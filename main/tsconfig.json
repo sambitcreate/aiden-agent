@@ -1,0 +1,50 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "lib": ["ES2022"],
+    "outDir": "../build/main",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@glaze/core/backend": [
+        "../../glaze-core/backend/index.d.ts",
+        "../../../../sdk/current/@glaze/core/backend/index.d.ts"
+      ],
+      "@glaze/core/oauth": [
+        "../../glaze-core/oauth/index.d.ts",
+        "../../../../sdk/current/@glaze/core/oauth/index.d.ts"
+      ],
+      "@glaze/core/ipc": [
+        "../../glaze-core/ipc/index.d.ts",
+        "../../../../sdk/current/@glaze/core/ipc/index.d.ts"
+      ],
+      "@glaze/core/preload": [
+        "../../glaze-core/preload/index.d.ts",
+        "../../../../sdk/current/@glaze/core/preload/index.d.ts"
+      ],
+      "@glaze/core/components": [
+        "../../glaze-core/components/index.d.ts",
+        "../../../../sdk/current/@glaze/core/components/index.d.ts"
+      ],
+      "@glaze/core/hooks": [
+        "../../glaze-core/hooks/index.d.ts",
+        "../../../../sdk/current/@glaze/core/hooks/index.d.ts"
+      ],
+      "@glaze/core/utils": [
+        "../../glaze-core/utils/index.d.ts",
+        "../../../../sdk/current/@glaze/core/utils/index.d.ts"
+      ]
+    }
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}

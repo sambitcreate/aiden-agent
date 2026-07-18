@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Glaze build output
+build/
+.devserverhost
+
+# Agent context (auto-generated, not worth versioning)
+.glaze_memory/
+.claude/
+
+# App icons (binary, auto-generated)
+app-icon.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Glaze agent temporary files
+tmp/*
+
+# Local agent troubleshooting notes
+.papercuts/
+
+# Portable Glaze exports (contain generated builds and local app data)
+*.glaze/
