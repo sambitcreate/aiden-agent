@@ -2,6 +2,7 @@
 
 import { ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
+import { configStore } from "../services/config-store.js";
 import type { Attachment, ChatRole } from "../services/types.js";
 
 function asString(value: unknown, name: string): string {
@@ -32,6 +33,14 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle("chats:rename", async (_event, id: unknown, title: unknown) => {
     await chatStore.rename(asString(id, "id"), asString(title, "title"));
+  });
+
+  ipcMain.handle("chats:moveEmptyToWorkspace", async (_event, id: unknown, workspaceId: unknown) => {
+    const nextWorkspaceId = asString(workspaceId, "workspaceId");
+    if (!(await configStore.getWorkspace(nextWorkspaceId))) {
+      throw new Error(`Workspace ${nextWorkspaceId} not found.`);
+    }
+    return chatStore.moveEmptyChatToWorkspace(asString(id, "id"), nextWorkspaceId);
   });
 
   ipcMain.handle("chats:remove", async (_event, id: unknown) => {

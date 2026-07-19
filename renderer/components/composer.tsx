@@ -1,5 +1,6 @@
-// Message composer. Top row shows the active workspace folder (click to reveal
-// in Finder) and, when the folder is a git repo, the current branch. The input
+// Message composer. On a new chat the top-row folder opens the workspace picker;
+// established chats reveal that folder in Finder. Git workspaces also show the
+// current branch. The input
 // row carries a new-chat button, a per-workspace permission control, the model
 // picker, voice input, and send/stop.
 
@@ -33,6 +34,7 @@ import {
   X,
 } from "lucide-react";
 import { GitBranchPicker } from "./git-branch-picker";
+import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
 import { attachmentsApi, onNotification, pickFiles } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
@@ -50,6 +52,10 @@ interface ComposerProps {
   gitBranch?: string;
   onOpenFolder?: () => void;
   onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
+  workspacePickerEnabled?: boolean;
+  workspaces?: Workspace[];
+  onSelectWorkspace?: (workspaceId: string) => Promise<void>;
+  onCreateScratchWorkspace?: () => Promise<void>;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
   /** The model picker element, rendered in the input row. */
@@ -90,6 +96,10 @@ export function Composer({
   gitBranch,
   onOpenFolder,
   onChangePermission,
+  workspacePickerEnabled,
+  workspaces = [],
+  onSelectWorkspace,
+  onCreateScratchWorkspace,
   visionSupported,
   modelPicker,
 }: ComposerProps) {
@@ -207,17 +217,38 @@ export function Composer({
       <div className="pointer-events-auto">
       {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
       <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
-        <Button
-          variant="transparent"
-          size="small"
-          className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-          onClick={onOpenFolder}
-          disabled={!workspace?.folderPath}
-          aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
-        >
-          <Folder className="size-4 shrink-0" />
-          <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-        </Button>
+        {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+          <WorkspacePicker
+            workspaces={workspaces}
+            activeWorkspaceId={workspace?.id}
+            onSelectWorkspace={onSelectWorkspace}
+            onCreateScratchWorkspace={onCreateScratchWorkspace}
+            trigger={
+              <Button
+                variant="transparent"
+                size="small"
+                className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                disabled={isGenerating || sending}
+                aria-label="Choose a workspace"
+              >
+                <Folder className="size-4 shrink-0" />
+                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+              </Button>
+            }
+          />
+        ) : (
+          <Button
+            variant="transparent"
+            size="small"
+            className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+            onClick={onOpenFolder}
+            disabled={!workspace?.folderPath}
+            aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+          >
+            <Folder className="size-4 shrink-0" />
+            <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+          </Button>
+        )}
         {/* Execution location — Pi runs locally on this Mac. */}
         <span className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden" title="The agent runs locally on this Mac">
           <Monitor className="size-4 shrink-0" />

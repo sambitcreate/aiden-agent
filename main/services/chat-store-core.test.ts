@@ -62,3 +62,26 @@ test("preserves every index entry during concurrent chat creation", async (t) =>
   assert.equal(chats.length, 12);
   assert.equal(new Set(chats.map((chat) => chat.id)).size, 12);
 });
+
+test("moves an empty chat between workspace lists", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "first" });
+
+  const moved = await store.moveEmptyChatToWorkspace(chat.id, "second");
+
+  assert.equal(moved.workspaceId, "second");
+  assert.equal((await store.list("first")).length, 0);
+  assert.deepEqual((await store.list("second")).map((entry) => entry.id), [chat.id]);
+});
+
+test("does not move a chat after its conversation has started", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "first" });
+  await store.appendMessage(chat.id, { role: "user", content: "Keep this chat here" });
+
+  await assert.rejects(
+    store.moveEmptyChatToWorkspace(chat.id, "second"),
+    /Only a new chat can change workspaces/,
+  );
+  assert.equal((await store.get(chat.id))?.workspaceId, "first");
+});

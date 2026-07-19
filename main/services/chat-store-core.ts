@@ -141,6 +141,22 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
       });
     },
 
+    /** Move only an untouched new chat so its workspace can be chosen from the composer. */
+    async moveEmptyChatToWorkspace(id: string, workspaceId: string): Promise<Chat> {
+      return serialized(async () => {
+        const chat = await readChat(id);
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        if (chat.messages.length > 0) {
+          throw new Error("Only a new chat can change workspaces.");
+        }
+        chat.workspaceId = workspaceId;
+        chat.updatedAt = Date.now();
+        await writeChat(chat);
+        await updateMeta(chat);
+        return chat;
+      });
+    },
+
     async remove(id: string): Promise<void> {
       return serialized(async () => {
         try {

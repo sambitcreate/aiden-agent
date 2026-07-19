@@ -5,6 +5,7 @@ import {
   Dialog as DialogPrimitive,
   DropdownMenu as DropdownMenuPrimitive,
   Label as LabelPrimitive,
+  Popover as PopoverPrimitive,
   RadioGroup as RadioGroupPrimitive,
   Select as SelectPrimitive,
   Separator as SeparatorPrimitive,
@@ -699,6 +700,25 @@ export const CustomDropdownMenu = DropdownMenuPrimitive.Root;
 export const CustomDropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 export const CustomDropdownMenuContent = DropdownMenuContent;
 
+export const Popover = PopoverPrimitive.Root;
+export const PopoverTrigger = PopoverPrimitive.Trigger;
+export const PopoverContent = React.forwardRef<
+  React.ElementRef<typeof PopoverPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
+>(function PopoverContent({ className, sideOffset = 6, ...props }, ref) {
+  return (
+    <PopoverPrimitive.Portal>
+      <PopoverPrimitive.Content
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(menuContentClass, "origin-[var(--radix-popover-content-transform-origin)]", className)}
+        {...props}
+      />
+    </PopoverPrimitive.Portal>
+  );
+});
+
 export const ContextMenu = ContextMenuPrimitive.Root;
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
 export const ContextMenuContent = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>>(function ContextContent({ className, ...props }, ref) { return <ContextMenuPrimitive.Portal><ContextMenuPrimitive.Content ref={ref} data-slot="popover-content" className={cn(menuContentClass, "origin-[var(--radix-context-menu-content-transform-origin)]", className)} {...props} /></ContextMenuPrimitive.Portal>; });
@@ -720,6 +740,7 @@ export const CommandInput = React.forwardRef<React.ElementRef<typeof CommandPrim
 export const CommandList = React.forwardRef<React.ElementRef<typeof CommandPrimitive.List>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>>(function CommandList({ className, ...props }, ref) { return <CommandPrimitive.List ref={ref} className={cn("h-[300px] max-h-[300px] overflow-y-auto p-1 outline-none", className)} {...props} />; });
 export const CommandEmpty = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>) => <CommandPrimitive.Empty className={cn("px-3 py-6 text-center text-small text-tertiary", className)} {...props} />;
 export const CommandItem = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Item>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>>(function CommandItem({ className, ...props }, ref) { return <CommandPrimitive.Item ref={ref} className={cn("relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-150 data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45", className)} {...props} />; });
+export const CommandSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>) => <CommandPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
 
 export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: () => void }) {
   return <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center"><Text variant="heading1">Something went wrong</Text><Text color="secondary">{error instanceof Error ? error.message : "Aiden Agent could not render this screen."}</Text>{reset ? <Button onClick={reset}>Try again</Button> : null}</div>;

@@ -1,11 +1,13 @@
 // Workspace CRUD + folder helpers (git status, reveal in Finder).
 
+import * as fs from "fs/promises";
 import * as path from "path";
 import { ipcMain, shell } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
 import { gitBranches, gitCheckout, gitCreateBranch, gitInfo } from "../services/git.js";
 import { llmClient } from "../services/llm-client.js";
+import { createScratchWorkspaceDirectory } from "../services/scratch-workspace.js";
 import { terminalService } from "../services/terminal.js";
 import type { Workspace, WorkspacePermission } from "../services/types.js";
 
@@ -40,6 +42,26 @@ export function registerWorkspaceHandlers(): void {
     const now = Date.now();
     const workspace: Workspace = { id: newId(), name, folderPath, permission, createdAt: now, updatedAt: now };
     return configStore.saveWorkspace(workspace);
+  });
+
+  ipcMain.handle("workspaces:createScratch", async () => {
+    const scratch = await createScratchWorkspaceDirectory();
+    const now = Date.now();
+    const workspace: Workspace = {
+      id: newId(),
+      name: scratch.name,
+      folderPath: scratch.folderPath,
+      permission: "ask",
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      return await configStore.saveWorkspace(workspace);
+    } catch (error) {
+      // The directory is still empty here; avoid leaving an orphan if persistence fails.
+      await fs.rmdir(scratch.folderPath).catch(() => undefined);
+      throw error;
+    }
   });
 
   ipcMain.handle("workspaces:update", async (_event, id: unknown, patch: unknown) => {

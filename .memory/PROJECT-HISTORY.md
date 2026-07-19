@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-19 — Add the new-chat workspace plate and scratch folders
+
+- Turned the composer’s folder chip into a searchable, keyboard-accessible workspace plate only while the current chat is untouched; established chats retain the existing open-in-Finder action.
+- Added a serialized empty-chat workspace move that updates the chat file and shared index together, validates the target workspace in main, and refuses to move any chat after its conversation has begun.
+- Added “Don’t work in a workspace” as an explicit scratch action backed by exclusive private directory creation under `~/aiden`, with readable random three-word names such as `day-game-run`, collision retry, Ask-mode workspace persistence, and cleanup if persistence fails.
+- Added focused scratch-name/directory and chat-move tests. The 22-test suite, type-check, lint, production build, and live Electron workspace search/selection checks pass.
+
 ### 2026-07-19 — Plan Pi-owned plug-and-play providers
 
 - Audited the current Electron provider path and Pi's `0.80.10` provider, model, auth, dynamic refresh, custom-provider, and persistence contracts with three independent review lanes.
