@@ -2,9 +2,10 @@
 // download management, and local transcription. Thin — logic lives in
 // services/parakeet.ts and services/local-models.ts.
 
-import { ipcMain } from "@glaze/core/backend";
+import { ipcMain } from "../platform.js";
 import { engineStatus, transcribePcm, releaseRecognizer } from "../services/parakeet.js";
 import { listModels, downloadModel, cancelDownload, deleteModel } from "../services/local-models.js";
+import { configStore } from "../services/config-store.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -37,6 +38,8 @@ export function registerLocalVoiceHandlers(): void {
     const modelId = asString(id, "id");
     releaseRecognizer(modelId);
     await deleteModel(modelId);
+    const settings = await configStore.getSettings();
+    if (settings.localVoiceModel === modelId) await configStore.setSettings({ localVoiceModel: "" });
   });
 
   // ── Local transcription ──────────────────────────────────────────────
