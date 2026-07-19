@@ -7,7 +7,7 @@
  *
  * @example
  * ```typescript
- * import { ipcMain } from '@glaze/core/backend';
+ * import { ipcMain } from '../platform.js';
  *
  * ipcMain.handle('app:myMethod', async (event, arg1, arg2) => {
  *   // Your logic here
@@ -16,7 +16,7 @@
  * ```
  */
 
-import { logger } from "@glaze/core/backend";
+import { app, logger } from "../platform.js";
 
 // App handlers - these are the methods your app provides to the frontend
 export const appHandlers = {
@@ -24,8 +24,8 @@ export const appHandlers = {
   getInfo: async () => {
     logger.info("app", "App info requested");
     return {
-      name: "My Glaze App",
-      version: "1.0.0",
+      name: app.getName(),
+      version: app.getVersion(),
       environment: process.env.NODE_ENV || "production",
     };
   },
