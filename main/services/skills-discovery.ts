@@ -8,7 +8,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { logger } from "@glaze/core/backend";
+import { logger } from "../platform.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
