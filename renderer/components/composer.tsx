@@ -5,6 +5,7 @@
 
 import * as React from "react";
 import {
+  AlertDialog,
   Button,
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -13,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Textarea,
+  Text,
   toast,
 } from "./ui";
 import { cn } from "../lib/ui-utils";
@@ -47,7 +49,7 @@ interface ComposerProps {
   /** Current git branch of the workspace folder, or undefined if not a repo. */
   gitBranch?: string;
   onOpenFolder?: () => void;
-  onChangePermission?: (permission: WorkspacePermission) => void;
+  onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
   /** The model picker element, rendered in the input row. */
@@ -56,11 +58,26 @@ interface ComposerProps {
 
 const PERMISSION_META: Record<
   WorkspacePermission,
-  { label: string; icon: React.ComponentType<{ className?: string }>; className: string }
+  { label: string; description: string; icon: React.ComponentType<{ className?: string }>; className: string }
 > = {
-  full: { label: "Full access", icon: OctagonAlert, className: "text-support-warning" },
-  ask: { label: "Ask first", icon: ShieldQuestion, className: "text-secondary" },
-  none: { label: "No access", icon: Lock, className: "text-tertiary" },
+  full: {
+    label: "Full access",
+    description: "Edit files and run commands without asking.",
+    icon: OctagonAlert,
+    className: "text-support-warning",
+  },
+  ask: {
+    label: "Ask first",
+    description: "Read freely; confirm every edit and command.",
+    icon: ShieldQuestion,
+    className: "text-secondary",
+  },
+  none: {
+    label: "No access",
+    description: "Keep workspace files and commands unavailable.",
+    icon: Lock,
+    className: "text-tertiary",
+  },
 };
 
 export function Composer({
@@ -80,6 +97,8 @@ export function Composer({
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [attaching, setAttaching] = React.useState(false);
   const [sending, setSending] = React.useState(false);
+  const [permissionSaving, setPermissionSaving] = React.useState(false);
+  const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const canSend = (text.trim().length > 0 || attachments.length > 0) && ready && !isGenerating && !sending;
 
   const settings = useSettings();
@@ -156,7 +175,29 @@ export function Composer({
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
 
+  const applyPermission = async (nextPermission: WorkspacePermission) => {
+    if (!onChangePermission || nextPermission === permission || permissionSaving) return;
+    setPermissionSaving(true);
+    try {
+      await onChangePermission(nextPermission);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't change workspace access.");
+    } finally {
+      setPermissionSaving(false);
+    }
+  };
+
+  const requestPermission = (nextPermission: WorkspacePermission) => {
+    if (nextPermission === permission || permissionSaving) return;
+    if (nextPermission === "full") {
+      setConfirmFullAccess(true);
+      return;
+    }
+    void applyPermission(nextPermission);
+  };
+
   return (
+    <>
     <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
       <div className="pointer-events-auto">
       {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
@@ -236,9 +277,15 @@ export function Composer({
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="transparent" size="small" className={cn("h-7 gap-1.5 px-2", perm.className)}>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  className={cn("h-7 gap-1.5 px-2", perm.className)}
+                  disabled={!workspace || permissionSaving}
+                  aria-label={`Workspace access: ${perm.label}`}
+                >
                   <PermIcon className="size-4 shrink-0" />
-                  {perm.label}
+                  {permissionSaving ? "Updating…" : perm.label}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
@@ -246,19 +293,25 @@ export function Composer({
                 <DropdownMenuSeparator />
                 <DropdownMenuCheckboxItem
                   checked={permission === "full"}
-                  onCheckedChange={() => onChangePermission?.("full")}
+                  sublabel={PERMISSION_META.full.description}
+                  disabled={permissionSaving}
+                  onCheckedChange={(checked) => checked && requestPermission("full")}
                 >
                   Full access
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem
                   checked={permission === "ask"}
-                  onCheckedChange={() => onChangePermission?.("ask")}
+                  sublabel={PERMISSION_META.ask.description}
+                  disabled={permissionSaving}
+                  onCheckedChange={(checked) => checked && requestPermission("ask")}
                 >
-                  Ask before edits & commands
+                  Ask first
                 </DropdownMenuCheckboxItem>
                 <DropdownMenuCheckboxItem
                   checked={permission === "none"}
-                  onCheckedChange={() => onChangePermission?.("none")}
+                  sublabel={PERMISSION_META.none.description}
+                  disabled={permissionSaving}
+                  onCheckedChange={(checked) => checked && requestPermission("none")}
                 >
                   No access
                 </DropdownMenuCheckboxItem>
@@ -302,5 +355,19 @@ export function Composer({
       </div>
       </div>
     </div>
+    <AlertDialog
+      open={confirmFullAccess}
+      onOpenChange={setConfirmFullAccess}
+      title="Enable Full Access?"
+      description={
+        <Text variant="small" color="secondary">
+          Aiden will be able to edit files and run commands in “{folderName ?? "this workspace"}” without asking
+          each time. You can change this any time from the composer.
+        </Text>
+      }
+      confirmLabel="Enable Full Access"
+      onConfirm={() => void applyPermission("full")}
+    />
+    </>
   );
 }

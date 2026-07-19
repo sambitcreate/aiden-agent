@@ -6,9 +6,9 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, EmptyState, ScrollArea, Text } from "../components/ui";
-import { SlidersHorizontal, SquarePen, TerminalSquare } from "lucide-react";
-import { MessageList } from "../components/message-list";
+import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { ShieldQuestion, SlidersHorizontal, SquarePen, TerminalSquare } from "lucide-react";
+import { MessageList, type ToolActivity } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
@@ -25,6 +25,16 @@ import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import type { Attachment, Chat, WorkspacePermission } from "../lib/types";
+
+const TOOL_LABELS: Record<string, string> = {
+  edit_file: "Edit file",
+  run_command: "Run command",
+  write_file: "Write file",
+};
+
+function toolLabel(toolName: string): string {
+  return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, " ");
+}
 
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
@@ -57,9 +67,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [qc, navigate, activeId]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
-  const [toolStatus, setToolStatus] = React.useState<string | null>(null);
+  const [toolActivity, setToolActivity] = React.useState<ToolActivity | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
+  const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const mountedRef = React.useRef(true);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -82,7 +93,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Reset transient state when switching chats.
   React.useEffect(() => {
     setStreamingText(null);
-    setToolStatus(null);
+    setToolActivity(null);
     setError(null);
     setApprovals([]);
   }, [chatId]);
@@ -94,7 +105,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     (history: Chat["messages"]) => {
       setError(null);
       setStreamingText("");
-      setToolStatus(null);
+      setToolActivity(null);
       setApprovals([]);
       const handle = startGeneration(
         {
@@ -107,16 +118,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
         {
           onDelta: (delta) => {
             if (mountedRef.current) {
-              setToolStatus(null);
+              setToolActivity(null);
               setStreamingText((prev) => (prev ?? "") + delta);
             }
           },
           onTool: (phase, toolName) => {
             if (!mountedRef.current) return;
-            setToolStatus(phase === "call" ? `Using ${toolName}…` : phase === "error" ? `${toolName} failed` : null);
+            const label = toolLabel(toolName);
+            setToolActivity(
+              phase === "call"
+                ? { state: "running", label: `${label}…` }
+                : phase === "error"
+                  ? { state: "failed", label: `${label} failed` }
+                  : { state: "completed", label: `${label} completed` },
+            );
           },
           onApproval: (prompt) => {
-            if (mountedRef.current) setApprovals((prev) => [...prev, prompt]);
+            if (mountedRef.current) {
+              setToolActivity(null);
+              setApprovals((prev) => [...prev, prompt]);
+            }
           },
           onDone: async (full) => {
             generationRef.current = null;
@@ -131,7 +152,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             if (mountedRef.current) {
               setStreamingText(null);
-              setToolStatus(null);
+              setToolActivity(null);
               setApprovals([]);
             }
           },
@@ -139,7 +160,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             generationRef.current = null;
             if (mountedRef.current) {
               setStreamingText(null);
-              setToolStatus(null);
+              setToolActivity(null);
               setApprovals([]);
               setError(message);
             }
@@ -170,12 +191,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, []);
 
   const decideApproval = React.useCallback(
-    (approvalId: string, decision: "allow" | "deny") => {
-      void chatsApi.approve(approvalId, decision);
-      setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
-      if (decision === "allow") setToolStatus("Working…");
+    async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
+      if (decidingApprovalId) return;
+      setDecidingApprovalId(prompt.approvalId);
+      try {
+        await chatsApi.approve(prompt.approvalId, decision);
+        setApprovals((prev) => prev.filter((approval) => approval.approvalId !== prompt.approvalId));
+        setToolActivity(
+          decision === "allow"
+            ? { state: "running", label: `${toolLabel(prompt.toolName)}…` }
+            : { state: "blocked", label: `${toolLabel(prompt.toolName)} denied` },
+        );
+      } catch (approvalError) {
+        toast.error(approvalError instanceof Error ? approvalError.message : "Couldn't send that approval decision.");
+      } finally {
+        setDecidingApprovalId(null);
+      }
     },
-    [],
+    [decidingApprovalId],
   );
 
   const openFolder = React.useCallback(() => {
@@ -228,28 +261,58 @@ export function ChatPane({ chatId }: { chatId: string }) {
         </>
       }
       autoScrollToBottom
-      autoScrollDeps={[messages.length, streamingText, toolStatus, approvals.length]}
+      autoScrollDeps={[messages.length, streamingText, toolActivity, approvals.length]}
       showScrollToBottomButton
       footer={
         <>
           {pending ? (
-            <div className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5" role="alert" aria-live="assertive">
-              <div className="rounded-card bg-popover p-3 shadow-[var(--shadow-composer)] outline outline-1 outline-field/80">
-                <Text variant="small-strong" as="p">
-                  Approval needed
-                </Text>
-                <Text variant="small" color="secondary" as="p" className="mt-0.5 break-words">
+            <div className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5">
+              <p className="sr-only" role="status">Approval needed for {toolLabel(pending.toolName)}</p>
+              <section
+                aria-labelledby={`approval-title-${pending.approvalId}`}
+                aria-describedby={`approval-summary-${pending.approvalId}`}
+                className="rounded-card bg-popover p-3 shadow-popover"
+              >
+                <div className="flex items-start gap-2.5">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
+                    <ShieldQuestion className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <Text variant="small-strong" as="p" id={`approval-title-${pending.approvalId}`}>
+                      {toolLabel(pending.toolName)} needs approval
+                    </Text>
+                    <Text variant="small" color="secondary" as="p" className="mt-0.5">
+                      Review this one action before Aiden continues.
+                    </Text>
+                  </div>
+                </div>
+                <Text
+                  variant="small"
+                  as="p"
+                  id={`approval-summary-${pending.approvalId}`}
+                  className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+                >
                   {pending.summary}
                 </Text>
                 <div className="mt-2.5 flex justify-end gap-2">
-                  <Button variant="transparent" size="small" onClick={() => decideApproval(pending.approvalId, "deny")}>
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    disabled={decidingApprovalId === pending.approvalId}
+                    onClick={() => void decideApproval(pending, "deny")}
+                  >
                     Deny
                   </Button>
-                  <Button variant="accent" size="small" onClick={() => decideApproval(pending.approvalId, "allow")}>
-                    Allow
+                  <Button
+                    variant="accent"
+                    size="small"
+                    disabled={decidingApprovalId === pending.approvalId}
+                    onClick={() => void decideApproval(pending, "allow")}
+                  >
+                    {decidingApprovalId === pending.approvalId ? "Sending…" : "Allow once"}
                   </Button>
                 </div>
-              </div>
+              </section>
             </div>
           ) : null}
           <Composer
@@ -292,7 +355,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         </div>
       ) : (
-        <MessageList messages={messages} streamingText={streamingText} toolStatus={toolStatus} error={error} />
+        <MessageList messages={messages} streamingText={streamingText} toolActivity={toolActivity} error={error} />
       )}
 
     </ScrollArea>
