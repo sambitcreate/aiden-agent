@@ -4,8 +4,8 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge, Button, Input, Separator, Text, toast } from "@glaze/core/components";
-import { cn } from "@glaze/core/utils";
+import { AlertDialog, Badge, Button, Input, Separator, Text, toast } from "../ui";
+import { cn } from "../../lib/ui-utils";
 import { Check, ChevronLeft, Download, Globe, Loader2, Trash2 } from "lucide-react";
 import { localVoiceApi, settingsApi } from "../../lib/ipc";
 import type { ModelDownloadProgress } from "../../lib/ipc";
@@ -140,6 +140,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
   const [query, setQuery] = React.useState("");
   const [progress, setProgress] = React.useState<Record<string, ModelDownloadProgress>>({});
   const [busy, setBusy] = React.useState<Record<string, "download" | "delete">>({});
+  const [deletingModel, setDeletingModel] = React.useState<LocalVoiceModel | null>(null);
 
   React.useEffect(() => {
     return onNotification<ModelDownloadProgress>("localModels:progress", (p) => {
@@ -213,7 +214,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
       busy={busy[m.id]}
       onDownload={(id) => void download(id)}
       onCancel={(id) => void localVoiceApi.cancelDownload(id)}
-      onDelete={(id) => void remove(id)}
+      onDelete={() => setDeletingModel(m)}
       onActivate={(id) => void activate(id)}
     />
   );
@@ -236,6 +237,12 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
 
       <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models by name…" />
 
+      {models.isLoading ? (
+        <Text variant="small" color="secondary">Loading models…</Text>
+      ) : models.isError ? (
+        <Text variant="small" color="red">Couldn't load transcription models.</Text>
+      ) : null}
+
       {downloaded.length > 0 ? (
         <div className="flex flex-col gap-2">
           <Text variant="small-strong" color="secondary">
@@ -254,11 +261,24 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
         </div>
       ) : null}
 
-      {filtered.length === 0 ? (
+      {!models.isLoading && !models.isError && filtered.length === 0 ? (
         <Text variant="small" color="tertiary">
-          No models match “{query}”.
+          {query.trim() ? `No models match “${query}”.` : "No transcription models are available."}
         </Text>
       ) : null}
+
+      <AlertDialog
+        open={deletingModel !== null}
+        onOpenChange={(open) => !open && setDeletingModel(null)}
+        title="Delete this model?"
+        description={deletingModel ? `“${deletingModel.name}” will be removed from this Mac. You can download it again later.` : null}
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={() => {
+          if (deletingModel) void remove(deletingModel.id);
+          setDeletingModel(null);
+        }}
+      />
     </div>
   );
 }
