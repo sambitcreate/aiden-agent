@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, Field, FieldSet, Input, Switch, Text, toast } from "@glaze/core/components";
+import { Button, Field, FieldSet, Input, Switch, toast } from "../ui";
 import { settingsApi, shortcutApi } from "../../lib/ipc";
 import { queryKeys, useSettings } from "../../lib/queries";
 
@@ -84,7 +84,7 @@ export function ShortcutSettings() {
       <Field label="Enable shortcut" description="Press the hotkey from anywhere to jump to Aiden Agent and start typing.">
         <Switch checked={enabled} onCheckedChange={(v) => void apply({ shortcutEnabled: v })} />
       </Field>
-      <Field label="Shortcut" description={recording ? "Press your key combination…" : "Click Record, then press a modifier + key."}>
+      <Field label="Shortcut" description={recording ? "Press your key combination…" : "Default: ⌘⌥Space. Choose Set shortcut to change it."}>
         <div className="flex gap-2">
           <Input
             ref={inputRef}
@@ -100,21 +100,17 @@ export function ShortcutSettings() {
             variant={recording ? "accent" : "filled"}
             onClick={() => (recording ? setRecording(false) : startRecording())}
           >
-            {recording ? "Cancel" : "Record"}
+            {recording ? "Cancel" : "Set shortcut"}
           </Button>
         </div>
       </Field>
       {accelerator !== DEFAULT_ACCELERATOR ? (
-        <Field label="">
+        <Field label="Reset" description="Restore the default ⌘⌥Space shortcut.">
           <Button size="small" variant="transparent" onClick={() => void apply({ shortcutAccelerator: DEFAULT_ACCELERATOR })}>
-            Reset to default (⌘⌥Space)
+            Reset to default
           </Button>
         </Field>
-      ) : (
-        <Text variant="small" color="tertiary">
-          Default is ⌘⌥Space.
-        </Text>
-      )}
+      ) : null}
     </FieldSet>
   );
 }
