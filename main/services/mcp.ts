@@ -8,7 +8,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import { logger } from "@glaze/core/backend";
+import { logger } from "../platform.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
 import type { McpServer } from "./types.js";
 
@@ -86,13 +86,15 @@ class McpManager {
 
   /** Connect and return status (used by the settings "test" action). */
   async status(server: McpServer): Promise<{ connected: boolean; toolCount: number; tools: string[]; error?: string }> {
+    const client = new Client({ name: "aiden-agent-test", version: "1.0.0" }, { capabilities: {} });
     try {
-      const client = await this.ensureConnected(server);
+      await client.connect(makeTransport(server) as never);
       const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
       return { connected: true, toolCount: tools.length, tools: tools.map((t) => t.name) };
     } catch (error) {
-      await this.disconnect(server.id);
       return { connected: false, toolCount: 0, tools: [], error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      await client.close().catch(() => {});
     }
   }
 
