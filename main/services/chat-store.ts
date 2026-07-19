@@ -69,7 +69,7 @@ export const chatStore = {
     const now = Date.now();
     const chat: Chat = {
       id: newId(),
-      title: input.title?.trim() || "New Chat",
+      title: input.title?.trim() || "New chat",
       workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
       providerId: input.providerId,
       model: input.model,
@@ -123,7 +123,7 @@ export const chatStore = {
     if (meta?.providerId) chat.providerId = meta.providerId;
     if (meta?.model) chat.model = meta.model;
     // Auto-title from the first user message.
-    if (meta?.autoTitle && chat.title === "New Chat" && full.role === "user") {
+    if (meta?.autoTitle && (chat.title === "New Chat" || chat.title === "New chat") && full.role === "user") {
       chat.title = deriveTitle(full.content);
     }
     await fs.writeFile(await chatPath(id), JSON.stringify(chat, null, 2), "utf-8");
@@ -154,5 +154,5 @@ async function updateMeta(chat: Chat): Promise<void> {
 
 function deriveTitle(text: string): string {
   const clean = text.replace(/\s+/g, " ").trim();
-  return clean.length > 48 ? `${clean.slice(0, 48)}…` : clean || "New Chat";
+  return clean.length > 48 ? `${clean.slice(0, 48)}…` : clean || "New chat";
 }
