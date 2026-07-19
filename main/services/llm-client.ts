@@ -11,7 +11,7 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import type { Api, Message, Model, ProviderStreams } from "@earendil-works/pi-ai";
-import { ipcMain, logger } from "@glaze/core/backend";
+import { ipcMain, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
 import { buildAgentTools } from "./tools.js";
