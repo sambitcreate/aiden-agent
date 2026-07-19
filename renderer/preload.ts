@@ -34,6 +34,7 @@ const NOTIFICATION_CHANNELS = new Set([
   "app:dictate-toggle",
   "app:focus-composer",
   "app:navigate",
+  "app:open-workspace-preferred-editor",
   "chat:approval",
   "chat:delta",
   "chat:done",
