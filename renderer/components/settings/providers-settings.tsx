@@ -9,7 +9,7 @@ import {
   Button,
   Separator,
   Text,
-} from "@glaze/core/components";
+} from "../ui";
 import { Plus, Trash2 } from "lucide-react";
 import { ProviderEditor } from "./provider-editor";
 import { providersApi } from "../../lib/ipc";
@@ -55,14 +55,14 @@ export function ProvidersSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
           <Text variant="strong">Providers</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Connect hosted APIs or local backends. Keys are stored encrypted on this device.
+            Use hosted APIs or local models. Messages and attachments go to the selected provider; keys stay encrypted on this Mac.
           </Text>
         </div>
-        <Button variant="filled" size="small" onClick={addCustom}>
+        <Button className="shrink-0" variant="filled" size="small" onClick={addCustom}>
           <Plus className="size-4" />
           Add custom
         </Button>
