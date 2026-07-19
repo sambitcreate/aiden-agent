@@ -21,6 +21,7 @@ import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./t
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 const active = new Map<string, { agent: Agent; workspaceId?: string }>();
+const initializing = new Map<string, { workspaceId?: string; cancelRequested: boolean }>();
 /** Approval requests awaiting a user decision, keyed by approvalId. */
 const pendingApprovals = new Map<string, (allowed: boolean) => void>();
 
@@ -98,20 +99,30 @@ function newApprovalId(): string {
   return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+async function prepareGeneration(params: ChatStartParams) {
+  const runtime = await resolveModelRuntime(params.providerId, params.model);
+  const workspace = params.workspaceId ? await configStore.getWorkspace(params.workspaceId) : undefined;
+  const permission: WorkspacePermission = workspace?.permission ?? "ask";
+  const folderPath = workspace?.folderPath;
+  const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
+  const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
+  const modelInfo = await modelsCatalog.info(runtime.provider.id, params.model);
+  return { runtime, permission, folderPath, git, tools, modelInfo };
+}
+
 export const llmClient = {
   async start(streamId: string, params: ChatStartParams): Promise<void> {
-    const runtime = await resolveModelRuntime(params.providerId, params.model);
-    const { provider, model, apiKey, streams } = runtime;
-
-    // Resolve the workspace: folder + permission drive the tool set + approvals.
-    const workspace = params.workspaceId ? await configStore.getWorkspace(params.workspaceId) : undefined;
-    const permission: WorkspacePermission = workspace?.permission ?? "ask";
-    const folderPath = workspace?.folderPath;
-    const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
-
-    const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
-    // Only forward image attachments to vision-capable models (models.dev).
-    const modelInfo = await modelsCatalog.info(provider.id, params.model);
+    const initialization = { workspaceId: params.workspaceId, cancelRequested: false };
+    initializing.set(streamId, initialization);
+    let setup: Awaited<ReturnType<typeof prepareGeneration>>;
+    try {
+      setup = await prepareGeneration(params);
+    } catch (error) {
+      initializing.delete(streamId);
+      throw error;
+    }
+    const { runtime, permission, folderPath, git, tools, modelInfo } = setup;
+    const { model, apiKey, streams } = runtime;
 
     const deniedToolCalls = new Set<string>();
     const agent = new Agent({
@@ -144,6 +155,8 @@ export const llmClient = {
       },
     });
     active.set(streamId, { agent, workspaceId: params.workspaceId });
+    initializing.delete(streamId);
+    if (initialization.cancelRequested) agent.abort();
 
     let full = "";
     let errored: string | null = null;
@@ -203,11 +216,16 @@ export const llmClient = {
   },
 
   cancel(streamId: string): void {
+    const initialization = initializing.get(streamId);
+    if (initialization) initialization.cancelRequested = true;
     active.get(streamId)?.agent.abort();
   },
 
   /** Stop generations whose tool set was snapshotted from this workspace. */
   cancelWorkspace(workspaceId: string): void {
+    for (const initialization of initializing.values()) {
+      if (initialization.workspaceId === workspaceId) initialization.cancelRequested = true;
+    }
     for (const entry of active.values()) {
       if (entry.workspaceId === workspaceId) entry.agent.abort();
     }
