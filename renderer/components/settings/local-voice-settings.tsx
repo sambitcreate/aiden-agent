@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge, Button, Callout, Field, FieldSet, Input, Switch, Text, toast } from "@glaze/core/components";
+import { Badge, Button, Callout, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
 import { Settings2 } from "lucide-react";
 import { settingsApi, shortcutApi } from "../../lib/ipc";
 import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
@@ -16,20 +16,27 @@ const DEFAULT_DICTATION_ACCELERATOR = "Command+Shift+D";
 
 function EngineStatus() {
   const status = useEngineStatus();
-  if (status.data && !status.data.ready) {
+  if (status.isLoading) {
+    return (
+      <Field label="Engine" description="Checking the bundled on-device transcription engine.">
+        <Badge>Checking…</Badge>
+      </Field>
+    );
+  }
+  if (status.isError || (status.data && !status.data.ready)) {
     return (
       <Callout color="red">
         <Text variant="small-strong" color="red">
           On-device engine unavailable
         </Text>
         <Text variant="small" color="secondary">
-          {status.data.error ?? "The speech engine failed to load."}
+          {status.data?.error ?? (status.error instanceof Error ? status.error.message : "The speech engine failed to load.")}
         </Text>
       </Callout>
     );
   }
   return (
-    <Field label="Engine" description="Runs bundled on your Mac (sherpa-onnx / Parakeet) — no install, no network.">
+    <Field label="Engine" description="Transcription runs locally after you download a Parakeet model.">
       <Badge color="green">Ready</Badge>
     </Field>
   );
