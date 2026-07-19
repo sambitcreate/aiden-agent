@@ -1,4 +1,4 @@
-// Thin, typed wrappers over the Glaze IPC bridge plus the chat streaming helper.
+// Thin, typed wrappers over Aiden Agent's Electron IPC bridge plus the chat streaming helper.
 
 import type {
   AppSettings,
@@ -23,7 +23,7 @@ import type {
 } from "./types";
 
 function bridge() {
-  return window.glazeAPI.glaze.ipc;
+  return window.aidenAPI.ipc;
 }
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -41,9 +41,10 @@ export const providersApi = {
   remove: (id: string) => invoke<void>("providers:remove", id),
   setKey: (id: string, key: string) =>
     invoke<{ hasKey: boolean; provider: Provider | null }>("providers:setKey", id, key),
-  test: (id: string, keyOverride?: string) =>
-    invoke<{ ok: true; modelCount: number }>("providers:test", id, keyOverride),
-  listModels: (id: string, keyOverride?: string) => invoke<string[]>("providers:listModels", id, keyOverride),
+  test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
+    invoke<{ ok: true; modelCount: number }>("providers:test", provider, keyOverride),
+  listModels: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
+    invoke<string[]>("providers:listModels", provider, keyOverride),
 };
 
 export const settingsApi = {
@@ -68,6 +69,7 @@ export const mcpApi = {
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
   authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
+  oauthStatus: (id: string) => invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
@@ -110,14 +112,14 @@ export const shortcutApi = {
 
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
-  const res = await window.glazeAPI.dialog.showOpenDialog({ properties: ["openDirectory"] });
+  const res = await window.aidenAPI.dialog.showOpenDialog({ properties: ["openDirectory"] });
   if (res.canceled || !res.filePaths?.length) return null;
   return res.filePaths[0];
 }
 
 /** Native multi-file picker for composer attachments. Returns [] if cancelled. */
 export async function pickFiles(): Promise<string[]> {
-  const res = await window.glazeAPI.dialog.showOpenDialog({ properties: ["openFile", "multiSelections"] });
+  const res = await window.aidenAPI.dialog.showOpenDialog({ properties: ["openFile", "multiSelections"] });
   if (res.canceled || !res.filePaths?.length) return [];
   return res.filePaths;
 }
@@ -209,7 +211,7 @@ export interface GenerationHandle {
 
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
-  onDone: (fullContent: string) => void;
+  onDone: (fullContent: string) => void | Promise<void>;
   onError: (message: string) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
@@ -240,8 +242,9 @@ export function startGeneration(params: ChatStartParams, callbacks: StreamCallba
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
-      callbacks.onDone(p.content);
-      dispose();
+      void Promise.resolve(callbacks.onDone(p.content))
+        .catch((error: unknown) => callbacks.onError(error instanceof Error ? error.message : String(error)))
+        .finally(dispose);
     }),
   );
   unsubs.push(
