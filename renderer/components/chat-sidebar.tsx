@@ -30,7 +30,7 @@ import {
   SidebarListItem,
   SplitView,
   Text,
-} from "@glaze/core/components";
+} from "./ui";
 import { ChevronsUpDown, Folder, FolderGit2, MessagesSquare, Settings } from "lucide-react";
 import { chatsApi, pickFolder, workspacesApi } from "../lib/ipc";
 import { queryKeys, useChats } from "../lib/queries";
@@ -143,7 +143,9 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
 
   const commitRename = async () => {
     if (!renaming) return;
-    await chatsApi.rename(renaming.id, renameValue);
+    const title = renameValue.trim();
+    if (!title) return;
+    await chatsApi.rename(renaming.id, title);
     await qc.invalidateQueries({ queryKey: queryKeys.chats });
     await qc.invalidateQueries({ queryKey: queryKeys.chat(renaming.id) });
     setRenaming(null);
@@ -169,28 +171,27 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
           <SidebarFooter>
             <Button
               variant="transparent"
-              size="small"
-              className="w-full justify-start"
+              className="h-10 w-full justify-start gap-2.5 px-2.5 text-[14px] font-normal"
               onClick={() => navigate({ to: "/settings" })}
             >
-              <Settings className="size-4" />
+              <Settings className="size-4.5 text-secondary" />
               Settings
             </Button>
           </SidebarFooter>
         }
       >
         {/* Workspace switcher — change the folder Pi works in. */}
-        <div className="px-2 pb-2">
+        <div className="px-2.5 pb-3">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="transparent" size="small" className="h-9 w-full justify-between px-2">
-                <span className="flex min-w-0 items-center gap-2">
+              <Button variant="transparent" className="h-10 w-full justify-between px-2.5 text-[14px] font-normal">
+                <span className="flex min-w-0 items-center gap-2.5">
                   {active?.folderPath ? (
                     <FolderGit2 className="size-4 shrink-0 text-secondary" />
                   ) : (
                     <Folder className="size-4 shrink-0 text-secondary" />
                   )}
-                  <span className="truncate text-small-strong">{active?.name ?? "Workspace"}</span>
+                  <span className="truncate font-medium">{active?.name ?? "Workspace"}</span>
                 </span>
                 <ChevronsUpDown className="size-4 shrink-0 text-tertiary" />
               </Button>
@@ -274,6 +275,7 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
         onOpenChange={(open) => !open && setRenaming(null)}
         title="Rename chat"
         confirmLabel="Save"
+        confirmDisabled={!renameValue.trim()}
         onConfirm={commitRename}
       >
         <Input
