@@ -331,6 +331,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
       if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
     });
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       if (event.key === "Escape") {
         event.preventDefault();
         localStorage.setItem(collapseKey, "1");
@@ -373,6 +374,8 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
         ) : null}
         <aside
           ref={sidebarRef}
+          inert={collapsed ? true : undefined}
+          aria-hidden={collapsed ? true : undefined}
           className={cn(
             "h-full shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out",
             compact && !collapsed && "absolute inset-y-0 left-0 z-30 shadow-dialog",
@@ -488,6 +491,14 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
               type="search"
               value={searchValue}
               onChange={(event) => onSearchChange?.(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && searchValue) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onSearchChange?.("");
+                  event.currentTarget.blur();
+                }
+              }}
               placeholder={searchPlaceholder ?? "Search"}
               aria-label={searchPlaceholder ?? "Search"}
               className="h-full min-w-0 flex-1 bg-transparent text-[14px] text-primary outline-none placeholder:text-tertiary"

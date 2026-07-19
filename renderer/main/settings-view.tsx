@@ -101,6 +101,8 @@ export function SettingsView() {
                 onChange={(event) => setSearch(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
                     setSearch("");
                     event.currentTarget.blur();
                   }
