@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { Check, Copy } from "lucide-react";
-import { cn } from "@glaze/core/utils";
+import { cn } from "../lib/ui-utils";
 
 interface CopyButtonProps {
   /** Text placed on the clipboard when clicked. */
