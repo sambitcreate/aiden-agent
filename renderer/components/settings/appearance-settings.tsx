@@ -1,15 +1,15 @@
 // Appearance settings — light / dark / auto via the native theme source.
 
 import * as React from "react";
-import { Field, FieldSet, Label, RadioGroup, RadioGroupItem, toast } from "@glaze/core/components";
-import type { NativeThemeInfo } from "@glaze/core/ipc";
+import { Field, FieldSet, Label, RadioGroup, RadioGroupItem, toast } from "../ui";
+import type { NativeThemeInfo } from "../../preload";
 
 export function AppearanceSettings() {
   const [themeInfo, setThemeInfo] = React.useState<NativeThemeInfo | null>(null);
 
   const refresh = React.useCallback(async () => {
     try {
-      setThemeInfo(await window.glazeAPI.nativeTheme.getInfo());
+      setThemeInfo(await window.aidenAPI.nativeTheme.getInfo());
     } catch (error) {
       toast.error(`Failed to read theme: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -21,7 +21,7 @@ export function AppearanceSettings() {
 
   const handleChange = async (value: string) => {
     try {
-      await window.glazeAPI.nativeTheme.setThemeSource(value as "system" | "light" | "dark");
+      await window.aidenAPI.nativeTheme.setThemeSource(value as "system" | "light" | "dark");
       await refresh();
     } catch (error) {
       toast.error(`Failed to set theme: ${error instanceof Error ? error.message : String(error)}`);
@@ -34,7 +34,7 @@ export function AppearanceSettings() {
         <RadioGroup value={themeInfo?.themeSource ?? "system"} onValueChange={handleChange} orientation="horizontal">
           <Label>
             <RadioGroupItem value="system" />
-            Auto
+            System
           </Label>
           <Label>
             <RadioGroupItem value="light" />
