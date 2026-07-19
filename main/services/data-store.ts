@@ -1,9 +1,9 @@
 // Generic JSON file store rooted in the app's userData directory.
-// See glaze-data-storage: never store persistent data in the repo.
+// Persistent app data belongs in the operating system's user-data directory.
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { app } from "@glaze/core/backend";
+import { app } from "../platform.js";
 
 export class DataStore<T> {
   private cache: T | null = null;
