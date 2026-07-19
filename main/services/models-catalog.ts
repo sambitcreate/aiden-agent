@@ -3,7 +3,7 @@
 // calling, reasoning, context length, open weights). Cached on disk with a TTL
 // so we don't refetch on every lookup.
 
-import { logger } from "@glaze/core/backend";
+import { logger } from "../platform.js";
 import { DataStore } from "./data-store.js";
 import type { ModelInfo } from "./types.js";
 
