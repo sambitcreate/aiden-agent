@@ -111,7 +111,18 @@ function setupApplicationMenu(): void {
         { role: "quit" },
       ],
     },
-    { role: "fileMenu" },
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Open Workspace in Preferred Editor",
+          accelerator: "Command+O",
+          click: () => ipcMain.broadcast("app:open-workspace-preferred-editor", {}),
+        },
+        { type: "separator" },
+        { role: "close" },
+      ],
+    },
     { role: "editMenu" },
     { role: "viewMenu" },
     { role: "windowMenu" },
