@@ -1,6 +1,6 @@
 // Reading user-attached files + models.dev capability lookups.
 
-import { ipcMain } from "@glaze/core/backend";
+import { ipcMain } from "../platform.js";
 import { readAttachments } from "../services/attachments.js";
 import { modelsCatalog } from "../services/models-catalog.js";
 
