@@ -248,6 +248,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     return Number.isFinite(saved) && saved >= limits.min && saved <= limits.max ? saved : limits.default;
   });
   const [leadingAnchor, setLeadingAnchor] = React.useState<HTMLDivElement | null>(null);
+  const sidebarRef = React.useRef<HTMLElement>(null);
   const toggle = React.useCallback(() => setCollapsed((value) => {
     localStorage.setItem(collapseKey, value ? "0" : "1");
     return !value;
@@ -316,18 +317,62 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     localStorage.setItem(widthKey, String(Math.round(next)));
   }, [limits.max, limits.min, width, widthKey]);
 
+  const compactOpen = compact && !collapsed;
+
+  React.useEffect(() => {
+    if (!compactOpen) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableSelector = "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])";
+    const getFocusable = () => [
+      ...Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
+      ...Array.from(leadingAnchor?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
+    ].filter((element) => element.offsetParent !== null);
+    const frame = requestAnimationFrame(() => {
+      if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
+    });
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        localStorage.setItem(collapseKey, "1");
+        setCollapsed(true);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !focusable.includes(active as HTMLElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !focusable.includes(active as HTMLElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", onKeyDown);
+      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+    };
+  }, [collapseKey, compactOpen, leadingAnchor]);
+
   return (
     <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
       <div className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary">
-        {compact && !collapsed ? (
+        {compactOpen ? (
           <button
             type="button"
             aria-label="Close sidebar"
             onClick={toggle}
+            tabIndex={-1}
             className="absolute inset-0 z-20 cursor-default bg-black/10 outline-none backdrop-blur-[1px] transition-opacity focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
           />
         ) : null}
         <aside
+          ref={sidebarRef}
           className={cn(
             "h-full shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out",
             compact && !collapsed && "absolute inset-y-0 left-0 z-30 shadow-dialog",
@@ -355,7 +400,13 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
             (collapsed || compact) && "pointer-events-none opacity-0",
           )}
         />
-        <main className="min-w-0 flex-1 bg-background">{children}</main>
+        <main
+          inert={compactOpen ? true : undefined}
+          aria-hidden={compactOpen ? true : undefined}
+          className="min-w-0 flex-1 bg-background"
+        >
+          {children}
+        </main>
         <div ref={setLeadingAnchor} className="absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center" />
       </div>
     </SplitContext.Provider>
@@ -408,7 +459,16 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
-    const mutationObserver = new MutationObserver(update);
+    const observeChildren = () => {
+      for (const child of element.children) {
+        if (child instanceof HTMLElement) resizeObserver.observe(child);
+      }
+    };
+    observeChildren();
+    const mutationObserver = new MutationObserver(() => {
+      observeChildren();
+      update();
+    });
     mutationObserver.observe(element, { childList: true, subtree: true });
     return () => {
       cancelAnimationFrame(frame);
@@ -476,6 +536,7 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
   const [footerHeight, setFooterHeight] = React.useState(0);
   const footerHeightRef = React.useRef(0);
   const [atBottom, setAtBottom] = React.useState(true);
+  const [atScrollEnd, setAtScrollEnd] = React.useState(true);
   const [atTop, setAtTop] = React.useState(true);
   const atBottomRef = React.useRef(true);
   const split = React.useContext(SplitContext);
@@ -487,13 +548,16 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
     if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior });
     setAtBottom(true);
+    setAtScrollEnd(true);
     setAtTop(element.scrollHeight <= element.clientHeight);
   }, []);
 
   const updateScrollEdges = React.useCallback((element = viewport.current) => {
     if (!element) return;
     setAtTop(element.scrollTop < 2);
-    setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
+    const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+    setAtBottom(remaining < 24);
+    setAtScrollEnd(remaining < 2);
   }, []);
 
   React.useLayoutEffect(() => {
@@ -520,18 +584,30 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
   React.useLayoutEffect(() => {
     const element = viewport.current;
     if (!element) return;
-    const update = () => updateScrollEdges(element);
+    const update = () => {
+      if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");
+      else updateScrollEdges(element);
+    };
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
-    const mutationObserver = new MutationObserver(update);
+    const observeChildren = () => {
+      for (const child of element.children) {
+        if (child instanceof HTMLElement) resizeObserver.observe(child);
+      }
+    };
+    observeChildren();
+    const mutationObserver = new MutationObserver(() => {
+      observeChildren();
+      update();
+    });
     mutationObserver.observe(element, { childList: true, subtree: true });
     return () => {
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
       mutationObserver.disconnect();
     };
-  }, [updateScrollEdges]);
+  }, [autoScrollToBottom, scrollToBottom, updateScrollEdges]);
 
   const resolvedToolbar = toolbar ?? (title || leading || actions ? (
     <header
@@ -551,7 +627,7 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
       <div
         ref={viewport}
         data-scroll-top={atTop}
-        data-scroll-bottom={atBottom}
+        data-scroll-bottom={atScrollEnd}
         className="scroll-edge-mask h-full w-full overflow-y-auto overscroll-contain"
         style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
         onScroll={(event) => {

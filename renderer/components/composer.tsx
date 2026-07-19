@@ -210,7 +210,7 @@ export function Composer({
         <Button
           variant="transparent"
           size="small"
-          className="h-7 min-w-0 max-w-[16rem] gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+          className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
           onClick={onOpenFolder}
           disabled={!workspace?.folderPath}
           aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}

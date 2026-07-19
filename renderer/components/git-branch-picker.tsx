@@ -95,7 +95,7 @@ export function GitBranchPicker({ folderPath, branch }: GitBranchPickerProps) {
       }}
     >
       <CustomDropdownMenuTrigger asChild>
-        <Button variant="transparent" size="small" className="h-7 max-w-[14rem] gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]">
+        <Button variant="transparent" size="small" className="h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]">
           <GitBranch className="size-4 shrink-0" />
           <span className="min-w-0 truncate text-small">{current}</span>
         </Button>
