@@ -6,7 +6,7 @@
 - Reworked composer permission copy and Full Access confirmation, made permissions immutable during generation, and upgraded inline approvals with human tool labels, explicit one-time scope, recoverable decisions, keyboard focus management, and distinct running/finished/failed/blocked activity.
 - Made workspace permission or folder changes cancel in-flight and initializing generations, including a tombstone handoff that prevents a cancelled start from reaching `agent.continue()`.
 - Polished settings, editor/branch/model controls, copy and attachment actions, terminal tabs and resizers, strict scroll-edge fades, content-growth auto-follow, medium-width composer sizing, and compact sidebar overlay focus/isolation/Escape behavior.
-- Completed three phase-specific two-reviewer loops; 18 focused tests, type-check, lint, production build, signed macOS packaging, and packaged-app settings/IPC smoke verification pass. The branch remains gated on its final whole-diff review, and the existing large renderer chunk warning remains follow-up performance work.
+- Completed three phase-specific two-reviewer loops and a final two-reviewer whole-diff pass. The repository's 18-test suite, including the new mutating-tool summary assertion, plus type-check, lint, production build, signed macOS packaging, and packaged-app settings/IPC smoke verification pass. The critical cancellation, focus, and scroll paths were source/runtime/reviewer validated but do not yet have dedicated automated tests; the existing large renderer chunk warning remains follow-up performance work.
 
 ### 2026-07-19 — Recreate ChatGPT/Codex-inspired interface elements
 

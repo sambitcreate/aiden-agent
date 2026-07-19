@@ -64,7 +64,7 @@
 
 ## Current verification status
 
-- The 2026-07-19 production UI/trust pass completed three phase-specific two-reviewer loops. Shared interactions, permissions/approvals, compact navigation, content-aware scroll edges, and responsive composer controls pass 18 focused tests, type-check, lint, production build, signed macOS packaging, live light/dark inspection, and packaged-app settings/IPC smoke verification; final whole-diff review gates the merge.
+- The 2026-07-19 production UI/trust pass completed three phase-specific two-reviewer loops and a final two-reviewer whole-diff pass. Shared interactions, permissions/approvals, compact navigation, content-aware scroll edges, and responsive composer controls pass the repository's 18-test suite, type-check, lint, production build, signed macOS packaging, live light/dark inspection, and packaged-app settings/IPC smoke verification. The critical cancellation, focus, and scroll paths were source/runtime/reviewer validated but still need dedicated automated tests.
 - Shared standard and confirmation modal entrances use a centered `.98` to `1` scale, 4px rise, and slight fade-in; reduced-motion mode removes the transform.
 - UI element and UX hardening pass: the composer now floats over the continuous transcript surface; settings use a wider, searchable, grouped navigation sidebar with readable descriptions and placeholders; settings dialogs keep actions visible; and the split view overlays/auto-collapses at compact widths.
 - Validated settings/chat fixes include draft provider testing, temporary MCP connection tests, safe external link handling, send-draft preservation on failure, footer-growth auto-follow, active local-model cleanup, and explicit Exa key removal behavior.
