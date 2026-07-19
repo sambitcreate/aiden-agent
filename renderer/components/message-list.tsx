@@ -1,6 +1,6 @@
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
-import { Ban, CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
+import { Ban, CircleAlert, CircleDot, LoaderCircle } from "lucide-react";
 import { Callout, Text } from "./ui";
 import { MessageBubble } from "./message-bubble";
 import type { ChatMessage } from "../lib/types";
@@ -15,7 +15,7 @@ interface MessageListProps {
 }
 
 export interface ToolActivity {
-  state: "running" | "completed" | "failed" | "blocked";
+  state: "running" | "finished" | "failed" | "blocked";
   label: string;
 }
 
@@ -23,8 +23,8 @@ export function MessageList({ messages, streamingText, toolActivity, error }: Me
   const ActivityIcon = toolActivity
     ? toolActivity.state === "running"
       ? LoaderCircle
-      : toolActivity.state === "completed"
-        ? CheckCircle2
+      : toolActivity.state === "finished"
+        ? CircleDot
         : toolActivity.state === "failed"
           ? CircleAlert
           : Ban
@@ -45,8 +45,8 @@ export function MessageList({ messages, streamingText, toolActivity, error }: Me
             className={
               toolActivity.state === "running"
                 ? "size-3.5 animate-spin text-accent"
-                : toolActivity.state === "completed"
-                  ? "size-3.5 text-green"
+                : toolActivity.state === "finished"
+                  ? "size-3.5 text-secondary"
                   : toolActivity.state === "failed"
                     ? "size-3.5 text-red"
                     : "size-3.5 text-support-warning"

@@ -62,7 +62,7 @@ const PERMISSION_META: Record<
 > = {
   full: {
     label: "Full access",
-    description: "Edit files and run commands without asking.",
+    description: "Read and edit files, and run commands without asking.",
     icon: OctagonAlert,
     className: "text-support-warning",
   },
@@ -99,7 +99,12 @@ export function Composer({
   const [sending, setSending] = React.useState(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && ready && !isGenerating && !sending;
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) &&
+    ready &&
+    !isGenerating &&
+    !sending &&
+    !permissionSaving;
 
   const settings = useSettings();
   const voice = useVoiceRecorder(
@@ -144,7 +149,7 @@ export function Composer({
 
   const submit = async () => {
     const trimmed = text.trim();
-    if ((!trimmed && attachments.length === 0) || !ready || isGenerating || sending) return;
+    if ((!trimmed && attachments.length === 0) || !ready || isGenerating || sending || permissionSaving) return;
     if (visionSupported === false && attachments.some((attachment) => attachment.kind === "image")) {
       toast.info("Switch to a vision-capable model before sending these images.");
       return;
@@ -176,7 +181,7 @@ export function Composer({
     : workspace?.name;
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
-    if (!onChangePermission || nextPermission === permission || permissionSaving) return;
+    if (!onChangePermission || nextPermission === permission || permissionSaving || isGenerating || sending) return;
     setPermissionSaving(true);
     try {
       await onChangePermission(nextPermission);
@@ -188,7 +193,7 @@ export function Composer({
   };
 
   const requestPermission = (nextPermission: WorkspacePermission) => {
-    if (nextPermission === permission || permissionSaving) return;
+    if (nextPermission === permission || permissionSaving || isGenerating || sending) return;
     if (nextPermission === "full") {
       setConfirmFullAccess(true);
       return;
@@ -281,8 +286,12 @@ export function Composer({
                   variant="transparent"
                   size="small"
                   className={cn("h-7 gap-1.5 px-2", perm.className)}
-                  disabled={!workspace || permissionSaving}
-                  aria-label={`Workspace access: ${perm.label}`}
+                  disabled={!workspace || permissionSaving || isGenerating || sending}
+                  aria-label={
+                    isGenerating || sending
+                      ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
+                      : `Workspace access: ${perm.label}`
+                  }
                 >
                   <PermIcon className="size-4 shrink-0" />
                   {permissionSaving ? "Updating…" : perm.label}
@@ -361,8 +370,8 @@ export function Composer({
       title="Enable Full Access?"
       description={
         <Text variant="small" color="secondary">
-          Aiden will be able to edit files and run commands in “{folderName ?? "this workspace"}” without asking
-          each time. You can change this any time from the composer.
+          Aiden will be able to read and edit files, and run commands in “{folderName ?? "this workspace"}”
+          without asking each time. You can change this any time from the composer.
         </Text>
       }
       confirmLabel="Enable Full Access"

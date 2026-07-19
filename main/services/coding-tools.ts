@@ -46,7 +46,7 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
   const a = (args ?? {}) as Record<string, unknown>;
   switch (toolName) {
     case "write_file":
-      return `Write file: ${String(a.path ?? "?")}`;
+      return `Create or replace file: ${String(a.path ?? "?")}`;
     case "edit_file":
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":

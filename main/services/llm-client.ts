@@ -20,7 +20,7 @@ import { resolveModelRuntime } from "./model-runtime.js";
 import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
-const active = new Map<string, Agent>();
+const active = new Map<string, { agent: Agent; workspaceId?: string }>();
 /** Approval requests awaiting a user decision, keyed by approvalId. */
 const pendingApprovals = new Map<string, (allowed: boolean) => void>();
 
@@ -113,6 +113,7 @@ export const llmClient = {
     // Only forward image attachments to vision-capable models (models.dev).
     const modelInfo = await modelsCatalog.info(provider.id, params.model);
 
+    const deniedToolCalls = new Set<string>();
     const agent = new Agent({
       initialState: {
         systemPrompt: buildSystemPrompt(folderPath, git.branch, permission),
@@ -138,10 +139,11 @@ export const llmClient = {
           else signal?.addEventListener("abort", () => resolve(false), { once: true });
         });
         pendingApprovals.delete(approvalId);
+        if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
         return allowed ? undefined : { block: true, reason: "The user denied this action." };
       },
     });
-    active.set(streamId, agent);
+    active.set(streamId, { agent, workspaceId: params.workspaceId });
 
     let full = "";
     let errored: string | null = null;
@@ -161,13 +163,15 @@ export const llmClient = {
         case "tool_execution_start":
           ipcMain.broadcast("chat:tool", { streamId, phase: "call", toolName: event.toolName });
           break;
-        case "tool_execution_end":
+        case "tool_execution_end": {
+          const denied = deniedToolCalls.delete(event.toolCallId);
           ipcMain.broadcast("chat:tool", {
             streamId,
-            phase: event.isError ? "error" : "result",
+            phase: denied ? "blocked" : event.isError ? "error" : "result",
             toolName: event.toolName,
           });
           break;
+        }
         default:
           break;
       }
@@ -199,6 +203,13 @@ export const llmClient = {
   },
 
   cancel(streamId: string): void {
-    active.get(streamId)?.abort();
+    active.get(streamId)?.agent.abort();
+  },
+
+  /** Stop generations whose tool set was snapshotted from this workspace. */
+  cancelWorkspace(workspaceId: string): void {
+    for (const entry of active.values()) {
+      if (entry.workspaceId === workspaceId) entry.agent.abort();
+    }
   },
 };

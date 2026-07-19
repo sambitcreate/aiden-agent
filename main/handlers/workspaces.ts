@@ -5,6 +5,7 @@ import { ipcMain, shell } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
 import { gitBranches, gitCheckout, gitCreateBranch, gitInfo } from "../services/git.js";
+import { llmClient } from "../services/llm-client.js";
 import { terminalService } from "../services/terminal.js";
 import type { Workspace, WorkspacePermission } from "../services/types.js";
 
@@ -58,6 +59,9 @@ export function registerWorkspaceHandlers(): void {
         ? (p.permission as WorkspacePermission)
         : existing.permission,
     };
+    if (next.permission !== existing.permission || next.folderPath !== existing.folderPath) {
+      llmClient.cancelWorkspace(existing.id);
+    }
     const saved = await configStore.saveWorkspace(next);
     if (saved.permission === "none" || saved.folderPath !== existing.folderPath) {
       terminalService.closeForWorkspace(existing.id);
@@ -67,6 +71,7 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("workspaces:remove", async (_event, id: unknown) => {
     const workspaceId = asString(id, "id");
+    llmClient.cancelWorkspace(workspaceId);
     terminalService.closeForWorkspace(workspaceId);
     await configStore.removeWorkspace(workspaceId);
   });

@@ -73,7 +73,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const mountedRef = React.useRef(true);
+  const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
+
+  chatIdRef.current = chatId;
 
   // Global shortcut / menu focuses the composer.
   React.useEffect(() => {
@@ -96,6 +100,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setToolActivity(null);
     setError(null);
     setApprovals([]);
+    setDecidingApprovalId(null);
   }, [chatId]);
 
   const messages = chat.data?.messages ?? [];
@@ -125,13 +130,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onTool: (phase, toolName) => {
             if (!mountedRef.current) return;
             const label = toolLabel(toolName);
-            setToolActivity(
-              phase === "call"
-                ? { state: "running", label: `${label}…` }
-                : phase === "error"
-                  ? { state: "failed", label: `${label} failed` }
-                  : { state: "completed", label: `${label} completed` },
-            );
+            if (phase === "call") setToolActivity({ state: "running", label: `${label}…` });
+            else if (phase === "blocked") setToolActivity({ state: "blocked", label: `${label} denied` });
+            else if (phase === "error") setToolActivity({ state: "failed", label: `${label} failed` });
+            else setToolActivity({ state: "finished", label: `${label} finished` });
           },
           onApproval: (prompt) => {
             if (mountedRef.current) {
@@ -193,9 +195,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const decideApproval = React.useCallback(
     async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
       if (decidingApprovalId) return;
+      const decisionChatId = chatId;
       setDecidingApprovalId(prompt.approvalId);
       try {
         await chatsApi.approve(prompt.approvalId, decision);
+        if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) => prev.filter((approval) => approval.approvalId !== prompt.approvalId));
         setToolActivity(
           decision === "allow"
@@ -203,12 +207,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             : { state: "blocked", label: `${toolLabel(prompt.toolName)} denied` },
         );
       } catch (approvalError) {
+        if (chatIdRef.current !== decisionChatId) return;
         toast.error(approvalError instanceof Error ? approvalError.message : "Couldn't send that approval decision.");
       } finally {
-        setDecidingApprovalId(null);
+        if (chatIdRef.current === decisionChatId) setDecidingApprovalId(null);
       }
     },
-    [decidingApprovalId],
+    [chatId, decidingApprovalId],
   );
 
   const openFolder = React.useCallback(() => {
@@ -225,6 +230,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const pending = approvals[0];
+
+  React.useEffect(() => {
+    if (!pending) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
+    return () => {
+      cancelAnimationFrame(frame);
+      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+    };
+  }, [pending?.approvalId]);
 
   return (
     <ScrollArea
@@ -296,6 +311,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 </Text>
                 <div className="mt-2.5 flex justify-end gap-2">
                   <Button
+                    ref={approvalDenyRef}
                     variant="transparent"
                     size="small"
                     disabled={decidingApprovalId === pending.approvalId}

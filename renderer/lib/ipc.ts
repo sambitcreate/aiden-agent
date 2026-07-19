@@ -213,7 +213,7 @@ interface ChatError {
   message: string;
 }
 
-export type ToolPhase = "call" | "result" | "error";
+export type ToolPhase = "call" | "result" | "error" | "blocked";
 interface ChatTool {
   streamId: string;
   phase: ToolPhase;
