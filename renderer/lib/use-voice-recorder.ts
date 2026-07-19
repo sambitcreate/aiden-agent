@@ -3,7 +3,7 @@
 // decodes to a 16 kHz mono WAV in the renderer and runs whisper.cpp locally.
 
 import * as React from "react";
-import { toast } from "@glaze/core/components";
+import { toast } from "../components/ui";
 import { voiceApi } from "./ipc";
 import type { VoiceProvider } from "./types";
 
@@ -74,14 +74,14 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
 
   const start = React.useCallback(async () => {
     try {
-      // Native permission gate before capture (see glaze-native-permissions).
-      const status = await window.glazeAPI.systemPreferences.getMediaAccessStatus("microphone");
+      // Native permission gate before capture.
+      const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
       if (status === "denied" || status === "restricted") {
         toast.error("Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone.");
         return;
       }
       if (status === "not-determined") {
-        const granted = await window.glazeAPI.systemPreferences.askForMediaAccess("microphone");
+        const granted = await window.aidenAPI.systemPreferences.askForMediaAccess("microphone");
         if (!granted) {
           toast.error("Microphone permission was not granted.");
           return;
