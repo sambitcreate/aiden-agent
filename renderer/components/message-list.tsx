@@ -1,6 +1,6 @@
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
-import { Callout, Text } from "@glaze/core/components";
+import { Callout, Text } from "./ui";
 import { MessageBubble } from "./message-bubble";
 import type { ChatMessage } from "../lib/types";
 
@@ -15,7 +15,7 @@ interface MessageListProps {
 
 export function MessageList({ messages, streamingText, toolStatus, error }: MessageListProps) {
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-6">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-3 py-6 sm:px-5">
       {messages.map((m) => (
         <MessageBubble key={m.id} role={m.role} content={m.content} attachments={m.attachments} />
       ))}
