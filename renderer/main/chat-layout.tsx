@@ -4,7 +4,7 @@
 
 import { Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import * as React from "react";
-import { SplitView } from "@glaze/core/components";
+import { SplitView } from "../components/ui";
 import { ChatSidebar } from "../components/chat-sidebar";
 import { chatsApi } from "../lib/ipc";
 import { useChats } from "../lib/queries";
@@ -17,7 +17,7 @@ export function ChatLayout() {
       <SplitView
         storageKey="aiden-agent"
         sidebar={<ChatSidebar activeChatId={params.chatId} />}
-        sidebarSize={{ default: 260, min: 220, max: 340 }}
+        sidebarSize={{ default: 272, min: 236, max: 340 }}
       >
         <Outlet />
       </SplitView>
