@@ -1,7 +1,7 @@
 // Phase-2 IPC handlers: Skills, MCP servers, Exa web search, voice transcription,
 // and the global shortcut. Thin — logic lives in services.
 
-import { ipcMain } from "@glaze/core/backend";
+import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { secrets } from "../services/secrets.js";
 import { mcpManager } from "../services/mcp.js";
@@ -69,7 +69,9 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("mcp:list", async () => configStore.listMcpServers());
   ipcMain.handle("mcp:save", async (_event, server: unknown) => {
     const parsed = parseMcpServer(server);
+    const existing = (await configStore.listMcpServers()).find((item) => item.id === parsed.id);
     await mcpManager.disconnect(parsed.id); // force reconnect with new config next use
+    if (existing?.oauth && !parsed.oauth) await clearOAuth(parsed.id);
     return configStore.saveMcpServer(parsed);
   });
   ipcMain.handle("mcp:remove", async (_event, id: unknown) => {
@@ -80,7 +82,6 @@ export function registerPhase2Handlers(): void {
   });
   ipcMain.handle("mcp:status", async (_event, server: unknown) => {
     const parsed = parseMcpServer(server);
-    await mcpManager.disconnect(parsed.id);
     const status = await mcpManager.status(parsed);
     return { ...status, authorized: parsed.oauth ? await hasOAuthTokens(parsed.id) : undefined };
   });
@@ -91,6 +92,9 @@ export function registerPhase2Handlers(): void {
     await authorizeMcpServer(parsed);
     return { authorized: true };
   });
+  ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => ({
+    authorized: await hasOAuthTokens(asString(id, "id")),
+  }));
   // Force-drop all cached MCP connections so the next message reconnects fresh.
   ipcMain.handle("mcp:reconnect", async () => {
     await mcpManager.closeAll();
@@ -104,7 +108,10 @@ export function registerPhase2Handlers(): void {
   ipcMain.handle("exa:setKey", async (_event, key: unknown) => {
     const value = typeof key === "string" ? key.trim() : "";
     if (value) await secrets.setKey("exa", value);
-    else await secrets.deleteKey("exa");
+    else {
+      await secrets.deleteKey("exa");
+      await configStore.setSettings({ exaEnabled: false });
+    }
     return { hasKey: Boolean(value) };
   });
   ipcMain.handle("exa:setEnabled", async (_event, enabled: unknown) => {
