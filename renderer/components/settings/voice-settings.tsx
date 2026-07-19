@@ -1,6 +1,6 @@
 // Voice settings — transcription provider for the composer's mic button and the
 // dictation hotkey. Cloud providers (OpenAI / Gemini) reuse the keys configured
-// under Providers; "On-device" runs whisper.cpp locally (managed below).
+// under Providers; "On-device" runs Parakeet locally (managed below).
 
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,8 +11,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Text,
-} from "@glaze/core/components";
+} from "../ui";
 import { settingsApi } from "../../lib/ipc";
 import { queryKeys, useSettings } from "../../lib/queries";
 import type { VoiceProvider } from "../../lib/types";
@@ -44,20 +43,23 @@ export function VoiceSettings() {
   return (
     <div className="flex flex-col gap-6">
       <FieldSet title="Voice Input">
-        <Field label="Provider" description="How the microphone in the composer is transcribed.">
+        <Field
+          label="Provider"
+          description={provider === "local" ? "Transcribes on this Mac after an on-device model is downloaded." : `Sends recordings to ${provider === "openai" ? "OpenAI" : "Google"} for transcription.`}
+        >
           <Select value={provider} onValueChange={changeProvider}>
             <SelectTrigger size="small">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="openai">OpenAI (Whisper)</SelectItem>
+              <SelectItem value="openai">OpenAI</SelectItem>
               <SelectItem value="gemini">Google Gemini</SelectItem>
               <SelectItem value="local">On-device (Parakeet)</SelectItem>
             </SelectContent>
           </Select>
         </Field>
         {isCloud ? (
-          <Field label="Model">
+          <Field label="Model" description="Used for microphone input and the dictation shortcut.">
             <Select value={model} onValueChange={(v) => void patch({ voiceModel: v })}>
               <SelectTrigger size="small">
                 <SelectValue />
@@ -72,11 +74,6 @@ export function VoiceSettings() {
             </Select>
           </Field>
         ) : null}
-        <Text variant="small" color="tertiary">
-          {isCloud
-            ? "Click the microphone in the composer to dictate; recordings are transcribed with the selected model."
-            : "Recordings are transcribed locally on your Mac — no audio leaves the device."}
-        </Text>
       </FieldSet>
 
       {provider === "local" ? <LocalVoiceSettings /> : null}
