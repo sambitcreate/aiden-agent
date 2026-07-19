@@ -1,163 +1,71 @@
 # Project Context
 
-## Overview
+## Identity and repository
 
-- **Repository workflow:** The source is maintained at `https://github.com/sambitcreate/aiden-agent`. It originated from a Glaze-managed checkout, and `README.md` documents the app and development workflow. The local `glaze.ts` wrapper supports standalone checkouts by resolving the SDK from Glaze's Application Support cache or `/Applications/Glaze.app`. Portable `.glaze/` exports are intentionally ignored because they can contain nested checkouts, generated builds, chats, logs, screenshots, and application-support data.
+- **App:** Aiden Agent
+- **Repository:** `https://github.com/sambitcreate/aiden-agent`
+- **Ownership:** Privately owned, self-contained Electron codebase with no external host application or private SDK requirement.
+- **Purpose:** A native macOS AI workspace agent that chats with local or hosted models and can act inside user-selected folders with explicit permissions.
 
-- **App Name:** Aiden Agent
-- **Purpose:** Native macOS AI **workspace agent** (Pi) — chat with any local/hosted model *and* let Pi read/edit files & run commands inside a folder you open, with per-workspace permissions.
-- **Features:**
-  - **Workspaces**: each workspace binds an optional folder + a permission level and holds its own chats. Sidebar has a workspace switcher ("Open folder as workspace…", "New empty workspace", remove); switching folders is how you change what Pi works on.
-  - **Agentic coding tools** (folder-scoped, Pi): `read_file`, `list_dir`, `glob`, `grep`, `edit_file`, `write_file`, `run_command` — all confined to the workspace root (run_command cwd = root).
-  - **Per-workspace permissions**: Full access (tools run) / Ask (writes & commands need inline Allow/Deny approval) / No access (folder tools withheld). Changed from the composer's permission control.
-  - **Git awareness**: composer shows the folder name (click → reveal in Finder) and, when it's a git repo, the current branch.
-  - **Attachments**: composer `+` attaches files/images (native multi-file picker). Images go to vision-capable models (skipped w/ a hint otherwise); text/code files are inlined as context. Attachments persist in the message and render in the transcript (image thumbnails / file chips).
-  - **models.dev catalog**: fetches the full models.dev database (cached 24h), auto-maps each provider+model, and surfaces capabilities (vision, tool calling, reasoning, open weights, context length) — shown as badges per model in the provider editor and used to gate image attachments.
-  - Multi-provider chat: preset connections (OpenAI, Anthropic/Claude, Gemini, DeepSeek, Kimi/Moonshot) + custom OpenAI-compatible / Anthropic-compatible endpoints; local presets for LM Studio & Ollama.
-  - Encrypted per-provider API key storage (never leaves the backend).
-  - Streaming responses with markdown + code-highlight rendering; Stop/cancel.
-  - Chat-history sidebar (scoped to the active workspace): create, rename, delete, search, route-driven selection.
-  - **Tool calling** (multi-step, pi agent loop): coding tools + Exa web search + Agent Skills + MCP server tools; live tool-activity status in the transcript.
-  - **MCP servers**: connect stdio / HTTP / SSE MCP servers (official `@modelcontextprotocol/sdk`); their tools become available to the model. Add/edit/test/enable/remove in settings.
-  - **Skills** = Agent Skills: name + description + instructions; each enabled skill is exposed as a callable tool that returns its instructions.
-  - **Voice input**: mic button in composer → cloud (OpenAI Whisper/gpt-4o-transcribe, Gemini) **or on-device (Parakeet via sherpa-onnx)**; configurable in settings. Cloud reuses provider keys; on-device runs locally with no network.
-  - **On-device transcription (Parakeet)**: bundled sherpa-onnx engine (no install/Homebrew). Download/manage NVIDIA Parakeet TDT 0.6B models (v3 = 25 languages, v2 = English) in a dedicated **model-management subview** (search, accuracy/speed meters, size/quant/languages, download/cancel/delete, Active/Recommended badges). Runs entirely on the Mac.
-  - **Global shortcut** (default ⌘⌥Space, configurable): brings app forward + focuses composer.
-  - **Dictation hotkey** (default ⌘⇧D, configurable, off by default): global hotkey toggles voice recording into the composer using the selected voice provider.
-  - **Collapsible sidebar** (SplitView.SidebarToggle, ⌃⌘S).
-  - In-app full-screen settings (Providers, Skills, MCP, Web Search, Voice, Shortcut, Appearance) with left nav.
-  - Light / Dark / Auto appearance.
+## Current architecture
 
-## Current State
+- **Desktop runtime:** Electron. `main/index.ts` owns lifecycle, windows, application menus, shortcuts, and cleanup.
+- **Platform boundary:** `main/platform.ts` centralizes Electron exports, logging, native dialogs, theme, microphone permissions, and renderer notifications.
+- **Security bridge:** `renderer/preload.ts` exposes `window.aidenAPI` through `contextBridge`. Renderer invokes are prefix-allowlisted and notifications are channel-allowlisted. Renderer sandboxing and context isolation are enabled; Node integration is disabled.
+- **Renderer:** React 19, TanStack Router, TanStack Query, Tailwind CSS 4, local UI components in `renderer/components/ui.tsx`, Radix primitives, cmdk, Sonner, and Lucide. The local component layer preserves the established macOS visual contract: translucent materials, native-density controls, pinned/collapsible/resizable split views, measured toolbar/footer scrolling, command pickers, fields, menus, and dialogs.
+- **Build:** Vite emits `build/renderer`; esbuild emits `build/main/index.js` and `build/preload/preload.cjs`; electron-builder packages the `.app`, DMG, and ZIP.
+- **Persistence:** JSON under `app.getPath("userData")`; provider keys and MCP OAuth sessions encrypted with Electron `safeStorage`.
 
-Frontend-heavy React UI over a backend that owns keys, streaming, chat persistence, workspaces, and folder-scoped tools. **The generation engine is pi's embedded agent loop** (`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`), which unifies OpenAI-compatible + Anthropic wire formats and drives multi-step tool calling. **Vercel AI SDK is fully removed** (`ai`/`@ai-sdk/*` gone from package.json; pi is the only engine).
+## Agent and tools
 
-**Key files**
-- `main/services/types.ts` — shared Provider/Chat/Message/ChatStartParams types.
-- `main/services/data-store.ts` — generic JSON store under `app.getPath("userData")` + `ensureUserDataDir`.
-- `main/services/secrets.ts` — safeStorage-backed API keys (`provider-keys.json`, base64 ciphertext; keys never returned to renderer).
-- `main/services/config-store.ts` — providers + settings in `config.json`; seeds `PRESETS` on first run.
-- `main/services/chat-store.ts` — `chats/index.json` + `chats/<id>.json`; CRUD + `appendMessage` (auto-titles from first user msg).
-- `main/services/llm-client.ts` — **pi agent loop**: resolves the workspace (folder + permission) from `params.workspaceId`, builds a dynamic system prompt (folder path + git branch + permission), a `Model<Api>`, a `streamFn` over `openAICompletionsApi()`/`anthropicMessagesApi()`, `getApiKey`, and `buildAgentTools({workspaceRoot, permission})`. Runs `new Agent(...).continue()`; subscribes → broadcasts `chat:delta`/`chat:tool`/`chat:done`/`chat:error`. **Approval flow**: `beforeToolCall` hook — in "ask" mode, for `write_file`/`edit_file`/`run_command` it broadcasts `chat:approval` and awaits a `pendingApprovals` Promise resolved by `llmClient.approve(approvalId, decision)` (or by the abort signal → block). `agent.abort()` per stream (`active` map).
-- `main/services/tools.ts` — `buildAgentTools(ctx: {workspaceRoot?, permission})` assembles `AgentTool[]` (pi): folder coding tools (when `workspaceRoot` set & permission≠"none") + Exa `web_search` + Agent Skills + MCP tools. Inputs use **typebox `Type.Object`**; each `execute` returns `AgentToolResult`.
-- `main/services/coding-tools.ts` — folder-scoped pi tools (read/write/edit/list/glob/grep/run_command); every path `resolveInRoot`-confined to the workspace root, `run_command` via `exec` (cwd=root, 120s timeout, 10MB buffer, truncated). Exports `APPROVAL_TOOL_NAMES` (write/edit/run) + `summarizeToolCall`. glob uses `fs.glob` (Node 24).
-- `main/services/git.ts` — `gitInfo(folderPath)` → `{isRepo, branch?}` via `execFile("git", …)` (3s timeout, graceful fallback).
-- `main/services/models-catalog.ts` — fetches `https://models.dev/api.json`, caches to `models-dev.json` (24h TTL, in-memory + disk), maps our provider ids → models.dev slugs (openai/anthropic/gemini→google/deepseek/moonshot→moonshotai; else global id search), normalizes to `ModelInfo` (`vision` = `attachment` || modalities.input has "image"; `toolCall`, `reasoning`, `openWeights`, `contextLength`). `info/infoMany/refresh`.
-- `main/services/attachments.ts` — `readAttachments(paths)`: images (by ext, ≤8MB) → base64 `data`; else UTF-8 text (NUL-byte binary check, ≤100k chars) → `text`. Returns `Attachment[]`.
-- `main/handlers/attachments.ts` — `attachments:read`, `models:info(providerId, modelIds)`, `models:refresh`.
-- `main/services/mcp.ts` — `McpManager` connects/caches MCP clients (stdio/http/sse via official SDK), `agentToolsFor()` wraps MCP tools as pi `AgentTool`s (raw JSON Schema wrapped via `Type.Unsafe`), `status()` for the test button, `collectMcpAgentTools()` merges enabled servers, `closeAll()` (used by the Reload button). `makeTransport` attaches a **non-interactive OAuth provider** (`oauthProviderFor`) when `server.oauth` — supplies stored tokens on background connects and never opens a browser mid-chat.
-- `main/services/mcp-oauth.ts` — MCP OAuth 2.0 (PKCE + dynamic client registration) per the MCP spec. `McpOAuthProvider implements OAuthClientProvider` (SDK), loopback redirect `http://127.0.0.1:41390/callback` (fixed port, RFC 8252 native flow). `authorizeMcpServer(server)` opens the consent page via `shell.openExternal`, captures the code on a short-lived localhost server, calls `transport.finishAuth(code)`, verifies, and stores tokens. Interactive vs background flag gates browser opening. `oauthProviderFor`/`hasOAuthTokens`/`clearOAuth`.
-- `main/services/mcp-oauth-store.ts` — safeStorage-encrypted per-server OAuth session (`{clientInformation, tokens, codeVerifier}`) in `mcp-oauth.json` (base64 ciphertext, like provider keys).
-- `main/services/git.ts` — read helpers `gitInfo` (isRepo + branch + **uncommitted count**) & `gitBranches` (list + current + uncommitted, sorted by committerdate); action helpers `gitCheckout`/`gitCreateBranch` (throw git's stderr on failure). All via `execFile("git",…)` with timeouts.
-- `main/services/skills-discovery.ts` — `discoverSkills(workspaceRoot?)` scans `<root>/.agents/*/SKILL.md` + global `~/.agents/*/SKILL.md`; minimal YAML frontmatter parser (name/description) + Markdown body = instructions; workspace overrides global by name. Merged into `buildAgentTools` (tools.ts) after config skills, deduped by tool key.
-- `main/services/transcription.ts` — cloud transcription: OpenAI (`/audio/transcriptions`, multipart) or Gemini (`generateContent` inline audio); uses provider keys.
-- `main/services/parakeet.ts` — **on-device engine = sherpa-onnx-node (bundled native, no install)**. `createRequire` loads the CJS addon; `engineStatus()`→`{ready,error}`; caches one `OfflineRecognizer` per model (`modelType:"nemo_transducer"`, featConfig 16k/dim80, encoder/decoder/joiner `.int8.onnx` + tokens.txt); `transcribePcm(Float32Array, modelId)` → text; `releaseRecognizer`.
-- `main/services/local-models.ts` — **Parakeet catalog** (`parakeet-v3` 25-lang recommended, `parakeet-v2` English) = sherpa-onnx int8 tar.bz2 from `github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/…`. Stored as dirs in `userData/parakeet-models/<id>/`. `downloadModel`: streaming fetch → temp `.tar.bz2` (progress 0–90% via `localModels:progress` `{…,phase}`) → `/usr/bin/tar -xjf … --strip-components=1` (extract 90–100%) → validates `encoder.int8.onnx`. `cancelDownload` (AbortController), `deleteModel`, `modelDir`, `isModelInstalled`, `listModels` (metadata: sizeLabel/quant/languagesLabel/accuracy/speed/recommended/installed).
-- `glaze.config.ts` — `externalizePackage("sherpa-onnx-node")` (copies the addon + `sherpa-onnx-darwin-*` dylibs to `build/main/node_modules/`; can't be inlined). **Verified the native module loads in the bundle (OfflineRecognizer) and engine shows "Ready" live.**
-- `main/services/shortcut.ts` — `globalShortcut` for **two** hotkeys: focus (`initShortcut`, default `Command+Alt+Space`) + dictation (`initDictationShortcut`, default `Command+Shift+D`, gated on `dictationEnabled`, skipped if it collides with focus accel). `applyShortcutFromSettings` re-registers both.
-- `main/handlers/local-voice.ts` — IPC: `localVoice:status`, `localModels:list|download|cancel|delete`, `voice:transcribeLocal(pcmBase64, modelId)` (base64 raw Float32 → `Buffer.readFloatLE` → `Float32Array`). Registered in `handlers/index.ts`.
-- **`main/handlers/providers.ts` `settings:set` is a strict whitelist** — must list every settings key or it's silently dropped. Now allows `voiceProvider:"local"`, `localVoiceModel`, `dictationEnabled`, `dictationAccelerator` (these were the "on-device didn't work" root cause).
-- `renderer/lib/accelerator.ts` — shared `toAccelerator(e)` / `prettyAccelerator(s)` key-event helpers (used by the dictation-hotkey recorder; shortcut-settings still has its own inline copy).
-- `renderer/components/settings/local-voice-settings.tsx` — `LocalVoiceSettings`: engine "Ready"/error `Callout`, active-model summary, **"Manage Models"** button → toggles `ModelManagerView` subview, dictation enable `Switch` + accelerator recorder; clears `localVoiceModel` if the active model was deleted.
-- `renderer/components/settings/model-manager-view.tsx` — `ModelManagerView` (the subview): back button, search, "Downloaded"/"Available to Download" sections, `ModelCard` (accuracy/speed `Meter` bars, size·quant, languages, Active/Recommended `Badge`, Download/Cancel/Use/Delete, `DownloadProgress`). Activating sets `{localVoiceModel, voiceProvider:"local"}`; auto-activates the first downloaded model.
-- `main/services/models.ts` — `GET /models` listing + `testConnection`.
-- `main/services/config-store.ts` — now also owns **workspaces** (`workspaces` array in config.json; seeds one folderless `id:"default"` workspace; `list/get/save/remove`, never drops to zero workspaces).
-- `main/handlers/{providers,chats,chat,workspaces,phase2}.ts` — thin IPC handlers, registered in `handlers/index.ts`. `workspaces.ts` = list/get/create/update/remove/gitInfo/openFolder (openFolder via backend `shell.openPath`) + **`git:branches`/`git:checkout`/`git:createBranch`**. `chat.ts` adds `chat:approve`. `chats.ts` create takes `workspaceId`; list takes optional `workspaceId` filter. phase2 = skills/mcp/exa/voice/shortcut, plus **`skills:discovered(folderPath)`**, **`mcp:authorize`** (browser OAuth), **`mcp:reconnect`** (closeAll); `mcp:status` returns `authorized?` for OAuth servers; `mcp:remove` clears stored OAuth tokens; `parseMcpServer` parses `oauth`.
-- `renderer/lib/workspace-context.tsx` — `WorkspaceProvider` + `useActiveWorkspace()` (active workspace shared between sidebar & chat pane; persisted in `aiden-agent.workspaceId`).
-- `main/index.ts` — Cmd+, broadcasts `app:navigate`; registers global shortcut (focus window + broadcast `app:focus-composer`); closes MCP + unregisters shortcut on before-quit.
-- `renderer/lib/ipc.ts` — typed invoke wrappers + `startGeneration` (subscribes before invoking; client-generated streamId).
-- `renderer/lib/queries.ts` — React Query hooks; `renderer/lib/use-model-selection.ts` — localStorage-backed provider/model choice.
-- `renderer/main/router.tsx` — routes: `chatLayout` (pathless) → `/` (ChatIndex redirect) + `/chat/$chatId` (ChatPane); `/settings`.
-- `renderer/main/{chat-layout,chat-pane,settings-view}.tsx`; `renderer/components/{chat-sidebar,composer,model-picker,message-list,message-bubble,markdown}.tsx`; `renderer/components/settings/{providers-settings,provider-editor,appearance-settings}.tsx`.
+- Pi is embedded in-process through `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`.
+- Workspace tools include `read_file`, `list_dir`, `glob`, `grep`, `edit_file`, `write_file`, and `run_command`.
+- Every filesystem path is resolved inside the active workspace root. Commands run with the workspace root as their working directory.
+- Permission modes are Full, Ask, and No Access. Ask mode pauses write/edit/command calls for inline Allow or Deny approval.
+- Git helpers report branch and uncommitted count, switch branches, and create branches.
+- Agent Skills are loaded from workspace and user `.agents/*/SKILL.md` folders.
+- MCP supports stdio, HTTP, and SSE transports plus native-app OAuth with a loopback PKCE redirect and encrypted tokens.
+- Optional Exa search becomes an agent tool when enabled and configured.
 
-**Components** (@glaze/core): `SplitView` (chat shell `storageKey="aiden-agent"`, sidebar 260/220/340; settings `"aiden-agent-settings"`); `Sidebar` has a top **workspace switcher** (`DropdownMenu` + `DropdownMenuCheckboxItem` per workspace, `sublabel`=folderPath; items: open-folder / new-empty / remove) above the search + chat list; `SidebarList`/**`SidebarListGroup`** (chats grouped Recent/Yesterday/month/Older, **scoped to active workspace**)/`SidebarListItem`/`SidebarFooter`; `ScrollArea` chat header — `title`=chat title, **no subtitle** (model picker moved into composer), `actions`=new-chat (`SquarePen`) + settings (`SlidersHorizontal`) glass buttons, `footer`=composer. **Composer** (redesigned to match reference): wrapped in a **full-width opaque `bg-background` + `border-t` bar** so transcript text never bleeds through the floating footer (the ScrollArea footer + `bg-well` are transparent; `bg-background` = opaque). Top row (matches reference: folder · Local · branch) = folder pill (`Folder`, click→reveal in Finder) + **static `Local` badge** (`Monitor` icon, "Pi runs locally") + **`GitBranchPicker`** (`renderer/components/git-branch-picker.tsx`, only when repo) — `CustomDropdownMenu`+`Command` combobox: "Search branches", branch list w/ `Check` on current + "Uncommitted: N files" subtitle, `Separator`, "Create and checkout new branch…" (inline name input). Uses `useGitBranches`/`gitApi.checkout`/`gitApi.createBranch`, invalidates git queries. Git chip fully hidden when not a repo; attachment chips (image thumbs / `FileText` chips w/ remove); textarea placeholder **"Do anything"**; bottom row = **`Plus` = attach files/images** (native multi-file picker; new-chat lives only in the header now) + **permission `DropdownMenu`** on the left, model picker + mic + send on the right. `ModelPicker` = **searchable combobox** (`CustomDropdownMenu` shell, `modal={false}` + embedded `Command`/cmdk): compact trigger (Cloud/Cpu icon + model label + `ChevronsUpDown`); dropdown has a "Model" header, `CommandInput` filter, flat hosted-first list, each item = Cloud (hosted) / Cpu (local) icon + label + muted quant/format tag (parsed from name: MLX/GGUF/Q4_K_S/…) + `Check` on active + **pin toggle** (hover-reveal; pinned float to top, persisted in localStorage `aiden-agent.pinnedModels`). `Command onKeyDown` stops propagation except Escape so cmdk owns arrows/typeahead but the menu still closes. (badges NOT inlined into names — capabilities live in the provider editor.) **Inline approval card** (rounded-card well + Deny/Allow buttons) renders in the transcript when a `chat:approval` is pending. `Select` grouped (model picker, value `providerId::model`); `Dialog`/`AlertDialog` (chat rename/delete, **workspace remove**, provider editor); `Field`/`FieldSet`/`RadioGroup` (settings); `ContextMenu` (chat rename/delete); `Textarea`, `Button`, `EmptyState`, `Text`. **Markdown** (`renderer/components/markdown.tsx`) via `react-markdown`+`remark-gfm`+**`remark-math`**+**`rehype-katex`** (LaTeX; imports `katex/dist/katex.min.css`; `.katex-display` set to scroll-x). **rehype-highlight removed** — code highlighting now done manually in **`renderer/components/code-block.tsx`** (`CodeBlock`): custom `pre`(unwrap)/`code` react-markdown components route fenced blocks to `CodeBlock`, which highlights via `hljs.highlight`/`highlightAuto` (memoized for streaming), **pretty-prints JSON** (explicit ```json or content that parses), shows a lang label + per-block copy button, and renders via `dangerouslySetInnerHTML` (hljs-escaped). Inline code = styled `<code>` span. hljs colors still in `renderer/styles.css`. Shared **`renderer/components/copy-button.tsx`** (`CopyButton`, `navigator.clipboard.writeText` → Copy/Check toggle) used by code blocks AND **message hover-copy** (`message-bubble.tsx`: `group` + `group-hover:opacity-100` copy button copies the raw markdown `content`, below both user & assistant messages; hidden while assistant is streaming). **Dark-mode background**: softened to graphite via `renderer/lib/dark-theme-overrides.ts` (`applyDarkThemeOverrides()` injects a runtime `<style>` for `html.dark{--bg:#2a2a2c;--bg-secondary:#1d1d1f}`, imported in both window entries) — NOT in styles.css, because Tailwind v4 strips seed-var redefinitions there.
+## Models, attachments, and voice
 
-Phase-2 settings components in `renderer/components/settings/`: `providers-settings` + `provider-editor`, `appearance-settings`, `skills-settings`, `mcp-settings`, `web-search-settings`, `voice-settings`, `shortcut-settings`. Composer voice via `renderer/lib/use-voice-recorder.ts` (MediaRecorder + `systemPreferences` mic permission; **for provider `"local"` it decodes via `AudioContext`/`OfflineAudioContext` to 16 kHz mono Float32 PCM, base64 → `voice:transcribeLocal`**). Composer subscribes to `app:dictate-toggle` (refs for latest voice/isGenerating). `SplitView.SidebarToggle` in chat `Sidebar.actions` — now the sole action there; the sidebar's own "New chat" icon button was removed as redundant with the header's new-chat button.
+- Providers support OpenAI-compatible and Anthropic-compatible APIs, with presets for common hosted services and local Ollama/LM Studio endpoints.
+- The models.dev catalog is cached for 24 hours and supplies vision, tool, reasoning, open-weight, and context metadata.
+- Text files are inlined with size limits; images are base64 encoded and sent only to vision-capable models.
+- Cloud transcription supports configured OpenAI and Gemini providers.
+- Local transcription uses bundled `sherpa-onnx-node` and downloaded Parakeet models. PCM conversion happens in the renderer; recognition happens in the main process.
 
-**Data & storage**
-- Backend JSON under userData: `config.json` (providers + settings + `mcpServers` [now w/ optional `oauth` flag] + `skills` + **`workspaces`**), `provider-keys.json` (encrypted; Exa key under id `"exa"`), **`mcp-oauth.json`** (encrypted per-server OAuth sessions), `chats/index.json` + `chats/<id>.json`. Agent Skills also discovered read-only from `.agents/*/SKILL.md` (workspace + `~/.agents`).
-- **Workspace** = `{id, name, folderPath?, permission:"full"|"ask"|"none", createdAt, updatedAt}`; seeded default `id:"default"`. **Chat** now has `workspaceId` (legacy chats backfilled to `"default"` on read); chat list filters by workspaceId. **ChatMessage** now has `attachments?: Attachment[]` (`{kind:"image"|"text", data?/text?, mimeType, name, size}`) persisted in the chat JSON.
-- **models-dev.json** cache under userData: `{fetchedAt, catalog}` (full models.dev api.json).
-- Renderer localStorage: `aiden-agent.providerId`, `aiden-agent.model`, **`aiden-agent.workspaceId`** (active workspace), **`aiden-agent.pinnedModels`** (JSON array of pinned `providerId::model` in the model picker).
-- `package.json` `glaze.capabilities.microphone` declared for voice input.
+## Privacy boundary
 
-**IPC channels**
-- `providers:list|save|remove|setKey|test|listModels`; `settings:get|set`.
-- `chats:list(workspaceId?)|get|create({workspaceId?,…})|rename|remove|appendMessage`.
-- `workspaces:list|get|create|update|remove|gitInfo(folderPath)|openFolder(folderPath)`.
-- `attachments:read(paths[])` → `Attachment[]`; `models:info(providerId, modelIds[])` → `Record<id, ModelInfo>`; `models:refresh` → `{providerCount, fetchedAt}`.
-- `chat:start(streamId, params{workspaceId?,…})` → `{streamId}`; `chat:cancel(streamId)`; **`chat:approve(approvalId, decision)`**. Notifications: `chat:delta`, `chat:done`, `chat:error`, `chat:tool` `{streamId,phase,toolName}`, **`chat:approval` `{streamId,approvalId,toolName,summary}`**.
-- `skills:list|save|remove`; `mcp:list|save|remove|status`; `exa:get|setKey|setEnabled`; `voice:transcribe(audioBase64,mimeType)`; `shortcut:apply`.
-- **On-device voice:** `localVoice:status`→`{ready,error}` (sherpa-onnx load check); `localModels:list`→`LocalVoiceModel[]`; `localModels:download(id)` (streams `localModels:progress` `{id,downloaded,total,percentage,phase:"download"|"extract"}`); `localModels:cancel(id)`; `localModels:delete(id)`; `voice:transcribeLocal(pcmBase64, modelId)`→text (pcmBase64 = raw 16 kHz mono Float32). Settings: `voiceProvider` now `"openai"|"gemini"|"local"`, + `localVoiceModel`, `dictationEnabled`, `dictationAccelerator` — **all must be whitelisted in `settings:set`**.
-- `app:navigate` `{path}`, `app:focus-composer`, **`app:dictate-toggle`** (backend → renderer; composer toggles the recorder).
+- Local data and credentials remain on the Mac unless a configured feature sends a request.
+- Hosted model calls, cloud transcription, Exa, remote MCP servers, models.dev catalog refreshes, and model downloads require network access and share the minimum data needed for that request.
+- A local-only session requires a local model endpoint, local voice, Exa disabled, and no remote MCP servers.
 
-**Integrations:** **pi** — `@earendil-works/pi-agent-core` (Agent loop, tool calling) + `@earendil-works/pi-ai` (unified LLM API; `/compat` for `openAICompletionsApi`/`anthropicMessagesApi` + `Type` from typebox). Streaming + multi-step tool calling run through pi (`Node >=22.19`; we're on Node 24). `@modelcontextprotocol/sdk` (MCP client, stdio/http/sse). Exa search API. OpenAI/Gemini transcription. **`sherpa-onnx-node`** (bundled native ASR engine for on-device Parakeet; externalized via `glaze.config.ts`). Providers via raw `fetch` for model listing. **Vercel AI SDK fully removed from package.json.** Git CLI used for branch detection; `child_process` `exec`/`execFile` for coding tools + git.
+## Important files
 
-**Conventions & constraints**
-- Backend owns all data/secrets; renderer is pure UI over `window.glazeAPI.glaze.ipc`.
-- Streaming uses broadcast→`onNotification` (single-param shape); renderer supplies streamId so it subscribes before the first token.
-- Every chat operation targets a concrete `chatId`; `/` redirects to newest chat or auto-creates one.
-- **pi tool inputs use typebox** (`Type.Object`; MCP schemas via `Type.Unsafe`). (Legacy note: the old AI SDK path required `jsonSchema`, never zod — zod OOM'd tsc.)
-- pi's `Agent.continue()` resolves on completion *and* on abort; errors are encoded as a `message_update` event with `assistantMessageEvent.type==="error"` (reason `"error"` vs `"aborted"`) — we only surface `chat:error` for `"error"`, treating `"aborted"` as `chat:done` with partial text.
-- MCP clients are cached in `McpManager`; disconnected on config change and app quit.
-- Cannot fully e2e-test generation/tools/voice without user keys or a running local server/MCP server — UI + wiring validated via DOM; global shortcut confirmed registered in logs; sidebar collapse confirmed (240→0px).
-- The scaffold's separate settings window (`renderer/settings/`, `windows/settings-window.ts`) is unused but left in place.
+- `main/index.ts` — Electron lifecycle and main window.
+- `main/platform.ts` — Electron platform facade and native IPC handlers.
+- `renderer/preload.ts` — allowlisted context bridge.
+- `renderer/components/ui.tsx` — repository-owned component system.
+- `PRODUCT.md` — product register, users, personality, anti-references, and design principles for interface work.
+- `main/services/llm-client.ts` — Pi agent loop, streaming, and approvals.
+- `main/services/coding-tools.ts` — workspace-confined tools.
+- `main/services/config-store.ts` — providers, settings, skills, MCP servers, and workspaces.
+- `main/services/chat-store.ts` — persisted chat history.
+- `main/services/secrets.ts` and `main/services/mcp-oauth-store.ts` — encrypted secrets.
+- `main/services/mcp.ts` and `main/services/mcp-oauth.ts` — MCP clients and OAuth.
+- `main/services/parakeet.ts` and `main/services/local-models.ts` — on-device transcription.
+- `vite.config.ts` and `scripts/build-electron.mjs` — independent builds.
+- `README.md` — current stack, privacy boundary, and commands.
 
-## Recent History
+## Current verification status
 
-### 2026-07-18 — Rich streaming chat rendering (Markdown/LaTeX/code/copy)
-- **Goal:** Upgrade the AI chat to render rich streaming responses (Markdown, tables, LaTeX, syntax-highlighted code, formatted JSON), per-code-block Copy buttons, and a hover Copy button on every message that copies the original Markdown.
-- **What was done:** Added `remark-math`+`rehype-katex`+`katex` (LaTeX). New `CodeBlock` (`code-block.tsx`) does hljs highlighting + JSON pretty-print + lang label + copy button; `markdown.tsx` now uses custom `pre`/`code` components and **dropped rehype-highlight**. New shared `CopyButton` (`copy-button.tsx`). `message-bubble.tsx` shows a hover copy button (raw markdown) on user + assistant messages.
-- **Key decisions:** Manual hljs highlighting (not rehype-highlight) so JSON can be reformatted and each block gets its own copy button. Highlighting memoized on display text so streaming stays smooth; incomplete JSON mid-stream falls back to raw gracefully. Tables + katex-display set to scroll-x to avoid bubble overflow.
-- **UI elements:** transcript code blocks, copy buttons, message hover actions, markdown/LaTeX/table rendering.
-- **Backend elements:** none (frontend-only).
-- **Corrections/Lessons Learned:** clipboard is not exposed via preload; renderer uses `navigator.clipboard.writeText` directly (WebView), with a silent catch for focus-related rejections. Verified KaTeX + hljs CSS bundle and apply at runtime.
-
-
-### 2026-07-18 — Soften dark-mode background from pure black to graphite
-- **Goal:** User disliked the pure-black dark theme (opaque black composer bar over the graphite window material); wanted a softer neutral look like a reference screenshot.
-- **What was done:** Override dark seeds `--bg`/`--bg-secondary` from #000 → graphite (`#2a2a2c` / `#1d1d1f`) so all bg/text/border ramps recompute and opaque surfaces (composer footer via `bg-background`=`var(--bg)`) blend with the window.
-- **Key decisions:** Injected via a runtime `<style>` (`renderer/lib/dark-theme-overrides.ts`, `applyDarkThemeOverrides()`, imported in `main/index.tsx` + `settings/index.tsx`) targeting `html.dark`.
-- **Corrections/Lessons Learned:** **Tailwind v4's compiler strips/consolidates redefinitions of its managed seed vars (`--bg`, `--bg-secondary`) written in styles.css** — a `.dark{--bg:…}` (and even higher-specificity `html.dark`) override compiled to *nothing* (identical output hash), while adjacent non-seed rules (hljs) survived. Runtime `<style>` injection bypasses the compiler and wins the cascade. Verified live: `--bg`=#2a2a2c, composer bg = rgb(42,42,44).
-- **UI elements:** window background, composer footer.
-
-### 2026-07-17 — Git branch picker, .agents skills, MCP reload + hosted OAuth
-
-- **Goal:** From a reference screenshot + asks: composer shows folder·Local·branch (git only when a repo) with an interactive branch picker; auto-discover Agent Skills from `.agents` folders; a Reload control so MCP/tool changes apply; and full browser OAuth for hosted MCPs (Composio).
-- **What was done:** (1) `git.ts` gained uncommitted count + `gitBranches`/`gitCheckout`/`gitCreateBranch`; `git:*` IPC in workspaces.ts; new `GitBranchPicker` (search + checkout + create-and-checkout) wired into composer; added static `Local` badge (`Monitor`). (2) `skills-discovery.ts` scans workspace + global `~/.agents/*/SKILL.md`, merged into `buildAgentTools`; surfaced read-only in Skills settings with source badges. (3) `mcp:reconnect` (closeAll) + Reload button in MCP settings. (4) `mcp-oauth.ts`/`mcp-oauth-store.ts` = MCP SDK OAuth (PKCE + dynamic registration) via loopback redirect (fixed port 41390), `shell.openExternal`, encrypted token store; `oauth` flag on `McpServer`; Authorize button + OAuth toggle in the MCP editor; non-interactive provider on background connects.
-- **Key decisions:** Loopback (RFC 8252) redirect for MCP OAuth rather than Glaze's `OAuthService` relay, because MCP needs dynamic client registration the high-level service doesn't model. "Local" is a static execution badge (per user). Skills = SKILL.md-subfolder convention.
-- **UI elements:** composer breadcrumb (folder/Local/branch), branch-picker dropdown, MCP Reload/Authorize buttons + OAuth switch, discovered-skills list.
-- **Backend elements:** git_cli, filesystem skill discovery, ipc_handlers, oauth (loopback + safeStorage), mcp reconnect.
-- **Verified live:** composer renders folder `godot-game-test` · `Local` · `main`; branch picker opens with real "Uncommitted: 14 files" + Create action. type-check/lint/build all green.
-- **Untested:** the MCP OAuth handshake against a live provider (no Composio OAuth account available) — structure follows the MCP spec but the end-to-end token exchange wasn't exercised. Composio's `connect.composio.dev/mcp` also works today via the `x-consumer-api-key` header without OAuth.
-
-### 2026-07-17 — Redesigned model picker as searchable combobox (icons, quant, pin)
-
-- **Goal:** Match a reference design — compact composer trigger + a searchable dropdown with per-model icons, quant tags, active check, and pin-to-top.
-- **What was done:** Rewrote `renderer/components/model-picker.tsx` from a grouped `Select` to `CustomDropdownMenu` + `Command` (cmdk). Trigger: Cloud/Cpu icon + label + `ChevronsUpDown`. Dropdown: "Model" header, filter input, flat hosted-first list; each row = provider-type icon + label + parsed quant/format tag + `Check` (active) + hover pin button. Added pinning persisted in `aiden-agent.pinnedModels` (pinned float to top). Kept `encodeSelection`/`decodeSelection`/`isUsable` exports + the `ModelPicker` props unchanged (chat-pane + use-model-selection untouched).
-- **Key decisions:** No `Popover` component exists in the SDK, so used `CustomDropdownMenu` (non-modal) as the anchored shell around cmdk. `Command onKeyDown` stops propagation except Escape so cmdk owns arrow/typeahead nav while the menu still closes. Local vs hosted detected via `!needsKey` or localhost baseUrl. Quant tag parsed from trailing token (MLX/GGUF/Q#_…); hosted models simply show none.
-- **UI elements:** composer model-picker trigger, searchable dropdown, model rows w/ icons + quant + check + pin.
-- **Backend elements:** none (frontend-only).
-- **Corrections/Lessons:** Verified live — trigger shows Cloud + "deepseek-chat"; dropdown filter works (typed "reason" → only deepseek-reasoner); active item shows single check; pin button present. Two `chevrons-up-down` triggers exist (workspace switcher + model picker) — disambiguate by the Cloud/Cpu icon.
-- **User Frustrations & Important Remarks:** Purely a visual/UX request via screenshots; delivered the combobox look incl. pinning.
-
-### 2026-07-17 — Pivot on-device voice to Parakeet (sherpa-onnx) + fix root wiring bug
-
-- **Goal:** User reported on-device "didn't work" (mic errored `voice:transcribe` = OpenAI/no key) and wanted a full handy-style model-management subview. Chose **Parakeet only, no Whisper**.
-- **Root cause found:** `settings:set` in `main/handlers/providers.ts` is a strict whitelist — it silently dropped `voiceProvider:"local"` and never listed `localVoiceModel`/`dictationEnabled`/`dictationAccelerator`. So selecting On-device never persisted → mic always used cloud. Fixed by whitelisting all of them. **Lesson: any new AppSettings key must be added to the `settings:set` whitelist or it's dropped.**
-- **What was done:** Swapped engine whisper.cpp → **sherpa-onnx-node** (bundled native addon, no Homebrew/install). Added dep + `glaze.config.ts` `externalizePackage`. New `parakeet.ts` (OfflineRecognizer, `nemo_transducer`), rewrote `local-models.ts` for Parakeet tar.bz2 catalog (v3 25-lang recommended, v2 English) from k2-fsa releases → download+`/usr/bin/tar` extract to `userData/parakeet-models/`. Handlers now `localVoice:status`(ready/error) + `voice:transcribeLocal(pcmBase64)`. Recorder sends 16 kHz Float32 PCM. New `model-manager-view.tsx` subview (search, Downloaded/Available, accuracy/speed meters, badges, download/cancel/delete/use); `local-voice-settings.tsx` reworked to engine-status + Manage-Models button + dictation. Removed `whisper-cli.ts`.
-- **Key decisions:** Parakeet needs ONNX (whisper.cpp can't run it) → sherpa-onnx-node is the bundled runtime; huge UX win = no external install. Activating a model auto-sets `voiceProvider:"local"`; first download auto-activates. Models are directory-based (encoder/decoder/joiner int8 onnx + tokens.txt).
-- **UI elements:** provider select (On-device (Parakeet)), engine Ready/Callout, Manage Models subview w/ model cards + meters + progress, dictation switch + hotkey recorder.
-- **Backend elements:** native module bundling (externalizePackage), sherpa-onnx OfflineRecognizer, streaming download + tar extraction, PCM IPC, settings whitelist fix.
-- **Corrections/Lessons:** Verified the native engine loads two ways — `node -e require()` on the built bundle (OfflineRecognizer present) AND live in-app engine badge shows **Ready**. `externalizePackage` correctly copied `sherpa-onnx.node` + `libonnxruntime`/`libsherpa-onnx-c-api` dylibs. `settings:set` whitelist was the silent-drop trap. DataStore caches config in memory (edits need a backend restart). Confirmed live: provider persists to local, engine Ready, model manager renders v2/v3 cards. Not testable here: actual 600 MB model download (needs network) + transcription accuracy.
-- **User Frustrations & Important Remarks:** User was frustrated the first version didn't work; the whitelist drop was the culprit. Wanted handy's exact models — clarified Parakeet/Nemotron need ONNX (delivered Parakeet); Whisper explicitly dropped per user.
-
-### 2026-07-17 — On-device (local) voice transcription + dictation hotkey
-
-- **Goal:** Add local voice transcription to Voice settings (inspired by handy): download/manage Whisper models locally, run transcription on-device, and a configurable hotkey for local dictation.
-- **What was done:** New provider `"local"` in Voice settings. Backend: `whisper-cli.ts` (locate/install whisper.cpp via Homebrew, `transcribeLocal`), `local-models.ts` (GGML catalog from ggerganov/whisper.cpp HF repo → `userData/whisper-models/`, streaming download w/ progress + cancel + delete), `local-voice.ts` handlers. Settings gained `voiceProvider:"local"`, `localVoiceModel`, `dictationEnabled`, `dictationAccelerator`. `shortcut.ts` now registers a 2nd (dictation) hotkey → broadcasts `app:dictate-toggle`. Frontend: `local-voice-settings.tsx` (engine status/install w/ live log, model manager list w/ progress bars, active-model select, dictation recorder), recorder decodes to 16 kHz WAV for local, composer passes provider/model + listens for `app:dictate-toggle`, shared `accelerator.ts` helper.
-- **Key decisions:** Chose whisper.cpp CLI (fast, Metal, matches handy) over bundled transformers.js, per user. Dictation hotkey reuses the composer recorder with the *selected* provider (not a separate local-only path). Audio decode/resample happens in the renderer (Web Audio) so no ffmpeg dep — backend only needs whisper-cli. Models download to `.part` then rename so listed models are always whole. Binaries resolved from Homebrew bin dirs directly (GUI apps lack shell PATH).
-- **UI elements:** Voice provider select (+On-device), engine install button + log well, model download/delete list w/ custom progress bar + Badge, active-model Select, dictation enable Switch + hotkey recorder.
-- **Backend elements:** child_process (spawn brew install, execFile whisper-cli), streaming fetch download, global shortcut, ipc_handler, local file storage.
-- **Corrections/Lessons:** Re-confirmed `window.glazeAPI.glaze.ipc.invoke` fails from LiveAppEvaluate (WKContentWorld isolation → "GlazeIPCError 0"); and Radix Select portals can't be opened via synthetic pointer/keyboard events — so the local panel's live render couldn't be auto-exercised (cloud Voice path + new copy verified in DOM; build/type-check/lint green). Homebrew formula is `whisper-cpp`, binary is `whisper-cli`.
-- **User Frustrations & Important Remarks:** User referenced `/Users/sambitbiswas/projects/opp/handy` (Tauri/Rust whisper.cpp app) as the inspiration; wanted download+manage models locally + hotkey for local transcription. Install/download flows require the user's Homebrew + network (expected for a real on-device feature).
+- UI element and UX hardening pass: the composer now floats over the continuous transcript surface; settings use a wider, searchable, grouped navigation sidebar with readable descriptions and placeholders; settings dialogs keep actions visible; and the split view overlays/auto-collapses at compact widths.
+- Validated settings/chat fixes include draft provider testing, temporary MCP connection tests, safe external link handling, send-draft preservation on failure, footer-growth auto-follow, active local-model cleanup, and explicit Exa key removal behavior.
+- `npm run type-check`, `npm run lint`, and `npm run build`: passing after the UI element and UX hardening pass.
+- `npm run type-check`: passing after the Electron migration and interface-fidelity recovery.
+- `npm run lint`: passing after the Electron migration and interface-fidelity recovery.
+- `npm run build`: passing after the interface-fidelity recovery; renderer still produces a large single main chunk and should be code-split later.
+- `npm run package`: passing; produced a signed arm64 `Aiden Agent.app` with bundle ID `com.sambitcreate.aiden-agent`.
+- Packaged-app smoke test: passing; the renderer loaded from the app archive, `window.aidenAPI` was present, the seven seeded providers loaded over IPC, and native theme IPC returned successfully.
+- Development visual check: passing for the chat shell, searchable settings navigation, provider dialog, workspace menu, sidebar collapse/expand, and persisted pointer resizing.
