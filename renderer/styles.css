@@ -1,8 +1,173 @@
-/*
- * Glaze framework styles (@import "@glaze/core/..." and @import "tailwindcss")
- * are automatically injected before this file during build and dev.
- * Add your custom styles and @source directives below.
- */
+@import "tailwindcss";
+
+@theme inline {
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary: var(--text-tertiary);
+  --color-quaternary: var(--text-quaternary);
+  --color-background: var(--surface-background);
+  --color-sidebar: var(--surface-sidebar);
+  --color-popover: var(--surface-popover);
+  --color-control: var(--surface-control);
+  --color-control-active: var(--surface-control-active);
+  --color-input: var(--surface-input);
+  --color-well: var(--surface-well);
+  --color-list-hover: var(--surface-list-hover);
+  --color-list-selection: var(--surface-list-selection);
+  --color-field: var(--border-field);
+  --color-separator: var(--border-separator);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-red: var(--support-red);
+  --color-green: var(--support-green);
+  --color-support-red: var(--support-red);
+  --color-support-green: var(--support-green);
+  --color-support-warning: var(--support-warning);
+  --radius-control: 12px;
+  --radius-card: 12px;
+  --radius-dialog: 16px;
+  --radius-popover: 12px;
+  --radius-pill: 9999px;
+  --shadow-dialog: 0 20px 48px -12px rgb(0 0 0 / 0.35);
+  --shadow-popover: inset 0 0 0 1px var(--border-field), 0 8px 24px rgb(0 0 0 / 0.18);
+  --shadow-composer: 0 2px 8px rgb(0 0 0 / 0.12);
+  --text-heading1: 24px;
+  --text-heading1--line-height: 30px;
+  --text-heading2: 18px;
+  --text-heading2--line-height: 24px;
+  --text-large-strong: 16px;
+  --text-large-strong--line-height: 22px;
+  --text-regular: 13px;
+  --text-regular--line-height: 18px;
+  --text-strong: 13px;
+  --text-strong--line-height: 18px;
+  --text-small: 12px;
+  --text-small--line-height: 16px;
+  --text-small-strong: 12px;
+  --text-small-strong--line-height: 16px;
+  --text-mini: 10px;
+  --text-mini--line-height: 12px;
+}
+
+:root {
+  color-scheme: light;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --text-primary: rgb(0 0 0 / 1);
+  --text-secondary: rgb(0 0 0 / 0.6);
+  --text-tertiary: rgb(0 0 0 / 0.55);
+  --text-quaternary: rgb(0 0 0 / 0.34);
+  --surface-background: rgb(255 255 255 / 0.4);
+  --surface-sidebar: rgb(255 255 255 / 0.3);
+  --surface-popover: color-mix(in srgb, #fcfcfc, white 15%);
+  --surface-control: rgb(0 0 0 / 0.1);
+  --surface-control-active: rgb(0 0 0 / 0.2);
+  --surface-input: rgb(0 0 0 / 0.05);
+  --surface-well: rgb(0 0 0 / 0.025);
+  --surface-list-hover: rgb(0 0 0 / 0.05);
+  --surface-list-selection: rgb(0 0 0 / 0.1);
+  --border-field: rgb(0 0 0 / 0.2);
+  --border-separator: rgb(0 0 0 / 0.1);
+  --accent: #138af2;
+  --accent-hover: color-mix(in srgb, var(--accent), black 5%);
+  --support-red: #b12424;
+  --support-green: #006b4f;
+  --support-warning: #9a6700;
+  --window-gradient-start: rgb(255 255 255 / 0.42);
+  --window-gradient-end: rgb(255 255 255 / 0.3);
+  --glass-fill: rgb(255 255 255 / 0.36);
+}
+
+:root.dark {
+  color-scheme: dark;
+  --text-primary: rgb(255 255 255 / 1);
+  --text-secondary: rgb(255 255 255 / 0.6);
+  --text-tertiary: rgb(255 255 255 / 0.55);
+  --text-quaternary: rgb(255 255 255 / 0.34);
+  --surface-background: rgb(0 0 0 / 0.4);
+  --surface-sidebar: rgb(0 0 0 / 0.3);
+  --surface-popover: color-mix(in srgb, #111113, black 15%);
+  --surface-control: rgb(255 255 255 / 0.1);
+  --surface-control-active: rgb(255 255 255 / 0.2);
+  --surface-input: rgb(255 255 255 / 0.05);
+  --surface-well: rgb(255 255 255 / 0.025);
+  --surface-list-hover: rgb(255 255 255 / 0.07);
+  --surface-list-selection: rgb(255 255 255 / 0.1);
+  --border-field: rgb(255 255 255 / 0.2);
+  --border-separator: rgb(255 255 255 / 0.1);
+  --accent: #4fa3f8;
+  --accent-hover: color-mix(in srgb, var(--accent), white 15%);
+  --support-red: #ff6363;
+  --support-green: #59d499;
+  --support-warning: #f4c152;
+  --window-gradient-start: rgb(0 0 0 / 0.42);
+  --window-gradient-end: rgb(0 0 0 / 0.32);
+  --glass-fill: rgb(0 0 0 / 0.28);
+  --shadow-dialog: 0 32px 64px -8px rgb(0 0 0 / 0.85), 0 10px 20px -4px rgb(0 0 0 / 0.4);
+  --shadow-popover: inset 0 0 0 1px var(--border-field), 0 8px 28px rgb(0 0 0 / 0.48);
+  --shadow-composer: 0 2px 8px rgb(0 0 0 / 0.45);
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, var(--window-gradient-start), var(--window-gradient-end));
+  color: var(--text-primary);
+  -webkit-font-smoothing: subpixel-antialiased;
+  font-synthesis: none;
+  font-feature-settings: "liga" 1, "calt" 1, "kern" 1;
+  user-select: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.drag-region { -webkit-app-region: drag; }
+.no-drag,
+.drag-region button,
+.drag-region input { -webkit-app-region: no-drag; }
+
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent; }
+
+.glass-surface {
+  background: var(--glass-fill);
+  backdrop-filter: blur(24px) saturate(1.25);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+}
+
+:root.window-blurred .dimmable { opacity: 0.48; }
+
+@keyframes aiden-dialog-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% - 14px)); }
+  to { opacity: 1; transform: translate(-50%, -50%); }
+}
+
+@keyframes aiden-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-slot="dialog-content"][data-state="open"] { animation: aiden-dialog-in 240ms cubic-bezier(0.215, 0.61, 0.355, 1); }
+  [data-slot="dialog-overlay"][data-state="open"] { animation: aiden-overlay-in 220ms ease-out; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-spin {
+    animation: none !important;
+  }
+}
 
 /* Tell Tailwind to scan all local renderer window files for class names */
 @source "./**/*.{ts,tsx}";
@@ -10,7 +175,7 @@
 @source not "./dev/**/*";
 
 /*
- * Syntax highlighting for chat code blocks (rehype-highlight emits .hljs-* spans).
+ * Syntax highlighting for chat code blocks.
  * Light values by default; overridden under .dark so highlighting adapts to the
  * app-wide appearance without a separate imported theme.
  */
