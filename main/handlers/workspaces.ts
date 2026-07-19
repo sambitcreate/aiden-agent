@@ -1,7 +1,7 @@
 // Workspace CRUD + folder helpers (git status, reveal in Finder).
 
 import * as path from "path";
-import { ipcMain, shell } from "@glaze/core/backend";
+import { ipcMain, shell } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { gitBranches, gitCheckout, gitCreateBranch, gitInfo } from "../services/git.js";
 import type { Workspace, WorkspacePermission } from "../services/types.js";
