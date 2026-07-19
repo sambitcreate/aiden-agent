@@ -18,7 +18,7 @@ import {
   Separator,
   Text,
   toast,
-} from "@glaze/core/components";
+} from "./ui";
 import { Check, GitBranch, Loader2, Plus } from "lucide-react";
 import { gitApi } from "../lib/ipc";
 import { queryKeys, useGitBranches } from "../lib/queries";
