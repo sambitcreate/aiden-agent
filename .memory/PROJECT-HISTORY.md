@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-19 — Plan Pi-owned plug-and-play providers
+
+- Audited the current Electron provider path and Pi's `0.80.10` provider, model, auth, dynamic refresh, custom-provider, and persistence contracts with three independent review lanes.
+- Confirmed that Aiden embeds Pi's Agent but bypasses Pi's provider runtime through seven seeded providers, two compatibility stream adapters, key-only credentials, and fabricated model metadata.
+- Chose the lean public `pi-ai` `Models` integration over the full coding-agent package: all Pi built-ins in Settings, only authenticated/available models in the composer, encrypted type-tagged credentials, generic provider-owned auth IPC, and declarative custom endpoints.
+- Added `docs/pi-provider-integration-plan.md` with the target architecture, security boundaries, legacy ID/key/config migration, DTO and IPC contracts, phased file-level implementation, test matrix, PR sequence, and definition of done.
+- No production implementation or dependency update was made in this planning pass.
+
 ### 2026-07-19 — Complete the ChatGPT/Codex-inspired UI and trust polish
 
 - Unified light/dark elevation, hover, pressed, focus, disabled, popover, dialog, toast, switch, radio, field, and list-row states across the repository-owned component system, with quieter motion and reduced-motion fallbacks.
