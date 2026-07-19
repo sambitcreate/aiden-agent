@@ -5,7 +5,7 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { app, safeStorage, logger } from "@glaze/core/backend";
+import { app, safeStorage, logger } from "../platform.js";
 import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 
 const FILE = "mcp-oauth.json";
