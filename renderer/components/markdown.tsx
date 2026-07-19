@@ -8,7 +8,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { cn } from "@glaze/core/utils";
+import { cn } from "../lib/ui-utils";
 import { CodeBlock } from "./code-block";
 import "katex/dist/katex.min.css";
 
@@ -36,7 +36,7 @@ export const Markdown = React.memo(function Markdown({ content }: MarkdownProps)
   return (
     <div
       className={cn(
-        "text-regular text-primary leading-relaxed",
+        "select-text text-regular text-primary leading-relaxed",
         "[&_p]:my-2 first:[&_p]:mt-0 last:[&_p]:mb-0",
         "[&_h1]:text-large-strong [&_h2]:text-strong [&_h3]:text-strong [&_h1]:mt-4 [&_h2]:mt-4 [&_h3]:mt-3 [&_h1]:mb-2 [&_h2]:mb-2 [&_h3]:mb-1",
         "[&_ul]:my-2 [&_ul]:pl-5 [&_ul]:list-disc [&_ol]:my-2 [&_ol]:pl-5 [&_ol]:list-decimal [&_li]:my-0.5",
