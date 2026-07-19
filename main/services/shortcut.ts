@@ -2,7 +2,7 @@
 //  • focus   (default ⌘⌥Space)  — brings the app forward and focuses the composer
 //  • dictate (default ⌘⇧D)      — brings the app forward and toggles on-device dictation
 
-import { globalShortcut, logger } from "@glaze/core/backend";
+import { globalShortcut, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 
 export const DEFAULT_ACCELERATOR = "Command+Alt+Space";
