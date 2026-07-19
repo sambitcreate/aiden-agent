@@ -26,6 +26,12 @@ export interface Workspace {
   updatedAt: number;
 }
 
+export interface ExternalEditor {
+  id: string;
+  label: string;
+  iconDataUrl: string;
+}
+
 export interface GitInfo {
   isRepo: boolean;
   branch?: string;
