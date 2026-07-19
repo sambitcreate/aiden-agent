@@ -14,7 +14,7 @@
 - **Security bridge:** `renderer/preload.ts` exposes `window.aidenAPI` through `contextBridge`. Renderer invokes are prefix-allowlisted and notifications are channel-allowlisted. Renderer sandboxing and context isolation are enabled; Node integration is disabled.
 - **Renderer:** React 19, TanStack Router, TanStack Query, Tailwind CSS 4, local UI components in `renderer/components/ui.tsx`, Radix primitives, cmdk, Sonner, and Lucide. The local component layer preserves the established macOS visual contract: translucent materials, native-density controls, pinned/collapsible/resizable split views, measured toolbar/footer scrolling, command pickers, fields, menus, and dialogs.
 - **Build:** Vite emits `build/renderer`; esbuild emits `build/main/index.js` and `build/preload/preload.cjs`; electron-builder packages the `.app`, DMG, and ZIP.
-- **Persistence:** JSON under `app.getPath("userData")`; provider keys and MCP OAuth sessions encrypted with Electron `safeStorage`.
+- **Persistence:** JSON under `app.getPath("userData")`; chat mutations are serialized across the shared index so background metadata updates cannot race message writes. Provider keys and MCP OAuth sessions are encrypted with Electron `safeStorage`.
 
 ## Agent and tools
 
@@ -30,6 +30,7 @@
 ## Models, attachments, and voice
 
 - Providers support OpenAI-compatible and Anthropic-compatible APIs, with presets for common hosted services and local Ollama/LM Studio endpoints.
+- A new chat immediately uses the first prompt or attachment name as a temporary title, then generates a concise title in the background with that chat's selected model. Manual renames win over late generated results; title failures leave the temporary title in place. The title-model resolver is isolated so a dedicated model picker can override the chat model later.
 - The models.dev catalog is cached for 24 hours and supplies vision, tool, reasoning, open-weight, and context metadata.
 - Text files are inlined with size limits; images are base64 encoded and sent only to vision-capable models.
 - Cloud transcription supports configured OpenAI and Gemini providers.
@@ -70,3 +71,4 @@
 - `npm run package`: passing; produced a signed arm64 `Aiden Agent.app` with bundle ID `com.sambitcreate.aiden-agent`.
 - Packaged-app smoke test: passing; the renderer loaded from the app archive, `window.aidenAPI` was present, the seven seeded providers loaded over IPC, and native theme IPC returned successfully.
 - Development visual check: passing for the chat shell, searchable settings navigation, provider dialog, workspace menu, sidebar collapse/expand, and persisted pointer resizing.
+- Background chat-title verification: 8 focused title/store tests, `npm run type-check`, `npm run lint`, and `npm run build` pass. The production build retains the existing large-renderer-chunk warning.

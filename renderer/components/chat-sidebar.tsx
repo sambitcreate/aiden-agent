@@ -196,7 +196,7 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
                 <ChevronsUpDown className="size-4 shrink-0 text-tertiary" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="start" className="w-80 max-w-[calc(100vw-2rem)]">
               <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
               {workspaces.map((w) => (
                 <DropdownMenuCheckboxItem

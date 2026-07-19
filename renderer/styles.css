@@ -147,6 +147,18 @@ textarea {
 
 :root.window-blurred .dimmable { opacity: 0.48; }
 
+.terminal-drawer {
+  min-height: 0;
+}
+
+.terminal-drawer .xterm {
+  height: 100%;
+}
+
+.terminal-drawer .xterm-viewport {
+  background-color: transparent !important;
+}
+
 @keyframes aiden-dialog-in {
   from { opacity: 0.8; transform: translate(-50%, -50%) scale(0.8); }
   to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
@@ -167,6 +179,7 @@ textarea {
   .animate-spin {
     animation: none !important;
   }
+
 }
 
 /* Tell Tailwind to scan all local renderer window files for class names */

@@ -4,6 +4,7 @@ import * as path from "path";
 import { ipcMain, shell } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { gitBranches, gitCheckout, gitCreateBranch, gitInfo } from "../services/git.js";
+import { terminalService } from "../services/terminal.js";
 import type { Workspace, WorkspacePermission } from "../services/types.js";
 
 const PERMISSIONS: WorkspacePermission[] = ["full", "ask", "none"];
@@ -56,11 +57,17 @@ export function registerWorkspaceHandlers(): void {
         ? (p.permission as WorkspacePermission)
         : existing.permission,
     };
-    return configStore.saveWorkspace(next);
+    const saved = await configStore.saveWorkspace(next);
+    if (saved.permission === "none" || saved.folderPath !== existing.folderPath) {
+      terminalService.closeForWorkspace(existing.id);
+    }
+    return saved;
   });
 
   ipcMain.handle("workspaces:remove", async (_event, id: unknown) => {
-    await configStore.removeWorkspace(asString(id, "id"));
+    const workspaceId = asString(id, "id");
+    terminalService.closeForWorkspace(workspaceId);
+    await configStore.removeWorkspace(workspaceId);
   });
 
   ipcMain.handle("workspaces:gitInfo", async (_event, folderPath: unknown) => {

@@ -18,6 +18,7 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
     "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && AIDEN_RENDERER_URL=http://127.0.0.1:4143 electron .",
     "lint": "eslint .",
+    "test": "tsx --test main/services/chat-title-policy.test.ts main/services/chat-store-core.test.ts",
     "type-check": "tsc --noEmit",
     "format": "oxfmt .",
     "package": "npm run build && electron-builder --mac dir",
@@ -30,12 +31,15 @@
     "@radix-ui/colors": "^3.0.0",
     "@tanstack/react-query": "^5.87.4",
     "@tanstack/react-router": "^1.131.36",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "highlight.js": "^11.9.0",
     "katex": "^0.16.47",
     "lucide-react": "^0.542.0",
+    "node-pty": "^1.1.0",
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
@@ -80,9 +84,11 @@
     "appId": "com.sambitcreate.aiden-agent",
     "productName": "Aiden Agent",
     "asar": true,
+    "npmRebuild": false,
     "asarUnpack": [
       "**/node_modules/sherpa-onnx-node/**",
-      "**/node_modules/sherpa-onnx-darwin-*/**"
+      "**/node_modules/sherpa-onnx-darwin-*/**",
+      "**/node_modules/node-pty/**"
     ],
     "directories": {
       "output": "release"
@@ -94,7 +100,10 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/app-icon.icns",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Aiden Agent uses the microphone only when you choose voice input or dictation."
       }

@@ -150,6 +150,26 @@ export const workspacesApi = {
   openFolder: (folderPath: string) => invoke<void>("workspaces:openFolder", folderPath),
 };
 
+// ── Interactive terminal ─────────────────────────────────────────────
+export interface TerminalSession {
+  id: string;
+  workspaceId: string;
+  cwd: string;
+}
+
+export interface TerminalSnapshot {
+  buffer: string;
+  sequence: number;
+}
+
+export const terminalApi = {
+  create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
+  snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
+  write: (sessionId: string, data: string) => invoke<void>("terminal:write", sessionId, data),
+  resize: (sessionId: string, cols: number, rows: number) => invoke<void>("terminal:resize", sessionId, cols, rows),
+  close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
+};
+
 // ── Git ───────────────────────────────────────────────────────────────
 export const gitApi = {
   branches: (folderPath: string) => invoke<GitBranches>("git:branches", folderPath),

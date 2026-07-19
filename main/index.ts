@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, logger, registerNativeHandlers, shell } fr
 import { Menu } from "electron";
 
 import { registerHandlers } from "./handlers/index.js";
+import { terminalService } from "./services/terminal.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import { initShortcut, initDictationShortcut, applyShortcutFromSettings, disposeShortcut } from "./services/shortcut.js";
 import { mcpManager } from "./services/mcp.js";
@@ -50,8 +51,10 @@ async function createMainWindow(): Promise<void> {
     },
   });
 
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
-  mainWindow.on("closed", () => {
+  const createdWindow = mainWindow;
+  createdWindow.once("ready-to-show", () => createdWindow.show());
+  createdWindow.on("closed", () => {
+    terminalService.closeForWebContents(createdWindow.webContents.id);
     mainWindow = null;
   });
 

@@ -93,6 +93,13 @@ export interface Chat extends ChatMeta {
   messages: ChatMessage[];
 }
 
+export interface ChatMetadataUpdated {
+  chatId: string;
+  workspaceId?: string;
+  title: string;
+  updatedAt: number;
+}
+
 export type McpTransport = "stdio" | "http" | "sse";
 
 export interface McpServer {

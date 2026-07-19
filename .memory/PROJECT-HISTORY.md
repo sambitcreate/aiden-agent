@@ -1,5 +1,24 @@
 # Project History
 
+### 2026-07-18 — Generate concise chat titles after the first prompt
+
+- Kept first-send navigation immediate by seeding the chat title from the normalized prompt or first attachment name, then launching a separate tool-free title request alongside the accepted first turn.
+- Defaulted title generation to the provider and model used by that chat, with a single resolver boundary ready for a future dedicated title-model picker.
+- Added a short 3–8-word coding-title prompt, strict one-line/sidebar-safe normalization, a 15-second timeout, and silent fallback to the initial seed.
+- Preserved manual renames with a compare-and-set title update, deduplicated in-flight title work, serialized the shared chat index/message writes, and pushed successful metadata updates into React Query caches over an allowlisted notification.
+- Split the chat persistence core from its Electron user-data binding so first-message, manual-rename, concurrent-write, and shared-index behavior can run under Node's test runner.
+- Added 8 focused tests; `npm test`, `npm run type-check`, `npm run lint`, and `npm run build` pass.
+
+### 2026-07-18 — Workspace terminal drawer
+
+- Added a bottom, resizable terminal drawer with a Cmd/Ctrl-J toggle, new-terminal, horizontal/vertical split, clear, close, and per-session tabs.
+- Terminal processes are real PTY-backed shells that start in a selected folder workspace. They have normal macOS user permissions (not filesystem confinement); IPC never accepts an arbitrary executable or working path, sessions are renderer-owned, and workspace revocation, workspace switches, or window closure terminates active sessions.
+- Terminal sessions open immediately without a confirmation prompt; `none`/removed/repointed workspaces immediately terminate their sessions, direct process groups are signalled during cleanup, replay output is sequenced, and the drawer remains keyboard accessible through hide/show, theme changes, and resize controls.
+- Widened the workspace switcher menu so workspace names and paths have a usable reading width.
+- Refined the terminal’s visual hierarchy after live inspection: chat now claims the flex remainder cleanly, the terminal defaults to a compact height with a chat-preserving cap, and the chrome is a rounded closeable tab strip with a dedicated add-tab action rather than a large titled panel.
+- Matched T3 Code’s closed-drawer lifecycle: the terminal is now unmounted from the chat layout when hidden, preventing a zero-height but still-painted bottom surface.
+- Corrected the chat/terminal flex boundary after screenshot verification: the chat viewport again fills the available column, while its parent clips overflow and yields space only when the terminal drawer is mounted.
+
 ### 2026-07-18 — Standardize modal entrance motion
 
 - Replaced the shared dialog's upward slide with a centered `0.8` to `1` zoom and slight fade-in for every standard and confirmation modal.

@@ -7,7 +7,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text } from "../components/ui";
-import { SlidersHorizontal, SquarePen } from "lucide-react";
+import { SlidersHorizontal, SquarePen, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
@@ -22,6 +22,7 @@ import {
 import { queryKeys, useChat, useGitInfo, useModelInfo, useProviders } from "../lib/queries";
 import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import type { Attachment, Chat, WorkspacePermission } from "../lib/types";
 
 export function ChatPane({ chatId }: { chatId: string }) {
@@ -30,6 +31,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const providers = useProviders();
   const chat = useChat(chatId);
   const { active, activeId } = useActiveWorkspace();
+  const terminal = useWorkspaceTerminal();
   const git = useGitInfo(active?.folderPath);
   const { providerId, model, select } = useModelSelection(providers.data);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
@@ -192,12 +194,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   return (
     <ScrollArea
-      className="h-full"
+      className="h-full min-h-0"
       title={chat.data?.title ?? "New chat"}
       actions={
         <>
           <Button iconOnly variant="glass" size="large" onClick={newChat} aria-label="New chat">
             <SquarePen />
+          </Button>
+          <Button
+            iconOnly
+            variant="glass"
+            size="large"
+            onClick={terminal.toggle}
+            disabled={!terminal.canOpen}
+            aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+            aria-pressed={terminal.open}
+            title="Toggle terminal (⌘J)"
+            data-terminal-toggle
+          >
+            <TerminalSquare />
           </Button>
           <Button
             iconOnly
@@ -260,11 +275,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     >
       {chat.isLoading || providers.isLoading ? (
-        <div className="flex h-full min-h-[50vh] items-center justify-center" aria-label="Loading conversation">
+        <div className="flex min-h-full items-center justify-center" aria-label="Loading conversation">
           <Text variant="small" color="secondary">Loading…</Text>
         </div>
       ) : messages.length === 0 && streamingText === null ? (
-        <div className="flex h-full min-h-[50vh] items-center justify-center">
+        <div className="flex min-h-full items-center justify-center">
           <EmptyState
             title="What would you like to work on?"
             description={

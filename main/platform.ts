@@ -75,4 +75,4 @@ export function registerNativeHandlers(): void {
   });
 }
 
-export { app, BrowserWindow, globalShortcut, safeStorage, shell, systemPreferences };
+export { app, BrowserWindow, dialog, globalShortcut, safeStorage, shell, systemPreferences };

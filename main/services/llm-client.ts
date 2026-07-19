@@ -9,23 +9,21 @@
 // hook and waits for the user to Allow or Deny in the UI.
 
 import { Agent } from "@earendil-works/pi-agent-core";
-import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
-import type { Api, Message, Model, ProviderStreams } from "@earendil-works/pi-ai";
+import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { ipcMain, logger } from "../platform.js";
-import { configStore } from "./config-store.js";
-import { secrets } from "./secrets.js";
 import { buildAgentTools } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
 import { modelsCatalog } from "./models-catalog.js";
-import type { ApprovalDecision, ChatStartParams, StoredProvider, WorkspacePermission } from "./types.js";
+import { configStore } from "./config-store.js";
+import { resolveModelRuntime } from "./model-runtime.js";
+import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 const active = new Map<string, Agent>();
 /** Approval requests awaiting a user decision, keyed by approvalId. */
 const pendingApprovals = new Map<string, (allowed: boolean) => void>();
 
-const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const ZERO_USAGE = {
   input: 0,
   output: 0,
@@ -34,32 +32,6 @@ const ZERO_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-
-// Lazy provider stream implementations (loaded once, dispatched per model.api).
-const openaiStreams = openAICompletionsApi();
-const anthropicStreams = anthropicMessagesApi();
-function streamsFor(api: Api): ProviderStreams {
-  return api === "anthropic-messages" ? anthropicStreams : openaiStreams;
-}
-
-function apiFor(provider: StoredProvider): Api {
-  return provider.kind === "anthropic" ? "anthropic-messages" : "openai-completions";
-}
-
-function buildModel(provider: StoredProvider, modelId: string): Model<Api> {
-  return {
-    id: modelId,
-    name: modelId,
-    api: apiFor(provider),
-    provider: provider.id,
-    baseUrl: provider.baseUrl,
-    reasoning: false,
-    input: ["text"],
-    cost: ZERO_COST,
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
 
 function buildSystemPrompt(folderPath: string | undefined, branch: string | undefined, permission: WorkspacePermission): string {
   const base =
@@ -128,12 +100,8 @@ function newApprovalId(): string {
 
 export const llmClient = {
   async start(streamId: string, params: ChatStartParams): Promise<void> {
-    const provider = await configStore.getProvider(params.providerId);
-    if (!provider) throw new Error(`Provider "${params.providerId}" not found.`);
-    const apiKey = provider.needsKey ? await secrets.getKey(provider.id) : null;
-    if (provider.needsKey && !apiKey) {
-      throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
-    }
+    const runtime = await resolveModelRuntime(params.providerId, params.model);
+    const { provider, model, apiKey, streams } = runtime;
 
     // Resolve the workspace: folder + permission drive the tool set + approvals.
     const workspace = params.workspaceId ? await configStore.getWorkspace(params.workspaceId) : undefined;
@@ -141,7 +109,6 @@ export const llmClient = {
     const folderPath = workspace?.folderPath;
     const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
 
-    const model = buildModel(provider, params.model);
     const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
     // Only forward image attachments to vision-capable models (models.dev).
     const modelInfo = await modelsCatalog.info(provider.id, params.model);
@@ -155,7 +122,7 @@ export const llmClient = {
       },
       getApiKey: () => apiKey ?? undefined,
       streamFn: (m, context, options) =>
-        streamsFor(m.api).streamSimple(m, context, {
+        streams.streamSimple(m, context, {
           ...options,
           apiKey: options?.apiKey ?? apiKey ?? undefined,
         }),

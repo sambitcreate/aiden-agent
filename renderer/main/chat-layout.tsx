@@ -3,25 +3,49 @@
 // the active workspace (shared via WorkspaceProvider).
 
 import { Outlet, useNavigate, useParams } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { SplitView } from "../components/ui";
 import { ChatSidebar } from "../components/chat-sidebar";
-import { chatsApi } from "../lib/ipc";
-import { useChats } from "../lib/queries";
-import { WorkspaceProvider, useActiveWorkspace } from "../lib/workspace-context";
+import { chatsApi, onNotification } from "../lib/ipc";
+import { queryKeys, useChats } from "../lib/queries";
+import { useActiveWorkspace } from "../lib/workspace-context";
+import { TerminalDrawer } from "../components/terminal-drawer";
+import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
+  const qc = useQueryClient();
+
+  React.useEffect(() => {
+    return onNotification<ChatMetadataUpdated>("chats:metadata-updated", (update) => {
+      qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) =>
+        current ? { ...current, title: update.title, updatedAt: update.updatedAt } : current,
+      );
+      qc.setQueriesData<ChatMeta[]>({ queryKey: queryKeys.chats }, (current) => {
+        if (!current) return current;
+        return current
+          .map((chat) =>
+            chat.id === update.chatId
+              ? { ...chat, title: update.title, updatedAt: update.updatedAt }
+              : chat,
+          )
+          .sort((a, b) => b.updatedAt - a.updatedAt);
+      });
+    });
+  }, [qc]);
+
   return (
-    <WorkspaceProvider>
-      <SplitView
-        storageKey="aiden-agent"
-        sidebar={<ChatSidebar activeChatId={params.chatId} />}
-        sidebarSize={{ default: 272, min: 236, max: 340 }}
-      >
-        <Outlet />
-      </SplitView>
-    </WorkspaceProvider>
+    <SplitView
+      storageKey="aiden-agent"
+      sidebar={<ChatSidebar activeChatId={params.chatId} />}
+      sidebarSize={{ default: 272, min: 236, max: 340 }}
+    >
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="min-h-0 flex-1 overflow-hidden"><Outlet /></div>
+        <TerminalDrawer />
+      </div>
+    </SplitView>
   );
 }
 

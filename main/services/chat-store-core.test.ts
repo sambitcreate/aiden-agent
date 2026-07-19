@@ -1,0 +1,64 @@
+import assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import test from "node:test";
+import { createChatStore } from "./chat-store-core.js";
+
+async function testStore(t: test.TestContext) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  return createChatStore(async () => directory);
+}
+
+test("seeds only the first user message and preserves a manual rename", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ workspaceId: "workspace" });
+  const seeded = await store.appendMessage(
+    chat.id,
+    { role: "user", content: "Investigate reconnect failures after restart" },
+    { autoTitle: true, providerId: "openai", model: "gpt-test" },
+  );
+  assert.equal(seeded.title, "Investigate reconnect failures after restart");
+
+  await store.rename(chat.id, "Keep my title");
+  const replaced = await store.replaceAutoTitle(
+    chat.id,
+    seeded.title,
+    "Reconnect failure investigation",
+  );
+  assert.equal(replaced, null);
+  assert.equal((await store.get(chat.id))?.title, "Keep my title");
+});
+
+test("serializes assistant persistence with a background title update", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  const seeded = await store.appendMessage(
+    chat.id,
+    { role: "user", content: "Improve the title flow" },
+    { autoTitle: true },
+  );
+
+  await Promise.all([
+    store.appendMessage(chat.id, { role: "assistant", content: "I can help with that." }),
+    store.replaceAutoTitle(chat.id, seeded.title, "Improve Chat Title Flow"),
+  ]);
+
+  const updated = await store.get(chat.id);
+  assert.equal(updated?.title, "Improve Chat Title Flow");
+  assert.deepEqual(
+    updated?.messages.map((message) => message.role),
+    ["user", "assistant"],
+  );
+});
+
+test("preserves every index entry during concurrent chat creation", async (t) => {
+  const store = await testStore(t);
+  await Promise.all(
+    Array.from({ length: 12 }, (_, index) => store.create({ title: `Chat ${index}` })),
+  );
+  const chats = await store.list();
+  assert.equal(chats.length, 12);
+  assert.equal(new Set(chats.map((chat) => chat.id)).size, 12);
+});

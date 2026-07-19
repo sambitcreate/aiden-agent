@@ -25,6 +25,7 @@ const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "terminal:",
   "voice:",
   "workspaces:",
 ] as const;
@@ -38,7 +39,10 @@ const NOTIFICATION_CHANNELS = new Set([
   "chat:done",
   "chat:error",
   "chat:tool",
+  "chats:metadata-updated",
   "localModels:progress",
+  "terminal:data",
+  "terminal:exit",
   "aiden:theme:changed",
 ]);
 

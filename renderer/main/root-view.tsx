@@ -2,6 +2,8 @@ import { Outlet, useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { onNotification } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
+import { WorkspaceProvider } from "../lib/workspace-context";
+import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
 
 export function RootView() {
   useTheme();
@@ -24,9 +26,5 @@ export function RootView() {
     };
   }, []);
 
-  return (
-    <div className="relative h-full">
-      <Outlet />
-    </div>
-  );
+  return <WorkspaceProvider><WorkspaceTerminalProvider><div className="relative h-full"><Outlet /></div></WorkspaceTerminalProvider></WorkspaceProvider>;
 }
