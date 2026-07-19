@@ -1,8 +1,8 @@
 // A single chat message. User messages are right-aligned bubbles; assistant
 // messages render markdown full-width, native-transcript style.
 
-import { Text } from "@glaze/core/components";
-import { cn } from "@glaze/core/utils";
+import { Text } from "./ui";
+import { cn } from "../lib/ui-utils";
 import { FileText } from "lucide-react";
 import { Markdown } from "./markdown";
 import { CopyButton } from "./copy-button";
