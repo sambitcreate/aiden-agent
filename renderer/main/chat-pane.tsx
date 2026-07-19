@@ -11,6 +11,7 @@ import { SlidersHorizontal, SquarePen, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
+import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import {
   chatsApi,
   onNotification,
@@ -198,6 +199,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       title={chat.data?.title ?? "New chat"}
       actions={
         <>
+          <OpenInEditorPicker workspaceId={active?.id} folderPath={active?.folderPath} />
           <Button iconOnly variant="glass" size="large" onClick={newChat} aria-label="New chat">
             <SquarePen />
           </Button>
