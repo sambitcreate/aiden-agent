@@ -1,5 +1,11 @@
 # Project History
 
+### 2026-07-18 — Standardize modal entrance motion
+
+- Replaced the shared dialog's upward slide with a centered `0.8` to `1` zoom and slight fade-in for every standard and confirmation modal.
+- Preserved the reduced-motion fallback and verified the Add MCP server dialog in the running Electron development app.
+- Confirmed `npm run type-check`, `npm run lint`, and `npm run build` pass.
+
 ### 2026-07-18 — Refine the chat and settings interface
 
 - Reworked the composer from a full-width footer into a centered floating cluster over the continuous transcript background, with an attached workspace context strip and restrained elevation.

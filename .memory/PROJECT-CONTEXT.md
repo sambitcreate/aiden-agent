@@ -60,6 +60,7 @@
 
 ## Current verification status
 
+- Shared standard and confirmation modal entrances use the centered `0.8` to `1` zoom with a slight fade-in; the Add MCP server path was visually verified in the running Electron development app.
 - UI element and UX hardening pass: the composer now floats over the continuous transcript surface; settings use a wider, searchable, grouped navigation sidebar with readable descriptions and placeholders; settings dialogs keep actions visible; and the split view overlays/auto-collapses at compact widths.
 - Validated settings/chat fixes include draft provider testing, temporary MCP connection tests, safe external link handling, send-draft preservation on failure, footer-growth auto-follow, active local-model cleanup, and explicit Exa key removal behavior.
 - `npm run type-check`, `npm run lint`, and `npm run build`: passing after the UI element and UX hardening pass.
