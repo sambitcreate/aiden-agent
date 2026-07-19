@@ -332,6 +332,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     });
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
       if (event.key === "Escape") {
         event.preventDefault();
         localStorage.setItem(collapseKey, "1");
