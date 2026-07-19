@@ -13,7 +13,7 @@
 - **Platform boundary:** `main/platform.ts` centralizes Electron exports, logging, native dialogs, theme, microphone permissions, and renderer notifications.
 - **Security bridge:** `renderer/preload.ts` exposes `window.aidenAPI` through `contextBridge`. Renderer invokes are prefix-allowlisted and notifications are channel-allowlisted. Renderer sandboxing and context isolation are enabled; Node integration is disabled.
 - **External editors:** `main/services/external-editors.ts` discovers a curated set of installed macOS editors from bundle metadata and standard application locations, deduplicates related bundles, caches native icons, and opens only a stored workspace folder through `/usr/bin/open -b` without a shell. The renderer stores the global preference under `aiden-agent.preferredEditorId`; Finder is always the final fallback.
-- **Renderer:** React 19, TanStack Router, TanStack Query, Tailwind CSS 4, local UI components in `renderer/components/ui.tsx`, Radix primitives, cmdk, Sonner, and Lucide. The local component layer preserves the established macOS visual contract: translucent materials, native-density controls, pinned/collapsible/resizable split views, measured toolbar/footer scrolling, command pickers, fields, menus, and dialogs.
+- **Renderer:** React 19, TanStack Router, TanStack Query, Tailwind CSS 4, local UI components in `renderer/components/ui.tsx`, Radix primitives, cmdk, Sonner, and Lucide. The local component layer preserves the established macOS visual contract: translucent materials, native-density controls, a light/dark elevation ladder, shared hover/pressed/focus/disabled states, collapsible/resizable split views with compact focus isolation, measured toolbar/footer scrolling, content-aware scroll-edge fades, command pickers, fields, menus, and dialogs.
 - **Build:** Vite emits `build/renderer`; esbuild emits `build/main/index.js` and `build/preload/preload.cjs`; electron-builder packages the `.app`, DMG, and ZIP.
 - **Persistence:** JSON under `app.getPath("userData")`; chat mutations are serialized across the shared index so background metadata updates cannot race message writes. Provider keys and MCP OAuth sessions are encrypted with Electron `safeStorage`.
 
@@ -22,7 +22,7 @@
 - Pi is embedded in-process through `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`.
 - Workspace tools include `read_file`, `list_dir`, `glob`, `grep`, `edit_file`, `write_file`, and `run_command`.
 - Every filesystem path is resolved inside the active workspace root. Commands run with the workspace root as their working directory.
-- Permission modes are Full, Ask, and No Access. Ask mode pauses write/edit/command calls for inline Allow or Deny approval.
+- Permission modes are Full, Ask, and No Access. Ask mode pauses write/edit/command calls for inline Allow once or Deny approval. Permission, folder, and workspace changes cancel both active and initializing generations before any newly disallowed tool continuation can begin.
 - Git helpers report branch and uncommitted count, switch branches, and create branches.
 - Agent Skills are loaded from workspace and user `.agents/*/SKILL.md` folders.
 - MCP supports stdio, HTTP, and SSE transports plus native-app OAuth with a loopback PKCE redirect and encrypted tokens.
@@ -64,7 +64,8 @@
 
 ## Current verification status
 
-- Shared standard and confirmation modal entrances use the centered `0.8` to `1` zoom with a slight fade-in; the Add MCP server path was visually verified in the running Electron development app.
+- The 2026-07-19 production UI/trust pass completed three phase-specific two-reviewer loops. Shared interactions, permissions/approvals, compact navigation, content-aware scroll edges, and responsive composer controls pass 18 focused tests, type-check, lint, production build, signed macOS packaging, live light/dark inspection, and packaged-app settings/IPC smoke verification; final whole-diff review gates the merge.
+- Shared standard and confirmation modal entrances use a centered `.98` to `1` scale, 4px rise, and slight fade-in; reduced-motion mode removes the transform.
 - UI element and UX hardening pass: the composer now floats over the continuous transcript surface; settings use a wider, searchable, grouped navigation sidebar with readable descriptions and placeholders; settings dialogs keep actions visible; and the split view overlays/auto-collapses at compact widths.
 - Validated settings/chat fixes include draft provider testing, temporary MCP connection tests, safe external link handling, send-draft preservation on failure, footer-growth auto-follow, active local-model cleanup, and explicit Exa key removal behavior.
 - `npm run type-check`, `npm run lint`, and `npm run build`: passing after the UI element and UX hardening pass.

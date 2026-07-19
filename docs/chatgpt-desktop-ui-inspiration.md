@@ -215,3 +215,16 @@ The best first slice is narrow and coherent:
 5. Add scroll-edge masks and verify light/dark plus reduced motion.
 
 This improves trust, navigation, and perceived polish without importing ChatGPT's larger product complexity.
+
+## Production follow-through — 2026-07-19
+
+The first implementation slice is now reflected in production Aiden:
+
+- Shared controls use a theme-aware elevation ladder with consistent rest, hover, pressed, focus, and disabled states.
+- Dialogs and popovers use the quieter motion recipes, with transforms removed under reduced motion.
+- Full Access has consequence-focused confirmation copy; Ask First approvals identify the tool and expose only Deny and Allow once.
+- Tool activity distinguishes running, finished, failed, and blocked outcomes, and permission or workspace changes cancel active and initializing generations.
+- Sidebar and long-content regions use scroll-position-aware fades; compact navigation isolates focus, closes in layers with Escape, and restores the prior focus target.
+- Settings, terminal, composer context, editor/branch/model pickers, copy controls, and attachment actions now share the same focus and interaction language.
+
+Pin/archive remains deliberately deferred: search already exists, while durable pin/archive behavior needs persistence and product semantics beyond a visual-polish pass. Review, commit, command-palette, and artifact surfaces remain in the later-stage backlog above.

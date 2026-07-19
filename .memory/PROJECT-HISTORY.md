@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-19 — Complete the ChatGPT/Codex-inspired UI and trust polish
+
+- Unified light/dark elevation, hover, pressed, focus, disabled, popover, dialog, toast, switch, radio, field, and list-row states across the repository-owned component system, with quieter motion and reduced-motion fallbacks.
+- Reworked composer permission copy and Full Access confirmation, made permissions immutable during generation, and upgraded inline approvals with human tool labels, explicit one-time scope, recoverable decisions, keyboard focus management, and distinct running/finished/failed/blocked activity.
+- Made workspace permission or folder changes cancel in-flight and initializing generations, including a tombstone handoff that prevents a cancelled start from reaching `agent.continue()`.
+- Polished settings, editor/branch/model controls, copy and attachment actions, terminal tabs and resizers, strict scroll-edge fades, content-growth auto-follow, medium-width composer sizing, and compact sidebar overlay focus/isolation/Escape behavior.
+- Completed three phase-specific two-reviewer loops; 18 focused tests, type-check, lint, production build, signed macOS packaging, and packaged-app settings/IPC smoke verification pass. The branch remains gated on its final whole-diff review, and the existing large renderer chunk warning remains follow-up performance work.
+
 ### 2026-07-19 — Recreate ChatGPT/Codex-inspired interface elements
 
 - Added an interactive, self-contained UI specimen covering button variants and state matrices, fields, search, toggles, chips, permission menus, sidebar rows, composer context, inline approvals, toasts, and Full Access confirmation.
