@@ -15,8 +15,8 @@ import {
   CustomDropdownMenuContent,
   CustomDropdownMenuTrigger,
   Text,
-} from "@glaze/core/components";
-import { cn } from "@glaze/core/utils";
+} from "./ui";
+import { cn } from "../lib/ui-utils";
 import { Check, ChevronsUpDown, Cloud, Cpu, Pin } from "lucide-react";
 import type { Provider } from "../lib/types";
 
@@ -126,7 +126,7 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
   return (
     <CustomDropdownMenu open={open} onOpenChange={setOpen}>
       <CustomDropdownMenuTrigger asChild>
-        <Button variant="transparent" size="small" disabled={disabled || !hasModels} className="max-w-56 gap-1.5">
+        <Button variant="transparent" size="small" disabled={disabled || !hasModels} className="min-w-0 max-w-[min(14rem,45vw)] gap-1.5">
           {selected ? (
             selected.isLocal ? (
               <Cpu className="size-4 shrink-0 text-tertiary" />
@@ -135,7 +135,7 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
             )
           ) : null}
           <span className="min-w-0 truncate">
-            {selected ? selected.label : hasModels ? "Select model" : "No models — set up a provider"}
+            {selected ? selected.label : hasModels ? "Select model" : "No models"}
           </span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-tertiary" />
         </Button>
@@ -190,7 +190,7 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
                     }}
                     className={cn(
                       "shrink-0 rounded-md p-0.5 text-tertiary transition-opacity hover:text-secondary",
-                      isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                      isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
                     )}
                   >
                     <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
