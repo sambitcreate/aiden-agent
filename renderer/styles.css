@@ -145,6 +145,16 @@ textarea {
   -webkit-backdrop-filter: blur(24px) saturate(1.25);
 }
 
+[data-toolbar] {
+  container: chat-toolbar / inline-size;
+}
+
+@container chat-toolbar (max-width: 600px) {
+  .open-in-editor-label {
+    display: none;
+  }
+}
+
 :root.window-blurred .dimmable { opacity: 0.48; }
 
 .terminal-drawer {
