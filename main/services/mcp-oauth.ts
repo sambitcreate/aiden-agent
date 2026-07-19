@@ -16,7 +16,7 @@ import type {
   OAuthClientMetadata,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { shell, logger } from "@glaze/core/backend";
+import { shell, logger } from "../platform.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
 import type { McpServer } from "./types.js";
 
