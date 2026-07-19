@@ -10,6 +10,7 @@ import type {
   ChatStartParams,
   DiscoveredSkill,
   EngineStatus,
+  ExternalEditor,
   GitBranches,
   GitInfo,
   LocalVoiceModel,
@@ -148,6 +149,10 @@ export const workspacesApi = {
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (folderPath: string) => invoke<GitInfo>("workspaces:gitInfo", folderPath),
   openFolder: (folderPath: string) => invoke<void>("workspaces:openFolder", folderPath),
+  externalEditors: (forceRefresh = false) =>
+    invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
+  openInEditor: (workspaceId: string, editorId: string) =>
+    invoke<void>("workspaces:openInEditor", workspaceId, editorId),
 };
 
 // ── Interactive terminal ─────────────────────────────────────────────
