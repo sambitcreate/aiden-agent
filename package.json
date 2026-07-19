@@ -1,19 +1,27 @@
 {
-  "id": "21wvm33l",
   "name": "aiden-agent",
   "version": "1.0.0",
   "productName": "Aiden Agent",
-  "description": "A native macOS AI workspace agent for local and cloud models",
-  "iconDescription": "A capable macOS AI agent that connects to local engines such as Ollama and LM Studio and cloud providers such as OpenAI, Claude, and Gemini. Aiden can work inside user-selected folders, use coding tools, connect to MCP servers, load Agent Skills, search the web, and accept voice input. The icon should feel intelligent, capable, approachable, and distinctly native to macOS.",
+  "description": "A private macOS AI workspace agent for local and cloud models",
+  "author": "Sambit Biswas",
   "private": true,
   "type": "module",
+  "main": "build/main/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sambitcreate/aiden-agent.git"
+  },
   "scripts": {
-    "build": "node glaze.ts build",
-    "dev": "node glaze.ts dev",
-    "dev:renderer": "node glaze.ts dev:renderer",
-    "lint": "node glaze.ts lint",
-    "type-check": "node glaze.ts type-check",
-    "format": "node glaze.ts format"
+    "build": "vite build && npm run build:electron",
+    "build:electron": "node scripts/build-electron.mjs",
+    "dev": "npm run build:electron && concurrently -k -s first \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
+    "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && AIDEN_RENDERER_URL=http://127.0.0.1:4143 electron .",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit",
+    "format": "oxfmt .",
+    "package": "npm run build && electron-builder --mac dir",
+    "dist": "npm run build && electron-builder --mac"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.80.6",
@@ -32,7 +40,6 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^9.0.1",
-    "rehype-highlight": "^7.0.0",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
@@ -51,6 +58,9 @@
     "@typescript-eslint/parser": "^8.18.0",
     "@vitejs/plugin-react": "^6.0.1",
     "babel-plugin-react-compiler": "^1.0.0",
+    "concurrently": "^10.0.3",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.27.4",
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.31.0",
@@ -59,24 +69,35 @@
     "tailwindcss": "^4.2.2",
     "tsx": "^4.20.5",
     "typescript": "^5.5.3",
-    "vite": "^8.0.2"
+    "vite": "^8.0.2",
+    "wait-on": "^9.0.10"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=22.19"
   },
   "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
-  "glaze": {
-    "capabilities": {
-      "microphone": {
-        "usage": "Transcribe your voice into the message composer"
+  "build": {
+    "appId": "com.sambitcreate.aiden-agent",
+    "productName": "Aiden Agent",
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/sherpa-onnx-node/**",
+      "**/node_modules/sherpa-onnx-darwin-*/**"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "build/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/app-icon.icns",
+      "target": ["dmg", "zip"],
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Aiden Agent uses the microphone only when you choose voice input or dictation."
       }
-    },
-    "sdkVersion": "0.10.0.0",
-    "createdAt": "2026-07-17T03:49:50.102Z",
-    "lastMigration": "cli-js-entry",
-    "host": {
-      "minVersion": "0.10.0.0"
-    },
-    "updatedAt": 1784350019569
+    }
   }
 }
