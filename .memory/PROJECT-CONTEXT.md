@@ -23,6 +23,7 @@
 - Workspace tools include `read_file`, `list_dir`, `glob`, `grep`, `edit_file`, `write_file`, and `run_command`.
 - Every filesystem path is resolved inside the active workspace root. Commands run with the workspace root as their working directory.
 - Permission modes are Full, Ask, and No Access. Ask mode pauses write/edit/command calls for inline Allow once or Deny approval. Permission, folder, and workspace changes cancel both active and initializing generations before any newly disallowed tool continuation can begin.
+- On an untouched new chat, the composer folder control opens a searchable workspace plate and can reassign that same empty chat without leaving a duplicate. “Don’t work in a workspace” creates a private, collision-safe `~/aiden/<word-word-word>` scratch folder using three- or four-letter words, persists it as an Ask-mode workspace, and binds the chat to it. Chats with messages cannot be moved this way.
 - Git helpers report branch and uncommitted count, switch branches, and create branches.
 - Agent Skills are loaded from workspace and user `.agents/*/SKILL.md` folders.
 - MCP supports stdio, HTTP, and SSE transports plus native-app OAuth with a loopback PKCE redirect and encrypted tokens.
@@ -56,6 +57,8 @@
 - `main/services/coding-tools.ts` — workspace-confined tools.
 - `main/services/config-store.ts` — providers, settings, skills, MCP servers, and workspaces.
 - `main/services/chat-store.ts` — persisted chat history.
+- `main/services/scratch-workspace.ts` — readable three-word scratch names and exclusive `~/aiden` directory creation.
+- `renderer/components/workspace-picker.tsx` — the new-chat searchable workspace/scratch option plate.
 - `main/services/secrets.ts` and `main/services/mcp-oauth-store.ts` — encrypted secrets.
 - `main/services/mcp.ts` and `main/services/mcp-oauth.ts` — MCP clients and OAuth.
 - `main/services/parakeet.ts` and `main/services/local-models.ts` — on-device transcription.
@@ -71,6 +74,7 @@
 
 ## Current verification status
 
+- New-chat workspace plate: the searchable anchored UI, keyboard filtering, and existing-workspace reassignment passed live Electron inspection. Scratch naming, collision retry, and empty-chat-only moves are covered by focused tests; the full 22-test suite, type-check, lint, production renderer build, and Electron main/preload build pass.
 - The 2026-07-19 production UI/trust pass completed three phase-specific two-reviewer loops and a final two-reviewer whole-diff pass. Shared interactions, permissions/approvals, compact navigation, content-aware scroll edges, and responsive composer controls pass the repository's 18-test suite, type-check, lint, production build, signed macOS packaging, live light/dark inspection, and packaged-app settings/IPC smoke verification. The critical cancellation, focus, and scroll paths were source/runtime/reviewer validated but still need dedicated automated tests.
 - Shared standard and confirmation modal entrances use a centered `.98` to `1` scale, 4px rise, and slight fade-in; reduced-motion mode removes the transform.
 - UI element and UX hardening pass: the composer now floats over the continuous transcript surface; settings use a wider, searchable, grouped navigation sidebar with readable descriptions and placeholders; settings dialogs keep actions visible; and the split view overlays/auto-collapses at compact widths.

@@ -41,7 +41,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const navigate = useNavigate();
   const providers = useProviders();
   const chat = useChat(chatId);
-  const { active, activeId } = useActiveWorkspace();
+  const { active, activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(active?.folderPath);
   const { providerId, model, select } = useModelSelection(providers.data);
@@ -105,6 +105,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const messages = chat.data?.messages ?? [];
   const isGenerating = streamingText !== null;
+  const isNewChat = !chat.isLoading && messages.length === 0 && !isGenerating;
 
   const runGeneration = React.useCallback(
     (history: Chat["messages"]) => {
@@ -229,6 +230,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [active, qc],
   );
 
+  const moveNewChatToWorkspace = React.useCallback(
+    async (workspaceId: string) => {
+      if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+      if (workspaceId === activeId) return;
+      const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
+      qc.setQueryData(queryKeys.chat(chatId), updated);
+      selectWorkspace(workspaceId);
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+    },
+    [activeId, chatId, isNewChat, qc, selectWorkspace],
+  );
+
+  const createScratchWorkspace = React.useCallback(async () => {
+    if (!isNewChat) throw new Error("Start a new chat before choosing a scratch folder.");
+    const workspace = await workspacesApi.createScratch();
+    await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+    await moveNewChatToWorkspace(workspace.id);
+  }, [isNewChat, moveNewChatToWorkspace, qc]);
+
   const pending = approvals[0];
 
   React.useEffect(() => {
@@ -341,6 +361,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             gitBranch={git.data?.isRepo ? git.data.branch : undefined}
             onOpenFolder={openFolder}
             onChangePermission={changePermission}
+            workspacePickerEnabled={isNewChat}
+            workspaces={workspaces}
+            onSelectWorkspace={moveNewChatToWorkspace}
+            onCreateScratchWorkspace={createScratchWorkspace}
             visionSupported={visionSupported}
             modelPicker={
               <ModelPicker

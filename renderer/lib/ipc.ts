@@ -142,6 +142,7 @@ export const workspacesApi = {
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; folderPath?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
+  createScratch: () => invoke<Workspace>("workspaces:createScratch"),
   update: (
     id: string,
     patch: { name?: string; folderPath?: string; permission?: WorkspacePermission },
@@ -189,6 +190,8 @@ export const chatsApi = {
   create: (input: { title?: string; workspaceId?: string; providerId?: string; model?: string }) =>
     invoke<Chat>("chats:create", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
+  moveEmptyToWorkspace: (id: string, workspaceId: string) =>
+    invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   appendMessage: (
     id: string,
