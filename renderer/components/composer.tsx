@@ -14,8 +14,8 @@ import {
   DropdownMenuTrigger,
   Textarea,
   toast,
-} from "@glaze/core/components";
-import { cn } from "@glaze/core/utils";
+} from "./ui";
+import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
   FileText,
@@ -39,7 +39,7 @@ import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
-  onSend: (text: string, attachments: Attachment[]) => void;
+  onSend: (text: string, attachments: Attachment[]) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
@@ -59,7 +59,7 @@ const PERMISSION_META: Record<
   { label: string; icon: React.ComponentType<{ className?: string }>; className: string }
 > = {
   full: { label: "Full access", icon: OctagonAlert, className: "text-support-warning" },
-  ask: { label: "Ask", icon: ShieldQuestion, className: "text-secondary" },
+  ask: { label: "Ask first", icon: ShieldQuestion, className: "text-secondary" },
   none: { label: "No access", icon: Lock, className: "text-tertiary" },
 };
 
@@ -79,7 +79,8 @@ export function Composer({
   const [text, setText] = React.useState("");
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [attaching, setAttaching] = React.useState(false);
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && ready && !isGenerating;
+  const [sending, setSending] = React.useState(false);
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && ready && !isGenerating && !sending;
 
   const settings = useSettings();
   const voice = useVoiceRecorder(
@@ -108,7 +109,7 @@ export function Composer({
     try {
       let added = await attachmentsApi.read(paths);
       // Drop images when the model can't see them, with a hint.
-      if (!visionSupported && added.some((a) => a.kind === "image")) {
+      if (visionSupported === false && added.some((a) => a.kind === "image")) {
         added = added.filter((a) => a.kind !== "image");
         toast.info("The selected model can't read images — image attachments were skipped.");
       }
@@ -122,18 +123,29 @@ export function Composer({
 
   const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
 
-  const submit = () => {
+  const submit = async () => {
     const trimmed = text.trim();
-    if ((!trimmed && attachments.length === 0) || !ready || isGenerating) return;
-    onSend(trimmed, attachments);
-    setText("");
-    setAttachments([]);
+    if ((!trimmed && attachments.length === 0) || !ready || isGenerating || sending) return;
+    if (visionSupported === false && attachments.some((attachment) => attachment.kind === "image")) {
+      toast.info("Switch to a vision-capable model before sending these images.");
+      return;
+    }
+    setSending(true);
+    try {
+      await onSend(trimmed, attachments);
+      setText("");
+      setAttachments([]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
+    } finally {
+      setSending(false);
+    }
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      submit();
+      void submit();
     }
   };
 
@@ -145,10 +157,10 @@ export function Composer({
     : workspace?.name;
 
   return (
-    <div className="border-t border-separator bg-background">
-    <div className="mx-auto w-full max-w-3xl px-5 pb-5 pt-2.5">
+    <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
+      <div className="pointer-events-auto">
       {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-      <div className="flex items-center gap-0.5 px-1.5 pb-1">
+      <div className="mx-3 flex min-h-8 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
         <Button
           variant="transparent"
           size="small"
@@ -161,7 +173,7 @@ export function Composer({
           <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
         </Button>
         {/* Execution location — Pi runs locally on this Mac. */}
-        <span className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary" title="Pi runs locally on this Mac">
+        <span className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary" title="The agent runs locally on this Mac">
           <Monitor className="size-4 shrink-0" />
           Local
         </span>
@@ -170,7 +182,7 @@ export function Composer({
         ) : null}
       </div>
 
-      <div className="rounded-2xl border border-field bg-well p-2.5">
+      <div className="-mt-1 rounded-2xl bg-popover p-2.5 shadow-[var(--shadow-composer)] outline outline-1 outline-field/80 transition-[outline-color,box-shadow] focus-within:outline-primary/30">
         {attachments.length > 0 ? (
           <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
             {attachments.map((a) => (
@@ -209,15 +221,15 @@ export function Composer({
           className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
           rows={1}
         />
-        <div className="mt-1.5 flex items-center justify-between gap-1.5">
-          <div className="flex items-center gap-1">
+        <div className="mt-1.5 flex min-w-0 items-center justify-between gap-1.5">
+          <div className="flex shrink-0 items-center gap-1">
             <Button
               variant="transparent"
               size="small"
               iconOnly
               className="rounded-full"
               onClick={handleAttach}
-              disabled={attaching || isGenerating}
+              disabled={attaching || isGenerating || sending}
               aria-label="Attach files or images"
             >
               {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
@@ -230,7 +242,7 @@ export function Composer({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
-                <DropdownMenuLabel>Pi permissions for this workspace</DropdownMenuLabel>
+                <DropdownMenuLabel>Workspace access</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuCheckboxItem
                   checked={permission === "full"}
@@ -253,13 +265,13 @@ export function Composer({
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center justify-end gap-1.5">
             {modelPicker}
             <Button
               variant={voice.recording ? "destructive" : "transparent"}
               size="small"
               iconOnly
-              disabled={voice.transcribing || isGenerating}
+              disabled={voice.transcribing || isGenerating || sending}
               onClick={() => (voice.recording ? voice.stop() : voice.start())}
               aria-label={voice.recording ? "Stop recording" : "Start voice input"}
             >
@@ -279,7 +291,7 @@ export function Composer({
                 size="small"
                 iconOnly
                 disabled={!canSend}
-                onClick={submit}
+                onClick={() => void submit()}
                 aria-label="Send message"
               >
                 <ArrowUp />
@@ -288,7 +300,7 @@ export function Composer({
           </div>
         </div>
       </div>
-    </div>
+      </div>
     </div>
   );
 }
