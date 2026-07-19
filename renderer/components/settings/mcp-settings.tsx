@@ -21,7 +21,7 @@ import {
   Text,
   Textarea,
   toast,
-} from "@glaze/core/components";
+} from "../ui";
 import { Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import { queryKeys, useMcpServers } from "../../lib/queries";
@@ -63,24 +63,24 @@ export function McpSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
           <Text variant="strong">MCP Servers</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Connect Model Context Protocol servers to give the assistant extra tools.
+            Add local commands or remote services. Tool inputs may be shared with the configured server.
           </Text>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             variant="transparent"
             size="small"
             onClick={async () => {
               await mcpApi.reconnect();
-              toast.success("Reconnecting — new tools apply on your next message.");
+              toast.success("Connections reset. Enabled servers reconnect with your next message.");
             }}
           >
             <RefreshCw className="size-4" />
-            Reload
+            Reset connections
           </Button>
           <Button variant="filled" size="small" onClick={() => setEditing(newServer())}>
             <Plus className="size-4" />
@@ -91,7 +91,7 @@ export function McpSettings() {
 
       {list.length === 0 ? (
         <Text variant="small" color="tertiary">
-          No MCP servers yet. Add a local command (e.g. an npx-based server) or a remote URL.
+          No MCP servers configured. Add a local command or remote server when you need extra tools.
         </Text>
       ) : (
         <div className="rounded-card border border-separator">
@@ -113,7 +113,7 @@ export function McpSettings() {
                 <Button variant="filled" size="small" onClick={() => setEditing(s)}>
                   Edit
                 </Button>
-                <Switch checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
+                <Switch aria-label={`Enable ${s.name || "MCP server"}`} checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
                 <Button variant="transparent" size="small" iconOnly aria-label="Remove server" onClick={() => setRemoving(s)}>
                   <Trash2 className="size-4" />
                 </Button>
@@ -172,7 +172,7 @@ function McpEditor({
   const [oauth, setOauth] = React.useState(Boolean(server.oauth));
   const [testing, setTesting] = React.useState(false);
   const [authorizing, setAuthorizing] = React.useState(false);
-  const [authorized, setAuthorized] = React.useState(Boolean(server.oauth));
+  const [authorized, setAuthorized] = React.useState(false);
 
   React.useEffect(() => {
     if (open) {
@@ -184,7 +184,10 @@ function McpEditor({
       setUrl(server.url ?? "");
       setHeaders(recordToLines(server.headers));
       setOauth(Boolean(server.oauth));
-      setAuthorized(Boolean(server.oauth));
+      setAuthorized(false);
+      if (server.oauth) {
+        void mcpApi.oauthStatus(server.id).then((status) => setAuthorized(status.authorized)).catch(() => setAuthorized(false));
+      }
     }
   }, [open, server]);
 
@@ -226,6 +229,7 @@ function McpEditor({
     setTesting(true);
     try {
       const status = await mcpApi.status(build());
+      if (oauth) setAuthorized(Boolean(status.authorized));
       if (status.connected) toast.success(`Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`);
       else toast.error(`Connection failed: ${status.error ?? "unknown error"}`);
     } catch (error) {
@@ -242,7 +246,7 @@ function McpEditor({
       title={server.name ? `Edit ${server.name}` : "Add MCP server"}
       size="large"
       confirmLabel="Save"
-      confirmDisabled={!name.trim()}
+      confirmDisabled={!name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
       onConfirm={async () => {
         await mcpApi.save(build());
         onSaved();
@@ -271,10 +275,10 @@ function McpEditor({
             <Field label="Command">
               <Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" />
             </Field>
-            <Field label="Arguments" description="Space-separated.">
+            <Field label="Arguments" description="Space-separated arguments passed to the command.">
               <Input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="-y @modelcontextprotocol/server-filesystem /path" />
             </Field>
-            <Field label="Environment" description="One KEY=VALUE per line." orientation="vertical">
+            <Field label="Environment" description="One KEY=VALUE per line. Values are stored in the app configuration on this Mac." orientation="vertical">
               <Textarea value={env} onChange={(e) => setEnv(e.target.value)} placeholder="API_KEY=..." className="max-h-40" />
             </Field>
           </>
@@ -283,14 +287,20 @@ function McpEditor({
             <Field label="Server URL">
               <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" />
             </Field>
-            <Field label="Headers" description="One Key: Value as Key=Value per line." orientation="vertical">
+            <Field label="Headers" description="One KEY=VALUE per line. Values are stored in the app configuration on this Mac." orientation="vertical">
               <Textarea value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder="Authorization=Bearer ..." className="max-h-40" />
             </Field>
             <Field
               label="OAuth sign-in"
               description="For hosted servers that require browser authorization instead of (or with) a key."
             >
-              <Switch checked={oauth} onCheckedChange={setOauth} />
+              <Switch
+                checked={oauth}
+                onCheckedChange={(value) => {
+                  setOauth(value);
+                  if (!value) setAuthorized(false);
+                }}
+              />
             </Field>
             {oauth ? (
               <Field label="Authorize" description={authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."}>
