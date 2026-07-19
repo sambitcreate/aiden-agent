@@ -17,7 +17,7 @@ const execAsync = promisify(exec);
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_GREP_MATCHES = 200;
-const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".glaze", ".cache"]);
+const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".cache"]);
 
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
 export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
