@@ -95,7 +95,7 @@ export function GitBranchPicker({ folderPath, branch }: GitBranchPickerProps) {
       }}
     >
       <CustomDropdownMenuTrigger asChild>
-        <Button variant="transparent" size="small" className="h-7 max-w-[14rem] gap-1.5 px-2 text-tertiary">
+        <Button variant="transparent" size="small" className="h-7 max-w-[14rem] gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]">
           <GitBranch className="size-4 shrink-0" />
           <span className="min-w-0 truncate text-small">{current}</span>
         </Button>
@@ -164,7 +164,7 @@ export function GitBranchPicker({ folderPath, branch }: GitBranchPickerProps) {
             <button
               type="button"
               onClick={() => setCreating(true)}
-              className="flex w-full items-center gap-2 px-3 py-2.5 text-small text-secondary hover:bg-control"
+              className="flex w-full items-center gap-2 px-3 py-2.5 text-small text-secondary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
             >
               <Plus className="size-4 shrink-0" />
               Create and checkout new branch…

@@ -301,9 +301,32 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     window.addEventListener("pointerup", finish);
   }, [collapsed, limits.max, limits.min, width, widthKey]);
 
+  const resizeWithKeyboard = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    const increment = event.shiftKey ? 40 : 16;
+    let next = width;
+    if (event.key === "ArrowLeft") next = width - increment;
+    else if (event.key === "ArrowRight") next = width + increment;
+    else if (event.key === "Home") next = limits.min;
+    else if (event.key === "End") next = limits.max;
+    else return;
+
+    event.preventDefault();
+    next = Math.min(limits.max, Math.max(limits.min, next));
+    setWidth(next);
+    localStorage.setItem(widthKey, String(Math.round(next)));
+  }, [limits.max, limits.min, width, widthKey]);
+
   return (
     <SplitContext.Provider value={{ collapsed, toggle, leadingAnchor }}>
       <div className="relative flex h-screen min-h-0 w-full overflow-hidden text-primary">
+        {compact && !collapsed ? (
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            onClick={toggle}
+            className="absolute inset-0 z-20 cursor-default bg-black/10 outline-none backdrop-blur-[1px] transition-opacity focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+          />
+        ) : null}
         <aside
           className={cn(
             "h-full shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out",
@@ -321,9 +344,14 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
+          aria-valuemin={limits.min}
+          aria-valuemax={limits.max}
+          aria-valuenow={Math.round(width)}
+          tabIndex={collapsed || compact ? -1 : 0}
           onPointerDown={beginResize}
+          onKeyDown={resizeWithKeyboard}
           className={cn(
-            "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20",
+            "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-focus-ring",
             (collapsed || compact) && "pointer-events-none opacity-0",
           )}
         />
@@ -364,6 +392,31 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
   actions?: React.ReactNode;
   footer?: React.ReactNode;
 }>) {
+  const viewport = React.useRef<HTMLDivElement>(null);
+  const [atTop, setAtTop] = React.useState(true);
+  const [atBottom, setAtBottom] = React.useState(true);
+  const updateScrollEdges = React.useCallback((element = viewport.current) => {
+    if (!element) return;
+    setAtTop(element.scrollTop < 2);
+    setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 2);
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const update = () => updateScrollEdges(element);
+    const frame = requestAnimationFrame(update);
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(element);
+    const mutationObserver = new MutationObserver(update);
+    mutationObserver.observe(element, { childList: true, subtree: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [updateScrollEdges]);
+
   return (
     <div data-sidebar className="glass-surface relative flex h-full min-h-0 flex-col overflow-hidden">
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
@@ -382,7 +435,15 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
           </label>
         </div>
       ) : null}
-      <div className="dimmable min-h-0 flex-1 overflow-y-auto">{children}</div>
+      <div
+        ref={viewport}
+        data-scroll-top={atTop}
+        data-scroll-bottom={atBottom}
+        className="scroll-edge-mask dimmable min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => updateScrollEdges(event.currentTarget)}
+      >
+        {children}
+      </div>
       {footer}
     </div>
   );
@@ -415,6 +476,7 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
   const [footerHeight, setFooterHeight] = React.useState(0);
   const footerHeightRef = React.useRef(0);
   const [atBottom, setAtBottom] = React.useState(true);
+  const [atTop, setAtTop] = React.useState(true);
   const atBottomRef = React.useRef(true);
   const split = React.useContext(SplitContext);
 
@@ -425,6 +487,13 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
     if (!element) return;
     element.scrollTo({ top: element.scrollHeight, behavior });
     setAtBottom(true);
+    setAtTop(element.scrollHeight <= element.clientHeight);
+  }, []);
+
+  const updateScrollEdges = React.useCallback((element = viewport.current) => {
+    if (!element) return;
+    setAtTop(element.scrollTop < 2);
+    setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
   }, []);
 
   React.useLayoutEffect(() => {
@@ -448,6 +517,22 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
     if (autoScrollToBottom && atBottom) scrollToBottom("auto");
   }, [autoScrollToBottom, ...autoScrollDeps]);
 
+  React.useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const update = () => updateScrollEdges(element);
+    const frame = requestAnimationFrame(update);
+    const resizeObserver = new ResizeObserver(update);
+    resizeObserver.observe(element);
+    const mutationObserver = new MutationObserver(update);
+    mutationObserver.observe(element, { childList: true, subtree: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [updateScrollEdges]);
+
   const resolvedToolbar = toolbar ?? (title || leading || actions ? (
     <header
       data-toolbar
@@ -465,11 +550,12 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
       {resolvedToolbar ? <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-10">{resolvedToolbar}</div> : null}
       <div
         ref={viewport}
-        className="h-full w-full overflow-y-auto overscroll-contain"
+        data-scroll-top={atTop}
+        data-scroll-bottom={atBottom}
+        className="scroll-edge-mask h-full w-full overflow-y-auto overscroll-contain"
         style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
         onScroll={(event) => {
-          const element = event.currentTarget;
-          setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
+          updateScrollEdges(event.currentTarget);
         }}
       >
         {children}

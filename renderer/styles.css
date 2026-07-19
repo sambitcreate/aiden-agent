@@ -163,6 +163,23 @@ textarea {
 
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent; }
 
+.scroll-edge-mask {
+  --scroll-fade-size: 14px;
+  transition: mask-image 120ms ease-out;
+}
+
+.scroll-edge-mask[data-scroll-top="false"][data-scroll-bottom="false"] {
+  mask-image: linear-gradient(to bottom, transparent, black var(--scroll-fade-size), black calc(100% - var(--scroll-fade-size)), transparent);
+}
+
+.scroll-edge-mask[data-scroll-top="false"][data-scroll-bottom="true"] {
+  mask-image: linear-gradient(to bottom, transparent, black var(--scroll-fade-size));
+}
+
+.scroll-edge-mask[data-scroll-top="true"][data-scroll-bottom="false"] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--scroll-fade-size)), transparent);
+}
+
 .glass-surface {
   background: var(--glass-fill);
   backdrop-filter: blur(24px) saturate(1.25);

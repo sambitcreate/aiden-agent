@@ -39,8 +39,8 @@ export function CopyButton({ text, label = "Copy", className }: CopyButtonProps)
       aria-label={copied ? "Copied" : label}
       title={copied ? "Copied" : label}
       className={cn(
-        "inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-tertiary",
-        "transition-colors hover:bg-control hover:text-secondary active:bg-control",
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-tertiary outline-none",
+        "transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring",
         className,
       )}
     >

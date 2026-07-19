@@ -206,11 +206,11 @@ export function Composer({
     <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
       <div className="pointer-events-auto">
       {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-      <div className="mx-3 flex min-h-8 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
+      <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
         <Button
           variant="transparent"
           size="small"
-          className="h-7 gap-1.5 px-2 text-secondary"
+          className="h-7 min-w-0 max-w-[16rem] gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
           onClick={onOpenFolder}
           disabled={!workspace?.folderPath}
           aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
@@ -219,7 +219,7 @@ export function Composer({
           <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
         </Button>
         {/* Execution location — Pi runs locally on this Mac. */}
-        <span className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary" title="The agent runs locally on this Mac">
+        <span className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden" title="The agent runs locally on this Mac">
           <Monitor className="size-4 shrink-0" />
           Local
         </span>
@@ -228,7 +228,7 @@ export function Composer({
         ) : null}
       </div>
 
-      <div className="-mt-1 rounded-2xl bg-popover p-2.5 shadow-[var(--shadow-composer)] outline outline-1 outline-field/80 transition-[outline-color,box-shadow] focus-within:outline-primary/30">
+      <div className="-mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80 transition-[outline-color,box-shadow] duration-150 ease-out focus-within:outline-focus-ring">
         {attachments.length > 0 ? (
           <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
             {attachments.map((a) => (
@@ -250,7 +250,7 @@ export function Composer({
                   type="button"
                   onClick={() => removeAttachment(a.id)}
                   aria-label={`Remove ${a.name}`}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary hover:bg-control hover:text-primary"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
                   <X className="size-3.5" />
                 </button>
