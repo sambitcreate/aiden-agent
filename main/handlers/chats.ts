@@ -1,6 +1,6 @@
 // Chat history CRUD IPC handlers.
 
-import { ipcMain } from "@glaze/core/backend";
+import { ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
 import type { Attachment, ChatRole } from "../services/types.js";
 
