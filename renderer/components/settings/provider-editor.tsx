@@ -16,7 +16,7 @@ import {
   SelectValue,
   Text,
   toast,
-} from "@glaze/core/components";
+} from "../ui";
 import { providersApi } from "../../lib/ipc";
 import { useModelInfo } from "../../lib/queries";
 import type { Provider, ProviderKind } from "../../lib/types";
@@ -65,10 +65,21 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     }
   };
 
+  const buildDraft = (): Omit<Provider, "hasKey"> => ({
+    id: provider.id,
+    kind,
+    label: label.trim() || provider.label,
+    baseUrl: baseUrl.trim() || provider.baseUrl,
+    models,
+    defaultModel: defaultModel || undefined,
+    needsKey: provider.needsKey,
+    isPreset: provider.isPreset,
+  });
+
   const handleTest = async () => {
     setTesting(true);
     try {
-      const result = await providersApi.test(provider.id, keyDraft.trim() || undefined);
+      const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
       toast.success(`Connected — ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} available.`);
     } catch (error) {
       toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -80,7 +91,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
   const handleRefreshModels = async () => {
     setRefreshing(true);
     try {
-      const list = await providersApi.listModels(provider.id, keyDraft.trim() || undefined);
+      const list = await providersApi.listModels(buildDraft(), keyDraft.trim() || undefined);
       setModels(list);
       if (!list.includes(defaultModel)) setDefaultModel(list[0] ?? "");
       toast.success(`Loaded ${list.length} model${list.length === 1 ? "" : "s"}.`);
@@ -93,16 +104,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
 
   const handleSave = async () => {
     await persistKeyIfNeeded();
-    await providersApi.save({
-      id: provider.id,
-      kind,
-      label: label.trim() || provider.label,
-      baseUrl: baseUrl.trim() || provider.baseUrl,
-      models,
-      defaultModel: defaultModel || undefined,
-      needsKey: provider.needsKey,
-      isPreset: provider.isPreset,
-    });
+    await providersApi.save(buildDraft());
     onSaved();
     onOpenChange(false);
   };
@@ -121,7 +123,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           <Input value={label} onChange={(e) => setLabel(e.target.value)} />
         </Field>
 
-        <Field label="Base URL" description="OpenAI-compatible or Anthropic-compatible endpoint.">
+        <Field label="Base URL" description={provider.isPreset ? "Base address used for API requests." : "Base address of an OpenAI- or Anthropic-compatible API."}>
           <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
         </Field>
 
@@ -181,7 +183,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           </Field>
         ) : (
           <Text variant="small" color="tertiary">
-            No models yet — use “Refresh models”, or they’ll load automatically once a key is set.
+            No models loaded. Refresh models after entering a valid endpoint and API key.
           </Text>
         )}
       </FieldSet>
@@ -192,7 +194,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
             Model capabilities
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-            Matched against models.dev — vision, tool calling, reasoning, open weights, and context length.
+            Capability hints from models.dev. Check provider documentation for exact support.
           </Text>
           <div className="mt-2 max-h-64 overflow-y-auto rounded-card border border-separator">
             {models.map((m, i) => {
