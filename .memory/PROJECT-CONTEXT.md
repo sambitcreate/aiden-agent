@@ -62,6 +62,13 @@
 - `vite.config.ts` and `scripts/build-electron.mjs` — independent builds.
 - `README.md` — current stack, privacy boundary, and commands.
 
+## Planned provider-runtime migration
+
+- `docs/pi-provider-integration-plan.md` is the source-grounded plan for replacing Aiden's seven-provider/two-protocol adapter with Pi's provider-owned `Models` runtime.
+- The plan uses public `@earendil-works/pi-ai` directly, keeps provider runtime objects and credentials in Electron main, lists every Pi provider in Settings, and exposes only Pi-available models in the composer.
+- The plan preserves declarative local/custom endpoints but deliberately excludes arbitrary executable Pi extensions until Aiden has a separate trusted plugin design.
+- Implementation has not started. Aiden's lockfile remains on Pi `0.80.6`; the plan targets a paired, exact reviewed Pi release beginning with `0.80.10` because the needed provider auth/refresh contract changed in `0.80.8`.
+
 ## Current verification status
 
 - The 2026-07-19 production UI/trust pass completed three phase-specific two-reviewer loops and a final two-reviewer whole-diff pass. Shared interactions, permissions/approvals, compact navigation, content-aware scroll edges, and responsive composer controls pass the repository's 18-test suite, type-check, lint, production build, signed macOS packaging, live light/dark inspection, and packaged-app settings/IPC smoke verification. The critical cancellation, focus, and scroll paths were source/runtime/reviewer validated but still need dedicated automated tests.
