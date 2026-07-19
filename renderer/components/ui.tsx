@@ -19,7 +19,9 @@ import { Toaster as SonnerToaster, toast } from "sonner";
 import { cn } from "../lib/ui-utils";
 
 export { toast };
-export const Toaster = SonnerToaster;
+export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
+  return <SonnerToaster position="top-center" offset={52} {...props} />;
+}
 export const TooltipProvider = TooltipPrimitive.Provider;
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -40,19 +42,19 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       ref={ref}
       type={asChild ? undefined : type}
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border border-transparent text-strong outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/50 disabled:pointer-events-none disabled:opacity-50 [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border border-transparent text-strong outline-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 ease-out focus-visible:ring-3 focus-visible:ring-accent/25 disabled:pointer-events-none disabled:opacity-45 [&_svg:not([class*='size-'])]:size-4",
         radius === "full" ? "rounded-pill" : "rounded-control",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
         size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",
         iconOnly && "aspect-square px-0",
-        variant === "filled" && "bg-control text-primary active:bg-control-active",
-        variant === "muted" && "bg-control/50 text-primary active:bg-control",
-        variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover",
-        variant === "glass" && "glass-surface text-primary shadow-sm hover:bg-control/70",
-        variant === "glassAccent" && "bg-accent text-white shadow-sm hover:bg-accent-hover",
-        variant === "accent" && "bg-accent text-white hover:bg-accent-hover",
-        variant === "destructive" && "bg-red text-white hover:opacity-90",
+        variant === "filled" && "bg-control text-primary shadow-control hover:bg-control-hover hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
+        variant === "muted" && "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed",
+        variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection",
+        variant === "glass" && "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
+        variant === "glassAccent" && "bg-accent text-white shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
+        variant === "accent" && "bg-accent text-white shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
+        variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed",
         className,
       )}
       {...props}
@@ -68,7 +70,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-colors placeholder:text-secondary focus:border-primary/40 disabled:opacity-50",
+        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-accent/70 focus:ring-3 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red aria-invalid:ring-red/20",
         className,
       )}
       {...props}
@@ -82,7 +84,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
       <textarea
         ref={ref}
         className={cn(
-          "field-sizing-content min-h-16 w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-colors placeholder:text-secondary focus:border-primary/40 disabled:opacity-50",
+          "field-sizing-content min-h-16 w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-accent/70 focus:ring-3 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red aria-invalid:ring-red/20",
           className,
         )}
         {...props}
@@ -367,7 +369,7 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
       {searchable ? (
         <div className="px-3 pb-3">
-          <label className="flex h-8 items-center gap-2 rounded-pill bg-input px-2.5 transition-colors focus-within:bg-control">
+          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:border-accent/60 focus-within:bg-control focus-within:ring-3 focus-within:ring-accent/20">
             <Search className="size-4 shrink-0 text-tertiary" />
             <input
               type="search"
@@ -392,7 +394,7 @@ export function SidebarListGroup({ title, className, children }: React.PropsWith
   return <div className={cn("mt-5 first:mt-0", className)}>{title ? <div className="mb-1.5 px-2.5 text-[13px] font-medium text-tertiary">{title}</div> : null}<div className="flex flex-col gap-0.5">{children}</div></div>;
 }
 export function SidebarListItem({ icon, title, selected, className, ...props }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "title"> & { icon?: React.ReactNode; title: React.ReactNode; selected?: boolean }) {
-  return <button type="button" aria-current={selected ? "page" : undefined} className={cn("flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-colors hover:bg-list-hover focus-visible:ring-2 focus-visible:ring-accent/40", selected && "bg-list-selection", className)} {...props}>{icon ? <span className="flex shrink-0 text-secondary [&_svg:not([class*='size-'])]:size-4.5">{icon}</span> : null}<span className="min-w-0 flex-1 truncate">{title}</span></button>;
+  return <button type="button" aria-current={selected ? "page" : undefined} className={cn("flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-3 focus-visible:ring-accent/25", selected && "bg-list-selection hover:bg-list-selection", className)} {...props}>{icon ? <span className="flex shrink-0 text-secondary [&_svg:not([class*='size-'])]:size-4.5">{icon}</span> : null}<span className="min-w-0 flex-1 truncate">{title}</span></button>;
 }
 
 export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrollToBottom, autoScrollDeps = [], showScrollToBottomButton, className, children }: React.PropsWithChildren<{
@@ -508,12 +510,12 @@ export function AlertDialog({ open, onOpenChange, title, description, confirmLab
   return <AlertDialogPrimitive.Root open={open} onOpenChange={onOpenChange}><AlertDialogPrimitive.Portal><AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" /><AlertDialogPrimitive.Content data-slot="dialog-content" className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-dialog outline outline-1 outline-field"><AlertDialogPrimitive.Title className="text-heading2 font-semibold">{title}</AlertDialogPrimitive.Title>{description ? <AlertDialogPrimitive.Description asChild><div className="mt-2 text-regular text-secondary">{description}</div></AlertDialogPrimitive.Description> : null}<div className="mt-5 flex justify-end gap-2"><AlertDialogPrimitive.Cancel asChild><Button variant="filled">Cancel</Button></AlertDialogPrimitive.Cancel><AlertDialogPrimitive.Action asChild><Button variant={confirmVariant === "destructive" ? "destructive" : "accent"} onClick={() => void onConfirm?.()}>{confirmLabel}</Button></AlertDialogPrimitive.Action></div></AlertDialogPrimitive.Content></AlertDialogPrimitive.Portal></AlertDialogPrimitive.Root>;
 }
 
-const menuContentClass = "z-50 min-w-48 overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none ring-1 ring-field";
-const menuItemClass = "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none data-[highlighted]:bg-accent data-[highlighted]:text-white data-[disabled]:opacity-45";
+const menuContentClass = "z-50 min-w-48 origin-[var(--radix-dropdown-menu-content-transform-origin)] overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none";
+const menuItemClass = "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-150 data-[highlighted]:bg-accent data-[highlighted]:text-white data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-export const DropdownMenuContent = React.forwardRef<React.ElementRef<typeof DropdownMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>>(function Content({ className, sideOffset = 6, ...props }, ref) { return <DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content ref={ref} sideOffset={sideOffset} className={cn(menuContentClass, className)} {...props} /></DropdownMenuPrimitive.Portal>; });
+export const DropdownMenuContent = React.forwardRef<React.ElementRef<typeof DropdownMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>>(function Content({ className, sideOffset = 6, ...props }, ref) { return <DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content ref={ref} data-slot="popover-content" sideOffset={sideOffset} className={cn(menuContentClass, className)} {...props} /></DropdownMenuPrimitive.Portal>; });
 export const DropdownMenuLabel = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>) => <DropdownMenuPrimitive.Label className={cn("px-2 py-1.5 text-small-strong text-tertiary", className)} {...props} />;
 export const DropdownMenuSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>) => <DropdownMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
 export const DropdownMenuItem = React.forwardRef<React.ElementRef<typeof DropdownMenuPrimitive.Item>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & { icon?: string; color?: string }>(function Item({ className, icon: _icon, color, ...props }, ref) { return <DropdownMenuPrimitive.Item ref={ref} className={cn(menuItemClass, color === "red" && "text-red", className)} {...props} />; });
@@ -525,25 +527,25 @@ export const CustomDropdownMenuContent = DropdownMenuContent;
 
 export const ContextMenu = ContextMenuPrimitive.Root;
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
-export const ContextMenuContent = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>>(function ContextContent({ className, ...props }, ref) { return <ContextMenuPrimitive.Portal><ContextMenuPrimitive.Content ref={ref} className={cn(menuContentClass, className)} {...props} /></ContextMenuPrimitive.Portal>; });
+export const ContextMenuContent = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>>(function ContextContent({ className, ...props }, ref) { return <ContextMenuPrimitive.Portal><ContextMenuPrimitive.Content ref={ref} data-slot="popover-content" className={cn(menuContentClass, className)} {...props} /></ContextMenuPrimitive.Portal>; });
 export const ContextMenuSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Separator>) => <ContextMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
 export const ContextMenuItem = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Item>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & { icon?: string; color?: string }>(function ContextItem({ className, icon: _icon, color, ...props }, ref) { return <ContextMenuPrimitive.Item ref={ref} className={cn(menuItemClass, color === "red" && "text-red", className)} {...props} />; });
 
 export const Select = SelectPrimitive.Root;
 export const SelectValue = SelectPrimitive.Value;
-export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none focus:border-primary/40", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
-export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} position={position} className={cn(menuContentClass, "max-h-72", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
+export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-accent/70 focus:ring-3 focus:ring-accent/20 disabled:cursor-not-allowed disabled:opacity-45", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
+export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} data-slot="popover-content" position={position} className={cn(menuContentClass, "max-h-72 origin-[var(--radix-select-content-transform-origin)]", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
 export const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>>(function SelectItem({ className, children, ...props }, ref) { return <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}><span className="absolute left-2"><SelectPrimitive.ItemIndicator><Check className="size-3.5" /></SelectPrimitive.ItemIndicator></span><SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText></SelectPrimitive.Item>; });
 
-export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-active outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/50 data-[state=checked]:bg-accent disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-sm transition-transform data-[state=checked]:translate-x-[18px]" /></SwitchPrimitive.Root>; });
+export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-active shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-hover focus-visible:ring-3 focus-visible:ring-accent/25 data-[state=checked]:bg-accent data-[state=checked]:shadow-control disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-transform duration-150 ease-out data-[state=checked]:translate-x-[18px]" /></SwitchPrimitive.Root>; });
 export const RadioGroup = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Root>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & { orientation?: "horizontal" | "vertical" }>(function RadioGroup({ className, orientation, ...props }, ref) { return <RadioGroupPrimitive.Root ref={ref} className={cn("flex gap-3", orientation === "vertical" && "flex-col", className)} {...props} />; });
-export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none focus-visible:ring-2 focus-visible:ring-accent/50 data-[state=checked]:border-accent", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
+export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:ring-3 focus-visible:ring-accent/25 data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
 
 export const Command = React.forwardRef<React.ElementRef<typeof CommandPrimitive>, React.ComponentPropsWithoutRef<typeof CommandPrimitive>>(function Command({ className, ...props }, ref) { return <CommandPrimitive ref={ref} className={cn("flex w-full flex-col overflow-hidden bg-transparent text-primary", className)} {...props} />; });
 export const CommandInput = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Input>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>>(function CommandInput({ className, ...props }, ref) { return <div className="flex h-9 items-center gap-2 border-b border-separator px-3"><Search className="size-4 shrink-0 text-tertiary" /><CommandPrimitive.Input ref={ref} className={cn("h-full min-w-0 flex-1 bg-transparent text-regular outline-none placeholder:text-secondary", className)} {...props} /></div>; });
 export const CommandList = React.forwardRef<React.ElementRef<typeof CommandPrimitive.List>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>>(function CommandList({ className, ...props }, ref) { return <CommandPrimitive.List ref={ref} className={cn("h-[300px] max-h-[300px] overflow-y-auto p-1 outline-none", className)} {...props} />; });
 export const CommandEmpty = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>) => <CommandPrimitive.Empty className={cn("px-3 py-6 text-center text-small text-tertiary", className)} {...props} />;
-export const CommandItem = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Item>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>>(function CommandItem({ className, ...props }, ref) { return <CommandPrimitive.Item ref={ref} className={cn("relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none data-[selected=true]:bg-list-selection data-[disabled=true]:opacity-50", className)} {...props} />; });
+export const CommandItem = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Item>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>>(function CommandItem({ className, ...props }, ref) { return <CommandPrimitive.Item ref={ref} className={cn("relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-150 data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45", className)} {...props} />; });
 
 export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: () => void }) {
   return <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center"><Text variant="heading1">Something went wrong</Text><Text color="secondary">{error instanceof Error ? error.message : "Aiden Agent could not render this screen."}</Text>{reset ? <Button onClick={reset}>Try again</Button> : null}</div>;
