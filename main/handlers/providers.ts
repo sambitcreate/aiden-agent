@@ -1,6 +1,6 @@
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain } from "@glaze/core/backend";
+import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { secrets } from "../services/secrets.js";
 import { listModels, testConnection } from "../services/models.js";
@@ -55,9 +55,8 @@ export function registerProviderHandlers(): void {
   });
 
   // Optional keyOverride lets the user test a freshly typed key before saving it.
-  ipcMain.handle("providers:test", async (_event, id: unknown, keyOverride?: unknown) => {
-    const provider = await configStore.getProvider(asString(id, "id"));
-    if (!provider) throw new Error("Provider not found.");
+  ipcMain.handle("providers:test", async (_event, providerValue: unknown, keyOverride?: unknown) => {
+    const provider = parseProvider(providerValue);
     const key =
       typeof keyOverride === "string" && keyOverride.trim()
         ? keyOverride.trim()
@@ -65,17 +64,13 @@ export function registerProviderHandlers(): void {
     return testConnection(provider, key);
   });
 
-  ipcMain.handle("providers:listModels", async (_event, id: unknown, keyOverride?: unknown) => {
-    const provider = await configStore.getProvider(asString(id, "id"));
-    if (!provider) throw new Error("Provider not found.");
+  ipcMain.handle("providers:listModels", async (_event, providerValue: unknown, keyOverride?: unknown) => {
+    const provider = parseProvider(providerValue);
     const key =
       typeof keyOverride === "string" && keyOverride.trim()
         ? keyOverride.trim()
         : await secrets.getKey(provider.id);
-    const models = await listModels(provider, key);
-    // Cache the discovered models on the provider record.
-    await configStore.saveProvider({ ...provider, models });
-    return models;
+    return listModels(provider, key);
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
