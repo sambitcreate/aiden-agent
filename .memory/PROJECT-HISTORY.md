@@ -1,5 +1,17 @@
 # Project History
 
+### 2026-07-19 — Recreate ChatGPT/Codex-inspired interface elements
+
+- Added an interactive, self-contained UI specimen covering button variants and state matrices, fields, search, toggles, chips, permission menus, sidebar rows, composer context, inline approvals, toasts, and Full Access confirmation.
+- Recreated the useful shipped elevation ladder with separate hairline, rest, hover, pressed, popover, toast, composer, and dialog recipes in light and dark mode.
+- Documented hover, pressed, keyboard-focus, disabled, primary, ghost, popover, and reduced-motion behavior in the main inspiration audit without changing production Aiden components yet.
+
+### 2026-07-18 — Map ChatGPT/Codex desktop UI inspiration
+
+- Inspected the installed ChatGPT-branded Codex Electron bundle, compiled renderer labels, routes, commands, layout tokens, and motion CSS, then mapped the inferred project/chat/approval/review/terminal/browser flows.
+- Confirmed the local `ghidra-mcp` checkout is not currently deployable on this Mac because Ghidra, its localhost server, and Maven are unavailable; documented why renderer-package inspection is more useful than native-shell decompilation for Electron UI research.
+- Added `docs/chatgpt-desktop-ui-inspiration.md` with a borrow/adapt/avoid ledger, exact motion timings, Aiden parity gaps, and a prioritized implementation slice.
+
 ### 2026-07-18 — Generate concise chat titles after the first prompt
 
 - Kept first-send navigation immediate by seeding the chat title from the normalized prompt or first attachment name, then launching a separate tool-free title request alongside the accepted first turn.

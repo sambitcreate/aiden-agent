@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aiden Interface Lab — ChatGPT/Codex-inspired controls</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+        --bg: #f4f4f3;
+        --surface: #ffffff;
+        --surface-raised: #fbfbfa;
+        --surface-subtle: #f7f7f6;
+        --control: rgb(0 0 0 / 0.065);
+        --control-hover: rgb(0 0 0 / 0.105);
+        --control-active: rgb(0 0 0 / 0.15);
+        --selected: rgb(0 0 0 / 0.095);
+        --line: rgb(0 0 0 / 0.1);
+        --line-strong: rgb(0 0 0 / 0.16);
+        --text: #181817;
+        --text-secondary: rgb(24 24 23 / 0.64);
+        --text-tertiary: rgb(24 24 23 / 0.46);
+        --accent: #0b7de5;
+        --accent-hover: #0873d5;
+        --accent-pressed: #0668c2;
+        --on-accent: #fff;
+        --danger: #c3322b;
+        --danger-hover: #ae2a24;
+        --success: #087c58;
+        --warning: #9a6700;
+        --radius-control: 10px;
+        --radius-popover: 12px;
+        --radius-composer: 20px;
+        --radius-dialog: 16px;
+        --shadow-hairline: 0 0 0 0.5px rgb(0 0 0 / 0.1);
+        --shadow-control: 0 1px 2px -1px rgb(0 0 0 / 0.08);
+        --shadow-control-hover: 0 2px 4px -1px rgb(0 0 0 / 0.1);
+        --shadow-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.13);
+        --shadow-elevated: var(--shadow-hairline), 0 3px 7.5px rgb(0 0 0 / 0.04), 0 0 20px rgb(0 0 0 / 0.05);
+        --shadow-composer: var(--shadow-hairline), 0 2px 8px rgb(0 0 0 / 0.1);
+        --shadow-toast: var(--shadow-hairline), 0 4px 12px rgb(0 0 0 / 0.1);
+        --shadow-dialog: var(--shadow-hairline), 0 16px 32px -8px rgb(0 0 0 / 0.3);
+        --duration-basic: 150ms;
+        --duration-relaxed: 300ms;
+        --ease-enter: cubic-bezier(0.19, 1, 0.22, 1);
+        --ease-snappy: cubic-bezier(0.23, 1, 0.32, 1);
+        --focus: 0 0 0 3px rgb(11 125 229 / 0.24);
+      }
+
+      html[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #111110;
+        --surface: #1b1b1a;
+        --surface-raised: #222221;
+        --surface-subtle: #171716;
+        --control: rgb(255 255 255 / 0.085);
+        --control-hover: rgb(255 255 255 / 0.13);
+        --control-active: rgb(255 255 255 / 0.18);
+        --selected: rgb(255 255 255 / 0.115);
+        --line: rgb(255 255 255 / 0.1);
+        --line-strong: rgb(255 255 255 / 0.17);
+        --text: #f5f5f3;
+        --text-secondary: rgb(245 245 243 / 0.65);
+        --text-tertiary: rgb(245 245 243 / 0.46);
+        --accent: #4b9cf2;
+        --accent-hover: #60a9f7;
+        --accent-pressed: #388bdc;
+        --danger: #e25750;
+        --danger-hover: #ef6b64;
+        --success: #55c99b;
+        --warning: #e6b750;
+        --shadow-hairline: 0 0 0 0.5px rgb(255 255 255 / 0.16);
+        --shadow-control: 0 1px 2px -1px rgb(0 0 0 / 0.42);
+        --shadow-control-hover: 0 2px 4px -1px rgb(0 0 0 / 0.52);
+        --shadow-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.52);
+        --shadow-elevated: var(--shadow-hairline), 0 3px 8px rgb(0 0 0 / 0.38), 0 0 20px rgb(0 0 0 / 0.24);
+        --shadow-composer: var(--shadow-hairline), 0 3px 12px rgb(0 0 0 / 0.46);
+        --shadow-toast: var(--shadow-hairline), 0 5px 16px rgb(0 0 0 / 0.5);
+        --shadow-dialog: var(--shadow-hairline), 0 24px 48px -12px rgb(0 0 0 / 0.72);
+        --focus: 0 0 0 3px rgb(75 156 242 / 0.3);
+      }
+
+      * { box-sizing: border-box; }
+      html { background: var(--bg); }
+      body { margin: 0; color: var(--text); background: var(--bg); font-size: 14px; line-height: 1.45; }
+      button, input, textarea { font: inherit; }
+      button { color: inherit; }
+      code { font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 12px; }
+
+      .topbar {
+        position: sticky;
+        z-index: 10;
+        top: 0;
+        display: flex;
+        min-height: 52px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 8px 20px;
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--bg) 82%, transparent);
+        backdrop-filter: blur(18px) saturate(1.2);
+      }
+
+      .brand { display: flex; min-width: 0; align-items: baseline; gap: 10px; }
+      .brand strong { font-size: 14px; font-weight: 620; }
+      .brand span { overflow: hidden; color: var(--text-tertiary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .toolbar-actions { display: flex; align-items: center; gap: 6px; }
+      .canvas { width: min(1120px, calc(100% - 32px)); margin: 28px auto 64px; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / 0.03); }
+      .intro { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 0.7fr); gap: 40px; padding: 34px; border-bottom: 1px solid var(--line); }
+      .intro h1 { max-width: 18ch; margin: 0; font-size: 28px; font-weight: 640; letter-spacing: -0.025em; line-height: 1.12; text-wrap: balance; }
+      .intro p { max-width: 70ch; margin: 12px 0 0; color: var(--text-secondary); }
+      .meta { align-self: end; padding: 12px 14px; border-radius: 12px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 12px; }
+      .meta strong { display: block; margin-bottom: 4px; color: var(--text); font-size: 12px; font-weight: 600; }
+      .section { padding: 30px 34px 34px; border-bottom: 1px solid var(--line); }
+      .section:last-child { border-bottom: 0; }
+      .section-head { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 28px; margin-bottom: 24px; }
+      .section h2 { margin: 0; font-size: 16px; font-weight: 620; letter-spacing: -0.012em; }
+      .section-head p { max-width: 70ch; margin: 0; color: var(--text-secondary); }
+      .cluster { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+      .stack { display: grid; gap: 12px; }
+      .section-spacer { height: 22px; }
+
+      .button {
+        display: inline-flex;
+        min-height: 32px;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        padding: 6px 12px;
+        border: 0;
+        border-radius: var(--radius-control);
+        background: var(--control);
+        box-shadow: var(--shadow-control);
+        cursor: default;
+        font-size: 13px;
+        font-weight: 560;
+        outline: none;
+        transition: background-color var(--duration-basic), color var(--duration-basic), box-shadow var(--duration-basic), opacity var(--duration-basic);
+        transition-timing-function: ease-out;
+      }
+      .button:hover, .button[data-state="hover"] { background: var(--control-hover); box-shadow: var(--shadow-control-hover); }
+      .button:active, .button[data-state="pressed"] { background: var(--control-active); box-shadow: var(--shadow-control-pressed); }
+      .button:focus-visible, .button[data-state="focus"] { box-shadow: var(--shadow-control), var(--focus); }
+      .button:disabled, .button[data-state="disabled"] { opacity: 0.42; pointer-events: none; }
+      .button.primary { background: var(--accent); color: var(--on-accent); box-shadow: 0 1px 2px rgb(0 0 0 / 0.18); }
+      .button.primary:hover, .button.primary[data-state="hover"] { background: var(--accent-hover); box-shadow: 0 2px 5px -1px rgb(0 0 0 / 0.24); }
+      .button.primary:active, .button.primary[data-state="pressed"] { background: var(--accent-pressed); box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.25); }
+      .button.ghost { background: transparent; box-shadow: none; font-weight: 500; }
+      .button.ghost:hover, .button.ghost[data-state="hover"] { background: var(--control); box-shadow: none; }
+      .button.ghost:active, .button.ghost[data-state="pressed"] { background: var(--control-hover); box-shadow: none; }
+      .button.glass { background: color-mix(in srgb, var(--surface) 78%, transparent); box-shadow: var(--shadow-hairline), var(--shadow-control); backdrop-filter: blur(12px); }
+      .button.glass:hover, .button.glass[data-state="hover"] { background: var(--surface); box-shadow: var(--shadow-hairline), var(--shadow-control-hover); }
+      .button.danger { background: var(--danger); color: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.16); }
+      .button.danger:hover, .button.danger[data-state="hover"] { background: var(--danger-hover); }
+      .button.icon { width: 32px; padding: 0; border-radius: 999px; }
+      .button.small { min-height: 28px; padding: 4px 9px; font-size: 12px; }
+      .button .chevron { margin-left: 2px; color: currentColor; opacity: 0.62; font-size: 10px; }
+
+      .state-grid { display: grid; grid-template-columns: 90px repeat(5, minmax(100px, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--line); }
+      .state-cell { display: flex; min-height: 64px; align-items: center; justify-content: center; padding: 10px; background: var(--surface-subtle); }
+      .state-label { justify-content: flex-start; color: var(--text-tertiary); font-size: 11px; font-weight: 580; }
+
+      .control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 30px; }
+      .control-group { display: grid; align-content: start; gap: 9px; }
+      .control-group > label, .field-label { color: var(--text-secondary); font-size: 12px; font-weight: 540; }
+      .field, .textarea {
+        width: 100%;
+        min-height: 34px;
+        padding: 7px 10px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--radius-control);
+        outline: none;
+        background: var(--surface);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgb(0 0 0 / 0.025);
+        transition: border-color var(--duration-basic), box-shadow var(--duration-basic), background-color var(--duration-basic);
+      }
+      .field:hover, .textarea:hover { border-color: color-mix(in srgb, var(--text) 25%, transparent); }
+      .field:focus, .textarea:focus { border-color: color-mix(in srgb, var(--accent) 56%, transparent); box-shadow: var(--focus); }
+      .field::placeholder, .textarea::placeholder { color: var(--text-tertiary); opacity: 1; }
+      .textarea { min-height: 76px; resize: vertical; }
+      .search-wrap { position: relative; }
+      .search-wrap .field { padding-left: 31px; border-color: transparent; background: var(--control); box-shadow: none; }
+      .search-icon { position: absolute; top: 8px; left: 10px; color: var(--text-tertiary); pointer-events: none; }
+      .switch { position: relative; width: 38px; height: 22px; padding: 0; border: 0; border-radius: 999px; background: var(--control-active); cursor: default; transition: background var(--duration-basic); }
+      .switch::after { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 0.25); content: ""; transition: transform var(--duration-basic) var(--ease-snappy); }
+      .switch[aria-checked="true"] { background: var(--accent); }
+      .switch[aria-checked="true"]::after { transform: translateX(16px); }
+      .switch:focus-visible { outline: none; box-shadow: var(--focus); }
+      .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 11px 12px; border-radius: 12px; background: var(--surface-subtle); }
+      .switch-copy strong { display: block; font-size: 13px; font-weight: 560; }
+      .switch-copy span { display: block; margin-top: 2px; color: var(--text-secondary); font-size: 12px; }
+      .chip { display: inline-flex; min-height: 26px; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: var(--control); color: var(--text-secondary); font-size: 12px; }
+      .chip.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent); }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+      .popover-stage { position: relative; min-height: 230px; padding: 28px; border-radius: 14px; background: var(--surface-subtle); }
+      .popover { position: absolute; top: 74px; left: 28px; width: 250px; padding: 6px; border-radius: var(--radius-popover); background: var(--surface-raised); box-shadow: var(--shadow-elevated); transform-origin: top left; }
+      .popover[hidden] { display: none; }
+      .popover.enter { animation: popover-in var(--duration-basic) var(--ease-enter) both; }
+      .menu-label { padding: 7px 9px 5px; color: var(--text-tertiary); font-size: 11px; font-weight: 600; }
+      .menu-item { display: flex; min-height: 34px; width: 100%; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; }
+      .menu-item:hover, .menu-item:focus-visible { outline: none; background: var(--control); }
+      .menu-item[aria-checked="true"]::after { content: "✓"; color: var(--accent); font-weight: 700; }
+      .menu-description { display: block; color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+
+      .workbench { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 510px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-subtle); }
+      .sidebar { display: flex; min-width: 0; flex-direction: column; padding: 12px 9px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-raised) 74%, transparent); }
+      .sidebar-search { margin: 6px 2px 14px; }
+      .nav-label { margin: 10px 9px 4px; color: var(--text-tertiary); font-size: 11px; font-weight: 600; }
+      .nav-row { display: flex; min-height: 34px; align-items: center; gap: 9px; padding: 7px 9px; border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); text-align: left; transition: background var(--duration-basic), color var(--duration-basic); }
+      .nav-row:hover { background: var(--control); color: var(--text); }
+      .nav-row.active { background: var(--selected); color: var(--text); }
+      .nav-glyph { width: 17px; color: var(--text-tertiary); text-align: center; }
+      .conversation { position: relative; display: flex; min-width: 0; flex-direction: column; background: var(--surface); }
+      .conversation-toolbar { display: flex; height: 44px; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
+      .conversation-toolbar strong { overflow: hidden; font-size: 13px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+      .messages { flex: 1; padding: 26px 26px 180px; }
+      .message { max-width: 620px; }
+      .message.user { width: fit-content; max-width: min(80%, 520px); margin-left: auto; padding: 9px 12px; border-radius: 14px 14px 4px 14px; background: var(--control); }
+      .message.assistant { margin-top: 22px; color: var(--text); line-height: 1.55; }
+      .message.assistant p { margin: 0 0 8px; }
+      .activity { display: grid; gap: 6px; margin-top: 14px; color: var(--text-secondary); font-size: 12px; }
+      .activity-row { display: flex; align-items: center; gap: 8px; }
+      .activity-row .status { width: 16px; color: var(--success); text-align: center; }
+      .approval { position: absolute; right: 18px; bottom: 164px; left: 18px; margin: 0; padding: 13px 14px; border-radius: 13px; background: var(--surface-raised); box-shadow: var(--shadow-elevated); }
+      .approval-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .approval strong { display: block; font-size: 13px; font-weight: 600; }
+      .approval p { margin: 3px 0 0; color: var(--text-secondary); font-size: 12px; }
+      .approval-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+      .composer-wrap { position: absolute; right: 18px; bottom: 16px; left: 18px; }
+      .context-strip { display: flex; width: fit-content; max-width: calc(100% - 20px); min-height: 28px; align-items: center; gap: 6px; margin: 0 10px -3px; padding: 4px 9px 7px; border-radius: 11px 11px 0 0; background: var(--control); color: var(--text-secondary); font-size: 11px; }
+      .composer { padding: 10px; border-radius: var(--radius-composer); background: var(--surface-raised); box-shadow: var(--shadow-composer); }
+      .composer textarea { width: 100%; min-height: 58px; padding: 4px 5px; border: 0; outline: 0; resize: none; background: transparent; color: var(--text); }
+      .composer textarea::placeholder { color: var(--text-tertiary); opacity: 1; }
+      .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .composer-controls { display: flex; min-width: 0; align-items: center; gap: 4px; }
+
+      .token-table { width: 100%; border-collapse: collapse; }
+      .token-table th, .token-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+      .token-table th { color: var(--text-tertiary); font-size: 11px; font-weight: 600; }
+      .token-table td { color: var(--text-secondary); font-size: 12px; }
+      .token-table td:first-child { color: var(--text); font-weight: 560; }
+      .swatch-shadow { width: 82px; height: 34px; border-radius: 9px; background: var(--surface-raised); }
+      .shadow-control { box-shadow: var(--shadow-control); }
+      .shadow-hover { box-shadow: var(--shadow-control-hover); }
+      .shadow-elevated { box-shadow: var(--shadow-elevated); }
+      .shadow-dialog { box-shadow: var(--shadow-dialog); }
+
+      .toast-region { position: fixed; z-index: 30; top: 64px; left: 50%; display: grid; gap: 8px; width: min(360px, calc(100% - 28px)); transform: translateX(-50%); pointer-events: none; }
+      .toast { padding: 10px 12px; border-radius: 11px; background: var(--surface-raised); box-shadow: var(--shadow-toast); color: var(--text); font-size: 13px; animation: toast-in 250ms var(--ease-snappy) both; }
+      .toast strong { margin-right: 5px; font-weight: 600; }
+
+      .dialog-layer { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 0.22); backdrop-filter: blur(2px); }
+      .dialog-layer[hidden] { display: none; }
+      .dialog { width: min(420px, 100%); padding: 20px; border-radius: var(--radius-dialog); background: var(--surface-raised); box-shadow: var(--shadow-dialog); animation: dialog-in 180ms var(--ease-enter) both; }
+      .dialog h3 { margin: 0; font-size: 17px; font-weight: 640; }
+      .dialog p { margin: 8px 0 0; color: var(--text-secondary); }
+      .dialog-list { display: grid; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+      .dialog-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; padding: 9px 10px; border-radius: 10px; background: var(--surface-subtle); }
+      .dialog-list strong { display: block; font-size: 12px; font-weight: 600; }
+      .dialog-list span { color: var(--text-secondary); font-size: 11px; }
+      .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+      @keyframes popover-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+      @keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes dialog-in { from { opacity: 0; transform: translateY(4px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+      @media (max-width: 760px) {
+        .intro, .section-head { grid-template-columns: 1fr; gap: 12px; }
+        .control-grid { grid-template-columns: 1fr; }
+        .state-grid { grid-template-columns: 78px repeat(5, 104px); overflow-x: auto; }
+        .workbench { grid-template-columns: 1fr; }
+        .sidebar { display: none; }
+        .section, .intro { padding-right: 20px; padding-left: 20px; }
+        .canvas { width: min(100% - 16px, 1120px); margin-top: 12px; }
+        .brand span { display: none; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <strong>Aiden Interface Lab</strong>
+        <span>ChatGPT/Codex-inspired interaction specimen</span>
+      </div>
+      <div class="toolbar-actions">
+        <button class="button ghost small" id="toastButton" type="button">Show toast</button>
+        <button class="button glass small" id="themeButton" type="button" aria-pressed="false">Dark mode</button>
+        <button class="button primary small" id="dialogButton" type="button">Full Access dialog</button>
+      </div>
+    </header>
+
+    <main class="canvas">
+      <section class="intro">
+        <div>
+          <h1>Controls that feel quiet until you touch them.</h1>
+          <p>This is an interactive recreation of the useful control language found in the installed ChatGPT/Codex desktop renderer, adapted to Aiden's existing macOS visual system. Hover, press, tab-focus, open the menu, switch themes, and trigger the dialog.</p>
+        </div>
+        <div class="meta"><strong>Reference build</strong>ChatGPT/Codex 26.715.31925<br>150ms basic · 300ms relaxed<br>System type · restrained elevation</div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Button vocabulary</h2>
+          <p>Neutral buttons gain only a small surface and shadow change. Primary actions carry the accent. Ghost buttons stay flat. Pressed states move inward through an inset shadow rather than bouncing or shifting layout.</p>
+        </div>
+        <div class="cluster">
+          <button class="button primary" type="button">Send message <span aria-hidden="true">↑</span></button>
+          <button class="button" type="button">Ask for approval <span class="chevron">⌄</span></button>
+          <button class="button ghost" type="button">Cancel</button>
+          <button class="button glass icon" type="button" aria-label="New chat">＋</button>
+          <button class="button danger" type="button">Deny</button>
+          <button class="button" type="button" disabled>Unavailable</button>
+        </div>
+        <div class="section-spacer"></div>
+        <div class="state-grid" role="group" aria-label="Neutral button state comparison">
+          <div class="state-cell state-label">Neutral</div>
+          <div class="state-cell"><button class="button" type="button">Default</button></div>
+          <div class="state-cell"><button class="button" data-state="hover" type="button">Hover</button></div>
+          <div class="state-cell"><button class="button" data-state="pressed" type="button">Pressed</button></div>
+          <div class="state-cell"><button class="button" data-state="focus" type="button">Focus</button></div>
+          <div class="state-cell"><button class="button" data-state="disabled" type="button">Disabled</button></div>
+          <div class="state-cell state-label">Primary</div>
+          <div class="state-cell"><button class="button primary" type="button">Default</button></div>
+          <div class="state-cell"><button class="button primary" data-state="hover" type="button">Hover</button></div>
+          <div class="state-cell"><button class="button primary" data-state="pressed" type="button">Pressed</button></div>
+          <div class="state-cell"><button class="button primary" data-state="focus" type="button">Focus</button></div>
+          <div class="state-cell"><button class="button primary" data-state="disabled" type="button">Disabled</button></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Fields and selection</h2>
+          <p>Inputs use a real boundary and a soft focus halo. Search fields are flatter and contextual. Selected chips use accent tint only when selection matters.</p>
+        </div>
+        <div class="control-grid">
+          <div class="control-group">
+            <label for="standardField">Provider name</label>
+            <input class="field" id="standardField" type="text" placeholder="Local model">
+          </div>
+          <div class="control-group">
+            <label for="searchField">Search</label>
+            <div class="search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input class="field" id="searchField" type="text" placeholder="Search chats"></div>
+          </div>
+          <div class="control-group">
+            <span class="field-label">Compact pickers</span>
+            <div class="cluster">
+              <button class="button small" id="popoverButton" type="button" aria-haspopup="menu" aria-expanded="true">Ask for approval <span class="chevron">⌄</span></button>
+              <button class="button ghost small" type="button">GPT-5.6 <span class="chevron">⌄</span></button>
+              <span class="chip selected"><span class="dot"></span>Local</span>
+              <span class="chip">main</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <span class="field-label">Settings row</span>
+            <div class="switch-row">
+              <div class="switch-copy"><strong>Web search</strong><span>Allow network-backed search tools</span></div>
+              <button class="switch" id="switchButton" type="button" role="switch" aria-checked="true" aria-label="Toggle web search"></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Popover elevation</h2>
+          <p>The menu uses a half-pixel optical edge plus two low-opacity shadows. The result separates from the page without becoming a floating card with a dramatic halo.</p>
+        </div>
+        <div class="popover-stage">
+          <button class="button" id="popoverButtonSecondary" type="button" aria-haspopup="menu" aria-expanded="true">Permissions <span class="chevron">⌄</span></button>
+          <div class="popover enter" id="popover" role="menu">
+            <div class="menu-label">How should actions be approved?</div>
+            <button class="menu-item" type="button" role="menuitemradio" aria-checked="true"><span>Ask for approval<span class="menu-description">Ask before edits and commands</span></span></button>
+            <button class="menu-item" type="button" role="menuitemradio" aria-checked="false"><span>Approve for me<span class="menu-description">Ask only for risky actions</span></span></button>
+            <button class="menu-item" type="button" role="menuitemradio" aria-checked="false"><span>Full Access<span class="menu-description">Unrestricted files and network</span></span></button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Conversation workbench</h2>
+          <p>The conversation remains spatially stable. Project, permission, model, approval, activity, and terminal/review affordances appear around it rather than replacing it.</p>
+        </div>
+        <div class="workbench">
+          <aside class="sidebar">
+            <button class="button primary" type="button">＋ New chat</button>
+            <div class="sidebar-search search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input class="field" type="text" aria-label="Search chats" placeholder="Search"></div>
+            <button class="nav-row active" type="button"><span class="nav-glyph">◫</span>Chats</button>
+            <button class="nav-row" type="button"><span class="nav-glyph">⌁</span>Projects</button>
+            <div class="nav-label">Today</div>
+            <button class="nav-row" type="button"><span class="nav-glyph">·</span>ChatGPT UI audit</button>
+            <button class="nav-row" type="button"><span class="nav-glyph">·</span>Terminal polish</button>
+            <button class="nav-row" type="button"><span class="nav-glyph">·</span>Provider setup</button>
+          </aside>
+          <div class="conversation">
+            <div class="conversation-toolbar"><strong>ChatGPT UI audit</strong><div class="cluster"><button class="button ghost icon" aria-label="Toggle terminal" type="button">⌘</button><button class="button ghost icon" aria-label="Settings" type="button">⋯</button></div></div>
+            <div class="messages">
+              <div class="message user">Map the interface patterns we should borrow.</div>
+              <div class="message assistant"><p>The strongest pattern is a stable conversation surface with context and tools progressively disclosed around it.</p><div class="activity"><div class="activity-row"><span class="status">✓</span>Inspected renderer tokens</div><div class="activity-row"><span class="status">✓</span>Mapped approval flow</div><div class="activity-row"><span class="status">●</span>Building element specimen</div></div></div>
+            </div>
+            <div class="approval" role="alert">
+              <div class="approval-head"><div><strong>Approval needed · run_command</strong><p>Run the local visual verification server in this workspace.</p></div><span class="chip">Once</span></div>
+              <div class="approval-actions"><button class="button ghost small" type="button">Deny</button><button class="button small" type="button">Allow once</button></div>
+            </div>
+            <div class="composer-wrap">
+              <div class="context-strip"><span>▣</span><span>aiden-macos</span><span>·</span><span>Local</span><span>·</span><span>main</span></div>
+              <div class="composer">
+                <textarea aria-label="Message" placeholder="Do anything"></textarea>
+                <div class="composer-footer">
+                  <div class="composer-controls"><button class="button ghost icon" type="button" aria-label="Attach">＋</button><button class="button ghost small" type="button">Ask for approval <span class="chevron">⌄</span></button></div>
+                  <div class="composer-controls"><button class="button ghost small" type="button">GPT-5.6 <span class="chevron">⌄</span></button><button class="button primary icon" type="button" aria-label="Send">↑</button></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Shadow recipes</h2>
+          <p>These values are recreated from the shipped renderer's elevation scale, then adjusted to Aiden's light and dark surfaces. Button shadows remain compact; only transient overlays receive larger elevation.</p>
+        </div>
+        <table class="token-table">
+          <thead><tr><th>Role</th><th>Preview</th><th>Aiden token</th><th>Usage note</th></tr></thead>
+          <tbody>
+            <tr><td>Control rest</td><td><div class="swatch-shadow shadow-control"></div></td><td><code>0 1px 2px -1px / 8%</code></td><td>Neutral and glass buttons; never enough to look detached.</td></tr>
+            <tr><td>Control hover</td><td><div class="swatch-shadow shadow-hover"></div></td><td><code>0 2px 4px -1px / 10%</code></td><td>Paired with a small background increase over 150ms.</td></tr>
+            <tr><td>Popover</td><td><div class="swatch-shadow shadow-elevated"></div></td><td><code>0.5px edge + 3px/7.5px + 20px ambient</code></td><td>Menus and approval cards. Low opacity matters more than large blur.</td></tr>
+            <tr><td>Dialog</td><td><div class="swatch-shadow shadow-dialog"></div></td><td><code>0.5px edge + 16px/32px -8px / 30%</code></td><td>Reserved for modal interruption; stronger in dark mode.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>Interaction notes</h2>
+          <p>The system should feel responsive without performing. State is communicated through surface, edge, and elevation before motion.</p>
+        </div>
+        <table class="token-table">
+          <tbody>
+            <tr><td>Hover</td><td><code>150ms ease-out</code></td><td>Increase surface contrast by roughly 4%, lift compact shadow one step, preserve geometry.</td></tr>
+            <tr><td>Pressed</td><td><code>150ms ease-out</code></td><td>Darken the surface and use an inset shadow. No bounce and no layout shift.</td></tr>
+            <tr><td>Focus</td><td><code>3px accent / 24–30%</code></td><td>Keyboard focus is visible outside the control and does not depend on color fill alone.</td></tr>
+            <tr><td>Popover enter</td><td><code>150ms · -4px · .98 → 1</code></td><td>Fast spatial orientation for contextual UI.</td></tr>
+            <tr><td>Dialog enter</td><td><code>180ms · +4px · .98 → 1</code></td><td>Quieter than Aiden's current .8 scale entrance.</td></tr>
+            <tr><td>Panel resize</td><td><code>300ms relaxed</code></td><td>Animate width only when opening or closing; disable transitions while dragging.</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+    <div class="dialog-layer" id="dialogLayer" hidden>
+      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogDescription">
+        <h3 id="dialogTitle">Turn on Full Access?</h3>
+        <p id="dialogDescription">Aiden could run commands, use the internet, and create or edit files without asking each time.</p>
+        <ul class="dialog-list">
+          <li><span aria-hidden="true">▣</span><div><strong>Files and folders</strong><span>Read, create, modify, or delete files available to the app.</span></div></li>
+          <li><span aria-hidden="true">⌘</span><div><strong>Terminal commands</strong><span>Run commands, install software, and change local state.</span></div></li>
+          <li><span aria-hidden="true">◎</span><div><strong>Internet and connected tools</strong><span>Access websites and send task data to configured services.</span></div></li>
+        </ul>
+        <div class="dialog-actions"><button class="button ghost" id="dialogCancel" type="button">Cancel</button><button class="button primary" id="dialogConfirm" type="button">Confirm</button></div>
+      </div>
+    </div>
+
+    <script>
+      const root = document.documentElement;
+      const themeButton = document.querySelector("#themeButton");
+      const switchButton = document.querySelector("#switchButton");
+      const popover = document.querySelector("#popover");
+      const popoverButtons = [document.querySelector("#popoverButton"), document.querySelector("#popoverButtonSecondary")];
+      const dialogLayer = document.querySelector("#dialogLayer");
+      const dialogButton = document.querySelector("#dialogButton");
+      const dialogCancel = document.querySelector("#dialogCancel");
+      const dialogConfirm = document.querySelector("#dialogConfirm");
+      const toastRegion = document.querySelector("#toastRegion");
+
+      themeButton.addEventListener("click", () => {
+        const dark = root.dataset.theme !== "dark";
+        root.dataset.theme = dark ? "dark" : "light";
+        themeButton.textContent = dark ? "Light mode" : "Dark mode";
+        themeButton.setAttribute("aria-pressed", String(dark));
+      });
+
+      switchButton.addEventListener("click", () => {
+        switchButton.setAttribute("aria-checked", String(switchButton.getAttribute("aria-checked") !== "true"));
+      });
+
+      const setPopover = (open) => {
+        popover.hidden = !open;
+        if (open) {
+          popover.classList.remove("enter");
+          requestAnimationFrame(() => popover.classList.add("enter"));
+        }
+        popoverButtons.forEach((button) => button.setAttribute("aria-expanded", String(open)));
+      };
+      popoverButtons.forEach((button) => button.addEventListener("click", () => setPopover(popover.hidden)));
+
+      const closeDialog = () => { dialogLayer.hidden = true; dialogButton.focus(); };
+      dialogButton.addEventListener("click", () => { dialogLayer.hidden = false; requestAnimationFrame(() => dialogCancel.focus()); });
+      dialogCancel.addEventListener("click", closeDialog);
+      dialogConfirm.addEventListener("click", () => { closeDialog(); showToast("Full Access", "Specimen only — no setting changed."); });
+      dialogLayer.addEventListener("click", (event) => { if (event.target === dialogLayer) closeDialog(); });
+
+      const showToast = (title, message) => {
+        const toast = document.createElement("div");
+        toast.className = "toast";
+        toast.innerHTML = `<strong>${title}</strong>${message}`;
+        toastRegion.append(toast);
+        window.setTimeout(() => toast.remove(), 2800);
+      };
+      document.querySelector("#toastButton").addEventListener("click", () => showToast("Saved", "Interaction tokens are documented."));
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          if (!dialogLayer.hidden) closeDialog();
+          setPopover(false);
+        }
+      });
+    </script>
+  </body>
+</html>

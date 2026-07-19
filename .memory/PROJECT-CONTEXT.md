@@ -48,6 +48,8 @@
 - `main/platform.ts` — Electron platform facade and native IPC handlers.
 - `renderer/preload.ts` — allowlisted context bridge.
 - `renderer/components/ui.tsx` — repository-owned component system.
+- `docs/chatgpt-desktop-ui-inspiration.md` — installed ChatGPT/Codex desktop flow, element, and motion audit with an Aiden-specific borrow/adapt/avoid backlog.
+- `docs/chatgpt-ui-element-specimen.html` — interactive light/dark recreation of the recommended buttons, fields, menus, composer, approvals, shadows, and hover/focus/pressed states.
 - `PRODUCT.md` — product register, users, personality, anti-references, and design principles for interface work.
 - `main/services/llm-client.ts` — Pi agent loop, streaming, and approvals.
 - `main/services/coding-tools.ts` — workspace-confined tools.
