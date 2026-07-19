@@ -3,6 +3,7 @@
 import * as path from "path";
 import { ipcMain, shell } from "../platform.js";
 import { configStore } from "../services/config-store.js";
+import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
 import { gitBranches, gitCheckout, gitCreateBranch, gitInfo } from "../services/git.js";
 import { terminalService } from "../services/terminal.js";
 import type { Workspace, WorkspacePermission } from "../services/types.js";
@@ -95,4 +96,19 @@ export function registerWorkspaceHandlers(): void {
     const error = await shell.openPath(p);
     if (error) throw new Error(`Could not open folder: ${error}`);
   });
+
+  ipcMain.handle("workspaces:externalEditors", async (_event, forceRefresh: unknown) =>
+    listExternalEditors(forceRefresh === true),
+  );
+
+  ipcMain.handle(
+    "workspaces:openInEditor",
+    async (_event, workspaceId: unknown, editorId: unknown) => {
+      const id = asString(workspaceId, "workspaceId");
+      const workspace = await configStore.getWorkspace(id);
+      if (!workspace) throw new Error(`Workspace ${id} was not found.`);
+      if (!workspace.folderPath) throw new Error(`${workspace.name} does not have a folder.`);
+      await openFolderInExternalEditor(workspace.folderPath, asString(editorId, "editorId"));
+    },
+  );
 }
