@@ -154,10 +154,6 @@ export const llmClient = {
         return allowed ? undefined : { block: true, reason: "The user denied this action." };
       },
     });
-    active.set(streamId, { agent, workspaceId: params.workspaceId });
-    initializing.delete(streamId);
-    if (initialization.cancelRequested) agent.abort();
-
     let full = "";
     let errored: string | null = null;
 
@@ -189,6 +185,13 @@ export const llmClient = {
           break;
       }
     });
+
+    initializing.delete(streamId);
+    if (initialization.cancelRequested) {
+      ipcMain.broadcast("chat:done", { streamId, content: "" });
+      return;
+    }
+    active.set(streamId, { agent, workspaceId: params.workspaceId });
 
     void (async () => {
       try {
