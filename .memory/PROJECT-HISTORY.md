@@ -12,6 +12,15 @@
 - Confirmed the local `ghidra-mcp` checkout is not currently deployable on this Mac because Ghidra, its localhost server, and Maven are unavailable; documented why renderer-package inspection is more useful than native-shell decompilation for Electron UI research.
 - Added `docs/chatgpt-desktop-ui-inspiration.md` with a borrow/adapt/avoid ledger, exact motion timings, Aiden parity gaps, and a prioritized implementation slice.
 
+### 2026-07-18 — Add the preferred-editor split control
+
+- Added a native-density Open split control at the start of the chat toolbar; its primary segment opens the active workspace in the global preferred editor, while the chevron lists installed supported editors and Finder.
+- Added curated main-process `.app` discovery with bundle/name fallbacks, duplicate Antigravity handling, a short cache refreshed when the menu opens, distinct native app artwork, and Finder kept last.
+- Added workspace-ID-scoped launch IPC that re-resolves the stored folder, validates it is still a directory, rejects unknown or removed editors, and launches with `/usr/bin/open -b` argument arrays without a shell.
+- Added global preference persistence under `aiden-agent.preferredEditorId`, automatic fallback when an editor disappears, actionable launch toasts, compact icon-only toolbar behavior, the File-menu `⌘O` command, and accessible split-control labels.
+- Added focused tests for discovery filtering and duplicate bundles, preference fallback/persistence, unknown IDs, missing/non-directory folders, refresh-before-launch, and safe launch arguments.
+- Verified the exact installed menu and native icons in the running dark-mode app at regular and compact widths, launched the active Downloads workspace in Cursor, and confirmed `npm test`, `npm run type-check`, `npm run lint`, and `npm run build` pass.
+
 ### 2026-07-18 — Generate concise chat titles after the first prompt
 
 - Kept first-send navigation immediate by seeding the chat title from the normalized prompt or first attachment name, then launching a separate tool-free title request alongside the accepted first turn.
