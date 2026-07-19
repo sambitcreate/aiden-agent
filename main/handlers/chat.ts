@@ -1,7 +1,7 @@
 // Streaming generation handlers. start() returns a streamId; tokens arrive via
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
-import { ipcMain } from "@glaze/core/backend";
+import { ipcMain } from "../platform.js";
 import { llmClient } from "../services/llm-client.js";
 import type { Attachment, ChatRole, ChatStartParams } from "../services/types.js";
 
