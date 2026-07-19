@@ -15,7 +15,7 @@ import {
   Switch,
   Text,
   Textarea,
-} from "@glaze/core/components";
+} from "../ui";
 import { FolderGit2, Plus, Trash2 } from "lucide-react";
 import { skillsApi } from "../../lib/ipc";
 import { queryKeys, useDiscoveredSkills, useSkills, useWorkspaces } from "../../lib/queries";
@@ -53,14 +53,14 @@ export function SkillsSettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
           <Text variant="strong">Skills</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
             Reusable instruction sets the assistant can invoke as tools when a task matches.
           </Text>
         </div>
-        <Button variant="filled" size="small" onClick={() => setEditing(newSkill())}>
+        <Button className="shrink-0" variant="filled" size="small" onClick={() => setEditing(newSkill())}>
           <Plus className="size-4" />
           New skill
         </Button>
@@ -87,7 +87,7 @@ export function SkillsSettings() {
                 <Button variant="filled" size="small" onClick={() => setEditing(s)}>
                   Edit
                 </Button>
-                <Switch checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
+                <Switch aria-label={`Enable ${s.name || "skill"}`} checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
                 <Button variant="transparent" size="small" iconOnly aria-label="Delete skill" onClick={() => setRemoving(s)}>
                   <Trash2 className="size-4" />
                 </Button>
@@ -187,7 +187,7 @@ function SkillEditor({
       title={skill.name ? `Edit ${skill.name}` : "New skill"}
       size="large"
       confirmLabel="Save"
-      confirmDisabled={!name.trim()}
+      confirmDisabled={!name.trim() || !instructions.trim()}
       onConfirm={async () => {
         await skillsApi.save({ ...skill, name: name.trim(), description: description.trim(), instructions });
         onSaved();
@@ -205,7 +205,7 @@ function SkillEditor({
             placeholder="Reviews code for bugs, style, and security issues"
           />
         </Field>
-        <Field label="Instructions" description="Loaded when the model invokes the skill." orientation="vertical">
+        <Field label="Instructions" description="Required. Loaded when the model invokes the skill." orientation="vertical">
           <Textarea
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
