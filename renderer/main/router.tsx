@@ -9,7 +9,7 @@ import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
 import { QueryClient } from "@tanstack/react-query";
-import { ErrorBoundaryView } from "@glaze/core/components";
+import { ErrorBoundaryView } from "../components/ui";
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
