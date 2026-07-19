@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { app, ipcMain, logger } from "@glaze/core/backend";
+import { app, ipcMain, logger } from "../platform.js";
 
 const execFileAsync = promisify(execFile);
 
