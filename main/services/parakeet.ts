@@ -3,7 +3,7 @@
 // downloaded/managed by local-models.ts; transcription runs fully offline.
 
 import { createRequire } from "node:module";
-import { logger } from "@glaze/core/backend";
+import { logger } from "../platform.js";
 import { modelDir, isModelInstalled } from "./local-models.js";
 
 // sherpa-onnx-node is a CommonJS native addon, externalized from the bundle.
