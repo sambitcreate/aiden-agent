@@ -164,10 +164,12 @@ export function GitBranchPicker({ folderPath, branch }: GitBranchPickerProps) {
             <button
               type="button"
               onClick={() => setCreating(true)}
-              className="flex w-full items-center gap-2 px-3 py-2.5 text-small text-secondary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+              className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
             >
               <Plus className="size-4 shrink-0" />
-              Create and checkout new branch…
+              <span className="min-w-0 truncate text-left text-small-strong">
+                Create and checkout new branch…
+              </span>
             </button>
           </Command>
         )}

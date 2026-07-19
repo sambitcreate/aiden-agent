@@ -120,3 +120,8 @@
 ### 2026-07-17 — Chat and interface foundation
 
 - Built provider configuration, encrypted API keys, chat persistence, streaming Markdown, math and code rendering, searchable model selection, chat history, settings, light/dark appearance, and workspace-aware composer UI.
+
+### 2026-07-19 — Match branch creation action density
+
+- Matched “Create and checkout new branch…” to the branch-row typography and compacted its padding so it stays on one line in the branch picker.
+- `npm run type-check`, `npm run lint`, and `npm run build` pass.
