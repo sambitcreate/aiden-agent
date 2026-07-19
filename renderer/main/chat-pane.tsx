@@ -6,7 +6,7 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, EmptyState, ScrollArea, Text } from "@glaze/core/components";
+import { Button, EmptyState, ScrollArea, Text } from "../components/ui";
 import { SlidersHorizontal, SquarePen } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
@@ -32,14 +32,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const { active, activeId } = useActiveWorkspace();
   const git = useGitInfo(active?.folderPath);
   const { providerId, model, select } = useModelSelection(providers.data);
-  const ready = Boolean(providerId && model);
+  const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
+  const ready = Boolean(
+    selectedProvider &&
+      model &&
+      selectedProvider.models.includes(model) &&
+      (selectedProvider.hasKey || !selectedProvider.needsKey),
+  );
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
     [providers.data, providerId],
   );
   const modelInfo = useModelInfo(providerId, providerModels);
-  const visionSupported = model ? Boolean(modelInfo.data?.[model]?.vision) : false;
+  const visionSupported = model && modelInfo.data?.[model] ? Boolean(modelInfo.data[model].vision) : undefined;
 
   const newChat = React.useCallback(async () => {
     const created = await chatsApi.create({ workspaceId: activeId });
@@ -187,7 +193,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <ScrollArea
       className="h-full"
-      title={chat.data?.title ?? "New Chat"}
+      title={chat.data?.title ?? "New chat"}
       actions={
         <>
           <Button iconOnly variant="glass" size="large" onClick={newChat} aria-label="New chat">
@@ -208,37 +214,63 @@ export function ChatPane({ chatId }: { chatId: string }) {
       autoScrollDeps={[messages.length, streamingText, toolStatus, approvals.length]}
       showScrollToBottomButton
       footer={
-        <Composer
-          ready={ready}
-          onSend={handleSend}
-          onStop={handleStop}
-          isGenerating={isGenerating}
-          inputRef={composerRef}
-          workspace={active}
-          gitBranch={git.data?.isRepo ? git.data.branch : undefined}
-          onOpenFolder={openFolder}
-          onChangePermission={changePermission}
-          visionSupported={visionSupported}
-          modelPicker={
-            <ModelPicker
-              providers={providers.data ?? []}
-              providerId={providerId}
-              model={model}
-              onChange={select}
-              disabled={isGenerating}
-            />
-          }
-        />
+        <>
+          {pending ? (
+            <div className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5" role="alert" aria-live="assertive">
+              <div className="rounded-card bg-popover p-3 shadow-[var(--shadow-composer)] outline outline-1 outline-field/80">
+                <Text variant="small-strong" as="p">
+                  Approval needed
+                </Text>
+                <Text variant="small" color="secondary" as="p" className="mt-0.5 break-words">
+                  {pending.summary}
+                </Text>
+                <div className="mt-2.5 flex justify-end gap-2">
+                  <Button variant="transparent" size="small" onClick={() => decideApproval(pending.approvalId, "deny")}>
+                    Deny
+                  </Button>
+                  <Button variant="accent" size="small" onClick={() => decideApproval(pending.approvalId, "allow")}>
+                    Allow
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <Composer
+            ready={ready}
+            onSend={handleSend}
+            onStop={handleStop}
+            isGenerating={isGenerating}
+            inputRef={composerRef}
+            workspace={active}
+            gitBranch={git.data?.isRepo ? git.data.branch : undefined}
+            onOpenFolder={openFolder}
+            onChangePermission={changePermission}
+            visionSupported={visionSupported}
+            modelPicker={
+              <ModelPicker
+                providers={providers.data ?? []}
+                providerId={providerId}
+                model={model}
+                onChange={select}
+                disabled={isGenerating}
+              />
+            }
+          />
+        </>
       }
     >
-      {messages.length === 0 && streamingText === null ? (
+      {chat.isLoading || providers.isLoading ? (
+        <div className="flex h-full min-h-[50vh] items-center justify-center" aria-label="Loading conversation">
+          <Text variant="small" color="secondary">Loading…</Text>
+        </div>
+      ) : messages.length === 0 && streamingText === null ? (
         <div className="flex h-full min-h-[50vh] items-center justify-center">
           <EmptyState
-            title="Start the conversation"
+            title="What would you like to work on?"
             description={
               (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
-                ? "Type a message below to chat with your selected model."
-                : "Add a provider and API key in Settings to get started."
+                ? undefined
+                : "Set up a provider in Settings to start."
             }
           />
         </div>
@@ -246,26 +278,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <MessageList messages={messages} streamingText={streamingText} toolStatus={toolStatus} error={error} />
       )}
 
-      {pending ? (
-        <div className="mx-auto w-full max-w-3xl px-5 pb-3">
-          <div className="rounded-card border border-field bg-well p-3">
-            <Text variant="small-strong" as="p">
-              Approval needed
-            </Text>
-            <Text variant="small" color="secondary" as="p" className="mt-0.5 break-words">
-              {pending.summary}
-            </Text>
-            <div className="mt-2.5 flex justify-end gap-2">
-              <Button variant="transparent" size="small" onClick={() => decideApproval(pending.approvalId, "deny")}>
-                Deny
-              </Button>
-              <Button variant="accent" size="small" onClick={() => decideApproval(pending.approvalId, "allow")}>
-                Allow
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </ScrollArea>
   );
 }
