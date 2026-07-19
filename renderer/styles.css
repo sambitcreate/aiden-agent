@@ -20,6 +20,7 @@
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-active: var(--accent-active);
+  --color-focus-ring: var(--focus-ring);
   --color-red: var(--support-red);
   --color-green: var(--support-green);
   --color-support-red: var(--support-red);
@@ -30,13 +31,13 @@
   --radius-dialog: 16px;
   --radius-popover: 12px;
   --radius-pill: 9999px;
-  --shadow-control: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.08);
-  --shadow-control-hover: 0 0 0 0.5px rgb(0 0 0 / 0.11), 0 2px 4px -1px rgb(0 0 0 / 0.1);
-  --shadow-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
-  --shadow-popover: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
-  --shadow-toast: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 4px 12px rgb(0 0 0 / 0.1);
-  --shadow-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
-  --shadow-composer: 0 2px 8px rgb(0 0 0 / 0.12);
+  --shadow-control: var(--elevation-control);
+  --shadow-control-hover: var(--elevation-control-hover);
+  --shadow-control-pressed: var(--elevation-control-pressed);
+  --shadow-popover: var(--elevation-popover);
+  --shadow-toast: var(--elevation-toast);
+  --shadow-dialog: var(--elevation-dialog);
+  --shadow-composer: var(--elevation-composer);
   --text-heading1: 24px;
   --text-heading1--line-height: 30px;
   --text-heading2: 18px;
@@ -77,12 +78,20 @@
   --accent: #138af2;
   --accent-hover: color-mix(in srgb, var(--accent), black 5%);
   --accent-active: color-mix(in srgb, var(--accent), black 12%);
+  --focus-ring: #006dcc;
   --support-red: #b12424;
   --support-green: #006b4f;
   --support-warning: #9a6700;
   --window-gradient-start: rgb(255 255 255 / 0.42);
   --window-gradient-end: rgb(255 255 255 / 0.3);
   --glass-fill: rgb(255 255 255 / 0.36);
+  --elevation-control: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.08);
+  --elevation-control-hover: 0 0 0 0.5px rgb(0 0 0 / 0.11), 0 2px 4px -1px rgb(0 0 0 / 0.1);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --elevation-popover: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
+  --elevation-toast: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 4px 12px rgb(0 0 0 / 0.1);
+  --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
+  --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
 }
 
 :root.dark {
@@ -106,19 +115,20 @@
   --accent: #4fa3f8;
   --accent-hover: color-mix(in srgb, var(--accent), white 15%);
   --accent-active: color-mix(in srgb, var(--accent), black 10%);
+  --focus-ring: #78bfff;
   --support-red: #ff6363;
   --support-green: #59d499;
   --support-warning: #f4c152;
   --window-gradient-start: rgb(0 0 0 / 0.42);
   --window-gradient-end: rgb(0 0 0 / 0.32);
   --glass-fill: rgb(0 0 0 / 0.28);
-  --shadow-control: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 1px 2px -1px rgb(0 0 0 / 0.5);
-  --shadow-control-hover: 0 0 0 0.5px rgb(255 255 255 / 0.15), 0 2px 4px -1px rgb(0 0 0 / 0.62);
-  --shadow-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
-  --shadow-popover: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
-  --shadow-toast: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 4px 12px rgb(0 0 0 / 0.54);
-  --shadow-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
-  --shadow-composer: 0 2px 8px rgb(0 0 0 / 0.45);
+  --elevation-control: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 1px 2px -1px rgb(0 0 0 / 0.5);
+  --elevation-control-hover: 0 0 0 0.5px rgb(255 255 255 / 0.15), 0 2px 4px -1px rgb(0 0 0 / 0.62);
+  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
+  --elevation-popover: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
+  --elevation-toast: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 4px 12px rgb(0 0 0 / 0.54);
+  --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
+  --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
 }
 
 html,
@@ -243,7 +253,7 @@ textarea {
 
 [data-sonner-toast] {
   border-radius: var(--radius-card) !important;
-  box-shadow: var(--shadow-toast) !important;
+  box-shadow: var(--elevation-toast) !important;
 }
 
 /* Tell Tailwind to scan all local renderer window files for class names */
