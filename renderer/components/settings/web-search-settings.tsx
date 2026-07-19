@@ -3,7 +3,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, Field, FieldSet, Input, Switch, Text, toast } from "@glaze/core/components";
+import { Button, Field, FieldSet, Input, Switch, toast } from "../ui";
 import { exaApi } from "../../lib/ipc";
 import { queryKeys, useExaConfig } from "../../lib/queries";
 
@@ -17,10 +17,11 @@ export function WebSearchSettings() {
   const hasKey = exa.data?.hasKey ?? false;
 
   const saveKey = async () => {
-    await exaApi.setKey(keyDraft.trim());
+    const value = keyDraft.trim();
+    await exaApi.setKey(value);
     setKeyDraft("");
     await invalidate();
-    toast.success(keyDraft.trim() ? "Exa API key saved." : "Exa API key removed.");
+    toast.success(value ? "Exa API key saved." : "Exa API key removed and web search disabled.");
   };
 
   const toggle = async (value: boolean) => {
@@ -32,7 +33,7 @@ export function WebSearchSettings() {
     <FieldSet title="Web Search (Exa)">
       <Field
         label="Enable web search"
-        description="Lets the assistant search the web with Exa when it needs current information."
+        description={hasKey ? "Adds an Exa search tool. Search queries are sent to Exa when the assistant uses it." : "Add an Exa API key below before enabling search."}
       >
         <Switch checked={enabled} onCheckedChange={toggle} disabled={!hasKey} />
       </Field>
@@ -47,16 +48,11 @@ export function WebSearchSettings() {
             onChange={(e) => setKeyDraft(e.target.value)}
             placeholder={hasKey ? "••••••••••••" : "Paste your Exa API key"}
           />
-          <Button size="medium" variant="filled" onClick={saveKey} disabled={!keyDraft.trim() && !hasKey}>
-            Save
+          <Button size="medium" variant={!keyDraft.trim() && hasKey ? "destructive" : "filled"} onClick={saveKey} disabled={!keyDraft.trim() && !hasKey}>
+            {keyDraft.trim() ? (hasKey ? "Replace" : "Save") : "Remove"}
           </Button>
         </div>
       </Field>
-      {!hasKey ? (
-        <Text variant="small" color="tertiary">
-          Add a key to enable web search.
-        </Text>
-      ) : null}
     </FieldSet>
   );
 }
