@@ -249,6 +249,12 @@ textarea {
   --error-bg: var(--surface-popover) !important;
   --error-border: color-mix(in srgb, var(--support-red), transparent 58%) !important;
   --error-text: var(--text-primary) !important;
+  --info-bg: var(--surface-popover) !important;
+  --info-border: color-mix(in srgb, var(--accent), transparent 58%) !important;
+  --info-text: var(--text-primary) !important;
+  --warning-bg: var(--surface-popover) !important;
+  --warning-border: color-mix(in srgb, var(--support-warning), transparent 58%) !important;
+  --warning-text: var(--text-primary) !important;
 }
 
 [data-sonner-toast] {
