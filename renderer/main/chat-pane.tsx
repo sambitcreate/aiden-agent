@@ -16,6 +16,7 @@ import {
   chatsApi,
   onNotification,
   startGeneration,
+  gitApi,
   workspacesApi,
   type ApprovalPrompt,
   type GenerationHandle,
@@ -43,16 +44,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chat = useChat(chatId);
   const { active, activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
-  const git = useGitInfo(active?.folderPath);
+  const git = useGitInfo(active?.id);
   const { providerId, model, select } = useModelSelection(providers.data);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const ready = Boolean(
     selectedProvider &&
-      model &&
-      selectedProvider.models.includes(model) &&
-      (selectedProvider.hasKey || !selectedProvider.needsKey),
+    model &&
+    selectedProvider.models.includes(model) &&
+    (selectedProvider.hasKey || !selectedProvider.needsKey),
   );
-
   const readinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
     if (!selectedProvider) return "Choose a chat model, or add one in Settings → Providers.";
@@ -60,7 +60,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return `${selectedProvider.label} needs an API key. Add one in Settings → Providers.`;
     }
     if (selectedProvider.models.length === 0) {
-      return `${selectedProvider.label} has no chat models. In Settings → Providers, test or refresh models, then save.`;
+      return `${selectedProvider.label} has no chat models. In Settings → Providers, discover models, then save.`;
     }
     if (!model || !selectedProvider.models.includes(model))
       return `Choose a model from ${selectedProvider.label}.`;
@@ -72,7 +72,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [providers.data, providerId],
   );
   const modelInfo = useModelInfo(providerId, providerModels);
-  const visionSupported = model && modelInfo.data?.[model] ? Boolean(modelInfo.data[model].vision) : undefined;
+  const visionSupported =
+    model && modelInfo.data?.[model] ? Boolean(modelInfo.data[model].vision) : undefined;
 
   const newChat = React.useCallback(async () => {
     const created = await chatsApi.create({ workspaceId: activeId });
@@ -133,7 +134,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
           workspaceId: activeId,
           providerId,
           model,
-          messages: history.map((m) => ({ role: m.role, content: m.content, attachments: m.attachments })),
+          messages: history.map((m) => ({
+            role: m.role,
+            content: m.content,
+            attachments: m.attachments,
+          })),
         },
         {
           onDelta: (delta) => {
@@ -146,8 +151,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current) return;
             const label = toolLabel(toolName);
             if (phase === "call") setToolActivity({ state: "running", label: `${label}…` });
-            else if (phase === "blocked") setToolActivity({ state: "blocked", label: `${label} denied` });
-            else if (phase === "error") setToolActivity({ state: "failed", label: `${label} failed` });
+            else if (phase === "blocked")
+              setToolActivity({ state: "blocked", label: `${label} denied` });
+            else if (phase === "error")
+              setToolActivity({ state: "failed", label: `${label} failed` });
             else setToolActivity({ state: "finished", label: `${label} finished` });
           },
           onApproval: (prompt) => {
@@ -201,7 +208,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setStreamingText(null);
               setToolActivity(null);
               setApprovals([]);
-              setError(partial ? `Generation stopped after a partial response: ${message}` : message);
+              setError(
+                partial ? `Generation stopped after a partial response: ${message}` : message,
+              );
             }
           },
         },
@@ -237,7 +246,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       try {
         await chatsApi.approve(prompt.approvalId, decision);
         if (chatIdRef.current !== decisionChatId) return;
-        setApprovals((prev) => prev.filter((approval) => approval.approvalId !== prompt.approvalId));
+        setApprovals((prev) =>
+          prev.filter((approval) => approval.approvalId !== prompt.approvalId),
+        );
         setToolActivity(
           decision === "allow"
             ? { state: "running", label: `${toolLabel(prompt.toolName)}…` }
@@ -245,7 +256,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
-        toast.error(approvalError instanceof Error ? approvalError.message : "Couldn't send that approval decision.");
+        toast.error(
+          approvalError instanceof Error
+            ? approvalError.message
+            : "Couldn't send that approval decision.",
+        );
       } finally {
         if (chatIdRef.current === decisionChatId) setDecidingApprovalId(null);
       }
@@ -254,8 +269,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const openFolder = React.useCallback(() => {
-    if (active?.folderPath) void workspacesApi.openFolder(active.folderPath);
-  }, [active?.folderPath]);
+    if (active?.folderPath) void workspacesApi.openFolder(active.id);
+  }, [active?.folderPath, active?.id]);
 
   const changePermission = React.useCallback(
     async (permission: WorkspacePermission) => {
@@ -285,11 +300,31 @@ export function ChatPane({ chatId }: { chatId: string }) {
     await moveNewChatToWorkspace(workspace.id);
   }, [isNewChat, moveNewChatToWorkspace, qc]);
 
+  const createGitWorktree = React.useCallback(
+    async (branchName: string) => {
+      if (!active) throw new Error("Choose a Git workspace first.");
+      if (isGenerating)
+        throw new Error("Stop the current response before changing Git workspaces.");
+      const workspace = await gitApi.createWorktree(active.id, branchName);
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      if (isNewChat) {
+        await moveNewChatToWorkspace(workspace.id);
+        return;
+      }
+      const created = await chatsApi.create({ workspaceId: workspace.id });
+      selectWorkspace(workspace.id);
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+    },
+    [active, isGenerating, isNewChat, moveNewChatToWorkspace, navigate, qc, selectWorkspace],
+  );
+
   const pending = approvals[0];
 
   React.useEffect(() => {
     if (!pending) return;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
     return () => {
       cancelAnimationFrame(frame);
@@ -338,7 +373,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <>
           {pending ? (
             <div className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5">
-              <p className="sr-only" role="status">Approval needed for {toolLabel(pending.toolName)}</p>
+              <p className="sr-only" role="status">
+                Approval needed for {toolLabel(pending.toolName)}
+              </p>
               <section
                 aria-labelledby={`approval-title-${pending.approvalId}`}
                 aria-describedby={`approval-summary-${pending.approvalId}`}
@@ -402,6 +439,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
             workspaces={workspaces}
             onSelectWorkspace={moveNewChatToWorkspace}
             onCreateScratchWorkspace={createScratchWorkspace}
+            onCreateGitWorktree={createGitWorktree}
+            gitWorktreeDescription={
+              isNewChat
+                ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
+                : "Creates a separate workspace and opens a new chat. This conversation stays here."
+            }
             visionSupported={visionSupported}
             modelPicker={
               <ModelPicker
@@ -417,8 +460,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     >
       {chat.isLoading || providers.isLoading ? (
-        <div className="flex min-h-full items-center justify-center" aria-label="Loading conversation">
-          <Text variant="small" color="secondary">Loading…</Text>
+        <div
+          className="flex min-h-full items-center justify-center"
+          aria-label="Loading conversation"
+        >
+          <Text variant="small" color="secondary">
+            Loading…
+          </Text>
         </div>
       ) : messages.length === 0 && streamingText === null ? (
         <div className="flex min-h-full items-center justify-center">
@@ -432,9 +480,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         </div>
       ) : (
-        <MessageList messages={messages} streamingText={streamingText} toolActivity={toolActivity} error={error} />
+        <MessageList
+          messages={messages}
+          streamingText={streamingText}
+          toolActivity={toolActivity}
+          error={error}
+        />
       )}
-
     </ScrollArea>
   );
 }
