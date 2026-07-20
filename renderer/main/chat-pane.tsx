@@ -53,6 +53,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
       (selectedProvider.hasKey || !selectedProvider.needsKey),
   );
 
+  const readinessMessage = React.useMemo(() => {
+    if (providers.isLoading) return "Loading chat models…";
+    if (!selectedProvider) return "Choose a chat model, or add one in Settings → Providers.";
+    if (selectedProvider.needsKey && !selectedProvider.hasKey) {
+      return `${selectedProvider.label} needs an API key. Add one in Settings → Providers.`;
+    }
+    if (selectedProvider.models.length === 0) {
+      return `${selectedProvider.label} has no chat models. In Settings → Providers, test or refresh models, then save.`;
+    }
+    if (!model || !selectedProvider.models.includes(model))
+      return `Choose a model from ${selectedProvider.label}.`;
+    return undefined;
+  }, [model, providers.isLoading, selectedProvider]);
+
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
     [providers.data, providerId],
@@ -159,13 +173,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setApprovals([]);
             }
           },
-          onError: (message) => {
+          onError: (message, partialContent) => {
             generationRef.current = null;
+            const partial = partialContent?.trim();
+            if (partial) {
+              void chatsApi
+                .appendMessage(
+                  chatId,
+                  { role: "assistant", content: partial, model },
+                  { providerId, model },
+                )
+                .then((updated) => {
+                  qc.setQueryData(queryKeys.chat(chatId), updated);
+                  void qc.invalidateQueries({ queryKey: queryKeys.chats });
+                })
+                .catch((error: unknown) => {
+                  if (mountedRef.current) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : "Couldn't save the partial assistant response.",
+                    );
+                  }
+                });
+            }
             if (mountedRef.current) {
               setStreamingText(null);
               setToolActivity(null);
               setApprovals([]);
-              setError(message);
+              setError(partial ? `Generation stopped after a partial response: ${message}` : message);
             }
           },
         },
@@ -353,6 +389,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           ) : null}
           <Composer
             ready={ready}
+            readinessMessage={readinessMessage}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={isGenerating}
