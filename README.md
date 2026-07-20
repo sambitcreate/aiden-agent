@@ -10,10 +10,11 @@ The source of truth is the private repository: [sambitcreate/aiden-agent](https:
 - Gives the agent read, search, edit, write, and command tools confined to the selected workspace folder.
 - Supports Full, Ask, and No Access permission modes per workspace.
 - Connects to OpenAI-compatible and Anthropic-compatible services, including local Ollama and LM Studio endpoints.
+- Can generate chat titles entirely on-device with Apple Foundation Models when the Mac supports Apple Intelligence.
 - Runs the embedded Pi agent loop for streaming, multi-step tool calls, and approvals.
 - Connects to stdio, HTTP, and SSE MCP servers, including OAuth-enabled remote servers.
 - Discovers Agent Skills from workspace and user skill folders.
-- Supports attachments, Git branch operations, Exa web search, global shortcuts, and dictation.
+- Supports attachments, rich Git status and branch operations, isolated worktree workspaces, Exa web search, global shortcuts, and dictation.
 - Provides on-device Parakeet transcription through the bundled sherpa-onnx runtime.
 
 ## Tech stack
@@ -28,6 +29,7 @@ The source of truth is the private repository: [sambitcreate/aiden-agent](https:
 | UI primitives | Local components, Radix UI, cmdk, Sonner, Lucide | Accessible dialogs, menus, inputs, command palettes, notifications, and icons |
 | Routing and data | TanStack Router and TanStack Query | In-memory app navigation and cached IPC-backed server state |
 | Agent runtime | `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai` | Model streaming, multi-step agent execution, and tool calling |
+| On-device titles | Swift 6.2 and Apple Foundation Models | macOS-gated, structured chat-title generation without a network provider |
 | Tool protocol | `@modelcontextprotocol/sdk` | MCP clients over stdio, HTTP, and SSE |
 | On-device speech | `sherpa-onnx-node` with NVIDIA Parakeet models | Local speech-to-text without sending recordings to a cloud service |
 | Rich text | React Markdown, remark-gfm, remark-math, KaTeX, Highlight.js | Markdown, tables, math, and code rendering |
@@ -59,6 +61,7 @@ Electron preload
     ▼
 Electron main process
     ├── Pi agent and model adapters
+    ├── bundled Apple Foundation Models title helper on supported Macs
     ├── workspace-scoped filesystem, command, and Git tools
     ├── chat/config JSON stores and encrypted secrets
     ├── MCP, OAuth, Exa, attachments, and model catalog
@@ -74,10 +77,13 @@ The codebase and build pipeline are self-contained in this repository and do not
 Local by default:
 
 - Chats, configuration, workspace metadata, and downloaded speech models are stored under Electron's Aiden Agent user-data directory.
+- Isolated Git worktrees created by Aiden are stored under that same user-data directory and registered as separate workspaces. Cleanup refuses dirty worktrees and preserves any managed branch that has advanced since creation.
+- Git remote status is read from local tracking refs and labeled “last fetched”; Aiden does not contact a remote unless the user explicitly runs a network operation elsewhere.
 - Provider keys and MCP OAuth sessions are encrypted with the operating system's secure storage before being written to disk.
 - Folder tools operate only inside the workspace root selected by the user.
 - Parakeet transcription runs on the Mac after its model has been downloaded.
 - Local model endpoints such as Ollama and LM Studio can keep prompts on the Mac.
+- Apple Foundation Models title generation runs on-device. Only the bounded title prompt is passed to Aiden's bundled native helper; it is not logged, retained by the helper, or sent to a provider.
 
 Network activity is still possible when a feature requires it:
 
@@ -85,7 +91,7 @@ Network activity is still possible when a feature requires it:
 - Cloud voice providers receive audio selected for cloud transcription.
 - Exa receives web-search queries when web search is enabled.
 - Remote MCP servers receive their tool requests.
-- The models.dev catalog is fetched to enrich model capability metadata.
+- Model-capability metadata is read from a release-bundled snapshot; the running app never contacts models.dev.
 - Parakeet model downloads come from the sherpa-onnx project release hosting.
 
 For a fully local session, select a local model endpoint, use on-device voice, disable Exa, and avoid remote MCP servers.
@@ -97,6 +103,7 @@ Requirements:
 - macOS
 - Node.js 22.19 or newer
 - npm
+- Xcode 26 or newer when building the Apple Foundation Models helper
 
 Install and launch the Electron app with Vite hot reload:
 
@@ -108,6 +115,8 @@ npm run dev
 Verification commands:
 
 ```bash
+npm test
+npm run test:native
 npm run type-check
 npm run lint
 npm run build
@@ -124,5 +133,9 @@ Create DMG and ZIP distribution artifacts:
 ```bash
 npm run dist
 ```
+
+`npm run dist` is the only path that contacts models.dev: it refreshes the model-capability snapshot immediately before packaging. Development, unpacked-package, and running-app paths only read the checked-in/bundled snapshot.
+
+Provider Settings exposes Apple Foundation Models only on macOS. On Apple Intelligence-capable Macs running macOS 26 or newer, chat titles can use Automatic, On-device only, or Selected chat model routing. Automatic prefers the on-device model when it is ready and otherwise uses the selected chat model; On-device only never falls back to a network provider after a native attempt.
 
 Unsigned local builds may require the usual macOS confirmation before first launch. Signing and notarization should be added before distributing the app to other Macs.
