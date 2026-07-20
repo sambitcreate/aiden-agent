@@ -1,4 +1,4 @@
-// Reading user-attached files + models.dev capability lookups.
+// Reading user-attached files + bundled model capability lookups.
 
 import { ipcMain } from "../platform.js";
 import { readAttachments } from "../services/attachments.js";
@@ -15,6 +15,4 @@ export function registerAttachmentHandlers(): void {
     const ids = Array.isArray(modelIds) ? modelIds.filter((m): m is string => typeof m === "string") : [];
     return modelsCatalog.infoMany(pid, ids);
   });
-
-  ipcMain.handle("models:refresh", async () => modelsCatalog.refresh());
 }
