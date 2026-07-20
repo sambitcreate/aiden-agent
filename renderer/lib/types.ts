@@ -17,11 +17,19 @@ export interface Provider {
 
 export type WorkspacePermission = "full" | "ask" | "none";
 
+export interface ManagedWorktree {
+  repositoryPath: string;
+  worktreePath: string;
+  branch: string;
+  createdFromHead: string;
+}
+
 export interface Workspace {
   id: string;
   name: string;
   folderPath?: string;
   permission: WorkspacePermission;
+  managedWorktree?: ManagedWorktree;
   createdAt: number;
   updatedAt: number;
 }
@@ -35,14 +43,40 @@ export interface ExternalEditor {
 export interface GitInfo {
   isRepo: boolean;
   branch?: string;
+  detached?: boolean;
+  unborn?: boolean;
   uncommitted?: number;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  defaultBranch?: string;
+  hasRemote?: boolean;
+  remoteState?: "local-ref";
 }
 
 export interface GitBranches {
   isRepo: boolean;
   current?: string;
   branches: string[];
+  remoteBranches: string[];
   uncommitted: number;
+  detached?: boolean;
+  unborn?: boolean;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  defaultBranch?: string;
+  hasRemote?: boolean;
+  remoteState?: "local-ref";
+}
+
+export interface GitWorktree {
+  path: string;
+  head: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  current: boolean;
 }
 
 export type ChatRole = "user" | "assistant" | "system";
@@ -141,6 +175,28 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
+export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
+
+export type FoundationModelsConnectionState =
+  | "ready"
+  | "unsupported_os"
+  | "device_not_eligible"
+  | "apple_intelligence_disabled"
+  | "model_preparing"
+  | "helper_unavailable"
+  | "unavailable"
+  | "error";
+
+export interface FoundationModelsConnectionStatus {
+  id: "apple-foundation-models";
+  label: "Apple Foundation Models";
+  state: FoundationModelsConnectionState;
+  detail: string;
+  local: true;
+  titleOnly: true;
+  retryable: boolean;
+}
+
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
@@ -152,6 +208,7 @@ export interface AppSettings {
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  chatTitleProviderId?: ChatTitleProviderId;
 }
 
 /** On-device Parakeet model in the download catalog. */
