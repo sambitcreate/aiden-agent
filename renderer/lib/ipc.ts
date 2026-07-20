@@ -38,12 +38,17 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
 // ── Providers & settings ──────────────────────────────────────────────
 export const providersApi = {
   list: () => invoke<Provider[]>("providers:list"),
-  save: (provider: Omit<Provider, "hasKey">) => invoke<Provider>("providers:save", provider),
+  save: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
+    invoke<Provider>("providers:save", provider, keyOverride),
   remove: (id: string) => invoke<void>("providers:remove", id),
   setKey: (id: string, key: string) =>
     invoke<{ hasKey: boolean; provider: Provider | null }>("providers:setKey", id, key),
   test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
-    invoke<{ ok: true; modelCount: number }>("providers:test", provider, keyOverride),
+    invoke<{ ok: true; modelCount: number; models: string[] }>(
+      "providers:test",
+      provider,
+      keyOverride,
+    ),
   listModels: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<string[]>("providers:listModels", provider, keyOverride),
 };
@@ -214,6 +219,7 @@ interface ChatDone {
 interface ChatError {
   streamId: string;
   message: string;
+  content?: string;
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -240,7 +246,7 @@ export interface GenerationHandle {
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
   onDone: (fullContent: string) => void | Promise<void>;
-  onError: (message: string) => void;
+  onError: (message: string, partialContent?: string) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
 }
@@ -278,7 +284,7 @@ export function startGeneration(params: ChatStartParams, callbacks: StreamCallba
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
-      callbacks.onError(p.message);
+      callbacks.onError(p.message, p.content);
       dispose();
     }),
   );
