@@ -43,6 +43,8 @@ import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
+  /** Actionable explanation for a disabled send state. */
+  readinessMessage?: string;
   onSend: (text: string, attachments: Attachment[]) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
@@ -88,6 +90,7 @@ const PERMISSION_META: Record<
 
 export function Composer({
   ready,
+  readinessMessage,
   onSend,
   onStop,
   isGenerating,
@@ -294,10 +297,17 @@ export function Composer({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Do anything"
+          placeholder={
+            ready ? "Do anything" : (readinessMessage ?? "Choose a chat model to start")
+          }
           className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
           rows={1}
         />
+        {!ready && readinessMessage ? (
+          <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
+            {readinessMessage}
+          </Text>
+        ) : null}
         <div className="mt-1.5 flex min-w-0 items-center justify-between gap-1.5">
           <div className="flex shrink-0 items-center gap-1">
             <Button
