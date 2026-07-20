@@ -118,6 +118,8 @@ async function prepareGeneration(params: ChatStartParams) {
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
   const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
+  // The release-bundled capability snapshot is local and cannot delay this
+  // chat with a public metadata request.
   const modelInfo = await modelsCatalog.info(runtime.provider.id, params.model);
   return { runtime, permission, folderPath, git, tools, modelInfo };
 }
@@ -134,7 +136,7 @@ export const llmClient = {
       throw error;
     }
     const { runtime, permission, folderPath, git, tools, modelInfo } = setup;
-    const { model, apiKey, streams } = runtime;
+    const { model, apiKey, headers: runtimeHeaders, streams } = runtime;
 
     const deniedToolCalls = new Set<string>();
     const agent = new Agent({
@@ -149,6 +151,9 @@ export const llmClient = {
         streams.streamSimple(m, context, {
           ...options,
           apiKey: options?.apiKey ?? apiKey ?? undefined,
+          // Runtime headers are last so a keyless provider cannot inherit an
+          // Authorization header from Pi's default client setup.
+          headers: runtimeHeaders ? { ...options?.headers, ...runtimeHeaders } : options?.headers,
         }),
       // In "ask" mode, pause before mutating tools until the user approves.
       beforeToolCall: async (context, signal) => {
