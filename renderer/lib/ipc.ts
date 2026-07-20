@@ -13,10 +13,12 @@ import type {
   ExternalEditor,
   GitBranches,
   GitInfo,
+  GitWorktree,
   LocalVoiceModel,
   McpServer,
   McpStatus,
   ModelInfo,
+  FoundationModelsConnectionStatus,
   Provider,
   Skill,
   Workspace,
@@ -56,6 +58,13 @@ export const providersApi = {
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
   set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+};
+
+export const titleProvidersApi = {
+  status: () =>
+    invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
+  refresh: () =>
+    invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────
@@ -138,23 +147,21 @@ export const attachmentsApi = {
 export const modelsApi = {
   info: (providerId: string, modelIds: string[]) =>
     invoke<Record<string, ModelInfo>>("models:info", providerId, modelIds),
-  refresh: () => invoke<{ providerCount: number; fetchedAt: number }>("models:refresh"),
 };
 
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
   list: () => invoke<Workspace[]>("workspaces:list"),
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
-  create: (input: { name?: string; folderPath?: string; permission?: WorkspacePermission }) =>
+  create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
+  createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (
-    id: string,
-    patch: { name?: string; folderPath?: string; permission?: WorkspacePermission },
-  ) => invoke<Workspace>("workspaces:update", id, patch),
+  update: (id: string, patch: { name?: string; permission?: WorkspacePermission }) =>
+    invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
-  gitInfo: (folderPath: string) => invoke<GitInfo>("workspaces:gitInfo", folderPath),
-  openFolder: (folderPath: string) => invoke<void>("workspaces:openFolder", folderPath),
+  gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
+  openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
   openInEditor: (workspaceId: string, editorId: string) =>
@@ -183,9 +190,14 @@ export const terminalApi = {
 
 // ── Git ───────────────────────────────────────────────────────────────
 export const gitApi = {
-  branches: (folderPath: string) => invoke<GitBranches>("git:branches", folderPath),
-  checkout: (folderPath: string, name: string) => invoke<void>("git:checkout", folderPath, name),
-  createBranch: (folderPath: string, name: string) => invoke<void>("git:createBranch", folderPath, name),
+  branches: (workspaceId: string) => invoke<GitBranches>("git:branches", workspaceId),
+  checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
+  createBranch: (workspaceId: string, name: string) => invoke<void>("git:createBranch", workspaceId, name),
+  worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
+  createWorktree: (workspaceId: string, name: string) =>
+    invoke<Workspace>("git:createWorktree", workspaceId, name),
+  deleteManagedWorktree: (workspaceId: string) =>
+    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
