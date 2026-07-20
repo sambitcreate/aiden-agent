@@ -30,15 +30,49 @@ import {
   SidebarListItem,
   SplitView,
   Text,
+  toast,
 } from "./ui";
 import { ChevronsUpDown, Folder, FolderGit2, MessagesSquare, Settings } from "lucide-react";
-import { chatsApi, pickFolder, workspacesApi } from "../lib/ipc";
+import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
+import {
+  CHAT_TITLE_FADE_OUT_MS,
+  createChatTitleReveal,
+  type ChatTitleRevealEvent,
+} from "../lib/chat-title-reveal";
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import type { ChatMeta, Workspace } from "../lib/types";
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
+  titleReveal?: ChatTitleRevealEvent | null;
+}
+
+function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string; title: string }) {
+  const characters = createChatTitleReveal(title);
+
+  return (
+    <span className="inline-grid max-w-full">
+      <span className="sr-only">{title}</span>
+      <span
+        aria-hidden="true"
+        className="chat-title-reveal-previous col-start-1 row-start-1 truncate"
+      >
+        {previousTitle}
+      </span>
+      <span aria-hidden="true" className="col-start-1 row-start-1 whitespace-nowrap">
+        {characters.map(({ value, delayMs }, index) => (
+          <span
+            className="chat-title-reveal-character inline-block"
+            key={`${index}-${value}`}
+            style={{ animationDelay: `${CHAT_TITLE_FADE_OUT_MS + delayMs}ms` }}
+          >
+            {value === " " ? "\u00a0" : value}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
 }
 
 const MONTHS = [
@@ -83,7 +117,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
   return groups;
 }
 
-export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
+export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
@@ -93,6 +127,7 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
   const [renameValue, setRenameValue] = React.useState("");
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
+  const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
 
   const items = (chats.data ?? []).filter((c) =>
     c.title.toLowerCase().includes(search.trim().toLowerCase()),
@@ -119,9 +154,8 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
   );
 
   const openFolderWorkspace = React.useCallback(async () => {
-    const folderPath = await pickFolder();
-    if (!folderPath) return;
-    const ws = await workspacesApi.create({ folderPath, permission: "ask" });
+    const ws = await workspacesApi.createFromFolder();
+    if (!ws) return;
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await enterWorkspace(ws.id);
   }, [enterWorkspace, qc]);
@@ -139,6 +173,20 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
     const remaining = workspaces.filter((w) => w.id !== removingWorkspace.id);
     setRemovingWorkspace(null);
     if (remaining[0]) await enterWorkspace(remaining[0].id);
+  };
+
+  const commitDeleteWorktree = async () => {
+    if (!deletingWorktree) return;
+    try {
+      const result = await gitApi.deleteManagedWorktree(deletingWorktree.id);
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      const remaining = workspaces.filter((workspace) => workspace.id !== deletingWorktree.id);
+      setDeletingWorktree(null);
+      toast.success(result.branchDeleted ? "Worktree and unchanged branch deleted." : "Worktree deleted; branch kept.");
+      if (remaining[0]) await enterWorkspace(remaining[0].id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't delete that worktree.");
+    }
   };
 
   const commitRename = async () => {
@@ -214,6 +262,11 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
               {active && workspaces.length > 1 ? (
                 <>
                   <DropdownMenuSeparator />
+                  {active.managedWorktree ? (
+                    <DropdownMenuItem icon="trash" color="red" onSelect={() => setDeletingWorktree(active)}>
+                      Delete worktree…
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuItem icon="trash" color="red" onSelect={() => setRemovingWorkspace(active)}>
                     Remove “{active.name}”
                   </DropdownMenuItem>
@@ -242,7 +295,17 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
                     <ContextMenuTrigger asChild>
                       <SidebarListItem
                         icon={<MessagesSquare className="size-4" />}
-                        title={chat.title}
+                        title={
+                          titleReveal?.chatId === chat.id ? (
+                            <GeneratedTitleReveal
+                              key={`${chat.id}-${titleReveal.version}`}
+                              previousTitle={titleReveal.previousTitle}
+                              title={chat.title}
+                            />
+                          ) : (
+                            chat.title
+                          )
+                        }
                         selected={chat.id === activeChatId}
                         onClick={() => navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })}
                       />
@@ -300,6 +363,23 @@ export function ChatSidebar({ activeChatId }: ChatSidebarProps) {
         confirmLabel="Delete"
         confirmVariant="destructive"
         onConfirm={commitDelete}
+      />
+
+      <AlertDialog
+        open={deletingWorktree !== null}
+        onOpenChange={(open) => !open && setDeletingWorktree(null)}
+        title="Delete this worktree?"
+        description={
+          deletingWorktree ? (
+            <Text variant="small" color="secondary">
+              The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is deleted only if it
+              has no commits beyond where Aiden created it. Chats stay on disk. Dirty worktrees are refused.
+            </Text>
+          ) : null
+        }
+        confirmLabel="Delete worktree"
+        confirmVariant="destructive"
+        onConfirm={commitDeleteWorktree}
       />
 
       <AlertDialog
