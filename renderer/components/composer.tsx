@@ -58,6 +58,8 @@ interface ComposerProps {
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
+  onCreateGitWorktree?: (branchName: string) => Promise<void>;
+  gitWorktreeDescription?: string;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
   /** The model picker element, rendered in the input row. */
@@ -66,7 +68,12 @@ interface ComposerProps {
 
 const PERMISSION_META: Record<
   WorkspacePermission,
-  { label: string; description: string; icon: React.ComponentType<{ className?: string }>; className: string }
+  {
+    label: string;
+    description: string;
+    icon: React.ComponentType<{ className?: string }>;
+    className: string;
+  }
 > = {
   full: {
     label: "Full access",
@@ -103,6 +110,8 @@ export function Composer({
   workspaces = [],
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onCreateGitWorktree,
+  gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   visionSupported,
   modelPicker,
 }: ComposerProps) {
@@ -122,7 +131,10 @@ export function Composer({
   const settings = useSettings();
   const voice = useVoiceRecorder(
     (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
-    { provider: settings.data?.voiceProvider ?? "openai", localModel: settings.data?.localVoiceModel },
+    {
+      provider: settings.data?.voiceProvider ?? "openai",
+      localModel: settings.data?.localVoiceModel,
+    },
   );
 
   // Global dictation hotkey toggles the same recorder (uses the selected provider).
@@ -158,12 +170,23 @@ export function Composer({
     }
   };
 
-  const removeAttachment = (id: string) => setAttachments((prev) => prev.filter((a) => a.id !== id));
+  const removeAttachment = (id: string) =>
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
 
   const submit = async () => {
     const trimmed = text.trim();
-    if ((!trimmed && attachments.length === 0) || !ready || isGenerating || sending || permissionSaving) return;
-    if (visionSupported === false && attachments.some((attachment) => attachment.kind === "image")) {
+    if (
+      (!trimmed && attachments.length === 0) ||
+      !ready ||
+      isGenerating ||
+      sending ||
+      permissionSaving
+    )
+      return;
+    if (
+      visionSupported === false &&
+      attachments.some((attachment) => attachment.kind === "image")
+    ) {
       toast.info("Switch to a vision-capable model before sending these images.");
       return;
     }
@@ -194,7 +217,14 @@ export function Composer({
     : workspace?.name;
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
-    if (!onChangePermission || nextPermission === permission || permissionSaving || isGenerating || sending) return;
+    if (
+      !onChangePermission ||
+      nextPermission === permission ||
+      permissionSaving ||
+      isGenerating ||
+      sending
+    )
+      return;
     setPermissionSaving(true);
     try {
       await onChangePermission(nextPermission);
@@ -216,208 +246,224 @@ export function Composer({
 
   return (
     <>
-    <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
-      <div className="pointer-events-auto">
-      {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-      <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
-        {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
-          <WorkspacePicker
-            workspaces={workspaces}
-            activeWorkspaceId={workspace?.id}
-            onSelectWorkspace={onSelectWorkspace}
-            onCreateScratchWorkspace={onCreateScratchWorkspace}
-            trigger={
+      <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
+        <div className="pointer-events-auto">
+          {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
+          <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
+            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+              <WorkspacePicker
+                workspaces={workspaces}
+                activeWorkspaceId={workspace?.id}
+                onSelectWorkspace={onSelectWorkspace}
+                onCreateScratchWorkspace={onCreateScratchWorkspace}
+                trigger={
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                    disabled={isGenerating || sending}
+                    aria-label="Choose a workspace"
+                  >
+                    <Folder className="size-4 shrink-0" />
+                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                  </Button>
+                }
+              />
+            ) : (
               <Button
                 variant="transparent"
                 size="small"
                 className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                disabled={isGenerating || sending}
-                aria-label="Choose a workspace"
+                onClick={onOpenFolder}
+                disabled={!workspace?.folderPath}
+                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
               >
                 <Folder className="size-4 shrink-0" />
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
-            }
-          />
-        ) : (
-          <Button
-            variant="transparent"
-            size="small"
-            className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-            onClick={onOpenFolder}
-            disabled={!workspace?.folderPath}
-            aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
-          >
-            <Folder className="size-4 shrink-0" />
-            <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
-          </Button>
-        )}
-        {/* Execution location — Pi runs locally on this Mac. */}
-        <span className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden" title="The agent runs locally on this Mac">
-          <Monitor className="size-4 shrink-0" />
-          Local
-        </span>
-        {gitBranch && workspace?.folderPath ? (
-          <GitBranchPicker folderPath={workspace.folderPath} branch={gitBranch} />
-        ) : null}
-      </div>
-
-      <div className="-mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80 transition-[outline-color,box-shadow] duration-150 ease-out focus-within:outline-focus-ring">
-        {attachments.length > 0 ? (
-          <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
-            {attachments.map((a) => (
-              <div
-                key={a.id}
-                className="group relative flex items-center gap-1.5 rounded-lg border border-field bg-background py-1 pl-1.5 pr-6"
-              >
-                {a.kind === "image" && a.data ? (
-                  <img
-                    src={`data:${a.mimeType};base64,${a.data}`}
-                    alt={a.name}
-                    className="size-7 rounded object-cover"
-                  />
-                ) : (
-                  <FileText className="size-4 shrink-0 text-tertiary" />
-                )}
-                <span className="max-w-[10rem] truncate text-small">{a.name}</span>
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(a.id)}
-                  aria-label={`Remove ${a.name}`}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        <Textarea
-          ref={inputRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            ready ? "Do anything" : (readinessMessage ?? "Choose a chat model to start")
-          }
-          className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
-          rows={1}
-        />
-        {!ready && readinessMessage ? (
-          <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
-            {readinessMessage}
-          </Text>
-        ) : null}
-        <div className="mt-1.5 flex min-w-0 items-center justify-between gap-1.5">
-          <div className="flex shrink-0 items-center gap-1">
-            <Button
-              variant="transparent"
-              size="small"
-              iconOnly
-              className="rounded-full"
-              onClick={handleAttach}
-              disabled={attaching || isGenerating || sending}
-              aria-label="Attach files or images"
+            )}
+            {/* Execution location — Pi runs locally on this Mac. */}
+            <span
+              className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+              title="The agent runs locally on this Mac"
             >
-              {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+              <Monitor className="size-4 shrink-0" />
+              Local
+            </span>
+            {gitBranch && workspace?.folderPath ? (
+              <GitBranchPicker
+                workspaceId={workspace.id}
+                branch={gitBranch}
+                disabled={isGenerating || sending || permissionSaving}
+                onCreateWorktree={onCreateGitWorktree}
+                worktreeDescription={gitWorktreeDescription}
+              />
+            ) : null}
+          </div>
+
+          <div className="-mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80 transition-[outline-color,box-shadow] duration-150 ease-out focus-within:outline-focus-ring">
+            {attachments.length > 0 ? (
+              <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
+                {attachments.map((a) => (
+                  <div
+                    key={a.id}
+                    className="group relative flex items-center gap-1.5 rounded-lg border border-field bg-background py-1 pl-1.5 pr-6"
+                  >
+                    {a.kind === "image" && a.data ? (
+                      <img
+                        src={`data:${a.mimeType};base64,${a.data}`}
+                        alt={a.name}
+                        className="size-7 rounded object-cover"
+                      />
+                    ) : (
+                      <FileText className="size-4 shrink-0 text-tertiary" />
+                    )}
+                    <span className="max-w-[10rem] truncate text-small">{a.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.id)}
+                      aria-label={`Remove ${a.name}`}
+                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <Textarea
+              ref={inputRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                ready ? "Do anything" : (readinessMessage ?? "Choose a chat model to start")
+              }
+              className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
+              rows={1}
+            />
+            {!ready && readinessMessage ? (
+              <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
+                {readinessMessage}
+              </Text>
+            ) : null}
+            <div className="mt-1.5 flex min-w-0 items-center justify-between gap-1.5">
+              <div className="flex shrink-0 items-center gap-1">
                 <Button
                   variant="transparent"
                   size="small"
-                  className={cn("h-7 gap-1.5 px-2", perm.className)}
-                  disabled={!workspace || permissionSaving || isGenerating || sending}
-                  aria-label={
-                    isGenerating || sending
-                      ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
-                      : `Workspace access: ${perm.label}`
-                  }
+                  iconOnly
+                  className="rounded-full"
+                  onClick={handleAttach}
+                  disabled={attaching || isGenerating || sending}
+                  aria-label="Attach files or images"
                 >
-                  <PermIcon className="size-4 shrink-0" />
-                  {permissionSaving ? "Updating…" : perm.label}
+                  {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start">
-                <DropdownMenuLabel>Workspace access</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={permission === "full"}
-                  sublabel={PERMISSION_META.full.description}
-                  disabled={permissionSaving}
-                  onCheckedChange={(checked) => checked && requestPermission("full")}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="transparent"
+                      size="small"
+                      className={cn("h-7 gap-1.5 px-2", perm.className)}
+                      disabled={!workspace || permissionSaving || isGenerating || sending}
+                      aria-label={
+                        isGenerating || sending
+                          ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
+                          : `Workspace access: ${perm.label}`
+                      }
+                    >
+                      <PermIcon className="size-4 shrink-0" />
+                      {permissionSaving ? "Updating…" : perm.label}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuLabel>Workspace access</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuCheckboxItem
+                      checked={permission === "full"}
+                      sublabel={PERMISSION_META.full.description}
+                      disabled={permissionSaving}
+                      onCheckedChange={(checked) => checked && requestPermission("full")}
+                    >
+                      Full access
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={permission === "ask"}
+                      sublabel={PERMISSION_META.ask.description}
+                      disabled={permissionSaving}
+                      onCheckedChange={(checked) => checked && requestPermission("ask")}
+                    >
+                      Ask first
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuCheckboxItem
+                      checked={permission === "none"}
+                      sublabel={PERMISSION_META.none.description}
+                      disabled={permissionSaving}
+                      onCheckedChange={(checked) => checked && requestPermission("none")}
+                    >
+                      No access
+                    </DropdownMenuCheckboxItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="flex min-w-0 items-center justify-end gap-1.5">
+                {modelPicker}
+                <Button
+                  variant={voice.recording ? "destructive" : "transparent"}
+                  size="small"
+                  iconOnly
+                  disabled={voice.transcribing || isGenerating || sending}
+                  onClick={() => (voice.recording ? voice.stop() : voice.start())}
+                  aria-label={voice.recording ? "Stop recording" : "Start voice input"}
                 >
-                  Full access
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={permission === "ask"}
-                  sublabel={PERMISSION_META.ask.description}
-                  disabled={permissionSaving}
-                  onCheckedChange={(checked) => checked && requestPermission("ask")}
-                >
-                  Ask first
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={permission === "none"}
-                  sublabel={PERMISSION_META.none.description}
-                  disabled={permissionSaving}
-                  onCheckedChange={(checked) => checked && requestPermission("none")}
-                >
-                  No access
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-          <div className="flex min-w-0 items-center justify-end gap-1.5">
-            {modelPicker}
-            <Button
-              variant={voice.recording ? "destructive" : "transparent"}
-              size="small"
-              iconOnly
-              disabled={voice.transcribing || isGenerating || sending}
-              onClick={() => (voice.recording ? voice.stop() : voice.start())}
-              aria-label={voice.recording ? "Stop recording" : "Start voice input"}
-            >
-              {voice.transcribing ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <Mic className={cn(voice.recording && "animate-pulse")} />
-              )}
-            </Button>
-            {isGenerating ? (
-              <Button variant="filled" size="small" iconOnly onClick={onStop} aria-label="Stop generating">
-                <Square className="fill-current" />
-              </Button>
-            ) : (
-              <Button
-                variant="accent"
-                size="small"
-                iconOnly
-                disabled={!canSend}
-                onClick={() => void submit()}
-                aria-label="Send message"
-              >
-                <ArrowUp />
-              </Button>
-            )}
+                  {voice.transcribing ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Mic className={cn(voice.recording && "animate-pulse")} />
+                  )}
+                </Button>
+                {isGenerating ? (
+                  <Button
+                    variant="filled"
+                    size="small"
+                    iconOnly
+                    onClick={onStop}
+                    aria-label="Stop generating"
+                  >
+                    <Square className="fill-current" />
+                  </Button>
+                ) : (
+                  <Button
+                    variant="accent"
+                    size="small"
+                    iconOnly
+                    disabled={!canSend}
+                    onClick={() => void submit()}
+                    aria-label="Send message"
+                  >
+                    <ArrowUp />
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      </div>
-    </div>
-    <AlertDialog
-      open={confirmFullAccess}
-      onOpenChange={setConfirmFullAccess}
-      title="Enable Full Access?"
-      description={
-        <Text variant="small" color="secondary">
-          Aiden will be able to read and edit files, and run commands in “{folderName ?? "this workspace"}”
-          without asking each time. You can change this any time from the composer.
-        </Text>
-      }
-      confirmLabel="Enable Full Access"
-      onConfirm={() => void applyPermission("full")}
-    />
+      <AlertDialog
+        open={confirmFullAccess}
+        onOpenChange={setConfirmFullAccess}
+        title="Enable Full Access?"
+        description={
+          <Text variant="small" color="secondary">
+            Aiden will be able to read and edit files, and run commands in “
+            {folderName ?? "this workspace"}” without asking each time. You can change this any time
+            from the composer.
+          </Text>
+        }
+        confirmLabel="Enable Full Access"
+        onConfirm={() => void applyPermission("full")}
+      />
     </>
   );
 }
