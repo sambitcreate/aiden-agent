@@ -68,7 +68,13 @@ interface ModelPickerProps {
   disabled?: boolean;
 }
 
-export function ModelPicker({ providers, providerId, model, onChange, disabled }: ModelPickerProps) {
+export function ModelPicker({
+  providers,
+  providerId,
+  model,
+  onChange,
+  disabled,
+}: ModelPickerProps) {
   const [open, setOpen] = React.useState(false);
   const [pinned, setPinned] = React.useState<string[]>(() => {
     try {
@@ -90,7 +96,9 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
   // Flatten usable providers into entries, hosted providers first then local.
   const entries = React.useMemo<ModelEntry[]>(() => {
     const usable = providers.filter(isUsable);
-    const ordered = [...usable].sort((a, b) => Number(providerIsLocal(a)) - Number(providerIsLocal(b)));
+    const ordered = [...usable].sort(
+      (a, b) => Number(providerIsLocal(a)) - Number(providerIsLocal(b)),
+    );
     const list: ModelEntry[] = [];
     for (const p of ordered) {
       const local = providerIsLocal(p);
@@ -109,7 +117,9 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
     }
     // Pinned entries float to the top, in pin order.
     const pinnedSet = new Set(pinned);
-    const pinnedEntries = pinned.map((v) => list.find((e) => e.value === v)).filter((e): e is ModelEntry => Boolean(e));
+    const pinnedEntries = pinned
+      .map((v) => list.find((e) => e.value === v))
+      .filter((e): e is ModelEntry => Boolean(e));
     const rest = list.filter((e) => !pinnedSet.has(e.value));
     return [...pinnedEntries, ...rest];
   }, [providers, pinned]);
@@ -117,6 +127,8 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = entries.find((e) => e.value === selectedValue);
   const hasModels = entries.length > 0;
+  const unavailableMessage =
+    "No chat models are available. Open Settings → Providers to test or refresh a connection.";
 
   const choose = (entry: ModelEntry) => {
     onChange(entry.providerId, entry.model);
@@ -126,7 +138,14 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
   return (
     <CustomDropdownMenu open={open} onOpenChange={setOpen}>
       <CustomDropdownMenuTrigger asChild>
-        <Button variant="transparent" size="small" disabled={disabled || !hasModels} className="min-w-0 max-w-[min(14rem,45vw)] gap-1.5">
+        <Button
+          variant="transparent"
+          size="small"
+          disabled={disabled || !hasModels}
+          className="min-w-0 max-w-[min(14rem,45vw)] gap-1.5"
+          aria-label={hasModels ? "Choose a model" : unavailableMessage}
+          title={hasModels ? undefined : unavailableMessage}
+        >
           {selected ? (
             selected.isLocal ? (
               <Cpu className="size-4 shrink-0 text-tertiary" />
@@ -190,7 +209,9 @@ export function ModelPicker({ providers, providerId, model, onChange, disabled }
                     }}
                     className={cn(
                       "shrink-0 rounded-md p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring",
-                      isPinned ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                      isPinned
+                        ? "opacity-100"
+                        : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
                     )}
                   >
                     <Pin className={cn("size-3.5", isPinned && "fill-current text-accent")} />
