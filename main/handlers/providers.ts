@@ -2,6 +2,11 @@
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
+import { NO_AUTH_API_KEY } from "../services/generation-runtime.js";
+import {
+  canUseStoredProviderKey,
+  sameProviderConnection,
+} from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import { listModels, testConnection } from "../services/models.js";
 import type { ProviderKind, StoredProvider } from "../services/types.js";
@@ -24,19 +29,65 @@ function parseProvider(value: unknown): StoredProvider {
     kind,
     label: asString(p.label, "label"),
     baseUrl: asString(p.baseUrl, "baseUrl").replace(/\/$/, ""),
-    models: Array.isArray(p.models) ? p.models.filter((m): m is string => typeof m === "string") : [],
+    models: Array.isArray(p.models)
+      ? p.models.filter((m): m is string => typeof m === "string")
+      : [],
     defaultModel: typeof p.defaultModel === "string" ? p.defaultModel : undefined,
     needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
     isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
   };
 }
 
+async function connectionKey(
+  provider: StoredProvider,
+  keyOverride: unknown,
+): Promise<string | null> {
+  // Keyless providers must never pull a stale stored secret into a local/LAN
+  // connection test merely because the provider ids happen to match. Pi sends
+  // this non-secret compatibility value during generation, so test and model
+  // discovery must send the same request shape.
+  if (!provider.needsKey) return NO_AUTH_API_KEY;
+  if (typeof keyOverride === "string" && keyOverride.trim()) return keyOverride.trim();
+
+  const saved = await configStore.getProvider(provider.id);
+  // A saved key is valid only for the saved endpoint/protocol. A draft with a
+  // different endpoint must receive a newly typed key before it can be tested.
+  if (!canUseStoredProviderKey(saved, provider)) return null;
+  return secrets.getKey(provider.id);
+}
+
+function replacementKey(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Save a provider and rotate its secret as one main-process operation. An
+ * existing key is removed before a changed endpoint becomes usable, so a
+ * renderer payload cannot redirect it to another host.
+ */
+async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
+  const previous = await configStore.getProvider(provider.id);
+  const connectionChanged = Boolean(previous && !sameProviderConnection(previous, provider));
+  const replacement = provider.needsKey ? replacementKey(keyOverride) : null;
+
+  if (connectionChanged || !provider.needsKey) await secrets.deleteKey(provider.id);
+  // Never restore a key after an endpoint/protocol change. A configuration
+  // write can fail after the in-memory store has advanced, and restoring the
+  // old credential would then expose it to the newly supplied endpoint.
+  const saved = await configStore.saveProvider(provider);
+  if (replacement) await secrets.setKey(provider.id, replacement);
+  return saved;
+}
+
 export function registerProviderHandlers(): void {
   ipcMain.handle("providers:list", async () => configStore.listProviders());
 
-  ipcMain.handle("providers:save", async (_event, provider: unknown) => {
-    return configStore.saveProvider(parseProvider(provider));
-  });
+  ipcMain.handle(
+    "providers:save",
+    async (_event, providerValue: unknown, keyOverride?: unknown) => {
+      return saveProvider(parseProvider(providerValue), keyOverride);
+    },
+  );
 
   ipcMain.handle("providers:remove", async (_event, id: unknown) => {
     await configStore.removeProvider(asString(id, "id"));
@@ -55,23 +106,23 @@ export function registerProviderHandlers(): void {
   });
 
   // Optional keyOverride lets the user test a freshly typed key before saving it.
-  ipcMain.handle("providers:test", async (_event, providerValue: unknown, keyOverride?: unknown) => {
-    const provider = parseProvider(providerValue);
-    const key =
-      typeof keyOverride === "string" && keyOverride.trim()
-        ? keyOverride.trim()
-        : await secrets.getKey(provider.id);
-    return testConnection(provider, key);
-  });
+  ipcMain.handle(
+    "providers:test",
+    async (_event, providerValue: unknown, keyOverride?: unknown) => {
+      const provider = parseProvider(providerValue);
+      const key = await connectionKey(provider, keyOverride);
+      return testConnection(provider, key);
+    },
+  );
 
-  ipcMain.handle("providers:listModels", async (_event, providerValue: unknown, keyOverride?: unknown) => {
-    const provider = parseProvider(providerValue);
-    const key =
-      typeof keyOverride === "string" && keyOverride.trim()
-        ? keyOverride.trim()
-        : await secrets.getKey(provider.id);
-    return listModels(provider, key);
-  });
+  ipcMain.handle(
+    "providers:listModels",
+    async (_event, providerValue: unknown, keyOverride?: unknown) => {
+      const provider = parseProvider(providerValue);
+      const key = await connectionKey(provider, keyOverride);
+      return listModels(provider, key);
+    },
+  );
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
@@ -88,7 +139,8 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
-    if (typeof p.dictationAccelerator === "string") next.dictationAccelerator = p.dictationAccelerator;
+    if (typeof p.dictationAccelerator === "string")
+      next.dictationAccelerator = p.dictationAccelerator;
     return configStore.setSettings(next);
   });
 }
