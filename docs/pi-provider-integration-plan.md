@@ -32,17 +32,17 @@ Pi currently registers 36 built-in chat providers through `builtinProviders()` a
 
 ## Why the current implementation cannot just expose more providers
 
-| Current behavior | Evidence | Consequence |
-| --- | --- | --- |
-| Aiden seeds seven providers once | `main/services/config-store.ts:30-118` | New Pi providers never appear on existing installs. |
-| Provider protocol is only `"openai"` or `"anthropic"` | `main/services/types.ts:3-19` and `renderer/lib/types.ts:4-16` | Most Pi provider transports cannot be represented. |
-| Aiden fabricates model metadata | `main/services/model-runtime.ts:19-35` | Every model becomes text-only, non-reasoning, zero-cost, 128K/8192. |
-| Streaming uses two `/compat` adapters | `main/services/model-runtime.ts:4-20` | OpenAI Responses, Codex, Google, Vertex, Bedrock, Mistral, Radius, and mixed-API providers are bypassed. |
-| Discovery always calls `baseUrl + /models` | `main/services/models.ts:14-42` | Static, OAuth, ambient-auth, and provider-specific catalogs fail. |
-| Credentials are one encrypted string | `main/services/secrets.ts:8-65` | OAuth, provider-scoped environment values, locked refresh, and generic login cannot work. |
-| Usability is `hasKey || !needsKey` | `renderer/components/model-picker.tsx:33-35` | Environment, OAuth, AWS, ADC, keyless-local, and re-login states are lost. |
-| Previous assistant messages are relabeled as the current provider/model | `main/services/llm-client.ts:59-72` | Cross-provider history and reasoning/signature continuity are unreliable. |
-| Pi packages resolve to `0.80.6` | `package-lock.json:750-790` | The provider-owned auth/availability/refresh contract added in `0.80.8` is unavailable. |
+| Current behavior                                                        | Evidence                                                       | Consequence                                                                                              |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------- |
+| Aiden seeds seven providers once                                        | `main/services/config-store.ts:30-118`                         | New Pi providers never appear on existing installs.                                                      |
+| Provider protocol is only `"openai"` or `"anthropic"`                   | `main/services/types.ts:3-19` and `renderer/lib/types.ts:4-16` | Most Pi provider transports cannot be represented.                                                       |
+| Aiden fabricates model metadata                                         | `main/services/model-runtime.ts:19-35`                         | Every model becomes text-only, non-reasoning, zero-cost, 128K/8192.                                      |
+| Streaming uses two `/compat` adapters                                   | `main/services/model-runtime.ts:4-20`                          | OpenAI Responses, Codex, Google, Vertex, Bedrock, Mistral, Radius, and mixed-API providers are bypassed. |
+| Discovery always calls `baseUrl + /models`                              | `main/services/models.ts:14-42`                                | Static, OAuth, ambient-auth, and provider-specific catalogs fail.                                        |
+| Credentials are one encrypted string                                    | `main/services/secrets.ts:8-65`                                | OAuth, provider-scoped environment values, locked refresh, and generic login cannot work.                |
+| Usability is `hasKey                                                    |                                                                | !needsKey`                                                                                               | `renderer/components/model-picker.tsx:33-35` | Environment, OAuth, AWS, ADC, keyless-local, and re-login states are lost. |
+| Previous assistant messages are relabeled as the current provider/model | `main/services/llm-client.ts:59-72`                            | Cross-provider history and reasoning/signature continuity are unreliable.                                |
+| Pi packages resolve to `0.80.6`                                         | `package-lock.json:750-790`                                    | The provider-owned auth/availability/refresh contract added in `0.80.8` is unavailable.                  |
 
 Pi's runtime already solves the missing pieces:
 
@@ -65,6 +65,8 @@ The direct integration gives Aiden:
 - a safe `createProvider()` seam for declarative custom endpoints.
 
 The full coding-agent runtime adds `models.json`, executable configuration commands, CLI extension loading, and remote overlays, but it also expands the packaged dependency and arbitrary-code surface. Those features do not belong in the initial desktop provider migration.
+
+Apple Foundation Models remains a separate macOS-only connection for chat-title metadata. It is not registered as a Pi chat provider, never appears in the composer model picker, and does not change Pi's ownership of conversational model streaming. Main-process title routing may choose that native connection before the Pi-backed selected chat model, according to the user's title-provider setting and current native availability.
 
 ```mermaid
 flowchart LR
@@ -94,6 +96,14 @@ flowchart LR
 8. Voice transcription remains an explicit OpenAI/Google/local feature. Listing a chat provider does not claim it can transcribe audio.
 9. Provider objects, auth functions, headers, credentials, and tokens remain in Electron main and never cross preload.
 
+### Current no-auth compatibility boundary
+
+LM Studio, Ollama, and a model server reached over Tailscale are not API-key providers by default. Aiden must not ask for, store, or transmit an API key unless the user explicitly changes that endpoint to API-key authentication.
+
+The installed Pi `0.80.6` package currently requires a non-empty value when constructing its OpenAI-compatible transport, even though the OpenAI SDK can suppress its generated bearer header. Aiden therefore keeps a fixed process-only compatibility token inside the main process and passes `Authorization: null` last in the request headers. The endpoint receives no `Authorization` or `x-api-key` header. Direct `/models` discovery never receives the compatibility token. The adjacent Pi source now has first-class `auth: "none"` support; upgrade Aiden to that release once it is published instead of retaining this compatibility layer indefinitely.
+
+Tailscale is a network path, not an authentication method. A Tailnet template starts with no authentication, but the user may opt into an API key if that server requires one; Aiden must never infer or alter the auth mode from a `.ts.net` hostname.
+
 ## Target backend contracts
 
 ### Provider registry
@@ -118,12 +128,7 @@ Define DTOs in both main and renderer without importing runtime provider objects
 
 ```ts
 type ProviderOrigin = "builtin" | "custom";
-type ProviderState =
-  | "ready"
-  | "setup_required"
-  | "refreshing"
-  | "stale"
-  | "needs_attention";
+type ProviderState = "ready" | "setup_required" | "refreshing" | "stale" | "needs_attention";
 
 interface ProviderSummary {
   id: string;
@@ -225,7 +230,7 @@ Build providers through Pi `createProvider()` and top-level static imports from 
 
 For discovery-capable endpoints, implement `fetchModels` so Pi handles in-flight de-duplication and stored dynamic overlays. A generic `/models` request remains only a custom endpoint feature; it is not used for Pi built-ins.
 
-Manual/custom models must include or derive Pi's required metadata. Use user-entered metadata first, optional models.dev enrichment second, and conservative documented defaults last. Pi is authoritative for every request-critical field on built-ins.
+Manual/custom models must include or derive Pi's required metadata. Use user-entered metadata first, the release-bundled capability snapshot second, and conservative documented defaults last. That snapshot is refreshed only by the release pipeline, never from the running app. Pi is authoritative for every request-critical field on built-ins.
 
 ## Migration plan
 
@@ -233,15 +238,15 @@ Run a versioned, idempotent migration before constructing the new registry.
 
 ### Provider ID mapping
 
-| Legacy Aiden ID | Pi ID | Migration behavior |
-| --- | --- | --- |
-| `openai` | `openai` | Preserve credential and selection. Ignore the legacy short model array. |
-| `anthropic` | `anthropic` | Preserve credential and selection. Ignore the legacy short model array. |
-| `gemini` | `google` | Copy credential, chat/settings selection, voice reference, and pins to `google`. |
-| `deepseek` | `deepseek` | Preserve credential and selection. |
-| `moonshot` | `moonshotai` | Copy credential, chat/settings selection, and pins to `moonshotai`. |
-| `lmstudio` | `custom:<stable-id>` | Convert to a keyless local custom provider with dynamic `/models` discovery. |
-| `ollama` | `custom:<stable-id>` | Convert to a keyless local custom provider with dynamic `/models` discovery. |
+| Legacy Aiden ID | Pi ID                | Migration behavior                                                               |
+| --------------- | -------------------- | -------------------------------------------------------------------------------- |
+| `openai`        | `openai`             | Preserve credential and selection. Ignore the legacy short model array.          |
+| `anthropic`     | `anthropic`          | Preserve credential and selection. Ignore the legacy short model array.          |
+| `gemini`        | `google`             | Copy credential, chat/settings selection, voice reference, and pins to `google`. |
+| `deepseek`      | `deepseek`           | Preserve credential and selection.                                               |
+| `moonshot`      | `moonshotai`         | Copy credential, chat/settings selection, and pins to `moonshotai`.              |
+| `lmstudio`      | `custom:<stable-id>` | Convert to a keyless local custom provider with dynamic `/models` discovery.     |
+| `ollama`        | `custom:<stable-id>` | Convert to a keyless local custom provider with dynamic `/models` discovery.     |
 
 ### Data handling
 
@@ -322,7 +327,7 @@ Replace the fabricated `resolveModelRuntime()` path with registry lookup:
 6. pass the chat ID as the Pi session ID where supported;
 7. preserve Pi's provider-specific API, headers, auth, compatibility, and mixed-model dispatch.
 
-Use `model.input.includes("image")` for vision decisions. Keep models.dev only for supplemental fields Pi lacks, such as open-weight status, release date, or a tool-capability hint.
+Use `model.input.includes("image")` for vision decisions. Keep the release-bundled capability snapshot only for supplemental fields Pi lacks, such as open-weight status, release date, or a tool-capability hint; never fetch that metadata at runtime.
 
 If a model lacks reliable tool support metadata, make the behavior explicit: either expose it as chat-only and withhold workspace tools, or label support unknown and surface a clear provider error. Do not silently advertise every listed model as a fully capable coding agent.
 
@@ -484,7 +489,7 @@ Tasks:
 1. Replace synthetic model creation with exact registry lookup.
 2. Route Agent and title streams through Pi `Models`.
 3. Use Pi modality/reasoning/limit metadata.
-4. Demote models.dev to supplemental display metadata.
+4. Use a release-generated capability snapshot only for supplemental display metadata; never contact models.dev at runtime.
 5. Validate model availability in main before persisting/sending.
 
 Exit gate: OpenAI uses Responses, Google uses Generative AI, Bedrock uses Converse, and a mixed-API provider keeps each model's native API in tests.
@@ -547,20 +552,20 @@ Exit gate: the packaged application enumerates the installed Pi registry, curren
 
 ## Test matrix
 
-| Area | Required coverage |
-| --- | --- |
-| Provider inventory | 36 reviewed built-ins, unique IDs, Radius included, unknown future provider generic fallback |
-| API dispatch | OpenAI Responses, OpenAI Completions, Anthropic Messages, Google, Vertex, Bedrock, Mistral, Pi Messages, mixed providers |
-| Availability | stored API key, environment key, keyless local, AWS profile/chain, Google ADC, OAuth, expired OAuth, auth error |
-| Credential store | list/read/modify/delete, concurrent modifies, single OAuth refresh, atomic write, corrupt ciphertext, unavailable `safeStorage`, no plaintext |
-| Auth flow | secret, text, select, manual code, auth URL, device code, progress, cancellation, timeout, window close, invalid URL |
-| Dynamic models | cache-only startup, background refresh, force refresh, stale-on-failure, partial provider errors, abort, removal cleanup |
-| Custom providers | four API families, no-auth, bearer key, secret header, manual models, `/models`, invalid schema/URL, ID collision |
-| Migration | seven presets, aliases, edited preset, custom provider, existing new credential, chats, settings, voice, selection, pins, retry/idempotency |
-| Runtime | exact Pi model object, Agent stream through Models, title completion through Models, no manual key injection, session ID |
-| History | legacy text-only messages, new provenance, provider switch, unavailable historical provider |
-| Renderer | provider state groups, auth dialogs, errors, long catalog virtualization, stale pin cleanup, keyboard and accessibility |
-| Packaging | generated catalogs included, external package resolution, lazy OAuth load, offline launch, signed/unpacked smoke |
+| Area               | Required coverage                                                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider inventory | 36 reviewed built-ins, unique IDs, Radius included, unknown future provider generic fallback                                                  |
+| API dispatch       | OpenAI Responses, OpenAI Completions, Anthropic Messages, Google, Vertex, Bedrock, Mistral, Pi Messages, mixed providers                      |
+| Availability       | stored API key, environment key, keyless local, AWS profile/chain, Google ADC, OAuth, expired OAuth, auth error                               |
+| Credential store   | list/read/modify/delete, concurrent modifies, single OAuth refresh, atomic write, corrupt ciphertext, unavailable `safeStorage`, no plaintext |
+| Auth flow          | secret, text, select, manual code, auth URL, device code, progress, cancellation, timeout, window close, invalid URL                          |
+| Dynamic models     | cache-only startup, background refresh, force refresh, stale-on-failure, partial provider errors, abort, removal cleanup                      |
+| Custom providers   | four API families, no-auth, bearer key, secret header, manual models, `/models`, invalid schema/URL, ID collision                             |
+| Migration          | seven presets, aliases, edited preset, custom provider, existing new credential, chats, settings, voice, selection, pins, retry/idempotency   |
+| Runtime            | exact Pi model object, Agent stream through Models, title completion through Models, no manual key injection, session ID                      |
+| History            | legacy text-only messages, new provenance, provider switch, unavailable historical provider                                                   |
+| Renderer           | provider state groups, auth dialogs, errors, long catalog virtualization, stale pin cleanup, keyboard and accessibility                       |
+| Packaging          | generated catalogs included, external package resolution, lazy OAuth load, offline launch, signed/unpacked smoke                              |
 
 Use Pi's faux provider and local HTTP fakes in automated tests. No test should require real provider credentials, paid tokens, or public network access.
 
