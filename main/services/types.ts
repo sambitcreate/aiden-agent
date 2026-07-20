@@ -31,6 +31,16 @@ export interface Provider extends StoredProvider {
  */
 export type WorkspacePermission = "full" | "ask" | "none";
 
+export interface ManagedWorktree {
+  /** Canonical repository root used to create the worktree. */
+  repositoryPath: string;
+  /** Canonical checkout root; the workspace may point at a nested path inside it. */
+  worktreePath: string;
+  branch: string;
+  /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
+  createdFromHead: string;
+}
+
 /** A named working context: an optional folder + a permission level for its chats. */
 export interface Workspace {
   id: string;
@@ -38,6 +48,8 @@ export interface Workspace {
   /** Absolute path to the folder Pi operates in (undefined = no folder bound yet). */
   folderPath?: string;
   permission: WorkspacePermission;
+  /** Present only for worktrees created and owned by Aiden. */
+  managedWorktree?: ManagedWorktree;
   createdAt: number;
   updatedAt: number;
 }
@@ -46,8 +58,19 @@ export interface Workspace {
 export interface GitInfo {
   isRepo: boolean;
   branch?: string;
+  /** True when HEAD points directly to a commit rather than a local branch. */
+  detached?: boolean;
+  /** True when the repository has no first commit yet. */
+  unborn?: boolean;
   /** Number of uncommitted (staged + unstaged + untracked) entries. */
   uncommitted?: number;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  defaultBranch?: string;
+  hasRemote?: boolean;
+  /** Ahead/behind compare local tracking refs; Aiden never fetches implicitly. */
+  remoteState?: "local-ref";
 }
 
 /** Branch list for the composer's branch picker. */
@@ -55,8 +78,27 @@ export interface GitBranches {
   isRepo: boolean;
   current?: string;
   branches: string[];
+  remoteBranches: string[];
   /** Uncommitted entry count on the current branch. */
   uncommitted: number;
+  detached?: boolean;
+  unborn?: boolean;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  defaultBranch?: string;
+  hasRemote?: boolean;
+  remoteState?: "local-ref";
+}
+
+/** One checkout reported by `git worktree list --porcelain -z`. */
+export interface GitWorktree {
+  path: string;
+  head: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  current: boolean;
 }
 
 export type ChatRole = "user" | "assistant" | "system";
@@ -87,7 +129,7 @@ export interface ChatMessage {
   attachments?: Attachment[];
 }
 
-/** Normalized capability info for a model, sourced from models.dev. */
+/** Normalized capability info for a model, sourced from the bundled release catalog. */
 export interface ModelInfo {
   id: string;
   name?: string;
@@ -105,7 +147,7 @@ export interface ModelInfo {
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  /** True when the model was found in the models.dev catalog. */
+  /** True when the model was found in the bundled release catalog. */
   matched: boolean;
 }
 
@@ -166,6 +208,28 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
+export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
+
+export type FoundationModelsConnectionState =
+  | "ready"
+  | "unsupported_os"
+  | "device_not_eligible"
+  | "apple_intelligence_disabled"
+  | "model_preparing"
+  | "helper_unavailable"
+  | "unavailable"
+  | "error";
+
+export interface FoundationModelsConnectionStatus {
+  id: "apple-foundation-models";
+  label: "Apple Foundation Models";
+  state: FoundationModelsConnectionState;
+  detail: string;
+  local: true;
+  titleOnly: true;
+  retryable: boolean;
+}
+
 /** Persisted lightweight app settings (theme is handled natively). */
 export interface AppSettings {
   lastProviderId?: string;
@@ -180,6 +244,8 @@ export interface AppSettings {
   /** Global hotkey that toggles on-device dictation into the composer. */
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  /** Background chat-title generation policy. Defaults to automatic. */
+  chatTitleProviderId?: ChatTitleProviderId;
 }
 
 /** Params for a streaming generation request. */
