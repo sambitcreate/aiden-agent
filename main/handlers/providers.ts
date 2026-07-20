@@ -2,13 +2,12 @@
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
-import { NO_AUTH_API_KEY } from "../services/generation-runtime.js";
 import {
   canUseStoredProviderKey,
   sameProviderConnection,
 } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
-import { listModels, testConnection } from "../services/models.js";
+import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
 import type { ProviderKind, StoredProvider } from "../services/types.js";
 
 function asString(value: unknown, name: string): string {
@@ -28,7 +27,7 @@ function parseProvider(value: unknown): StoredProvider {
     id: asString(p.id, "id"),
     kind,
     label: asString(p.label, "label"),
-    baseUrl: asString(p.baseUrl, "baseUrl").replace(/\/$/, ""),
+    baseUrl: normalizeProviderBaseUrl(asString(p.baseUrl, "baseUrl")),
     models: Array.isArray(p.models)
       ? p.models.filter((m): m is string => typeof m === "string")
       : [],
@@ -42,11 +41,10 @@ async function connectionKey(
   provider: StoredProvider,
   keyOverride: unknown,
 ): Promise<string | null> {
-  // Keyless providers must never pull a stale stored secret into a local/LAN
-  // connection test merely because the provider ids happen to match. Pi sends
-  // this non-secret compatibility value during generation, so test and model
-  // discovery must send the same request shape.
-  if (!provider.needsKey) return NO_AUTH_API_KEY;
+  // Keyless providers must never pull a stale stored secret into a connection
+  // test merely because the provider ids happen to match. Discovery talks to
+  // the HTTP endpoint directly, so it must send no compatibility token either.
+  if (!provider.needsKey) return null;
   if (typeof keyOverride === "string" && keyOverride.trim()) return keyOverride.trim();
 
   const saved = await configStore.getProvider(provider.id);
@@ -95,13 +93,17 @@ export function registerProviderHandlers(): void {
 
   ipcMain.handle("providers:setKey", async (_event, id: unknown, key: unknown) => {
     const providerId = asString(id, "id");
+    const provider = await configStore.getProvider(providerId);
+    if (provider && !provider.needsKey) {
+      await secrets.deleteKey(providerId);
+      return { hasKey: false, provider };
+    }
     const value = typeof key === "string" ? key.trim() : "";
     if (value) {
       await secrets.setKey(providerId, value);
     } else {
       await secrets.deleteKey(providerId);
     }
-    const provider = await configStore.getProvider(providerId);
     return { hasKey: Boolean(value), provider: provider ?? null };
   });
 
@@ -141,6 +143,13 @@ export function registerProviderHandlers(): void {
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
+    if (
+      p.chatTitleProviderId === "automatic" ||
+      p.chatTitleProviderId === "apple-foundation-models" ||
+      p.chatTitleProviderId === "chat-model"
+    ) {
+      next.chatTitleProviderId = p.chatTitleProviderId;
+    }
     return configStore.setSettings(next);
   });
 }
