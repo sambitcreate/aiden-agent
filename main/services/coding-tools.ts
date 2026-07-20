@@ -26,19 +26,103 @@ function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
 }
 
-/** Resolve a user/agent-supplied path within the root, rejecting any escape. */
+/** Resolve a user/agent-supplied path within the root, rejecting lexical escapes. */
 function resolveInRoot(root: string, p: string): string {
   const resolved = path.resolve(root, p ?? ".");
   const rel = path.relative(root, resolved);
-  if (rel === "" ) return root;
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (rel === "") return root;
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
     throw new Error(`Path "${p}" is outside the workspace folder.`);
   }
   return resolved;
 }
 
+function assertRealPathInRoot(root: string, resolved: string, suppliedPath: string): string {
+  const rel = path.relative(root, resolved);
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    throw new Error(`Path "${suppliedPath}" resolves outside the workspace folder.`);
+  }
+  return resolved;
+}
+
+/** Resolve an existing path, following symlinks only after checking its target. */
+async function resolveExistingInRoot(
+  root: string,
+  suppliedPath: string,
+): Promise<{ root: string; full: string }> {
+  const lexical = resolveInRoot(root, suppliedPath);
+  const [realRoot, realPath] = await Promise.all([fs.realpath(root), fs.realpath(lexical)]);
+  return { root: realRoot, full: assertRealPathInRoot(realRoot, realPath, suppliedPath) };
+}
+
+async function nearestExistingAncestor(fullPath: string): Promise<string> {
+  let current = fullPath;
+  for (;;) {
+    try {
+      await fs.lstat(current);
+      return current;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Resolve a writable path without letting mkdir/writeFile follow a symlink to
+ * somewhere outside the workspace. Existing safe symlinks are canonicalized.
+ */
+async function resolveWritableInRoot(root: string, suppliedPath: string): Promise<string> {
+  const lexical = resolveInRoot(root, suppliedPath);
+  const realRoot = await fs.realpath(root);
+  const parent = path.dirname(lexical);
+  const ancestor = await nearestExistingAncestor(parent);
+  const realAncestor = await fs.realpath(ancestor);
+  assertRealPathInRoot(realRoot, realAncestor, suppliedPath);
+
+  await fs.mkdir(parent, { recursive: true });
+  const realParent = await fs.realpath(parent);
+  assertRealPathInRoot(realRoot, realParent, suppliedPath);
+
+  try {
+    await fs.lstat(lexical);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return lexical;
+    throw error;
+  }
+
+  try {
+    const realPath = await fs.realpath(lexical);
+    return assertRealPathInRoot(realRoot, realPath, suppliedPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(`Path "${suppliedPath}" is a dangling symbolic link.`);
+    }
+    throw error;
+  }
+}
+
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}\n… [truncated, ${text.length - max} more chars]` : text;
+  return text.length > max
+    ? `${text.slice(0, max)}\n… [truncated, ${text.length - max} more chars]`
+    : text;
+}
+
+/** Keep common environment-secret files out of model-visible tool results. */
+function isEnvironmentSecretPath(relativePath: string): boolean {
+  return relativePath
+    .split(/[\\/]/)
+    .some((segment) => segment === ".env" || segment.startsWith(".env."));
+}
+
+function rejectEnvironmentSecret(root: string, fullPath: string): void {
+  if (isEnvironmentSecretPath(path.relative(root, fullPath))) {
+    throw new Error(
+      "Reading .env files is disabled to keep workspace secrets out of model context.",
+    );
+  }
 }
 
 /** Build a short human summary of a mutating tool call for the approval prompt. */
@@ -60,14 +144,20 @@ function makeReadFile(root: string): AgentTool {
   return {
     name: "read_file",
     label: "Read File",
-    description: "Read a UTF-8 text file from the workspace folder. Paths are relative to the folder root.",
-    parameters: Type.Object({ path: Type.String({ description: "File path relative to the workspace folder." }) }),
+    description:
+      "Read a UTF-8 text file from the workspace folder. Paths are relative to the folder root.",
+    parameters: Type.Object({
+      path: Type.String({ description: "File path relative to the workspace folder." }),
+    }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
       const { path: p } = params as { path: string };
-      const full = resolveInRoot(root, p);
+      const { root: realRoot, full } = await resolveExistingInRoot(root, p);
+      rejectEnvironmentSecret(realRoot, full);
       const buf = await fs.readFile(full);
       const text = buf.subarray(0, MAX_READ_BYTES).toString("utf-8");
-      return textResult(buf.length > MAX_READ_BYTES ? `${text}\n… [truncated]` : text || "[empty file]");
+      return textResult(
+        buf.length > MAX_READ_BYTES ? `${text}\n… [truncated]` : text || "[empty file]",
+      );
     },
   };
 }
@@ -84,8 +174,7 @@ function makeWriteFile(root: string): AgentTool {
     }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
       const { path: p, content } = params as { path: string; content: string };
-      const full = resolveInRoot(root, p);
-      await fs.mkdir(path.dirname(full), { recursive: true });
+      const full = await resolveWritableInRoot(root, p);
       await fs.writeFile(full, content, "utf-8");
       return textResult(`Wrote ${content.length} chars to ${p}.`);
     },
@@ -100,20 +189,27 @@ function makeEditFile(root: string): AgentTool {
       "Replace an exact substring in an existing file. old_string must appear exactly once; use enough surrounding context to make it unique.",
     parameters: Type.Object({
       path: Type.String({ description: "File path relative to the workspace folder." }),
-      old_string: Type.String({ description: "Exact text to replace (must be unique in the file)." }),
+      old_string: Type.String({
+        description: "Exact text to replace (must be unique in the file).",
+      }),
       new_string: Type.String({ description: "Replacement text." }),
     }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
-      const { path: p, old_string, new_string } = params as {
+      const {
+        path: p,
+        old_string,
+        new_string,
+      } = params as {
         path: string;
         old_string: string;
         new_string: string;
       };
-      const full = resolveInRoot(root, p);
+      const { full } = await resolveExistingInRoot(root, p);
       const original = await fs.readFile(full, "utf-8");
       const count = original.split(old_string).length - 1;
       if (count === 0) throw new Error(`old_string not found in ${p}.`);
-      if (count > 1) throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
+      if (count > 1)
+        throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
       await fs.writeFile(full, original.replace(old_string, new_string), "utf-8");
       return textResult(`Edited ${p}.`);
     },
@@ -126,15 +222,15 @@ function makeListDir(root: string): AgentTool {
     label: "List Directory",
     description: "List the entries of a directory in the workspace folder.",
     parameters: Type.Object({
-      path: Type.Optional(Type.String({ description: "Directory relative to the workspace folder (default root)." })),
+      path: Type.Optional(
+        Type.String({ description: "Directory relative to the workspace folder (default root)." }),
+      ),
     }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
       const { path: p } = params as { path?: string };
-      const full = resolveInRoot(root, p ?? ".");
+      const { full } = await resolveExistingInRoot(root, p ?? ".");
       const entries = await fs.readdir(full, { withFileTypes: true });
-      const lines = entries
-        .map((e) => `${e.isDirectory() ? "dir " : "file"}  ${e.name}`)
-        .sort();
+      const lines = entries.map((e) => `${e.isDirectory() ? "dir " : "file"}  ${e.name}`).sort();
       return textResult(lines.length ? lines.join("\n") : "[empty directory]");
     },
   };
@@ -144,13 +240,31 @@ function makeGlob(root: string): AgentTool {
   return {
     name: "glob",
     label: "Find Files",
-    description: "Find files in the workspace folder matching a glob pattern, e.g. \"src/**/*.ts\".",
-    parameters: Type.Object({ pattern: Type.String({ description: "Glob pattern relative to the workspace folder." }) }),
+    description: 'Find files in the workspace folder matching a glob pattern, e.g. "src/**/*.ts".',
+    parameters: Type.Object({
+      pattern: Type.String({ description: "Glob pattern relative to the workspace folder." }),
+    }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
       const { pattern } = params as { pattern: string };
       const matches: string[] = [];
+      const realRoot = await fs.realpath(root);
       // fs.glob is available on Node 22+/24.
       for await (const entry of fs.glob(pattern, { cwd: root })) {
+        try {
+          const lexical = resolveInRoot(root, entry);
+          const realPath = await fs.realpath(lexical);
+          assertRealPathInRoot(realRoot, realPath, entry);
+          if (
+            isEnvironmentSecretPath(entry) ||
+            isEnvironmentSecretPath(path.relative(realRoot, realPath))
+          ) {
+            continue;
+          }
+        } catch {
+          // A dangling or escaping symlink is not a workspace file and must
+          // never be surfaced to the model.
+          continue;
+        }
         matches.push(entry);
         if (matches.length >= 500) break;
       }
@@ -165,7 +279,10 @@ async function grepDir(dir: string, root: string, re: RegExp, out: string[]): Pr
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (out.length >= MAX_GREP_MATCHES) return;
-    if (entry.name.startsWith(".") && entry.name !== ".env") continue;
+    // Dotfiles commonly hold credentials (for example .env); never include
+    // their contents in model context through a broad workspace search.
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isSymbolicLink()) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
@@ -205,7 +322,9 @@ function makeGrep(root: string): AgentTool {
       "Search the workspace folder for lines matching a regular expression. Returns file:line: match, capped at 200 hits.",
     parameters: Type.Object({
       pattern: Type.String({ description: "JavaScript regular expression to search for." }),
-      path: Type.Optional(Type.String({ description: "Subdirectory to limit the search to (default root)." })),
+      path: Type.Optional(
+        Type.String({ description: "Subdirectory to limit the search to (default root)." }),
+      ),
     }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
       const { pattern, path: p } = params as { pattern: string; path?: string };
@@ -213,11 +332,13 @@ function makeGrep(root: string): AgentTool {
       try {
         re = new RegExp(pattern);
       } catch (e) {
-        throw new Error(`Invalid regular expression: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(
+          `Invalid regular expression: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
-      const start = resolveInRoot(root, p ?? ".");
+      const { root: realRoot, full: start } = await resolveExistingInRoot(root, p ?? ".");
       const out: string[] = [];
-      await grepDir(start, root, re, out);
+      await grepDir(start, realRoot, re, out);
       return textResult(out.length ? out.join("\n") : "[no matches]");
     },
   };
@@ -243,7 +364,12 @@ function makeRunCommand(root: string): AgentTool {
       } catch (error) {
         const e = error as { stdout?: string; stderr?: string; message?: string; code?: number };
         const combined = [e.stdout, e.stderr, e.message].filter(Boolean).join("\n").trim();
-        return textResult(truncate(`Command exited with error (code ${e.code ?? "?"}):\n${combined}`, MAX_OUTPUT_CHARS));
+        return textResult(
+          truncate(
+            `Command exited with error (code ${e.code ?? "?"}):\n${combined}`,
+            MAX_OUTPUT_CHARS,
+          ),
+        );
       }
     },
   };
