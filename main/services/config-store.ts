@@ -139,6 +139,14 @@ function normalizeWorkspace(w: Workspace): Workspace {
     ...w,
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
+    managedWorktree:
+      w.managedWorktree &&
+      typeof w.managedWorktree.repositoryPath === "string" &&
+      typeof w.managedWorktree.worktreePath === "string" &&
+      typeof w.managedWorktree.branch === "string" &&
+      typeof w.managedWorktree.createdFromHead === "string"
+        ? { ...w.managedWorktree }
+        : undefined,
   };
 }
 
