@@ -14,7 +14,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
   Text,
   toast,
 } from "../ui";
@@ -28,6 +27,14 @@ function formatContext(n: number | undefined): string | null {
   if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`;
   if (n >= 1000) return `${Math.round(n / 1000)}K`;
   return String(n);
+}
+
+function isTailnetEndpoint(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().endsWith(".ts.net");
+  } catch {
+    return false;
+  }
 }
 
 interface ProviderEditorProps {
@@ -48,7 +55,6 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     provider.defaultModel ?? provider.models[0] ?? "",
   );
   const [testing, setTesting] = React.useState(false);
-  const [refreshing, setRefreshing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [modelsStale, setModelsStale] = React.useState(false);
   const [connectionNotice, setConnectionNotice] = React.useState<{
@@ -92,7 +98,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
   const markDiscoveryStale = () => {
     setModelsStale(true);
     setConnectionNotice({
-      message: "Connection settings changed. Test or refresh models again before saving.",
+      message: "Connection settings changed. Discover models again before saving.",
       error: true,
     });
   };
@@ -108,16 +114,16 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           error: false,
         });
         toast.success(
-          `Connected — ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} loaded. Save to use them.`,
+          `Endpoint reached — ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} loaded. Save to use them.`,
         );
       } else {
         const message =
-          "Connected, but no models were found. Load one in the local server, then refresh models.";
-        setConnectionNotice({ message, error: true });
+          "Endpoint reached, but no models were found. Load one in the server, then discover models again.";
+        setConnectionNotice({ message, error: false });
         toast.info(message);
       }
     } catch (error) {
-      const message = `Connection failed: ${error instanceof Error ? error.message : String(error)}`;
+      const message = `Couldn't reach this endpoint: ${error instanceof Error ? error.message : String(error)}`;
       setConnectionNotice({ message, error: true });
       toast.error(message);
     } finally {
@@ -125,36 +131,9 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     }
   };
 
-  const handleRefreshModels = async () => {
-    setRefreshing(true);
-    try {
-      const list = await providersApi.listModels(buildDraft(), keyDraft.trim() || undefined);
-      applyDiscoveredModels(list);
-      if (list.length > 0) {
-        setConnectionNotice({
-          message: `${list.length} model${list.length === 1 ? "" : "s"} loaded. Save to use them.`,
-          error: false,
-        });
-        toast.success(
-          `Loaded ${list.length} model${list.length === 1 ? "" : "s"}. Save to use them.`,
-        );
-      } else {
-        const message = "No models were found. Load one in the local server, then refresh models.";
-        setConnectionNotice({ message, error: true });
-        toast.info(message);
-      }
-    } catch (error) {
-      const message = `Couldn't load models: ${error instanceof Error ? error.message : String(error)}`;
-      setConnectionNotice({ message, error: true });
-      toast.error(message);
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
   const handleSave = async () => {
     if (modelsStale) {
-      const message = "Connection settings changed. Test or refresh models again before saving.";
+      const message = "Connection settings changed. Discover models again before saving.";
       setConnectionNotice({ message, error: true });
       toast.error(message);
       return;
@@ -163,7 +142,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     try {
       await providersApi.save(buildDraft(), keyDraft.trim() || undefined);
       if (models.length === 0) {
-        toast.info("Saved without models. Test or refresh this provider before sending a chat.");
+        toast.info("Saved without models. Discover models before sending a chat.");
       }
       onSaved();
       onOpenChange(false);
@@ -183,7 +162,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       title={`Configure ${provider.label}`}
       size="large"
       confirmLabel="Save"
-      confirmDisabled={saving || testing || refreshing}
+      confirmDisabled={saving || testing}
       onConfirm={handleSave}
     >
       <FieldSet>
@@ -201,6 +180,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
         >
           <Input
             value={baseUrl}
+            disabled={testing}
             onChange={(e) => {
               setBaseUrl(e.target.value);
               markDiscoveryStale();
@@ -213,6 +193,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           <Field label="API format">
             <Select
               value={kind}
+              disabled={testing}
               onValueChange={(v) => {
                 setKind(v as ProviderKind);
                 markDiscoveryStale();
@@ -229,28 +210,33 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           </Field>
         ) : null}
 
-        {!provider.isPreset ? (
-          <Field
-            label="Authentication"
-            description={
-              needsKey
-                ? "This endpoint requires a bearer API key."
-                : "No saved API key is required. A non-secret compatibility placeholder is sent to trusted local or LAN servers."
-            }
+        <Field
+          label="Authentication"
+          description={
+            needsKey
+              ? "This endpoint requires an API key. It is encrypted on this Mac."
+              : isTailnetEndpoint(baseUrl)
+                ? "Tailscale controls network reachability. Add an API key only if this server requires one."
+                : "No API key is requested or stored. Aiden sends no Authorization or API-key header."
+          }
+        >
+          <Select
+            value={needsKey ? "api-key" : "none"}
+            disabled={testing}
+            onValueChange={(value) => {
+              setNeedsKey(value === "api-key");
+              markDiscoveryStale();
+            }}
           >
-            <div className="flex items-center justify-between gap-3">
-              <Text variant="small">API key required</Text>
-              <Switch
-                checked={needsKey}
-                onCheckedChange={(value) => {
-                  setNeedsKey(value);
-                  markDiscoveryStale();
-                }}
-                aria-label="API key required"
-              />
-            </div>
-          </Field>
-        ) : null}
+            <SelectTrigger size="small">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No authentication</SelectItem>
+              <SelectItem value="api-key">API key</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
 
         {needsKey ? (
           <Field
@@ -264,6 +250,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
             <Input
               type="password"
               value={keyDraft}
+              disabled={testing}
               onChange={(e) => {
                 setKeyDraft(e.target.value);
                 markDiscoveryStale();
@@ -280,21 +267,19 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
                 size="small"
                 variant="filled"
                 onClick={handleTest}
-                disabled={testing || refreshing || saving}
+                disabled={testing || saving}
               >
-                {testing ? "Testing…" : "Test"}
-              </Button>
-              <Button
-                size="small"
-                variant="filled"
-                onClick={handleRefreshModels}
-                disabled={refreshing || testing || saving}
-              >
-                {refreshing ? "Loading…" : "Refresh models"}
+                {testing ? "Discovering…" : "Discover models"}
               </Button>
             </div>
             {connectionNotice ? (
-              <Text variant="small" color={connectionNotice.error ? "red" : "tertiary"} as="p">
+              <Text
+                variant="small"
+                color={connectionNotice.error ? "red" : "tertiary"}
+                as="p"
+                role={connectionNotice.error ? "alert" : "status"}
+                aria-live={connectionNotice.error ? "assertive" : "polite"}
+              >
                 {connectionNotice.message}
               </Text>
             ) : null}
@@ -318,7 +303,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           </Field>
         ) : (
           <Text variant="small" color="tertiary">
-            {`No models loaded. Test or refresh models after entering a valid endpoint${needsKey ? " and API key." : "."}`}
+            {`No models loaded. Discover models after entering a valid endpoint${needsKey ? " and API key." : "."}`}
           </Text>
         )}
       </FieldSet>
@@ -329,7 +314,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
             Model capabilities
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-            Capability hints from models.dev. Check provider documentation for exact support.
+            Capability hints bundled with this release. Check provider documentation for exact support.
           </Text>
           <div className="mt-2 max-h-64 overflow-y-auto rounded-card border border-separator">
             {models.map((m, i) => {
