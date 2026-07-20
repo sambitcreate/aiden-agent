@@ -3,13 +3,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  AlertDialog,
-  Badge,
-  Button,
-  Separator,
-  Text,
-} from "../ui";
+import { AlertDialog, Badge, Button, Separator, Text } from "../ui";
 import { Plus, Trash2 } from "lucide-react";
 import { ProviderEditor } from "./provider-editor";
 import { providersApi } from "../../lib/ipc";
@@ -38,7 +32,9 @@ export function ProvidersSettings() {
       label: "Custom Provider",
       baseUrl: "http://localhost:8000/v1",
       models: [],
-      needsKey: true,
+      // Custom connections start local-first. The editor exposes an explicit
+      // auth toggle for hosted endpoints that require a bearer key.
+      needsKey: false,
       isPreset: false,
       hasKey: false,
     });
@@ -59,7 +55,8 @@ export function ProvidersSettings() {
         <div className="min-w-0 flex-1">
           <Text variant="strong">Providers</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Use hosted APIs or local models. Messages and attachments go to the selected provider; keys stay encrypted on this Mac.
+            Use hosted APIs or local models. Messages and attachments go to the selected provider;
+            keys stay encrypted on this Mac.
           </Text>
         </div>
         <Button className="shrink-0" variant="filled" size="small" onClick={addCustom}>
@@ -88,7 +85,13 @@ export function ProvidersSettings() {
                 Configure
               </Button>
               {!p.isPreset ? (
-                <Button variant="transparent" size="small" iconOnly aria-label="Remove provider" onClick={() => setRemoving(p)}>
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  aria-label="Remove provider"
+                  onClick={() => setRemoving(p)}
+                >
                   <Trash2 className="size-4" />
                 </Button>
               ) : null}
