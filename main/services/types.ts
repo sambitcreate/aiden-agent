@@ -214,4 +214,6 @@ export interface ChatDone {
 export interface ChatError {
   streamId: string;
   message: string;
+  /** Streamed text retained when a provider fails after beginning a response. */
+  content?: string;
 }
