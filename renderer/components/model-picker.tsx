@@ -40,7 +40,12 @@ const PINNED_KEY = "aiden-agent.pinnedModels";
 const FORMAT_RE = /[\s._-](MLX|GGUF|GGML|FP16|BF16|F16|INT8|AWQ|GPTQ|Q\d(?:_[A-Z0-9]+)*)$/i;
 
 function providerIsLocal(p: Provider): boolean {
-  return !p.needsKey || /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(p.baseUrl ?? "");
+  try {
+    const hostname = new URL(p.baseUrl).hostname.toLowerCase();
+    return hostname === "localhost" || hostname === "::1" || /^127\./.test(hostname);
+  } catch {
+    return false;
+  }
 }
 
 /** Split a model id into a display label and an optional quant/format tag. */
@@ -126,9 +131,10 @@ export function ModelPicker({
 
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = entries.find((e) => e.value === selectedValue);
+  const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const unavailableMessage =
-    "No chat models are available. Open Settings → Providers to test or refresh a connection.";
+    "No chat models are available. Open Settings → Providers to discover models for a connection.";
 
   const choose = (entry: ModelEntry) => {
     onChange(entry.providerId, entry.model);
@@ -143,8 +149,22 @@ export function ModelPicker({
           size="small"
           disabled={disabled || !hasModels}
           className="min-w-0 max-w-[min(14rem,45vw)] gap-1.5"
-          aria-label={hasModels ? "Choose a model" : unavailableMessage}
-          title={hasModels ? undefined : unavailableMessage}
+          aria-label={
+            hasUnavailableSelection
+              ? "Selected model is unavailable. Choose a model."
+              : selected
+                ? `Selected model: ${selected.label} from ${selected.providerLabel}. Choose a model.`
+                : hasModels
+                  ? "Choose a model"
+                  : unavailableMessage
+          }
+          title={
+            hasUnavailableSelection
+              ? "Selected model is unavailable."
+              : hasModels
+                ? undefined
+                : unavailableMessage
+          }
         >
           {selected ? (
             selected.isLocal ? (
@@ -154,7 +174,13 @@ export function ModelPicker({
             )
           ) : null}
           <span className="min-w-0 truncate">
-            {selected ? selected.label : hasModels ? "Select model" : "No models"}
+            {selected
+              ? `${selected.label} · ${selected.providerLabel}`
+              : hasUnavailableSelection
+                ? "Model unavailable"
+                : hasModels
+                  ? "Select model"
+                  : "No models"}
           </span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-tertiary" />
         </Button>
@@ -162,6 +188,7 @@ export function ModelPicker({
 
       <CustomDropdownMenuContent align="start" className="w-72 p-0">
         <Command
+          label="Chat model"
           // cmdk owns filtering + arrow-key nav; keep those keys from reaching the
           // Radix menu, but let Escape bubble up so the menu can still close.
           onKeyDown={(e) => {
@@ -173,7 +200,7 @@ export function ModelPicker({
               Model
             </Text>
           </div>
-          <CommandInput placeholder="Filter models…" />
+          <CommandInput aria-label="Filter chat models" placeholder="Filter models…" />
           <CommandList>
             <CommandEmpty>No models found.</CommandEmpty>
             {entries.map((entry) => {
@@ -191,7 +218,12 @@ export function ModelPicker({
                   ) : (
                     <Cloud className="size-4 shrink-0 text-tertiary" />
                   )}
-                  <span className="min-w-0 flex-1 truncate text-small-strong">{entry.label}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-small-strong">{entry.label}</span>
+                    <span className="block truncate text-small text-tertiary">
+                      {entry.providerLabel}
+                    </span>
+                  </span>
                   {entry.format ? (
                     <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
                   ) : null}
