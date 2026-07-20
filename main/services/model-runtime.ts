@@ -4,6 +4,7 @@
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import type { Api, Model, ProviderStreams } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
+import { resolveRuntimeApiKey } from "./generation-runtime.js";
 import { secrets } from "./secrets.js";
 import type { StoredProvider } from "./types.js";
 
@@ -49,7 +50,8 @@ export async function resolveModelRuntime(
   const provider = await configStore.getProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" not found.`);
 
-  const apiKey = provider.needsKey ? await secrets.getKey(provider.id) : null;
+  const storedApiKey = provider.needsKey ? await secrets.getKey(provider.id) : null;
+  const apiKey = resolveRuntimeApiKey(provider, storedApiKey);
   if (provider.needsKey && !apiKey) {
     throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
   }
@@ -58,7 +60,7 @@ export async function resolveModelRuntime(
   return {
     provider,
     model,
-    apiKey: apiKey ?? undefined,
+    apiKey,
     streams: streamsFor(model.api),
   };
 }
