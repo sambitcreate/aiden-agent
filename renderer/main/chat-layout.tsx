@@ -8,6 +8,11 @@ import * as React from "react";
 import { SplitView } from "../components/ui";
 import { ChatSidebar } from "../components/chat-sidebar";
 import { chatsApi, onNotification } from "../lib/ipc";
+import {
+  CHAT_TITLE_FADE_OUT_MS,
+  CHAT_TITLE_REVEAL_DURATION_MS,
+  type ChatTitleRevealEvent,
+} from "../lib/chat-title-reveal";
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
@@ -16,9 +21,18 @@ import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
   const qc = useQueryClient();
+  const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
   React.useEffect(() => {
-    return onNotification<ChatMetadataUpdated>("chats:metadata-updated", (update) => {
+    let clearReveal: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = onNotification<ChatMetadataUpdated>("chats:metadata-updated", (update) => {
+      const previousTitle =
+        qc.getQueryData<Chat | null>(queryKeys.chat(update.chatId))?.title ??
+        qc
+          .getQueriesData<ChatMeta[]>({ queryKey: queryKeys.chats })
+          .flatMap(([, chats]) => chats ?? [])
+          .find((chat) => chat.id === update.chatId)?.title ??
+        update.title;
       qc.setQueryData<Chat | null>(queryKeys.chat(update.chatId), (current) =>
         current ? { ...current, title: update.title, updatedAt: update.updatedAt } : current,
       );
@@ -32,13 +46,24 @@ export function ChatLayout() {
           )
           .sort((a, b) => b.updatedAt - a.updatedAt);
       });
+      const reveal = { chatId: update.chatId, version: update.updatedAt, previousTitle };
+      setTitleReveal(reveal);
+      clearTimeout(clearReveal);
+      clearReveal = setTimeout(() => {
+        setTitleReveal((current) => (current?.version === reveal.version ? null : current));
+      }, CHAT_TITLE_FADE_OUT_MS + CHAT_TITLE_REVEAL_DURATION_MS + 50);
     });
+
+    return () => {
+      unsubscribe();
+      clearTimeout(clearReveal);
+    };
   }, [qc]);
 
   return (
     <SplitView
       storageKey="aiden-agent"
-      sidebar={<ChatSidebar activeChatId={params.chatId} />}
+      sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
       <div className="flex h-full min-h-0 flex-col">
