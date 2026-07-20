@@ -1,5 +1,45 @@
 # Project History
 
+### 2026-07-20 — Animate generated chat-title replacements
+
+- Added a quick character-by-character reveal only when the background title-generation notification replaces a temporary chat title; initial list rendering and manual renames remain static.
+- Used a dependency-free two-stage sequence: the temporary title fades out for 200ms, then the replacement runs a 500ms opacity and 2px-rise character reveal without moving surrounding layout.
+- Kept one unsplit screen-reader label while hiding visual character spans from accessibility APIs, and disabled the decorative animation under `prefers-reduced-motion`.
+- Added focused ordering and duration-bound tests. The 64-test TypeScript suite, type-check, lint, and production build pass.
+
+### 2026-07-20 — Add on-device Apple Foundation Models chat titles
+
+- Added a macOS-only Apple Foundation Models connection for background chat titles, with macOS 26, Apple silicon, Apple Intelligence, and model-readiness gates exposed as serializable main-owned status.
+- Added a SwiftPM background helper app with a versioned, bounded JSON protocol, fresh one-shot `LanguageModelSession` use, guided `@Generable` output, mapped availability/generation errors, immediate request-file deletion, and native protocol tests.
+- Added Automatic, On-device only, and Selected chat model routing. Apple never appears in the composer, On-device only never falls back to a network model, stale readiness is downgraded after native availability failures, and existing manual-rename/compare-and-set title safety remains intact.
+- LaunchServices uses a private per-request exchange directory. The helper publishes its process ID, checks a cancellation marker before generation, and is terminated and cleaned on timeout, abort, or app quit.
+- Added the native status card and title-provider selector to Provider Settings, including preparing polling, manual refresh, accessible live/busy status, and visible save/refresh failures.
+- Limited packaged build inputs to renderer/main/preload output, declared the nested helper as an additional macOS signing input, and removed Swift release/test/module-cache residue and the duplicate helper from `app.asar`.
+- Completed two fresh, independent reviews against the Foundation Models skills repository and T3 Code, then fixed every validated finding covering helper ownership, cached readiness, Settings errors, package residue, and nested signing structure.
+- Verification passes with 61 TypeScript tests, 4 Swift tests, type-check, lint, production build, unpacked macOS packaging, strict nested-helper signature validation, clean asar inspection, and real on-device generation from both development and packaged helpers. Aiden's older app-wide sealed-resources verification issue remains separate from this feature.
+
+### 2026-07-20 — Make model metadata release-only
+
+- Replaced runtime catalog fetching and user-data TTL caching with a static model-capabilities JSON asset read locally from the application package.
+- Removed the refresh IPC path so neither settings nor chat startup can invoke a public capability-catalog request.
+- Added a release-only snapshot updater and made the distribution command run it before building artifacts; development and unpacked-package flows retain the checked-in snapshot without network access.
+
+### 2026-07-19 — Harden Git operations and add isolated worktree workspaces
+
+- Replaced arbitrary renderer-path Git IPC with workspace-ID-scoped resolution that rechecks the persisted folder, directory availability, and workspace permission in Electron main.
+- Moved folder grants to a main-process system picker; permission changes, workspace removal, and renderer teardown now abort active Git operations.
+- Rebuilt the Git service around direct argument arrays, a stable noninteractive environment, typed and redacted errors, output and timeout bounds, process-group aborts, inherited Git-routing-variable removal, NUL-safe porcelain parsing, a bounded one-second cache with mutation epochs, and per-common-directory mutation serialization shared by linked worktrees.
+- Added richer local repository state—detached and unborn refs, upstream, ahead/behind counts, remote-derived default branch, remotes, and local/remote refs. Tracking state is explicitly local-only/last-fetched and the app never performs an implicit network fetch.
+- Added managed isolated worktrees under Electron user data. Creation uses a collision-resistant repository/branch path, preserves nested workspace scope, transactionally rolls back the checkout/branch when later steps fail, preserves the source checkout, and opens the result as a separate Aiden workspace inheriting the source permission.
+- Added explicit managed-worktree cleanup that refuses dirty checkouts and deletes the branch only if it still points to its original creation commit; otherwise the branch and its commits remain intact.
+- Extended the existing compact branch menu using the documented ChatGPT/Codex menu, context-strip, motion, focus, and progressive-disclosure references; no new page, modal, or component system was introduced.
+- Completed three independent backend, correctness, and UI reviews against T3 Code and the documented ChatGPT/Codex references, then resolved their authorization, cancellation, rollback, cache-race, process-tree, managed-cleanup, and interaction-state findings.
+- Expanded to 15 focused real-repository Git tests covering unusual NUL-delimited paths, shell-safe refs, local-only checkout, remote divergence/default refs, common-directory concurrency, linked and nested worktrees, cache/mutation races, transactional rollback, descendant termination, inherited environment isolation, credential redaction, unborn repositories, and non-repositories. The full 37-test suite, type-check, lint, and production renderer/main/preload build pass. A live Electron pass verified the compact menu and layered creation/Escape behavior before the final review fixes; the post-review GUI recheck was blocked by the locked Mac and completed from source/build evidence instead.
+
+### 2026-07-19 — Require UI reference review for new elements
+
+- Updated the agent guidance so any new UI element or component begins with a review of the ChatGPT/Codex desktop inspiration audit and interactive UI specimen, while adapting those references to Aiden's established visual language.
+
 ### 2026-07-19 — Add the new-chat workspace plate and scratch folders
 
 - Turned the composer’s folder chip into a searchable, keyboard-accessible workspace plate only while the current chat is untouched; established chats retain the existing open-in-Finder action.
