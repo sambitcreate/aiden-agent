@@ -14,7 +14,7 @@
 - **Security bridge:** `renderer/preload.ts` exposes `window.aidenAPI` through `contextBridge`. Renderer invokes are prefix-allowlisted and notifications are channel-allowlisted. Renderer sandboxing and context isolation are enabled; Node integration is disabled.
 - **External editors:** `main/services/external-editors.ts` discovers a curated set of installed macOS editors from bundle metadata and standard application locations, deduplicates related bundles, caches native icons, and opens only a stored workspace folder through `/usr/bin/open -b` without a shell. The renderer stores the global preference under `aiden-agent.preferredEditorId`; Finder is always the final fallback.
 - **Renderer:** React 19, TanStack Router, TanStack Query, Tailwind CSS 4, local UI components in `renderer/components/ui.tsx`, Radix primitives, cmdk, Sonner, and Lucide. The local component layer preserves the established macOS visual contract: translucent materials, native-density controls, a light/dark elevation ladder, shared hover/pressed/focus/disabled states, collapsible/resizable split views with compact focus isolation, measured toolbar/footer scrolling, content-aware scroll-edge fades, command pickers, fields, menus, and dialogs.
-- **Build:** Vite emits `build/renderer`; esbuild emits `build/main/index.js` and `build/preload/preload.cjs`; electron-builder packages the `.app`, DMG, and ZIP.
+- **Build:** Vite emits `build/renderer`; esbuild emits `build/main/index.js` and `build/preload/preload.cjs`; SwiftPM builds a background helper app for Apple Foundation Models; electron-builder packages the `.app`, DMG, and ZIP.
 - **Persistence:** JSON under `app.getPath("userData")`; chat mutations are serialized across the shared index so background metadata updates cannot race message writes. Provider keys and MCP OAuth sessions are encrypted with Electron `safeStorage`.
 
 ## Agent and tools
@@ -24,7 +24,10 @@
 - Every filesystem path is resolved inside the active workspace root. Commands run with the workspace root as their working directory.
 - Permission modes are Full, Ask, and No Access. Ask mode pauses write/edit/command calls for inline Allow once or Deny approval. Permission, folder, and workspace changes cancel both active and initializing generations before any newly disallowed tool continuation can begin.
 - On an untouched new chat, the composer folder control opens a searchable workspace plate and can reassign that same empty chat without leaving a duplicate. “Don’t work in a workspace” creates a private, collision-safe `~/aiden/<word-word-word>` scratch folder using three- or four-letter words, persists it as an Ask-mode workspace, and binds the chat to it. Chats with messages cannot be moved this way.
-- Git helpers report branch and uncommitted count, switch branches, and create branches.
+- Git IPC is workspace-ID scoped: main re-resolves the stored directory and rejects No Access workspaces instead of accepting renderer-provided paths. Folder grants come from a main-process system picker. Permission changes, workspace removal, and renderer teardown abort active Git operations.
+- `main/services/git.ts` runs direct argv-only, noninteractive Git subprocesses with bounded output, read/mutation timeouts, process-group cancellation, path/credential-redacted failures, inherited Git-routing-variable removal, NUL-safe porcelain parsing, one-second bounded caches with mutation epochs, and a mutation queue keyed by Git's canonical common directory.
+- Git status reports the current, detached, or unborn ref, uncommitted count, upstream, ahead/behind divergence, default branch, remotes, and local/remote refs. Tracking information uses local refs and is labeled “last fetched”; Aiden never fetches implicitly. The composer branch menu polls local state, switches or creates local branches, and can create an isolated branch checkout under Electron `userData/worktrees`.
+- Managed worktrees are persisted as separate workspaces with the source permission and ownership provenance. Creation preserves nested workspace scope and rolls back both Git and filesystem state on failure. Explicit deletion refuses dirty checkouts and deletes the managed branch only when it still points to its original creation commit.
 - Agent Skills are loaded from workspace and user `.agents/*/SKILL.md` folders.
 - MCP supports stdio, HTTP, and SSE transports plus native-app OAuth with a loopback PKCE redirect and encrypted tokens.
 - Optional Exa search becomes an agent tool when enabled and configured.
@@ -32,8 +35,8 @@
 ## Models, attachments, and voice
 
 - Providers support OpenAI-compatible and Anthropic-compatible APIs, with presets for common hosted services and local Ollama/LM Studio endpoints.
-- A new chat immediately uses the first prompt or attachment name as a temporary title, then generates a concise title in the background with that chat's selected model. Manual renames win over late generated results; title failures leave the temporary title in place. The title-model resolver is isolated so a dedicated model picker can override the chat model later.
-- The models.dev catalog is cached for 24 hours and supplies vision, tool, reasoning, open-weight, and context metadata.
+- A new chat immediately uses the first prompt or attachment name as a temporary title, then generates a concise title in the background. Provider Settings offers Automatic, Apple Foundation Models, or the selected chat model. Automatic prefers Apple on supported macOS 26+ Apple Intelligence hardware when the model is ready; the Apple-only mode never silently falls back to a network model after a native attempt. Manual renames win over late generated results, and failures leave the temporary title in place. Successful background title replacements fade the temporary sidebar title out over 200ms, then run a 500ms character-by-character opacity and 2px-rise reveal; Reduce Motion renders the final title immediately.
+- A release-generated static model-capability snapshot supplies vision, tool, reasoning, open-weight, and context metadata. The app reads it locally from the package and never refreshes it at runtime.
 - Text files are inlined with size limits; images are base64 encoded and sent only to vision-capable models.
 - Cloud transcription supports configured OpenAI and Gemini providers.
 - Local transcription uses bundled `sherpa-onnx-node` and downloaded Parakeet models. PCM conversion happens in the renderer; recognition happens in the main process.
@@ -41,7 +44,8 @@
 ## Privacy boundary
 
 - Local data and credentials remain on the Mac unless a configured feature sends a request.
-- Hosted model calls, cloud transcription, Exa, remote MCP servers, models.dev catalog refreshes, and model downloads require network access and share the minimum data needed for that request.
+- Apple Foundation Models title prompts stay on-device. Electron main launches the bundled background helper app through LaunchServices and exchanges one bounded, versioned JSON request through a private temporary directory that is deleted after completion.
+- Hosted model calls, cloud transcription, Exa, remote MCP servers, and model downloads require network access and share the minimum data needed for that request. Model-catalog refreshes happen only while creating release artifacts.
 - A local-only session requires a local model endpoint, local voice, Exa disabled, and no remote MCP servers.
 
 ## Important files
@@ -57,7 +61,12 @@
 - `main/services/coding-tools.ts` — workspace-confined tools.
 - `main/services/config-store.ts` — providers, settings, skills, MCP servers, and workspaces.
 - `main/services/chat-store.ts` — persisted chat history.
+- `main/services/chat-title.ts` and `main/services/chat-title-routing.ts` — title policy, native/chat-model routing, seed fallback, and manual-rename safety.
+- `main/services/foundation-models-connection.ts` — macOS platform boundary and signed helper-app transport; its adjacent core module owns pure availability and protocol policy.
+- `native/apple-foundation-models` — SwiftPM helper app, versioned JSON protocol, structured Foundation Models title generation, and native tests.
 - `main/services/scratch-workspace.ts` — readable three-word scratch names and exclusive `~/aiden` directory creation.
+- `main/services/git.ts` — structured Git process boundary, status parsing/cache, per-repository mutation serialization, branch actions, and managed worktrees.
+- `main/services/git.test.ts` — real-repository coverage for unusual paths/refs, divergence, concurrency, process bounds, and worktree lifecycle.
 - `renderer/components/workspace-picker.tsx` — the new-chat searchable workspace/scratch option plate.
 - `main/services/secrets.ts` and `main/services/mcp-oauth-store.ts` — encrypted secrets.
 - `main/services/mcp.ts` and `main/services/mcp-oauth.ts` — MCP clients and OAuth.
@@ -74,6 +83,9 @@
 
 ## Current verification status
 
+- Generated-title reveal: notification-scoped sidebar animation, a 200ms temporary-title fade followed by a bounded 500ms per-character reveal, accessible unsplit text, and reduced-motion behavior are implemented without another animation dependency. Three focused timing/order tests bring the TypeScript suite to 64 tests; type-check, lint, and production build pass.
+- Apple Foundation Models titles: the macOS-gated helper, title routing, Provider Settings state, process ownership, cancellation, immediate prompt-file deletion, package filtering, and nested helper signature passed two fresh reviews against the Foundation Models skills repository and T3 Code. All validated findings were fixed. The 61-test TypeScript suite, 4-test Swift suite, type-check, lint, production build, unpacked package, clean asar inspection, strict helper signature check, and real development/packaged on-device title generation pass. The pre-existing outer-app sealed-resources signing issue remains separate.
+- Git foundation: 15 focused real-repository tests and the full 37-test suite pass, along with type-check, lint, and the production renderer/main/preload build. Three independent backend, correctness, and UI reviews were completed against T3 Code and the documented ChatGPT/Codex references; their workspace authorization, cancellation/rollback, cache-race, linked-worktree, process isolation, managed cleanup, and interaction-state findings were resolved. An earlier live Electron pass verified the compact menu, creation disclosure, autofocus, consequence copy, and layered Escape/focus return; the post-review recheck was blocked by a locked Mac, so its changed states were source/build validated.
 - New-chat workspace plate: the searchable anchored UI, keyboard filtering, and existing-workspace reassignment passed live Electron inspection. Scratch naming, collision retry, and empty-chat-only moves are covered by focused tests; the full 22-test suite, type-check, lint, production renderer build, and Electron main/preload build pass.
 - The 2026-07-19 production UI/trust pass completed three phase-specific two-reviewer loops and a final two-reviewer whole-diff pass. Shared interactions, permissions/approvals, compact navigation, content-aware scroll edges, and responsive composer controls pass the repository's 18-test suite, type-check, lint, production build, signed macOS packaging, live light/dark inspection, and packaged-app settings/IPC smoke verification. The critical cancellation, focus, and scroll paths were source/runtime/reviewer validated but still need dedicated automated tests.
 - Shared standard and confirmation modal entrances use a centered `.98` to `1` scale, 4px rise, and slight fade-in; reduced-motion mode removes the transform.
