@@ -6,6 +6,10 @@ import { terminalService } from "./services/terminal.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import { initShortcut, initDictationShortcut, applyShortcutFromSettings, disposeShortcut } from "./services/shortcut.js";
 import { mcpManager } from "./services/mcp.js";
+import {
+  disposeFoundationModelsConnection,
+  foundationModelsConnection,
+} from "./services/foundation-models-connection.js";
 
 app.setName("Aiden Agent");
 registerNativeHandlers();
@@ -52,9 +56,10 @@ async function createMainWindow(): Promise<void> {
   });
 
   const createdWindow = mainWindow;
+  const createdWebContentsId = createdWindow.webContents.id;
   createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("closed", () => {
-    terminalService.closeForWebContents(createdWindow.webContents.id);
+    terminalService.closeForWebContents(createdWebContentsId);
     mainWindow = null;
   });
 
@@ -135,11 +140,13 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", () => {
+  void foundationModelsConnection.status({ force: true });
   showMainWindow();
 });
 
 app.on("before-quit", () => {
   disposeShortcut();
+  disposeFoundationModelsConnection();
   void mcpManager.closeAll();
 });
 
@@ -155,6 +162,7 @@ app.whenReady().then(async () => {
     ipcMain.broadcast("app:dictate-toggle", {});
   });
   void applyShortcutFromSettings();
+  void foundationModelsConnection.status();
 
   await createMainWindow();
 }).catch((error: unknown) => {
