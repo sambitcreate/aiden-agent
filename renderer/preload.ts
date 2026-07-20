@@ -26,6 +26,7 @@ const INVOKE_PREFIXES = [
   "shortcut:",
   "skills:",
   "terminal:",
+  "titleProviders:",
   "voice:",
   "workspaces:",
 ] as const;
