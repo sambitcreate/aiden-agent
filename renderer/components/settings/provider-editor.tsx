@@ -14,6 +14,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Text,
   toast,
 } from "../ui";
@@ -40,11 +41,20 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
   const [label, setLabel] = React.useState(provider.label);
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
+  const [needsKey, setNeedsKey] = React.useState(provider.needsKey);
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
-  const [defaultModel, setDefaultModel] = React.useState(provider.defaultModel ?? provider.models[0] ?? "");
+  const [defaultModel, setDefaultModel] = React.useState(
+    provider.defaultModel ?? provider.models[0] ?? "",
+  );
   const [testing, setTesting] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+  const [modelsStale, setModelsStale] = React.useState(false);
+  const [connectionNotice, setConnectionNotice] = React.useState<{
+    message: string;
+    error: boolean;
+  } | null>(null);
   const modelInfo = useModelInfo(provider.id, models);
 
   // Reset drafts whenever a different provider is opened.
@@ -53,17 +63,14 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       setLabel(provider.label);
       setBaseUrl(provider.baseUrl);
       setKind(provider.kind);
+      setNeedsKey(provider.needsKey);
       setKeyDraft("");
       setModels(provider.models);
       setDefaultModel(provider.defaultModel ?? provider.models[0] ?? "");
+      setModelsStale(false);
+      setConnectionNotice(null);
     }
   }, [open, provider]);
-
-  const persistKeyIfNeeded = async () => {
-    if (keyDraft.trim()) {
-      await providersApi.setKey(provider.id, keyDraft.trim());
-    }
-  };
 
   const buildDraft = (): Omit<Provider, "hasKey"> => ({
     id: provider.id,
@@ -72,17 +79,47 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     baseUrl: baseUrl.trim() || provider.baseUrl,
     models,
     defaultModel: defaultModel || undefined,
-    needsKey: provider.needsKey,
+    needsKey,
     isPreset: provider.isPreset,
   });
+
+  const applyDiscoveredModels = (list: string[]) => {
+    setModels(list);
+    setDefaultModel((current) => (list.includes(current) ? current : (list[0] ?? "")));
+    setModelsStale(false);
+  };
+
+  const markDiscoveryStale = () => {
+    setModelsStale(true);
+    setConnectionNotice({
+      message: "Connection settings changed. Test or refresh models again before saving.",
+      error: true,
+    });
+  };
 
   const handleTest = async () => {
     setTesting(true);
     try {
       const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
-      toast.success(`Connected — ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} available.`);
+      applyDiscoveredModels(result.models);
+      if (result.models.length > 0) {
+        setConnectionNotice({
+          message: `${result.modelCount} model${result.modelCount === 1 ? "" : "s"} found. Save to use them.`,
+          error: false,
+        });
+        toast.success(
+          `Connected — ${result.modelCount} model${result.modelCount === 1 ? "" : "s"} loaded. Save to use them.`,
+        );
+      } else {
+        const message =
+          "Connected, but no models were found. Load one in the local server, then refresh models.";
+        setConnectionNotice({ message, error: true });
+        toast.info(message);
+      }
     } catch (error) {
-      toast.error(`Connection failed: ${error instanceof Error ? error.message : String(error)}`);
+      const message = `Connection failed: ${error instanceof Error ? error.message : String(error)}`;
+      setConnectionNotice({ message, error: true });
+      toast.error(message);
     } finally {
       setTesting(false);
     }
@@ -92,21 +129,51 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     setRefreshing(true);
     try {
       const list = await providersApi.listModels(buildDraft(), keyDraft.trim() || undefined);
-      setModels(list);
-      if (!list.includes(defaultModel)) setDefaultModel(list[0] ?? "");
-      toast.success(`Loaded ${list.length} model${list.length === 1 ? "" : "s"}.`);
+      applyDiscoveredModels(list);
+      if (list.length > 0) {
+        setConnectionNotice({
+          message: `${list.length} model${list.length === 1 ? "" : "s"} loaded. Save to use them.`,
+          error: false,
+        });
+        toast.success(
+          `Loaded ${list.length} model${list.length === 1 ? "" : "s"}. Save to use them.`,
+        );
+      } else {
+        const message = "No models were found. Load one in the local server, then refresh models.";
+        setConnectionNotice({ message, error: true });
+        toast.info(message);
+      }
     } catch (error) {
-      toast.error(`Couldn't load models: ${error instanceof Error ? error.message : String(error)}`);
+      const message = `Couldn't load models: ${error instanceof Error ? error.message : String(error)}`;
+      setConnectionNotice({ message, error: true });
+      toast.error(message);
     } finally {
       setRefreshing(false);
     }
   };
 
   const handleSave = async () => {
-    await persistKeyIfNeeded();
-    await providersApi.save(buildDraft());
-    onSaved();
-    onOpenChange(false);
+    if (modelsStale) {
+      const message = "Connection settings changed. Test or refresh models again before saving.";
+      setConnectionNotice({ message, error: true });
+      toast.error(message);
+      return;
+    }
+    setSaving(true);
+    try {
+      await providersApi.save(buildDraft(), keyDraft.trim() || undefined);
+      if (models.length === 0) {
+        toast.info("Saved without models. Test or refresh this provider before sending a chat.");
+      }
+      onSaved();
+      onOpenChange(false);
+    } catch (error) {
+      const message = `Couldn't save provider: ${error instanceof Error ? error.message : String(error)}`;
+      setConnectionNotice({ message, error: true });
+      toast.error(message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -116,6 +183,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       title={`Configure ${provider.label}`}
       size="large"
       confirmLabel="Save"
+      confirmDisabled={saving || testing || refreshing}
       onConfirm={handleSave}
     >
       <FieldSet>
@@ -123,13 +191,33 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           <Input value={label} onChange={(e) => setLabel(e.target.value)} />
         </Field>
 
-        <Field label="Base URL" description={provider.isPreset ? "Base address used for API requests." : "Base address of an OpenAI- or Anthropic-compatible API."}>
-          <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+        <Field
+          label="Base URL"
+          description={
+            provider.isPreset
+              ? "Base address used for API requests."
+              : "Base address of an OpenAI- or Anthropic-compatible API."
+          }
+        >
+          <Input
+            value={baseUrl}
+            onChange={(e) => {
+              setBaseUrl(e.target.value);
+              markDiscoveryStale();
+            }}
+            placeholder="https://api.example.com/v1"
+          />
         </Field>
 
         {!provider.isPreset ? (
           <Field label="API format">
-            <Select value={kind} onValueChange={(v) => setKind(v as ProviderKind)}>
+            <Select
+              value={kind}
+              onValueChange={(v) => {
+                setKind(v as ProviderKind);
+                markDiscoveryStale();
+              }}
+            >
               <SelectTrigger size="small">
                 <SelectValue />
               </SelectTrigger>
@@ -141,28 +229,75 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           </Field>
         ) : null}
 
-        {provider.needsKey ? (
+        {!provider.isPreset ? (
+          <Field
+            label="Authentication"
+            description={
+              needsKey
+                ? "This endpoint requires a bearer API key."
+                : "No saved API key is required. A non-secret compatibility placeholder is sent to trusted local or LAN servers."
+            }
+          >
+            <div className="flex items-center justify-between gap-3">
+              <Text variant="small">API key required</Text>
+              <Switch
+                checked={needsKey}
+                onCheckedChange={(value) => {
+                  setNeedsKey(value);
+                  markDiscoveryStale();
+                }}
+                aria-label="API key required"
+              />
+            </div>
+          </Field>
+        ) : null}
+
+        {needsKey ? (
           <Field
             label="API key"
-            description={provider.hasKey ? "A key is saved. Enter a new value to replace it." : "Stored encrypted on this device."}
+            description={
+              provider.hasKey
+                ? "A key is saved. Enter it again to test a changed endpoint; it will not be sent to a different address."
+                : "Stored encrypted on this device."
+            }
           >
             <Input
               type="password"
               value={keyDraft}
-              onChange={(e) => setKeyDraft(e.target.value)}
+              onChange={(e) => {
+                setKeyDraft(e.target.value);
+                markDiscoveryStale();
+              }}
               placeholder={provider.hasKey ? "••••••••••••" : "Paste your API key"}
             />
           </Field>
         ) : null}
 
         <Field label="Connection">
-          <div className="flex gap-2">
-            <Button size="small" variant="filled" onClick={handleTest} disabled={testing}>
-              {testing ? "Testing…" : "Test"}
-            </Button>
-            <Button size="small" variant="filled" onClick={handleRefreshModels} disabled={refreshing}>
-              {refreshing ? "Loading…" : "Refresh models"}
-            </Button>
+          <div className="grid gap-2">
+            <div className="flex gap-2">
+              <Button
+                size="small"
+                variant="filled"
+                onClick={handleTest}
+                disabled={testing || refreshing || saving}
+              >
+                {testing ? "Testing…" : "Test"}
+              </Button>
+              <Button
+                size="small"
+                variant="filled"
+                onClick={handleRefreshModels}
+                disabled={refreshing || testing || saving}
+              >
+                {refreshing ? "Loading…" : "Refresh models"}
+              </Button>
+            </div>
+            {connectionNotice ? (
+              <Text variant="small" color={connectionNotice.error ? "red" : "tertiary"} as="p">
+                {connectionNotice.message}
+              </Text>
+            ) : null}
           </div>
         </Field>
 
@@ -183,7 +318,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           </Field>
         ) : (
           <Text variant="small" color="tertiary">
-            No models loaded. Refresh models after entering a valid endpoint and API key.
+            {`No models loaded. Test or refresh models after entering a valid endpoint${needsKey ? " and API key." : "."}`}
           </Text>
         )}
       </FieldSet>
