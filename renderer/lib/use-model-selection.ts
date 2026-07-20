@@ -1,5 +1,6 @@
 // App-wide provider+model selection, persisted in localStorage (UI preference,
-// not routed state). Falls back to the first usable provider once data loads.
+// not routed state). Defaults once when no selection exists, but never silently
+// reroutes an existing selection to another provider.
 
 import * as React from "react";
 import { isUsable } from "../components/model-picker";
@@ -9,24 +10,28 @@ const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
 
 export function useModelSelection(providers: Provider[] | undefined) {
-  const [providerId, setProviderId] = React.useState(() => localStorage.getItem(PROVIDER_KEY) ?? "");
+  const [providerId, setProviderId] = React.useState(
+    () => localStorage.getItem(PROVIDER_KEY) ?? "",
+  );
   const [model, setModel] = React.useState(() => localStorage.getItem(MODEL_KEY) ?? "");
 
-  // Once providers load, ensure the selection points at a usable provider/model.
+  // Once providers load, choose an initial usable provider only when there is no
+  // saved selection. A removed or unavailable provider must remain explicit so a
+  // later chat cannot unexpectedly go to a hosted connection.
   React.useEffect(() => {
     if (!providers?.length) return;
+    if (providerId || model) return;
     const usable = providers.filter(isUsable);
-    const current = usable.find((p) => p.id === providerId);
-    const modelValid = current?.models.includes(model);
-    if (!current || !modelValid) {
-      const first = usable[0];
-      if (first) {
-        const nextModel = first.defaultModel && first.models.includes(first.defaultModel) ? first.defaultModel : first.models[0];
-        setProviderId(first.id);
-        setModel(nextModel);
-        localStorage.setItem(PROVIDER_KEY, first.id);
-        localStorage.setItem(MODEL_KEY, nextModel);
-      }
+    const first = usable[0];
+    if (first) {
+      const nextModel =
+        first.defaultModel && first.models.includes(first.defaultModel)
+          ? first.defaultModel
+          : first.models[0];
+      setProviderId(first.id);
+      setModel(nextModel);
+      localStorage.setItem(PROVIDER_KEY, first.id);
+      localStorage.setItem(MODEL_KEY, nextModel);
     }
   }, [providers, providerId, model]);
 
