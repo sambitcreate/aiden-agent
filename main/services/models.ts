@@ -11,6 +11,13 @@ interface ModelsResponse {
   models?: ModelEntry[];
 }
 
+export interface ConnectionTestResult {
+  ok: true;
+  modelCount: number;
+  /** The discovered ids let Settings hydrate its draft without another request. */
+  models: string[];
+}
+
 function headersFor(provider: StoredProvider, apiKey: string | null): Record<string, string> {
   if (provider.kind === "anthropic") {
     return {
@@ -22,12 +29,17 @@ function headersFor(provider: StoredProvider, apiKey: string | null): Record<str
 }
 
 /** Fetch the model list. Returns [] if the endpoint doesn't support it. */
-export async function listModels(provider: StoredProvider, apiKey: string | null): Promise<string[]> {
+export async function listModels(
+  provider: StoredProvider,
+  apiKey: string | null,
+): Promise<string[]> {
   const url = `${provider.baseUrl.replace(/\/$/, "")}/models`;
   const response = await fetch(url, { headers: headersFor(provider, apiKey) });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Failed to list models: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+    throw new Error(
+      `Failed to list models: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+    );
   }
   const json = (await response.json()) as ModelsResponse;
   const ids = (json.data ?? json.models ?? [])
@@ -37,7 +49,10 @@ export async function listModels(provider: StoredProvider, apiKey: string | null
 }
 
 /** Lightweight connectivity/auth check. Throws with a specific message on failure. */
-export async function testConnection(provider: StoredProvider, apiKey: string | null): Promise<{ ok: true; modelCount: number }> {
+export async function testConnection(
+  provider: StoredProvider,
+  apiKey: string | null,
+): Promise<ConnectionTestResult> {
   const models = await listModels(provider, apiKey);
-  return { ok: true, modelCount: models.length };
+  return { ok: true, modelCount: models.length, models };
 }
