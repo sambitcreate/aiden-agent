@@ -1,7 +1,7 @@
 // React Query hooks for providers, chats, and settings.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { chatsApi, exaApi, gitApi, localVoiceApi, mcpApi, modelsApi, providersApi, settingsApi, skillsApi, workspacesApi } from "./ipc";
+import { chatsApi, exaApi, gitApi, localVoiceApi, mcpApi, modelsApi, providersApi, settingsApi, skillsApi, titleProvidersApi, workspacesApi } from "./ipc";
 import type { Provider } from "./types";
 
 export const queryKeys = {
@@ -10,14 +10,16 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  foundationModelsConnection: ["foundationModelsConnection"] as const,
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
   exa: ["exa"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
-  git: (folderPath: string | undefined) => ["git", folderPath ?? "none"] as const,
-  gitBranches: (folderPath: string | undefined) => ["gitBranches", folderPath ?? "none"] as const,
+  git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
+  gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
+  gitWorktrees: (workspaceId: string | undefined) => ["gitWorktrees", workspaceId ?? "none"] as const,
   discoveredSkills: (folderPath: string | undefined) => ["discoveredSkills", folderPath ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
@@ -37,7 +39,7 @@ export function useWorkspaces() {
   return useQuery({ queryKey: queryKeys.workspaces, queryFn: workspacesApi.list });
 }
 
-/** models.dev capability info for a provider's models, keyed by model id. */
+/** Release-bundled capability info for a provider's models, keyed by model id. */
 export function useModelInfo(providerId: string | undefined, modelIds: string[]) {
   const key = [...modelIds].sort().join(",");
   return useQuery({
@@ -48,21 +50,31 @@ export function useModelInfo(providerId: string | undefined, modelIds: string[])
   });
 }
 
-export function useGitInfo(folderPath: string | undefined) {
+export function useGitInfo(workspaceId: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.git(folderPath),
-    queryFn: () => workspacesApi.gitInfo(folderPath as string),
-    enabled: Boolean(folderPath),
-    staleTime: 15_000,
+    queryKey: queryKeys.git(workspaceId),
+    queryFn: () => workspacesApi.gitInfo(workspaceId as string),
+    enabled: Boolean(workspaceId),
+    refetchInterval: 5_000,
+    staleTime: 1_000,
   });
 }
 
-export function useGitBranches(folderPath: string | undefined, enabled = true) {
+export function useGitWorktrees(workspaceId: string | undefined, enabled = true) {
   return useQuery({
-    queryKey: queryKeys.gitBranches(folderPath),
-    queryFn: () => gitApi.branches(folderPath as string),
-    enabled: Boolean(folderPath) && enabled,
-    staleTime: 10_000,
+    queryKey: queryKeys.gitWorktrees(workspaceId),
+    queryFn: () => gitApi.worktrees(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    staleTime: 1_000,
+  });
+}
+
+export function useGitBranches(workspaceId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.gitBranches(workspaceId),
+    queryFn: () => gitApi.branches(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    staleTime: 1_000,
   });
 }
 
@@ -84,6 +96,16 @@ export function useChat(id: string | undefined) {
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
+}
+
+export function useFoundationModelsConnection() {
+  return useQuery({
+    queryKey: queryKeys.foundationModelsConnection,
+    queryFn: titleProvidersApi.status,
+    refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      query.state.data?.state === "model_preparing" ? 5_000 : false,
+  });
 }
 
 export function useSkills() {
