@@ -2,9 +2,13 @@
 // one-shot model tasks such as generated chat titles.
 
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
-import type { Api, Model, ProviderStreams } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
-import { resolveRuntimeApiKey } from "./generation-runtime.js";
+import {
+  resolveRuntimeApiKey,
+  resolveRuntimeBaseUrl,
+  resolveRuntimeHeaders,
+} from "./generation-runtime.js";
 import { secrets } from "./secrets.js";
 import type { StoredProvider } from "./types.js";
 
@@ -27,7 +31,7 @@ function buildModel(provider: StoredProvider, modelId: string): Model<Api> {
     name: modelId,
     api: apiFor(provider),
     provider: provider.id,
-    baseUrl: provider.baseUrl,
+    baseUrl: resolveRuntimeBaseUrl(provider),
     reasoning: false,
     input: ["text"],
     cost: ZERO_COST,
@@ -40,6 +44,7 @@ export interface ResolvedModelRuntime {
   provider: StoredProvider;
   model: Model<Api>;
   apiKey: string | undefined;
+  headers: ProviderHeaders | undefined;
   streams: ProviderStreams;
 }
 
@@ -61,6 +66,7 @@ export async function resolveModelRuntime(
     provider,
     model,
     apiKey,
+    headers: resolveRuntimeHeaders(provider),
     streams: streamsFor(model.api),
   };
 }
