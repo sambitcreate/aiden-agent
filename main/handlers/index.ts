@@ -13,6 +13,7 @@ import { registerAttachmentHandlers } from "./attachments.js";
 import { registerPhase2Handlers } from "./phase2.js";
 import { registerLocalVoiceHandlers } from "./local-voice.js";
 import { registerTerminalHandlers } from "./terminal.js";
+import { registerTitleProviderHandlers } from "./title-providers.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -33,6 +34,7 @@ export function registerHandlers(): void {
   registerPhase2Handlers();
   registerLocalVoiceHandlers();
   registerTerminalHandlers();
+  registerTitleProviderHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 
