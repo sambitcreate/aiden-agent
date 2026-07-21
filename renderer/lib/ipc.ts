@@ -7,12 +7,23 @@ import type {
   Chat,
   ChatMeta,
   ChatMessage,
+  ChatTitleRenameResult,
   ChatStartParams,
   DiscoveredSkill,
   EngineStatus,
   ExternalEditor,
   GitBranches,
+  GitCommitInput,
+  GitCommitResult,
+  GitComparison,
+  GitComparisonDiffInput,
+  GitDiffInput,
+  GitFileDiff,
   GitInfo,
+  GitPushCapability,
+  GitPushInput,
+  GitPushResult,
+  GitReview,
   GitWorktree,
   LocalVoiceModel,
   McpServer,
@@ -20,8 +31,12 @@ import type {
   ModelInfo,
   FoundationModelsConnectionStatus,
   Provider,
+  ProviderModelMetadata,
   Skill,
   Workspace,
+  WorkspaceFileDocument,
+  WorkspaceFileIndex,
+  WorkspaceFileWriteResult,
   WorkspacePermission,
 } from "./types";
 
@@ -37,6 +52,13 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
 
+export const appApi = {
+  setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
+    invoke<boolean>("app:setCloseGuard", guard),
+  setDockIcon: (preference: "aiden" | "monochrome") =>
+    invoke<boolean>("app:setDockIcon", preference),
+};
+
 // ── Providers & settings ──────────────────────────────────────────────
 export const providersApi = {
   list: () => invoke<Provider[]>("providers:list"),
@@ -46,11 +68,12 @@ export const providersApi = {
   setKey: (id: string, key: string) =>
     invoke<{ hasKey: boolean; provider: Provider | null }>("providers:setKey", id, key),
   test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
-    invoke<{ ok: true; modelCount: number; models: string[] }>(
-      "providers:test",
-      provider,
-      keyOverride,
-    ),
+    invoke<{
+      ok: true;
+      modelCount: number;
+      models: string[];
+      modelMetadata: Record<string, ProviderModelMetadata>;
+    }>("providers:test", provider, keyOverride),
   listModels: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<string[]>("providers:listModels", provider, keyOverride),
 };
@@ -61,10 +84,8 @@ export const settingsApi = {
 };
 
 export const titleProvidersApi = {
-  status: () =>
-    invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
-  refresh: () =>
-    invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
+  status: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
+  refresh: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────
@@ -98,7 +119,8 @@ export const exaApi = {
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
 export const voiceApi = {
-  transcribe: (audioBase64: string, mimeType: string) => invoke<string>("voice:transcribe", audioBase64, mimeType),
+  transcribe: (audioBase64: string, mimeType: string) =>
+    invoke<string>("voice:transcribe", audioBase64, mimeType),
   /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
   transcribeLocal: (pcmBase64: string, modelId: string) =>
     invoke<string>("voice:transcribeLocal", pcmBase64, modelId),
@@ -134,7 +156,9 @@ export async function pickFolder(): Promise<string | null> {
 
 /** Native multi-file picker for composer attachments. Returns [] if cancelled. */
 export async function pickFiles(): Promise<string[]> {
-  const res = await window.aidenAPI.dialog.showOpenDialog({ properties: ["openFile", "multiSelections"] });
+  const res = await window.aidenAPI.dialog.showOpenDialog({
+    properties: ["openFile", "multiSelections"],
+  });
   if (res.canceled || !res.filePaths?.length) return [];
   return res.filePaths;
 }
@@ -166,6 +190,17 @@ export const workspacesApi = {
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
   openInEditor: (workspaceId: string, editorId: string) =>
     invoke<void>("workspaces:openInEditor", workspaceId, editorId),
+  files: (workspaceId: string) => invoke<WorkspaceFileIndex>("workspaces:files", workspaceId),
+  readFile: (workspaceId: string, path: string) =>
+    invoke<WorkspaceFileDocument>("workspaces:readFile", workspaceId, path),
+  writeFile: (workspaceId: string, path: string, content: string, expectedVersion: string) =>
+    invoke<WorkspaceFileWriteResult>(
+      "workspaces:writeFile",
+      workspaceId,
+      path,
+      content,
+      expectedVersion,
+    ),
 };
 
 // ── Interactive terminal ─────────────────────────────────────────────
@@ -184,15 +219,30 @@ export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
   write: (sessionId: string, data: string) => invoke<void>("terminal:write", sessionId, data),
-  resize: (sessionId: string, cols: number, rows: number) => invoke<void>("terminal:resize", sessionId, cols, rows),
+  resize: (sessionId: string, cols: number, rows: number) =>
+    invoke<void>("terminal:resize", sessionId, cols, rows),
   close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
 };
 
 // ── Git ───────────────────────────────────────────────────────────────
 export const gitApi = {
+  review: (workspaceId: string) => invoke<GitReview>("git:review", workspaceId),
+  diff: (workspaceId: string, input: GitDiffInput) =>
+    invoke<GitFileDiff>("git:diff", workspaceId, input),
+  commit: (workspaceId: string, input: GitCommitInput) =>
+    invoke<GitCommitResult>("git:commit", workspaceId, input),
+  pushCapability: (workspaceId: string) =>
+    invoke<GitPushCapability>("git:pushCapability", workspaceId),
+  push: (workspaceId: string, input: GitPushInput) =>
+    invoke<GitPushResult>("git:push", workspaceId, input),
+  compare: (workspaceId: string, targetRef: string) =>
+    invoke<GitComparison>("git:compare", workspaceId, targetRef),
+  comparisonDiff: (workspaceId: string, input: GitComparisonDiffInput) =>
+    invoke<GitFileDiff>("git:comparisonDiff", workspaceId, input),
   branches: (workspaceId: string) => invoke<GitBranches>("git:branches", workspaceId),
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
-  createBranch: (workspaceId: string, name: string) => invoke<void>("git:createBranch", workspaceId, name),
+  createBranch: (workspaceId: string, name: string) =>
+    invoke<void>("git:createBranch", workspaceId, name),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
@@ -207,12 +257,19 @@ export const chatsApi = {
   create: (input: { title?: string; workspaceId?: string; providerId?: string; model?: string }) =>
     invoke<Chat>("chats:create", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
+  renameWithFoundationModels: (id: string) =>
+    invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   appendMessage: (
     id: string,
-    message: { role: ChatMessage["role"]; content: string; model?: string; attachments?: Attachment[] },
+    message: {
+      role: ChatMessage["role"];
+      content: string;
+      model?: string;
+      attachments?: Attachment[];
+    },
     meta?: { providerId?: string; model?: string; autoTitle?: boolean },
   ) => invoke<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
@@ -272,7 +329,10 @@ function makeStreamId(): string {
  * (filtered by a client-generated streamId) BEFORE kicking off the backend, so
  * no opening tokens are missed. Auto-unsubscribes on done/error.
  */
-export function startGeneration(params: ChatStartParams, callbacks: StreamCallbacks): GenerationHandle {
+export function startGeneration(
+  params: ChatStartParams,
+  callbacks: StreamCallbacks,
+): GenerationHandle {
   const streamId = makeStreamId();
   const unsubs: Array<() => void> = [];
   const dispose = () => {
@@ -289,7 +349,9 @@ export function startGeneration(params: ChatStartParams, callbacks: StreamCallba
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
       void Promise.resolve(callbacks.onDone(p.content))
-        .catch((error: unknown) => callbacks.onError(error instanceof Error ? error.message : String(error)))
+        .catch((error: unknown) =>
+          callbacks.onError(error instanceof Error ? error.message : String(error)),
+        )
         .finally(dispose);
     }),
   );
@@ -308,7 +370,11 @@ export function startGeneration(params: ChatStartParams, callbacks: StreamCallba
   unsubs.push(
     onNotification<ChatApproval>("chat:approval", (p) => {
       if (p.streamId === streamId)
-        callbacks.onApproval?.({ approvalId: p.approvalId, toolName: p.toolName, summary: p.summary });
+        callbacks.onApproval?.({
+          approvalId: p.approvalId,
+          toolName: p.toolName,
+          summary: p.summary,
+        });
     }),
   );
 
