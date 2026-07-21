@@ -1,5 +1,15 @@
 # Project History
 
+### 2026-07-21 — Add ChatGPT / Codex sign-in and Pi-native runtime
+
+- Exact-pinned `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` at `0.80.10`, adopted Pi's built-in `openai-codex` provider and seven-model catalog, and kept the seven existing API-key providers on their compatibility runtime without exposing a duplicate generic Codex card.
+- Added an encrypted, atomic, serialized type-tagged credential store and single-instance app boundary. Plaintext OAuth credentials stay in Electron main; renderer APIs expose only configuration/health snapshots and app-owned flow identifiers.
+- Added owner- and document-bound browser/device-code OAuth orchestration with sanitized prompts/events, HTTPS-only external links, opaque select values, cancellation/cleanup timeouts, explicit credential commit point-of-no-return, awaited quit durability, logout, and cross-window status broadcasts.
+- Added a compact dedicated ChatGPT Settings card with status, sign-in, device-code/copy/link, manual-code/text/secret/select prompts, cancellation/retry, repair, and confirmed sign-out. Reducer/session generations prevent stale callbacks or secret drafts from crossing prompt/flow boundaries, and focus/live-region behavior covers every asynchronous state.
+- Routed Codex chat and title requests through Pi's native provider stream with Pi-authoritative capabilities, per-Agent-turn OAuth refresh, a 60-second expiry safety window, bounded caller and shared-operation deadlines, guarded late one-time-token reconciliation, credential-generation dispatch barriers, automatic rotation, backend health, stale-model rejection, and chat-session identity. Pi `0.80.10` Codex requests are forced to SSE until its lazy WebSocket path checks cancellation before handshake construction.
+- Distinguished app-requested cancellation from credential-change interruption so partial old-generation responses are saved with an error instead of ordinary completion. Hardened abort fan-out and already-cancelled promise observation against Electron main-process crashes and unhandled rejections.
+- Implemented in five phases on an isolated worktree branch, with two independent memory/source-aware reviewer passes after every phase and repeated adversarial loops until both lanes were clean. Final verification passed 177 TypeScript tests, 4 Swift tests, type-check, lint, production build, `npm audit --omit=dev` with zero vulnerabilities, signed arm64 packaging, strict deep signature verification, asar content/version checks, and isolated packaged-app preload/provider/Codex IPC smoke. No live OAuth exchange or push was performed.
+
 ### 2026-07-20 — Add a spatial, magnetic model picker
 
 - Replaced the composer model dropdown with a Photographic Styles-inspired square Pad plus the preserved searchable List view. Horizontal position runs Faster → More deliberate; vertical position runs Everyday → More capable.
