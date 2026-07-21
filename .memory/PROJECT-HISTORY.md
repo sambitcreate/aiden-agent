@@ -1,5 +1,22 @@
 # Project History
 
+### 2026-07-21 — Add the paired light and dark Appearance workbench
+
+- Replaced the one-choice native theme screen with a full Appearance workbench: visual System/Light/Dark cards, live light-versus-dark code preview, four paired theme presets, independent light/dark colors, font families, sidebar translucency, contrast, JSON import/copy, and app-wide preference controls.
+- Added a versioned shared appearance contract plus startup cache/prepaint. Semantic colors now reach the complete renderer, syntax highlighting, terminal, file/editor code, and review diffs; UI/code size, pointer cursors, font smoothing, explicit diff markers, and resolved reduce-motion preferences update live.
+- Raised the default dark canvas from near-black to graphite `#181B21` with visibly layered sidebar and raised surfaces. Custom themes require readable text and accent contrast; unsafe drafts remain recoverable in the editor but cannot replace the applied or saved theme.
+- Added real color and monochrome Aiden Dock choices, packaged both PNG assets, restored the saved icon and native theme before window creation, and made native/save failures non-destructive and visibly retryable.
+- Completed two fresh independent architecture and UI reviews, then fixed their validated startup fallback, hydration race, full native-theme broadcast, strict import schema/version, named-preset mismatch, reduce-motion override, roving-radio keyboard, provider-context mount, and save-order findings.
+- Live isolated Electron QA passed in light and graphite dark modes, including clean Appearance navigation, unsafe-color recovery, native Reduce Motion override, keyboard focus, and Dock swaps. All 151 tests, type-check, lint, production build, signed arm64 packaging, strict deep signature verification, and packaged-app Appearance/Dock smoke checks pass; the existing renderer chunk-size warning remains.
+
+### 2026-07-20 — Bundle local-first and Artificial Analysis model metadata
+
+- Changed explicit LM Studio and Ollama discovery to use their native model endpoints, persist provider-reported names, model type, vision/tools/reasoning, context, parameters, and format, and exclude embedding models from chat selection.
+- Added bundled models.dev and Artificial Analysis snapshots with one guarded manual/release updater. The runtime precedence is local discovery metadata for local models, Artificial Analysis for hosted matches, then models.dev for missing models or fields; no public catalog runs inside the app.
+- Derived fixed capability and median end-to-end response-time percentiles for the spatial pad, added visible Artificial Analysis attribution, and kept local models off hosted benchmark positions. Unknown capability flags remain unknown so an unmatched catalog row no longer incorrectly blocks images.
+- Made snapshot refresh fail before network access without an API key and explicit redistribution-rights confirmation. The repository therefore carries a validated empty Artificial Analysis placeholder until an authorized refresh is available.
+- Added native-discovery, precedence, parser, ranking, pagination, licensing, packaging, embedding-filter, and pad-integration coverage. All 150 TypeScript/JavaScript tests, type-check, lint, production build, signed unpacked package, direct `app.asar` snapshot inspection, targeted formatting, and diff checks pass; the existing renderer chunk-size warning remains.
+
 ### 2026-07-20 — Add a spatial, magnetic model picker
 
 - Replaced the composer model dropdown with a Photographic Styles-inspired square Pad plus the preserved searchable List view. Horizontal position runs Faster → More deliberate; vertical position runs Everyday → More capable.
@@ -8,6 +25,38 @@
 - Kept the picker close to the old list footprint: a 316px main surface (about 10% wider than the prior 288px menu) containing only accessible `List`/`Pad` tabs and their active content. Provider/capability/context metadata moved into a separate 224px read-only hover/focus sidecar outside the picker; ranking copy, title/count/reset chrome, visible axes, and help copy were removed from the visual surface while remaining accessible where needed.
 - Added an optional fixed-snapshot `ModelRanking` seam without introducing runtime network access. Artificial Analysis research identified it as the best unified intelligence/response-time source, but customer-facing redistribution requires a Commercial agreement; current name/size estimates are labeled Estimated and unknown/local models are Unranked.
 - Verified exact live dimensions (316×350px main surface, 300px Pad, 224px sidecar), magnetic hover and restoration without changing the committed model, searchable List sizing, and roving tab keyboard access in Electron through the DevTools protocol. Added pure ranking/navigation/lattice tests; the full 71-test suite, type-check, lint, formatting check, and production build pass.
+
+### 2026-07-20 — Rename existing chats with Apple Foundation Models
+
+- Added `Rename with Apple` to each chat row's existing context menu, gated by the main-owned Apple Foundation Models availability state and paired with disabled, in-progress, success, unchanged, refusal, and recoverable-error feedback.
+- Built a bounded on-device rename prompt from the original user request, attachment names, and up to eight recent user/assistant messages; system instructions and attachment contents never enter the native request.
+- Reused the signed LaunchServices helper and metadata notification path, including the existing accessible title reveal, while compare-and-set persistence ensures a manual rename made during generation always wins.
+- Live isolated Electron QA verified the enabled menu item, row-level busy state, native refusal preservation, a successful 1.36-second on-device rename to `Add compact rename to chat rows`, and the completion toast. All 129 TypeScript tests, four native tests, type-check, lint, production build, and diff checks pass; the existing renderer chunk-size warning remains.
+
+### 2026-07-20 — Separate the Environment summary from Review and Files
+
+- Replaced the integrated Overview tab with a detached 380px top-right Environment card that leaves the chat at full width, interactive, and undimmed in both wide and compact layouts.
+- Kept Review and Files in the existing persistent, resizable work surface. Their wide inline and compact inert-overlay behavior is unchanged, and the mounted Files editor preserves its selected file and draft while the summary card is visible.
+- Made the toolbar and `⌘⇧E` open the summary first; Changes and Compare deep-link to Review, the header action exposes Review/Files/Compare destinations, and the expanded surface has a dedicated Summary control.
+- Preserved layered Escape and focus return, added a quiet `.98`/4px card entrance with a reduced-motion override, removed the hidden inline panel's residual border width, and kept only one accessible Environment overview mounted at a time.
+- Closed the Phase 4 two-reviewer loop after separating preferred and rendered width state, protecting a 560px minimum conversation region, isolating every compact-overlay background sibling, trapping focus, and retaining the card for its 120ms exit animation. Both fresh re-reviewers returned SHIP.
+- Updated both ChatGPT/Codex UI reference artifacts to document and demonstrate the detached summary plus expanded work-surface topology.
+- Live isolated-renderer checks passed for card geometry, non-modal conversation behavior, compact overlay and wide inline modes, Review/Files transitions, action menu, mounted editor state, and fresh-cycle Escape focus restoration. All 127 tests, type-check, lint, and the production renderer/main/preload build pass; the existing renderer chunk-size warning remains.
+
+### 2026-07-20 — Add the thread-adjacent Environment Review and Files workbench
+
+- Expanded the ChatGPT/Codex desktop audit into an explicit state inventory for the right-side shell, responsive modes, Git Review, unified diffs, file indexing, full-file editing, dirty/saving/conflict flows, and bounded/error states; added an interactive Review/Files tour to the HTML specimen.
+- Added a persistent, keyboard-accessible Environment panel with Review and Files tabs, `⌘⇧E`, pointer/keyboard resizing, wide inline and compact overlay layouts, focus return, reduced motion, and mounted drafts across tab/panel visibility changes.
+- Added workspace-authorized Git review and bounded per-file diffs for staged/unstaged, untracked, rename/copy, conflict, deletion, binary, truncated, clean, non-repository, loading, and recoverable-error states.
+- Added a bounded workspace tree and UTF-8 full-file editor with search, narrow list/detail navigation, native undo/redo, line gutter, wrap, `⌘S`, atomic SHA-256 version-checked saves, stale-file refusal, and destructive confirmation before discarding edits.
+- Verified the specimen and live Electron shell at wide and compact sizes. All 75 TypeScript tests, type-check, lint, and renderer/main/preload production builds pass; the existing large renderer-chunk warning remains.
+
+### 2026-07-20 — Normalize model names and disclose picker metadata
+
+- Refreshed the release-only models.dev snapshot and now prefer its canonical display names throughout the composer picker and Provider Settings without altering the exact IDs sent to providers.
+- Added deterministic name cleanup for unlisted and local models, including versions, parameter sizes, quantization/file-format tags, and common model-family capitalization.
+- Added a compact collision-aware details card for the active pointer or keyboard row with provider, inputs, capabilities, context, output limit, raw ID, and metadata provenance; equivalent summaries remain available to screen readers inside the menu.
+- Kept search compatible with friendly names, provider labels, raw IDs, and format tags. The live packaged picker and keyboard navigation pass alongside 67 tests, type-check, lint, and a signed DMG/ZIP distribution build.
 
 ### 2026-07-20 — Animate generated chat-title replacements
 
