@@ -3,7 +3,6 @@
 // in a separate, read-only detail surface beside the picker.
 
 import * as React from "react";
-import { useQueries } from "@tanstack/react-query";
 import {
   Button,
   Command,
@@ -21,15 +20,13 @@ import { cn } from "../lib/ui-utils";
 import {
   createModelEntries,
   encodeSelection,
-  isUsable,
   orderModelEntries,
   PINNED_MODELS_KEY,
   positionModels,
   type ModelEntry,
   type PositionedModel,
 } from "../lib/model-picker-data";
-import { modelsApi } from "../lib/ipc";
-import { queryKeys } from "../lib/queries";
+import { useProvidersModelInfo } from "../lib/queries";
 import type { ModelInfo, Provider } from "../lib/types";
 import { Check, ChevronsUpDown, Cloud, Cpu, Pin } from "lucide-react";
 
@@ -52,6 +49,52 @@ function formatTokens(value: number | undefined): string | null {
     return `${Number.isInteger(thousands) ? thousands : thousands.toFixed(1)}K`;
   }
   return String(value);
+}
+
+function formatInputs(info: ModelInfo | undefined): string {
+  if (!info?.matched) return "Not listed";
+  const inputs = info.inputModalities?.length
+    ? info.inputModalities
+    : info.vision === true
+      ? ["text", "image"]
+      : info.vision === false
+        ? ["text"]
+        : [];
+  if (inputs.length === 0) return "Unknown";
+  return inputs.map((input) => input.charAt(0).toLocaleUpperCase() + input.slice(1)).join(", ");
+}
+
+function formatCapabilities(info: ModelInfo | undefined): string {
+  if (!info?.matched) return "Not listed";
+  const capabilities = [
+    info.reasoning ? "Reasoning" : null,
+    info.toolCall ? "Tools" : null,
+    info.vision ? "Vision" : null,
+    info.openWeights ? "Open weights" : null,
+  ].filter((value): value is string => Boolean(value));
+  if (capabilities.length > 0) return capabilities.join(", ");
+  const hasKnownCapability = [info.reasoning, info.toolCall, info.vision, info.openWeights].some(
+    (value) => value !== undefined,
+  );
+  return hasKnownCapability ? "Standard generation" : "Unknown";
+}
+
+function describeModel(entry: ModelEntry): string {
+  const details = [
+    `Provider ${entry.providerLabel}`,
+    `Inputs ${formatInputs(entry.info)}`,
+    `Capabilities ${formatCapabilities(entry.info)}`,
+  ];
+  const context = formatTokens(entry.info?.contextLength);
+  const output = formatTokens(entry.info?.outputLimit);
+  if (context) details.push(`Context ${context} tokens`);
+  if (output) details.push(`Maximum output ${output} tokens`);
+  if (entry.ranking) details.push(`Benchmark ${entry.ranking.source}`);
+  else if (entry.info?.metadataSource === "artificial-analysis") {
+    details.push("Model data Artificial Analysis");
+  }
+  details.push(`Model ID ${entry.model}`);
+  return details.join(". ");
 }
 
 function readPinnedModels(): string[] {
@@ -88,15 +131,25 @@ function useExternalModelDetails(): boolean {
 function ModelHoverDetails({
   model,
   metadataLoading,
+  showArtificialAnalysisAttribution,
 }: {
   model: PositionedModel | undefined;
   metadataLoading: boolean;
+  showArtificialAnalysisAttribution: boolean;
 }) {
   if (!model) return null;
 
   const info = model.info;
   const context = formatTokens(info?.contextLength);
   const output = formatTokens(info?.outputLimit);
+  const inputs = formatInputs(info);
+  const attributionUrl =
+    model.ranking?.sourceUrl ??
+    (info?.metadataSource === "artificial-analysis"
+      ? "https://artificialanalysis.ai"
+      : showArtificialAnalysisAttribution
+        ? "https://artificialanalysis.ai"
+        : undefined);
   const capabilities = [
     info?.vision ? "Vision" : null,
     info?.toolCall ? "Tools" : null,
@@ -104,6 +157,8 @@ function ModelHoverDetails({
     info?.openWeights ? "Open weights" : null,
   ].filter((value): value is string => Boolean(value));
   const detailRows = [
+    info?.matched ? ["Inputs", inputs] : null,
+    info?.parameterCount ? ["Parameters", info.parameterCount] : null,
     context ? ["Context", context] : null,
     output ? ["Max output", output] : null,
     info?.releaseDate ? ["Released", info.releaseDate] : null,
@@ -155,6 +210,25 @@ function ModelHoverDetails({
           {metadataLoading ? "Loading model details…" : "No additional model details."}
         </Text>
       )}
+
+      <div className="mt-2 border-t border-separator pt-2">
+        <div
+          className="truncate font-mono text-[10px] leading-4 text-quaternary"
+          title={model.model}
+        >
+          {model.model}
+        </div>
+        {attributionUrl ? (
+          <a
+            href={attributionUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="pointer-events-auto mt-1 inline-block text-[10px] leading-4 text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+          >
+            {model.ranking ? "Benchmark data" : "Model data"} · Artificial Analysis
+          </a>
+        ) : null}
+      </div>
     </aside>
   );
 }
@@ -179,28 +253,20 @@ export function ModelPicker({
   const listPanelId = `${pickerId}-list-panel`;
   const padPanelId = `${pickerId}-pad-panel`;
 
-  const metadataProviders = React.useMemo(() => providers.filter(isUsable), [providers]);
-  const metadataQueries = useQueries({
-    queries: metadataProviders.map((provider) => {
-      const key = [...provider.models].sort().join(",");
-      return {
-        queryKey: [...queryKeys.modelInfo(provider.id), key],
-        queryFn: () => modelsApi.info(provider.id, provider.models),
-        enabled: open,
-        staleTime: 60 * 60 * 1000,
-      };
-    }),
-  });
+  const catalog = useProvidersModelInfo(providers);
 
   const infoByValue: Record<string, ModelInfo | undefined> = {};
-  metadataProviders.forEach((provider, providerIndex) => {
-    const data = metadataQueries[providerIndex]?.data;
+  providers.forEach((provider) => {
+    const data = catalog.data[provider.id];
     for (const modelId of provider.models) {
       infoByValue[encodeSelection(provider.id, modelId)] = data?.[modelId];
     }
   });
 
   const entries = createModelEntries(providers, infoByValue);
+  const usesArtificialAnalysis = entries.some(
+    (entry) => entry.info?.metadataSource === "artificial-analysis",
+  );
   const orderedEntries = orderModelEntries(entries, pinned);
   const positioned = positionModels(entries);
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
@@ -210,7 +276,7 @@ export function ModelPicker({
     positioned.find((entry) => entry.value === previewValue) ?? selectedPosition ?? positioned[0];
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
-  const metadataLoading = metadataQueries.some((query) => query.isLoading);
+  const metadataLoading = catalog.isLoading;
   const unavailableMessage =
     "No chat models are available. Open Settings → Providers to discover models for a connection.";
 
@@ -431,11 +497,13 @@ export function ModelPicker({
                 {orderedEntries.map((entry) => {
                   const isActive = entry.value === selectedValue;
                   const isPinned = pinned.includes(entry.value);
+                  const descriptionId = `model-description-${entry.value.replace(/[^a-zA-Z0-9_-]/gu, "-")}`;
                   return (
                     <CommandItem
                       key={entry.value}
                       value={entry.value}
-                      keywords={[entry.label, entry.providerLabel, entry.format ?? ""]}
+                      keywords={[entry.label, entry.providerLabel, entry.model, entry.format ?? ""]}
+                      aria-describedby={descriptionId}
                       onSelect={() => commit(entry, true)}
                       onMouseEnter={() => setPreviewValue(entry.value)}
                       className="group gap-2"
@@ -454,6 +522,9 @@ export function ModelPicker({
                       {entry.format ? (
                         <span className="shrink-0 text-small text-tertiary">{entry.format}</span>
                       ) : null}
+                      <span id={descriptionId} className="sr-only">
+                        {describeModel(entry)}
+                      </span>
                       {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
                       <button
                         type="button"
@@ -485,7 +556,22 @@ export function ModelPicker({
         )}
 
         {showExternalDetails ? (
-          <ModelHoverDetails model={activePosition} metadataLoading={metadataLoading} />
+          <ModelHoverDetails
+            model={activePosition}
+            metadataLoading={metadataLoading}
+            showArtificialAnalysisAttribution={usesArtificialAnalysis}
+          />
+        ) : usesArtificialAnalysis ? (
+          <div className="border-t border-separator px-3 py-1.5 text-[10px] leading-4">
+            <a
+              href="https://artificialanalysis.ai"
+              target="_blank"
+              rel="noreferrer"
+              className="text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+            >
+              Model data · Artificial Analysis
+            </a>
+          </div>
         ) : null}
       </PopoverContent>
     </Popover>
