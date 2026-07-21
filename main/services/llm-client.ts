@@ -66,7 +66,11 @@ function buildSystemPrompt(
 // Rehydrate the transcript into pi messages so the agent continues from full
 // history. Image attachments are only sent when the model supports vision; text
 // attachments are always inlined as extra context.
-function toPiMessages(params: ChatStartParams, model: Model<Api>, vision: boolean): Message[] {
+function toPiMessages(
+  params: ChatStartParams,
+  model: Model<Api>,
+  vision: boolean | undefined,
+): Message[] {
   const now = Date.now();
   return params.messages.map((m): Message => {
     if (m.role === "assistant") {
@@ -95,7 +99,7 @@ function toPiMessages(params: ChatStartParams, model: Model<Api>, vision: boolea
       .join("\n\n");
     const combinedText = [textPrefix, m.content].filter(Boolean).join("\n\n");
     if (combinedText) parts.push({ type: "text", text: combinedText });
-    if (vision) {
+    if (vision !== false) {
       for (const a of attachments) {
         if (a.kind === "image" && a.data)
           parts.push({ type: "image", data: a.data, mimeType: a.mimeType });
@@ -120,7 +124,7 @@ async function prepareGeneration(params: ChatStartParams) {
   const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
   // The release-bundled capability snapshot is local and cannot delay this
   // chat with a public metadata request.
-  const modelInfo = await modelsCatalog.info(runtime.provider.id, params.model);
+  const modelInfo = await modelsCatalog.info(runtime.provider, params.model);
   return { runtime, permission, folderPath, git, tools, modelInfo };
 }
 
