@@ -4,7 +4,12 @@ import { Menu } from "electron";
 import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
-import { initShortcut, initDictationShortcut, applyShortcutFromSettings, disposeShortcut } from "./services/shortcut.js";
+import {
+  initShortcut,
+  initDictationShortcut,
+  applyShortcutFromSettings,
+  disposeShortcut,
+} from "./services/shortcut.js";
 import { mcpManager } from "./services/mcp.js";
 import {
   disposeFoundationModelsConnection,
@@ -12,8 +17,7 @@ import {
 } from "./services/foundation-models-connection.js";
 
 app.setName("Aiden Agent");
-registerNativeHandlers();
-registerHandlers();
+const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -82,7 +86,8 @@ async function createMainWindow(): Promise<void> {
   logger.info("main", "Loading renderer", { url });
   await mainWindow.loadURL(url);
 
-  if (process.env.AIDEN_OPEN_DEVTOOLS === "1") mainWindow.webContents.openDevTools({ mode: "detach" });
+  if (process.env.AIDEN_OPEN_DEVTOOLS === "1")
+    mainWindow.webContents.openDevTools({ mode: "detach" });
 }
 
 function showMainWindow(): void {
@@ -135,37 +140,48 @@ function setupApplicationMenu(): void {
   Menu.setApplicationMenu(menu);
 }
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
-
-app.on("activate", () => {
-  void foundationModelsConnection.status({ force: true });
-  showMainWindow();
-});
-
-app.on("before-quit", () => {
-  disposeShortcut();
-  disposeFoundationModelsConnection();
-  void mcpManager.closeAll();
-});
-
-app.whenReady().then(async () => {
-  setupApplicationMenu();
-
-  initShortcut(() => {
-    showMainWindow();
-    ipcMain.broadcast("app:focus-composer", {});
-  });
-  initDictationShortcut(() => {
-    showMainWindow();
-    ipcMain.broadcast("app:dictate-toggle", {});
-  });
-  void applyShortcutFromSettings();
-  void foundationModelsConnection.status();
-
-  await createMainWindow();
-}).catch((error: unknown) => {
-  logger.error("main", "Failed to start Aiden Agent", error);
+if (!ownsSingleInstanceLock) {
   app.quit();
-});
+} else {
+  registerNativeHandlers();
+  registerHandlers();
+
+  app.on("second-instance", () => showMainWindow());
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("activate", () => {
+    void foundationModelsConnection.status({ force: true });
+    showMainWindow();
+  });
+
+  app.on("before-quit", () => {
+    disposeShortcut();
+    disposeFoundationModelsConnection();
+    void mcpManager.closeAll();
+  });
+
+  app
+    .whenReady()
+    .then(async () => {
+      setupApplicationMenu();
+
+      initShortcut(() => {
+        showMainWindow();
+        ipcMain.broadcast("app:focus-composer", {});
+      });
+      initDictationShortcut(() => {
+        showMainWindow();
+        ipcMain.broadcast("app:dictate-toggle", {});
+      });
+      void applyShortcutFromSettings();
+      void foundationModelsConnection.status();
+
+      await createMainWindow();
+    })
+    .catch((error: unknown) => {
+      logger.error("main", "Failed to start Aiden Agent", error);
+      app.quit();
+    });
+}

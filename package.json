@@ -20,7 +20,7 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
     "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && AIDEN_RENDERER_URL=http://127.0.0.1:4143 electron .",
     "lint": "eslint .",
-    "test": "tsx --test main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/coding-tools.test.ts main/services/foundation-models-connection.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/models.test.ts main/services/provider-key-policy.test.ts main/services/scratch-workspace.test.ts renderer/lib/chat-title-reveal.test.ts renderer/lib/editor-preference.test.ts renderer/lib/model-picker-data.test.ts",
+    "test": "tsx --test main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/codex-provider.test.ts main/services/coding-tools.test.ts main/services/foundation-models-connection.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/models.test.ts main/services/pi-credential-store-core.test.ts main/services/pi-provider-contract.test.ts main/services/provider-key-policy.test.ts main/services/scratch-workspace.test.ts renderer/lib/chat-title-reveal.test.ts renderer/lib/editor-preference.test.ts renderer/lib/model-picker-data.test.ts",
     "test:native": "CLANG_MODULE_CACHE_PATH=build/native-test-module-cache SWIFT_MODULECACHE_PATH=build/native-test-module-cache swift test --disable-sandbox --package-path native/apple-foundation-models --scratch-path build/native-swift-tests",
     "type-check": "tsc --noEmit",
     "format": "oxfmt .",
@@ -29,8 +29,8 @@
     "dist": "npm run release:update-model-capabilities && npm run build:native && npm run build && electron-builder --mac"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.80.6",
-    "@earendil-works/pi-ai": "^0.80.6",
+    "@earendil-works/pi-agent-core": "0.80.10",
+    "@earendil-works/pi-ai": "0.80.10",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@radix-ui/colors": "^3.0.0",
     "@tanstack/react-query": "^5.87.4",
