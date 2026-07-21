@@ -1,8 +1,20 @@
 // React Query hooks for providers, chats, and settings.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { chatsApi, exaApi, gitApi, localVoiceApi, mcpApi, modelsApi, providersApi, settingsApi, skillsApi, titleProvidersApi, workspacesApi } from "./ipc";
-import type { Provider } from "./types";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  chatsApi,
+  exaApi,
+  gitApi,
+  localVoiceApi,
+  mcpApi,
+  modelsApi,
+  providersApi,
+  settingsApi,
+  skillsApi,
+  titleProvidersApi,
+  workspacesApi,
+} from "./ipc";
+import type { CodexProviderSnapshot, Provider } from "./types";
 
 export const queryKeys = {
   providers: ["providers"] as const,
@@ -10,6 +22,7 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   foundationModelsConnection: ["foundationModelsConnection"] as const,
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
@@ -19,13 +32,52 @@ export const queryKeys = {
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
-  gitWorktrees: (workspaceId: string | undefined) => ["gitWorktrees", workspaceId ?? "none"] as const,
-  discoveredSkills: (folderPath: string | undefined) => ["discoveredSkills", folderPath ?? "none"] as const,
+  gitWorktrees: (workspaceId: string | undefined) =>
+    ["gitWorktrees", workspaceId ?? "none"] as const,
+  discoveredSkills: (folderPath: string | undefined) =>
+    ["discoveredSkills", folderPath ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
 export function useProviders() {
   return useQuery({ queryKey: queryKeys.providers, queryFn: providersApi.list });
+}
+
+export function useCodexProviderStatus() {
+  return useQuery({
+    queryKey: queryKeys.codexProviderStatus,
+    queryFn: () => providersApi.authStatus("openai-codex"),
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+async function cancelCodexProviderReads(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: queryKeys.codexProviderStatus }),
+    queryClient.cancelQueries({ queryKey: queryKeys.providers }),
+  ]);
+}
+
+/** Cancel stale pre-auth reads before asking active observers for authoritative state. */
+export async function refreshCodexProviderState(queryClient: QueryClient): Promise<void> {
+  await cancelCodexProviderReads(queryClient);
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.codexProviderStatus }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
+  ]);
+}
+
+export async function logoutCodexProvider(
+  queryClient: QueryClient,
+  logout: (providerId: "openai-codex") => Promise<CodexProviderSnapshot> = providersApi.logout,
+): Promise<CodexProviderSnapshot> {
+  await cancelCodexProviderReads(queryClient);
+  const next = await logout("openai-codex");
+  await cancelCodexProviderReads(queryClient);
+  queryClient.setQueryData(queryKeys.codexProviderStatus, next);
+  await queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+  return next;
 }
 
 export function useChats(workspaceId?: string) {
@@ -103,8 +155,7 @@ export function useFoundationModelsConnection() {
     queryKey: queryKeys.foundationModelsConnection,
     queryFn: titleProvidersApi.status,
     refetchOnWindowFocus: true,
-    refetchInterval: (query) =>
-      query.state.data?.state === "model_preparing" ? 5_000 : false,
+    refetchInterval: (query) => (query.state.data?.state === "model_preparing" ? 5_000 : false),
   });
 }
 

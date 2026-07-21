@@ -24,6 +24,7 @@ import {
 } from "../ui";
 import { ChevronDown, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { ProviderEditor } from "./provider-editor";
+import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
 import { queryKeys, useFoundationModelsConnection, useProviders, useSettings } from "../../lib/queries";
 import type { ChatTitleProviderId, FoundationModelsConnectionStatus, Provider } from "../../lib/types";
@@ -182,6 +183,8 @@ export function ProvidersSettings() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+
+      <CodexProviderSettings />
 
       {foundationModels.data ? (
         <div
