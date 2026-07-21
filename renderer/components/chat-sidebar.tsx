@@ -32,15 +32,16 @@ import {
   Text,
   toast,
 } from "./ui";
-import { ChevronsUpDown, Folder, FolderGit2, MessagesSquare, Settings } from "lucide-react";
+import { ChevronsUpDown, Folder, FolderGit2, Loader2, MessagesSquare, Settings } from "lucide-react";
 import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import {
   CHAT_TITLE_FADE_OUT_MS,
   createChatTitleReveal,
   type ChatTitleRevealEvent,
 } from "../lib/chat-title-reveal";
-import { queryKeys, useChats } from "../lib/queries";
+import { queryKeys, useChats, useFoundationModelsConnection } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
 
 interface ChatSidebarProps {
@@ -121,29 +122,67 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
+  const environmentPanel = useEnvironmentPanel();
   const chats = useChats(activeId);
+  const foundationModels = useFoundationModelsConnection();
   const [search, setSearch] = React.useState("");
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
+  const [renamingWithAppleId, setRenamingWithAppleId] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
+  const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
+  const [deletingWorktreeBusy, setDeletingWorktreeBusy] = React.useState(false);
 
   const items = (chats.data ?? []).filter((c) =>
     c.title.toLowerCase().includes(search.trim().toLowerCase()),
   );
   const groups = groupChats(items);
+  const appleRenameReady = foundationModels.data?.state === "ready";
+  const appleRenameDetail = foundationModels.isLoading
+    ? "Checking Apple Foundation Models availability."
+    : foundationModels.data?.detail ?? "Apple Foundation Models are unavailable.";
+  const workspaceActionBlocked = environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
+  const workspaceSwitchBlocked = workspaceActionBlocked || environmentPanel.editorState.dirty;
+  const settingsBlockedReason = environmentPanel.gitOperationBusy
+    ? "Wait for the current Git operation to finish"
+    : environmentPanel.editorState.saving
+      ? "Wait for the open file to finish saving"
+      : environmentPanel.editorState.dirty
+        ? "Save or discard the open file's edits first"
+        : undefined;
 
   // Move to a workspace and land on one of its chats (creating one if empty).
   const enterWorkspace = React.useCallback(
-    async (id: string) => {
-      select(id);
+    async (id: string, allowDirtyDiscard = false) => {
+      if (environmentPanel.gitOperationBusy) {
+        toast.info("Wait for the current Git operation to finish before switching workspaces.");
+        return false;
+      }
+      if (environmentPanel.editorState.saving) {
+        toast.info("Wait for the open file to finish saving before switching workspaces.");
+        return false;
+      }
+      if (environmentPanel.editorState.dirty && !allowDirtyDiscard) {
+        toast.info("Save or discard the open file's edits before switching workspaces.");
+        return false;
+      }
+      if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const list = await chatsApi.list(id);
       const target = list[0] ?? (await chatsApi.create({ workspaceId: id }));
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
-      void navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
+      const previousWorkspaceId = activeId;
+      select(id);
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: target.id } });
+      } catch (error) {
+        if (previousWorkspaceId) select(previousWorkspaceId);
+        throw error;
+      }
+      return true;
     },
-    [navigate, qc, select],
+    [activeId, environmentPanel.agentBusy, environmentPanel.cancelAgent, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, navigate, qc, select],
   );
 
   const switchWorkspace = React.useCallback(
@@ -154,38 +193,76 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   );
 
   const openFolderWorkspace = React.useCallback(async () => {
+    if (workspaceSwitchBlocked) return;
     const ws = await workspacesApi.createFromFolder();
     if (!ws) return;
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await enterWorkspace(ws.id);
-  }, [enterWorkspace, qc]);
+  }, [enterWorkspace, qc, workspaceSwitchBlocked]);
 
   const newEmptyWorkspace = React.useCallback(async () => {
+    if (workspaceSwitchBlocked) return;
     const ws = await workspacesApi.create({ permission: "ask" });
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await enterWorkspace(ws.id);
-  }, [enterWorkspace, qc]);
+  }, [enterWorkspace, qc, workspaceSwitchBlocked]);
 
   const commitRemoveWorkspace = async () => {
-    if (!removingWorkspace) return;
-    await workspacesApi.remove(removingWorkspace.id);
-    await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+    if (!removingWorkspace || removingWorkspaceBusy) return;
+    if (environmentPanel.gitOperationBusy) {
+      toast.info("Wait for the current Git operation to finish before removing this workspace.");
+      return;
+    }
+    if (environmentPanel.editorState.saving) {
+      toast.info("Wait for the open file to finish saving before removing this workspace.");
+      return;
+    }
     const remaining = workspaces.filter((w) => w.id !== removingWorkspace.id);
-    setRemovingWorkspace(null);
-    if (remaining[0]) await enterWorkspace(remaining[0].id);
+    if (!remaining[0]) return;
+    setRemovingWorkspaceBusy(true);
+    try {
+      const switched = await enterWorkspace(remaining[0].id, true);
+      if (!switched) return;
+      await workspacesApi.remove(removingWorkspace.id);
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      setRemovingWorkspace(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't remove that workspace.");
+    } finally {
+      setRemovingWorkspaceBusy(false);
+    }
   };
 
   const commitDeleteWorktree = async () => {
-    if (!deletingWorktree) return;
+    const target = deletingWorktree;
+    if (!target || deletingWorktreeBusy) return;
+    if (environmentPanel.gitOperationBusy) {
+      toast.info("Wait for the current Git operation to finish before deleting this worktree.");
+      return;
+    }
+    if (environmentPanel.editorState.saving) {
+      toast.info("Wait for the open file to finish saving before deleting this worktree.");
+      return;
+    }
+    if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
+    const remaining = workspaces.filter((workspace) => workspace.id !== target.id);
+    if (!remaining[0]) return;
+    setDeletingWorktreeBusy(true);
+    let gitBusy = false;
     try {
-      const result = await gitApi.deleteManagedWorktree(deletingWorktree.id);
+      const switched = await enterWorkspace(remaining[0].id, true);
+      if (!switched) return;
+      environmentPanel.setGitOperationBusy(true);
+      gitBusy = true;
+      const result = await gitApi.deleteManagedWorktree(target.id);
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
-      const remaining = workspaces.filter((workspace) => workspace.id !== deletingWorktree.id);
       setDeletingWorktree(null);
       toast.success(result.branchDeleted ? "Worktree and unchanged branch deleted." : "Worktree deleted; branch kept.");
-      if (remaining[0]) await enterWorkspace(remaining[0].id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't delete that worktree.");
+    } finally {
+      if (gitBusy) environmentPanel.setGitOperationBusy(false);
+      setDeletingWorktreeBusy(false);
     }
   };
 
@@ -199,8 +276,30 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     setRenaming(null);
   };
 
+  const renameWithApple = async (chat: ChatMeta) => {
+    if (renamingWithAppleId) return;
+    if (!appleRenameReady) {
+      toast.info(appleRenameDetail);
+      return;
+    }
+    setRenamingWithAppleId(chat.id);
+    try {
+      const result = await chatsApi.renameWithFoundationModels(chat.id);
+      if (result.changed) toast.success(`Renamed to “${result.title}”.`);
+      else toast.info(`“${result.title}” already fits this chat.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Apple couldn't rename that chat.");
+      await qc.invalidateQueries({ queryKey: queryKeys.foundationModelsConnection });
+    } finally {
+      setRenamingWithAppleId(null);
+    }
+  };
+
   const commitDelete = async () => {
     if (!deleting) return;
+    if (deleting.id === activeChatId && environmentPanel.agentBusy) {
+      environmentPanel.cancelAgent?.();
+    }
     await chatsApi.remove(deleting.id);
     await qc.invalidateQueries({ queryKey: queryKeys.chats });
     if (deleting.id === activeChatId) void navigate({ to: "/" });
@@ -221,6 +320,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
               variant="transparent"
               className="h-10 w-full justify-start gap-2.5 px-2.5 text-[14px] font-normal"
               onClick={() => navigate({ to: "/settings" })}
+              disabled={Boolean(settingsBlockedReason)}
+              title={settingsBlockedReason}
             >
               <Settings className="size-4.5 text-secondary" />
               Settings
@@ -250,6 +351,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 <DropdownMenuCheckboxItem
                   key={w.id}
                   checked={w.id === activeId}
+                  disabled={workspaceSwitchBlocked}
                   sublabel={w.folderPath ?? undefined}
                   onCheckedChange={() => switchWorkspace(w.id)}
                 >
@@ -257,17 +359,21 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 </DropdownMenuCheckboxItem>
               ))}
               <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={openFolderWorkspace}>Open folder as workspace…</DropdownMenuItem>
-              <DropdownMenuItem onSelect={newEmptyWorkspace}>New empty workspace</DropdownMenuItem>
+              <DropdownMenuItem disabled={workspaceSwitchBlocked} onSelect={openFolderWorkspace}>
+                Open folder as workspace…
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={workspaceSwitchBlocked} onSelect={newEmptyWorkspace}>
+                New empty workspace
+              </DropdownMenuItem>
               {active && workspaces.length > 1 ? (
                 <>
                   <DropdownMenuSeparator />
                   {active.managedWorktree ? (
-                    <DropdownMenuItem icon="trash" color="red" onSelect={() => setDeletingWorktree(active)}>
+                    <DropdownMenuItem disabled={workspaceActionBlocked} icon="trash" color="red" onSelect={() => setDeletingWorktree(active)}>
                       Delete worktree…
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem icon="trash" color="red" onSelect={() => setRemovingWorkspace(active)}>
+                  <DropdownMenuItem disabled={workspaceActionBlocked} icon="trash" color="red" onSelect={() => setRemovingWorkspace(active)}>
                     Remove “{active.name}”
                   </DropdownMenuItem>
                 </>
@@ -294,7 +400,12 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   <ContextMenu key={chat.id}>
                     <ContextMenuTrigger asChild>
                       <SidebarListItem
-                        icon={<MessagesSquare className="size-4" />}
+                        icon={
+                          renamingWithAppleId === chat.id
+                            ? <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                            : <MessagesSquare className="size-4" />
+                        }
+                        aria-busy={renamingWithAppleId === chat.id}
                         title={
                           titleReveal?.chatId === chat.id ? (
                             <GeneratedTitleReveal
@@ -313,6 +424,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                     <ContextMenuContent>
                       <ContextMenuItem
                         icon="pencil"
+                        disabled={renamingWithAppleId === chat.id}
                         onSelect={() => {
                           setRenameValue(chat.title);
                           setRenaming(chat);
@@ -320,8 +432,35 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                       >
                         Rename
                       </ContextMenuItem>
+                      {foundationModels.data !== null ? (
+                        <ContextMenuItem
+                          disabled={!appleRenameReady || renamingWithAppleId !== null}
+                          aria-label={
+                            renamingWithAppleId === chat.id
+                              ? "Renaming with Apple"
+                              : appleRenameReady
+                                ? "Rename with Apple"
+                                : `Rename with Apple. ${appleRenameDetail}`
+                          }
+                          onSelect={() => void renameWithApple(chat)}
+                        >
+                          <span className="min-w-0 flex-1">
+                            {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
+                          </span>
+                          {!appleRenameReady ? (
+                            <span className="text-small text-tertiary">
+                              {foundationModels.isLoading ? "Checking…" : "Unavailable"}
+                            </span>
+                          ) : null}
+                        </ContextMenuItem>
+                      ) : null}
                       <ContextMenuSeparator />
-                      <ContextMenuItem icon="trash" color="red" onSelect={() => setDeleting(chat)}>
+                      <ContextMenuItem
+                        icon="trash"
+                        color="red"
+                        disabled={renamingWithAppleId === chat.id}
+                        onSelect={() => setDeleting(chat)}
+                      >
                         Delete
                       </ContextMenuItem>
                     </ContextMenuContent>
@@ -337,6 +476,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         open={renaming !== null}
         onOpenChange={(open) => !open && setRenaming(null)}
         title="Rename chat"
+        description="Choose the name shown for this conversation in the sidebar."
         confirmLabel="Save"
         confirmDisabled={!renameValue.trim()}
         onConfirm={commitRename}
@@ -367,35 +507,45 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
 
       <AlertDialog
         open={deletingWorktree !== null}
-        onOpenChange={(open) => !open && setDeletingWorktree(null)}
+        onOpenChange={(open) => !open && !deletingWorktreeBusy && setDeletingWorktree(null)}
         title="Delete this worktree?"
         description={
           deletingWorktree ? (
             <Text variant="small" color="secondary">
               The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is deleted only if it
               has no commits beyond where Aiden created it. Chats stay on disk. Dirty worktrees are refused.
+              {environmentPanel.editorState.workspaceId === deletingWorktree.id && environmentPanel.editorState.dirty
+                ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
+                : ""}
             </Text>
           ) : null
         }
-        confirmLabel="Delete worktree"
+        confirmLabel={deletingWorktreeBusy ? "Deleting…" : "Delete worktree"}
         confirmVariant="destructive"
+        busy={deletingWorktreeBusy}
+        keepOpenOnConfirm
         onConfirm={commitDeleteWorktree}
       />
 
       <AlertDialog
         open={removingWorkspace !== null}
-        onOpenChange={(open) => !open && setRemovingWorkspace(null)}
+        onOpenChange={(open) => !open && !removingWorkspaceBusy && setRemovingWorkspace(null)}
         title="Remove this workspace?"
         description={
           removingWorkspace ? (
             <Text variant="small" color="secondary">
               “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be listed. The folder
               itself is not touched.
+              {environmentPanel.editorState.workspaceId === removingWorkspace.id && environmentPanel.editorState.dirty
+                ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
+                : ""}
             </Text>
           ) : null
         }
-        confirmLabel="Remove"
+        confirmLabel={removingWorkspaceBusy ? "Removing…" : "Remove"}
         confirmVariant="destructive"
+        busy={removingWorkspaceBusy}
+        keepOpenOnConfirm
         onConfirm={commitRemoveWorkspace}
       />
     </>
