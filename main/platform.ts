@@ -56,7 +56,10 @@ export function registerNativeHandlers(): void {
     shouldUseHighContrastColors: nativeTheme.shouldUseHighContrastColors,
     shouldUseInvertedColorScheme: nativeTheme.shouldUseInvertedColorScheme,
   }));
-  electronIpcMain.handle("aiden:theme:set", (_event, source: "system" | "light" | "dark") => {
+  electronIpcMain.handle("aiden:theme:set", (_event, source: unknown) => {
+    if (source !== "system" && source !== "light" && source !== "dark") {
+      throw new Error("Invalid native theme source.");
+    }
     nativeTheme.themeSource = source;
     return true;
   });
@@ -71,6 +74,8 @@ export function registerNativeHandlers(): void {
     broadcast("aiden:theme:changed", {
       themeSource: nativeTheme.themeSource,
       shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+      shouldUseHighContrastColors: nativeTheme.shouldUseHighContrastColors,
+      shouldUseInvertedColorScheme: nativeTheme.shouldUseInvertedColorScheme,
     });
   });
 }
