@@ -19,7 +19,7 @@ import {
   Text,
   toast,
 } from "./ui";
-import { Check, FolderGit2, GitBranch, Loader2, Plus } from "lucide-react";
+import { Check, ChevronDown, FolderGit2, GitBranch, Loader2, Plus } from "lucide-react";
 import { gitApi } from "../lib/ipc";
 import { queryKeys, useGitBranches, useGitWorktrees } from "../lib/queries";
 
@@ -28,7 +28,12 @@ interface GitBranchPickerProps {
   branch: string;
   disabled?: boolean;
   onCreateWorktree?: (branchName: string) => Promise<void>;
+  onBusyChange?: (busy: boolean) => void;
   worktreeDescription: string;
+  triggerVariant?: "compact" | "overview";
+  disabledReason?: string;
+  detached?: boolean;
+  unborn?: boolean;
 }
 
 type CreateMode = "branch" | "worktree" | null;
@@ -47,10 +52,16 @@ export function GitBranchPicker({
   branch,
   disabled = false,
   onCreateWorktree,
+  onBusyChange,
   worktreeDescription,
+  triggerVariant = "compact",
+  disabledReason,
+  detached: detachedProp = false,
+  unborn: unbornProp = false,
 }: GitBranchPickerProps) {
   const qc = useQueryClient();
   const searchRef = React.useRef<HTMLInputElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   const [open, setOpen] = React.useState(false);
   const [createMode, setCreateMode] = React.useState<CreateMode>(null);
   const [newName, setNewName] = React.useState("");
@@ -58,16 +69,19 @@ export function GitBranchPicker({
 
   const branches = useGitBranches(workspaceId, open);
   const worktrees = useGitWorktrees(workspaceId, open);
-  const current = branches.data?.current ?? branch;
+  const detached = branches.data?.detached ?? detachedProp;
+  const unborn = branches.data?.unborn ?? unbornProp;
+  const currentRef = branches.data?.current ?? branch;
+  const current = detached ? "Detached HEAD" : currentRef;
   const uncommitted = branches.data?.uncommitted ?? 0;
   const ahead = branches.data?.ahead ?? 0;
   const behind = branches.data?.behind ?? 0;
   const upstream = branches.data?.upstream;
   const defaultBranch = branches.data?.defaultBranch;
-  const unborn = branches.data?.unborn ?? false;
   const list = branches.data?.branches ?? [];
   const remoteBranches = branches.data?.remoteBranches ?? [];
-  const currentSummary = statusSummary(uncommitted, ahead, behind, upstream);
+  const status = statusSummary(uncommitted, ahead, behind, upstream);
+  const currentSummary = [unborn ? "No commits yet" : undefined, status].filter(Boolean).join(" · ") || undefined;
   const unavailable = disabled || busy;
   const branchWorktrees = new Map(
     (worktrees.data ?? [])
@@ -76,14 +90,17 @@ export function GitBranchPicker({
   );
 
   React.useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
+    if (disabled && !busy) setOpen(false);
+  }, [busy, disabled]);
 
   const refresh = () =>
     Promise.all([
       qc.invalidateQueries({ queryKey: queryKeys.gitBranches(workspaceId) }),
       qc.invalidateQueries({ queryKey: queryKeys.gitWorktrees(workspaceId) }),
       qc.invalidateQueries({ queryKey: queryKeys.git(workspaceId) }),
+      qc.invalidateQueries({ queryKey: queryKeys.gitReview(workspaceId) }),
+      qc.invalidateQueries({ queryKey: queryKeys.gitPushCapability(workspaceId) }),
+      qc.invalidateQueries({ queryKey: queryKeys.gitComparisons(workspaceId) }),
     ]);
 
   const reset = () => {
@@ -97,27 +114,38 @@ export function GitBranchPicker({
   };
 
   const checkout = async (name: string) => {
-    if (unavailable || name === current || branchWorktrees.has(name)) {
-      if (name === current) setOpen(false);
+    if (unavailable || name === currentRef || branchWorktrees.has(name)) {
+      if (name === currentRef) setOpen(false);
       return;
     }
+    onBusyChange?.(true);
     setBusy(true);
+    let closeAfterSuccess = false;
     try {
       await gitApi.checkout(workspaceId, name);
       await refresh();
-      setOpen(false);
-      reset();
+      closeAfterSuccess = true;
     } catch (error) {
+      await refresh().catch(() => undefined);
       toast.error(error instanceof Error ? error.message : "Couldn't switch branch.");
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
+      if (closeAfterSuccess) {
+        requestAnimationFrame(() => {
+          setOpen(false);
+          reset();
+        });
+      }
     }
   };
 
   const create = async () => {
     const name = newName.trim();
     if (!name || !createMode || unavailable || unborn) return;
+    onBusyChange?.(true);
     setBusy(true);
+    let closeAfterSuccess = false;
     try {
       if (createMode === "worktree") {
         if (!onCreateWorktree) return;
@@ -126,9 +154,9 @@ export function GitBranchPicker({
         await gitApi.createBranch(workspaceId, name);
         await refresh();
       }
-      setOpen(false);
-      reset();
+      closeAfterSuccess = true;
     } catch (error) {
+      await refresh().catch(() => undefined);
       toast.error(
         error instanceof Error
           ? error.message
@@ -138,6 +166,13 @@ export function GitBranchPicker({
       );
     } finally {
       setBusy(false);
+      onBusyChange?.(false);
+      if (closeAfterSuccess) {
+        requestAnimationFrame(() => {
+          setOpen(false);
+          reset();
+        });
+      }
     }
   };
 
@@ -153,19 +188,48 @@ export function GitBranchPicker({
       }}
     >
       <CustomDropdownMenuTrigger asChild>
-        <Button
-          variant="transparent"
-          size="small"
-          disabled={disabled}
-          className="h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]"
-          title={currentSummary ? `${current} · ${currentSummary}` : current}
-        >
-          <GitBranch className="size-4 shrink-0" />
-          <span className="min-w-0 truncate text-small">{current}</span>
-        </Button>
+        {triggerVariant === "overview" ? (
+          <button
+            ref={triggerRef}
+            type="button"
+            disabled={disabled}
+            aria-label={`Branch ${current}${currentSummary ? `, ${currentSummary}` : ""}`}
+            title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
+            className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45"
+          >
+            <GitBranch className="size-4.5 text-secondary" aria-hidden="true" />
+            <span className="min-w-0 truncate text-regular text-primary">{current}</span>
+            <span className="flex min-w-0 items-center gap-1.5 text-small text-tertiary">
+              {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+              {currentSummary ? <span className="max-w-52 truncate">{currentSummary}</span> : null}
+              <ChevronDown className="size-4 shrink-0" aria-hidden="true" />
+            </span>
+          </button>
+        ) : (
+          <Button
+            ref={triggerRef}
+            variant="transparent"
+            size="small"
+            disabled={disabled}
+            className="h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]"
+            title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
+          >
+            <GitBranch className="size-4 shrink-0" />
+            <span className="min-w-0 truncate text-small">{current}</span>
+          </Button>
+        )}
       </CustomDropdownMenuTrigger>
 
-      <CustomDropdownMenuContent align="start" className="w-72 p-0">
+      <CustomDropdownMenuContent
+        align="start"
+        className="w-72 p-0"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          requestAnimationFrame(() => {
+            if (triggerRef.current?.isConnected && !triggerRef.current.disabled) triggerRef.current.focus();
+          });
+        }}
+      >
         {createMode ? (
           <div className="flex flex-col gap-2 p-3" aria-busy={busy}>
             <Text variant="small" color="tertiary">
@@ -222,8 +286,28 @@ export function GitBranchPicker({
                 Local branches
               </Text>
             </div>
+            {branches.error ? (
+              <div className="mx-2 mt-2 flex items-center justify-between gap-2 rounded-control bg-support-red/[0.08] px-2 py-1.5 text-small text-support-red" role="status">
+                <span className="min-w-0">
+                  {branches.data ? "Refresh failed. Showing known branches." : "Branches are unavailable."}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void branches.refetch()}
+                  className="shrink-0 rounded-control px-1.5 py-0.5 text-small-strong outline-none hover:bg-support-red/10 focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : null}
             <CommandList>
-              <CommandEmpty>{branches.isLoading ? "Loading…" : "No branches found."}</CommandEmpty>
+              <CommandEmpty>
+                {branches.isLoading
+                  ? "Loading…"
+                  : branches.error
+                    ? "No branch snapshot is available."
+                    : "No branches found."}
+              </CommandEmpty>
               {list.map((name) => {
                 const isActive = name === current;
                 const otherWorktree = branchWorktrees.get(name);
