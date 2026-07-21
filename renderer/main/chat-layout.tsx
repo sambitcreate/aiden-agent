@@ -2,7 +2,7 @@
 // Selection is route-driven (chatId param); the visible chat list is scoped to
 // the active workspace (shared via WorkspaceProvider).
 
-import { Outlet, useNavigate, useParams } from "@tanstack/react-router";
+import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { SplitView } from "../components/ui";
@@ -23,6 +23,7 @@ import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
 
@@ -52,9 +53,12 @@ export function ChatLayout() {
       const reveal = { chatId: update.chatId, version: update.updatedAt, previousTitle };
       setTitleReveal(reveal);
       clearTimeout(clearReveal);
-      clearReveal = setTimeout(() => {
-        setTitleReveal((current) => (current?.version === reveal.version ? null : current));
-      }, CHAT_TITLE_FADE_OUT_MS + CHAT_TITLE_REVEAL_DURATION_MS + 50);
+      clearReveal = setTimeout(
+        () => {
+          setTitleReveal((current) => (current?.version === reveal.version ? null : current));
+        },
+        CHAT_TITLE_FADE_OUT_MS + CHAT_TITLE_REVEAL_DURATION_MS + 50,
+      );
     });
 
     return () => {
@@ -71,8 +75,10 @@ export function ChatLayout() {
     >
       <EnvironmentWorkbench>
         <div className="flex h-full min-h-0 flex-col">
-          <div className="min-h-0 flex-1 overflow-hidden"><Outlet /></div>
-          <TerminalDrawer />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Outlet />
+          </div>
+          {pathname === "/profile" ? null : <TerminalDrawer />}
         </div>
       </EnvironmentWorkbench>
     </SplitView>

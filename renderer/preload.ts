@@ -22,11 +22,13 @@ const INVOKE_PREFIXES = [
   "mcp:",
   "models:",
   "providers:",
+  "profile:",
   "settings:",
   "shortcut:",
   "skills:",
   "terminal:",
   "titleProviders:",
+  "usage:",
   "voice:",
   "workspaces:",
 ] as const;

@@ -4,8 +4,15 @@
 
 import { ipcMain } from "../platform.js";
 import { engineStatus, transcribePcm, releaseRecognizer } from "../services/parakeet.js";
-import { listModels, downloadModel, cancelDownload, deleteModel } from "../services/local-models.js";
+import {
+  listModels,
+  downloadModel,
+  cancelDownload,
+  deleteModel,
+} from "../services/local-models.js";
 import { configStore } from "../services/config-store.js";
+import { unreportedUsageRecord } from "../services/usage-accounting.js";
+import { usageStore } from "../services/usage-store.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -39,11 +46,39 @@ export function registerLocalVoiceHandlers(): void {
     releaseRecognizer(modelId);
     await deleteModel(modelId);
     const settings = await configStore.getSettings();
-    if (settings.localVoiceModel === modelId) await configStore.setSettings({ localVoiceModel: "" });
+    if (settings.localVoiceModel === modelId)
+      await configStore.setSettings({ localVoiceModel: "" });
   });
 
   // ── Local transcription ──────────────────────────────────────────────
   ipcMain.handle("voice:transcribeLocal", async (_event, pcmBase64: unknown, modelId: unknown) => {
-    return transcribePcm(pcmToFloat32(asString(pcmBase64, "pcmBase64")), asString(modelId, "modelId"));
+    const parsedModelId = asString(modelId, "modelId");
+    const pcm = pcmToFloat32(asString(pcmBase64, "pcmBase64"));
+    try {
+      const transcript = transcribePcm(pcm, parsedModelId);
+      await usageStore.record(
+        unreportedUsageRecord({
+          source: "voice-transcription",
+          providerId: "local-voice",
+          providerLabel: "On-device voice",
+          modelId: parsedModelId,
+          local: true,
+          status: "completed",
+        }),
+      );
+      return transcript;
+    } catch (error) {
+      await usageStore.record(
+        unreportedUsageRecord({
+          source: "voice-transcription",
+          providerId: "local-voice",
+          providerLabel: "On-device voice",
+          modelId: parsedModelId,
+          local: true,
+          status: "failed",
+        }),
+      );
+      throw error;
+    }
   });
 }

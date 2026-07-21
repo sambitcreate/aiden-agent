@@ -24,6 +24,8 @@ import {
   terminalGenerationWasAborted,
 } from "./generation-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
+import { assistantUsageRecord } from "./usage-accounting.js";
+import { usageStore } from "./usage-store.js";
 import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
@@ -191,7 +193,7 @@ export const llmClient = {
     let aborted = false;
     let currentAssistantTurnHadTextDelta = false;
 
-    agent.subscribe((event) => {
+    agent.subscribe(async (event) => {
       switch (event.type) {
         case "message_start":
           if (event.message.role === "assistant") currentAssistantTurnHadTextDelta = false;
@@ -208,6 +210,16 @@ export const llmClient = {
           break;
         }
         case "message_end": {
+          if (event.message.role === "assistant") {
+            await usageStore.record(
+              assistantUsageRecord({
+                message: event.message,
+                provider: runtime.provider,
+                model,
+                source: "chat",
+              }),
+            );
+          }
           const terminalError = terminalGenerationError(event.message);
           if (terminalError) errored = terminalError;
           if (terminalGenerationWasAborted(event.message)) aborted = true;

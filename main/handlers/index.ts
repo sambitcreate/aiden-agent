@@ -14,6 +14,8 @@ import { registerPhase2Handlers } from "./phase2.js";
 import { registerLocalVoiceHandlers } from "./local-voice.js";
 import { registerTerminalHandlers } from "./terminal.js";
 import { registerTitleProviderHandlers } from "./title-providers.js";
+import { registerUsageHandlers } from "./usage.js";
+import { registerProfileHandlers } from "./profile.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -35,6 +37,8 @@ export function registerHandlers(): void {
   registerLocalVoiceHandlers();
   registerTerminalHandlers();
   registerTitleProviderHandlers();
+  registerUsageHandlers();
+  registerProfileHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

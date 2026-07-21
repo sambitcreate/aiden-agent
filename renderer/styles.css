@@ -102,7 +102,8 @@
   --elevation-control: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.08);
   --elevation-control-hover: 0 0 0 0.5px rgb(0 0 0 / 0.11), 0 2px 4px -1px rgb(0 0 0 / 0.1);
   --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
-  --elevation-popover: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
+  --elevation-popover:
+    0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
   --elevation-toast: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 4px 12px rgb(0 0 0 / 0.1);
   --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
@@ -145,8 +146,10 @@
   --syntax-variable: #ffb06b;
   --elevation-control: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 1px 2px -1px rgb(0 0 0 / 0.5);
   --elevation-control-hover: 0 0 0 0.5px rgb(255 255 255 / 0.15), 0 2px 4px -1px rgb(0 0 0 / 0.62);
-  --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
-  --elevation-popover: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
+  --elevation-control-pressed:
+    inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
+  --elevation-popover:
+    0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
   --elevation-toast: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 4px 12px rgb(0 0 0 / 0.54);
   --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
@@ -163,13 +166,20 @@ body,
 body {
   margin: 0;
   background-color: transparent;
-  background-image: linear-gradient(to bottom, var(--window-gradient-start), var(--window-gradient-end));
+  background-image: linear-gradient(
+    to bottom,
+    var(--window-gradient-start),
+    var(--window-gradient-end)
+  );
   color: var(--text-primary);
   font-family: var(--font-ui-family);
   font-size: var(--ui-font-size);
   -webkit-font-smoothing: antialiased;
   font-synthesis: none;
-  font-feature-settings: "liga" 1, "calt" 1, "kern" 1;
+  font-feature-settings:
+    "liga" 1,
+    "calt" 1,
+    "kern" 1;
   user-select: none;
 }
 
@@ -221,12 +231,19 @@ textarea {
   font: inherit;
 }
 
-.drag-region { -webkit-app-region: drag; }
+.drag-region {
+  -webkit-app-region: drag;
+}
 .no-drag,
 .drag-region button,
-.drag-region input { -webkit-app-region: no-drag; }
+.drag-region input {
+  -webkit-app-region: no-drag;
+}
 
-* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent; }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-primary), transparent 60%) transparent;
+}
 
 .scroll-edge-mask {
   --scroll-fade-size: 14px;
@@ -234,7 +251,13 @@ textarea {
 }
 
 .scroll-edge-mask[data-scroll-top="false"][data-scroll-bottom="false"] {
-  mask-image: linear-gradient(to bottom, transparent, black var(--scroll-fade-size), black calc(100% - var(--scroll-fade-size)), transparent);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black var(--scroll-fade-size),
+    black calc(100% - var(--scroll-fade-size)),
+    transparent
+  );
 }
 
 .scroll-edge-mask[data-scroll-top="false"][data-scroll-bottom="true"] {
@@ -266,12 +289,7 @@ textarea {
       color-mix(in srgb, var(--accent) 20%, transparent),
       transparent 46%
     ),
-    linear-gradient(
-      to top,
-      rgb(0 0 0 / 4%),
-      transparent 64%
-    ),
-    var(--surface-well);
+    linear-gradient(to top, rgb(0 0 0 / 4%), transparent 64%), var(--surface-well);
   box-shadow:
     inset 0 0 0 0.5px var(--border-separator),
     inset 0 1px 0 rgb(255 255 255 / 7%);
@@ -323,7 +341,67 @@ textarea {
   }
 }
 
-:root.window-blurred .dimmable { opacity: 0.48; }
+@container chat-toolbar (max-width: 500px) {
+  .profile-share-label {
+    display: none;
+  }
+}
+
+.usage-profile-content {
+  container: usage-profile / inline-size;
+}
+
+.usage-profile-stat + .usage-profile-stat {
+  border-left: 1px solid var(--border-separator);
+}
+
+.usage-profile-scoreboard {
+  border-left: 1px solid var(--border-separator);
+  padding-left: 24px;
+}
+
+.usage-profile-token-mix {
+  padding-right: 24px;
+}
+
+@container usage-profile (max-width: 660px) {
+  .usage-profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-profile-stat {
+    padding: 16px;
+  }
+
+  .usage-profile-stat:first-child,
+  .usage-profile-stat:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .usage-profile-stat:nth-child(3),
+  .usage-profile-stat:nth-child(4) {
+    border-top: 1px solid var(--border-separator);
+  }
+
+  .usage-profile-lower {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .usage-profile-scoreboard {
+    border-top: 1px solid var(--border-separator);
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .usage-profile-token-mix {
+    padding-right: 0;
+  }
+}
+
+:root.window-blurred .dimmable {
+  opacity: 0.48;
+}
 
 .terminal-drawer {
   min-height: 0;
@@ -338,43 +416,85 @@ textarea {
 }
 
 @keyframes aiden-dialog-in {
-  from { opacity: 0; transform: translate(-50%, calc(-50% + 4px)) scale(0.98); }
-  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 4px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
 }
 
 @keyframes aiden-dialog-out {
-  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  to { opacity: 0; transform: translate(-50%, calc(-50% + 2px)) scale(0.99); }
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 2px)) scale(0.99);
+  }
 }
 
 @keyframes aiden-overlay-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes aiden-overlay-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes aiden-popover-in {
-  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @keyframes aiden-popover-out {
-  from { opacity: 1; transform: translateY(0) scale(1); }
-  to { opacity: 0; transform: translateY(-2px) scale(0.99); }
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.99);
+  }
 }
 
 @keyframes aiden-chat-title-character-in {
-  from { opacity: 0; transform: translateY(2px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes aiden-chat-title-previous-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes aiden-environment-summary-in {
@@ -1051,7 +1171,10 @@ textarea {
  * Light values by default; overridden under .dark so highlighting adapts to the
  * app-wide appearance without a separate imported theme.
  */
-.hljs { color: inherit; background: transparent; }
+.hljs {
+  color: inherit;
+  background: transparent;
+}
 .hljs-comment,
 .hljs-quote { color: var(--syntax-comment); font-style: italic; }
 .hljs-keyword,

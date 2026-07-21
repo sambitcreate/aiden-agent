@@ -8,6 +8,7 @@ import { RootView } from "./root-view";
 import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
+import { ProfileView } from "./profile-view";
 import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 
@@ -50,6 +51,13 @@ const chatRoute = createRoute({
   staticData: { title: "Chat" },
 });
 
+const profileRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/profile",
+  component: ProfileView,
+  staticData: { title: "Profile" },
+});
+
 // Full-screen settings (outside the chat shell).
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -59,7 +67,7 @@ const settingsRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-  chatLayoutRoute.addChildren([indexRoute, chatRoute]),
+  chatLayoutRoute.addChildren([indexRoute, chatRoute, profileRoute]),
   settingsRoute,
 ]);
 

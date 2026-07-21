@@ -14,10 +14,12 @@ import {
   localVoiceApi,
   mcpApi,
   modelsApi,
+  profileApi,
   providersApi,
   settingsApi,
   skillsApi,
   titleProvidersApi,
+  usageApi,
   workspacesApi,
 } from "./ipc";
 import type {
@@ -25,6 +27,7 @@ import type {
   CodexProviderStatusChanged,
   ModelInfo,
   Provider,
+  UsageDateRange,
 } from "./types";
 
 export const queryKeys = {
@@ -34,6 +37,8 @@ export const queryKeys = {
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
+  profile: ["profile"] as const,
+  usage: (range: UsageDateRange) => ["usage", range] as const,
   foundationModelsConnection: ["foundationModelsConnection"] as const,
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
@@ -248,6 +253,17 @@ export function useChat(id: string | undefined) {
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
+}
+
+export function useProfile() {
+  return useQuery({ queryKey: queryKeys.profile, queryFn: profileApi.get });
+}
+
+export function useUsageSummary(range: UsageDateRange) {
+  return useQuery({
+    queryKey: queryKeys.usage(range),
+    queryFn: () => usageApi.summary(range),
+  });
 }
 
 export function useFoundationModelsConnection() {

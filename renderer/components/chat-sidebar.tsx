@@ -3,7 +3,7 @@
 // footer button.
 
 import * as React from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertDialog,
@@ -32,7 +32,15 @@ import {
   Text,
   toast,
 } from "./ui";
-import { ChevronsUpDown, Folder, FolderGit2, Loader2, MessagesSquare, Settings } from "lucide-react";
+import {
+  ChevronsUpDown,
+  Folder,
+  FolderGit2,
+  Loader2,
+  MessagesSquare,
+  Settings,
+  UserRound,
+} from "lucide-react";
 import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import {
   CHAT_TITLE_FADE_OUT_MS,
@@ -77,8 +85,18 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
 }
 
 const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 const DAY_MS = 86_400_000;
@@ -120,6 +138,7 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
@@ -257,7 +276,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       const result = await gitApi.deleteManagedWorktree(target.id);
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       setDeletingWorktree(null);
-      toast.success(result.branchDeleted ? "Worktree and unchanged branch deleted." : "Worktree deleted; branch kept.");
+      toast.success(
+        result.branchDeleted
+          ? "Worktree and unchanged branch deleted."
+          : "Worktree deleted; branch kept.",
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't delete that worktree.");
     } finally {
@@ -316,16 +339,22 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         actions={<SplitView.SidebarToggle />}
         footer={
           <SidebarFooter>
-            <Button
-              variant="transparent"
-              className="h-10 w-full justify-start gap-2.5 px-2.5 text-[14px] font-normal"
-              onClick={() => navigate({ to: "/settings" })}
-              disabled={Boolean(settingsBlockedReason)}
-              title={settingsBlockedReason}
-            >
-              <Settings className="size-4.5 text-secondary" />
-              Settings
-            </Button>
+            <div className="flex flex-col gap-0.5" title={settingsBlockedReason}>
+              <SidebarListItem
+                icon={<UserRound />}
+                title="Profile"
+                selected={pathname === "/profile"}
+                disabled={Boolean(settingsBlockedReason)}
+                onClick={() => navigate({ to: "/profile" })}
+              />
+              <SidebarListItem
+                icon={<Settings />}
+                title="Settings"
+                selected={pathname === "/settings"}
+                disabled={Boolean(settingsBlockedReason)}
+                onClick={() => navigate({ to: "/settings" })}
+              />
+            </div>
           </SidebarFooter>
         }
       >
@@ -333,7 +362,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         <div className="px-2.5 pb-3">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="transparent" className="h-10 w-full justify-between px-2.5 text-[14px] font-normal">
+              <Button
+                variant="transparent"
+                className="h-10 w-full justify-between px-2.5 text-[14px] font-normal"
+              >
                 <span className="flex min-w-0 items-center gap-2.5">
                   {active?.folderPath ? (
                     <FolderGit2 className="size-4 shrink-0 text-secondary" />
@@ -369,11 +401,21 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 <>
                   <DropdownMenuSeparator />
                   {active.managedWorktree ? (
-                    <DropdownMenuItem disabled={workspaceActionBlocked} icon="trash" color="red" onSelect={() => setDeletingWorktree(active)}>
+                    <DropdownMenuItem
+                      disabled={workspaceActionBlocked}
+                      icon="trash"
+                      color="red"
+                      onSelect={() => setDeletingWorktree(active)}
+                    >
                       Delete worktree…
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem disabled={workspaceActionBlocked} icon="trash" color="red" onSelect={() => setRemovingWorkspace(active)}>
+                  <DropdownMenuItem
+                    disabled={workspaceActionBlocked}
+                    icon="trash"
+                    color="red"
+                    onSelect={() => setRemovingWorkspace(active)}
+                  >
                     Remove “{active.name}”
                   </DropdownMenuItem>
                 </>
@@ -418,7 +460,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           )
                         }
                         selected={chat.id === activeChatId}
-                        onClick={() => navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })}
+                        onClick={() =>
+                          navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })
+                        }
                       />
                     </ContextMenuTrigger>
                     <ContextMenuContent>

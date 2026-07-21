@@ -30,6 +30,7 @@ import type {
   McpStatus,
   ModelInfo,
   FoundationModelsConnectionStatus,
+  Profile,
   Provider,
   ProviderModelMetadata,
   CodexProviderSnapshot,
@@ -39,6 +40,8 @@ import type {
   ProviderAuthEvent,
   ProviderAuthPrompt,
   Skill,
+  UsageDateRange,
+  UsageSummary,
   Workspace,
   WorkspaceFileDocument,
   WorkspaceFileIndex,
@@ -119,6 +122,16 @@ export const settingsApi = {
 export const titleProvidersApi = {
   status: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
   refresh: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
+};
+
+export const usageApi = {
+  summary: (range: UsageDateRange = "1y") => invoke<UsageSummary>("usage:summary", range),
+};
+
+export const profileApi = {
+  get: () => invoke<Profile>("profile:get"),
+  setName: (name: string) => invoke<Profile>("profile:setName", name),
+  shareImage: (dataUrl: string) => invoke<void>("profile:shareImage", dataUrl),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────
