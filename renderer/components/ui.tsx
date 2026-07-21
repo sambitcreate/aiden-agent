@@ -4,6 +4,7 @@ import {
   ContextMenu as ContextMenuPrimitive,
   Dialog as DialogPrimitive,
   DropdownMenu as DropdownMenuPrimitive,
+  HoverCard as HoverCardPrimitive,
   Label as LabelPrimitive,
   Popover as PopoverPrimitive,
   RadioGroup as RadioGroupPrimitive,
@@ -53,8 +54,8 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         variant === "muted" && "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed",
         variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection",
         variant === "glass" && "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
-        variant === "glassAccent" && "bg-accent text-white shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
-        variant === "accent" && "bg-accent text-white shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
+        variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
+        variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
         variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed",
         className,
       )}
@@ -671,22 +672,90 @@ type DialogProps = React.PropsWithChildren<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: React.ReactNode;
+  description: React.ReactNode;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  confirmHidden?: boolean;
+  cancelRef?: React.RefObject<HTMLButtonElement | null>;
+  dismissDisabled?: boolean;
   onConfirm?: () => void | Promise<void>;
+  returnFocus?: () => HTMLElement | null;
   size?: "large";
 }>;
 
-export function Dialog({ open, onOpenChange, title, confirmLabel = "Done", confirmDisabled, onConfirm, size, children }: DialogProps) {
-  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}><DialogPrimitive.Portal><DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" /><DialogPrimitive.Content data-slot="dialog-content" className={cn("fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none", size === "large" && "w-[min(92vw,680px)]")}><DialogPrimitive.Title className="mb-4 shrink-0 text-heading2 font-semibold">{title}</DialogPrimitive.Title><div className="min-h-0 overflow-y-auto px-0.5">{children}</div><div className="mt-5 flex shrink-0 justify-end gap-2"><DialogPrimitive.Close asChild><Button variant="filled">Cancel</Button></DialogPrimitive.Close><Button variant="accent" disabled={confirmDisabled} onClick={() => void onConfirm?.()}>{confirmLabel}</Button></div></DialogPrimitive.Content></DialogPrimitive.Portal></DialogPrimitive.Root>;
+export function Dialog({ open, onOpenChange, title, description, confirmLabel = "Done", confirmDisabled, confirmHidden, cancelRef, dismissDisabled, onConfirm, returnFocus, size, children }: DialogProps) {
+  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}><DialogPrimitive.Portal><DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" /><DialogPrimitive.Content data-slot="dialog-content" onCloseAutoFocus={(event) => { const target = returnFocus?.(); if (target?.isConnected) { event.preventDefault(); target.focus(); } }} onEscapeKeyDown={(event) => dismissDisabled && event.preventDefault()} onPointerDownOutside={(event) => dismissDisabled && event.preventDefault()} className={cn("fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none", size === "large" && "w-[min(92vw,680px)]")}><DialogPrimitive.Title className="shrink-0 text-heading2 font-semibold">{title}</DialogPrimitive.Title><DialogPrimitive.Description asChild><div className="mt-1.5 shrink-0 text-regular text-secondary">{description}</div></DialogPrimitive.Description><div className="mt-4 min-h-0 overflow-y-auto px-0.5">{children}</div><div className="mt-5 flex shrink-0 justify-end gap-2"><DialogPrimitive.Close asChild><Button ref={cancelRef} variant="filled" disabled={dismissDisabled}>{confirmHidden ? "Close" : "Cancel"}</Button></DialogPrimitive.Close>{confirmHidden ? null : <Button variant="accent" disabled={confirmDisabled} onClick={() => void onConfirm?.()}>{confirmLabel}</Button>}</div></DialogPrimitive.Content></DialogPrimitive.Portal></DialogPrimitive.Root>;
 }
 
-export function AlertDialog({ open, onOpenChange, title, description, confirmLabel = "Confirm", confirmVariant, onConfirm }: Omit<DialogProps, "children" | "size" | "confirmDisabled"> & { description?: React.ReactNode; confirmVariant?: "destructive" }) {
-  return <AlertDialogPrimitive.Root open={open} onOpenChange={onOpenChange}><AlertDialogPrimitive.Portal><AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" /><AlertDialogPrimitive.Content data-slot="dialog-content" className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none"><AlertDialogPrimitive.Title className="text-heading2 font-semibold">{title}</AlertDialogPrimitive.Title>{description ? <AlertDialogPrimitive.Description asChild><div className="mt-2 text-regular text-secondary">{description}</div></AlertDialogPrimitive.Description> : null}<div className="mt-5 flex justify-end gap-2"><AlertDialogPrimitive.Cancel asChild><Button variant="filled">Cancel</Button></AlertDialogPrimitive.Cancel><AlertDialogPrimitive.Action asChild><Button variant={confirmVariant === "destructive" ? "destructive" : "accent"} onClick={() => void onConfirm?.()}>{confirmLabel}</Button></AlertDialogPrimitive.Action></div></AlertDialogPrimitive.Content></AlertDialogPrimitive.Portal></AlertDialogPrimitive.Root>;
+export function AlertDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  confirmLabel = "Confirm",
+  confirmVariant,
+  busy = false,
+  keepOpenOnConfirm = false,
+  returnFocus,
+  onConfirm,
+}: Omit<DialogProps, "children" | "size" | "confirmDisabled" | "confirmHidden" | "cancelRef" | "dismissDisabled" | "description"> & {
+  description?: React.ReactNode;
+  confirmVariant?: "destructive";
+  busy?: boolean;
+  keepOpenOnConfirm?: boolean;
+}) {
+  const confirm = (
+    <Button
+      variant={confirmVariant === "destructive" ? "destructive" : "accent"}
+      disabled={busy}
+      onClick={() => void onConfirm?.()}
+    >
+      {confirmLabel}
+    </Button>
+  );
+  return (
+    <AlertDialogPrimitive.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!busy) onOpenChange(nextOpen);
+      }}
+    >
+      <AlertDialogPrimitive.Portal>
+        <AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" />
+        <AlertDialogPrimitive.Content
+          data-slot="dialog-content"
+          aria-busy={busy}
+          onCloseAutoFocus={(event) => {
+            const target = returnFocus?.()
+              ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+            if (target?.isConnected) {
+              event.preventDefault();
+              target.focus();
+            }
+          }}
+          onEscapeKeyDown={(event) => busy && event.preventDefault()}
+          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none"
+        >
+          <AlertDialogPrimitive.Title className="text-heading2 font-semibold">{title}</AlertDialogPrimitive.Title>
+          {description ? (
+            <AlertDialogPrimitive.Description asChild>
+              <div className="mt-2 text-regular text-secondary">{description}</div>
+            </AlertDialogPrimitive.Description>
+          ) : null}
+          <div className="mt-5 flex justify-end gap-2">
+            <AlertDialogPrimitive.Cancel asChild>
+              <Button variant="filled" disabled={busy}>Cancel</Button>
+            </AlertDialogPrimitive.Cancel>
+            {keepOpenOnConfirm ? confirm : <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>}
+          </div>
+        </AlertDialogPrimitive.Content>
+      </AlertDialogPrimitive.Portal>
+    </AlertDialogPrimitive.Root>
+  );
 }
 
 const menuContentClass = "z-50 min-w-48 overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none";
-const menuItemClass = "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-150 data-[highlighted]:bg-accent data-[highlighted]:text-white data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
+const menuItemClass = "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-150 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -719,6 +788,29 @@ export const PopoverContent = React.forwardRef<
   );
 });
 
+export const HoverCard = HoverCardPrimitive.Root;
+export const HoverCardTrigger = HoverCardPrimitive.Trigger;
+export const HoverCardContent = React.forwardRef<
+  React.ElementRef<typeof HoverCardPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof HoverCardPrimitive.Content>
+>(function HoverCardContent({ className, sideOffset = 8, ...props }, ref) {
+  return (
+    <HoverCardPrimitive.Portal>
+      <HoverCardPrimitive.Content
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(
+          "z-[60] w-64 rounded-popover bg-popover p-3 text-primary shadow-popover outline-none",
+          "origin-[var(--radix-hover-card-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </HoverCardPrimitive.Portal>
+  );
+});
+
 export const ContextMenu = ContextMenuPrimitive.Root;
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
 export const ContextMenuContent = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>>(function ContextContent({ className, ...props }, ref) { return <ContextMenuPrimitive.Portal><ContextMenuPrimitive.Content ref={ref} data-slot="popover-content" className={cn(menuContentClass, "origin-[var(--radix-context-menu-content-transform-origin)]", className)} {...props} /></ContextMenuPrimitive.Portal>; });
@@ -726,8 +818,8 @@ export const ContextMenuSeparator = ({ className, ...props }: React.ComponentPro
 export const ContextMenuItem = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Item>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & { icon?: string; color?: string }>(function ContextItem({ className, icon: _icon, color, ...props }, ref) { return <ContextMenuPrimitive.Item ref={ref} className={cn(menuItemClass, color === "red" && "text-red", className)} {...props} />; });
 
 export const Select = SelectPrimitive.Root;
-export const SelectValue = SelectPrimitive.Value;
-export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-45", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
+export const SelectValue = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Value>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>>(function SelectValue({ className, ...props }, ref) { return <SelectPrimitive.Value ref={ref} className={cn("min-w-0 flex-1 truncate text-left", className)} {...props} />; });
+export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-45", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon className="shrink-0"><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
 export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} data-slot="popover-content" position={position} className={cn(menuContentClass, "max-h-72 origin-[var(--radix-select-content-transform-origin)]", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
 export const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>>(function SelectItem({ className, children, ...props }, ref) { return <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}><span className="absolute left-2"><SelectPrimitive.ItemIndicator><Check className="size-3.5" /></SelectPrimitive.ItemIndicator></span><SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText></SelectPrimitive.Item>; });
 
