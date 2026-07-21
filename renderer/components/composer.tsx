@@ -52,6 +52,8 @@ interface ComposerProps {
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
   gitBranch?: string;
+  gitDetached?: boolean;
+  gitUnborn?: boolean;
   onOpenFolder?: () => void;
   onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
   workspacePickerEnabled?: boolean;
@@ -59,7 +61,11 @@ interface ComposerProps {
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
   onCreateGitWorktree?: (branchName: string) => Promise<void>;
+  onGitOperationBusyChange?: (busy: boolean) => void;
+  gitOperationBusy?: boolean;
+  workspaceChangeBlockedReason?: string;
   gitWorktreeDescription?: string;
+  gitMutationBlockedReason?: string;
   /** Whether the selected model accepts image input. */
   visionSupported?: boolean;
   /** The model picker element, rendered in the input row. */
@@ -104,6 +110,8 @@ export function Composer({
   inputRef,
   workspace,
   gitBranch,
+  gitDetached,
+  gitUnborn,
   onOpenFolder,
   onChangePermission,
   workspacePickerEnabled,
@@ -111,7 +119,11 @@ export function Composer({
   onSelectWorkspace,
   onCreateScratchWorkspace,
   onCreateGitWorktree,
+  onGitOperationBusyChange,
+  gitOperationBusy = false,
+  workspaceChangeBlockedReason,
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
+  gitMutationBlockedReason,
   visionSupported,
   modelPicker,
 }: ComposerProps) {
@@ -126,7 +138,8 @@ export function Composer({
     ready &&
     !isGenerating &&
     !sending &&
-    !permissionSaving;
+    !permissionSaving &&
+    !gitOperationBusy;
 
   const settings = useSettings();
   const voice = useVoiceRecorder(
@@ -152,6 +165,10 @@ export function Composer({
   }, []);
 
   const handleAttach = async () => {
+    if (gitOperationBusy) {
+      toast.info("Wait for the current Git operation to finish before attaching files.");
+      return;
+    }
     const paths = await pickFiles();
     if (paths.length === 0) return;
     setAttaching(true);
@@ -174,6 +191,10 @@ export function Composer({
     setAttachments((prev) => prev.filter((a) => a.id !== id));
 
   const submit = async () => {
+    if (gitOperationBusy) {
+      toast.info("Wait for the current Git operation to finish before sending.");
+      return;
+    }
     const trimmed = text.trim();
     if (
       (!trimmed && attachments.length === 0) ||
@@ -217,12 +238,17 @@ export function Composer({
     : workspace?.name;
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
+    if (workspaceChangeBlockedReason) {
+      toast.info(workspaceChangeBlockedReason);
+      return;
+    }
     if (
       !onChangePermission ||
       nextPermission === permission ||
       permissionSaving ||
       isGenerating ||
-      sending
+      sending ||
+      gitOperationBusy
     )
       return;
     setPermissionSaving(true);
@@ -236,7 +262,11 @@ export function Composer({
   };
 
   const requestPermission = (nextPermission: WorkspacePermission) => {
-    if (nextPermission === permission || permissionSaving || isGenerating || sending) return;
+    if (workspaceChangeBlockedReason) {
+      toast.info(workspaceChangeBlockedReason);
+      return;
+    }
+    if (nextPermission === permission || permissionSaving || isGenerating || sending || gitOperationBusy) return;
     if (nextPermission === "full") {
       setConfirmFullAccess(true);
       return;
@@ -261,7 +291,7 @@ export function Composer({
                     variant="transparent"
                     size="small"
                     className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={isGenerating || sending}
+                    disabled={isGenerating || sending || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
                     aria-label="Choose a workspace"
                   >
                     <Folder className="size-4 shrink-0" />
@@ -294,8 +324,12 @@ export function Composer({
               <GitBranchPicker
                 workspaceId={workspace.id}
                 branch={gitBranch}
-                disabled={isGenerating || sending || permissionSaving}
+                detached={gitDetached}
+                unborn={gitUnborn}
+                disabled={isGenerating || sending || attaching || permissionSaving || Boolean(gitMutationBlockedReason)}
+                disabledReason={gitMutationBlockedReason}
                 onCreateWorktree={onCreateGitWorktree}
+                onBusyChange={onGitOperationBusyChange}
                 worktreeDescription={gitWorktreeDescription}
               />
             ) : null}
@@ -355,7 +389,7 @@ export function Composer({
                   iconOnly
                   className="rounded-full"
                   onClick={handleAttach}
-                  disabled={attaching || isGenerating || sending}
+                  disabled={attaching || isGenerating || sending || gitOperationBusy}
                   aria-label="Attach files or images"
                 >
                   {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
@@ -366,9 +400,11 @@ export function Composer({
                       variant="transparent"
                       size="small"
                       className={cn("h-7 gap-1.5 px-2", perm.className)}
-                      disabled={!workspace || permissionSaving || isGenerating || sending}
+                      disabled={!workspace || permissionSaving || isGenerating || sending || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
                       aria-label={
-                        isGenerating || sending
+                        workspaceChangeBlockedReason
+                          ? `Workspace access: ${perm.label}. ${workspaceChangeBlockedReason}.`
+                          : isGenerating || sending
                           ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
                           : `Workspace access: ${perm.label}`
                       }
@@ -383,7 +419,7 @@ export function Composer({
                     <DropdownMenuCheckboxItem
                       checked={permission === "full"}
                       sublabel={PERMISSION_META.full.description}
-                      disabled={permissionSaving}
+                      disabled={permissionSaving || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
                       onCheckedChange={(checked) => checked && requestPermission("full")}
                     >
                       Full access
@@ -391,7 +427,7 @@ export function Composer({
                     <DropdownMenuCheckboxItem
                       checked={permission === "ask"}
                       sublabel={PERMISSION_META.ask.description}
-                      disabled={permissionSaving}
+                      disabled={permissionSaving || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
                       onCheckedChange={(checked) => checked && requestPermission("ask")}
                     >
                       Ask first
@@ -399,7 +435,7 @@ export function Composer({
                     <DropdownMenuCheckboxItem
                       checked={permission === "none"}
                       sublabel={PERMISSION_META.none.description}
-                      disabled={permissionSaving}
+                      disabled={permissionSaving || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
                       onCheckedChange={(checked) => checked && requestPermission("none")}
                     >
                       No access
