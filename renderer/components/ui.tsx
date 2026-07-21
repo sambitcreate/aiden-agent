@@ -671,14 +671,17 @@ type DialogProps = React.PropsWithChildren<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: React.ReactNode;
+  description?: React.ReactNode;
   confirmLabel?: string;
   confirmDisabled?: boolean;
+  cancelDisabled?: boolean;
+  busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   size?: "large";
 }>;
 
-export function Dialog({ open, onOpenChange, title, confirmLabel = "Done", confirmDisabled, onConfirm, size, children }: DialogProps) {
-  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}><DialogPrimitive.Portal><DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" /><DialogPrimitive.Content data-slot="dialog-content" className={cn("fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none", size === "large" && "w-[min(92vw,680px)]")}><DialogPrimitive.Title className="mb-4 shrink-0 text-heading2 font-semibold">{title}</DialogPrimitive.Title><div className="min-h-0 overflow-y-auto px-0.5">{children}</div><div className="mt-5 flex shrink-0 justify-end gap-2"><DialogPrimitive.Close asChild><Button variant="filled">Cancel</Button></DialogPrimitive.Close><Button variant="accent" disabled={confirmDisabled} onClick={() => void onConfirm?.()}>{confirmLabel}</Button></div></DialogPrimitive.Content></DialogPrimitive.Portal></DialogPrimitive.Root>;
+export function Dialog({ open, onOpenChange, title, description, confirmLabel = "Done", confirmDisabled, cancelDisabled, busy, onConfirm, size, children }: DialogProps) {
+  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}><DialogPrimitive.Portal><DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" /><DialogPrimitive.Content data-slot="dialog-content" aria-busy={busy || undefined} className={cn("fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none", size === "large" && "w-[min(92vw,680px)]")}><DialogPrimitive.Title className="mb-4 shrink-0 text-heading2 font-semibold">{title}</DialogPrimitive.Title>{description ? <DialogPrimitive.Description className="sr-only">{description}</DialogPrimitive.Description> : null}<div className="min-h-0 overflow-y-auto px-0.5">{children}</div><div className="mt-5 flex shrink-0 justify-end gap-2"><DialogPrimitive.Close asChild><Button variant="filled" disabled={cancelDisabled}>Cancel</Button></DialogPrimitive.Close><Button variant="accent" disabled={confirmDisabled} onClick={() => void onConfirm?.()}>{confirmLabel}</Button></div></DialogPrimitive.Content></DialogPrimitive.Portal></DialogPrimitive.Root>;
 }
 
 export function AlertDialog({ open, onOpenChange, title, description, confirmLabel = "Confirm", confirmVariant, onConfirm }: Omit<DialogProps, "children" | "size" | "confirmDisabled"> & { description?: React.ReactNode; confirmVariant?: "destructive" }) {

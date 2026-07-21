@@ -1,5 +1,20 @@
 # Project History
 
+### 2026-07-21 — Add privacy-safe native profile sharing
+
+- Added a Profile-toolbar Share action and a live, theme-matched 3:4 SVG preview that rasterizes locally to a fixed 1200×1600 PNG. The curated image contains the chosen profile name and aggregate usage only; it never adds prompts, chats, workspace names, paths, or generated content.
+- All-time snapshots keep all-time totals while clipping only the activity heatmap to the latest inclusive 365 days. Shorter selected ranges retain their own calendar window, and the card bounds long names/model labels, sanitizes bidirectional controls, compacts streaks, and preserves readable light/dark text contrast.
+- Hardened the renderer/main boundary with canonical base64 and complete PNG chunk/CRC validation, native decode plus re-encode, fixed-dimension checks, one active native ShareMenu, a live parent-window requirement, private `0700`/`0600` temp artifacts, delayed post-menu cleanup, a maximum session lifetime, and stale-crash cleanup.
+- Added focused share-data, self-contained SVG, complete PNG, malformed payload, private-file, and stale-cleanup tests. The full 94-test suite, type-check, lint, production renderer/main/preload build, and `git diff --check` pass. Live Electron acceptance verified the profile, responsive toolbar/month labels, accessible 3:4 preview, 1200×1600 raster path, and native macOS share-services menu without selecting an external destination.
+
+### 2026-07-21 — Add private, device-local model-usage accounting
+
+- Added a serialized `usage.json` aggregate ledger with rolling 7/30/90-day, one-year, and all-time summaries, active-day streaks, per-model rankings, exact reported token breakdowns, and hosted cost totals only when pricing is known. Prompts, transcripts, chat/workspace identifiers, paths, and generated content never enter the record contract or persisted buckets.
+- Count every Pi assistant `message_end`, including tool-loop, terminal-error, and abort turns; also count chat-model and Apple Foundation Models title requests, OpenAI/Gemini cloud transcription, and on-device Parakeet transcription. Local and otherwise unmetered calls remain visible in request/activity totals while local cost is always excluded.
+- Hardened locality around the actual loopback endpoint rather than provider names or authentication mode, separated Gemini cached prompt tokens from uncached input, and retained failed/invalid-response transcription attempts without double-counting.
+- Await best-effort ledger writes at model-call settlement boundaries so fast shutdown cannot drop completed calls. The in-memory mutation tail survives transient save failures, malformed/impossible persisted dates are discarded, corrupt local cost fields are stripped, and the main/preload/renderer IPC boundary exposes only privacy-safe summaries.
+- Added 9 focused accounting tests covering aggregation, inclusive ranges and streaks, concurrency/privacy, tool-loop/error/abort outcomes, local/hosted cost semantics, OpenAI/Gemini usage fields, corrupt data, and transient write recovery. The full 80-test suite, type-check, lint, and production build pass.
+
 ### 2026-07-20 — Add a spatial, magnetic model picker
 
 - Replaced the composer model dropdown with a Photographic Styles-inspired square Pad plus the preserved searchable List view. Horizontal position runs Faster → More deliberate; vertical position runs Everyday → More capable.

@@ -16,6 +16,12 @@ import { configStore } from "./config-store.js";
 import { foundationModelsConnection } from "./foundation-models-connection.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import { modelsCatalog } from "./models-catalog.js";
+import {
+  assistantUsageRecord,
+  isLocalModelProvider,
+  unreportedUsageRecord,
+} from "./usage-accounting.js";
+import { usageStore } from "./usage-store.js";
 
 const TITLE_TIMEOUT_MS = 15_000;
 const inFlight = new Map<string, Promise<void>>();
@@ -34,7 +40,9 @@ function assistantText(content: AssistantMessage["content"]): string {
 }
 
 async function generateWithChatModel(input: {
-  firstMessage: Parameters<typeof buildChatTitlePrompt>[0] & { attachments?: import("./types.js").Attachment[] };
+  firstMessage: Parameters<typeof buildChatTitlePrompt>[0] & {
+    attachments?: import("./types.js").Attachment[];
+  };
   selection: ChatTitleModelSelection;
   signal: AbortSignal;
 }): Promise<string> {
@@ -57,29 +65,87 @@ async function generateWithChatModel(input: {
     });
   }
 
-  const result = await runtime.streams
-    .streamSimple(
-      runtime.model,
-      {
-        systemPrompt: "You write short, specific titles for coding conversations.",
-        messages: [{ role: "user", content: promptContent, timestamp: Date.now() }],
-      },
-      {
-        apiKey: runtime.apiKey,
-        headers: runtime.headers,
-        signal: input.signal,
-        temperature: 0.2,
-        maxTokens: 48,
-        timeoutMs: TITLE_TIMEOUT_MS,
-        maxRetries: 0,
-        cacheRetention: "none",
-      },
-    )
-    .result();
+  let result: AssistantMessage;
+  try {
+    result = await runtime.streams
+      .streamSimple(
+        runtime.model,
+        {
+          systemPrompt: "You write short, specific titles for coding conversations.",
+          messages: [{ role: "user", content: promptContent, timestamp: Date.now() }],
+        },
+        {
+          apiKey: runtime.apiKey,
+          headers: runtime.headers,
+          signal: input.signal,
+          temperature: 0.2,
+          maxTokens: 48,
+          timeoutMs: TITLE_TIMEOUT_MS,
+          maxRetries: 0,
+          cacheRetention: "none",
+        },
+      )
+      .result();
+  } catch (error) {
+    await usageStore.record(
+      unreportedUsageRecord({
+        source: "chat-title",
+        providerId: runtime.provider.id,
+        providerLabel: runtime.provider.label,
+        modelId: runtime.model.id,
+        modelLabel: runtime.model.name,
+        local: isLocalModelProvider(runtime.provider),
+        status: input.signal.aborted ? "cancelled" : "failed",
+      }),
+    );
+    throw error;
+  }
+  await usageStore.record(
+    assistantUsageRecord({
+      message: result,
+      provider: runtime.provider,
+      model: runtime.model,
+      source: "chat-title",
+    }),
+  );
   if (result.stopReason === "error" || result.stopReason === "aborted") {
     throw new Error(result.errorMessage || `Title generation ${result.stopReason}.`);
   }
   return assistantText(result.content);
+}
+
+async function generateWithAppleFoundationModels(
+  prompt: string,
+  signal: AbortSignal,
+): Promise<string> {
+  try {
+    const title = await foundationModelsConnection.generateTitle(prompt, signal);
+    await usageStore.record(
+      unreportedUsageRecord({
+        source: "chat-title",
+        providerId: "apple-foundation-models",
+        providerLabel: "Apple Foundation Models",
+        modelId: "apple-foundation-model",
+        modelLabel: "Apple Foundation Model",
+        local: true,
+        status: "completed",
+      }),
+    );
+    return title;
+  } catch (error) {
+    await usageStore.record(
+      unreportedUsageRecord({
+        source: "chat-title",
+        providerId: "apple-foundation-models",
+        providerLabel: "Apple Foundation Models",
+        modelId: "apple-foundation-model",
+        modelLabel: "Apple Foundation Model",
+        local: true,
+        status: signal.aborted ? "cancelled" : "failed",
+      }),
+    );
+    throw error;
+  }
 }
 
 async function generateFirstTurnTitle(input: {
@@ -109,7 +175,7 @@ async function generateFirstTurnTitle(input: {
   try {
     const rawTitle =
       route === "apple-foundation-models"
-        ? await foundationModelsConnection.generateTitle(
+        ? await generateWithAppleFoundationModels(
             buildChatTitlePrompt(firstMessage),
             abortController.signal,
           )

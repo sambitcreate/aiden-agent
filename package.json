@@ -1,16 +1,15 @@
 {
   "name": "aiden-agent",
   "version": "1.0.0",
-  "productName": "Aiden Agent",
+  "private": true,
   "description": "A private macOS AI workspace agent for local and cloud models",
   "author": "Sambit Biswas",
-  "private": true,
-  "type": "module",
-  "main": "build/main/index.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/sambitcreate/aiden-agent.git"
   },
+  "type": "module",
+  "main": "build/main/index.js",
   "scripts": {
     "build": "vite build && npm run build:electron",
     "build:native": "node scripts/build-foundation-models-helper.mjs --required",
@@ -20,7 +19,7 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
     "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && AIDEN_RENDERER_URL=http://127.0.0.1:4143 electron .",
     "lint": "eslint .",
-    "test": "tsx --test main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/coding-tools.test.ts main/services/foundation-models-connection.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/models.test.ts main/services/provider-key-policy.test.ts main/services/scratch-workspace.test.ts renderer/lib/chat-title-reveal.test.ts renderer/lib/editor-preference.test.ts renderer/lib/model-picker-data.test.ts",
+    "test": "tsx --test main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/coding-tools.test.ts main/services/foundation-models-connection.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/models.test.ts main/services/profile-share-core.test.ts main/services/profile-share-files.test.ts main/services/profile.test.ts main/services/provider-key-policy.test.ts main/services/scratch-workspace.test.ts main/services/usage-store-core.test.ts renderer/components/usage/profile-share-card.test.tsx renderer/lib/chat-title-reveal.test.ts renderer/lib/editor-preference.test.ts renderer/lib/model-picker-data.test.ts renderer/lib/profile-share-data.test.ts renderer/lib/usage-profile-data.test.ts",
     "test:native": "CLANG_MODULE_CACHE_PATH=build/native-test-module-cache SWIFT_MODULECACHE_PATH=build/native-test-module-cache swift test --disable-sandbox --package-path native/apple-foundation-models --scratch-path build/native-swift-tests",
     "type-check": "tsc --noEmit",
     "format": "oxfmt .",
@@ -124,5 +123,6 @@
         "NSMicrophoneUsageDescription": "Aiden Agent uses the microphone only when you choose voice input or dictation."
       }
     }
-  }
+  },
+  "productName": "Aiden Agent"
 }

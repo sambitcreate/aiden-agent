@@ -1,9 +1,11 @@
 import {
   BrowserWindow,
+  ShareMenu,
   app,
   dialog,
   globalShortcut,
   ipcMain as electronIpcMain,
+  nativeImage,
   nativeTheme,
   safeStorage,
   shell,
@@ -14,8 +16,19 @@ import {
 
 type LogValue = unknown;
 
-function writeLog(level: "debug" | "info" | "warn" | "error", scope: string, values: LogValue[]): void {
-  const method = level === "debug" ? console.debug : level === "info" ? console.info : level === "warn" ? console.warn : console.error;
+function writeLog(
+  level: "debug" | "info" | "warn" | "error",
+  scope: string,
+  values: LogValue[],
+): void {
+  const method =
+    level === "debug"
+      ? console.debug
+      : level === "info"
+        ? console.info
+        : level === "warn"
+          ? console.warn
+          : console.error;
   method(`[${scope}]`, ...values);
 }
 
@@ -47,7 +60,9 @@ export function registerNativeHandlers(): void {
 
   electronIpcMain.handle("aiden:dialog:open", async (event, options?: OpenDialogOptions) => {
     const parent = BrowserWindow.fromWebContents(event.sender);
-    return parent ? dialog.showOpenDialog(parent, options ?? {}) : dialog.showOpenDialog(options ?? {});
+    return parent
+      ? dialog.showOpenDialog(parent, options ?? {})
+      : dialog.showOpenDialog(options ?? {});
   });
 
   electronIpcMain.handle("aiden:theme:get", () => ({
@@ -60,8 +75,10 @@ export function registerNativeHandlers(): void {
     nativeTheme.themeSource = source;
     return true;
   });
-  electronIpcMain.handle("aiden:media:status", (_event, mediaType: "microphone" | "camera" | "screen") =>
-    systemPreferences.getMediaAccessStatus(mediaType),
+  electronIpcMain.handle(
+    "aiden:media:status",
+    (_event, mediaType: "microphone" | "camera" | "screen") =>
+      systemPreferences.getMediaAccessStatus(mediaType),
   );
   electronIpcMain.handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
     systemPreferences.askForMediaAccess(mediaType),
@@ -75,4 +92,14 @@ export function registerNativeHandlers(): void {
   });
 }
 
-export { app, BrowserWindow, dialog, globalShortcut, safeStorage, shell, systemPreferences };
+export {
+  app,
+  BrowserWindow,
+  ShareMenu,
+  dialog,
+  globalShortcut,
+  nativeImage,
+  safeStorage,
+  shell,
+  systemPreferences,
+};

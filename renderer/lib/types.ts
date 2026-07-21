@@ -209,6 +209,68 @@ export interface AppSettings {
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
   chatTitleProviderId?: ChatTitleProviderId;
+  profileName?: string;
+}
+
+export interface Profile {
+  name: string;
+}
+
+export type UsageDateRange = "7d" | "30d" | "90d" | "1y" | "all";
+
+export interface UsageTokenBreakdown {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+}
+
+export interface UsageDaySummary {
+  date: string;
+  requests: number;
+  reportedTokenRequests: number;
+  unmeteredRequests: number;
+  tokens: UsageTokenBreakdown;
+  hostedCostUsd: number;
+}
+
+export interface UsageModelSummary {
+  providerId: string;
+  providerLabel: string;
+  modelId: string;
+  modelLabel: string;
+  local: boolean;
+  requests: number;
+  reportedTokenRequests: number;
+  unmeteredRequests: number;
+  tokens: UsageTokenBreakdown;
+  hostedCostUsd: number;
+}
+
+export interface UsageSummary {
+  range: UsageDateRange;
+  startDate: string;
+  endDate: string;
+  totals: {
+    requests: number;
+    completedRequests: number;
+    failedRequests: number;
+    cancelledRequests: number;
+    reportedTokenRequests: number;
+    unmeteredRequests: number;
+    localRequests: number;
+    costedRequests: number;
+    unpricedHostedRequests: number;
+    hostedCostUsd: number;
+    activeDays: number;
+    currentStreak: number;
+    longestStreak: number;
+    tokens: UsageTokenBreakdown;
+  };
+  days: UsageDaySummary[];
+  models: UsageModelSummary[];
 }
 
 /** On-device Parakeet model in the download catalog. */

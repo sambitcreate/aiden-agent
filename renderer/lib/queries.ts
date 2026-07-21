@@ -1,8 +1,22 @@
 // React Query hooks for providers, chats, and settings.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { chatsApi, exaApi, gitApi, localVoiceApi, mcpApi, modelsApi, providersApi, settingsApi, skillsApi, titleProvidersApi, workspacesApi } from "./ipc";
-import type { Provider } from "./types";
+import {
+  chatsApi,
+  exaApi,
+  gitApi,
+  localVoiceApi,
+  mcpApi,
+  modelsApi,
+  profileApi,
+  providersApi,
+  settingsApi,
+  skillsApi,
+  titleProvidersApi,
+  usageApi,
+  workspacesApi,
+} from "./ipc";
+import type { Provider, UsageDateRange } from "./types";
 
 export const queryKeys = {
   providers: ["providers"] as const,
@@ -10,6 +24,8 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  profile: ["profile"] as const,
+  usage: (range: UsageDateRange) => ["usage", range] as const,
   foundationModelsConnection: ["foundationModelsConnection"] as const,
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
@@ -19,8 +35,10 @@ export const queryKeys = {
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
-  gitWorktrees: (workspaceId: string | undefined) => ["gitWorktrees", workspaceId ?? "none"] as const,
-  discoveredSkills: (folderPath: string | undefined) => ["discoveredSkills", folderPath ?? "none"] as const,
+  gitWorktrees: (workspaceId: string | undefined) =>
+    ["gitWorktrees", workspaceId ?? "none"] as const,
+  discoveredSkills: (folderPath: string | undefined) =>
+    ["discoveredSkills", folderPath ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -98,13 +116,23 @@ export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
 }
 
+export function useProfile() {
+  return useQuery({ queryKey: queryKeys.profile, queryFn: profileApi.get });
+}
+
+export function useUsageSummary(range: UsageDateRange) {
+  return useQuery({
+    queryKey: queryKeys.usage(range),
+    queryFn: () => usageApi.summary(range),
+  });
+}
+
 export function useFoundationModelsConnection() {
   return useQuery({
     queryKey: queryKeys.foundationModelsConnection,
     queryFn: titleProvidersApi.status,
     refetchOnWindowFocus: true,
-    refetchInterval: (query) =>
-      query.state.data?.state === "model_preparing" ? 5_000 : false,
+    refetchInterval: (query) => (query.state.data?.state === "model_preparing" ? 5_000 : false),
   });
 }
 

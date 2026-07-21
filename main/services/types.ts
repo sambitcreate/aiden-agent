@@ -246,6 +246,72 @@ export interface AppSettings {
   dictationAccelerator?: string;
   /** Background chat-title generation policy. Defaults to automatic. */
   chatTitleProviderId?: ChatTitleProviderId;
+  /** Device-local display name used by the private usage profile. */
+  profileName?: string;
+}
+
+export interface Profile {
+  name: string;
+}
+
+/** Date windows available in the private, device-local usage profile. */
+export type UsageDateRange = "7d" | "30d" | "90d" | "1y" | "all";
+
+/** Token counts reported by a model provider. Reasoning is a subset of output. */
+export interface UsageTokenBreakdown {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+  total: number;
+}
+
+export interface UsageDaySummary {
+  date: string;
+  requests: number;
+  reportedTokenRequests: number;
+  unmeteredRequests: number;
+  tokens: UsageTokenBreakdown;
+  hostedCostUsd: number;
+}
+
+export interface UsageModelSummary {
+  providerId: string;
+  providerLabel: string;
+  modelId: string;
+  modelLabel: string;
+  local: boolean;
+  requests: number;
+  reportedTokenRequests: number;
+  unmeteredRequests: number;
+  tokens: UsageTokenBreakdown;
+  hostedCostUsd: number;
+}
+
+/** Privacy-safe aggregate returned to the renderer. No chat or workspace content is persisted. */
+export interface UsageSummary {
+  range: UsageDateRange;
+  startDate: string;
+  endDate: string;
+  totals: {
+    requests: number;
+    completedRequests: number;
+    failedRequests: number;
+    cancelledRequests: number;
+    reportedTokenRequests: number;
+    unmeteredRequests: number;
+    localRequests: number;
+    costedRequests: number;
+    unpricedHostedRequests: number;
+    hostedCostUsd: number;
+    activeDays: number;
+    currentStreak: number;
+    longestStreak: number;
+    tokens: UsageTokenBreakdown;
+  };
+  days: UsageDaySummary[];
+  models: UsageModelSummary[];
 }
 
 /** Params for a streaming generation request. */
