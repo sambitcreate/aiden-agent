@@ -3,8 +3,13 @@ import test from "node:test";
 
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 
-import { logoutCodexProvider, queryKeys, refreshCodexProviderState } from "./queries.js";
-import type { CodexProviderSnapshot } from "./types.js";
+import {
+  logoutCodexProvider,
+  queryKeys,
+  refreshCodexProviderState,
+  subscribeCodexProviderState,
+} from "./queries.js";
+import type { CodexProviderSnapshot, CodexProviderStatusChanged } from "./types.js";
 
 function snapshot(configured: boolean): CodexProviderSnapshot {
   return {
@@ -12,6 +17,7 @@ function snapshot(configured: boolean): CodexProviderSnapshot {
     name: "OpenAI Codex",
     authName: "ChatGPT",
     configured,
+    needsAttention: false,
     models: [],
   };
 }
@@ -65,5 +71,32 @@ test("terminal refresh replaces a data-less pending status read", async () => {
 
   assert.deepEqual(queryClient.getQueryData(queryKeys.codexProviderStatus), snapshot(true));
   unsubscribe();
+  queryClient.clear();
+});
+
+test("main-originated Codex health changes reconcile status and provider caches", async () => {
+  const queryClient = new QueryClient();
+  let notification = (_event: CodexProviderStatusChanged): void => undefined;
+  let unsubscribed = false;
+  const refreshes: QueryClient[] = [];
+  const unsubscribe = subscribeCodexProviderState(
+    queryClient,
+    (handler) => {
+      notification = handler;
+      return () => {
+        unsubscribed = true;
+      };
+    },
+    async (client) => {
+      refreshes.push(client);
+    },
+  );
+
+  notification({ providerId: "openai-codex", needsAttention: true });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(refreshes, [queryClient]);
+  unsubscribe();
+  assert.equal(unsubscribed, true);
   queryClient.clear();
 });

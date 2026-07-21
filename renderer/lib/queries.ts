@@ -14,7 +14,7 @@ import {
   titleProvidersApi,
   workspacesApi,
 } from "./ipc";
-import type { CodexProviderSnapshot, Provider } from "./types";
+import type { CodexProviderSnapshot, CodexProviderStatusChanged, Provider } from "./types";
 
 export const queryKeys = {
   providers: ["providers"] as const,
@@ -66,6 +66,20 @@ export async function refreshCodexProviderState(queryClient: QueryClient): Promi
     queryClient.invalidateQueries({ queryKey: queryKeys.codexProviderStatus }),
     queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
   ]);
+}
+
+/** Reconcile both caches when any main-process request discovers new Codex auth health. */
+export function subscribeCodexProviderState(
+  queryClient: QueryClient,
+  subscribe: (
+    handler: (event: CodexProviderStatusChanged) => void,
+  ) => () => void = providersApi.onAuthStatusChanged,
+  refresh: (queryClient: QueryClient) => Promise<void> = refreshCodexProviderState,
+): () => void {
+  return subscribe((event) => {
+    if (event.providerId !== "openai-codex") return;
+    void refresh(queryClient);
+  });
 }
 
 export async function logoutCodexProvider(

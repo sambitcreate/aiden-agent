@@ -17,6 +17,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
   );
   assert.equal(provider?.id, "openai-codex");
   assert.equal(provider?.name, "OpenAI Codex");
+  assert.equal(provider?.baseUrl, "https://chatgpt.com/backend-api");
   assert.equal(provider?.auth.oauth?.name, "OpenAI (ChatGPT Plus/Pro)");
   assert.equal(typeof provider?.auth.oauth?.login, "function");
   assert.equal(typeof provider?.auth.oauth?.refresh, "function");

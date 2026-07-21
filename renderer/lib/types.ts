@@ -32,7 +32,13 @@ export interface CodexProviderSnapshot {
   name: string;
   authName: string;
   configured: boolean;
+  needsAttention: boolean;
   models: CodexModelSummary[];
+}
+
+export interface CodexProviderStatusChanged {
+  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  needsAttention: boolean;
 }
 
 export interface ProviderAuthSelectOption {

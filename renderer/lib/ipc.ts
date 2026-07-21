@@ -21,6 +21,7 @@ import type {
   FoundationModelsConnectionStatus,
   Provider,
   CodexProviderSnapshot,
+  CodexProviderStatusChanged,
   ProviderAuthDone,
   ProviderAuthError,
   ProviderAuthEvent,
@@ -83,6 +84,8 @@ export const providersApi = {
     onNotification("providers:auth:done", handler),
   onAuthError: (handler: (event: ProviderAuthError) => void) =>
     onNotification("providers:auth:error", handler),
+  onAuthStatusChanged: (handler: (event: CodexProviderStatusChanged) => void) =>
+    onNotification("providers:auth:status-changed", handler),
 };
 
 export const settingsApi = {
@@ -91,10 +94,8 @@ export const settingsApi = {
 };
 
 export const titleProvidersApi = {
-  status: () =>
-    invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
-  refresh: () =>
-    invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
+  status: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
+  refresh: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
 };
 
 // ── Skills ────────────────────────────────────────────────────────────
@@ -128,7 +129,8 @@ export const exaApi = {
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
 export const voiceApi = {
-  transcribe: (audioBase64: string, mimeType: string) => invoke<string>("voice:transcribe", audioBase64, mimeType),
+  transcribe: (audioBase64: string, mimeType: string) =>
+    invoke<string>("voice:transcribe", audioBase64, mimeType),
   /** On-device transcription: base64 raw 16 kHz mono Float32 PCM + downloaded model id. */
   transcribeLocal: (pcmBase64: string, modelId: string) =>
     invoke<string>("voice:transcribeLocal", pcmBase64, modelId),
@@ -164,7 +166,9 @@ export async function pickFolder(): Promise<string | null> {
 
 /** Native multi-file picker for composer attachments. Returns [] if cancelled. */
 export async function pickFiles(): Promise<string[]> {
-  const res = await window.aidenAPI.dialog.showOpenDialog({ properties: ["openFile", "multiSelections"] });
+  const res = await window.aidenAPI.dialog.showOpenDialog({
+    properties: ["openFile", "multiSelections"],
+  });
   if (res.canceled || !res.filePaths?.length) return [];
   return res.filePaths;
 }
@@ -214,7 +218,8 @@ export const terminalApi = {
   create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
   snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
   write: (sessionId: string, data: string) => invoke<void>("terminal:write", sessionId, data),
-  resize: (sessionId: string, cols: number, rows: number) => invoke<void>("terminal:resize", sessionId, cols, rows),
+  resize: (sessionId: string, cols: number, rows: number) =>
+    invoke<void>("terminal:resize", sessionId, cols, rows),
   close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
 };
 
@@ -222,7 +227,8 @@ export const terminalApi = {
 export const gitApi = {
   branches: (workspaceId: string) => invoke<GitBranches>("git:branches", workspaceId),
   checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
-  createBranch: (workspaceId: string, name: string) => invoke<void>("git:createBranch", workspaceId, name),
+  createBranch: (workspaceId: string, name: string) =>
+    invoke<void>("git:createBranch", workspaceId, name),
   worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
@@ -242,7 +248,12 @@ export const chatsApi = {
   remove: (id: string) => invoke<void>("chats:remove", id),
   appendMessage: (
     id: string,
-    message: { role: ChatMessage["role"]; content: string; model?: string; attachments?: Attachment[] },
+    message: {
+      role: ChatMessage["role"];
+      content: string;
+      model?: string;
+      attachments?: Attachment[];
+    },
     meta?: { providerId?: string; model?: string; autoTitle?: boolean },
   ) => invoke<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
@@ -302,7 +313,10 @@ function makeStreamId(): string {
  * (filtered by a client-generated streamId) BEFORE kicking off the backend, so
  * no opening tokens are missed. Auto-unsubscribes on done/error.
  */
-export function startGeneration(params: ChatStartParams, callbacks: StreamCallbacks): GenerationHandle {
+export function startGeneration(
+  params: ChatStartParams,
+  callbacks: StreamCallbacks,
+): GenerationHandle {
   const streamId = makeStreamId();
   const unsubs: Array<() => void> = [];
   const dispose = () => {
@@ -319,7 +333,9 @@ export function startGeneration(params: ChatStartParams, callbacks: StreamCallba
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
       void Promise.resolve(callbacks.onDone(p.content))
-        .catch((error: unknown) => callbacks.onError(error instanceof Error ? error.message : String(error)))
+        .catch((error: unknown) =>
+          callbacks.onError(error instanceof Error ? error.message : String(error)),
+        )
         .finally(dispose);
     }),
   );
@@ -338,7 +354,11 @@ export function startGeneration(params: ChatStartParams, callbacks: StreamCallba
   unsubs.push(
     onNotification<ChatApproval>("chat:approval", (p) => {
       if (p.streamId === streamId)
-        callbacks.onApproval?.({ approvalId: p.approvalId, toolName: p.toolName, summary: p.summary });
+        callbacks.onApproval?.({
+          approvalId: p.approvalId,
+          toolName: p.toolName,
+          summary: p.summary,
+        });
     }),
   );
 

@@ -317,6 +317,7 @@ export function CodexProviderSettings() {
   }, [status]);
 
   const configured = status.data?.configured === true;
+  const needsAttention = status.data?.needsAttention === true;
   const busy = authView !== null || signingOut;
   const statusBusy = status.isLoading || status.isFetching;
   const prompt = authView?.phase === "waiting" ? authView.prompt : undefined;
@@ -341,13 +342,20 @@ export function CodexProviderSettings() {
           <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
             <MessageSquareCode className="size-4" aria-hidden />
           </div>
-          <div className="min-w-0 flex-1">
+          <div
+            className="min-w-0 flex-1"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <div className="flex flex-wrap items-center gap-2">
               <Text id={cardTitleId} variant="strong">
                 ChatGPT / Codex
               </Text>
               <Badge color="blue">Built in</Badge>
-              <span>{statusBadge(signingOut, statusBusy, status.isError, configured)}</span>
+              <span>
+                {statusBadge(signingOut, statusBusy, status.isError || needsAttention, configured)}
+              </span>
             </div>
             <Text variant="small" color="secondary" className="mt-1 block">
               Use your ChatGPT account for Codex models. OAuth credentials stay encrypted on this
@@ -360,9 +368,11 @@ export function CodexProviderSettings() {
                   ? "Aiden is checking the ChatGPT credential stored on this Mac."
                   : status.isError
                     ? "Aiden couldn't read the stored sign-in. Retry, sign in again, or clear it."
-                    : configured
-                      ? "A ChatGPT credential is stored. Aiden verifies and refreshes it when a Codex request starts."
-                      : "Sign in with ChatGPT to make Codex models available in the model picker."}
+                    : needsAttention
+                      ? "The stored ChatGPT sign-in was rejected or could not refresh. Sign in again to repair it."
+                      : configured
+                        ? "A ChatGPT credential is stored. Aiden verifies and refreshes it when a Codex request starts."
+                        : "Sign in with ChatGPT to make Codex models available in the model picker."}
             </Text>
           </div>
         </div>

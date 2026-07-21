@@ -2,17 +2,57 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model, ProviderStreams } from "@earendil-works/pi-ai";
 import {
   PI_AUTH_COMPATIBILITY_TOKEN,
+  buildAgentRuntimeOptions,
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
   terminalAssistantText,
   terminalAssistantTextFallback,
   terminalGenerationError,
+  terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
 } from "./generation-runtime.js";
+
+test("forwards the chat identity through Pi Agent options into the native stream", () => {
+  let receivedSessionId: string | undefined;
+  let receivedApiKey: string | undefined;
+  let receivedAuthorization: string | null | undefined;
+  const nativeStream = ((_model, _context, options) => {
+    receivedSessionId = options?.sessionId;
+    receivedApiKey = options?.apiKey;
+    receivedAuthorization = options?.headers?.Authorization;
+    throw new Error("captured");
+  }) as ProviderStreams["streamSimple"];
+  const agentOptions = buildAgentRuntimeOptions("chat-session-123", {
+    apiKey: "runtime-key",
+    headers: { Authorization: null },
+    streams: { streamSimple: nativeStream },
+  });
+  const model: Model<"openai-codex-responses"> = {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 272_000,
+    maxTokens: 128_000,
+  };
+
+  assert.equal(agentOptions.sessionId, "chat-session-123");
+  assert.throws(
+    () => agentOptions.streamFn?.(model, { messages: [] }, { sessionId: agentOptions.sessionId }),
+    /captured/u,
+  );
+  assert.equal(receivedSessionId, "chat-session-123");
+  assert.equal(receivedApiKey, "runtime-key");
+  assert.equal(receivedAuthorization, null);
+});
 
 test("uses an in-memory non-secret credential for an explicitly keyless provider", () => {
   assert.equal(resolveRuntimeApiKey({ needsKey: false }, null), PI_AUTH_COMPATIBILITY_TOKEN);
@@ -215,6 +255,15 @@ test("classifies terminal Pi errors without turning an aborted turn into an erro
   assert.equal(terminalGenerationError({ role: "assistant", stopReason: "aborted" }), null);
   assert.equal(terminalGenerationWasAborted({ role: "assistant", stopReason: "aborted" }), true);
   assert.equal(terminalGenerationWasAborted({ role: "toolResult", stopReason: "aborted" }), false);
+});
+
+test("surfaces a dependency abort unless the app explicitly requested cancellation", () => {
+  assert.equal(
+    terminalGenerationInterruptionError(true, false),
+    "The response was interrupted before it finished. Try again.",
+  );
+  assert.equal(terminalGenerationInterruptionError(true, true), null);
+  assert.equal(terminalGenerationInterruptionError(false, false), null);
 });
 
 test("uses final assistant text when a provider does not stream text deltas", () => {

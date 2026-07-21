@@ -1,6 +1,6 @@
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import {
   canUseStoredProviderKey,
@@ -15,6 +15,12 @@ import {
 } from "../services/provider-auth-flow-core.js";
 import { providerAuthFlow } from "../services/provider-auth-flow.js";
 import { providerAuthOwner } from "../services/provider-auth-owner.js";
+import { providerRegistry } from "../services/provider-registry.js";
+import {
+  assertMutableProviderId,
+  forwardCodexProviderStatusChanges,
+  mergeCodexProvider,
+} from "../services/provider-list-core.js";
 import type { ProviderKind, StoredProvider } from "../services/types.js";
 
 function asString(value: unknown, name: string): string {
@@ -71,6 +77,7 @@ function replacementKey(value: unknown): string | null {
  * renderer payload cannot redirect it to another host.
  */
 async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
+  assertMutableProviderId(provider.id);
   const previous = await configStore.getProvider(provider.id);
   const connectionChanged = Boolean(previous && !sameProviderConnection(previous, provider));
   const replacement = provider.needsKey ? replacementKey(keyOverride) : null;
@@ -84,8 +91,22 @@ async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
   return saved;
 }
 
+async function listProviders() {
+  const providers = await configStore.listProviders();
+  try {
+    return mergeCodexProvider(providers, await providerRegistry.codex.snapshot());
+  } catch {
+    logger.warn("providers", "ChatGPT / Codex status was unavailable while listing providers.");
+    return mergeCodexProvider(providers, null);
+  }
+}
+
 export function registerProviderHandlers(): void {
-  ipcMain.handle("providers:list", async () => configStore.listProviders());
+  forwardCodexProviderStatusChanges(providerRegistry.codex, (channel, event) =>
+    ipcMain.broadcast(channel, event),
+  );
+
+  ipcMain.handle("providers:list", listProviders);
 
   ipcMain.handle("providers:auth:status", async (_event, providerId: unknown) =>
     providerAuthFlow.status(parseProviderAuthProviderId(providerId)),
@@ -96,17 +117,11 @@ export function registerProviderHandlers(): void {
   );
 
   ipcMain.handle("providers:auth:respond", (event, request: unknown) =>
-    providerAuthFlow.respond(
-      providerAuthOwner(event),
-      parseProviderAuthResponseRequest(request),
-    ),
+    providerAuthFlow.respond(providerAuthOwner(event), parseProviderAuthResponseRequest(request)),
   );
 
   ipcMain.handle("providers:auth:cancel", (event, request: unknown) =>
-    providerAuthFlow.cancel(
-      providerAuthOwner(event),
-      parseProviderAuthStartRequest(request),
-    ),
+    providerAuthFlow.cancel(providerAuthOwner(event), parseProviderAuthStartRequest(request)),
   );
 
   ipcMain.handle("providers:logout", async (event, providerId: unknown) => {
@@ -124,11 +139,14 @@ export function registerProviderHandlers(): void {
   );
 
   ipcMain.handle("providers:remove", async (_event, id: unknown) => {
-    await configStore.removeProvider(asString(id, "id"));
+    const providerId = asString(id, "id");
+    assertMutableProviderId(providerId);
+    await configStore.removeProvider(providerId);
   });
 
   ipcMain.handle("providers:setKey", async (_event, id: unknown, key: unknown) => {
     const providerId = asString(id, "id");
+    assertMutableProviderId(providerId);
     const provider = await configStore.getProvider(providerId);
     if (provider && !provider.needsKey) {
       await secrets.deleteKey(providerId);
@@ -148,6 +166,7 @@ export function registerProviderHandlers(): void {
     "providers:test",
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
+      assertMutableProviderId(provider.id);
       const key = await connectionKey(provider, keyOverride);
       return testConnection(provider, key);
     },
@@ -157,6 +176,7 @@ export function registerProviderHandlers(): void {
     "providers:listModels",
     async (_event, providerValue: unknown, keyOverride?: unknown) => {
       const provider = parseProvider(providerValue);
+      assertMutableProviderId(provider.id);
       const key = await connectionKey(provider, keyOverride);
       return listModels(provider, key);
     },

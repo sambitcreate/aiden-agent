@@ -47,6 +47,7 @@ const NOTIFICATION_CHANNELS = new Set([
   "providers:auth:error",
   "providers:auth:event",
   "providers:auth:prompt",
+  "providers:auth:status-changed",
   "terminal:data",
   "terminal:exit",
   "aiden:theme:changed",
@@ -80,7 +81,8 @@ const aidenAPI = {
       ipcRenderer.invoke("aiden:dialog:open", options) as Promise<OpenDialogReturnValue>,
   },
   nativeTheme: {
-    getInfo: (): Promise<NativeThemeInfo> => ipcRenderer.invoke("aiden:theme:get") as Promise<NativeThemeInfo>,
+    getInfo: (): Promise<NativeThemeInfo> =>
+      ipcRenderer.invoke("aiden:theme:get") as Promise<NativeThemeInfo>,
     setThemeSource: (source: "system" | "light" | "dark"): Promise<boolean> =>
       ipcRenderer.invoke("aiden:theme:set", source) as Promise<boolean>,
     onChanged: (callback: (info: NativeThemeInfo) => void): (() => void) =>

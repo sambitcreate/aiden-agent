@@ -65,6 +65,7 @@ function snapshot(configured = false) {
     name: "OpenAI Codex",
     authName: "OpenAI (ChatGPT Plus/Pro)",
     configured,
+    needsAttention: false,
     models: [],
   };
 }
