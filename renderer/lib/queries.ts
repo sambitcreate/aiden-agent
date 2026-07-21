@@ -1,8 +1,20 @@
 // React Query hooks for providers, chats, and settings.
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { chatsApi, exaApi, gitApi, localVoiceApi, mcpApi, modelsApi, providersApi, settingsApi, skillsApi, titleProvidersApi, workspacesApi } from "./ipc";
-import type { Provider } from "./types";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  chatsApi,
+  exaApi,
+  gitApi,
+  localVoiceApi,
+  mcpApi,
+  modelsApi,
+  providersApi,
+  settingsApi,
+  skillsApi,
+  titleProvidersApi,
+  workspacesApi,
+} from "./ipc";
+import type { ModelInfo, Provider } from "./types";
 
 export const queryKeys = {
   providers: ["providers"] as const,
@@ -18,9 +30,18 @@ export const queryKeys = {
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
+  gitReview: (workspaceId: string | undefined) => ["git-review", workspaceId ?? "none"] as const,
+  gitPushCapability: (workspaceId: string | undefined) =>
+    ["git-push-capability", workspaceId ?? "none"] as const,
+  gitComparisons: (workspaceId: string | undefined) =>
+    ["git-comparison", workspaceId ?? "none"] as const,
+  gitComparison: (workspaceId: string | undefined, targetRef: string | undefined) =>
+    [...queryKeys.gitComparisons(workspaceId), targetRef ?? "none"] as const,
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
-  gitWorktrees: (workspaceId: string | undefined) => ["gitWorktrees", workspaceId ?? "none"] as const,
-  discoveredSkills: (folderPath: string | undefined) => ["discoveredSkills", folderPath ?? "none"] as const,
+  gitWorktrees: (workspaceId: string | undefined) =>
+    ["gitWorktrees", workspaceId ?? "none"] as const,
+  discoveredSkills: (folderPath: string | undefined) =>
+    ["discoveredSkills", folderPath ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -40,14 +61,48 @@ export function useWorkspaces() {
 }
 
 /** Release-bundled capability info for a provider's models, keyed by model id. */
-export function useModelInfo(providerId: string | undefined, modelIds: string[]) {
+function modelMetadataKey(provider: Provider | undefined): string {
+  if (!provider?.modelMetadata) return "";
+  return JSON.stringify(
+    Object.entries(provider.modelMetadata).sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+export function useModelInfo(
+  providerId: string | undefined,
+  modelIds: string[],
+  provider?: Provider,
+) {
   const key = [...modelIds].sort().join(",");
   return useQuery({
-    queryKey: [...queryKeys.modelInfo(providerId), key],
+    queryKey: [...queryKeys.modelInfo(providerId), key, modelMetadataKey(provider)],
     queryFn: () => modelsApi.info(providerId as string, modelIds),
     enabled: Boolean(providerId) && modelIds.length > 0,
     staleTime: 60 * 60 * 1000,
   });
+}
+
+/** Resolve release-bundled display and capability metadata for every picker connection. */
+export function useProvidersModelInfo(providers: Provider[]) {
+  const results = useQueries({
+    queries: providers.map((provider) => {
+      const key = [...provider.models].sort().join(",");
+      return {
+        queryKey: [...queryKeys.modelInfo(provider.id), key, modelMetadataKey(provider)],
+        queryFn: () => modelsApi.info(provider.id, provider.models),
+        enabled: provider.models.length > 0,
+        staleTime: 60 * 60 * 1000,
+      };
+    }),
+  });
+  const data: Record<string, Record<string, ModelInfo>> = {};
+  providers.forEach((provider, index) => {
+    data[provider.id] = results[index]?.data ?? {};
+  });
+  return {
+    data,
+    isLoading: results.some((result) => result.isLoading),
+  };
 }
 
 export function useGitInfo(workspaceId: string | undefined) {
@@ -56,6 +111,40 @@ export function useGitInfo(workspaceId: string | undefined) {
     queryFn: () => workspacesApi.gitInfo(workspaceId as string),
     enabled: Boolean(workspaceId),
     refetchInterval: 5_000,
+    staleTime: 1_000,
+  });
+}
+
+export function useGitReview(workspaceId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.gitReview(workspaceId),
+    queryFn: () => gitApi.review(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    refetchInterval: enabled ? 4_000 : false,
+    staleTime: 1_000,
+  });
+}
+
+export function useGitPushCapability(workspaceId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.gitPushCapability(workspaceId),
+    queryFn: () => gitApi.pushCapability(workspaceId as string),
+    enabled: Boolean(workspaceId) && enabled,
+    refetchInterval: enabled ? 5_000 : false,
+    staleTime: 1_000,
+  });
+}
+
+export function useGitComparison(
+  workspaceId: string | undefined,
+  targetRef: string | undefined,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: queryKeys.gitComparison(workspaceId, targetRef),
+    queryFn: () => gitApi.compare(workspaceId as string, targetRef as string),
+    enabled: Boolean(workspaceId) && Boolean(targetRef) && enabled,
+    refetchInterval: enabled ? 5_000 : false,
     staleTime: 1_000,
   });
 }
@@ -103,8 +192,7 @@ export function useFoundationModelsConnection() {
     queryKey: queryKeys.foundationModelsConnection,
     queryFn: titleProvidersApi.status,
     refetchOnWindowFocus: true,
-    refetchInterval: (query) =>
-      query.state.data?.state === "model_preparing" ? 5_000 : false,
+    refetchInterval: (query) => (query.state.data?.state === "model_preparing" ? 5_000 : false),
   });
 }
 
