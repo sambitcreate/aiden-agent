@@ -19,7 +19,8 @@ import {
 } from "../ui";
 import { providersApi } from "../../lib/ipc";
 import { useModelInfo } from "../../lib/queries";
-import type { Provider, ProviderKind } from "../../lib/types";
+import { resolveModelDisplay } from "../../lib/model-display";
+import type { Provider, ProviderKind, ProviderModelMetadata } from "../../lib/types";
 
 /** Compact k-token label, e.g. 128000 → "128K". */
 function formatContext(n: number | undefined): string | null {
@@ -51,6 +52,9 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
   const [needsKey, setNeedsKey] = React.useState(provider.needsKey);
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
+  const [modelMetadata, setModelMetadata] = React.useState<Record<string, ProviderModelMetadata>>(
+    provider.modelMetadata ?? {},
+  );
   const [defaultModel, setDefaultModel] = React.useState(
     provider.defaultModel ?? provider.models[0] ?? "",
   );
@@ -61,7 +65,10 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     message: string;
     error: boolean;
   } | null>(null);
-  const modelInfo = useModelInfo(provider.id, models);
+  const modelInfo = useModelInfo(provider.id, models, provider);
+  const usesArtificialAnalysis = models.some(
+    (modelId) => modelInfo.data?.[modelId]?.metadataSource === "artificial-analysis",
+  );
 
   // Reset drafts whenever a different provider is opened.
   React.useEffect(() => {
@@ -72,6 +79,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       setNeedsKey(provider.needsKey);
       setKeyDraft("");
       setModels(provider.models);
+      setModelMetadata(provider.modelMetadata ?? {});
       setDefaultModel(provider.defaultModel ?? provider.models[0] ?? "");
       setModelsStale(false);
       setConnectionNotice(null);
@@ -84,13 +92,18 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     label: label.trim() || provider.label,
     baseUrl: baseUrl.trim() || provider.baseUrl,
     models,
+    modelMetadata,
     defaultModel: defaultModel || undefined,
     needsKey,
     isPreset: provider.isPreset,
   });
 
-  const applyDiscoveredModels = (list: string[]) => {
+  const applyDiscoveredModels = (
+    list: string[],
+    metadata: Record<string, ProviderModelMetadata>,
+  ) => {
     setModels(list);
+    setModelMetadata(metadata);
     setDefaultModel((current) => (list.includes(current) ? current : (list[0] ?? "")));
     setModelsStale(false);
   };
@@ -107,7 +120,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     setTesting(true);
     try {
       const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
-      applyDiscoveredModels(result.models);
+      applyDiscoveredModels(result.models, result.modelMetadata);
       if (result.models.length > 0) {
         setConnectionNotice({
           message: `${result.modelCount} model${result.modelCount === 1 ? "" : "s"} found. Save to use them.`,
@@ -160,6 +173,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       open={open}
       onOpenChange={onOpenChange}
       title={`Configure ${provider.label}`}
+      description="Set the connection details and models available through this provider."
       size="large"
       confirmLabel="Save"
       confirmDisabled={saving || testing}
@@ -288,18 +302,37 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
 
         {models.length > 0 ? (
           <Field label="Default model">
-            <Select value={defaultModel} onValueChange={setDefaultModel}>
-              <SelectTrigger size="small">
-                <SelectValue placeholder="Select a model" />
-              </SelectTrigger>
-              <SelectContent>
-                {models.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="grid gap-1.5">
+              <Select value={defaultModel} onValueChange={setDefaultModel}>
+                <SelectTrigger size="small">
+                  <SelectValue placeholder="Select a model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {models.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {
+                        resolveModelDisplay(
+                          m,
+                          modelMetadata[m]?.name
+                            ? { name: modelMetadata[m].name }
+                            : modelInfo.data?.[m],
+                        ).label
+                      }
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {usesArtificialAnalysis ? (
+                <a
+                  href="https://artificialanalysis.ai"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-fit text-small text-tertiary underline decoration-separator underline-offset-2 hover:text-secondary"
+                >
+                  Model data · Artificial Analysis
+                </a>
+              ) : null}
+            </div>
           </Field>
         ) : (
           <Text variant="small" color="tertiary">
@@ -314,19 +347,21 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
             Model capabilities
           </Text>
           <Text variant="small" color="tertiary" as="p" className="mt-0.5">
-            Capability hints bundled with this release. Check provider documentation for exact support.
+            Capability hints bundled with this release. Check provider documentation for exact
+            support.
           </Text>
           <div className="mt-2 max-h-64 overflow-y-auto rounded-card border border-separator">
             {models.map((m, i) => {
               const info = modelInfo.data?.[m];
+              const display = resolveModelDisplay(m, info);
               const ctx = formatContext(info?.contextLength);
               return (
                 <div
                   key={m}
                   className={`flex items-center gap-2 px-3 py-2 ${i > 0 ? "border-t border-separator" : ""}`}
                 >
-                  <Text variant="small" truncate className="min-w-0 flex-1">
-                    {m}
+                  <Text variant="small" truncate className="min-w-0 flex-1" title={m}>
+                    {display.label}
                   </Text>
                   {info?.matched ? (
                     <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
