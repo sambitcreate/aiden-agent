@@ -53,6 +53,21 @@ test("serializes assistant persistence with a background title update", async (t
   );
 });
 
+test("an explicit generated rename preserves a newer manual title", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ title: "Original title" });
+
+  await store.rename(chat.id, "Manual title wins");
+  const replaced = await store.replaceTitleIfUnchanged(
+    chat.id,
+    "Original title",
+    "Generated Apple title",
+  );
+
+  assert.equal(replaced, null);
+  assert.equal((await store.get(chat.id))?.title, "Manual title wins");
+});
+
 test("preserves every index entry during concurrent chat creation", async (t) => {
   const store = await testStore(t);
   await Promise.all(
