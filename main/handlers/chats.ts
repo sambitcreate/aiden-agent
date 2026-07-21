@@ -2,6 +2,7 @@
 
 import { ipcMain } from "../platform.js";
 import { chatStore } from "../services/chat-store.js";
+import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
 import type { Attachment, ChatRole } from "../services/types.js";
 
@@ -34,6 +35,10 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:rename", async (_event, id: unknown, title: unknown) => {
     await chatStore.rename(asString(id, "id"), asString(title, "title"));
   });
+
+  ipcMain.handle("chats:renameWithFoundationModels", async (_event, id: unknown) =>
+    chatTitleService.renameWithFoundationModels(asString(id, "id")),
+  );
 
   ipcMain.handle("chats:moveEmptyToWorkspace", async (_event, id: unknown, workspaceId: unknown) => {
     const nextWorkspaceId = asString(workspaceId, "workspaceId");
