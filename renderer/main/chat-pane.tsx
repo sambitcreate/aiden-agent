@@ -25,6 +25,7 @@ import { queryKeys, useChat, useGitInfo, useModelInfo, useProviders } from "../l
 import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
+import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
 import type { Attachment, Chat, WorkspacePermission } from "../lib/types";
 
 const TOOL_LABELS: Record<string, string> = {
@@ -45,6 +46,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const { active, activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(active?.id);
+  const environmentPanel = useEnvironmentPanel();
+  const settingsBlockedReason = environmentPanel.gitOperationBusy
+    ? "Wait for the current Git operation to finish"
+    : environmentPanel.editorState.saving
+      ? "Wait for the open file to finish saving"
+      : environmentPanel.editorState.dirty
+        ? "Save or discard the open file's edits first"
+        : undefined;
   const { providerId, model, select } = useModelSelection(providers.data);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const ready = Boolean(
@@ -71,9 +80,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
     [providers.data, providerId],
   );
-  const modelInfo = useModelInfo(providerId, providerModels);
-  const visionSupported =
-    model && modelInfo.data?.[model] ? Boolean(modelInfo.data[model].vision) : undefined;
+  const modelInfo = useModelInfo(providerId, providerModels, selectedProvider);
+  const visionSupported = model ? modelInfo.data?.[model]?.vision : undefined;
 
   const newChat = React.useCallback(async () => {
     const created = await chatsApi.create({ workspaceId: activeId });
@@ -82,11 +90,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [qc, navigate, activeId]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
+  const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [toolActivity, setToolActivity] = React.useState<ToolActivity | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
+  const generationIntentRef = React.useRef(0);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -104,6 +114,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      generationIntentRef.current += 1;
       generationRef.current?.cancel();
       generationRef.current = null;
     };
@@ -112,6 +123,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Reset transient state when switching chats.
   React.useEffect(() => {
     setStreamingText(null);
+    setIsStartingGeneration(false);
     setToolActivity(null);
     setError(null);
     setApprovals([]);
@@ -122,8 +134,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const isGenerating = streamingText !== null;
   const isNewChat = !chat.isLoading && messages.length === 0 && !isGenerating;
 
+  React.useLayoutEffect(() => {
+    environmentPanel.setAgentBusy(isGenerating || isStartingGeneration);
+    return () => environmentPanel.setAgentBusy(false);
+  }, [environmentPanel.setAgentBusy, isGenerating, isStartingGeneration]);
+
   const runGeneration = React.useCallback(
     (history: Chat["messages"]) => {
+      const generationIntent = generationIntentRef.current;
       setError(null);
       setStreamingText("");
       setToolActivity(null);
@@ -142,13 +160,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         },
         {
           onDelta: (delta) => {
-            if (mountedRef.current) {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setToolActivity(null);
               setStreamingText((prev) => (prev ?? "") + delta);
             }
           },
           onTool: (phase, toolName) => {
-            if (!mountedRef.current) return;
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             const label = toolLabel(toolName);
             if (phase === "call") setToolActivity({ state: "running", label: `${label}…` });
             else if (phase === "blocked")
@@ -158,12 +176,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             else setToolActivity({ state: "finished", label: `${label} finished` });
           },
           onApproval: (prompt) => {
-            if (mountedRef.current) {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setToolActivity(null);
               setApprovals((prev) => [...prev, prompt]);
             }
           },
           onDone: async (full) => {
+            if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
             if (full.trim()) {
               const updated = await chatsApi.appendMessage(
@@ -181,6 +200,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
           },
           onError: (message, partialContent) => {
+            if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
             const partial = partialContent?.trim();
             if (partial) {
@@ -222,14 +242,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const handleSend = React.useCallback(
     async (text: string, attachments: Attachment[]) => {
-      const updated = await chatsApi.appendMessage(
-        chatId,
-        { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
-        { providerId, model, autoTitle: true },
-      );
-      qc.setQueryData(queryKeys.chat(chatId), updated);
-      void qc.invalidateQueries({ queryKey: queryKeys.chats });
-      runGeneration(updated.messages);
+      const generationIntent = ++generationIntentRef.current;
+      setIsStartingGeneration(true);
+      try {
+        const updated = await chatsApi.appendMessage(
+          chatId,
+          { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
+          { providerId, model, autoTitle: true },
+        );
+        qc.setQueryData(queryKeys.chat(chatId), updated);
+        void qc.invalidateQueries({ queryKey: queryKeys.chats });
+        if (generationIntentRef.current !== generationIntent) return;
+        runGeneration(updated.messages);
+      } finally {
+        setIsStartingGeneration(false);
+      }
     },
     [chatId, providerId, model, qc, runGeneration],
   );
@@ -237,6 +264,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const handleStop = React.useCallback(() => {
     generationRef.current?.cancel();
   }, []);
+
+  const cancelAgentForContextChange = React.useCallback(() => {
+    generationIntentRef.current += 1;
+    generationRef.current?.cancel();
+    generationRef.current = null;
+    setStreamingText(null);
+    setIsStartingGeneration(false);
+    setToolActivity(null);
+    setApprovals([]);
+    setDecidingApprovalId(null);
+  }, []);
+
+  React.useEffect(() => {
+    environmentPanel.setCancelAgentHandler(cancelAgentForContextChange);
+    return () => environmentPanel.setCancelAgentHandler(null);
+  }, [cancelAgentForContextChange, environmentPanel.setCancelAgentHandler]);
 
   const decideApproval = React.useCallback(
     async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
@@ -275,36 +318,64 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const changePermission = React.useCallback(
     async (permission: WorkspacePermission) => {
       if (!active) return;
+      if (environmentPanel.gitOperationBusy)
+        throw new Error("Wait for the current Git operation to finish before changing workspace access.");
+      if (environmentPanel.editorState.saving)
+        throw new Error("Wait for the open file to finish saving before changing workspace access.");
+      if (environmentPanel.editorState.dirty)
+        throw new Error("Save or discard the open file's edits before changing workspace access.");
+      if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       await workspacesApi.update(active.id, { permission });
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     },
-    [active, qc],
+    [active, environmentPanel.agentBusy, environmentPanel.cancelAgent, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, qc],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
+      if (environmentPanel.gitOperationBusy) {
+        throw new Error("Wait for the current Git operation to finish before switching workspaces.");
+      }
+      if (environmentPanel.editorState.saving) {
+        throw new Error("Wait for the open file to finish saving before switching workspaces.");
+      }
+      if (environmentPanel.editorState.dirty) {
+        throw new Error("Save or discard the open file's edits before switching workspaces.");
+      }
       if (workspaceId === activeId) return;
       const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
       qc.setQueryData(queryKeys.chat(chatId), updated);
       selectWorkspace(workspaceId);
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
     },
-    [activeId, chatId, isNewChat, qc, selectWorkspace],
+    [activeId, chatId, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, isNewChat, qc, selectWorkspace],
   );
 
   const createScratchWorkspace = React.useCallback(async () => {
     if (!isNewChat) throw new Error("Start a new chat before choosing a scratch folder.");
+    if (environmentPanel.editorState.dirty)
+      throw new Error("Save or discard the open file's edits before creating a scratch workspace.");
+    if (environmentPanel.editorState.saving)
+      throw new Error("Wait for the open file to finish saving before creating a scratch workspace.");
+    if (environmentPanel.gitOperationBusy)
+      throw new Error("Wait for the current Git operation to finish before creating a scratch workspace.");
     const workspace = await workspacesApi.createScratch();
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await moveNewChatToWorkspace(workspace.id);
-  }, [isNewChat, moveNewChatToWorkspace, qc]);
+  }, [environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, isNewChat, moveNewChatToWorkspace, qc]);
 
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
       if (!active) throw new Error("Choose a Git workspace first.");
-      if (isGenerating)
+      if (isGenerating || isStartingGeneration)
         throw new Error("Stop the current response before changing Git workspaces.");
+      if (environmentPanel.gitOperationBusy)
+        throw new Error("Wait for the current Git operation to finish before changing Git workspaces.");
+      if (environmentPanel.editorState.saving)
+        throw new Error("Wait for the open file to finish saving before changing Git workspaces.");
+      if (environmentPanel.editorState.dirty)
+        throw new Error("Save or discard the open file's edits before changing Git workspaces.");
       const workspace = await gitApi.createWorktree(active.id, branchName);
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       if (isNewChat) {
@@ -316,8 +387,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
       void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
     },
-    [active, isGenerating, isNewChat, moveNewChatToWorkspace, navigate, qc, selectWorkspace],
+    [active, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, isGenerating, isNewChat, isStartingGeneration, moveNewChatToWorkspace, navigate, qc, selectWorkspace],
   );
+
+  React.useEffect(() => {
+    environmentPanel.setCreateWorktreeHandler(createGitWorktree);
+    return () => environmentPanel.setCreateWorktreeHandler(null);
+  }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
 
@@ -342,6 +418,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <Button iconOnly variant="glass" size="large" onClick={newChat} aria-label="New chat">
             <SquarePen />
           </Button>
+          <EnvironmentPanelToggle />
           <Button
             iconOnly
             variant="glass"
@@ -360,7 +437,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             variant="glass"
             size="large"
             onClick={() => navigate({ to: "/settings" })}
+            disabled={Boolean(settingsBlockedReason)}
             aria-label="Settings"
+            title={settingsBlockedReason}
           >
             <SlidersHorizontal />
           </Button>
@@ -433,6 +512,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             inputRef={composerRef}
             workspace={active}
             gitBranch={git.data?.isRepo ? git.data.branch : undefined}
+            gitDetached={git.data?.detached}
+            gitUnborn={git.data?.unborn}
             onOpenFolder={openFolder}
             onChangePermission={changePermission}
             workspacePickerEnabled={isNewChat}
@@ -440,6 +521,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onSelectWorkspace={moveNewChatToWorkspace}
             onCreateScratchWorkspace={createScratchWorkspace}
             onCreateGitWorktree={createGitWorktree}
+            onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
+            gitOperationBusy={environmentPanel.gitOperationBusy}
+            workspaceChangeBlockedReason={settingsBlockedReason}
+            gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
             gitWorktreeDescription={
               isNewChat
                 ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
