@@ -1,5 +1,14 @@
 # Project History
 
+### 2026-07-20 — Add a spatial, magnetic model picker
+
+- Replaced the composer model dropdown with a Photographic Styles-inspired square Pad plus the preserved searchable List view. Horizontal position runs Faster → More deliberate; vertical position runs Everyday → More capable.
+- Assigned every usable provider/model pair to a unique, evenly spaced lattice cell nearest its desired ranking position. The reference 11×11 grid expands automatically for catalogs above 121 models, so active dots never overlap and pinning never changes geometry.
+- Added a high-contrast white puck with nearest-model hysteresis and magnetic animation. Hover and drag update the model details live, pointer-leave restores an uncommitted preview, pointer release commits, arrow keys move spatially, Enter commits, Escape restores the selected model, and reduced-motion removes decorative easing.
+- Kept the picker close to the old list footprint: a 316px main surface (about 10% wider than the prior 288px menu) containing only accessible `List`/`Pad` tabs and their active content. Provider/capability/context metadata moved into a separate 224px read-only hover/focus sidecar outside the picker; ranking copy, title/count/reset chrome, visible axes, and help copy were removed from the visual surface while remaining accessible where needed.
+- Added an optional fixed-snapshot `ModelRanking` seam without introducing runtime network access. Artificial Analysis research identified it as the best unified intelligence/response-time source, but customer-facing redistribution requires a Commercial agreement; current name/size estimates are labeled Estimated and unknown/local models are Unranked.
+- Verified exact live dimensions (316×350px main surface, 300px Pad, 224px sidecar), magnetic hover and restoration without changing the committed model, searchable List sizing, and roving tab keyboard access in Electron through the DevTools protocol. Added pure ranking/navigation/lattice tests; the full 71-test suite, type-check, lint, formatting check, and production build pass.
+
 ### 2026-07-20 — Animate generated chat-title replacements
 
 - Added a quick character-by-character reveal only when the background title-generation notification replaces a temporary chat title; initial list rendering and manual renames remain static.

@@ -3,7 +3,7 @@
 // reroutes an existing selection to another provider.
 
 import * as React from "react";
-import { isUsable } from "../components/model-picker";
+import { isUsable } from "./model-picker-data";
 import type { Provider } from "./types";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
