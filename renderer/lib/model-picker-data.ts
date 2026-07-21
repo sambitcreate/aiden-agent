@@ -1,4 +1,7 @@
-import type { ModelInfo, Provider } from "./types";
+import type { ModelInfo, ModelRanking, Provider } from "./types";
+import { resolveModelDisplay } from "./model-display";
+
+export type { ModelRanking } from "./types";
 
 export const PINNED_MODELS_KEY = "aiden-agent.pinnedModels";
 export const BASE_MODEL_GRID_SIZE = 11;
@@ -10,16 +13,6 @@ const DEEP_VARIANT_RE =
   /(?:^|[\s._/-])(reasoner|reasoning|thinking|think|deep|high|xhigh)(?:$|[\s._/-])/i;
 const CAPABLE_VARIANT_RE = /(?:^|[\s._/-])(sonnet|opus|pro|ultra|max|large)(?:$|[\s._/-])/i;
 const PARAMETER_COUNT_RE = /(?:^|[\s._/-])(\d+(?:\.\d+)?)b(?:$|[\s._/-])/i;
-
-export interface ModelRanking {
-  /** Fixed-snapshot percentile, where 1 is the most capable model. */
-  capabilityPercentile: number;
-  /** Fixed-snapshot percentile, where 1 is the slowest response profile. */
-  responseTimePercentile: number;
-  source: string;
-  sourceUrl?: string;
-  measuredAt?: string;
-}
 
 export interface ModelEntry {
   value: string;
@@ -106,17 +99,24 @@ export function createModelEntries(
   for (const { provider, local } of orderedProviders) {
     for (const model of provider.models) {
       const value = encodeSelection(provider.id, model);
-      const { label, format } = parseModel(model);
+      const info = infoByValue[value];
+      if (
+        provider.modelMetadata?.[model]?.type === "embedding" ||
+        info?.modelType === "embedding"
+      ) {
+        continue;
+      }
+      const display = resolveModelDisplay(model, info);
       entries.push({
         value,
         providerId: provider.id,
         model,
-        label,
-        format,
+        label: display.label,
+        format: display.format ?? info?.format ?? null,
         providerLabel: provider.label,
         isLocal: local,
-        info: infoByValue[value],
-        ranking: rankingsByValue[value],
+        info,
+        ranking: rankingsByValue[value] ?? info?.ranking,
       });
     }
   }
@@ -168,7 +168,7 @@ function estimatePosition(
   let x = 0.5;
   let y = 0.5;
   let signals = 0;
-  const model = entry.model.toLowerCase();
+  const model = `${entry.model} ${entry.info?.parameterCount ?? ""}`.toLowerCase();
 
   if (FAST_VARIANT_RE.test(model)) {
     x -= 0.22;
