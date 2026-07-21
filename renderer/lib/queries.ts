@@ -1,6 +1,12 @@
 // React Query hooks for providers, chats, and settings.
 
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   chatsApi,
   exaApi,
@@ -14,7 +20,12 @@ import {
   titleProvidersApi,
   workspacesApi,
 } from "./ipc";
-import type { ModelInfo, Provider } from "./types";
+import type {
+  CodexProviderSnapshot,
+  CodexProviderStatusChanged,
+  ModelInfo,
+  Provider,
+} from "./types";
 
 export const queryKeys = {
   providers: ["providers"] as const,
@@ -22,6 +33,7 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   foundationModelsConnection: ["foundationModelsConnection"] as const,
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
@@ -47,6 +59,57 @@ export const queryKeys = {
 
 export function useProviders() {
   return useQuery({ queryKey: queryKeys.providers, queryFn: providersApi.list });
+}
+
+export function useCodexProviderStatus() {
+  return useQuery({
+    queryKey: queryKeys.codexProviderStatus,
+    queryFn: () => providersApi.authStatus("openai-codex"),
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+async function cancelCodexProviderReads(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: queryKeys.codexProviderStatus }),
+    queryClient.cancelQueries({ queryKey: queryKeys.providers }),
+  ]);
+}
+
+/** Cancel stale pre-auth reads before asking active observers for authoritative state. */
+export async function refreshCodexProviderState(queryClient: QueryClient): Promise<void> {
+  await cancelCodexProviderReads(queryClient);
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.codexProviderStatus }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
+  ]);
+}
+
+/** Reconcile both caches when any main-process request discovers new Codex auth health. */
+export function subscribeCodexProviderState(
+  queryClient: QueryClient,
+  subscribe: (
+    handler: (event: CodexProviderStatusChanged) => void,
+  ) => () => void = providersApi.onAuthStatusChanged,
+  refresh: (queryClient: QueryClient) => Promise<void> = refreshCodexProviderState,
+): () => void {
+  return subscribe((event) => {
+    if (event.providerId !== "openai-codex") return;
+    void refresh(queryClient);
+  });
+}
+
+export async function logoutCodexProvider(
+  queryClient: QueryClient,
+  logout: (providerId: "openai-codex") => Promise<CodexProviderSnapshot> = providersApi.logout,
+): Promise<CodexProviderSnapshot> {
+  await cancelCodexProviderReads(queryClient);
+  const next = await logout("openai-codex");
+  await cancelCodexProviderReads(queryClient);
+  queryClient.setQueryData(queryKeys.codexProviderStatus, next);
+  await queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+  return next;
 }
 
 export function useChats(workspaceId?: string) {

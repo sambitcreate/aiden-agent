@@ -2,6 +2,7 @@
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
 import { ipcMain } from "../platform.js";
+import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient } from "../services/llm-client.js";
 import type { Attachment, ChatRole, ChatStartParams } from "../services/types.js";
@@ -41,12 +42,14 @@ export function registerChatGenerationHandlers(): void {
   ipcMain.handle("chat:start", async (_event, streamId: unknown, params: unknown) => {
     const id = typeof streamId === "string" && streamId ? streamId : newStreamId();
     const parsed = parseParams(params);
-    await llmClient.start(id, parsed);
-    chatTitleService.startForFirstTurn({
-      chatId: parsed.chatId,
-      providerId: parsed.providerId,
-      model: parsed.model,
-    });
+    await startGenerationAndMaybeTitle(
+      {
+        start: (streamId, params) => llmClient.start(streamId, params),
+        startTitle: (input) => chatTitleService.startForFirstTurn(input),
+      },
+      id,
+      parsed,
+    );
     return { streamId: id };
   });
 

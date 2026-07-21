@@ -24,9 +24,20 @@ import {
 } from "../ui";
 import { ChevronDown, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { ProviderEditor } from "./provider-editor";
+import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
-import { queryKeys, useFoundationModelsConnection, useProviders, useSettings } from "../../lib/queries";
-import type { ChatTitleProviderId, FoundationModelsConnectionStatus, Provider } from "../../lib/types";
+import {
+  queryKeys,
+  useFoundationModelsConnection,
+  useProviders,
+  useSettings,
+} from "../../lib/queries";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  type ChatTitleProviderId,
+  type FoundationModelsConnectionStatus,
+  type Provider,
+} from "../../lib/types";
 
 function statusBadge(p: Provider): React.ReactNode {
   if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
@@ -63,7 +74,9 @@ export function ProvidersSettings() {
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
-  const list = providers.data ?? [];
+  const list = (providers.data ?? []).filter(
+    (provider) => provider.id !== OPENAI_CODEX_PROVIDER_ID,
+  );
   const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
 
   const setTitleProvider = async (value: ChatTitleProviderId) => {
@@ -72,7 +85,9 @@ export function ProvidersSettings() {
       await settingsApi.set({ chatTitleProviderId: value });
       await qc.invalidateQueries({ queryKey: queryKeys.settings });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't save the chat title provider.");
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't save the chat title provider.",
+      );
     } finally {
       setSavingTitleProvider(false);
     }
@@ -84,7 +99,9 @@ export function ProvidersSettings() {
       const status = await titleProvidersApi.refresh();
       qc.setQueryData(queryKeys.foundationModelsConnection, status);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't refresh Apple Foundation Models.");
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't refresh Apple Foundation Models.",
+      );
     } finally {
       setRefreshingFoundationModels(false);
     }
@@ -183,6 +200,8 @@ export function ProvidersSettings() {
         </DropdownMenu>
       </div>
 
+      <CodexProviderSettings />
+
       {foundationModels.data ? (
         <div
           className="rounded-card border border-separator"
@@ -222,7 +241,9 @@ export function ProvidersSettings() {
           <Separator />
           <div className="flex flex-col gap-2 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <Text variant="small-strong" as="p">Chat title provider</Text>
+              <Text variant="small-strong" as="p">
+                Chat title provider
+              </Text>
               <Text variant="small" color="tertiary" as="p" className="mt-0.5">
                 Automatic prefers this Mac, then uses the selected chat model only when Apple is
                 unavailable. On-device only never falls back to a network provider.
@@ -233,7 +254,11 @@ export function ProvidersSettings() {
               disabled={savingTitleProvider}
               onValueChange={(value) => void setTitleProvider(value as ChatTitleProviderId)}
             >
-              <SelectTrigger size="small" className="w-full shrink-0 sm:w-48" aria-label="Chat title provider">
+              <SelectTrigger
+                size="small"
+                className="w-full shrink-0 sm:w-48"
+                aria-label="Chat title provider"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

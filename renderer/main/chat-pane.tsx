@@ -21,12 +21,24 @@ import {
   type ApprovalPrompt,
   type GenerationHandle,
 } from "../lib/ipc";
-import { queryKeys, useChat, useGitInfo, useModelInfo, useProviders } from "../lib/queries";
+import {
+  queryKeys,
+  refreshCodexProviderState,
+  useChat,
+  useGitInfo,
+  useModelInfo,
+  useProviders,
+} from "../lib/queries";
 import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
-import type { Attachment, Chat, WorkspacePermission } from "../lib/types";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  type Attachment,
+  type Chat,
+  type WorkspacePermission,
+} from "../lib/types";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -64,8 +76,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   const readinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
-    if (!selectedProvider) return "Choose a chat model, or add one in Settings → Providers.";
+    if (!selectedProvider) {
+      return providerId === OPENAI_CODEX_PROVIDER_ID
+        ? "Sign in with ChatGPT in Settings → Providers to use Codex."
+        : "Choose a chat model, or add one in Settings → Providers.";
+    }
     if (selectedProvider.needsKey && !selectedProvider.hasKey) {
+      if (selectedProvider.id === OPENAI_CODEX_PROVIDER_ID) {
+        return "Sign in with ChatGPT in Settings → Providers to use Codex.";
+      }
       return `${selectedProvider.label} needs an API key. Add one in Settings → Providers.`;
     }
     if (selectedProvider.models.length === 0) {
@@ -74,7 +93,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (!model || !selectedProvider.models.includes(model))
       return `Choose a model from ${selectedProvider.label}.`;
     return undefined;
-  }, [model, providers.isLoading, selectedProvider]);
+  }, [model, providerId, providers.isLoading, selectedProvider]);
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -202,6 +221,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onError: (message, partialContent) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
+            if (providerId === OPENAI_CODEX_PROVIDER_ID) {
+              void refreshCodexProviderState(qc);
+            }
             const partial = partialContent?.trim();
             if (partial) {
               void chatsApi

@@ -16,7 +16,7 @@ import { resolveChatTitleRoute } from "./chat-title-routing.js";
 import { configStore } from "./config-store.js";
 import { foundationModelsConnection } from "./foundation-models-connection.js";
 import { resolveModelRuntime } from "./model-runtime.js";
-import { modelsCatalog } from "./models-catalog.js";
+import { providerModelInfo } from "./provider-model-info.js";
 
 const TITLE_TIMEOUT_MS = 15_000;
 const inFlight = new Map<string, Promise<void>>();
@@ -69,12 +69,18 @@ function assistantText(content: AssistantMessage["content"]): string {
 }
 
 async function generateWithChatModel(input: {
-  firstMessage: Parameters<typeof buildChatTitlePrompt>[0] & { attachments?: import("./types.js").Attachment[] };
+  firstMessage: Parameters<typeof buildChatTitlePrompt>[0] & {
+    attachments?: import("./types.js").Attachment[];
+  };
   selection: ChatTitleModelSelection;
   signal: AbortSignal;
 }): Promise<string> {
-  const runtime = await resolveModelRuntime(input.selection.providerId, input.selection.model);
-  const modelInfo = await modelsCatalog.info(runtime.provider, input.selection.model);
+  const runtime = await resolveModelRuntime(
+    input.selection.providerId,
+    input.selection.model,
+    input.signal,
+  );
+  const modelInfo = await providerModelInfo.info(input.selection.providerId, input.selection.model);
   const promptContent: Array<TextContent | ImageContent> = [
     {
       type: "text",

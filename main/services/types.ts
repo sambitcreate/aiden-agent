@@ -158,7 +158,12 @@ export interface ModelRanking {
   measuredAt?: string;
 }
 
-export type ModelMetadataSource = "local" | "artificial-analysis" | "models-dev" | "fallback";
+export type ModelMetadataSource =
+  | "local"
+  | "provider"
+  | "artificial-analysis"
+  | "models-dev"
+  | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {

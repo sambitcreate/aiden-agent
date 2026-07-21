@@ -1,7 +1,8 @@
 // Pure policy shared by the Pi runtime. Keep this Electron-free so the
 // keyless-provider and terminal-error contracts have fast, deterministic tests.
 
-import type { ProviderHeaders } from "@earendil-works/pi-ai";
+import type { AgentOptions } from "@earendil-works/pi-agent-core";
+import type { ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -48,6 +49,31 @@ export function resolveRuntimeHeaders(provider: {
     : { Authorization: null };
 }
 
+interface AgentRuntimeTransport {
+  apiKey: string | undefined;
+  headers: ProviderHeaders | undefined;
+  streams: Pick<ProviderStreams, "streamSimple">;
+}
+
+/** Keep the chat identity and provider transport attached to every Pi Agent turn. */
+export function buildAgentRuntimeOptions(
+  chatId: string,
+  runtime: AgentRuntimeTransport,
+): Pick<AgentOptions, "sessionId" | "getApiKey" | "streamFn"> {
+  return {
+    sessionId: chatId,
+    getApiKey: () => runtime.apiKey,
+    streamFn: (model, context, options) =>
+      runtime.streams.streamSimple(model, context, {
+        ...options,
+        apiKey: options?.apiKey ?? runtime.apiKey,
+        // Runtime headers are last so a keyless provider cannot inherit an
+        // Authorization header from Pi's default client setup.
+        headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
+      }),
+  };
+}
+
 type TerminalAssistantMessage = {
   role?: string;
   stopReason?: string;
@@ -63,6 +89,16 @@ export function terminalGenerationError(message: TerminalAssistantMessage): stri
 /** Pi reports user-initiated stops as a terminal assistant message as well. */
 export function terminalGenerationWasAborted(message: TerminalAssistantMessage): boolean {
   return message.role === "assistant" && message.stopReason === "aborted";
+}
+
+/** Only app-owned cancellation is a successful stop; dependency aborts are interruptions. */
+export function terminalGenerationInterruptionError(
+  wasAborted: boolean,
+  cancelRequested: boolean,
+): string | null {
+  return wasAborted && !cancelRequested
+    ? "The response was interrupted before it finished. Try again."
+    : null;
 }
 
 /** Return final text when a provider completes without emitting text deltas. */

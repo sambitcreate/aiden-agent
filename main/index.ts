@@ -5,7 +5,12 @@ import path from "node:path";
 import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
-import { initShortcut, initDictationShortcut, applyShortcutFromSettings, disposeShortcut } from "./services/shortcut.js";
+import {
+  initShortcut,
+  initDictationShortcut,
+  applyShortcutFromSettings,
+  disposeShortcut,
+} from "./services/shortcut.js";
 import { mcpManager } from "./services/mcp.js";
 import {
   disposeFoundationModelsConnection,
@@ -13,10 +18,10 @@ import {
 } from "./services/foundation-models-connection.js";
 import { configStore } from "./services/config-store.js";
 import { normalizeAppearanceConfig, type DockIconPreference } from "../renderer/shared/appearance.js";
+import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 
 app.setName("Aiden Agent");
-registerNativeHandlers();
-registerHandlers();
+const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
 let closeGuard = { dirty: false, gitBusy: false, path: undefined as string | undefined, saving: false };
@@ -24,6 +29,7 @@ let protectedAction: "close" | "quit" | "reload" | null = null;
 let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
+let shutdownStarted = false;
 
 function hasCloseGuard(): boolean {
   return closeGuard.dirty || closeGuard.gitBusy || closeGuard.saving;
@@ -78,6 +84,19 @@ function cleanupApplication(): void {
   disposeShortcut();
   disposeFoundationModelsConnection();
   void mcpManager.closeAll();
+}
+
+async function shutdownAndQuit(): Promise<void> {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  cleanupApplication();
+  try {
+    await shutdownProviderAuthFlow();
+  } catch (error) {
+    logger.error("main", "Provider authentication shutdown did not complete cleanly.", error);
+  }
+  forceAppQuit = true;
+  app.quit();
 }
 
 async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<number | null> {
@@ -192,9 +211,8 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<void> {
   lifecycleCheckInFlight = true;
   try {
     if (!await authorizeProtectedAction(window, "close")) return;
-    forceAppQuit = true;
     protectedAction = "quit";
-    setImmediate(() => app.quit());
+    await shutdownAndQuit();
   } finally {
     lifecycleCheckInFlight = false;
   }
@@ -308,6 +326,7 @@ async function createMainWindow(): Promise<void> {
     protectedAction = null;
     if (interruptedAction === "quit") {
       forceAppQuit = false;
+      shutdownStarted = false;
       setImmediate(() => void requestApplicationQuit(createdWindow));
     } else if (interruptedAction === "close") {
       setImmediate(() => void requestWindowClose(createdWindow));
@@ -338,7 +357,8 @@ async function createMainWindow(): Promise<void> {
   logger.info("main", "Loading renderer", { url });
   await mainWindow.loadURL(url);
 
-  if (process.env.AIDEN_OPEN_DEVTOOLS === "1") mainWindow.webContents.openDevTools({ mode: "detach" });
+  if (process.env.AIDEN_OPEN_DEVTOOLS === "1")
+    mainWindow.webContents.openDevTools({ mode: "detach" });
 }
 
 function showMainWindow(): void {
@@ -418,43 +438,59 @@ function setupApplicationMenu(): void {
   Menu.setApplicationMenu(menu);
 }
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
-
-app.on("activate", () => {
-  void foundationModelsConnection.status({ force: true });
-  showMainWindow();
-});
-
-app.on("before-quit", (event) => {
-  if (forceAppQuit || !mainWindow || mainWindow.isDestroyed()) return;
-  event.preventDefault();
-  void requestApplicationQuit(mainWindow);
-});
-
-app.on("will-quit", cleanupApplication);
-
-app.whenReady().then(async () => {
-  const settings = await configStore.getSettings();
-  const appearance = normalizeAppearanceConfig(settings.appearance);
-  nativeTheme.themeSource = appearance.mode;
-  await restoreDockIconPreference(appearance.dockIcon);
-  setupApplicationMenu();
-
-  initShortcut(() => {
-    showMainWindow();
-    ipcMain.broadcast("app:focus-composer", {});
-  });
-  initDictationShortcut(() => {
-    showMainWindow();
-    ipcMain.broadcast("app:dictate-toggle", {});
-  });
-  void applyShortcutFromSettings();
-  void foundationModelsConnection.status();
-
-  await createMainWindow();
-}).catch((error: unknown) => {
-  logger.error("main", "Failed to start Aiden Agent", error);
+if (!ownsSingleInstanceLock) {
   app.quit();
-});
+} else {
+  registerNativeHandlers();
+  registerHandlers();
+
+  app.on("second-instance", () => showMainWindow());
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
+
+  app.on("activate", () => {
+    void foundationModelsConnection.status({ force: true });
+    showMainWindow();
+  });
+
+  app.on("before-quit", (event) => {
+    if (forceAppQuit) return;
+    event.preventDefault();
+    if (shutdownStarted || lifecycleCheckInFlight) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      void requestApplicationQuit(mainWindow);
+    } else {
+      void shutdownAndQuit();
+    }
+  });
+
+  app.on("will-quit", cleanupApplication);
+
+  app
+    .whenReady()
+    .then(async () => {
+      const settings = await configStore.getSettings();
+      const appearance = normalizeAppearanceConfig(settings.appearance);
+      nativeTheme.themeSource = appearance.mode;
+      await restoreDockIconPreference(appearance.dockIcon);
+      setupApplicationMenu();
+
+      initShortcut(() => {
+        showMainWindow();
+        ipcMain.broadcast("app:focus-composer", {});
+      });
+      initDictationShortcut(() => {
+        showMainWindow();
+        ipcMain.broadcast("app:dictate-toggle", {});
+      });
+      void applyShortcutFromSettings();
+      void foundationModelsConnection.status();
+
+      await createMainWindow();
+    })
+    .catch((error: unknown) => {
+      logger.error("main", "Failed to start Aiden Agent", error);
+      void shutdownAndQuit();
+    });
+}

@@ -14,11 +14,13 @@ import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
-import { modelsCatalog } from "./models-catalog.js";
+import { providerModelInfo } from "./provider-model-info.js";
 import { configStore } from "./config-store.js";
 import {
+  buildAgentRuntimeOptions,
   terminalAssistantTextFallback,
   terminalGenerationError,
+  terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
 } from "./generation-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
@@ -26,7 +28,10 @@ import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./t
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 const active = new Map<string, { agent: Agent; workspaceId?: string; cancelRequested: boolean }>();
-const initializing = new Map<string, { workspaceId?: string; cancelRequested: boolean }>();
+const initializing = new Map<
+  string,
+  { workspaceId?: string; cancelRequested: boolean; controller: AbortController }
+>();
 /** Approval requests awaiting a user decision, keyed by approvalId. */
 const pendingApprovals = new Map<string, (allowed: boolean) => void>();
 
@@ -113,8 +118,8 @@ function newApprovalId(): string {
   return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function prepareGeneration(params: ChatStartParams) {
-  const runtime = await resolveModelRuntime(params.providerId, params.model);
+async function prepareGeneration(params: ChatStartParams, signal: AbortSignal) {
+  const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const workspace = params.workspaceId
     ? await configStore.getWorkspace(params.workspaceId)
     : undefined;
@@ -122,43 +127,43 @@ async function prepareGeneration(params: ChatStartParams) {
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
   const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
-  // The release-bundled capability snapshot is local and cannot delay this
-  // chat with a public metadata request.
-  const modelInfo = await modelsCatalog.info(runtime.provider, params.model);
+  // Capability metadata is local: Pi owns Codex facts and the release snapshot
+  // owns legacy-provider facts, so chat startup never waits on a public catalog.
+  const modelInfo = await providerModelInfo.info(runtime.provider.id, params.model);
   return { runtime, permission, folderPath, git, tools, modelInfo };
 }
 
 export const llmClient = {
-  async start(streamId: string, params: ChatStartParams): Promise<void> {
-    const initialization = { workspaceId: params.workspaceId, cancelRequested: false };
+  async start(streamId: string, params: ChatStartParams): Promise<boolean> {
+    const initialization = {
+      workspaceId: params.workspaceId,
+      cancelRequested: false,
+      controller: new AbortController(),
+    };
     initializing.set(streamId, initialization);
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     try {
-      setup = await prepareGeneration(params);
+      setup = await prepareGeneration(params, initialization.controller.signal);
     } catch (error) {
       initializing.delete(streamId);
+      if (initialization.cancelRequested || initialization.controller.signal.aborted) {
+        ipcMain.broadcast("chat:done", { streamId, content: "" });
+        return false;
+      }
       throw error;
     }
     const { runtime, permission, folderPath, git, tools, modelInfo } = setup;
-    const { model, apiKey, headers: runtimeHeaders, streams } = runtime;
+    const { model } = runtime;
 
     const deniedToolCalls = new Set<string>();
     const agent = new Agent({
+      ...buildAgentRuntimeOptions(params.chatId, runtime),
       initialState: {
         systemPrompt: buildSystemPrompt(folderPath, git.branch, permission),
         model,
         tools,
         messages: toPiMessages(params, model, modelInfo.vision),
       },
-      getApiKey: () => apiKey ?? undefined,
-      streamFn: (m, context, options) =>
-        streams.streamSimple(m, context, {
-          ...options,
-          apiKey: options?.apiKey ?? apiKey ?? undefined,
-          // Runtime headers are last so a keyless provider cannot inherit an
-          // Authorization header from Pi's default client setup.
-          headers: runtimeHeaders ? { ...options?.headers, ...runtimeHeaders } : options?.headers,
-        }),
       // In "ask" mode, pause before mutating tools until the user approves.
       beforeToolCall: async (context, signal) => {
         if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name))
@@ -234,7 +239,7 @@ export const llmClient = {
     initializing.delete(streamId);
     if (initialization.cancelRequested) {
       ipcMain.broadcast("chat:done", { streamId, content: "" });
-      return;
+      return false;
     }
     const activeGeneration = { agent, workspaceId: params.workspaceId, cancelRequested: false };
     active.set(streamId, activeGeneration);
@@ -242,9 +247,13 @@ export const llmClient = {
     void (async () => {
       try {
         await agent.continue();
-        const wasCancelled = aborted || activeGeneration.cancelRequested;
-        const finalError =
-          errored ?? (wasCancelled ? null : agent.state.errorMessage?.trim() || null);
+        const wasCancelled = activeGeneration.cancelRequested;
+        const finalError = wasCancelled
+          ? null
+          : (terminalGenerationInterruptionError(aborted, wasCancelled) ??
+            errored ??
+            agent.state.errorMessage?.trim() ??
+            null);
         if (finalError) {
           ipcMain.broadcast("chat:error", {
             streamId,
@@ -268,6 +277,7 @@ export const llmClient = {
         active.delete(streamId);
       }
     })();
+    return true;
   },
 
   /** Resolve a pending tool-approval request from the UI. */
@@ -278,7 +288,10 @@ export const llmClient = {
 
   cancel(streamId: string): void {
     const initialization = initializing.get(streamId);
-    if (initialization) initialization.cancelRequested = true;
+    if (initialization) {
+      initialization.cancelRequested = true;
+      initialization.controller.abort(new Error("Chat initialization cancelled."));
+    }
     const generation = active.get(streamId);
     if (generation) {
       generation.cancelRequested = true;
@@ -289,7 +302,10 @@ export const llmClient = {
   /** Stop generations whose tool set was snapshotted from this workspace. */
   cancelWorkspace(workspaceId: string): void {
     for (const initialization of initializing.values()) {
-      if (initialization.workspaceId === workspaceId) initialization.cancelRequested = true;
+      if (initialization.workspaceId === workspaceId) {
+        initialization.cancelRequested = true;
+        initialization.controller.abort(new Error("Workspace generation cancelled."));
+      }
     }
     for (const entry of active.values()) {
       if (entry.workspaceId === workspaceId) {

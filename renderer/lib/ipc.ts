@@ -32,6 +32,12 @@ import type {
   FoundationModelsConnectionStatus,
   Provider,
   ProviderModelMetadata,
+  CodexProviderSnapshot,
+  CodexProviderStatusChanged,
+  ProviderAuthDone,
+  ProviderAuthError,
+  ProviderAuthEvent,
+  ProviderAuthPrompt,
   Skill,
   Workspace,
   WorkspaceFileDocument,
@@ -76,6 +82,33 @@ export const providersApi = {
     }>("providers:test", provider, keyOverride),
   listModels: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<string[]>("providers:listModels", provider, keyOverride),
+  authStatus: (providerId: "openai-codex") =>
+    invoke<CodexProviderSnapshot>("providers:auth:status", providerId),
+  authStart: (request: { flowId: string; providerId: "openai-codex" }) =>
+    invoke<{ started: true }>("providers:auth:start", request),
+  authRespond: (request: {
+    flowId: string;
+    providerId: "openai-codex";
+    promptId: string;
+    value: string;
+  }) => invoke<{ accepted: true }>("providers:auth:respond", request),
+  authCancel: (request: { flowId: string; providerId: "openai-codex" }) =>
+    invoke<{ cancelled: true } | { cancelled: false; reason: "finishing" }>(
+      "providers:auth:cancel",
+      request,
+    ),
+  logout: (providerId: "openai-codex") =>
+    invoke<CodexProviderSnapshot>("providers:logout", providerId),
+  onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
+    onNotification("providers:auth:prompt", handler),
+  onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
+    onNotification("providers:auth:event", handler),
+  onAuthDone: (handler: (event: ProviderAuthDone) => void) =>
+    onNotification("providers:auth:done", handler),
+  onAuthError: (handler: (event: ProviderAuthError) => void) =>
+    onNotification("providers:auth:error", handler),
+  onAuthStatusChanged: (handler: (event: CodexProviderStatusChanged) => void) =>
+    onNotification("providers:auth:status-changed", handler),
 };
 
 export const settingsApi = {
