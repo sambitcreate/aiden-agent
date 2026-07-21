@@ -2,6 +2,7 @@
 
 import { ipcMain } from "../platform.js";
 import { readAttachments } from "../services/attachments.js";
+import { configStore } from "../services/config-store.js";
 import { modelsCatalog } from "../services/models-catalog.js";
 
 export function registerAttachmentHandlers(): void {
@@ -13,6 +14,7 @@ export function registerAttachmentHandlers(): void {
   ipcMain.handle("models:info", async (_event, providerId: unknown, modelIds: unknown) => {
     const pid = typeof providerId === "string" ? providerId : "";
     const ids = Array.isArray(modelIds) ? modelIds.filter((m): m is string => typeof m === "string") : [];
-    return modelsCatalog.infoMany(pid, ids);
+    const provider = await configStore.getProvider(pid);
+    return modelsCatalog.infoMany(provider ?? { id: pid, baseUrl: "" }, ids);
   });
 }
