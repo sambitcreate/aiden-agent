@@ -1,6 +1,23 @@
 // Shared backend/renderer data types for the AI chat client.
 
+import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
+
 export type ProviderKind = "openai" | "anthropic";
+
+export type ProviderModelType = "llm" | "embedding";
+
+/** Metadata reported by the configured provider during explicit model discovery. */
+export interface ProviderModelMetadata {
+  source: "lmstudio" | "ollama" | "provider";
+  name?: string;
+  type?: ProviderModelType;
+  vision?: boolean;
+  toolCall?: boolean;
+  reasoning?: boolean;
+  contextLength?: number;
+  parameterCount?: string;
+  format?: string;
+}
 
 /** A configured connection to an LLM backend (hosted or local). */
 export interface StoredProvider {
@@ -11,6 +28,8 @@ export interface StoredProvider {
   baseUrl: string;
   /** Suggested / cached model ids for the picker. */
   models: string[];
+  /** Provider-reported metadata captured alongside the last explicit discovery. */
+  modelMetadata?: Record<string, ProviderModelMetadata>;
   defaultModel?: string;
   /** Whether this provider requires an API key (local backends often don't). */
   needsKey: boolean;
@@ -129,25 +148,42 @@ export interface ChatMessage {
   attachments?: Attachment[];
 }
 
-/** Normalized capability info for a model, sourced from the bundled release catalog. */
+export interface ModelRanking {
+  /** Fixed-snapshot percentile, where 1 is the most capable model. */
+  capabilityPercentile: number;
+  /** Fixed-snapshot percentile, where 1 is the slowest response profile. */
+  responseTimePercentile: number;
+  source: string;
+  sourceUrl?: string;
+  measuredAt?: string;
+}
+
+export type ModelMetadataSource = "local" | "artificial-analysis" | "models-dev" | "fallback";
+
+/** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
   id: string;
   name?: string;
   /** Accepts image input (vision). */
-  vision: boolean;
+  vision?: boolean;
   /** Supports tool/function calling. */
-  toolCall: boolean;
+  toolCall?: boolean;
   /** Exposes reasoning / thinking. */
-  reasoning: boolean;
+  reasoning?: boolean;
   /** Open-weight / open-source model. */
-  openWeights: boolean;
+  openWeights?: boolean;
+  modelType?: ProviderModelType;
+  parameterCount?: string;
+  format?: string;
   contextLength?: number;
   outputLimit?: number;
   inputModalities?: string[];
   /** Training knowledge cutoff (e.g. "2025-05"). */
   knowledge?: string;
   releaseDate?: string;
-  /** True when the model was found in the bundled release catalog. */
+  ranking?: ModelRanking;
+  metadataSource: ModelMetadataSource;
+  /** True when any trusted metadata source identified the model. */
   matched: boolean;
 }
 
@@ -230,7 +266,7 @@ export interface FoundationModelsConnectionStatus {
   retryable: boolean;
 }
 
-/** Persisted lightweight app settings (theme is handled natively). */
+/** Persisted lightweight app settings. */
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
@@ -246,6 +282,8 @@ export interface AppSettings {
   dictationAccelerator?: string;
   /** Background chat-title generation policy. Defaults to automatic. */
   chatTitleProviderId?: ChatTitleProviderId;
+  /** Paired light/dark palettes and global appearance preferences. */
+  appearance?: AppearanceConfig;
 }
 
 /** Params for a streaming generation request. */
