@@ -244,6 +244,7 @@ function McpEditor({
       open={open}
       onOpenChange={onOpenChange}
       title={server.name ? `Edit ${server.name}` : "Add MCP server"}
+      description="Configure how Aiden connects to this tool server."
       size="large"
       confirmLabel="Save"
       confirmDisabled={!name.trim() || (transport === "stdio" ? !command.trim() : !url.trim())}
