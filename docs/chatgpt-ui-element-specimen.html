@@ -238,6 +238,112 @@
       .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
       .composer-controls { display: flex; min-width: 0; align-items: center; gap: 4px; }
 
+      .environment-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+      .environment-demo { position: relative; display: grid; grid-template-columns: minmax(250px, .72fr) minmax(430px, 1.28fr); height: 560px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); transition: grid-template-columns var(--duration-relaxed) ease-out; }
+      .environment-demo[data-mode="overview"], .environment-demo[data-open="false"] { grid-template-columns: minmax(0, 1fr) 0; }
+      .environment-demo[data-mode="overview"] .environment-thread, .environment-demo[data-open="false"] .environment-thread { border-right-color: transparent; }
+      .environment-demo[data-mode="overview"] .environment-panel-specimen, .environment-demo[data-open="false"] .environment-panel-specimen { visibility: hidden; opacity: 0; pointer-events: none; }
+      .environment-demo[data-open="false"] .environment-summary-card { visibility: hidden; opacity: 0; pointer-events: none; }
+      .environment-thread { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface); }
+      .environment-thread-head, .environment-panel-head { display: flex; height: 44px; flex: 0 0 auto; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--line); }
+      .environment-thread-head strong, .environment-panel-head strong { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+      .environment-thread-body { display: flex; min-height: 0; flex: 1; flex-direction: column; justify-content: space-between; gap: 24px; padding: 24px 20px 18px; }
+      .environment-thread-copy { display: grid; gap: 14px; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
+      .environment-thread-copy p { margin: 0; }
+      .environment-panel-specimen { display: flex; min-width: 0; flex-direction: column; background: var(--surface-raised); opacity: 1; transition: opacity var(--duration-basic) ease-out; }
+      .environment-summary-card { position: absolute; z-index: 3; top: 56px; right: 12px; display: flex; width: min(360px, calc(100% - 24px)); max-height: calc(100% - 68px); flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: var(--surface-raised); box-shadow: var(--shadow-dialog); animation: popover-in var(--duration-basic) var(--ease-enter) both; }
+      .environment-demo:not([data-mode="overview"]) .environment-summary-card { visibility: hidden; opacity: 0; pointer-events: none; }
+      .environment-summary-head { display: flex; height: 48px; flex: 0 0 auto; align-items: center; gap: 8px; padding: 0 12px 0 16px; }
+      .environment-summary-head strong { min-width: 0; flex: 1; color: var(--text-tertiary); font-size: 13px; font-weight: 580; }
+      .environment-tabs { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 10px; background: var(--surface-subtle); }
+      .environment-tab { display: inline-flex; height: 28px; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: 12px; font-weight: 560; }
+      .environment-tab:hover { background: var(--control); color: var(--text); }
+      .environment-tab[aria-selected="true"] { background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow-control); }
+      .environment-view { min-height: 0; flex: 1; }
+      .environment-view[hidden] { display: none; }
+      .environment-overview { overflow-y: auto; padding: 0 12px 12px; }
+      .environment-overview-inner { max-width: 440px; margin: 0 auto; }
+      .environment-overview-title { margin: 0 8px 10px; }
+      .environment-overview-title strong, .environment-overview-title span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .environment-overview-title strong { color: var(--text); font-size: 13px; font-weight: 580; }
+      .environment-overview-title span { margin-top: 2px; color: var(--text-tertiary); font-size: 11px; }
+      .environment-summary-row { display: grid; min-height: 44px; width: 100%; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 0 8px; border: 0; border-radius: 10px; background: transparent; color: var(--text); text-align: left; }
+      button.environment-summary-row:hover { background: var(--control); }
+      .environment-summary-icon { color: var(--text-secondary); font-size: 16px; text-align: center; }
+      .environment-summary-label { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+      .environment-summary-meta { overflow: hidden; color: var(--text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .environment-summary-counts { display: flex; gap: 8px; font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .environment-summary-counts .add { color: var(--success); }
+      .environment-summary-counts .delete { color: var(--danger); }
+      .environment-inline-actions { display: flex; gap: 4px; }
+      .environment-inline-action { height: 26px; padding: 0 7px; border: 0; border-radius: 8px; background: var(--control); color: var(--text-secondary); font-size: 10px; }
+      .environment-inline-action:hover { background: var(--control-hover); color: var(--text); }
+      .overview-meta-state { display: none; }
+      .environment-demo[data-state="summary"] .overview-summary,
+      .environment-demo[data-state="summary-clean"] .overview-clean,
+      .environment-demo[data-state="summary-loading"] .overview-loading,
+      .environment-demo[data-state="summary-error"] .overview-error { display: flex; }
+      .overview-loading { width: 72px; height: 8px; border-radius: 999px; background: var(--control); }
+      .overview-error { color: var(--danger); }
+      .review-modebar { display: flex; height: 38px; align-items: center; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+      .review-mode { height: 26px; padding: 0 9px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 580; }
+      .review-mode[aria-selected="true"] { background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow-control); }
+      .environment-subbar { display: flex; height: 38px; align-items: center; gap: 7px; padding: 0 10px; border-bottom: 1px solid var(--line); color: var(--text-secondary); font-size: 11px; }
+      .environment-subbar strong { min-width: 0; flex: 1; overflow: hidden; color: var(--text); font-size: 12px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+      .review-file-list { max-height: 148px; overflow-y: auto; padding: 5px; border-bottom: 1px solid var(--line); }
+      .review-ready { display: flex; height: calc(100% - 38px); min-height: 0; flex-direction: column; }
+      .compare-ready { display: none; height: calc(100% - 38px); min-height: 0; flex-direction: column; }
+      .review-file { display: flex; min-height: 39px; width: 100%; align-items: center; gap: 8px; padding: 5px 7px; border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); text-align: left; }
+      .review-file:hover { background: var(--control); }
+      .review-file.active { background: var(--selected); color: var(--text); }
+      .review-status { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center; border-radius: 6px; background: var(--control); color: var(--warning); font-size: 10px; font-weight: 650; }
+      .review-file-copy { min-width: 0; flex: 1; }
+      .review-file-copy strong, .review-file-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .review-file-copy strong { color: var(--text); font-size: 11px; font-weight: 580; }
+      .review-file-copy span { color: var(--text-tertiary); font-size: 10px; }
+      .review-counts { display: flex; flex: 0 0 auto; gap: 4px; font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 10px; }
+      .review-counts .add { color: var(--success); }
+      .review-counts .delete { color: var(--danger); }
+      .diff-head { display: flex; height: 34px; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+      .diff-head code { min-width: 0; flex: 1; overflow: hidden; color: var(--text-secondary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+      .diff-view { min-height: 0; flex: 1; overflow: auto; padding: 8px 0; background: var(--surface); font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 10px; line-height: 17px; }
+      .diff-line { display: grid; min-width: 520px; grid-template-columns: 36px 36px minmax(0, 1fr); }
+      .diff-number { padding: 0 7px; border-right: 1px solid var(--line); color: var(--text-tertiary); text-align: right; }
+      .diff-code { margin: 0; padding: 0 9px; color: var(--text); white-space: pre; }
+      .diff-line.addition { background: color-mix(in srgb, var(--success) 9%, transparent); }
+      .diff-line.deletion { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+      .diff-line.hunk { margin: 4px 0; background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); }
+      .environment-state-only { display: none; height: calc(100% - 38px); flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 28px; text-align: center; }
+      .environment-state-only strong { font-size: 13px; font-weight: 600; }
+      .environment-state-only span { max-width: 38ch; color: var(--text-secondary); font-size: 11px; }
+      .environment-state-only .state-glyph { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; background: var(--control); color: var(--text-secondary); }
+      .environment-demo[data-state="clean"] .review-ready, .environment-demo[data-state="loading"] .review-ready, .environment-demo[data-state="error"] .review-ready,
+      .environment-demo[data-state^="compare"] .review-ready { display: none; }
+      .environment-demo[data-state="clean"] .state-clean, .environment-demo[data-state="loading"] .state-loading, .environment-demo[data-state="error"] .state-error { display: flex; }
+      .environment-demo[data-state="compare"] .compare-ready { display: flex; }
+      .environment-demo[data-state="compare-identical"] .state-compare-identical,
+      .environment-demo[data-state="compare-error"] .state-compare-error { display: flex; }
+      .files-layout { display: grid; height: 100%; min-height: 0; grid-template-columns: 148px minmax(0, 1fr); }
+      .file-tree { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface-subtle); }
+      .file-search { margin: 7px; }
+      .file-tree-list { min-height: 0; flex: 1; overflow-y: auto; padding: 0 5px 7px; }
+      .file-row { display: flex; height: 27px; width: 100%; align-items: center; gap: 5px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: 11px; text-align: left; }
+      .file-row.indent { padding-left: 20px; }
+      .file-row:hover { background: var(--control); color: var(--text); }
+      .file-row.active { background: var(--selected); color: var(--text); }
+      .file-editor { display: flex; min-width: 0; flex-direction: column; background: var(--surface); }
+      .editor-head { display: flex; height: 38px; align-items: center; gap: 7px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--line); }
+      .editor-head code { min-width: 0; flex: 1; overflow: hidden; color: var(--text-secondary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+      .editor-status { color: var(--text-tertiary); font-size: 10px; }
+      .editor-conflict { display: none; align-items: flex-start; gap: 6px; padding: 7px 9px; border-bottom: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); background: color-mix(in srgb, var(--danger) 6%, transparent); color: var(--danger); font-size: 10px; }
+      .environment-demo[data-state="dirty"] .editor-status { color: var(--text-secondary); }
+      .environment-demo[data-state="dirty"] .editor-save { background: var(--accent); color: var(--on-accent); }
+      .environment-demo[data-state="conflict"] .editor-conflict { display: flex; }
+      .editor-canvas { display: grid; min-height: 0; flex: 1; grid-template-columns: 38px minmax(0, 1fr); overflow: hidden; font-family: "SFMono-Regular", "SF Mono", Menlo, monospace; font-size: 10px; line-height: 18px; }
+      .editor-lines { margin: 0; padding: 10px 7px; border-right: 1px solid var(--line); background: var(--surface-subtle); color: var(--text-tertiary); text-align: right; user-select: none; }
+      .editor-code { margin: 0; overflow: auto; padding: 10px; color: var(--text); white-space: pre; }
+      .state-tour-note { margin: 10px 0 0; color: var(--text-secondary); font-size: 11px; }
+
       .token-table { width: 100%; border-collapse: collapse; }
       .token-table th, .token-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
       .token-table th { color: var(--text-tertiary); font-size: 11px; font-weight: 600; }
@@ -253,8 +359,10 @@
       .toast { padding: 10px 12px; border-radius: 11px; background: var(--surface-raised); box-shadow: var(--shadow-toast); color: var(--text); font-size: 13px; animation: toast-in 250ms var(--ease-snappy) both; }
       .toast strong { margin-right: 5px; font-weight: 600; }
 
-      .dialog-layer { position: fixed; z-index: 40; inset: 0; display: grid; place-items: center; padding: 24px; background: rgb(0 0 0 / 0.22); backdrop-filter: blur(2px); }
-      .dialog-layer[hidden] { display: none; }
+      .dialog-layer { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 24px; border: 0; background: transparent; color: var(--text); }
+      .dialog-layer[open] { display: grid; place-items: center; }
+      .dialog-layer:not([open]) { display: none; }
+      .dialog-layer::backdrop { background: rgb(0 0 0 / 0.22); backdrop-filter: blur(2px); }
       .dialog { width: min(420px, 100%); padding: 20px; border-radius: var(--radius-dialog); background: var(--surface-raised); box-shadow: var(--shadow-dialog); animation: dialog-in 180ms var(--ease-enter) both; }
       .dialog h3 { margin: 0; font-size: 17px; font-weight: 640; }
       .dialog p { margin: 8px 0 0; color: var(--text-secondary); }
@@ -263,6 +371,22 @@
       .dialog-list strong { display: block; font-size: 12px; font-weight: 600; }
       .dialog-list span { color: var(--text-secondary); font-size: 11px; }
       .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+      .commit-message { width: 100%; min-height: 76px; margin-top: 14px; padding: 9px 10px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 9px; background: transparent; color: var(--text); font: inherit; outline: none; }
+      .commit-message:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+      .commit-options { display: grid; gap: 8px; margin-top: 12px; }
+      .commit-option { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; }
+      .commit-option strong, .commit-option span { display: block; }
+      .commit-option strong { font-size: 12px; }
+      .commit-option span { margin-top: 2px; color: var(--text-secondary); font-size: 11px; }
+      .commit-state-controls { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+      .commit-status { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 9px 10px; border-radius: 10px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
+      .commit-status[data-tone="danger"] { background: color-mix(in srgb, var(--danger) 9%, transparent); color: var(--danger); }
+      .commit-status[data-tone="success"] { background: color-mix(in srgb, var(--success) 9%, transparent); color: var(--success); }
+      .commit-status[data-tone="warning"] { background: color-mix(in srgb, var(--warning) 10%, transparent); color: var(--warning); }
+      .push-grid { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 10px; margin-top: 14px; }
+      .push-grid label { display: grid; gap: 5px; color: var(--text-secondary); font-size: 11px; }
+      .push-grid select, .push-grid input { min-width: 0; height: 32px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 9px; background: transparent; color: var(--text); font: inherit; }
+      .push-disclosure { margin-top: 12px; padding: 9px 10px; border-radius: 10px; background: var(--surface-subtle); color: var(--text-secondary); font-size: 11px; line-height: 1.45; }
 
       @keyframes popover-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
       @keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
@@ -274,6 +398,8 @@
         .state-grid { grid-template-columns: 78px repeat(5, 104px); overflow-x: auto; }
         .workbench { grid-template-columns: 1fr; }
         .sidebar { display: none; }
+        .environment-demo { grid-template-columns: 1fr; }
+        .environment-thread { display: none; }
         .section, .intro { padding-right: 20px; padding-left: 20px; }
         .canvas { width: min(100% - 16px, 1120px); margin-top: 12px; }
         .brand span { display: none; }
@@ -427,6 +553,158 @@
 
       <section class="section">
         <div class="section-head">
+          <h2>Environment surfaces</h2>
+          <p>A detached Environment card floats over the conversation as a compact status launcher. Review and Files expand into the persistent, resizable work surface only when the task needs a full diff or editor.</p>
+        </div>
+        <div class="environment-controls" aria-label="Environment panel state tour">
+          <button class="button small" id="environmentToggleButton" type="button" aria-pressed="true">Close environment</button>
+          <button class="button small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary">Overview · changes</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary-clean">Overview · clean</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary-loading">Overview · loading</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="overview" data-environment-state="summary-error">Overview · error</button>
+          <button class="button small environment-state-button" type="button" data-environment-mode="review" data-environment-state="changes">Review · changes</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="review" data-environment-state="clean">Clean</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="review" data-environment-state="loading">Loading</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="review" data-environment-state="error">Error</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="review" data-environment-state="compare">Compare · diverged</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="review" data-environment-state="compare-identical">Compare · identical</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="review" data-environment-state="compare-error">Compare · error</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="files" data-environment-state="editor">Files · editor</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="files" data-environment-state="dirty">Dirty</button>
+          <button class="button ghost small environment-state-button" type="button" data-environment-mode="files" data-environment-state="conflict">Conflict</button>
+        </div>
+        <div class="environment-demo" id="environmentDemo" data-mode="overview" data-state="summary" data-open="true">
+          <div class="environment-thread">
+            <div class="environment-thread-head"><strong>Environment sidebar states</strong><button class="button ghost icon" type="button" aria-label="More conversation actions">⋯</button></div>
+            <div class="environment-thread-body">
+              <div class="environment-thread-copy">
+                <p><strong>Conversation stays mounted.</strong> Review and Files appear as working context instead of replacing the thread.</p>
+                <p>The wide diff and editor content escape the conversation measure, while decisions and explanations remain in the chat.</p>
+              </div>
+              <div class="composer">
+                <textarea aria-label="Specimen message" placeholder="Ask Aiden about these changes"></textarea>
+                <div class="composer-footer"><button class="button ghost small" type="button">Ask for approval</button><button class="button primary icon" type="button" aria-label="Send">↑</button></div>
+              </div>
+            </div>
+          </div>
+          <aside class="environment-summary-card" id="environmentSummaryCard" aria-label="Environment summary specimen">
+            <div class="environment-summary-head">
+              <strong>Environment</strong>
+              <button class="button ghost icon" id="environmentSummaryActions" type="button" aria-label="Browse environment files" title="Browse files">+</button>
+            </div>
+            <div class="environment-overview" id="environmentOverviewView" role="region" aria-label="Environment overview">
+              <div class="environment-overview-inner">
+                <button class="environment-summary-row" id="environmentOverviewChanges" type="button">
+                  <span class="environment-summary-icon" aria-hidden="true">↔</span><span class="environment-summary-label">Changes</span>
+                  <span class="overview-meta-state overview-summary environment-summary-counts"><span class="add">+214,272</span><span class="delete">−94</span></span>
+                  <span class="overview-meta-state overview-clean environment-summary-meta" style="color: var(--success)">✓ Clean</span>
+                  <span class="overview-meta-state overview-loading" aria-label="Loading changes"></span>
+                  <span class="overview-meta-state overview-error environment-summary-meta">! Unavailable</span>
+                </button>
+                <div class="environment-summary-row"><span class="environment-summary-icon" aria-hidden="true">▱</span><span class="environment-summary-label">Local</span><span class="environment-summary-meta">Runs on this Mac</span></div>
+                <button class="environment-summary-row" type="button"><span class="environment-summary-icon" aria-hidden="true">⑂</span><span class="environment-summary-label">main</span><span class="environment-summary-meta">⌄</span></button>
+                <div class="environment-summary-row environment-commit-row"><span class="environment-summary-icon" aria-hidden="true">⊙</span><span class="environment-summary-label">Commit or push</span><span class="environment-inline-actions"><button class="environment-inline-action" id="environmentCommitButton" type="button">Commit</button><button class="environment-inline-action" id="environmentPushButton" type="button">Push</button></span></div>
+                <button class="environment-summary-row" id="environmentOverviewCompare" type="button"><span class="environment-summary-icon" aria-hidden="true">↔</span><span class="environment-summary-label">Compare branch</span><span class="environment-summary-meta">↗</span></button>
+              </div>
+            </div>
+          </aside>
+          <aside class="environment-panel-specimen" id="environmentPanelSpecimen" aria-label="Environment sidebar specimen">
+            <div class="environment-panel-head">
+              <strong>Environment</strong>
+              <button class="button ghost icon" id="environmentSummaryButton" type="button" aria-label="Show environment summary" title="Show summary">☷</button>
+              <div class="environment-tabs" role="tablist" aria-label="Environment views">
+                <button class="environment-tab" id="environmentReviewTab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="environmentReviewView">↔ Review</button>
+                <button class="environment-tab" id="environmentFilesTab" type="button" role="tab" tabindex="-1" aria-selected="false" aria-controls="environmentFilesView">▤ Files</button>
+              </div>
+              <button class="button ghost icon" id="environmentCloseButton" type="button" aria-label="Close environment sidebar">×</button>
+            </div>
+            <div class="environment-view" id="environmentReviewView" role="tabpanel" aria-labelledby="environmentReviewTab" hidden>
+              <div class="review-modebar" role="tablist" aria-label="Review source"><button class="review-mode" id="environmentChangesMode" type="button" role="tab" aria-selected="true">Changes</button><button class="review-mode" id="environmentCompareMode" type="button" role="tab" aria-selected="false">Compare</button></div>
+              <div class="review-ready">
+                <div class="environment-subbar"><span aria-hidden="true">⌘</span><strong>main</strong><span>3 files</span><button class="button ghost icon" type="button" aria-label="Refresh changes">↻</button></div>
+                <div class="review-file-list">
+                  <button class="review-file active" type="button"><span class="review-status">M</span><span class="review-file-copy"><strong>environment-panel.tsx</strong><span>renderer/components</span></span><span class="review-counts"><span class="add">+48</span><span class="delete">−6</span></span></button>
+                  <button class="review-file" type="button"><span class="review-status" style="color: var(--success)">A</span><span class="review-file-copy"><strong>workspace-files.ts</strong><span>main/services</span></span><span class="review-counts"><span class="add">+212</span><span class="delete">−0</span></span></button>
+                  <button class="review-file" type="button"><span class="review-status" style="color: var(--danger)">D</span><span class="review-file-copy"><strong>legacy-preview.tsx</strong><span>renderer/components</span></span><span class="review-counts"><span class="add">+0</span><span class="delete">−31</span></span></button>
+                </div>
+                <div class="diff-head"><code>renderer/components/environment-panel.tsx</code><button class="button ghost small" type="button">Open file</button></div>
+                <div class="diff-view" aria-label="Unified diff example">
+                  <div class="diff-line"><span class="diff-number"></span><span class="diff-number"></span><pre class="diff-code">diff --git a/environment-panel.tsx b/environment-panel.tsx</pre></div>
+                  <div class="diff-line hunk"><span class="diff-number"></span><span class="diff-number"></span><pre class="diff-code">@@ -42,6 +42,10 @@</pre></div>
+                  <div class="diff-line"><span class="diff-number">42</span><span class="diff-number">42</span><pre class="diff-code"> export function EnvironmentPanel() {</pre></div>
+                  <div class="diff-line deletion"><span class="diff-number">43</span><span class="diff-number"></span><pre class="diff-code">-  return &lt;Preview /&gt;;</pre></div>
+                  <div class="diff-line addition"><span class="diff-number"></span><span class="diff-number">43</span><pre class="diff-code">+  const [tab, setTab] = useState("review");</pre></div>
+                  <div class="diff-line addition"><span class="diff-number"></span><span class="diff-number">44</span><pre class="diff-code">+  return &lt;WorkspacePanel tab={tab} /&gt;;</pre></div>
+                  <div class="diff-line"><span class="diff-number">44</span><span class="diff-number">45</span><pre class="diff-code"> }</pre></div>
+                </div>
+              </div>
+              <div class="compare-ready">
+                <div class="environment-subbar"><span aria-hidden="true">⑂</span><strong>main with Last fetched · origin/main</strong><span title="One commit ahead, two behind">↑1 ↓2</span><button class="button ghost icon" type="button" aria-label="Refresh local comparison">↻</button></div>
+                <div class="review-file-list">
+                  <button class="review-file active" type="button"><span class="review-status">M</span><span class="review-file-copy"><strong>environment-panel.tsx</strong><span>renderer/components</span></span><span class="review-counts"><span class="add">+48</span><span class="delete">−6</span></span></button>
+                  <button class="review-file" type="button"><span class="review-status" style="color: var(--success)">A</span><span class="review-file-copy"><strong>git-push-dialog.tsx</strong><span>renderer/components</span></span><span class="review-counts"><span class="add">+190</span><span class="delete">−0</span></span></button>
+                </div>
+                <div class="diff-head"><code>renderer/components/environment-panel.tsx · merge-base..HEAD</code><button class="button ghost small" type="button">Open file</button></div>
+                <div class="diff-view" aria-label="Merge-base branch comparison example">
+                  <div class="diff-line"><span class="diff-number"></span><span class="diff-number"></span><pre class="diff-code">diff --git a/environment-panel.tsx b/environment-panel.tsx</pre></div>
+                  <div class="diff-line hunk"><span class="diff-number"></span><span class="diff-number"></span><pre class="diff-code">@@ -83,6 +83,8 @@</pre></div>
+                  <div class="diff-line"><span class="diff-number">83</span><span class="diff-number">83</span><pre class="diff-code"> &lt;ReviewPanel</pre></div>
+                  <div class="diff-line addition"><span class="diff-number"></span><span class="diff-number">84</span><pre class="diff-code">+  mode="compare"</pre></div>
+                  <div class="diff-line addition"><span class="diff-number"></span><span class="diff-number">85</span><pre class="diff-code">+  target="refs/remotes/origin/main"</pre></div>
+                </div>
+              </div>
+              <div class="environment-state-only state-clean"><span class="state-glyph" style="color: var(--success)">✓</span><strong>Working tree is clean</strong><span>New edits will appear here without moving the conversation.</span></div>
+              <div class="environment-state-only state-loading"><span class="state-glyph">◌</span><strong>Loading workspace changes…</strong><span>File-shaped skeletons preserve the review layout while Git responds.</span></div>
+              <div class="environment-state-only state-error"><span class="state-glyph" style="color: var(--danger)">!</span><strong>Review unavailable</strong><span>The workspace changed before the diff finished. Retry keeps the panel and thread in place.</span><button class="button small" type="button">Try again</button></div>
+              <div class="environment-state-only state-compare-identical"><span class="state-glyph" style="color: var(--success)">✓</span><strong>Branches are identical</strong><span>Both exact local references point to the same history. No network fetch was performed.</span></div>
+              <div class="environment-state-only state-compare-error"><span class="state-glyph" style="color: var(--danger)">!</span><strong>Comparison unavailable</strong><span>The target moved or does not share history with the current branch. Refresh local references or choose another target.</span><button class="button small" type="button">Try again</button></div>
+            </div>
+
+            <div class="environment-view" id="environmentFilesView" role="tabpanel" aria-labelledby="environmentFilesTab" hidden>
+              <div class="files-layout">
+                <div class="file-tree">
+                  <div class="file-search search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input class="field" type="text" aria-label="Search workspace files" placeholder="Search files"></div>
+                  <div class="file-tree-list">
+                    <button class="file-row" type="button">⌄ <span>▣ renderer</span></button>
+                    <button class="file-row indent" type="button">⌄ <span>▣ components</span></button>
+                    <button class="file-row indent active" type="button">· <span>environment-panel.tsx</span></button>
+                    <button class="file-row indent" type="button">· <span>files-panel.tsx</span></button>
+                    <button class="file-row" type="button">› <span>▣ main</span></button>
+                    <button class="file-row" type="button">· <span>package.json</span></button>
+                  </div>
+                </div>
+                <div class="file-editor">
+                  <div class="editor-head"><code>renderer/components/environment-panel.tsx</code><span class="editor-status" id="environmentEditorStatus">Saved</span><button class="button ghost small" type="button">Wrap</button><button class="button small editor-save" id="environmentSaveButton" type="button" disabled>Save</button></div>
+                  <div class="editor-conflict"><span aria-hidden="true">!</span><span>The file changed on disk. Reload before saving so newer work is not overwritten.</span></div>
+                  <div class="editor-canvas">
+                    <pre class="editor-lines">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11</pre>
+                    <pre class="editor-code">import * as React from "react";
+import { ReviewPanel } from "./review-panel";
+import { FilesPanel } from "./files-panel";
+
+export function EnvironmentSurfaces() {
+  const [tab, setTab] = React.useState("overview");
+
+  return (
+    &lt;&gt;
+      {tab === "overview" ? &lt;EnvironmentSummaryCard /&gt; : null}
+      &lt;WorkspacePanel hidden={tab === "overview"}&gt;
+        {tab === "review" ? &lt;ReviewPanel /&gt; : &lt;FilesPanel /&gt;}
+      &lt;/WorkspacePanel&gt;
+    &lt;/&gt;
+  );
+}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+        <p class="state-tour-note">The production state inventory also covers no workspace, No Access, push without a remote, rejection, timeout reconciliation and unknown outcome, compare target loading, unrelated history, binary and truncated diffs, empty/truncated file indexes, invalid UTF-8, oversized files, missing files, save failure, dirty-file switching, narrow-window list/detail navigation, keyboard resizing, and reduced motion.</p>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
           <h2>Shadow recipes</h2>
           <p>These values are recreated from the shipped renderer's elevation scale, then adjusted to Aiden's light and dark surfaces. Button shadows remain compact; only transient overlays receive larger elevation.</p>
         </div>
@@ -461,8 +739,8 @@
 
     <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
-    <div class="dialog-layer" id="dialogLayer" hidden>
-      <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle" aria-describedby="dialogDescription">
+    <dialog class="dialog-layer" id="dialogLayer" aria-labelledby="dialogTitle" aria-describedby="dialogDescription">
+      <div class="dialog">
         <h3 id="dialogTitle">Turn on Full Access?</h3>
         <p id="dialogDescription">Aiden could run commands, use the internet, and create or edit files without asking each time.</p>
         <ul class="dialog-list">
@@ -472,7 +750,57 @@
         </ul>
         <div class="dialog-actions"><button class="button ghost" id="dialogCancel" type="button">Cancel</button><button class="button primary" id="dialogConfirm" type="button">Confirm</button></div>
       </div>
-    </div>
+    </dialog>
+
+    <dialog class="dialog-layer" id="environmentCommitLayer" data-state="ready" aria-labelledby="environmentCommitTitle" aria-describedby="environmentCommitDescription">
+      <div class="dialog">
+        <h3 id="environmentCommitTitle">Commit changes</h3>
+        <p id="environmentCommitDescription">Commit the reviewed snapshot to <strong>main</strong>. Git hooks and signing settings apply; push stays separate.</p>
+        <div id="environmentCommitForm">
+          <label class="field-label" for="environmentCommitMessage" style="display:block;margin-top:14px">Commit message</label>
+          <textarea class="commit-message" id="environmentCommitMessage" placeholder="Describe this change"></textarea>
+          <div class="commit-options" role="radiogroup" aria-label="Changes to include">
+            <label class="commit-option"><input type="radio" name="commit-scope" value="staged" checked><span><strong>Staged changes only</strong><span>1 staged file; unstaged portions stay in the working tree.</span></span></label>
+            <label class="commit-option"><input type="radio" name="commit-scope" value="all"><span><strong>All current changes</strong><span>3 changed files, including untracked files.</span></span></label>
+          </div>
+        </div>
+        <div class="commit-status" id="environmentCommitStatus" role="status" hidden><span id="environmentCommitStatusText"></span><button class="button ghost small" id="environmentCommitRefresh" type="button" hidden>Refresh changes</button></div>
+        <div class="commit-state-controls" aria-label="Commit dialog specimen states">
+          <button class="button small commit-state-button" type="button" data-commit-state="ready">Ready</button>
+          <button class="button ghost small commit-state-button" type="button" data-commit-state="running">Running</button>
+          <button class="button ghost small commit-state-button" type="button" data-commit-state="failed">Failed</button>
+          <button class="button ghost small commit-state-button" type="button" data-commit-state="unknown">Unknown</button>
+          <button class="button ghost small commit-state-button" type="button" data-commit-state="unavailable">Unavailable</button>
+          <button class="button ghost small commit-state-button" type="button" data-commit-state="success">Success</button>
+        </div>
+        <div class="dialog-actions"><button class="button ghost" id="environmentCommitCancel" type="button">Cancel</button><button class="button primary" id="environmentCommitConfirm" type="button" disabled>Commit</button></div>
+      </div>
+    </dialog>
+
+    <dialog class="dialog-layer" id="environmentPushLayer" data-state="ready" aria-labelledby="environmentPushTitle" aria-describedby="environmentPushDescription">
+      <div class="dialog">
+        <h3 id="environmentPushTitle">Push branch</h3>
+        <p id="environmentPushDescription">Push the frozen <strong>main</strong> commit with a normal non-force refspec. Aiden does not fetch first.</p>
+        <div id="environmentPushForm">
+          <div class="push-grid">
+            <label>Remote<select id="environmentPushRemote"><option>origin</option><option>upstream</option></select></label>
+            <label>Destination branch<input id="environmentPushDestination" value="main" spellcheck="false"></label>
+          </div>
+          <label class="commit-option" style="margin-top:12px"><input id="environmentPushUpstream" type="checkbox" checked><span><strong>Remember as upstream</strong><span>Ahead/behind stays labeled as a last-fetched local fact.</span></span></label>
+          <div class="push-disclosure">Pre-push hooks and configured authentication may run. Force push, mirror, prune, follow-tags, submodule recursion, and implicit fetch are disabled.</div>
+        </div>
+        <div class="commit-status" id="environmentPushStatus" role="status" hidden><span id="environmentPushStatusText"></span><button class="button ghost small" id="environmentPushRefresh" type="button" hidden>Refresh branch state</button></div>
+        <div class="commit-state-controls" aria-label="Push dialog specimen states">
+          <button class="button small push-state-button" type="button" data-push-state="ready">Ready</button>
+          <button class="button ghost small push-state-button" type="button" data-push-state="running">Running</button>
+          <button class="button ghost small push-state-button" type="button" data-push-state="failed">Rejected</button>
+          <button class="button ghost small push-state-button" type="button" data-push-state="unknown">Unknown</button>
+          <button class="button ghost small push-state-button" type="button" data-push-state="unavailable">No remote</button>
+          <button class="button ghost small push-state-button" type="button" data-push-state="success">Success</button>
+        </div>
+        <div class="dialog-actions"><button class="button ghost" id="environmentPushCancel" type="button">Cancel</button><button class="button primary" id="environmentPushConfirm" type="button">Push</button></div>
+      </div>
+    </dialog>
 
     <script>
       const root = document.documentElement;
@@ -485,6 +813,56 @@
       const dialogCancel = document.querySelector("#dialogCancel");
       const dialogConfirm = document.querySelector("#dialogConfirm");
       const toastRegion = document.querySelector("#toastRegion");
+      const environmentDemo = document.querySelector("#environmentDemo");
+      const environmentPanelSpecimen = document.querySelector("#environmentPanelSpecimen");
+      const environmentSummaryCard = document.querySelector("#environmentSummaryCard");
+      const environmentSummaryActions = document.querySelector("#environmentSummaryActions");
+      const environmentSummaryButton = document.querySelector("#environmentSummaryButton");
+      const environmentToggleButton = document.querySelector("#environmentToggleButton");
+      const environmentCloseButton = document.querySelector("#environmentCloseButton");
+      const environmentReviewTab = document.querySelector("#environmentReviewTab");
+      const environmentFilesTab = document.querySelector("#environmentFilesTab");
+      const environmentOverviewView = document.querySelector("#environmentOverviewView");
+      const environmentReviewView = document.querySelector("#environmentReviewView");
+      const environmentFilesView = document.querySelector("#environmentFilesView");
+      const environmentOverviewChanges = document.querySelector("#environmentOverviewChanges");
+      const environmentOverviewCompare = document.querySelector("#environmentOverviewCompare");
+      const environmentChangesMode = document.querySelector("#environmentChangesMode");
+      const environmentCompareMode = document.querySelector("#environmentCompareMode");
+      const environmentCommitButton = document.querySelector("#environmentCommitButton");
+      const environmentPushButton = document.querySelector("#environmentPushButton");
+      const environmentCommitLayer = document.querySelector("#environmentCommitLayer");
+      const environmentCommitForm = document.querySelector("#environmentCommitForm");
+      const environmentCommitMessage = document.querySelector("#environmentCommitMessage");
+      const environmentCommitCancel = document.querySelector("#environmentCommitCancel");
+      const environmentCommitConfirm = document.querySelector("#environmentCommitConfirm");
+      const environmentCommitStatus = document.querySelector("#environmentCommitStatus");
+      const environmentCommitStatusText = document.querySelector("#environmentCommitStatusText");
+      const environmentCommitRefresh = document.querySelector("#environmentCommitRefresh");
+      const environmentCommitStateButtons = [...document.querySelectorAll(".commit-state-button")];
+      const environmentCommitInputs = [...environmentCommitForm.querySelectorAll("textarea, input")];
+      const environmentPushLayer = document.querySelector("#environmentPushLayer");
+      const environmentPushForm = document.querySelector("#environmentPushForm");
+      const environmentPushDestination = document.querySelector("#environmentPushDestination");
+      const environmentPushCancel = document.querySelector("#environmentPushCancel");
+      const environmentPushConfirm = document.querySelector("#environmentPushConfirm");
+      const environmentPushStatus = document.querySelector("#environmentPushStatus");
+      const environmentPushStatusText = document.querySelector("#environmentPushStatusText");
+      const environmentPushRefresh = document.querySelector("#environmentPushRefresh");
+      const environmentPushStateButtons = [...document.querySelectorAll(".push-state-button")];
+      const environmentPushInputs = [...environmentPushForm.querySelectorAll("select, input")];
+      const environmentEditorStatus = document.querySelector("#environmentEditorStatus");
+      const environmentSaveButton = document.querySelector("#environmentSaveButton");
+      const environmentStateButtons = [...document.querySelectorAll(".environment-state-button")];
+      const environmentViews = [
+        { mode: "review", tab: environmentReviewTab, view: environmentReviewView, state: "changes" },
+        { mode: "files", tab: environmentFilesTab, view: environmentFilesView, state: "editor" },
+      ];
+      const environmentReviewModes = [
+        { button: environmentChangesMode, state: "changes" },
+        { button: environmentCompareMode, state: "compare" },
+      ];
+      let environmentReturnFocus = environmentToggleButton;
 
       themeButton.addEventListener("click", () => {
         const dark = root.dataset.theme !== "dark";
@@ -507,11 +885,12 @@
       };
       popoverButtons.forEach((button) => button.addEventListener("click", () => setPopover(popover.hidden)));
 
-      const closeDialog = () => { dialogLayer.hidden = true; dialogButton.focus(); };
-      dialogButton.addEventListener("click", () => { dialogLayer.hidden = false; requestAnimationFrame(() => dialogCancel.focus()); });
+      const closeDialog = () => { if (dialogLayer.open) dialogLayer.close(); dialogButton.focus(); };
+      dialogButton.addEventListener("click", () => { dialogLayer.showModal(); requestAnimationFrame(() => dialogCancel.focus()); });
       dialogCancel.addEventListener("click", closeDialog);
       dialogConfirm.addEventListener("click", () => { closeDialog(); showToast("Full Access", "Specimen only — no setting changed."); });
       dialogLayer.addEventListener("click", (event) => { if (event.target === dialogLayer) closeDialog(); });
+      dialogLayer.addEventListener("cancel", (event) => { event.preventDefault(); closeDialog(); });
 
       const showToast = (title, message) => {
         const toast = document.createElement("div");
@@ -522,12 +901,299 @@
       };
       document.querySelector("#toastButton").addEventListener("click", () => showToast("Saved", "Interaction tokens are documented."));
 
+      const syncEnvironmentSurfaces = () => {
+        const open = environmentDemo.dataset.open !== "false";
+        const summaryOpen = open && environmentDemo.dataset.mode === "overview";
+        const panelOpen = open && !summaryOpen;
+        environmentSummaryCard.setAttribute("aria-hidden", String(!summaryOpen));
+        environmentSummaryCard.inert = !summaryOpen;
+        environmentPanelSpecimen.setAttribute("aria-hidden", String(!panelOpen));
+        environmentPanelSpecimen.inert = !panelOpen;
+      };
+
+      const setEnvironmentOpen = (open, moveFocus = true) => {
+        const wasOpen = environmentDemo.dataset.open === "true";
+        if (open && !wasOpen && document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+          environmentReturnFocus = document.activeElement;
+        }
+        environmentDemo.dataset.open = String(open);
+        syncEnvironmentSurfaces();
+        environmentToggleButton.setAttribute("aria-pressed", String(open));
+        environmentToggleButton.textContent = open ? "Close environment" : "Open environment";
+        if (moveFocus) {
+          requestAnimationFrame(() => {
+            if (open && environmentDemo.dataset.mode === "overview") environmentSummaryActions.focus();
+            else if (open) environmentViews.find(({ tab }) => tab.getAttribute("aria-selected") === "true")?.tab.focus();
+            else (environmentReturnFocus.isConnected ? environmentReturnFocus : environmentToggleButton).focus();
+          });
+        }
+      };
+
+      const setEnvironmentState = (mode, state) => {
+        setEnvironmentOpen(true, false);
+        environmentDemo.dataset.mode = mode;
+        environmentDemo.dataset.state = state;
+        environmentViews.forEach(({ mode: viewMode, tab, view }) => {
+          const selected = mode === viewMode;
+          tab.setAttribute("aria-selected", String(selected));
+          tab.tabIndex = selected ? 0 : -1;
+          view.hidden = !selected;
+        });
+        environmentEditorStatus.textContent = state === "dirty" ? "Edited" : state === "conflict" ? "Save failed" : "Saved";
+        environmentSaveButton.disabled = state !== "dirty";
+        const comparing = mode === "review" && state.startsWith("compare");
+        environmentChangesMode.setAttribute("aria-selected", String(mode === "review" && !comparing));
+        environmentCompareMode.setAttribute("aria-selected", String(comparing));
+        environmentChangesMode.tabIndex = !comparing ? 0 : -1;
+        environmentCompareMode.tabIndex = comparing ? 0 : -1;
+        environmentStateButtons.forEach((button) => {
+          const selected = button.dataset.environmentMode === mode && button.dataset.environmentState === state;
+          button.classList.toggle("primary", selected);
+          button.classList.toggle("ghost", !selected);
+        });
+        syncEnvironmentSurfaces();
+      };
+
+      environmentToggleButton.addEventListener("click", () => {
+        if (environmentDemo.dataset.open !== "false") setEnvironmentOpen(false);
+        else setEnvironmentState("overview", "summary");
+      });
+      environmentCloseButton.addEventListener("click", () => setEnvironmentOpen(false));
+      environmentSummaryActions.addEventListener("click", () => setEnvironmentState("files", "editor"));
+      environmentSummaryButton.addEventListener("click", () => setEnvironmentState("overview", "summary"));
+      environmentReviewTab.addEventListener("click", () => setEnvironmentState("review", "changes"));
+      environmentFilesTab.addEventListener("click", () => setEnvironmentState("files", "editor"));
+      environmentOverviewChanges.addEventListener("click", () => setEnvironmentState("review", "changes"));
+      environmentOverviewCompare.addEventListener("click", () => setEnvironmentState("review", "compare"));
+      environmentChangesMode.addEventListener("click", () => setEnvironmentState("review", "changes"));
+      environmentCompareMode.addEventListener("click", () => setEnvironmentState("review", "compare"));
+      let environmentCommitTimer;
+      const environmentCommitCopy = {
+        running: ["status", "Creating an immutable local commit… Workspace switching and dismissal stay locked."],
+        failed: ["danger", "A hook refused the commit. No commit was created and the real index is unchanged; refresh Review before retrying."],
+        unknown: ["warning", "Aiden could not determine whether the branch advanced. The real index is unchanged; refresh Review and inspect the branch before retrying."],
+        unavailable: ["warning", "Resolve conflicts and refresh Review before committing from Aiden."],
+        success: ["success", "Local commit created on main. A post-commit warning would appear here without turning success into a failure."],
+      };
+      const syncEnvironmentCommitConfirm = () => {
+        const state = environmentCommitLayer.dataset.state;
+        environmentCommitConfirm.hidden = state === "unavailable";
+        environmentCommitConfirm.textContent = state === "success" ? "Done" : state === "running" ? "Committing…" : "Commit";
+        environmentCommitConfirm.disabled = state === "ready" ? !environmentCommitMessage.value.trim() : state !== "success";
+      };
+      const setEnvironmentCommitState = (state) => {
+        window.clearTimeout(environmentCommitTimer);
+        environmentCommitLayer.dataset.state = state;
+        const unavailable = state === "unavailable";
+        const success = state === "success";
+        const running = state === "running";
+        environmentCommitForm.hidden = unavailable || success;
+        environmentCommitInputs.forEach((input) => { input.disabled = running; });
+        environmentCommitCancel.disabled = running;
+        environmentCommitCancel.textContent = unavailable ? "Close" : "Cancel";
+        environmentCommitLayer.querySelector(".dialog").setAttribute("aria-busy", String(running));
+        environmentCommitStatus.hidden = state === "ready";
+        if (state !== "ready") {
+          const [tone, copy] = environmentCommitCopy[state];
+          environmentCommitStatus.dataset.tone = tone;
+          environmentCommitStatus.setAttribute("role", state === "failed" || state === "unknown" ? "alert" : "status");
+          environmentCommitStatusText.textContent = copy;
+        }
+        environmentCommitRefresh.hidden = state !== "failed" && state !== "unknown";
+        environmentCommitStateButtons.forEach((button) => {
+          const selected = button.dataset.commitState === state;
+          button.disabled = running;
+          button.classList.toggle("primary", selected);
+          button.classList.toggle("ghost", !selected);
+        });
+        syncEnvironmentCommitConfirm();
+      };
+      const closeEnvironmentCommit = () => {
+        if (environmentCommitLayer.dataset.state === "running") return;
+        window.clearTimeout(environmentCommitTimer);
+        if (environmentCommitLayer.open) environmentCommitLayer.close();
+        environmentCommitButton.focus();
+      };
+      environmentCommitButton.addEventListener("click", () => {
+        environmentCommitLayer.showModal();
+        environmentCommitMessage.value = "";
+        environmentCommitLayer.querySelector('input[value="staged"]').checked = true;
+        setEnvironmentCommitState("ready");
+        requestAnimationFrame(() => environmentCommitMessage.focus());
+      });
+      environmentCommitMessage.addEventListener("input", syncEnvironmentCommitConfirm);
+      environmentCommitCancel.addEventListener("click", closeEnvironmentCommit);
+      environmentCommitConfirm.addEventListener("click", () => {
+        if (environmentCommitLayer.dataset.state === "success") {
+          closeEnvironmentCommit();
+          return;
+        }
+        if (environmentCommitLayer.dataset.state !== "ready" || !environmentCommitMessage.value.trim()) return;
+        setEnvironmentCommitState("running");
+        environmentCommitTimer = window.setTimeout(() => {
+          if (!environmentCommitLayer.open || environmentCommitLayer.dataset.state !== "running") return;
+          setEnvironmentCommitState("success");
+          closeEnvironmentCommit();
+          showToast("Committed", "Local commit created on main; nothing was pushed.");
+        }, 700);
+      });
+      environmentCommitLayer.addEventListener("click", (event) => {
+        if (event.target === environmentCommitLayer) closeEnvironmentCommit();
+      });
+      environmentCommitLayer.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        closeEnvironmentCommit();
+      });
+      environmentCommitRefresh.addEventListener("click", () => {
+        setEnvironmentCommitState("ready");
+        environmentCommitMessage.focus();
+      });
+      environmentCommitStateButtons.forEach((button) => button.addEventListener("click", () => {
+        setEnvironmentCommitState(button.dataset.commitState);
+        if (button.dataset.commitState === "running") {
+          environmentCommitTimer = window.setTimeout(() => setEnvironmentCommitState("success"), 900);
+        }
+      }));
+
+      let environmentPushTimer;
+      const environmentPushCopy = {
+        running: ["status", "Pushing the frozen commit… Workspace switching and dismissal stay locked."],
+        failed: ["danger", "The remote rejected this normal push. Nothing was forced or fetched; refresh local branch state before retrying."],
+        unknown: ["warning", "Aiden could not determine whether origin/main advanced. Inspect the remote before retrying."],
+        unavailable: ["warning", "Add a Git remote before pushing from Aiden."],
+        success: ["success", "The frozen commit is now at origin/main. Upstream-setting trouble would remain a separate warning."],
+      };
+      const syncEnvironmentPushConfirm = () => {
+        const state = environmentPushLayer.dataset.state;
+        environmentPushConfirm.hidden = state === "unavailable";
+        environmentPushConfirm.textContent = state === "success" ? "Done" : state === "running" ? "Pushing…" : "Push";
+        environmentPushConfirm.disabled = state === "ready" ? !environmentPushDestination.value.trim() : state !== "success";
+      };
+      const setEnvironmentPushState = (state) => {
+        window.clearTimeout(environmentPushTimer);
+        environmentPushLayer.dataset.state = state;
+        const unavailable = state === "unavailable";
+        const success = state === "success";
+        const running = state === "running";
+        environmentPushForm.hidden = unavailable || success;
+        environmentPushInputs.forEach((input) => { input.disabled = running; });
+        environmentPushCancel.disabled = running;
+        environmentPushCancel.textContent = unavailable ? "Close" : "Cancel";
+        environmentPushLayer.querySelector(".dialog").setAttribute("aria-busy", String(running));
+        environmentPushStatus.hidden = state === "ready";
+        if (state !== "ready") {
+          const [tone, copy] = environmentPushCopy[state];
+          environmentPushStatus.dataset.tone = tone;
+          environmentPushStatus.setAttribute("role", state === "failed" || state === "unknown" ? "alert" : "status");
+          environmentPushStatusText.textContent = copy;
+        }
+        environmentPushRefresh.hidden = state !== "failed" && state !== "unknown";
+        environmentPushStateButtons.forEach((button) => {
+          const selected = button.dataset.pushState === state;
+          button.disabled = running;
+          button.classList.toggle("primary", selected);
+          button.classList.toggle("ghost", !selected);
+        });
+        syncEnvironmentPushConfirm();
+      };
+      const closeEnvironmentPush = () => {
+        if (environmentPushLayer.dataset.state === "running") return;
+        window.clearTimeout(environmentPushTimer);
+        if (environmentPushLayer.open) environmentPushLayer.close();
+        environmentPushButton.focus();
+      };
+      environmentPushButton.addEventListener("click", () => {
+        environmentPushLayer.showModal();
+        environmentPushDestination.value = "main";
+        setEnvironmentPushState("ready");
+        requestAnimationFrame(() => environmentPushDestination.focus());
+      });
+      environmentPushDestination.addEventListener("input", syncEnvironmentPushConfirm);
+      environmentPushCancel.addEventListener("click", closeEnvironmentPush);
+      environmentPushConfirm.addEventListener("click", () => {
+        if (environmentPushLayer.dataset.state === "success") {
+          closeEnvironmentPush();
+          return;
+        }
+        if (environmentPushLayer.dataset.state !== "ready" || !environmentPushDestination.value.trim()) return;
+        setEnvironmentPushState("running");
+        environmentPushTimer = window.setTimeout(() => {
+          if (!environmentPushLayer.open || environmentPushLayer.dataset.state !== "running") return;
+          setEnvironmentPushState("success");
+          closeEnvironmentPush();
+          showToast("Pushed", "main is now at origin/main; no force or fetch was used.");
+        }, 700);
+      });
+      environmentPushLayer.addEventListener("click", (event) => {
+        if (event.target === environmentPushLayer) closeEnvironmentPush();
+      });
+      environmentPushLayer.addEventListener("cancel", (event) => {
+        event.preventDefault();
+        closeEnvironmentPush();
+      });
+      environmentPushRefresh.addEventListener("click", () => {
+        setEnvironmentPushState("ready");
+        environmentPushDestination.focus();
+      });
+      environmentPushStateButtons.forEach((button) => button.addEventListener("click", () => {
+        setEnvironmentPushState(button.dataset.pushState);
+        if (button.dataset.pushState === "running") {
+          environmentPushTimer = window.setTimeout(() => setEnvironmentPushState("success"), 900);
+        }
+      }));
+      environmentStateButtons.forEach((button) => button.addEventListener("click", () => setEnvironmentState(button.dataset.environmentMode, button.dataset.environmentState)));
+      environmentViews.forEach(({ tab }, index) => {
+        tab.addEventListener("keydown", (event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const nextIndex = event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? environmentViews.length - 1
+              : (index + (event.key === "ArrowRight" ? 1 : -1) + environmentViews.length) % environmentViews.length;
+          const next = environmentViews[nextIndex];
+          setEnvironmentState(next.mode, next.state);
+          next.tab.focus();
+        });
+      });
+      environmentReviewModes.forEach(({ button }, index) => {
+        button.addEventListener("keydown", (event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const nextIndex = event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? environmentReviewModes.length - 1
+              : (index + (event.key === "ArrowRight" ? 1 : -1) + environmentReviewModes.length) % environmentReviewModes.length;
+          const next = environmentReviewModes[nextIndex];
+          setEnvironmentState("review", next.state);
+          next.button.focus();
+        });
+      });
+
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
-          if (!dialogLayer.hidden) closeDialog();
-          setPopover(false);
+          if (environmentPushLayer.open) {
+            closeEnvironmentPush();
+            return;
+          }
+          if (environmentCommitLayer.open) {
+            closeEnvironmentCommit();
+            return;
+          }
+          if (dialogLayer.open) {
+            closeDialog();
+            return;
+          }
+          if (!popover.hidden) {
+            setPopover(false);
+            return;
+          }
+          if (environmentDemo.dataset.open !== "false") setEnvironmentOpen(false);
         }
       });
+
+      setEnvironmentState("overview", "summary");
     </script>
   </body>
 </html>
