@@ -16,6 +16,9 @@ import {
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
+import {
+  EnvironmentWorkbench,
+} from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 
 export function ChatLayout() {
@@ -66,10 +69,12 @@ export function ChatLayout() {
       sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
       sidebarSize={{ default: 272, min: 236, max: 340 }}
     >
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="min-h-0 flex-1 overflow-hidden"><Outlet /></div>
-        <TerminalDrawer />
-      </div>
+      <EnvironmentWorkbench>
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="min-h-0 flex-1 overflow-hidden"><Outlet /></div>
+          <TerminalDrawer />
+        </div>
+      </EnvironmentWorkbench>
     </SplitView>
   );
 }
