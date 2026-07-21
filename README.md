@@ -91,7 +91,7 @@ Network activity is still possible when a feature requires it:
 - Cloud voice providers receive audio selected for cloud transcription.
 - Exa receives web-search queries when web search is enabled.
 - Remote MCP servers receive their tool requests.
-- Model-capability metadata is read from a release-bundled snapshot; the running app never contacts models.dev.
+- Model metadata is read from release-bundled models.dev and Artificial Analysis snapshots. The running app never contacts either catalog; local LM Studio and Ollama metadata is captured only when the user explicitly discovers models.
 - Parakeet model downloads come from the sherpa-onnx project release hosting.
 
 For a fully local session, select a local model endpoint, use on-device voice, disable Exa, and avoid remote MCP servers.
@@ -134,7 +134,13 @@ Create DMG and ZIP distribution artifacts:
 npm run dist
 ```
 
-`npm run dist` is the only path that contacts models.dev: it refreshes the model-capability snapshot immediately before packaging. Development, unpacked-package, and running-app paths only read the checked-in/bundled snapshot.
+Refresh both checked-in model snapshots manually during development with:
+
+```bash
+ARTIFICIAL_ANALYSIS_API_KEY=YOUR_KEY AA_REDISTRIBUTION_CONFIRMED=1 npm run models:refresh
+```
+
+Use `AA_API_KEY` as the shorter key variable if preferred. Set the redistribution flag only after the applicable Artificial Analysis rights are confirmed. Until the first authorized refresh, the checked-in Artificial Analysis file is a schema-valid empty placeholder. The refresh validates every paginated response and both catalogs before replacing either checked-in snapshot. `npm run dist` runs this same guarded refresh before packaging; `npm run package`, ordinary development, and the running app use only the bundled files and make no public catalog request.
 
 Provider Settings exposes Apple Foundation Models only on macOS. On Apple Intelligence-capable Macs running macOS 26 or newer, chat titles can use Automatic, On-device only, or Selected chat model routing. Automatic prefers the on-device model when it is ready and otherwise uses the selected chat model; On-device only never falls back to a network provider after a native attempt.
 
