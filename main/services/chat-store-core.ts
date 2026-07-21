@@ -141,6 +141,25 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
       });
     },
 
+    /** Apply an asynchronous rename only when no newer rename won the race. */
+    async replaceTitleIfUnchanged(
+      id: string,
+      expectedTitle: string,
+      title: string,
+    ): Promise<Chat | null> {
+      return serialized(async () => {
+        const chat = await readChat(id);
+        if (!chat || chat.title !== expectedTitle) return null;
+        const nextTitle = title.trim();
+        if (!nextTitle || nextTitle === chat.title) return null;
+        chat.title = nextTitle;
+        chat.updatedAt = Date.now();
+        await writeChat(chat);
+        await updateMeta(chat);
+        return chat;
+      });
+    },
+
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
     async moveEmptyChatToWorkspace(id: string, workspaceId: string): Promise<Chat> {
       return serialized(async () => {
