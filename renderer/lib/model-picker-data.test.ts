@@ -115,6 +115,41 @@ test("licensed benchmark percentiles map directly to capability and response-tim
   assert.equal(fastCapable.paceLabel, "Faster");
 });
 
+test("bundled rankings flow into the pad and stale embedding ids stay out of the picker", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    models: ["chat", "embed"],
+    modelMetadata: {
+      chat: { source: "lmstudio", type: "llm" },
+      embed: { source: "lmstudio", type: "embedding" },
+    },
+  });
+  const hosted = provider({ id: "hosted", label: "Hosted", models: ["ranked"] });
+  const ranking = {
+    capabilityPercentile: 0.92,
+    responseTimePercentile: 0.18,
+    source: "Artificial Analysis",
+    sourceUrl: "https://artificialanalysis.ai",
+  };
+  const entries = createModelEntries([local, hosted], {
+    "hosted::ranked": {
+      id: "ranked",
+      ranking,
+      metadataSource: "artificial-analysis",
+      matched: true,
+    },
+  });
+
+  assert.deepEqual(
+    entries.map((model) => model.value),
+    ["hosted::ranked", "local::chat"],
+  );
+  assert.deepEqual(entries[0].ranking, ranking);
+  assert.equal(positionModels(entries)[0].confidence, "benchmark");
+});
+
 test("explicit model variants create estimates while unknown models stay visibly unranked", () => {
   const positioned = positionModels([
     entry("flash", "gemini-flash"),
@@ -166,6 +201,7 @@ test("asynchronous capability metadata enriches details without shifting map geo
         toolCall: true,
         reasoning: true,
         openWeights: false,
+        metadataSource: "models-dev",
         matched: true,
       },
     },
