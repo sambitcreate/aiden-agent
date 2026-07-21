@@ -1,7 +1,23 @@
 // Renderer-side mirror of the backend data shapes (types only; no runtime import
 // across the process boundary).
 
+import type { AppearanceConfig } from "../shared/appearance";
+
 export type ProviderKind = "openai" | "anthropic";
+
+export type ProviderModelType = "llm" | "embedding";
+
+export interface ProviderModelMetadata {
+  source: "lmstudio" | "ollama" | "provider";
+  name?: string;
+  type?: ProviderModelType;
+  vision?: boolean;
+  toolCall?: boolean;
+  reasoning?: boolean;
+  contextLength?: number;
+  parameterCount?: string;
+  format?: string;
+}
 
 export interface Provider {
   id: string;
@@ -9,6 +25,7 @@ export interface Provider {
   label: string;
   baseUrl: string;
   models: string[];
+  modelMetadata?: Record<string, ProviderModelMetadata>;
   defaultModel?: string;
   needsKey: boolean;
   isPreset?: boolean;
@@ -79,6 +96,169 @@ export interface GitWorktree {
   current: boolean;
 }
 
+export type GitReviewFileStatus =
+  | "added"
+  | "conflicted"
+  | "copied"
+  | "deleted"
+  | "modified"
+  | "renamed"
+  | "untracked";
+
+export interface GitReviewFile {
+  path: string;
+  previousPath?: string;
+  status: GitReviewFileStatus;
+  staged: boolean;
+  unstaged: boolean;
+  additions?: number;
+  deletions?: number;
+  binary?: boolean;
+}
+
+export interface GitReviewSummary {
+  fileCount: number;
+  additions: number;
+  deletions: number;
+  unavailableStats: number;
+  stagedFiles: number;
+  unstagedFiles: number;
+  conflictedFiles: number;
+}
+
+export interface GitCommitCapability {
+  allowed: boolean;
+  reason?: string;
+  snapshot?: string;
+  snapshotComplete: boolean;
+  repositoryRoot: boolean;
+}
+
+export interface GitReview {
+  isRepo: boolean;
+  branch?: string;
+  files: GitReviewFile[];
+  summary: GitReviewSummary;
+  commit: GitCommitCapability;
+}
+
+export interface GitDiffInput {
+  expectedSnapshot: string;
+  path: string;
+}
+
+export type GitCommitMode = "staged" | "all";
+
+export interface GitCommitInput {
+  expectedSnapshot: string;
+  message: string;
+  mode: GitCommitMode;
+}
+
+export interface GitCommitResult {
+  commit: string;
+  branch: string;
+  remainingChanges?: number;
+  subject: string;
+  warning?: string;
+}
+
+export interface GitPushCapability {
+  allowed: boolean;
+  reason?: string;
+  branch?: string;
+  expectedHead?: string;
+  remotes: string[];
+  remoteIdentities: Record<string, string>;
+  suggestedRemote?: string;
+  destinationBranch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  repositoryRoot: boolean;
+  remoteState: "local-ref";
+}
+
+export interface GitPushInput {
+  destinationBranch: string;
+  expectedBranch: string;
+  expectedHead: string;
+  expectedRemoteIdentity: string;
+  remote: string;
+  setUpstream: boolean;
+}
+
+export interface GitPushResult {
+  branch: string;
+  commit: string;
+  destinationBranch: string;
+  remote: string;
+  upstreamSet: boolean;
+  warning?: string;
+}
+
+export interface GitComparison {
+  currentBranch?: string;
+  expectedHead: string;
+  expectedTarget: string;
+  targetRef: string;
+  targetLabel: string;
+  mergeBase: string;
+  ahead: number;
+  behind: number;
+  files: GitReviewFile[];
+  summary: GitReviewSummary;
+  snapshot: string;
+  remoteState: "local-ref";
+}
+
+export interface GitComparisonDiffInput {
+  expectedHead: string;
+  expectedTarget: string;
+  mergeBase: string;
+  path: string;
+  targetRef: string;
+}
+
+export interface GitFileDiff {
+  path: string;
+  patch: string;
+  binary: boolean;
+  truncated: boolean;
+}
+
+export type WorkspaceFileKind = "directory" | "file" | "symlink";
+
+export interface WorkspaceFileEntry {
+  path: string;
+  name: string;
+  parentPath: string;
+  depth: number;
+  kind: WorkspaceFileKind;
+  symbolic?: boolean;
+  size?: number;
+  modifiedAt?: number;
+}
+
+export interface WorkspaceFileIndex {
+  entries: WorkspaceFileEntry[];
+  truncated: boolean;
+  skippedDirectories: number;
+}
+
+export interface WorkspaceFileDocument {
+  path: string;
+  content: string;
+  size: number;
+  modifiedAt: number;
+  version: string;
+  warning?: string;
+}
+
+export type WorkspaceFileWriteResult =
+  | { ok: true; document: WorkspaceFileDocument }
+  | { ok: false; code: "changed_on_disk" | "io_error"; message: string };
+
 export type ChatRole = "user" | "assistant" | "system";
 
 export type AttachmentKind = "image" | "text";
@@ -95,18 +275,33 @@ export interface Attachment {
   text?: string;
 }
 
+export interface ModelRanking {
+  capabilityPercentile: number;
+  responseTimePercentile: number;
+  source: string;
+  sourceUrl?: string;
+  measuredAt?: string;
+}
+
+export type ModelMetadataSource = "local" | "artificial-analysis" | "models-dev" | "fallback";
+
 export interface ModelInfo {
   id: string;
   name?: string;
-  vision: boolean;
-  toolCall: boolean;
-  reasoning: boolean;
-  openWeights: boolean;
+  vision?: boolean;
+  toolCall?: boolean;
+  reasoning?: boolean;
+  openWeights?: boolean;
+  modelType?: ProviderModelType;
+  parameterCount?: string;
+  format?: string;
   contextLength?: number;
   outputLimit?: number;
   inputModalities?: string[];
   knowledge?: string;
   releaseDate?: string;
+  ranking?: ModelRanking;
+  metadataSource: ModelMetadataSource;
   matched: boolean;
 }
 
@@ -138,6 +333,10 @@ export interface ChatMetadataUpdated {
   workspaceId?: string;
   title: string;
   updatedAt: number;
+}
+
+export interface ChatTitleRenameResult extends ChatMetadataUpdated {
+  changed: boolean;
 }
 
 export type McpTransport = "stdio" | "http" | "sse";
@@ -209,6 +408,7 @@ export interface AppSettings {
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
   chatTitleProviderId?: ChatTitleProviderId;
+  appearance?: AppearanceConfig;
 }
 
 /** On-device Parakeet model in the download catalog. */
