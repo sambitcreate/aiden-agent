@@ -8,7 +8,13 @@ import {
 } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
-import type { ProviderKind, StoredProvider } from "../services/types.js";
+import type {
+  ProviderKind,
+  ProviderModelMetadata,
+  ProviderModelType,
+  StoredProvider,
+} from "../services/types.js";
+import { parseAppearanceConfig } from "../../renderer/shared/appearance.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -17,21 +23,73 @@ function asString(value: unknown, name: string): string {
   return value;
 }
 
+function optionalPositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function optionalModelType(value: unknown): ProviderModelType | undefined {
+  return value === "llm" || value === "embedding" ? value : undefined;
+}
+
+function parseModelMetadata(value: unknown): Record<string, ProviderModelMetadata> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries: Array<[string, ProviderModelMetadata]> = [];
+  for (const [modelId, raw] of Object.entries(value)) {
+    if (!modelId || !raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const metadata = raw as Record<string, unknown>;
+    const source =
+      metadata.source === "lmstudio" ||
+      metadata.source === "ollama" ||
+      metadata.source === "provider"
+        ? metadata.source
+        : "provider";
+    entries.push([
+      modelId,
+      {
+        source,
+        name: typeof metadata.name === "string" && metadata.name ? metadata.name : undefined,
+        type: optionalModelType(metadata.type),
+        vision: typeof metadata.vision === "boolean" ? metadata.vision : undefined,
+        toolCall: typeof metadata.toolCall === "boolean" ? metadata.toolCall : undefined,
+        reasoning: typeof metadata.reasoning === "boolean" ? metadata.reasoning : undefined,
+        contextLength: optionalPositiveNumber(metadata.contextLength),
+        parameterCount:
+          typeof metadata.parameterCount === "string" && metadata.parameterCount
+            ? metadata.parameterCount
+            : undefined,
+        format:
+          typeof metadata.format === "string" && metadata.format ? metadata.format : undefined,
+      },
+    ]);
+  }
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function parseProvider(value: unknown): StoredProvider {
   if (typeof value !== "object" || value === null) {
     throw new Error("Invalid provider payload.");
   }
   const p = value as Record<string, unknown>;
   const kind = p.kind === "anthropic" ? "anthropic" : ("openai" as ProviderKind);
+  const modelMetadata = parseModelMetadata(p.modelMetadata);
+  const models = Array.isArray(p.models)
+    ? p.models.filter(
+        (model): model is string =>
+          typeof model === "string" && modelMetadata?.[model]?.type !== "embedding",
+      )
+    : [];
+  const defaultModel =
+    typeof p.defaultModel === "string" && models.includes(p.defaultModel)
+      ? p.defaultModel
+      : undefined;
   return {
     id: asString(p.id, "id"),
     kind,
     label: asString(p.label, "label"),
     baseUrl: normalizeProviderBaseUrl(asString(p.baseUrl, "baseUrl")),
-    models: Array.isArray(p.models)
-      ? p.models.filter((m): m is string => typeof m === "string")
-      : [],
-    defaultModel: typeof p.defaultModel === "string" ? p.defaultModel : undefined,
+    models,
+    modelMetadata,
+    defaultModel,
     needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
     isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
   };
@@ -150,6 +208,7 @@ export function registerProviderHandlers(): void {
     ) {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
+    if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     return configStore.setSettings(next);
   });
 }
