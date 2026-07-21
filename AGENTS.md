@@ -12,7 +12,7 @@ Before adding any new UI element or component, review both `docs/chatgpt-desktop
 
 ## Release model metadata
 
-`npm run dist` is the only path that may contact models.dev; it refreshes the static model-capability snapshot immediately before packaging. Never add a models.dev call to development, unpacked builds, or the live Electron app.
+`npm run models:refresh` is the explicit development refresh, and `npm run dist` invokes the same release step before packaging. Those are the only paths that may contact models.dev or Artificial Analysis. Never add a public-catalog call to normal development, unpacked builds, or the live Electron app. Artificial Analysis refreshes require both an API key and explicit confirmation that redistribution rights are in place.
 
 ## Papercuts
 
