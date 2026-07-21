@@ -11,6 +11,7 @@ import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
 import { useActiveWorkspace } from "../lib/workspace-context";
+import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 
 const MIN_DRAWER_HEIGHT = 152;
 const MAX_DRAWER_RATIO = 0.5;
@@ -57,29 +58,53 @@ function initialHeight(): number {
   return clampHeight(Number.isFinite(saved) ? saved : DEFAULT_DRAWER_HEIGHT);
 }
 
+function appearanceValue(name: string, fallback: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+function terminalFontSize(): number {
+  const value = Number.parseFloat(appearanceValue("--code-font-size", "12"));
+  return Number.isFinite(value) ? value : 12;
+}
+
+function terminalFontFamily(): string {
+  return appearanceValue(
+    "--font-code-family",
+    "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+  );
+}
+
 function terminalTheme() {
-  const dark = document.documentElement.classList.contains("dark");
+  const dark = document.documentElement.dataset.appearanceScheme === "dark";
+  const foreground = appearanceValue("--terminal-foreground", dark ? "#e6e9ee" : "#1c1e21");
+  const background = appearanceValue("--terminal-background", dark ? "#1d232d" : "#ffffff");
+  const red = appearanceValue("--terminal-red", dark ? "#ff5e57" : "#ff453a");
+  const green = appearanceValue("--terminal-green", dark ? "#32d17a" : "#30d158");
+  const yellow = appearanceValue("--terminal-yellow", dark ? "#ffb020" : "#d48a00");
+  const blue = appearanceValue("--terminal-blue", dark ? "#8ebcff" : "#3866ad");
+  const magenta = appearanceValue("--terminal-magenta", dark ? "#dcbaff" : "#895a9d");
+  const cyan = appearanceValue("--terminal-cyan", dark ? "#91e9ee" : "#367d8c");
   return {
-    background: dark ? "#101216" : "#f9fafb",
-    foreground: dark ? "#f4f5f7" : "#1d2530",
-    cursor: dark ? "#a8cbff" : "#1a365d",
-    selectionBackground: dark ? "rgba(168, 203, 255, 0.26)" : "rgba(26, 54, 93, 0.2)",
-    black: dark ? "#222833" : "#2d3643",
-    red: dark ? "#ff8b9c" : "#bd4c5f",
-    green: dark ? "#9de8ae" : "#367a56",
-    yellow: dark ? "#f4d27b" : "#98732b",
-    blue: dark ? "#9cc4ff" : "#486aa9",
-    magenta: dark ? "#dcbaff" : "#885a9d",
-    cyan: dark ? "#91e9ee" : "#367d8c",
-    white: dark ? "#dbe2ed" : "#dbe2ed",
-    brightBlack: dark ? "#8490a2" : "#738096",
-    brightRed: dark ? "#ffb1bc" : "#d36c7a",
-    brightGreen: dark ? "#b5f1c1" : "#609d7c",
-    brightYellow: dark ? "#f9e5b0" : "#b79350",
-    brightBlue: dark ? "#c0daff" : "#7797c9",
-    brightMagenta: dark ? "#eccfff" : "#a784b6",
-    brightCyan: dark ? "#c1f6f7" : "#6eabb2",
-    brightWhite: dark ? "#ffffff" : "#ffffff",
+    background,
+    foreground,
+    cursor: appearanceValue("--terminal-cursor", "#0a84ff"),
+    selectionBackground: appearanceValue("--terminal-selection", dark ? "rgb(10 132 255 / 0.3)" : "rgb(10 132 255 / 0.2)"),
+    black: appearanceValue("--terminal-black", dark ? "#252a31" : "#34373b"),
+    red,
+    green,
+    yellow,
+    blue,
+    magenta,
+    cyan,
+    white: appearanceValue("--terminal-white", foreground),
+    brightBlack: appearanceValue("--text-tertiary", dark ? "#9aa3ae" : "#6b7280"),
+    brightRed: red,
+    brightGreen: green,
+    brightYellow: yellow,
+    brightBlue: blue,
+    brightMagenta: magenta,
+    brightCyan: cyan,
+    brightWhite: foreground,
   };
 }
 
@@ -230,6 +255,7 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
 }) {
   const hostRef = React.useRef<HTMLDivElement>(null);
   const xtermRef = React.useRef<Xterm | null>(null);
+  const resizeTerminalRef = React.useRef<(() => void) | null>(null);
   const onUnavailableRef = React.useRef(onUnavailable);
   onUnavailableRef.current = onUnavailable;
 
@@ -238,8 +264,8 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
     if (!host) return;
     const xterm = new Xterm({
       cursorBlink: true,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      fontSize: 12,
+      fontFamily: terminalFontFamily(),
+      fontSize: terminalFontSize(),
       lineHeight: 1.25,
       scrollback: 5_000,
       theme: terminalTheme(),
@@ -256,6 +282,7 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
         // The host can briefly have zero size during drawer animation.
       }
     };
+    resizeTerminalRef.current = resize;
     const observer = new ResizeObserver(() => requestAnimationFrame(resize));
     observer.observe(host);
     let hydrated = false;
@@ -295,6 +322,7 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
       disposeInput.dispose();
       xterm.dispose();
       xtermRef.current = null;
+      resizeTerminalRef.current = null;
     };
   }, [session.id]);
 
@@ -307,11 +335,15 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
   }, [clearEpoch]);
 
   React.useEffect(() => {
-    const observer = new MutationObserver(() => {
-      if (xtermRef.current) xtermRef.current.options.theme = terminalTheme();
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
+    const updateAppearance = () => {
+      if (!xtermRef.current) return;
+      xtermRef.current.options.theme = terminalTheme();
+      xtermRef.current.options.fontFamily = terminalFontFamily();
+      xtermRef.current.options.fontSize = terminalFontSize();
+      requestAnimationFrame(() => resizeTerminalRef.current?.());
+    };
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, updateAppearance);
+    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, updateAppearance);
   }, []);
 
   return <div ref={hostRef} onMouseDown={onFocus} className="h-full min-h-0 w-full select-text p-2" />;
