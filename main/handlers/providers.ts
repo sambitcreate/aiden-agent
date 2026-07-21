@@ -8,6 +8,13 @@ import {
 } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
+import {
+  parseProviderAuthProviderId,
+  parseProviderAuthResponseRequest,
+  parseProviderAuthStartRequest,
+} from "../services/provider-auth-flow-core.js";
+import { providerAuthFlow } from "../services/provider-auth-flow.js";
+import { providerAuthOwner } from "../services/provider-auth-owner.js";
 import type { ProviderKind, StoredProvider } from "../services/types.js";
 
 function asString(value: unknown, name: string): string {
@@ -79,6 +86,35 @@ async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
 
 export function registerProviderHandlers(): void {
   ipcMain.handle("providers:list", async () => configStore.listProviders());
+
+  ipcMain.handle("providers:auth:status", async (_event, providerId: unknown) =>
+    providerAuthFlow.status(parseProviderAuthProviderId(providerId)),
+  );
+
+  ipcMain.handle("providers:auth:start", (event, request: unknown) =>
+    providerAuthFlow.start(providerAuthOwner(event), parseProviderAuthStartRequest(request)),
+  );
+
+  ipcMain.handle("providers:auth:respond", (event, request: unknown) =>
+    providerAuthFlow.respond(
+      providerAuthOwner(event),
+      parseProviderAuthResponseRequest(request),
+    ),
+  );
+
+  ipcMain.handle("providers:auth:cancel", (event, request: unknown) =>
+    providerAuthFlow.cancel(
+      providerAuthOwner(event),
+      parseProviderAuthStartRequest(request),
+    ),
+  );
+
+  ipcMain.handle("providers:logout", async (event, providerId: unknown) => {
+    // Logout is a credential mutation, so reject requests queued by a document
+    // that navigation or renderer replacement has already made stale.
+    providerAuthOwner(event);
+    return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
+  });
 
   ipcMain.handle(
     "providers:save",

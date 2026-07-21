@@ -15,6 +15,86 @@ export interface Provider {
   hasKey: boolean;
 }
 
+export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
+
+export interface CodexModelSummary {
+  id: string;
+  name: string;
+  api: "openai-codex-responses";
+  reasoning: boolean;
+  vision: boolean;
+  contextWindow: number;
+  maxTokens: number;
+}
+
+export interface CodexProviderSnapshot {
+  id: typeof OPENAI_CODEX_PROVIDER_ID;
+  name: string;
+  authName: string;
+  configured: boolean;
+  models: CodexModelSummary[];
+}
+
+export interface ProviderAuthSelectOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export interface ProviderAuthPrompt {
+  flowId: string;
+  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  promptId: string;
+  type: "text" | "secret" | "select" | "manual_code";
+  message: string;
+  placeholder?: string;
+  options?: ProviderAuthSelectOption[];
+}
+
+export type ProviderAuthEvent =
+  | {
+      flowId: string;
+      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      type: "info";
+      message: string;
+      links?: Array<{ url: string; label?: string }>;
+    }
+  | {
+      flowId: string;
+      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      type: "auth_url";
+      url: string;
+      instructions?: string;
+    }
+  | {
+      flowId: string;
+      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      type: "device_code";
+      userCode: string;
+      verificationUri: string;
+      intervalSeconds?: number;
+      expiresInSeconds?: number;
+    }
+  | {
+      flowId: string;
+      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      type: "progress";
+      message: string;
+    };
+
+export interface ProviderAuthDone {
+  flowId: string;
+  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  cancelled: boolean;
+}
+
+export interface ProviderAuthError {
+  flowId: string;
+  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  code: "port_busy" | "rate_limited" | "timed_out" | "verification_failed" | "sign_in_failed";
+  message: string;
+}
+
 export type WorkspacePermission = "full" | "ask" | "none";
 
 export interface ManagedWorktree {

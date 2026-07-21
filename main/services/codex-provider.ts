@@ -1,4 +1,11 @@
-import type { Api, AuthInteraction, Model, Models } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AuthInteraction,
+  CredentialStore,
+  Model,
+  Models,
+  OAuthCredential,
+} from "@earendil-works/pi-ai";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
@@ -37,7 +44,10 @@ function summarizeModel(model: Model<Api>): CodexModelSummary {
 }
 
 export class CodexProviderService {
-  constructor(private readonly models: Models) {
+  constructor(
+    private readonly models: Models,
+    private readonly credentials: CredentialStore,
+  ) {
     const provider = models.getProvider(OPENAI_CODEX_PROVIDER_ID);
     if (!provider?.auth.oauth) {
       throw new Error("The installed Pi release does not provide OpenAI Codex OAuth.");
@@ -57,8 +67,16 @@ export class CodexProviderService {
     };
   }
 
-  login(interaction: AuthInteraction) {
-    return this.models.login(OPENAI_CODEX_PROVIDER_ID, "oauth", interaction);
+  /** Complete the remote OAuth exchange without mutating the credential store. */
+  authenticate(interaction: AuthInteraction): Promise<OAuthCredential> {
+    const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
+    if (!provider?.auth.oauth) throw new Error("OpenAI Codex provider is unavailable.");
+    return provider.auth.oauth.login(interaction);
+  }
+
+  /** Commit only after the owning flow has crossed its cancellation boundary. */
+  async commitCredential(credential: OAuthCredential): Promise<void> {
+    await this.credentials.modify(OPENAI_CODEX_PROVIDER_ID, async () => credential);
   }
 
   logout(): Promise<void> {

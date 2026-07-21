@@ -15,11 +15,14 @@ import {
   disposeFoundationModelsConnection,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+let shutdownStarted = false;
+let quitAuthorized = false;
 
 function openExternalUrl(value: string): void {
   try {
@@ -156,10 +159,22 @@ if (!ownsSingleInstanceLock) {
     showMainWindow();
   });
 
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
+    if (quitAuthorized) return;
+    event.preventDefault();
+    if (shutdownStarted) return;
+    shutdownStarted = true;
     disposeShortcut();
     disposeFoundationModelsConnection();
     void mcpManager.closeAll();
+    void shutdownProviderAuthFlow()
+      .catch(() => {
+        logger.error("main", "Provider authentication shutdown did not complete cleanly.");
+      })
+      .finally(() => {
+        quitAuthorized = true;
+        app.quit();
+      });
   });
 
   app
