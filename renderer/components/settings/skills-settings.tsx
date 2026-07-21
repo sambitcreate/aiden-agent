@@ -185,6 +185,7 @@ function SkillEditor({
       open={open}
       onOpenChange={onOpenChange}
       title={skill.name ? `Edit ${skill.name}` : "New skill"}
+      description="Define when the model should use this skill and the instructions it should follow."
       size="large"
       confirmLabel="Save"
       confirmDisabled={!name.trim() || !instructions.trim()}
