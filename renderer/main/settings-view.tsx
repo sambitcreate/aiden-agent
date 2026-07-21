@@ -52,14 +52,14 @@ const NAV: NavItem[] = [
 
 const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
 
-const CONTENT: Record<Section, React.ReactNode> = {
-  providers: <ProvidersSettings />,
-  skills: <SkillsSettings />,
-  mcp: <McpSettings />,
-  websearch: <WebSearchSettings />,
-  voice: <VoiceSettings />,
-  shortcut: <ShortcutSettings />,
-  appearance: <AppearanceSettings />,
+const CONTENT: Record<Section, React.ComponentType> = {
+  providers: ProvidersSettings,
+  skills: SkillsSettings,
+  mcp: McpSettings,
+  websearch: WebSearchSettings,
+  voice: VoiceSettings,
+  shortcut: ShortcutSettings,
+  appearance: AppearanceSettings,
 };
 
 export function SettingsView() {
@@ -71,6 +71,7 @@ export function SettingsView() {
   const filteredNav = query
     ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
     : NAV;
+  const ActiveSection = CONTENT[section];
 
   return (
     <SplitView
@@ -160,7 +161,7 @@ export function SettingsView() {
         className="h-full"
         title="Settings"
       >
-        <div className="mx-auto w-full max-w-2xl px-5 py-6">{CONTENT[section]}</div>
+        <div className="mx-auto w-full max-w-2xl px-5 py-6"><ActiveSection /></div>
       </ScrollArea>
     </SplitView>
   );
