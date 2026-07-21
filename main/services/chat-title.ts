@@ -6,6 +6,7 @@ import type { AssistantMessage, ImageContent, TextContent } from "@earendil-work
 import { ipcMain, logger } from "../platform.js";
 import { chatStore } from "./chat-store.js";
 import {
+  buildChatRenamePrompt,
   buildChatTitlePrompt,
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
@@ -19,10 +20,44 @@ import { modelsCatalog } from "./models-catalog.js";
 
 const TITLE_TIMEOUT_MS = 15_000;
 const inFlight = new Map<string, Promise<void>>();
+const manualRenameInFlight = new Map<string, Promise<ChatTitleRenameResult>>();
 
 export interface ChatTitleModelSelection {
   providerId: string;
   model: string;
+}
+
+export interface ChatTitleRenameResult {
+  chatId: string;
+  workspaceId?: string;
+  title: string;
+  updatedAt: number;
+  changed: boolean;
+}
+
+function titleUpdate(chat: {
+  id: string;
+  workspaceId?: string;
+  title: string;
+  updatedAt: number;
+}): Omit<ChatTitleRenameResult, "changed"> {
+  return {
+    chatId: chat.id,
+    workspaceId: chat.workspaceId,
+    title: chat.title,
+    updatedAt: chat.updatedAt,
+  };
+}
+
+function publishTitleUpdate(chat: {
+  id: string;
+  workspaceId?: string;
+  title: string;
+  updatedAt: number;
+}): Omit<ChatTitleRenameResult, "changed"> {
+  const update = titleUpdate(chat);
+  ipcMain.broadcast("chats:metadata-updated", update);
+  return update;
 }
 
 function assistantText(content: AssistantMessage["content"]): string {
@@ -39,7 +74,7 @@ async function generateWithChatModel(input: {
   signal: AbortSignal;
 }): Promise<string> {
   const runtime = await resolveModelRuntime(input.selection.providerId, input.selection.model);
-  const modelInfo = await modelsCatalog.info(input.selection.providerId, input.selection.model);
+  const modelInfo = await modelsCatalog.info(runtime.provider, input.selection.model);
   const promptContent: Array<TextContent | ImageContent> = [
     {
       type: "text",
@@ -49,7 +84,7 @@ async function generateWithChatModel(input: {
   const firstImage = input.firstMessage.attachments?.find(
     (attachment) => attachment.kind === "image" && attachment.data,
   );
-  if (modelInfo.vision && firstImage?.data) {
+  if (modelInfo.vision !== false && firstImage?.data) {
     promptContent.push({
       type: "image",
       data: firstImage.data,
@@ -123,12 +158,59 @@ async function generateFirstTurnTitle(input: {
     const updated = await chatStore.replaceAutoTitle(input.chatId, titleSeed, generatedTitle);
     if (!updated) return;
 
-    ipcMain.broadcast("chats:metadata-updated", {
-      chatId: updated.id,
-      workspaceId: updated.workspaceId,
-      title: updated.title,
-      updatedAt: updated.updatedAt,
-    });
+    publishTitleUpdate(updated);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function generateFoundationModelsRename(chatId: string): Promise<ChatTitleRenameResult> {
+  const backgroundTitle = inFlight.get(chatId);
+  if (backgroundTitle) await backgroundTitle;
+
+  const chat = await chatStore.get(chatId);
+  if (!chat) throw new Error("That chat no longer exists.");
+  const hasUserContext = chat.messages.some(
+    (message) =>
+      message.role === "user" &&
+      (message.content.trim().length > 0 || (message.attachments?.length ?? 0) > 0),
+  );
+  if (!hasUserContext) {
+    throw new Error("Start the conversation before asking Apple to rename it.");
+  }
+
+  const status = await foundationModelsConnection.status();
+  if (status?.state !== "ready") {
+    throw new Error(
+      status?.detail ?? "Apple Foundation Models are available only on supported Macs.",
+    );
+  }
+
+  const expectedTitle = chat.title;
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), TITLE_TIMEOUT_MS);
+  try {
+    const rawTitle = await foundationModelsConnection.generateTitle(
+      buildChatRenamePrompt(chat.messages),
+      abortController.signal,
+    );
+    const generatedTitle = sanitizeGeneratedChatTitle(rawTitle);
+    if (!generatedTitle) {
+      throw new Error("Apple Foundation Models did not return a usable title.");
+    }
+    if (generatedTitle === expectedTitle) {
+      return { ...titleUpdate(chat), changed: false };
+    }
+
+    const updated = await chatStore.replaceTitleIfUnchanged(
+      chatId,
+      expectedTitle,
+      generatedTitle,
+    );
+    if (!updated) {
+      throw new Error("The chat title changed while Apple was generating. The newer title was kept.");
+    }
+    return { ...publishTitleUpdate(updated), changed: true };
   } finally {
     clearTimeout(timeout);
   }
@@ -155,5 +237,17 @@ export const chatTitleService = {
         inFlight.delete(input.chatId);
       });
     inFlight.set(input.chatId, task);
+  },
+
+  async renameWithFoundationModels(chatId: string): Promise<ChatTitleRenameResult> {
+    const existing = manualRenameInFlight.get(chatId);
+    if (existing) return existing;
+    const task = generateFoundationModelsRename(chatId);
+    manualRenameInFlight.set(chatId, task);
+    try {
+      return await task;
+    } finally {
+      if (manualRenameInFlight.get(chatId) === task) manualRenameInFlight.delete(chatId);
+    }
   },
 };
