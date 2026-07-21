@@ -56,7 +56,7 @@ export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlock
           className="opacity-0 transition-opacity group-hover/code:opacity-100 focus-visible:opacity-100"
         />
       </div>
-      <pre className="overflow-x-auto p-3 leading-relaxed">
+      <pre className="code-font-sized overflow-x-auto p-3 leading-relaxed">
         {html ? (
           <code className="hljs font-mono text-small" dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
