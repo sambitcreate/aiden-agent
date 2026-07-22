@@ -208,30 +208,18 @@ export function ComputerUseSettings() {
       </FieldSet>
 
       <FieldSet title="How it behaves">
-        <Field
-          label="Data sent to your model"
-          description="When a chat opts in, read-only screenshots, window details, and accessibility text may be sent to the selected model provider for the current response. Aiden does not save this content to Aiden chat history or application logs; the selected provider handles it under its own data policy."
-        >
-          <Text variant="small" color="secondary">
-            Per opted-in chat
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6 p-4 max-[640px]:grid-cols-1 max-[640px]:gap-3">
+          <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
+            Only chats you turn on can use Computer Use. For those responses, your selected model
+            may receive screenshots, window details, and accessibility text. Aiden doesn’t save that
+            content; your provider handles it under its data policy. Read-only inspection runs
+            without prompts, while every control action requires Allow once.
           </Text>
-        </Field>
-        <Field
-          label="Per-chat activation"
-          description="After the beta is ready, turn Computer Use on only in the conversations that need native app control."
-        >
-          <Text variant="small" color="secondary">
-            Off by default
-          </Text>
-        </Field>
-        <Field
-          label="Approval"
-          description="Read-only captures and window lists do not prompt. Every click, keystroke, scroll, drag, focus change, or value change asks for a fresh Allow once decision."
-        >
-          <Text variant="small" color="secondary">
-            Always ask for input
-          </Text>
-        </Field>
+          <div className="flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
+            <Badge className="whitespace-nowrap">Per-chat opt-in</Badge>
+            <Badge className="whitespace-nowrap">Actions ask first</Badge>
+          </div>
+        </div>
       </FieldSet>
     </>
   );
