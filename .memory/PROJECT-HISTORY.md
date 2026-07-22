@@ -1,5 +1,9 @@
 # Project History
 
+### 2026-07-22 — Correct composer context-strip depth
+
+- Isolated the attached context-strip/composer stack and assigned explicit local layers so the translucent, backdrop-blurred strip stays behind the raised composer edge. The existing overlap, darker theme-aware surface, and compact geometry remain unchanged.
+
 ### 2026-07-22 — Add Command-number chat switching
 
 - Added native-style ⌘1–⌘9 chat navigation. Holding Command for half a second reveals quiet, theme-aware shortcut chips beside the first nine chats, while the shortcuts themselves work immediately.

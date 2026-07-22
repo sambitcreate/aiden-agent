@@ -317,7 +317,7 @@ export function Composer({
   return (
     <>
       <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
-        <div className="pointer-events-auto">
+        <div className="pointer-events-auto isolate">
           {computerUse ? (
             <span id={computerUseDescriptionId} className="sr-only">
               Computer Use may send screenshots and accessibility text to the selected model. Every
@@ -359,7 +359,7 @@ export function Composer({
             </aside>
           ) : null}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-          <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
+          <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
                 workspaces={workspaces}
@@ -426,7 +426,7 @@ export function Composer({
             ) : null}
           </div>
 
-          <div className="-mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80 transition-[outline-color,box-shadow] duration-150 ease-out focus-within:outline-focus-ring">
+          <div className="relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80 transition-[outline-color,box-shadow] duration-150 ease-out focus-within:outline-focus-ring">
             {attachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
                 {attachments.map((a) => (
