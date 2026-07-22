@@ -121,11 +121,15 @@ async function verifyCode(
   requirement?: string,
   signal?: AbortSignal,
 ): Promise<void> {
-  await runCuaDriverCommand({ command: "/usr/bin/codesign" }, codesignVerifyArguments(target, requirement), {
-    env: buildCuaDriverEnvironment(process.env),
-    signal,
-    timeoutMs: 6_000,
-  });
+  await runCuaDriverCommand(
+    { command: "/usr/bin/codesign" },
+    codesignVerifyArguments(target, requirement),
+    {
+      env: buildCuaDriverEnvironment(process.env),
+      signal,
+      timeoutMs: 6_000,
+    },
+  );
 }
 
 async function currentAidenSigningTeam(signal?: AbortSignal): Promise<string> {
@@ -138,7 +142,7 @@ async function currentAidenSigningTeam(signal?: AbortSignal): Promise<string> {
   ) {
     throw new CuaDriverError(
       "host_identity_invalid",
-      "Computer Use requires a signed production build of Aiden.",
+      "Computer Use requires a signed packaged build of Aiden.",
     );
   }
   await verifyCode(target, undefined, signal).catch((error: unknown) => {
@@ -268,10 +272,7 @@ export async function resolveCuaDriverInstallation(
   }
   await verifyCode(
     resolvedDriver,
-    signingRequirement(
-      CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER,
-      CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID,
-    ),
+    signingRequirement(CUA_DRIVER_UPSTREAM_SIGNING_IDENTIFIER, CUA_DRIVER_UPSTREAM_SIGNING_TEAM_ID),
     signal,
   ).catch((error: unknown) => {
     if (error instanceof CuaDriverError && error.code === "cancelled") throw error;
@@ -287,15 +288,13 @@ export async function resolveCuaDriverInstallation(
     await Promise.all([
       verifyCode(resolvedApp, helperRequirement, signal),
       verifyCode(resolvedBroker, helperRequirement, signal),
-    ]).catch(
-      () => {
-        throwIfAborted(signal);
-        throw new CuaDriverError(
-          "driver_integrity_failed",
-          "The Aiden Computer Use helper did not match Aiden's signing identity.",
-        );
-      },
-    );
+    ]).catch(() => {
+      throwIfAborted(signal);
+      throw new CuaDriverError(
+        "driver_integrity_failed",
+        "The Aiden Computer Use helper did not match Aiden's signing identity.",
+      );
+    });
   } else {
     // Development helpers may be ad-hoc signed so packaging can be exercised.
     // The runtime bridge check still fails closed outside a signed production app.

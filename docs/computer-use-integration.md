@@ -135,9 +135,9 @@ credentials, and dynamic-loader variables never cross either child boundary.
 Cua recording/replay is not exposed because it persists complete tool arguments
 and creates a broader filesystem/output surface than this integration needs.
 
-Ad-hoc development builds cannot satisfy the production signing/team check and
-must not claim the isolated TCC boundary. Unit/integration tests use a faithful
-fake bridge; real permission acceptance is performed only with a team-signed
+Ad-hoc hot-reload builds cannot satisfy the packaged signing/team check and must
+not claim the isolated TCC boundary. Unit/integration tests use a faithful fake
+bridge; real permission acceptance is performed only with a team-signed
 packaged app. Release packaging disables RunAsNode, Node environment options,
 and CLI inspection, enables embedded ASAR integrity and ASAR-only loading, and
 gives the Rust helper no Electron JIT or library-validation exceptions.
@@ -162,11 +162,51 @@ Use unavailable.
 3. **Product surface:** persisted global enablement and per-chat activation;
    readiness/doctor/permission IPC; Settings and composer controls; accessible
    allow-once approval details; lifecycle cleanup.
-4. **Release and acceptance:** vendored binary, nested signature/notarization
-   validation, packaged-resource inspection, privacy documentation, full test
-   suite, and an opt-in real-driver smoke against a disposable app window.
+4. **Release and acceptance:** isolated development output plus transactional
+   distribution staging; mandatory Developer ID and notarization preflight;
+   nested signature, staple, Gatekeeper, entitlement, fuse, and
+   packaged-resource validation; privacy documentation; the full test suite;
+   and an opt-in operator-driven real-driver smoke against an isolated profile
+   and uniquely titled disposable TextEdit window. The smoke seeds both gates
+   off, then uses the normal Settings, macOS TCC, per-chat, Allow-once, Stop, and
+   quit paths with a capability-authenticated, loopback-only scripted
+   vision/tool model—never a privileged test backdoor. It validates and owns the
+   exact system TextEdit executable, correlates every result to its tool-call ID
+   and exact PID/window, rejects failed or denied actions, and verifies the saved
+   marker and post-action capture. Only the visible Stop control emits the
+   content-free explicit user-Stop event; unmount/navigation cleanup cannot
+   satisfy this evidence. The harness proves Stop reaped the helper while Aiden
+   remained alive and only then accepts a normal app quit. Failure cleanup
+   actively TERM-to-KILLs only exact package-owned broker/driver and disposable
+   TextEdit processes with PID-reuse checks.
 
-Every phase is frozen and independently reviewed before the next phase begins.
+The reproducible commands are:
+
+```bash
+npm run package
+npm run package:verify
+AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged
+```
+
+The acceptance command intentionally stops for visible macOS TCC decisions and
+two normal Aiden **Allow once** decisions (type, then save). On success it writes
+an evidence-only receipt to `build/computer-use-acceptance-receipt.json`, bound
+to the tested app's signed CDHash, app-ASAR hash, bundle ID, and versions. A new
+package or acceptance run invalidates the old receipt. TCC grants are persistent
+macOS state and must be revoked manually in System Settings if no longer wanted.
+Distribution uses `npm run dist`; it removes the old canonical output, builds in
+staging, and promotes only verified current DMG/ZIP output. Its after-sign and
+pre-promotion verifiers require Aiden's Developer ID Application identity, a
+stapled ticket, and a successful Gatekeeper assessment. Pre-promotion also
+validates and mounts the DMG read-only, extracts the ZIP privately, runs the full
+package/notarization verifier on both embedded apps, and binds their bundle
+versions, signed CDHash, and app-ASAR hash to the verified staging app. A receipt
+for the development package is not evidence of a notarized distribution.
+
+Freeze a phase only after its automated gates and independent reviews pass.
+Operational evidence remains artifact-specific: no release is accepted until
+`release:verify` passes that exact canonical distribution, and no packaged
+Computer Use smoke is accepted until its identity-bound receipt exists.
 
 ## Non-negotiable safety rules
 

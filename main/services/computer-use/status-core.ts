@@ -59,7 +59,7 @@ function fixedErrorStatus(error: unknown): ComputerUseStatus {
       enabled: true,
       beta: true,
       state: "production_build_required",
-      detail: "Computer Use requires a signed production build of Aiden.",
+      detail: "Computer Use requires a signed packaged build of Aiden.",
       ready: false,
       available: false,
       retryable: false,

@@ -681,16 +681,27 @@ mod tests {
             },
             0,
         );
-        let mut byte = 0_u8;
-        // SAFETY: stdout_read is live and byte is writable.
-        let count =
-            unsafe { libc::read(stdout_read.as_raw_fd(), (&mut byte as *mut u8).cast(), 1) };
-        assert_eq!(
-            count,
-            0,
-            "launcher retained the driver's stdout writer: {}",
-            io::Error::last_os_error(),
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let mut byte = 0_u8;
+            // SAFETY: stdout_read is live and byte is writable.
+            let count =
+                unsafe { libc::read(stdout_read.as_raw_fd(), (&mut byte as *mut u8).cast(), 1) };
+            if count == 0 {
+                break;
+            }
+            let error = io::Error::last_os_error();
+            if count == -1 && error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline
+            {
+                // Rust's native tests run in parallel. Another launcher test
+                // can transiently fork this CLOEXEC writer before its child
+                // closes the inherited descriptor. Require bounded EOF rather
+                // than an impossible same-instruction handoff between tests.
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            panic!("launcher retained the driver's stdout writer: {error}");
+        }
     }
 
     #[test]

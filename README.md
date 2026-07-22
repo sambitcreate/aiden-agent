@@ -19,22 +19,22 @@ The source of truth is the private repository: [sambitcreate/aiden-agent](https:
 
 ## Tech stack
 
-| Layer | Technology | Role |
-| --- | --- | --- |
-| Desktop runtime | Electron 43 | macOS windows, menus, IPC, permissions, secure storage, and packaging |
-| Language | TypeScript | Shared implementation language for main process, preload, and renderer |
-| Renderer | React 19 | Chat, workspace, settings, model, MCP, and voice interfaces |
-| Build | Vite 8 and esbuild | Renderer bundling plus Electron main/preload compilation |
-| Styling | Tailwind CSS 4 | Local design tokens, layout, light/dark themes, and component styling |
-| UI primitives | Local components, Radix UI, cmdk, Sonner, Lucide | Accessible dialogs, menus, inputs, command palettes, notifications, and icons |
-| Routing and data | TanStack Router and TanStack Query | In-memory app navigation and cached IPC-backed server state |
-| Agent runtime | `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai` | Model streaming, multi-step agent execution, and tool calling |
-| On-device titles | Swift 6.2 and Apple Foundation Models | macOS-gated, structured chat-title generation without a network provider |
-| Tool protocol | `@modelcontextprotocol/sdk` | MCP clients over stdio, HTTP, and SSE |
-| On-device speech | `sherpa-onnx-node` with NVIDIA Parakeet models | Local speech-to-text without sending recordings to a cloud service |
-| Rich text | React Markdown, remark-gfm, remark-math, KaTeX, Highlight.js | Markdown, tables, math, and code rendering |
-| Persistence | JSON files in Electron `userData` and Electron `safeStorage` | Chats, configuration, workspaces, encrypted provider keys, and encrypted MCP OAuth sessions |
-| Distribution | electron-builder | Builds the macOS `.app`, DMG, and ZIP artifacts |
+| Layer            | Technology                                                   | Role                                                                                        |
+| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| Desktop runtime  | Electron 43                                                  | macOS windows, menus, IPC, permissions, secure storage, and packaging                       |
+| Language         | TypeScript                                                   | Shared implementation language for main process, preload, and renderer                      |
+| Renderer         | React 19                                                     | Chat, workspace, settings, model, MCP, and voice interfaces                                 |
+| Build            | Vite 8 and esbuild                                           | Renderer bundling plus Electron main/preload compilation                                    |
+| Styling          | Tailwind CSS 4                                               | Local design tokens, layout, light/dark themes, and component styling                       |
+| UI primitives    | Local components, Radix UI, cmdk, Sonner, Lucide             | Accessible dialogs, menus, inputs, command palettes, notifications, and icons               |
+| Routing and data | TanStack Router and TanStack Query                           | In-memory app navigation and cached IPC-backed server state                                 |
+| Agent runtime    | `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`  | Model streaming, multi-step agent execution, and tool calling                               |
+| On-device titles | Swift 6.2 and Apple Foundation Models                        | macOS-gated, structured chat-title generation without a network provider                    |
+| Tool protocol    | `@modelcontextprotocol/sdk`                                  | MCP clients over stdio, HTTP, and SSE                                                       |
+| On-device speech | `sherpa-onnx-node` with NVIDIA Parakeet models               | Local speech-to-text without sending recordings to a cloud service                          |
+| Rich text        | React Markdown, remark-gfm, remark-math, KaTeX, Highlight.js | Markdown, tables, math, and code rendering                                                  |
+| Persistence      | JSON files in Electron `userData` and Electron `safeStorage` | Chats, configuration, workspaces, encrypted provider keys, and encrypted MCP OAuth sessions |
+| Distribution     | electron-builder                                             | Builds the macOS `.app`, DMG, and ZIP artifacts                                             |
 
 ## Repository-owned interface system
 
@@ -128,13 +128,39 @@ Create an unpacked macOS application:
 
 ```bash
 npm run package
+npm run package:verify
 ```
+
+The development-signed app is rebuilt into
+`release/development/mac-*/Aiden Agent.app`. Hot-reload `npm run dev` is not a
+signed packaged build, so its Computer Use page intentionally reports that a
+signed packaged build is required.
 
 Create DMG and ZIP distribution artifacts:
 
 ```bash
 npm run dist
 ```
+
+Distribution is published only to `release/distribution/`. `npm run dist`
+invalidates the prior canonical output first, builds into an isolated staging
+lane, and atomically promotes it only after the current app, DMG, and ZIP pass
+all release gates. A failed preflight, build, notarization, or verification
+therefore cannot leave an older or partial artifact looking current. Cleanup
+refuses symlinked output ancestors. Distribution requires a Developer ID
+Application identity for Aiden's pinned Team ID and exactly one complete
+notarization credential strategy. Supported strategies are `APPLE_API_KEY` +
+`APPLE_API_KEY_ID` + `APPLE_API_ISSUER`, `APPLE_ID` +
+`APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`, or an
+`APPLE_KEYCHAIN_PROFILE` (with optional `APPLE_KEYCHAIN`). The post-sign gate
+requires the app to be Developer ID signed, stapled, and accepted by
+Gatekeeper. Before promotion, the release gate validates the DMG container,
+mounts it read-only, extracts the ZIP into a private temporary directory, runs
+the complete package/notarization verifier on both embedded apps, and requires
+their bundle versions, signed CDHash, and app-ASAR SHA-256 to match the verified
+staging app. `npm run release:verify` repeats the canonical app validation. A
+development package or acceptance receipt does not claim that a notarized
+distribution was produced.
 
 Refresh both checked-in model snapshots manually during development with:
 
@@ -149,3 +175,41 @@ Provider Settings exposes Apple Foundation Models only on macOS. On Apple Intell
 `npm run package` requires and verifies a development-signed app. Distribution
 still requires a Developer ID release signature and successful notarization;
 the development package intentionally skips notarization.
+
+Run the opt-in, operator-driven Computer Use acceptance against the packaged
+app with:
+
+```bash
+AIDEN_COMPUTER_USE_ACCEPTANCE=1 npm run test:computer-use:packaged
+```
+
+Pass `-- --app "/absolute/path/Aiden Agent.app"` to test another explicit
+package. The harness verifies the package, seeds both Computer Use gates
+**off**, creates isolated app data and a uniquely titled disposable TextEdit
+document, and uses a loopback-only scripted model—no model data leaves the Mac.
+Each run authenticates that loopback endpoint with a fresh, unlogged 256-bit
+capability URL; requests to every other route are rejected. The operator must
+enable the normal Settings and per-chat composer controls; the harness records
+their persisted state when the request arrives. It resolves and validates
+TextEdit's exact system bundle/executable, owns the newly launched process, and
+then resolves the exact PID/window from `list_windows` rather than trusting an
+app-name match.
+
+The sequence covers app/window enumeration, AX/vision/SoM capture, an approved
+background type with `capture_after`, an approved save-key action, saved-file
+verification, stale-element rejection before approval, and Stop-driven helper
+teardown while Aiden remains open. Navigation/unmount cancellation is marked as
+lifecycle cleanup and cannot satisfy the harness; only the visible Stop control
+emits the explicit user-Stop evidence. Only after the terminal confirms teardown
+does the operator quit Aiden normally. Failure cleanup actively terminates only
+the exact packaged broker/driver and the exact disposable TextEdit process. No
+hidden approval or permission bypass exists.
+
+On success, the harness writes
+`build/computer-use-acceptance-receipt.json`. Every package or acceptance start
+invalidates the prior receipt, and the new receipt is bound to the tested app's
+signed CDHash, app-ASAR SHA-256, bundle ID, and versions. macOS Accessibility
+and Screen Recording grants persist outside the isolated app-data directory;
+revoke them in System Settings after the test if Aiden should no longer retain
+that access. The operator must explicitly accept any TCC prompt and both visible
+Aiden **Allow once** decisions.

@@ -11,11 +11,14 @@ import {
   assertComputerUseExecutableMode,
   assertComputerUseMachOMinimum,
   assertComputerUseMinimumSystemVersion,
+  assertDeveloperIdSignature,
   assertElectronEntitlements,
   assertMinimalComputerUseEntitlements,
   assertMatchingHostCodeHashes,
+  assertSamePackagedArtifactIdentity,
   assertHardenedRuntime,
   assertRegularFile,
+  requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
@@ -120,10 +123,7 @@ test("package verifier requires the pinned broker executable and hardened execut
 
 test("package verifier pins the helper to the launch-requirement deployment floor", () => {
   assert.doesNotThrow(() => assertComputerUseMinimumSystemVersion("14.4"));
-  assert.throws(
-    () => assertComputerUseMinimumSystemVersion("13.0"),
-    /minimum macOS version/,
-  );
+  assert.throws(() => assertComputerUseMinimumSystemVersion("13.0"), /minimum macOS version/);
 });
 
 test("package verifier requires the enclosing bundle and host process to share one CDHash", () => {
@@ -136,6 +136,26 @@ test("package verifier requires the enclosing bundle and host process to share o
   assert.throws(() => assertMatchingHostCodeHashes("not-a-hash", "not-a-hash"), /CDHash/);
 });
 
+test("archive identity must match the verified staging app in every bound field", () => {
+  const identity = {
+    bundleIdentifier: "works.aiden.agent",
+    bundleVersion: "42",
+    shortVersion: "1.2.3",
+    cdHash: "7c6eb54a898b9aab9b4aa7d525d14e02a36330b6",
+    appAsarSha256: "a".repeat(64),
+  };
+  assert.doesNotThrow(() => assertSamePackagedArtifactIdentity(identity, { ...identity }, "ZIP"));
+  assert.throws(
+    () =>
+      assertSamePackagedArtifactIdentity(
+        identity,
+        { ...identity, appAsarSha256: "b".repeat(64) },
+        "DMG",
+      ),
+    /DMG.*appAsarSha256 mismatch/u,
+  );
+});
+
 test("package verifier requires hardened runtime on every executable code object", () => {
   assert.doesNotThrow(() =>
     assertHardenedRuntime("CodeDirectory v=20500 size=900 flags=0x10000(runtime) hashes=20"),
@@ -146,9 +166,36 @@ test("package verifier requires hardened runtime on every executable code object
   );
 });
 
+test("release verification requires Aiden's Developer ID identity, not development signing", () => {
+  assert.doesNotThrow(() =>
+    assertDeveloperIdSignature(
+      "Authority=Developer ID Application: Sambit Biswas (5WP229CBB8)\nTeamIdentifier=5WP229CBB8",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertDeveloperIdSignature(
+        "Authority=Apple Development: Sambit Biswas (7EK65FX44E)\nTeamIdentifier=5WP229CBB8",
+      ),
+    /Developer ID Application/,
+  );
+  assert.throws(
+    () =>
+      assertDeveloperIdSignature(
+        "Authority=Developer ID Application: Other (WRONGTEAM1)\nTeamIdentifier=WRONGTEAM1",
+      ),
+    /Developer ID Application/,
+  );
+  assert.equal(requiresReleaseVerification("development"), false);
+  assert.equal(requiresReleaseVerification("distribution"), true);
+  assert.equal(requiresReleaseVerification(undefined), true);
+});
+
 test("package verifier checks the broker's Mach-O deployment target, not only Info.plist", () => {
   assert.doesNotThrow(() =>
-    assertComputerUseMachOMinimum("Load command 10\n      cmd LC_BUILD_VERSION\n platform MACOS\n    minos 14.4\n"),
+    assertComputerUseMachOMinimum(
+      "Load command 10\n      cmd LC_BUILD_VERSION\n platform MACOS\n    minos 14.4\n",
+    ),
   );
   assert.throws(
     () => assertComputerUseMachOMinimum("platform MACOS\nminos 11.0\n"),

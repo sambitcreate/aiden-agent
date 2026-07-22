@@ -38,3 +38,28 @@ test("an unload veto blocks service shutdown and leaves the renderer alive", asy
   assert.equal(window.listenerCount("closed"), 0);
   assert.equal(window.webContents.listenerCount("will-prevent-unload"), 0);
 });
+
+test("a real close may invalidate the BrowserWindow webContents getter before cleanup", async () => {
+  const contents = new EventEmitter();
+  class DestroyingQuitWindow extends EventEmitter implements RendererQuitWindow {
+    destroyed = false;
+
+    get webContents(): EventEmitter {
+      if (this.destroyed) throw new Error("Object has been destroyed");
+      return contents;
+    }
+
+    isDestroyed(): boolean {
+      return this.destroyed;
+    }
+
+    close(): void {
+      this.destroyed = true;
+      this.emit("closed");
+    }
+  }
+
+  const window = new DestroyingQuitWindow();
+  assert.equal(await closeRendererBeforeShutdown(window), true);
+  assert.equal(contents.listenerCount("will-prevent-unload"), 0);
+});

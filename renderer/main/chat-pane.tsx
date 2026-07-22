@@ -158,7 +158,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     return () => {
       mountedRef.current = false;
       generationIntentRef.current += 1;
-      generationRef.current?.cancel();
+      generationRef.current?.cancel("lifecycle");
       generationRef.current = null;
     };
   }, [chatId]);
@@ -315,12 +315,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
-    generationRef.current?.cancel();
+    generationRef.current?.cancel("user_stop");
   }, []);
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
-    generationRef.current?.cancel();
+    generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
     setStreamingText(null);
     setIsStartingGeneration(false);

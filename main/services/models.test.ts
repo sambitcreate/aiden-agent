@@ -417,5 +417,10 @@ test("runtime metadata stays offline and both release snapshots are packaged", a
   ) as { build?: { files?: string[] }; scripts?: Record<string, string> };
   assert.ok(packageJson.build?.files?.includes("resources/model-capabilities.json"));
   assert.ok(packageJson.build?.files?.includes("resources/artificial-analysis-models.json"));
-  assert.match(packageJson.scripts?.dist ?? "", /release:update-model-snapshots/u);
+  assert.match(packageJson.scripts?.dist ?? "", /run-macos-distribution/u);
+  const distributionRunner = await readFile(
+    new URL("../../scripts/run-macos-distribution.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(distributionRunner, /npm\("release:update-model-snapshots"\)/u);
 });

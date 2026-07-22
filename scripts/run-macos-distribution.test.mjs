@@ -1,0 +1,108 @@
+/* global process */
+
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import {
+  discoverMacDistributionArchives,
+  runDistributionTransaction,
+  verifyMacDistributionArchives,
+} from "./run-macos-distribution.mjs";
+
+test("distribution failures discard staging before anything is promoted", async () => {
+  const events = [];
+  await assert.rejects(
+    runDistributionTransaction({
+      prepare: async () => {
+        events.push("prepare");
+        return { staging: "/stage", distribution: "/distribution" };
+      },
+      build: async () => {
+        events.push("preflight-or-build");
+        throw new Error("missing notarization credentials");
+      },
+      verify: async () => events.push("verify"),
+      promote: async () => events.push("promote"),
+      discard: async () => events.push("discard"),
+    }),
+    /missing notarization credentials/u,
+  );
+  assert.deepEqual(events, ["prepare", "preflight-or-build", "discard"]);
+});
+
+test("distribution promotion happens only after build and verification", async () => {
+  const events = [];
+  const result = await runDistributionTransaction({
+    prepare: async () => {
+      events.push("prepare");
+      return { staging: "/stage", distribution: "/distribution" };
+    },
+    build: async () => events.push("build"),
+    verify: async () => events.push("verify"),
+    promote: async () => {
+      events.push("promote");
+      return "/distribution";
+    },
+    discard: async () => events.push("discard"),
+  });
+  assert.equal(result, "/distribution");
+  assert.deepEqual(events, ["prepare", "build", "verify", "promote"]);
+});
+
+test("distribution archive discovery requires exactly one current DMG and ZIP", async () => {
+  const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-distribution-artifacts-"));
+  try {
+    await writeFile(path.join(staging, "Aiden Agent.dmg"), "dmg", "utf8");
+    await assert.rejects(discoverMacDistributionArchives(staging), /exactly one DMG and ZIP/u);
+    await writeFile(path.join(staging, "Aiden Agent.zip"), "zip", "utf8");
+    assert.deepEqual(await discoverMacDistributionArchives(staging), {
+      dmg: path.join(staging, "Aiden Agent.dmg"),
+      zip: path.join(staging, "Aiden Agent.zip"),
+    });
+    await writeFile(path.join(staging, "stale.zip"), "stale", "utf8");
+    await assert.rejects(discoverMacDistributionArchives(staging), /found 1\/2/u);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+});
+
+test("distribution verification opens both archives and binds them to staging identity", async () => {
+  const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-distribution-verify-"));
+  const identity = { cdHash: "verified" };
+  const calls = [];
+  try {
+    await Promise.all([
+      writeFile(path.join(staging, "Aiden Agent.dmg"), "fixture", "utf8"),
+      writeFile(path.join(staging, "Aiden Agent.zip"), "fixture", "utf8"),
+    ]);
+    await verifyMacDistributionArchives(staging, identity, {
+      verifyDmg: async (file, expected) => calls.push(["dmg", file, expected]),
+      verifyZip: async (file, expected) => calls.push(["zip", file, expected]),
+    });
+    assert.deepEqual(calls, [
+      ["dmg", path.join(staging, "Aiden Agent.dmg"), identity],
+      ["zip", path.join(staging, "Aiden Agent.zip"), identity],
+    ]);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+});
+
+test(
+  "literal text files named DMG and ZIP cannot pass production archive verification",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-distribution-invalid-"));
+    try {
+      await Promise.all([
+        writeFile(path.join(staging, "Aiden Agent.dmg"), "not a disk image", "utf8"),
+        writeFile(path.join(staging, "Aiden Agent.zip"), "not a zip archive", "utf8"),
+      ]);
+      await assert.rejects(verifyMacDistributionArchives(staging, {}), /hdiutil failed/u);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
+  },
+);

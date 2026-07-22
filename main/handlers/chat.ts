@@ -1,8 +1,9 @@
 // Streaming generation handlers. start() returns a streamId; tokens arrive via
 // "chat:delta" / "chat:done" / "chat:error" broadcasts (see llm-client).
 
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
+import { isExplicitUserStop } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
@@ -55,10 +56,15 @@ export function registerChatGenerationHandlers(): void {
     return { streamId: id };
   });
 
-  ipcMain.handle("chat:cancel", async (event, streamId: unknown) => {
+  ipcMain.handle("chat:cancel", async (event, streamId: unknown, origin: unknown) => {
     if (typeof streamId !== "string") return;
     const owner = chatGenerationOwner(event);
-    llmClient.cancel(streamId, owner.documentId);
+    if (llmClient.cancel(streamId, owner.documentId) && isExplicitUserStop(origin)) {
+      // This structured lifecycle event is intentionally content-free. Besides
+      // normal diagnostics, packaged acceptance accepts it only when the
+      // renderer identifies the visible Stop control as the cancellation origin.
+      logger.info("chat", JSON.stringify({ event: "renderer_user_stop", streamId }));
+    }
   });
 
   // Resolve a pending tool-approval request ("ask" mode).

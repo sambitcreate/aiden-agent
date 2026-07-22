@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isExplicitUserStop } from "./chat-cancel.js";
 import { startGenerationAndMaybeTitle } from "./chat-generation-start.js";
 import type { ChatStartParams } from "./types.js";
 
@@ -43,4 +44,11 @@ test("starts one title request only after chat initialization succeeds", async (
   assert.deepEqual(titleInputs, [
     { chatId: "chat-1", providerId: "openai-codex", model: "gpt-5.4" },
   ]);
+});
+
+test("only an explicit visible user Stop origin is acceptance evidence", () => {
+  assert.equal(isExplicitUserStop("user_stop"), true);
+  for (const origin of ["lifecycle", "navigation", "unmount", "stop", "", null, undefined]) {
+    assert.equal(isExplicitUserStop(origin), false);
+  }
 });

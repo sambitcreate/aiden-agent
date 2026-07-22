@@ -127,13 +127,22 @@ export function assertHardenedRuntime(codeDisplay, target = "signed code") {
   }
 }
 
+export function assertDeveloperIdSignature(codeDisplay, target = "signed code") {
+  if (
+    !codeDisplay.includes("Authority=Developer ID Application:") ||
+    !codeDisplay.includes(`TeamIdentifier=${AIDEN_SIGNING_TEAM_ID}`)
+  ) {
+    throw new Error(
+      `Distribution code is not signed by Aiden's Developer ID Application identity: ${target}`,
+    );
+  }
+}
+
 export function assertComputerUseMachOMinimum(buildDisplay) {
   const platforms = [...buildDisplay.matchAll(/^\s*platform\s+(\S+)\s*$/gm)].map(
     (match) => match[1],
   );
-  const minimums = [...buildDisplay.matchAll(/^\s*minos\s+(\S+)\s*$/gm)].map(
-    (match) => match[1],
-  );
+  const minimums = [...buildDisplay.matchAll(/^\s*minos\s+(\S+)\s*$/gm)].map((match) => match[1]);
   if (
     platforms.length !== 1 ||
     platforms[0] !== "MACOS" ||
@@ -173,6 +182,32 @@ function cdHashFromCodeDisplay(display, target) {
   const match = display.match(/^CDHash=([0-9a-f]{40})$/m);
   if (!match) throw new Error(`Signed code omitted an exact SHA-1 CDHash: ${target}`);
   return match[1];
+}
+
+export async function packagedArtifactIdentity(appPath) {
+  const resolvedApp = path.resolve(appPath);
+  const infoPlist = path.join(resolvedApp, "Contents", "Info.plist");
+  return {
+    bundleIdentifier: await readInfoPlistValue(infoPlist, "CFBundleIdentifier"),
+    bundleVersion: await readInfoPlistValue(infoPlist, "CFBundleVersion"),
+    shortVersion: await readInfoPlistValue(infoPlist, "CFBundleShortVersionString"),
+    cdHash: cdHashFromCodeDisplay(await readCodeDisplay(resolvedApp), resolvedApp),
+    appAsarSha256: await sha256(path.join(resolvedApp, "Contents", "Resources", "app.asar")),
+  };
+}
+
+export function assertSamePackagedArtifactIdentity(expected, actual, source) {
+  for (const field of [
+    "bundleIdentifier",
+    "bundleVersion",
+    "shortVersion",
+    "cdHash",
+    "appAsarSha256",
+  ]) {
+    if (actual?.[field] !== expected?.[field]) {
+      throw new Error(`${source} does not contain the verified staging app (${field} mismatch).`);
+    }
+  }
 }
 
 export function assertMinimalComputerUseEntitlements(entitlements) {
@@ -347,8 +382,21 @@ export async function verifyMacPackage(appPath) {
   console.log(`Verified hardened macOS package: ${paths.app}`);
 }
 
-async function discoverPackagedApp() {
-  const releaseDirectory = path.join(repositoryRoot, "release");
+export async function verifyNotarizedMacPackage(appPath) {
+  const resolvedApp = path.resolve(appPath);
+  assertDeveloperIdSignature(await readCodeDisplay(resolvedApp), resolvedApp);
+  await run("/usr/bin/xcrun", ["stapler", "validate", resolvedApp]);
+  await run("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=4", resolvedApp]);
+  console.log(`Verified notarized Developer ID package: ${resolvedApp}`);
+}
+
+export function requiresReleaseVerification(type) {
+  return type !== "development";
+}
+
+export async function discoverPackagedApp(
+  releaseDirectory = path.join(repositoryRoot, "release", "development"),
+) {
   const candidates = [];
   for (const entry of await readdir(releaseDirectory, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith("mac")) continue;
@@ -369,15 +417,24 @@ async function discoverPackagedApp() {
 
 export async function verifyAfterSign(context) {
   if (context.electronPlatformName !== "darwin") return;
-  await verifyMacPackage(
-    path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`),
-  );
+  const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  await verifyMacPackage(appPath);
+  if (requiresReleaseVerification(context.packager.platformSpecificBuildOptions.type)) {
+    await verifyNotarizedMacPackage(appPath);
+  }
 }
 
 export default verifyAfterSign;
 
 if (process.argv[1] && path.resolve(process.argv[1]) === modulePath) {
-  await verifyMacPackage(
-    process.argv[2] ? path.resolve(process.argv[2]) : await discoverPackagedApp(),
-  );
+  const mode = process.argv[2];
+  const release = mode === "--release";
+  const development = mode === "--development";
+  const explicitPath = release || development ? process.argv[3] : process.argv[2];
+  const output = release ? "distribution" : "development";
+  const appPath = explicitPath
+    ? path.resolve(explicitPath)
+    : await discoverPackagedApp(path.join(repositoryRoot, "release", output));
+  await verifyMacPackage(appPath);
+  if (release) await verifyNotarizedMacPackage(appPath);
 }

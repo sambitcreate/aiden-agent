@@ -364,7 +364,7 @@ interface ChatApproval extends ApprovalPrompt {
 
 export interface GenerationHandle {
   streamId: string;
-  cancel: () => void;
+  cancel: (origin: "lifecycle" | "user_stop") => void;
 }
 
 export interface StreamCallbacks {
@@ -440,8 +440,8 @@ export function startGeneration(
 
   return {
     streamId,
-    cancel: () => {
-      void invoke("chat:cancel", streamId);
+    cancel: (origin) => {
+      void invoke("chat:cancel", streamId, origin);
     },
   };
 }
