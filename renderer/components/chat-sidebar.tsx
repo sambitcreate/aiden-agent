@@ -37,7 +37,6 @@ import {
   Folder,
   FolderGit2,
   Loader2,
-  MessagesSquare,
   Settings,
   UserRound,
 } from "lucide-react";
@@ -445,7 +444,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                         icon={
                           renamingWithAppleId === chat.id
                             ? <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                            : <MessagesSquare className="size-4" />
+                            : undefined
                         }
                         aria-busy={renamingWithAppleId === chat.id}
                         title={

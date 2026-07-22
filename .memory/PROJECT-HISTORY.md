@@ -1,5 +1,9 @@
 # Project History
 
+### 2026-07-22 — Simplify sidebar chat rows
+
+- Removed the repeated speech-bubble icon from ordinary chat rows so titles align directly with their time-bucket labels and the conversation-first sidebar reads more quietly. The temporary Apple rename spinner remains as a meaningful progress indicator.
+
 ### 2026-07-22 — Repair theme safety and composer context layering
 
 - Corrected the Slate light accent so every built-in light/dark preset passes the same canvas-and-raised contrast checks enforced by the Appearance UI. Named presets now normalize back to their current canonical palette, migrating stale cached Aiden colors without changing explicit custom themes.
