@@ -1,5 +1,5 @@
 use crate::darwin;
-use crate::signing::{driver_path, verify_live_driver, PinnedDriver, AIDEN_BUNDLE_ID};
+use crate::signing::{driver_path, verify_live_driver, PinnedDriver, BROKER_BUNDLE_ID};
 use crate::supervisor::{LauncherSupervisor, SupervisionFailure};
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
@@ -15,7 +15,7 @@ use std::thread;
 const TERMINATE_GRACE: Duration = Duration::from_millis(500);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(2);
-const DRIVER_ARGUMENTS: &[&str] = &["mcp", "--embedded"];
+const DRIVER_ARGUMENTS: &[&str] = &["mcp", "--embedded", "--host-bundle-id", BROKER_BUNDLE_ID];
 const LAUNCH_COMMAND: u8 = 0xa6;
 const LAUNCHER_READY: u8 = 0xb5;
 const LAUNCH_FRAME_BYTES: usize = 12;
@@ -69,7 +69,7 @@ fn optional_environment(key: &str, fallback: Option<&str>) -> Option<String> {
 fn allowed_driver_environment() -> Vec<String> {
     let mut environment = vec![
         "PATH=/usr/bin:/bin:/usr/sbin:/sbin".to_owned(),
-        format!("CUA_DRIVER_HOST_BUNDLE_ID={AIDEN_BUNDLE_ID}"),
+        format!("CUA_DRIVER_HOST_BUNDLE_ID={BROKER_BUNDLE_ID}"),
         "CUA_DRIVER_EMBEDDED=1".to_owned(),
         "CUA_DRIVER_RS_TELEMETRY_ENABLED=0".to_owned(),
         "CUA_TELEMETRY_ENABLED=0".to_owned(),
@@ -583,7 +583,10 @@ mod tests {
             format!("{:x}", Sha256::digest(bytes)),
             "ad026fbd60b3d23a310f4dcd73ae7c7eeeb3d6f0db09e98e28f0be0420853637"
         );
-        assert_eq!(DRIVER_ARGUMENTS, ["mcp", "--embedded"]);
+        assert_eq!(
+            DRIVER_ARGUMENTS,
+            ["mcp", "--embedded", "--host-bundle-id", BROKER_BUNDLE_ID]
+        );
     }
 
     #[test]
@@ -708,6 +711,7 @@ mod tests {
             assert!(!keys.contains(&forbidden));
         }
         assert!(environment.contains(&"CUA_DRIVER_EMBEDDED=1".to_owned()));
+        assert!(environment.contains(&format!("CUA_DRIVER_HOST_BUNDLE_ID={BROKER_BUNDLE_ID}")));
     }
 
     #[test]

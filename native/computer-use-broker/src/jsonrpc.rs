@@ -30,6 +30,7 @@ pub(crate) const ALLOWED_TOOLS: &[&str] = &[
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ClientMessage {
     Forward(Vec<u8>),
+    RequestHostPermissions(Vec<u8>),
     Respond(Vec<u8>),
     Drop,
 }
@@ -76,11 +77,37 @@ fn is_allowed_tool(name: &str) -> bool {
     ALLOWED_TOOLS.contains(&name)
 }
 
+fn is_exact_host_permission_request(object: &Map<String, Value>) -> bool {
+    if object.get("method") != Some(&Value::String("tools/call".to_owned())) {
+        return false;
+    }
+    let Some(params) = object.get("params").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(arguments) = params.get("arguments").and_then(Value::as_object) else {
+        return false;
+    };
+    params.len() == 2
+        && params.get("name") == Some(&Value::String("check_permissions".to_owned()))
+        && arguments.len() == 1
+        && arguments.get("prompt") == Some(&Value::Bool(true))
+}
+
+fn replace_permission_prompt_with_recheck(object: &mut Map<String, Value>) {
+    object
+        .get_mut("params")
+        .and_then(Value::as_object_mut)
+        .and_then(|params| params.get_mut("arguments"))
+        .and_then(Value::as_object_mut)
+        .expect("exact permission request was validated")
+        .insert("prompt".to_owned(), Value::Bool(false));
+}
+
 pub(crate) fn process_client_message(
     input: &[u8],
     pending_tool_lists: &mut HashSet<String>,
 ) -> Result<ClientMessage, String> {
-    let object = parse_object(input)?;
+    let mut object = parse_object(input)?;
     let method = object
         .get("method")
         .and_then(Value::as_str)
@@ -121,6 +148,12 @@ pub(crate) fn process_client_message(
     if method == "tools/list" {
         let id = request_id.expect("tools/list was checked as a request");
         pending_tool_lists.insert(request_id_key(id)?);
+    }
+    if is_exact_host_permission_request(&object) {
+        replace_permission_prompt_with_recheck(&mut object);
+        return Ok(ClientMessage::RequestHostPermissions(canonical_line(
+            &Value::Object(object),
+        )?));
     }
     Ok(ClientMessage::Forward(canonical_line(&Value::Object(
         object,
@@ -207,6 +240,36 @@ mod tests {
         ] {
             assert!(matches!(
                 process_client_message(message.as_bytes(), &mut pending()).unwrap(),
+                ClientMessage::Forward(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn exact_permission_prompt_is_host_owned_and_driver_receives_only_a_recheck() {
+        let message = process_client_message(
+            br#"{"jsonrpc":"2.0","id":"permissions","method":"tools/call","params":{"name":"check_permissions","arguments":{"prompt":true}}}"#,
+            &mut pending(),
+        )
+        .unwrap();
+        let ClientMessage::RequestHostPermissions(forwarded) = message else {
+            panic!("expected host-owned permission request");
+        };
+        let forwarded: Value = serde_json::from_slice(&forwarded).unwrap();
+        assert_eq!(forwarded["params"]["arguments"]["prompt"], false);
+        assert_eq!(forwarded["id"], "permissions");
+    }
+
+    #[test]
+    fn malformed_or_expanded_permission_calls_never_gain_host_prompt_authority() {
+        for message in [
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_permissions","arguments":{"prompt":false}}}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_permissions","arguments":{"prompt":true,"extra":true}}}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_permissions","arguments":{"prompt":"true"}}}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_permissions","arguments":{"prompt":true},"_meta":{}}}"#.as_slice(),
+        ] {
+            assert!(matches!(
+                process_client_message(message, &mut pending()).unwrap(),
                 ClientMessage::Forward(_)
             ));
         }

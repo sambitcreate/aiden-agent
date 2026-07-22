@@ -53,11 +53,19 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
   assert.equal(await aborted, false);
   assert.equal(abortedSignal.listenerCount(), 0);
 
-  const cancelled = approvals.request({ streamId: "cancel", toolName: "edit_file", summary: "edit" });
+  const cancelled = approvals.request({
+    streamId: "cancel",
+    toolName: "edit_file",
+    summary: "edit",
+  });
   approvals.cancelStream("cancel");
   assert.equal(await cancelled, false);
 
-  const shutdown = approvals.request({ streamId: "shutdown", toolName: "run_command", summary: "run" });
+  const shutdown = approvals.request({
+    streamId: "shutdown",
+    toolName: "run_command",
+    summary: "run",
+  });
   approvals.shutdown();
   assert.equal(await shutdown, false);
   assert.equal(approvals.pendingCount, 0);
@@ -79,4 +87,19 @@ test("an already-aborted request publishes nothing", async () => {
   );
   assert.equal(publications, 0);
   assert.equal(approvals.pendingCount, 0);
+});
+
+test("only the renderer document that received a prompt can decide it", async () => {
+  const prompts: Array<{ approvalId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const pending = approvals.request(
+    { streamId: "stream", toolName: "computer_use", summary: "click" },
+    undefined,
+    "document-one",
+  );
+
+  assert.equal(approvals.decide(prompts[0].approvalId, true, "document-two"), false);
+  assert.equal(approvals.pendingCount, 1);
+  assert.equal(approvals.decide(prompts[0].approvalId, true, "document-one"), true);
+  assert.equal(await pending, true);
 });

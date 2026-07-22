@@ -416,6 +416,7 @@ export interface ChatMeta {
 }
 
 export interface Chat extends ChatMeta {
+  computerUseEnabled?: boolean;
   messages: ChatMessage[];
 }
 
@@ -500,7 +501,34 @@ export interface AppSettings {
   dictationAccelerator?: string;
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
+  computerUseEnabled?: boolean;
   profileName?: string;
+}
+
+export type ComputerUseStatusState =
+  | "disabled"
+  | "ready"
+  | "permission_required"
+  | "production_build_required"
+  | "unsupported"
+  | "unavailable"
+  | "incompatible"
+  | "error";
+
+export interface ComputerUseStatus {
+  enabled: boolean;
+  beta: true;
+  state: ComputerUseStatusState;
+  detail: string;
+  ready: boolean;
+  available: boolean;
+  retryable: boolean;
+  canRequestPermissions: boolean;
+  driverVersion?: string;
+  permissions: {
+    accessibility: boolean | null;
+    screenRecording: boolean | null;
+  };
 }
 
 export interface Profile {

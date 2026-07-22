@@ -2,19 +2,20 @@
 // pi-ai). A fresh Agent runs per generation: it owns multi-step tool calling
 // (folder-scoped coding tools, Exa search, Agent Skills, MCP servers) and
 // streams assistant text. Text deltas and tool activity are pushed to the
-// renderer as broadcasts.
+// exact renderer document that owns the generation.
 //
 // Workspaces bind a folder + a permission level. In "ask" mode the agent pauses
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
 import { Agent } from "@earendil-works/pi-agent-core";
-import { ipcMain, logger } from "../platform.js";
+import { logger } from "../platform.js";
 import { buildAgentTools } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
 import { providerModelInfo } from "./provider-model-info.js";
 import { configStore } from "./config-store.js";
+import { chatStore } from "./chat-store.js";
 import {
   buildAgentRuntimeOptions,
   effectiveModelForGeneration,
@@ -36,9 +37,20 @@ import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { toPiMessages } from "./generation-messages.js";
+import { createComputerUseController } from "./computer-use/runtime.js";
+import { computerUseStatus } from "./computer-use/status.js";
+import type { ChatGenerationOwner } from "./chat-generation-owner.js";
+import {
+  activatedComputerUseStreamIds,
+  ChatComputerUseMutationGate,
+  ComputerUseGenerationGate,
+} from "./computer-use/generation-gate.js";
 
 interface ActiveGeneration {
   agent: Agent;
+  chatId: string;
+  owner: ChatGenerationOwner;
+  removeOwnerInvalidation: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
   computerUse?: ComputerUseController;
@@ -49,20 +61,39 @@ const active = new Map<string, ActiveGeneration>();
 const initializing = new Map<
   string,
   {
+    chatId: string;
+    owner: ChatGenerationOwner;
+    removeOwnerInvalidation: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
   }
 >();
+const computerUseGenerationGate = new ComputerUseGenerationGate();
+const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
+
+function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
+  return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
+}
+
+function sendGeneration(streamId: string, channel: string, payload: unknown): boolean {
+  const owner = ownerForStream(streamId);
+  if (!owner || owner.isDestroyed()) return false;
+  try {
+    owner.send(channel, payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const approvals = new ToolApprovalCoordinator((prompt) => {
-  ipcMain.broadcast("chat:approval", prompt);
+  if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
+    throw new Error("The generation's renderer document is no longer active.");
+  }
 });
 const SHUTDOWN_GENERATION_GRACE_MS = 5_000;
-
-function disabledComputerUseController(): ComputerUseController | undefined {
-  return undefined;
-}
 
 function resetGenerationAgent(agent: Agent, streamId: string): void {
   try {
@@ -95,7 +126,13 @@ function buildSystemPrompt(
   );
 }
 
-async function prepareGeneration(_streamId: string, params: ChatStartParams, signal: AbortSignal) {
+async function prepareGeneration(
+  streamId: string,
+  params: ChatStartParams,
+  signal: AbortSignal,
+  computerUseGateSnapshot: number,
+  activatedComputerUse: (controller: ComputerUseController) => void,
+) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const workspace = params.workspaceId
     ? await configStore.getWorkspace(params.workspaceId)
@@ -108,10 +145,27 @@ async function prepareGeneration(_streamId: string, params: ChatStartParams, sig
   const modelInfo = await providerModelInfo.info(runtime.provider.id, params.model);
   const model = effectiveModelForGeneration(runtime.model, modelInfo.vision);
   const supportsImages = model.input.includes("image");
-  // Phase 3 supplies a generation-owned controller only after the persisted
-  // beta setting and permission/status UX are present. Keeping this undefined
-  // makes Phase 2's adapter unreachable from production while fully testable.
-  const computerUse = disabledComputerUseController();
+  const settings = await configStore.getSettings();
+  const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
+  let computerUse: ComputerUseController | undefined;
+  if (
+    settings.computerUseEnabled === true &&
+    chat?.computerUseEnabled === true &&
+    computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
+  ) {
+    const status = await computerUseStatus.status({ signal });
+    if (
+      computerUseGenerationGate.isCurrent(computerUseGateSnapshot) &&
+      status.enabled &&
+      !status.ready
+    ) {
+      throw new Error(`Computer Use is enabled for this chat but is not ready. ${status.detail}`);
+    }
+    if (computerUseGenerationGate.isCurrent(computerUseGateSnapshot) && status.ready) {
+      computerUse = createComputerUseController(streamId, supportsImages);
+      activatedComputerUse(computerUse);
+    }
+  }
   const tools = await buildAgentTools({ workspaceRoot: folderPath, permission, computerUse });
   return {
     runtime: { ...runtime, model },
@@ -125,26 +179,52 @@ async function prepareGeneration(_streamId: string, params: ChatStartParams, sig
 }
 
 export const llmClient = {
-  async start(streamId: string, params: ChatStartParams): Promise<boolean> {
+  async start(
+    streamId: string,
+    params: ChatStartParams,
+    owner: ChatGenerationOwner,
+  ): Promise<boolean> {
+    if (chatComputerUseMutationGate.isChanging(params.chatId)) {
+      throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
+    }
     if (initializing.has(streamId) || active.has(streamId)) {
       throw new Error("A generation with this stream id is already running.");
     }
     const initialization = {
+      chatId: params.chatId,
+      owner,
+      removeOwnerInvalidation: () => {},
       workspaceId: params.workspaceId,
       cancelRequested: false,
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
     };
+    const computerUseGateSnapshot = computerUseGenerationGate.snapshot();
     initializing.set(streamId, initialization);
+    initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
+      this.cancel(streamId);
+    });
+    if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     try {
-      setup = await prepareGeneration(streamId, params, initialization.controller.signal);
+      setup = await prepareGeneration(
+        streamId,
+        params,
+        initialization.controller.signal,
+        computerUseGateSnapshot,
+        (computerUse) => {
+          initialization.computerUse = computerUse;
+        },
+      );
     } catch (error) {
-      initializing.delete(streamId);
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        ipcMain.broadcast("chat:done", { streamId, content: "" });
+        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        initializing.delete(streamId);
+        initialization.removeOwnerInvalidation();
         return false;
       }
+      initializing.delete(streamId);
+      initialization.removeOwnerInvalidation();
       throw error;
     }
     const { runtime, permission, folderPath, git, tools, supportsImages, computerUse } = setup;
@@ -199,6 +279,7 @@ export const llmClient = {
           const allowed = await approvals.request(
             { streamId, toolName: context.toolCall.name, summary },
             signal,
+            owner.documentId,
           );
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
           if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
@@ -231,7 +312,7 @@ export const llmClient = {
             if (e.type === "text_delta") {
               full += e.delta;
               currentAssistantTurnHadTextDelta = true;
-              ipcMain.broadcast("chat:delta", { streamId, delta: e.delta });
+              sendGeneration(streamId, "chat:delta", { streamId, delta: e.delta });
             } else if (e.type === "error" && e.reason === "error") {
               errored = e.error.errorMessage ?? "Generation failed.";
             }
@@ -263,11 +344,15 @@ export const llmClient = {
             break;
           }
           case "tool_execution_start":
-            ipcMain.broadcast("chat:tool", { streamId, phase: "call", toolName: event.toolName });
+            sendGeneration(streamId, "chat:tool", {
+              streamId,
+              phase: "call",
+              toolName: event.toolName,
+            });
             break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
-            ipcMain.broadcast("chat:tool", {
+            sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
@@ -279,20 +364,30 @@ export const llmClient = {
         }
       });
     } catch (error) {
-      initializing.delete(streamId);
       if (candidate) resetGenerationAgent(candidate, streamId);
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        ipcMain.broadcast("chat:done", { streamId, content: "" });
+        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        initializing.delete(streamId);
+        initialization.removeOwnerInvalidation();
         return false;
       }
+      initializing.delete(streamId);
+      initialization.removeOwnerInvalidation();
       throw error;
     }
     const agent = candidate;
-    if (!agent) throw new Error("Could not initialize the generation agent.");
+    if (!agent) {
+      initializing.delete(streamId);
+      initialization.removeOwnerInvalidation();
+      throw new Error("Could not initialize the generation agent.");
+    }
 
     const activeGeneration: ActiveGeneration = {
       agent,
+      chatId: params.chatId,
+      owner,
+      removeOwnerInvalidation: initialization.removeOwnerInvalidation,
       workspaceId: params.workspaceId,
       cancelRequested: false,
       computerUse,
@@ -303,10 +398,11 @@ export const llmClient = {
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
-      active.delete(streamId);
       resetGenerationAgent(agent, streamId);
       await computerUse?.close().catch(() => {});
-      ipcMain.broadcast("chat:done", { streamId, content: "" });
+      sendGeneration(streamId, "chat:done", { streamId, content: "" });
+      active.delete(streamId);
+      activeGeneration.removeOwnerInvalidation();
       return false;
     }
 
@@ -321,30 +417,35 @@ export const llmClient = {
             agent.state.errorMessage?.trim() ??
             null);
         if (finalError) {
-          ipcMain.broadcast("chat:error", {
+          sendGeneration(streamId, "chat:error", {
             streamId,
             message: finalError,
             content: full || undefined,
           });
         } else if (!full.trim() && !wasCancelled) {
-          ipcMain.broadcast("chat:error", {
+          sendGeneration(streamId, "chat:error", {
             streamId,
             message: "The model returned an empty response. Try again.",
           });
         } else {
           // Covers both normal completion and user abort (partial `full`).
-          ipcMain.broadcast("chat:done", { streamId, content: full });
+          sendGeneration(streamId, "chat:done", { streamId, content: full });
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
-        ipcMain.broadcast("chat:error", { streamId, message, content: full || undefined });
+        sendGeneration(streamId, "chat:error", {
+          streamId,
+          message,
+          content: full || undefined,
+        });
       } finally {
         try {
           resetGenerationAgent(agent, streamId);
           await computerUse?.close().catch(() => {});
         } finally {
           active.delete(streamId);
+          activeGeneration.removeOwnerInvalidation();
         }
       }
     })();
@@ -354,24 +455,52 @@ export const llmClient = {
   },
 
   /** Resolve a pending tool-approval request from the UI. */
-  approve(approvalId: string, decision: ApprovalDecision): void {
-    approvals.decide(approvalId, decision === "allow");
+  approve(approvalId: string, decision: ApprovalDecision, ownerDocumentId?: string): boolean {
+    return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
   },
 
-  cancel(streamId: string): void {
+  cancel(streamId: string, ownerDocumentId?: string): boolean {
     const initialization = initializing.get(streamId);
+    const generation = active.get(streamId);
+    const owner = initialization?.owner ?? generation?.owner;
+    if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
+      return false;
+    }
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.controller.abort(new Error("Chat initialization cancelled."));
       void initialization.computerUse?.close();
     }
-    const generation = active.get(streamId);
     if (generation) {
       generation.cancelRequested = true;
       generation.agent.abort();
       void generation.computerUse?.close();
     }
     approvals.cancelStream(streamId);
+    return true;
+  },
+
+  isChatBusy(chatId: string): boolean {
+    return (
+      [...initializing.values()].some((entry) => entry.chatId === chatId) ||
+      [...active.values()].some((entry) => entry.chatId === chatId)
+    );
+  },
+
+  beginComputerUseSettingChange(chatId: string): (() => void) | null {
+    return chatComputerUseMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
+  },
+
+  /** Closing the global gate cancels every snapshot that could race the setting change. */
+  cancelComputerUseGenerations(): void {
+    computerUseGenerationGate.close();
+    const activated = new Set([
+      ...activatedComputerUseStreamIds(initializing),
+      ...activatedComputerUseStreamIds(active),
+    ]);
+    for (const streamId of activated) {
+      this.cancel(streamId);
+    }
   },
 
   /** Stop generations whose tool set was snapshotted from this workspace. */

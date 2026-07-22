@@ -1,5 +1,14 @@
 # Project History
 
+### 2026-07-22 — Add fail-closed Computer Use activation and permission UX
+
+- Added a persisted global Computer Use beta gate and a separate persisted per-chat opt-in, both off by default. Production creates the generation-owned `cua-driver` controller only when both gates, the generation revision, the exact model image capability, signed-helper readiness, and macOS permissions are current.
+- Added Settings readiness/status/error/retry states, host-owned Accessibility and Screen Recording requests, a keyboard-reachable composer control, explicit provider data-policy copy, and one-action approval UI. The pinned embedded driver is launched with the signed broker's exact `--host-bundle-id`, and permission reports attributed to any other host fail closed.
+- Bound status, permission, chat-setting, stream, cancellation, and approval work to the exact renderer document or generation AbortSignal so navigation cannot relaunch a stale helper or permission prompt. Per-chat opt-ins stage to a temporary file and atomically rename only while the owner remains current.
+- Serialized every config read-modify-write through one fresh-snapshot transaction queue. Disabling closes the live generation gate synchronously, cancels only Computer Use generations, persists even if its renderer exits, and latches a fail-closed state that a failed or stale enable cannot clear.
+- Sealed and verified disabled-state durability before quit, kept the renderer alive with a native error when persistence fails, settled unload vetoes before irreversible service shutdown, and added a tested renderer-close barrier. A successful enable clears the fail-closed latch only after persistence and final owner validation.
+- Added status, permission, ownership, configuration-race, shutdown, stale-enable, composer-keyboard, query-error, and quit-lifecycle regressions. The full and focused Computer Use suites, 41 native Rust tests with strict clippy, type-check, lint, diff check, and production build pass. Three independent final reviewers returned ACCEPT for integration/lifecycle, adversarial security, and upstream/product mapping.
+
 ### 2026-07-22 — Add the Hermes-style cua-driver Computer Use adapter
 
 - Added one sequential, model-agnostic `computer_use` AgentTool over the authenticated external `cua-driver` boundary. The adapter supports capture, app/window discovery, exact focus, pointer/drag/scroll, typing/keys/value changes, and bounded waits without adding any Swift GUI automation implementation.

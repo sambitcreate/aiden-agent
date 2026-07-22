@@ -9,6 +9,7 @@ export interface ToolApprovalPrompt {
 
 interface PendingApproval {
   streamId: string;
+  ownerDocumentId?: string;
   settle(allowed: boolean): void;
 }
 
@@ -24,6 +25,7 @@ export class ToolApprovalCoordinator {
   request(
     descriptor: Omit<ToolApprovalPrompt, "approvalId">,
     signal?: AbortSignal,
+    ownerDocumentId?: string,
   ): Promise<boolean> {
     if (signal?.aborted) return Promise.resolve(false);
     const approvalId = `a-${randomUUID()}`;
@@ -37,7 +39,11 @@ export class ToolApprovalCoordinator {
         signal?.removeEventListener("abort", aborted);
         resolve(allowed);
       };
-      this.pending.set(approvalId, { streamId: descriptor.streamId, settle: finish });
+      this.pending.set(approvalId, {
+        streamId: descriptor.streamId,
+        ownerDocumentId,
+        settle: finish,
+      });
       signal?.addEventListener("abort", aborted, { once: true });
       if (signal?.aborted) {
         aborted();
@@ -51,9 +57,9 @@ export class ToolApprovalCoordinator {
     });
   }
 
-  decide(approvalId: string, allowed: boolean): boolean {
+  decide(approvalId: string, allowed: boolean, ownerDocumentId?: string): boolean {
     const entry = this.pending.get(approvalId);
-    if (!entry) return false;
+    if (!entry || entry.ownerDocumentId !== ownerDocumentId) return false;
     entry.settle(allowed);
     return true;
   }

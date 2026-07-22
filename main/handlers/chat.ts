@@ -5,6 +5,7 @@ import { ipcMain } from "../platform.js";
 import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient } from "../services/llm-client.js";
+import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import type { Attachment, ChatRole, ChatStartParams } from "../services/types.js";
 
 const ROLES: ChatRole[] = ["user", "assistant", "system"];
@@ -37,14 +38,15 @@ function newStreamId(): string {
 }
 
 export function registerChatGenerationHandlers(): void {
-  // The renderer supplies a streamId so it can subscribe to delta broadcasts
+  // The renderer supplies a streamId so it can subscribe to owner-bound deltas
   // before generation begins (no dropped opening tokens).
-  ipcMain.handle("chat:start", async (_event, streamId: unknown, params: unknown) => {
+  ipcMain.handle("chat:start", async (event, streamId: unknown, params: unknown) => {
+    const owner = chatGenerationOwner(event);
     const id = typeof streamId === "string" && streamId ? streamId : newStreamId();
     const parsed = parseParams(params);
     await startGenerationAndMaybeTitle(
       {
-        start: (streamId, params) => llmClient.start(streamId, params),
+        start: (streamId, params) => llmClient.start(streamId, params, owner),
         startTitle: (input) => chatTitleService.startForFirstTurn(input),
       },
       id,
@@ -53,13 +55,18 @@ export function registerChatGenerationHandlers(): void {
     return { streamId: id };
   });
 
-  ipcMain.handle("chat:cancel", async (_event, streamId: unknown) => {
-    if (typeof streamId === "string") llmClient.cancel(streamId);
+  ipcMain.handle("chat:cancel", async (event, streamId: unknown) => {
+    if (typeof streamId !== "string") return;
+    const owner = chatGenerationOwner(event);
+    llmClient.cancel(streamId, owner.documentId);
   });
 
   // Resolve a pending tool-approval request ("ask" mode).
-  ipcMain.handle("chat:approve", async (_event, approvalId: unknown, decision: unknown) => {
+  ipcMain.handle("chat:approve", async (event, approvalId: unknown, decision: unknown) => {
     if (typeof approvalId !== "string" || !approvalId) return;
-    llmClient.approve(approvalId, decision === "allow" ? "allow" : "deny");
+    const owner = chatGenerationOwner(event);
+    if (!llmClient.approve(approvalId, decision === "allow" ? "allow" : "deny", owner.documentId)) {
+      throw new Error("This renderer document does not own that approval.");
+    }
   });
 }

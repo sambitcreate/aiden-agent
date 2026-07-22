@@ -69,9 +69,10 @@ authentication.
 
 After authentication, the broker:
 
-1. starts the pinned driver as `cua-driver mcp --embedded` with anonymous
-   stdin/stdout pipes, so it inherits only the separately granted broker's TCC
-   responsibility;
+1. starts the pinned driver as
+   `cua-driver mcp --embedded --host-bundle-id com.sambitcreate.aiden-agent.cua-driver`
+   with anonymous stdin/stdout pipes, so the driver's permission report names
+   the separately granted signed broker that owns TCC responsibility;
 2. establishes occupied broker and driver-supervision groups before any
    privileged child exists, then uses macOS's kernel-enforced launch requirement
    to admit only the reviewed Cua signing identity, Team ID,
@@ -85,6 +86,15 @@ After authentication, the broker:
    Hermes action-tool allowlist;
 4. keeps every privileged pipe endpoint inside the authenticated chain and
    terminates/reaps the complete containment group when either peer closes.
+
+The embedded driver intentionally ignores `check_permissions.prompt`. When the
+user explicitly chooses **Request access** in Aiden, the authenticated broker
+recognizes only the exact internal `check_permissions { prompt: true }` shape,
+requests Accessibility and Screen Recording from its own LaunchServices-owned
+host identity with Apple's public APIs, rewrites the driver call to a status-only
+recheck, and grants no prompt authority to expanded or malformed calls. Aiden
+then tears down that driver and checks readiness with a fresh helper so a stale
+per-process TCC cache cannot report the pre-prompt state.
 
 An internal anonymous-pipe guard occupies the broker group and receives no
 public arguments. Before calling Foundation or Security, the dormant launcher
@@ -169,7 +179,8 @@ Every phase is frozen and independently reviewed before the next phase begins.
 - Dangerous system shortcuts and destructive shell-like text are rejected
   before the approval prompt.
 - Screenshots and base64 image payloads remain transient in the Pi tool loop;
-  they are not written to Aiden chat history or logs.
+  Aiden does not write them to its chat history or application logs. The
+  selected model provider handles received content under its own data policy.
 - Production does not accept an arbitrary driver path. Development cannot bypass
   the pinned hash and signing checks.
 - The granted helper never accepts model-selected driver arguments, a public

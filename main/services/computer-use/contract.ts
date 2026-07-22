@@ -3,7 +3,22 @@ export const CUA_DRIVER_TOOL_SCHEMA = "1";
 export const CUA_DRIVER_CAPABILITY_VERSION = "1";
 export const CUA_DRIVER_HOST_BUNDLE_ID = "com.sambitcreate.aiden-agent";
 export const CUA_DRIVER_BROKER_BUNDLE_ID = "com.sambitcreate.aiden-agent.cua-driver";
+/** The signed broker is the responsible process that owns macOS TCC permission. */
+export const CUA_DRIVER_TCC_HOST_BUNDLE_ID = CUA_DRIVER_BROKER_BUNDLE_ID;
 export const CUA_DRIVER_BROKER_EXECUTABLE = "aiden-cua-broker";
+
+/** The broker's launch-requirement API first exists on macOS 14.4. */
+export function computerUsePlatformSupported(
+  platform: NodeJS.Platform,
+  systemVersion: string,
+): boolean {
+  if (platform !== "darwin") return false;
+  const match = /^(\d+)(?:\.(\d+))?/u.exec(systemVersion.trim());
+  if (!match) return false;
+  const major = Number.parseInt(match[1], 10);
+  const minor = Number.parseInt(match[2] ?? "0", 10);
+  return major > 14 || (major === 14 && minor >= 4);
+}
 
 export const CUA_DRIVER_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "start_session",
@@ -79,7 +94,7 @@ export class CuaDriverError extends Error {
  */
 export function buildCuaDriverEnvironment(
   source: NodeJS.ProcessEnv = process.env,
-  hostBundleId = CUA_DRIVER_HOST_BUNDLE_ID,
+  hostBundleId = CUA_DRIVER_TCC_HOST_BUNDLE_ID,
 ): Record<string, string> {
   const env: Record<string, string> = {
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",

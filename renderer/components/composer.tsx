@@ -27,6 +27,7 @@ import {
   Lock,
   Mic,
   Monitor,
+  MousePointer2,
   OctagonAlert,
   Plus,
   ShieldQuestion,
@@ -39,6 +40,7 @@ import { useVoiceRecorder } from "../lib/use-voice-recorder";
 import { attachmentsApi, onNotification, pickFiles } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
 import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
+import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
 
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
@@ -70,6 +72,15 @@ interface ComposerProps {
   visionSupported?: boolean;
   /** The model picker element, rendered in the input row. */
   modelPicker?: React.ReactNode;
+  /** Global-beta readiness plus this chat's local Computer Use opt-in. */
+  computerUse?: {
+    enabled: boolean;
+    ready: boolean;
+    checking: boolean;
+    saving: boolean;
+    detail: string;
+  };
+  onChangeComputerUse?: (enabled: boolean) => void | Promise<void>;
 }
 
 const PERMISSION_META: Record<
@@ -125,6 +136,8 @@ export function Composer({
   gitWorktreeDescription = "Creates a separate workspace and keeps this checkout unchanged.",
   gitMutationBlockedReason,
   visionSupported,
+  computerUse,
+  onChangeComputerUse,
   modelPicker,
 }: ComposerProps) {
   const [text, setText] = React.useState("");
@@ -133,13 +146,16 @@ export function Composer({
   const [sending, setSending] = React.useState(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
-  const canSend =
-    (text.trim().length > 0 || attachments.length > 0) &&
-    ready &&
-    !isGenerating &&
-    !sending &&
-    !permissionSaving &&
-    !gitOperationBusy;
+  const computerUseDescriptionId = React.useId();
+  const submissionAllowed = composerSubmissionAllowed({
+    ready,
+    isGenerating,
+    sending,
+    permissionSaving,
+    computerUseSaving: computerUse?.saving === true,
+    gitOperationBusy,
+  });
+  const canSend = (text.trim().length > 0 || attachments.length > 0) && submissionAllowed;
 
   const settings = useSettings();
   const voice = useVoiceRecorder(
@@ -196,14 +212,7 @@ export function Composer({
       return;
     }
     const trimmed = text.trim();
-    if (
-      (!trimmed && attachments.length === 0) ||
-      !ready ||
-      isGenerating ||
-      sending ||
-      permissionSaving
-    )
-      return;
+    if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
     if (
       visionSupported === false &&
       attachments.some((attachment) => attachment.kind === "image")
@@ -236,6 +245,11 @@ export function Composer({
   const folderName = workspace?.folderPath
     ? workspace.folderPath.split("/").filter(Boolean).pop()
     : workspace?.name;
+  const computerUseControl = computerUseControlState({
+    enabled: computerUse?.enabled ?? false,
+    ready: computerUse?.ready ?? false,
+    busy: computerUse?.saving === true || isGenerating || sending || gitOperationBusy,
+  });
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
     if (workspaceChangeBlockedReason) {
@@ -266,7 +280,14 @@ export function Composer({
       toast.info(workspaceChangeBlockedReason);
       return;
     }
-    if (nextPermission === permission || permissionSaving || isGenerating || sending || gitOperationBusy) return;
+    if (
+      nextPermission === permission ||
+      permissionSaving ||
+      isGenerating ||
+      sending ||
+      gitOperationBusy
+    )
+      return;
     if (nextPermission === "full") {
       setConfirmFullAccess(true);
       return;
@@ -291,7 +312,12 @@ export function Composer({
                     variant="transparent"
                     size="small"
                     className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
-                    disabled={isGenerating || sending || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
+                    disabled={
+                      isGenerating ||
+                      sending ||
+                      gitOperationBusy ||
+                      Boolean(workspaceChangeBlockedReason)
+                    }
                     aria-label="Choose a workspace"
                   >
                     <Folder className="size-4 shrink-0" />
@@ -326,7 +352,13 @@ export function Composer({
                 branch={gitBranch}
                 detached={gitDetached}
                 unborn={gitUnborn}
-                disabled={isGenerating || sending || attaching || permissionSaving || Boolean(gitMutationBlockedReason)}
+                disabled={
+                  isGenerating ||
+                  sending ||
+                  attaching ||
+                  permissionSaving ||
+                  Boolean(gitMutationBlockedReason)
+                }
                 disabledReason={gitMutationBlockedReason}
                 onCreateWorktree={onCreateGitWorktree}
                 onBusyChange={onGitOperationBusyChange}
@@ -381,6 +413,20 @@ export function Composer({
                 {readinessMessage}
               </Text>
             ) : null}
+            {computerUse ? (
+              <Text
+                id={computerUseDescriptionId}
+                as="p"
+                variant="small"
+                color="tertiary"
+                className="px-1.5 pb-1"
+              >
+                Read-only captures and accessibility text may go to the selected model for this
+                response. Aiden does not save them to Aiden chat history or application logs; the
+                selected provider handles them under its own data policy. Input actions still ask
+                first.
+              </Text>
+            ) : null}
             <div className="mt-1.5 flex min-w-0 items-center justify-between gap-1.5">
               <div className="flex shrink-0 items-center gap-1">
                 <Button
@@ -400,13 +446,20 @@ export function Composer({
                       variant="transparent"
                       size="small"
                       className={cn("h-7 gap-1.5 px-2", perm.className)}
-                      disabled={!workspace || permissionSaving || isGenerating || sending || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
+                      disabled={
+                        !workspace ||
+                        permissionSaving ||
+                        isGenerating ||
+                        sending ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
                       aria-label={
                         workspaceChangeBlockedReason
                           ? `Workspace access: ${perm.label}. ${workspaceChangeBlockedReason}.`
                           : isGenerating || sending
-                          ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
-                          : `Workspace access: ${perm.label}`
+                            ? `Workspace access: ${perm.label}. Finish or stop the current response to change access.`
+                            : `Workspace access: ${perm.label}`
                       }
                     >
                       <PermIcon className="size-4 shrink-0" />
@@ -419,7 +472,11 @@ export function Composer({
                     <DropdownMenuCheckboxItem
                       checked={permission === "full"}
                       sublabel={PERMISSION_META.full.description}
-                      disabled={permissionSaving || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
+                      disabled={
+                        permissionSaving ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
                       onCheckedChange={(checked) => checked && requestPermission("full")}
                     >
                       Full access
@@ -427,7 +484,11 @@ export function Composer({
                     <DropdownMenuCheckboxItem
                       checked={permission === "ask"}
                       sublabel={PERMISSION_META.ask.description}
-                      disabled={permissionSaving || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
+                      disabled={
+                        permissionSaving ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
                       onCheckedChange={(checked) => checked && requestPermission("ask")}
                     >
                       Ask first
@@ -435,13 +496,55 @@ export function Composer({
                     <DropdownMenuCheckboxItem
                       checked={permission === "none"}
                       sublabel={PERMISSION_META.none.description}
-                      disabled={permissionSaving || gitOperationBusy || Boolean(workspaceChangeBlockedReason)}
+                      disabled={
+                        permissionSaving ||
+                        gitOperationBusy ||
+                        Boolean(workspaceChangeBlockedReason)
+                      }
                       onCheckedChange={(checked) => checked && requestPermission("none")}
                     >
                       No access
                     </DropdownMenuCheckboxItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
+                {computerUse && onChangeComputerUse ? (
+                  <Button
+                    variant={computerUse.enabled ? "muted" : "transparent"}
+                    size="small"
+                    className={cn(
+                      "h-7 gap-1.5 px-2 aria-disabled:opacity-45",
+                      computerUse.enabled ? "text-accent" : "text-secondary",
+                    )}
+                    disabled={computerUseControl.disabled}
+                    aria-disabled={computerUseControl.ariaDisabled || undefined}
+                    aria-describedby={computerUseDescriptionId}
+                    onClick={() => {
+                      if (computerUseControl.ariaDisabled) {
+                        toast.info(computerUse.detail);
+                        return;
+                      }
+                      void onChangeComputerUse(!computerUse.enabled);
+                    }}
+                    aria-pressed={computerUse.enabled}
+                    aria-label={
+                      computerUse.enabled
+                        ? "Turn off Computer Use for this chat"
+                        : `Turn on Computer Use for this chat. ${computerUse.detail}`
+                    }
+                    title={
+                      computerUse.ready || computerUse.enabled
+                        ? "Computer Use (Beta) · every input action asks for approval"
+                        : computerUse.detail
+                    }
+                  >
+                    {computerUse.checking || computerUse.saving ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <MousePointer2 />
+                    )}
+                    Computer
+                  </Button>
+                ) : null}
               </div>
               <div className="flex min-w-0 items-center justify-end gap-1.5">
                 {modelPicker}

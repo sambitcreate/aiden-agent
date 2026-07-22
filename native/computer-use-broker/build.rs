@@ -41,6 +41,8 @@ fn main() {
 
     println!("cargo:rustc-link-arg={}", output.display());
     println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=ApplicationServices");
+    println!("cargo:rustc-link-lib=framework=CoreGraphics");
     println!("cargo:rustc-link-lib=framework=Security");
     println!("cargo:rustc-link-lib=bsm");
     println!("cargo:rustc-link-lib=proc");

@@ -381,6 +381,11 @@ fn relay_client_to_driver(
         match message {
             ClientMessage::Forward(bytes) => write_line(&mut driver_input, &bytes)
                 .map_err(|error| format!("could not relay MCP request: {error}"))?,
+            ClientMessage::RequestHostPermissions(bytes) => {
+                crate::darwin::request_computer_use_permissions();
+                write_line(&mut driver_input, &bytes)
+                    .map_err(|error| format!("could not relay permission recheck: {error}"))?;
+            }
             ClientMessage::Respond(bytes) => {
                 let mut writer = lock_writer(&control_writer)?;
                 write_line(&mut *writer, &bytes)

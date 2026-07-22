@@ -10,6 +10,7 @@ const CDHASH_CAPACITY: usize = 41;
 const PATH_CAPACITY: usize = 4_096;
 
 unsafe extern "C" {
+    fn aiden_request_computer_use_permissions();
     fn aiden_copy_live_code_identity(
         pid: c_int,
         identifier: *const c_char,
@@ -81,6 +82,15 @@ unsafe extern "C" {
     fn proc_signal_with_audittoken(audit_token: *mut AuditToken, signal: c_int) -> c_int;
     #[cfg(test)]
     fn aiden_cua_launch_requirement_bytes(length: *mut usize) -> *const u8;
+}
+
+/// Raise macOS's Accessibility and Screen Recording prompts from the exact
+/// LaunchServices-owned helper that is responsible for the embedded driver.
+pub(crate) fn request_computer_use_permissions() {
+    // SAFETY: the Objective-C shim takes no pointers and owns its autorelease
+    // pool. Invocation is reachable only after the bridge has authenticated
+    // Aiden and the broker has authenticated that exact bridge incarnation.
+    unsafe { aiden_request_computer_use_permissions() };
 }
 
 /// Kernel-issued identity for one exact process incarnation. Unlike a numeric

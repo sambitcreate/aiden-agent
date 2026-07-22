@@ -4,6 +4,7 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import { randomUUID } from "node:crypto";
 import {
   DEFAULT_CHAT_TITLE,
   canReplaceGeneratedChatTitle,
@@ -173,6 +174,35 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
         await writeChat(chat);
         await updateMeta(chat);
         return chat;
+      });
+    },
+
+    /** Persist the chat-local Computer Use opt-in without reordering conversation history. */
+    async setComputerUseEnabled(
+      id: string,
+      enabled: boolean,
+      isCurrent: () => boolean = () => true,
+    ): Promise<Chat> {
+      return serialized(async () => {
+        const chat = await readChat(id);
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        const destination = await chatPath(chat.id);
+        if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+        chat.computerUseEnabled = enabled;
+        const staged = path.join(
+          path.dirname(destination),
+          `.${path.basename(destination)}.${randomUUID()}.computer-use.tmp`,
+        );
+        try {
+          await fs.writeFile(staged, JSON.stringify(chat, null, 2), "utf-8");
+          // No await occurs between this ownership check and invoking the
+          // atomic rename, so a replaced document cannot commit the staged opt-in.
+          if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+          await fs.rename(staged, destination);
+          return chat;
+        } finally {
+          await fs.rm(staged, { force: true }).catch(() => undefined);
+        }
       });
     },
 

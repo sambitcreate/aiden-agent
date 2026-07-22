@@ -9,6 +9,7 @@ import type {
   ChatMessage,
   ChatTitleRenameResult,
   ChatStartParams,
+  ComputerUseStatus,
   DiscoveredSkill,
   EngineStatus,
   ExternalEditor,
@@ -117,6 +118,12 @@ export const providersApi = {
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
   set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+};
+
+export const computerUseApi = {
+  status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
+  setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
+  requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
 };
 
 export const titleProvidersApi = {
@@ -307,6 +314,8 @@ export const chatsApi = {
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
+  setComputerUse: (id: string, enabled: boolean) =>
+    invoke<Chat>("chats:setComputerUse", id, enabled),
   remove: (id: string) => invoke<void>("chats:remove", id),
   appendMessage: (
     id: string,

@@ -15,6 +15,7 @@ const INVOKE_PREFIXES = [
   "attachments:",
   "chat:",
   "chats:",
+  "computerUse:",
   "exa:",
   "git:",
   "localModels:",

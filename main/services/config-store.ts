@@ -3,7 +3,14 @@
 
 import { DataStore } from "./data-store.js";
 import { secrets } from "./secrets.js";
-import type { AppSettings, McpServer, Provider, Skill, StoredProvider, Workspace } from "./types.js";
+import type {
+  AppSettings,
+  McpServer,
+  Provider,
+  Skill,
+  StoredProvider,
+  Workspace,
+} from "./types.js";
 
 interface ConfigShape {
   providers: StoredProvider[];
@@ -108,29 +115,38 @@ const store = new DataStore<ConfigShape>("config.json", {
   workspaces: [],
 });
 
+let seedPromise: Promise<void> | null = null;
+
 async function ensureSeeded(): Promise<ConfigShape> {
-  const config = await store.load();
-  let dirty = false;
-  if (!config.seeded) {
-    config.providers = structuredClone(PRESETS);
-    config.seeded = true;
-    dirty = true;
+  if (!seedPromise) {
+    seedPromise = store
+      .update((config) => {
+        if (!config.seeded) {
+          config.providers = structuredClone(PRESETS);
+          config.seeded = true;
+        }
+        // Backfill arrays added after the initial release.
+        if (!Array.isArray(config.mcpServers)) config.mcpServers = [];
+        if (!Array.isArray(config.skills)) config.skills = [];
+        if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) {
+          config.workspaces = [defaultWorkspace()];
+        }
+      })
+      .catch((error: unknown) => {
+        seedPromise = null;
+        throw error;
+      });
   }
-  // Backfill arrays added after the initial release.
-  if (!Array.isArray(config.mcpServers)) {
-    config.mcpServers = [];
-    dirty = true;
-  }
-  if (!Array.isArray(config.skills)) {
-    config.skills = [];
-    dirty = true;
-  }
-  if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) {
-    config.workspaces = [defaultWorkspace()];
-    dirty = true;
-  }
-  if (dirty) await store.save(config);
-  return config;
+  await seedPromise;
+  return store.load();
+}
+
+async function mutateConfig<R>(
+  mutation: (draft: ConfigShape) => R | Promise<R>,
+  isCurrent: () => boolean = () => true,
+): Promise<R> {
+  await ensureSeeded();
+  return store.update(mutation, isCurrent);
 }
 
 const PERMISSIONS = new Set(["full", "ask", "none"]);
@@ -167,21 +183,19 @@ export const configStore = {
 
   /** Insert or update a provider record (upsert by id). */
   async saveProvider(provider: StoredProvider): Promise<Provider> {
-    const config = await ensureSeeded();
-    const idx = config.providers.findIndex((p) => p.id === provider.id);
-    if (idx >= 0) {
-      config.providers[idx] = { ...config.providers[idx], ...provider };
-    } else {
-      config.providers.push(provider);
-    }
-    await store.save(config);
-    return toProvider(config.providers.find((p) => p.id === provider.id)!);
+    const stored = await mutateConfig((config) => {
+      const idx = config.providers.findIndex((p) => p.id === provider.id);
+      if (idx >= 0) config.providers[idx] = { ...config.providers[idx], ...provider };
+      else config.providers.push(provider);
+      return structuredClone(config.providers.find((p) => p.id === provider.id)!);
+    });
+    return toProvider(stored);
   },
 
   async removeProvider(id: string): Promise<void> {
-    const config = await ensureSeeded();
-    config.providers = config.providers.filter((p) => p.id !== id);
-    await store.save(config);
+    await mutateConfig((config) => {
+      config.providers = config.providers.filter((p) => p.id !== id);
+    });
     await secrets.deleteKey(id);
   },
 
@@ -190,11 +204,14 @@ export const configStore = {
     return config.settings;
   },
 
-  async setSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-    const config = await ensureSeeded();
-    config.settings = { ...config.settings, ...patch };
-    await store.save(config);
-    return config.settings;
+  async setSettings(
+    patch: Partial<AppSettings>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<AppSettings> {
+    return mutateConfig((config) => {
+      config.settings = { ...config.settings, ...patch };
+      return structuredClone(config.settings);
+    }, isCurrent);
   },
 
   // ── MCP servers ──────────────────────────────────────────────────────
@@ -204,18 +221,18 @@ export const configStore = {
   },
 
   async saveMcpServer(server: McpServer): Promise<McpServer> {
-    const config = await ensureSeeded();
-    const idx = config.mcpServers.findIndex((s) => s.id === server.id);
-    if (idx >= 0) config.mcpServers[idx] = server;
-    else config.mcpServers.push(server);
-    await store.save(config);
-    return server;
+    return mutateConfig((config) => {
+      const idx = config.mcpServers.findIndex((s) => s.id === server.id);
+      if (idx >= 0) config.mcpServers[idx] = server;
+      else config.mcpServers.push(server);
+      return structuredClone(server);
+    });
   },
 
   async removeMcpServer(id: string): Promise<void> {
-    const config = await ensureSeeded();
-    config.mcpServers = config.mcpServers.filter((s) => s.id !== id);
-    await store.save(config);
+    await mutateConfig((config) => {
+      config.mcpServers = config.mcpServers.filter((s) => s.id !== id);
+    });
   },
 
   // ── Skills ───────────────────────────────────────────────────────────
@@ -225,18 +242,18 @@ export const configStore = {
   },
 
   async saveSkill(skill: Skill): Promise<Skill> {
-    const config = await ensureSeeded();
-    const idx = config.skills.findIndex((s) => s.id === skill.id);
-    if (idx >= 0) config.skills[idx] = skill;
-    else config.skills.push(skill);
-    await store.save(config);
-    return skill;
+    return mutateConfig((config) => {
+      const idx = config.skills.findIndex((s) => s.id === skill.id);
+      if (idx >= 0) config.skills[idx] = skill;
+      else config.skills.push(skill);
+      return structuredClone(skill);
+    });
   },
 
   async removeSkill(id: string): Promise<void> {
-    const config = await ensureSeeded();
-    config.skills = config.skills.filter((s) => s.id !== id);
-    await store.save(config);
+    await mutateConfig((config) => {
+      config.skills = config.skills.filter((s) => s.id !== id);
+    });
   },
 
   // ── Workspaces ───────────────────────────────────────────────────────
@@ -252,20 +269,20 @@ export const configStore = {
 
   /** Insert or update a workspace (upsert by id). */
   async saveWorkspace(workspace: Workspace): Promise<Workspace> {
-    const config = await ensureSeeded();
     const next = normalizeWorkspace({ ...workspace, updatedAt: Date.now() });
-    const idx = config.workspaces.findIndex((w) => w.id === next.id);
-    if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
-    else config.workspaces.push(next);
-    await store.save(config);
-    return config.workspaces.find((w) => w.id === next.id)!;
+    return mutateConfig((config) => {
+      const idx = config.workspaces.findIndex((w) => w.id === next.id);
+      if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
+      else config.workspaces.push(next);
+      return structuredClone(config.workspaces.find((w) => w.id === next.id)!);
+    });
   },
 
   async removeWorkspace(id: string): Promise<void> {
-    const config = await ensureSeeded();
-    config.workspaces = config.workspaces.filter((w) => w.id !== id);
-    // Never leave the app without a workspace.
-    if (config.workspaces.length === 0) config.workspaces = [defaultWorkspace()];
-    await store.save(config);
+    await mutateConfig((config) => {
+      config.workspaces = config.workspaces.filter((w) => w.id !== id);
+      // Never leave the app without a workspace.
+      if (config.workspaces.length === 0) config.workspaces = [defaultWorkspace()];
+    });
   },
 };

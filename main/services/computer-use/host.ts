@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import type { Readable } from "node:stream";
 import path from "node:path";
 import {
-  CUA_DRIVER_HOST_BUNDLE_ID,
+  CUA_DRIVER_TCC_HOST_BUNDLE_ID,
   CUA_DRIVER_TOOL_SCHEMA,
   CUA_DRIVER_VERSION,
   CuaDriverError,
@@ -104,7 +104,9 @@ async function readBridgeReady(
     const data = (chunk: Buffer) => {
       input = input.length === 0 ? chunk : Buffer.concat([input, chunk]);
       if (input.length > MAX_READY_BYTES) {
-        finish(new CuaDriverError("bridge_invalid", "Computer Use returned too much startup data."));
+        finish(
+          new CuaDriverError("bridge_invalid", "Computer Use returned too much startup data."),
+        );
         return;
       }
       const newline = input.indexOf(0x0a);
@@ -127,11 +129,7 @@ async function readBridgeReady(
         finish(new CuaDriverError("bridge_invalid", "Computer Use returned invalid startup data."));
       }
     };
-    const timer = setTimeout(
-      () =>
-        finish(startupTimeoutError()),
-      remainingMilliseconds(deadline),
-    );
+    const timer = setTimeout(() => finish(startupTimeoutError()), remainingMilliseconds(deadline));
     timer.unref();
     signal?.addEventListener("abort", aborted, { once: true });
     readyPipe.on("data", data);
@@ -174,7 +172,7 @@ export class CuaDriverHost {
     }
     this.env = buildCuaDriverEnvironment(
       options.baseEnv ?? process.env,
-      CUA_DRIVER_HOST_BUNDLE_ID,
+      CUA_DRIVER_TCC_HOST_BUNDLE_ID,
     );
   }
 
@@ -199,9 +197,7 @@ export class CuaDriverHost {
   get running(): boolean {
     return [...this.runtimes].some(
       (runtime) =>
-        !runtime.stopping &&
-        runtime.bridge.exitCode === null &&
-        runtime.bridge.signalCode === null,
+        !runtime.stopping && runtime.bridge.exitCode === null && runtime.bridge.signalCode === null,
     );
   }
 

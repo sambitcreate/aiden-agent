@@ -204,6 +204,8 @@ export interface ChatMeta {
 }
 
 export interface Chat extends ChatMeta {
+  /** Per-chat opt-in. The global Computer Use beta setting remains authoritative. */
+  computerUseEnabled?: boolean;
   messages: ChatMessage[];
 }
 
@@ -289,8 +291,36 @@ export interface AppSettings {
   chatTitleProviderId?: ChatTitleProviderId;
   /** Paired light/dark palettes and global appearance preferences. */
   appearance?: AppearanceConfig;
+  /** Global opt-in for the external cua-driver Computer Use beta. */
+  computerUseEnabled?: boolean;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
+}
+
+export type ComputerUseStatusState =
+  | "disabled"
+  | "ready"
+  | "permission_required"
+  | "production_build_required"
+  | "unsupported"
+  | "unavailable"
+  | "incompatible"
+  | "error";
+
+export interface ComputerUseStatus {
+  enabled: boolean;
+  beta: true;
+  state: ComputerUseStatusState;
+  detail: string;
+  ready: boolean;
+  available: boolean;
+  retryable: boolean;
+  canRequestPermissions: boolean;
+  driverVersion?: string;
+  permissions: {
+    accessibility: boolean | null;
+    screenRecording: boolean | null;
+  };
 }
 
 export interface Profile {

@@ -1,4 +1,6 @@
 #import <Foundation/Foundation.h>
+#import <ApplicationServices/ApplicationServices.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <Security/Security.h>
 #import <bsm/libbsm.h>
 #import <errno.h>
@@ -63,6 +65,21 @@ static NSString *requirement_string(const char *identifier, const char *team) {
         @"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",
         identifierString,
         teamString];
+}
+
+void aiden_request_computer_use_permissions(void) {
+    @autoreleasepool {
+        // In embedded mode cua-driver deliberately never raises TCC prompts.
+        // This LaunchServices-owned helper is the responsible host, so it must
+        // request both grants itself after Aiden's authenticated settings flow
+        // reaches the broker. These calls are no-ops for grants already held.
+        NSDictionary *accessibilityOptions = @{
+            (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
+        };
+        (void)AXIsProcessTrustedWithOptions(
+            (__bridge CFDictionaryRef)accessibilityOptions);
+        (void)CGRequestScreenCaptureAccess();
+    }
 }
 
 static int copy_signing_information(

@@ -86,7 +86,10 @@ test("moves an empty chat between workspace lists", async (t) => {
 
   assert.equal(moved.workspaceId, "second");
   assert.equal((await store.list("first")).length, 0);
-  assert.deepEqual((await store.list("second")).map((entry) => entry.id), [chat.id]);
+  assert.deepEqual(
+    (await store.list("second")).map((entry) => entry.id),
+    [chat.id],
+  );
 });
 
 test("does not move a chat after its conversation has started", async (t) => {
@@ -99,4 +102,49 @@ test("does not move a chat after its conversation has started", async (t) => {
     /Only a new chat can change workspaces/,
   );
   assert.equal((await store.get(chat.id))?.workspaceId, "first");
+});
+
+test("persists Computer Use per chat without reordering the chat index", async (t) => {
+  const store = await testStore(t);
+  const older = await store.create({ title: "Older" });
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const newer = await store.create({ title: "Newer" });
+
+  const enabled = await store.setComputerUseEnabled(older.id, true);
+  assert.equal(enabled.computerUseEnabled, true);
+  assert.equal((await store.get(older.id))?.computerUseEnabled, true);
+  assert.deepEqual(
+    (await store.list()).map((chat) => chat.id),
+    [newer.id, older.id],
+  );
+
+  const disabled = await store.setComputerUseEnabled(older.id, false);
+  assert.equal(disabled.computerUseEnabled, false);
+});
+
+test("a stale renderer guard cannot persist a per-chat Computer Use opt-in", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ title: "Guarded" });
+
+  await assert.rejects(
+    store.setComputerUseEnabled(chat.id, true, () => false),
+    /no longer active/u,
+  );
+  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
+});
+
+test("a renderer replaced while a per-chat opt-in is staged cannot commit it", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({ title: "Guarded during write" });
+  let checks = 0;
+
+  await assert.rejects(
+    store.setComputerUseEnabled(chat.id, true, () => {
+      checks += 1;
+      return checks === 1;
+    }),
+    /no longer active/u,
+  );
+  assert.equal(checks, 2);
+  assert.equal((await store.get(chat.id))?.computerUseEnabled, undefined);
 });

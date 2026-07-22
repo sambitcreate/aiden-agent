@@ -25,9 +25,11 @@ import {
   queryKeys,
   refreshCodexProviderState,
   useChat,
+  useComputerUseStatus,
   useGitInfo,
   useModelInfo,
   useProviders,
+  useSettings,
 } from "../lib/queries";
 import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
@@ -39,11 +41,13 @@ import {
   type Chat,
   type WorkspacePermission,
 } from "../lib/types";
+import { computerUseReadinessReady } from "../lib/computer-use-control";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
   run_command: "Run command",
   write_file: "Write file",
+  computer_use: "Computer Use",
 };
 
 function toolLabel(toolName: string): string {
@@ -55,6 +59,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const navigate = useNavigate();
   const providers = useProviders();
   const chat = useChat(chatId);
+  const settings = useSettings();
+  const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
+  const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { active, activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(active?.id);
@@ -68,13 +75,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         : undefined;
   const { providerId, model, select } = useModelSelection(providers.data);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
-  const ready = Boolean(
+  const modelReady = Boolean(
     selectedProvider &&
     model &&
     selectedProvider.models.includes(model) &&
     (selectedProvider.hasKey || !selectedProvider.needsKey),
   );
-  const readinessMessage = React.useMemo(() => {
+  const modelReadinessMessage = React.useMemo(() => {
     if (providers.isLoading) return "Loading chat models…";
     if (!selectedProvider) {
       return providerId === OPENAI_CODEX_PROVIDER_ID
@@ -94,6 +101,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       return `Choose a model from ${selectedProvider.label}.`;
     return undefined;
   }, [model, providerId, providers.isLoading, selectedProvider]);
+  const chatComputerUseEnabled = chat.data?.computerUseEnabled === true;
+  const computerUseReady = computerUseReadinessReady(
+    computerUseStatus.data?.ready === true,
+    computerUseStatus.isError,
+  );
+  const computerUseStatusDetail = computerUseStatus.isError
+    ? "Computer Use readiness check failed. Open Settings → Computer Use and try again."
+    : (computerUseStatus.data?.detail ?? "Checking Computer Use readiness…");
+  const computerUseReadinessMessage =
+    computerUseGloballyEnabled && chatComputerUseEnabled && !computerUseReady
+      ? computerUseStatus.isLoading
+        ? "Checking Computer Use readiness…"
+        : computerUseStatusDetail
+      : undefined;
+  const ready = modelReady && !computerUseReadinessMessage;
+  const readinessMessage = modelReadinessMessage ?? computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -113,6 +136,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [toolActivity, setToolActivity] = React.useState<ToolActivity | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
+  const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationIntentRef = React.useRef(0);
@@ -264,12 +288,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const handleSend = React.useCallback(
     async (text: string, attachments: Attachment[]) => {
+      if (computerUseSaving) {
+        throw new Error("Wait for the Computer Use setting to finish saving before sending.");
+      }
       const generationIntent = ++generationIntentRef.current;
       setIsStartingGeneration(true);
       try {
         const updated = await chatsApi.appendMessage(
           chatId,
-          { role: "user", content: text, attachments: attachments.length ? attachments : undefined },
+          {
+            role: "user",
+            content: text,
+            attachments: attachments.length ? attachments : undefined,
+          },
           { providerId, model, autoTitle: true },
         );
         qc.setQueryData(queryKeys.chat(chatId), updated);
@@ -280,7 +311,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setIsStartingGeneration(false);
       }
     },
-    [chatId, providerId, model, qc, runGeneration],
+    [chatId, computerUseSaving, providerId, model, qc, runGeneration],
   );
 
   const handleStop = React.useCallback(() => {
@@ -341,23 +372,57 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (permission: WorkspacePermission) => {
       if (!active) return;
       if (environmentPanel.gitOperationBusy)
-        throw new Error("Wait for the current Git operation to finish before changing workspace access.");
+        throw new Error(
+          "Wait for the current Git operation to finish before changing workspace access.",
+        );
       if (environmentPanel.editorState.saving)
-        throw new Error("Wait for the open file to finish saving before changing workspace access.");
+        throw new Error(
+          "Wait for the open file to finish saving before changing workspace access.",
+        );
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       await workspacesApi.update(active.id, { permission });
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     },
-    [active, environmentPanel.agentBusy, environmentPanel.cancelAgent, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, qc],
+    [
+      active,
+      environmentPanel.agentBusy,
+      environmentPanel.cancelAgent,
+      environmentPanel.editorState.dirty,
+      environmentPanel.editorState.saving,
+      environmentPanel.gitOperationBusy,
+      qc,
+    ],
+  );
+
+  const changeComputerUse = React.useCallback(
+    async (enabled: boolean) => {
+      if (computerUseSaving || isStartingGeneration || streamingText !== null) return;
+      setComputerUseSaving(true);
+      try {
+        const updated = await chatsApi.setComputerUse(chatId, enabled);
+        qc.setQueryData(queryKeys.chat(chatId), updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't change Computer Use for this chat.",
+        );
+      } finally {
+        setComputerUseSaving(false);
+      }
+    },
+    [chatId, computerUseSaving, isStartingGeneration, qc, streamingText],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
       if (environmentPanel.gitOperationBusy) {
-        throw new Error("Wait for the current Git operation to finish before switching workspaces.");
+        throw new Error(
+          "Wait for the current Git operation to finish before switching workspaces.",
+        );
       }
       if (environmentPanel.editorState.saving) {
         throw new Error("Wait for the open file to finish saving before switching workspaces.");
@@ -371,7 +436,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       selectWorkspace(workspaceId);
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
     },
-    [activeId, chatId, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, isNewChat, qc, selectWorkspace],
+    [
+      activeId,
+      chatId,
+      environmentPanel.editorState.dirty,
+      environmentPanel.editorState.saving,
+      environmentPanel.gitOperationBusy,
+      isNewChat,
+      qc,
+      selectWorkspace,
+    ],
   );
 
   const createScratchWorkspace = React.useCallback(async () => {
@@ -379,13 +453,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (environmentPanel.editorState.dirty)
       throw new Error("Save or discard the open file's edits before creating a scratch workspace.");
     if (environmentPanel.editorState.saving)
-      throw new Error("Wait for the open file to finish saving before creating a scratch workspace.");
+      throw new Error(
+        "Wait for the open file to finish saving before creating a scratch workspace.",
+      );
     if (environmentPanel.gitOperationBusy)
-      throw new Error("Wait for the current Git operation to finish before creating a scratch workspace.");
+      throw new Error(
+        "Wait for the current Git operation to finish before creating a scratch workspace.",
+      );
     const workspace = await workspacesApi.createScratch();
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await moveNewChatToWorkspace(workspace.id);
-  }, [environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, isNewChat, moveNewChatToWorkspace, qc]);
+  }, [
+    environmentPanel.editorState.dirty,
+    environmentPanel.editorState.saving,
+    environmentPanel.gitOperationBusy,
+    isNewChat,
+    moveNewChatToWorkspace,
+    qc,
+  ]);
 
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
@@ -393,7 +478,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (isGenerating || isStartingGeneration)
         throw new Error("Stop the current response before changing Git workspaces.");
       if (environmentPanel.gitOperationBusy)
-        throw new Error("Wait for the current Git operation to finish before changing Git workspaces.");
+        throw new Error(
+          "Wait for the current Git operation to finish before changing Git workspaces.",
+        );
       if (environmentPanel.editorState.saving)
         throw new Error("Wait for the open file to finish saving before changing Git workspaces.");
       if (environmentPanel.editorState.dirty)
@@ -409,7 +496,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
       void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
     },
-    [active, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, isGenerating, isNewChat, isStartingGeneration, moveNewChatToWorkspace, navigate, qc, selectWorkspace],
+    [
+      active,
+      environmentPanel.editorState.dirty,
+      environmentPanel.editorState.saving,
+      environmentPanel.gitOperationBusy,
+      isGenerating,
+      isNewChat,
+      isStartingGeneration,
+      moveNewChatToWorkspace,
+      navigate,
+      qc,
+      selectWorkspace,
+    ],
   );
 
   React.useEffect(() => {
@@ -553,6 +652,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 : "Creates a separate workspace and opens a new chat. This conversation stays here."
             }
             visionSupported={visionSupported}
+            computerUse={
+              computerUseGloballyEnabled
+                ? {
+                    enabled: chatComputerUseEnabled,
+                    ready: computerUseReady,
+                    checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
+                    saving: computerUseSaving,
+                    detail: computerUseStatusDetail,
+                  }
+                : undefined
+            }
+            onChangeComputerUse={changeComputerUse}
             modelPicker={
               <ModelPicker
                 providers={providers.data ?? []}

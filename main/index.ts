@@ -1,4 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, logger, registerNativeHandlers, shell } from "./platform.js";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  logger,
+  registerNativeHandlers,
+  shell,
+} from "./platform.js";
 import { Menu, nativeImage, nativeTheme } from "electron";
 import path from "node:path";
 
@@ -17,15 +25,26 @@ import {
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
 import { configStore } from "./services/config-store.js";
-import { normalizeAppearanceConfig, type DockIconPreference } from "../renderer/shared/appearance.js";
+import {
+  normalizeAppearanceConfig,
+  type DockIconPreference,
+} from "../renderer/shared/appearance.js";
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
+import { computerUseStatus } from "./services/computer-use/status.js";
+import { computerUseSettings } from "./services/computer-use/settings.js";
+import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
-let closeGuard = { dirty: false, gitBusy: false, path: undefined as string | undefined, saving: false };
+let closeGuard = {
+  dirty: false,
+  gitBusy: false,
+  path: undefined as string | undefined,
+  saving: false,
+};
 let protectedAction: "close" | "quit" | "reload" | null = null;
 let forceAppQuit = false;
 let cleanupStarted = false;
@@ -68,10 +87,14 @@ function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload
     message: closeGuard.path
       ? `“${closeGuard.path}” has edits that have not been saved.`
       : "The open file has edits that have not been saved.",
-    detail: action === "close"
-      ? "Closing Aiden will permanently discard those edits."
-      : "Reloading Aiden will permanently discard those edits.",
-    buttons: ["Keep Editing", action === "close" ? "Discard Edits and Close" : "Discard Edits and Reload"],
+    detail:
+      action === "close"
+        ? "Closing Aiden will permanently discard those edits."
+        : "Reloading Aiden will permanently discard those edits.",
+    buttons: [
+      "Keep Editing",
+      action === "close" ? "Discard Edits and Close" : "Discard Edits and Reload",
+    ],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
@@ -84,16 +107,31 @@ function cleanupApplication(): void {
   cleanupStarted = true;
   disposeShortcut();
   disposeFoundationModelsConnection();
+  computerUseStatus.invalidate();
   llmClient.abortAll();
   void mcpManager.closeAll();
 }
 
-async function shutdownAndQuit(): Promise<void> {
+async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  if (!settingsPrepared) {
+    try {
+      await computerUseSettings.shutdown();
+    } catch (error) {
+      shutdownStarted = false;
+      computerUseSettings.resumeAfterCancelledShutdown();
+      logger.error("main", "Computer Use state was not durable; Aiden will stay open.", error);
+      return;
+    }
+  }
   cleanupApplication();
   try {
-    await Promise.all([shutdownProviderAuthFlow(), llmClient.shutdown()]);
+    await Promise.all([
+      shutdownProviderAuthFlow(),
+      computerUseStatus.shutdown(),
+      llmClient.shutdown(),
+    ]);
   } catch (error) {
     logger.error("main", "Application service shutdown did not complete cleanly.", error);
   }
@@ -103,7 +141,7 @@ async function shutdownAndQuit(): Promise<void> {
 
 async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<number | null> {
   try {
-    const latest = await window.webContents.executeJavaScript(
+    const latest = (await window.webContents.executeJavaScript(
       `({
         dirty: document.documentElement.dataset.aidenDirty === "1",
         gitBusy: document.documentElement.dataset.aidenGitBusy === "1",
@@ -111,7 +149,7 @@ async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<num
         saving: document.documentElement.dataset.aidenSaving === "1"
       })`,
       true,
-    ) as { dirty?: unknown; gitBusy?: unknown; revision?: unknown; saving?: unknown };
+    )) as { dirty?: unknown; gitBusy?: unknown; revision?: unknown; saving?: unknown };
     closeGuard = {
       dirty: latest?.dirty === true,
       gitBusy: latest?.gitBusy === true,
@@ -127,7 +165,8 @@ async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<num
       dialog.showMessageBoxSync(window, {
         type: "info",
         title: "Aiden is still checking this window",
-        message: "Aiden could not confirm whether an editor or Git operation is still active. Keep the window open and try again.",
+        message:
+          "Aiden could not confirm whether an editor or Git operation is still active. Keep the window open and try again.",
         buttons: ["Keep Aiden Open"],
         defaultId: 0,
         cancelId: 0,
@@ -140,15 +179,17 @@ async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<num
 
 async function armRendererUnload(window: BrowserWindow, revision: number): Promise<boolean> {
   try {
-    return await window.webContents.executeJavaScript(
-      `(() => {
+    return (
+      (await window.webContents.executeJavaScript(
+        `(() => {
         const root = document.documentElement;
         if (Number(root.dataset.aidenGuardRevision || "0") !== ${revision}) return false;
         root.dataset.aidenApprovedGuardRevision = String(${revision});
         return true;
       })()`,
-      true,
-    ) === true;
+        true,
+      )) === true
+    );
   } catch (error) {
     logger.warn("main", "Could not arm the renderer unload guard", error);
     return false;
@@ -169,7 +210,8 @@ async function authorizeProtectedAction(
     dialog.showMessageBoxSync(window, {
       type: "info",
       title: "Aiden is still updating this window",
-      message: "The editor or Git state changed while Aiden prepared this action. Keep the window open and try again.",
+      message:
+        "The editor or Git state changed while Aiden prepared this action. Keep the window open and try again.",
       buttons: ["Keep Aiden Open"],
       defaultId: 0,
       cancelId: 0,
@@ -183,7 +225,7 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
-    if (!await authorizeProtectedAction(window, "close")) return;
+    if (!(await authorizeProtectedAction(window, "close"))) return;
     protectedAction = "close";
     window.close();
   } finally {
@@ -198,7 +240,7 @@ async function requestWindowReload(
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
-    if (!await authorizeProtectedAction(window, "reload")) return;
+    if (!(await authorizeProtectedAction(window, "reload"))) return;
     closeGuard = { dirty: false, gitBusy: false, path: undefined, saving: false };
     protectedAction = "reload";
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
@@ -212,17 +254,44 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<void> {
   if (lifecycleCheckInFlight || window.isDestroyed()) return;
   lifecycleCheckInFlight = true;
   try {
-    if (!await authorizeProtectedAction(window, "close")) return;
+    if (!(await authorizeProtectedAction(window, "close"))) return;
+    try {
+      await computerUseSettings.shutdown();
+    } catch (error) {
+      computerUseSettings.resumeAfterCancelledShutdown();
+      logger.error("main", "Computer Use state was not durable; quit was cancelled.", error);
+      if (!window.isDestroyed()) {
+        dialog.showMessageBoxSync(window, {
+          type: "error",
+          title: "Aiden couldn't save Computer Use",
+          message: "Aiden will stay open because Computer Use could not be safely turned off.",
+          detail: "Check that the app can write its settings, then try quitting again.",
+          buttons: ["Keep Aiden Open"],
+          defaultId: 0,
+          noLink: true,
+        });
+      }
+      return;
+    }
     protectedAction = "quit";
-    await shutdownAndQuit();
+    if (!(await closeRendererBeforeShutdown(window))) {
+      protectedAction = null;
+      computerUseSettings.resumeAfterCancelledShutdown();
+      return;
+    }
+    await shutdownAndQuit(true);
   } finally {
     lifecycleCheckInFlight = false;
   }
 }
 
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
-  const input = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
+    return false;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   closeGuard = {
     dirty: input.dirty === true,
     gitBusy: input.gitBusy === true,
@@ -234,13 +303,14 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
 
 async function applyDockIconPreference(preference: DockIconPreference): Promise<boolean> {
   if (process.platform !== "darwin" || !app.dock) return false;
-  const iconPath = preference === "monochrome"
-    ? app.isPackaged
-      ? path.join(process.resourcesPath, "app-icon-monochrome.png")
-      : path.join(app.getAppPath(), "resources", "app-icon-monochrome.png")
-    : app.isPackaged
-      ? path.join(process.resourcesPath, "app-icon.png")
-      : path.join(app.getAppPath(), "resources", "app-icon.png");
+  const iconPath =
+    preference === "monochrome"
+      ? app.isPackaged
+        ? path.join(process.resourcesPath, "app-icon-monochrome.png")
+        : path.join(app.getAppPath(), "resources", "app-icon-monochrome.png")
+      : app.isPackaged
+        ? path.join(process.resourcesPath, "app-icon.png")
+        : path.join(app.getAppPath(), "resources", "app-icon.png");
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty()) throw new Error(`Dock icon is unavailable: ${path.basename(iconPath)}`);
   app.dock.setIcon(icon);
@@ -263,7 +333,8 @@ async function restoreDockIconPreference(preference: DockIconPreference): Promis
 }
 
 ipcMain.handle("app:setDockIcon", async (event, value: unknown) => {
-  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
+    return false;
   if (value !== "aiden" && value !== "monochrome") throw new Error("Invalid Dock icon preference.");
   return applyDockIconPreference(value);
 });

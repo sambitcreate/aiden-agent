@@ -1,0 +1,238 @@
+import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, TriangleAlert } from "lucide-react";
+import { Badge, Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
+import { computerUseApi } from "../../lib/ipc";
+import { reduceComputerUseRefreshState } from "../../lib/computer-use-control";
+import { queryKeys, useComputerUseStatus, useSettings } from "../../lib/queries";
+import type { AppSettings, ComputerUseStatus } from "../../lib/types";
+
+function statusPresentation(status: ComputerUseStatus | undefined, failed: boolean) {
+  if (failed) {
+    return { label: "Check failed", color: "red", icon: TriangleAlert, iconClass: "text-red" };
+  }
+  if (!status) {
+    return { label: "Checking…", color: undefined, icon: Loader2, iconClass: "animate-spin" };
+  }
+  if (status.state === "ready") {
+    return { label: "Ready", color: "green", icon: CheckCircle2, iconClass: "text-green" };
+  }
+  if (status.state === "permission_required") {
+    return {
+      label: "Permission needed",
+      color: undefined,
+      icon: ShieldAlert,
+      iconClass: "text-support-warning",
+    };
+  }
+  if (status.state === "disabled") {
+    return { label: "Off", color: undefined, icon: ShieldAlert, iconClass: "text-tertiary" };
+  }
+  return { label: "Unavailable", color: "red", icon: TriangleAlert, iconClass: "text-red" };
+}
+
+export function ComputerUseSettings() {
+  const queryClient = useQueryClient();
+  const statusQuery = useComputerUseStatus();
+  const settingsQuery = useSettings();
+  const [saving, setSaving] = React.useState(false);
+  const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(null);
+  const [requesting, setRequesting] = React.useState(false);
+  const [refreshState, updateRefreshState] = React.useReducer(reduceComputerUseRefreshState, {
+    refreshing: false,
+    error: null,
+  });
+  const { refreshing, error: refreshError } = refreshState;
+  React.useEffect(() => {
+    if (statusQuery.isSuccess && statusQuery.dataUpdatedAt > 0) {
+      updateRefreshState({ type: "succeeded" });
+    }
+  }, [statusQuery.dataUpdatedAt, statusQuery.isSuccess]);
+  const status = statusQuery.data;
+  const persistedEnabled = status
+    ? status.enabled
+    : settingsQuery.data?.computerUseEnabled === true;
+  const enabled = pendingEnabled ?? persistedEnabled;
+  const statusFailed = statusQuery.isError || refreshError !== null;
+  const presentation = refreshing
+    ? { label: "Checking…", color: undefined, icon: Loader2, iconClass: "animate-spin" }
+    : statusPresentation(status, statusFailed);
+  const StatusIcon = presentation.icon;
+
+  const commitStatus = React.useCallback(
+    (next: ComputerUseStatus) => {
+      updateRefreshState({ type: "succeeded" });
+      queryClient.setQueryData(queryKeys.computerUseStatus, next);
+      queryClient.setQueryData<AppSettings | undefined>(queryKeys.settings, (current) =>
+        current ? { ...current, computerUseEnabled: next.enabled } : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+    },
+    [queryClient],
+  );
+
+  const toggle = async (enabled: boolean) => {
+    if (saving) return;
+    setSaving(true);
+    setPendingEnabled(enabled);
+    try {
+      await queryClient.cancelQueries({ queryKey: queryKeys.computerUseStatus });
+      const next = await computerUseApi.setEnabled(enabled);
+      commitStatus(next);
+      if (enabled && next.state !== "ready" && next.state !== "permission_required") {
+        toast.error(next.detail);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't update Computer Use.");
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.computerUseStatus }),
+      ]);
+    } finally {
+      setPendingEnabled(null);
+      setSaving(false);
+    }
+  };
+
+  const refresh = async () => {
+    if (refreshing) return;
+    updateRefreshState({ type: "start" });
+    try {
+      commitStatus(await computerUseApi.status(true));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Couldn't check Computer Use.";
+      updateRefreshState({ type: "failed", error: message });
+      toast.error(message);
+    }
+  };
+
+  const requestPermissions = async () => {
+    if (requesting) return;
+    setRequesting(true);
+    try {
+      const next = await computerUseApi.requestPermissions();
+      commitStatus(next);
+      if (!next.ready) toast.info(next.detail);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't request access.");
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  return (
+    <>
+      <FieldSet
+        title={
+          <span className="inline-flex items-center gap-2">
+            Computer Use <Badge color="blue">Beta</Badge>
+          </span>
+        }
+      >
+        <Field
+          label="Enable Computer Use"
+          description="Makes Aiden's pinned external cua-driver available as an opt-in tool in individual chats."
+        >
+          <div className="flex justify-end">
+            <Switch
+              checked={enabled}
+              onCheckedChange={(checked) => void toggle(checked)}
+              disabled={saving || settingsQuery.isLoading}
+              aria-label="Enable Computer Use beta"
+            />
+            {saving ? (
+              <Text role="status" variant="small" color="secondary" className="ml-2">
+                Saving…
+              </Text>
+            ) : null}
+          </div>
+        </Field>
+        <Field
+          label="Readiness"
+          description="Computer Use needs Accessibility and Screen Recording. Permission belongs to Aiden Computer Use, not the model provider."
+          orientation="vertical"
+        >
+          <Callout
+            aria-live="polite"
+            aria-busy={refreshing}
+            role={statusFailed ? "alert" : undefined}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <StatusIcon className={`mt-0.5 size-4 shrink-0 ${presentation.iconClass}`} />
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Text variant="small-strong">{presentation.label}</Text>
+                    {status?.driverVersion ? (
+                      <Badge>cua-driver {status.driverVersion}</Badge>
+                    ) : null}
+                  </div>
+                  <Text as="p" variant="small" color="secondary" className="mt-1">
+                    {refreshError ??
+                      (statusQuery.isError
+                        ? "Aiden couldn’t check the signed Computer Use helper. Try again."
+                        : (status?.detail ?? "Checking the signed Computer Use helper…"))}
+                  </Text>
+                </div>
+              </div>
+              {enabled || statusQuery.isError ? (
+                <Button
+                  size="small"
+                  variant="transparent"
+                  iconOnly
+                  onClick={() => void refresh()}
+                  disabled={refreshing || statusQuery.isFetching || requesting || saving}
+                  aria-label="Check Computer Use again"
+                  title="Check again"
+                >
+                  <RefreshCw
+                    className={refreshing || statusQuery.isFetching ? "animate-spin" : undefined}
+                  />
+                </Button>
+              ) : null}
+            </div>
+            {status?.canRequestPermissions ? (
+              <div className="mt-3 flex justify-end">
+                <Button
+                  size="small"
+                  onClick={() => void requestPermissions()}
+                  disabled={requesting}
+                >
+                  {requesting ? <Loader2 className="animate-spin" /> : <ShieldAlert />}
+                  {requesting ? "Requesting…" : "Request access"}
+                </Button>
+              </div>
+            ) : null}
+          </Callout>
+        </Field>
+      </FieldSet>
+
+      <FieldSet title="How it behaves">
+        <Field
+          label="Data sent to your model"
+          description="When a chat opts in, read-only screenshots, window details, and accessibility text may be sent to the selected model provider for the current response. Aiden does not save this content to Aiden chat history or application logs; the selected provider handles it under its own data policy."
+        >
+          <Text variant="small" color="secondary">
+            Per opted-in chat
+          </Text>
+        </Field>
+        <Field
+          label="Per-chat activation"
+          description="After the beta is ready, turn Computer Use on only in the conversations that need native app control."
+        >
+          <Text variant="small" color="secondary">
+            Off by default
+          </Text>
+        </Field>
+        <Field
+          label="Approval"
+          description="Read-only captures and window lists do not prompt. Every click, keystroke, scroll, drag, focus change, or value change asks for a fresh Allow once decision."
+        >
+          <Text variant="small" color="secondary">
+            Always ask for input
+          </Text>
+        </Field>
+      </FieldSet>
+    </>
+  );
+}

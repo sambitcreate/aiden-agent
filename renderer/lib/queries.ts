@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import {
   chatsApi,
+  computerUseApi,
   exaApi,
   gitApi,
   localVoiceApi,
@@ -36,6 +37,7 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  computerUseStatus: ["computerUseStatus"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
   usage: (range: UsageDateRange) => ["usage", range] as const,
@@ -253,6 +255,17 @@ export function useChat(id: string | undefined) {
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
+}
+
+export function useComputerUseStatus(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.computerUseStatus,
+    queryFn: () => computerUseApi.status(),
+    enabled,
+    retry: false,
+    staleTime: 5_000,
+    refetchOnWindowFocus: true,
+  });
 }
 
 export function useProfile() {

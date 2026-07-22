@@ -2,12 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "@tanstack/react-router";
-import {
-  Button,
-  ScrollArea,
-  Sidebar,
-  SplitView,
-} from "../components/ui";
+import { Button, ScrollArea, Sidebar, SplitView } from "../components/ui";
 import {
   ChevronLeft,
   Server,
@@ -19,6 +14,7 @@ import {
   Keyboard,
   ListFilter,
   Search,
+  MousePointer2,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -27,8 +23,17 @@ import { McpSettings } from "../components/settings/mcp-settings";
 import { WebSearchSettings } from "../components/settings/web-search-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
+import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 
-type Section = "providers" | "skills" | "mcp" | "websearch" | "voice" | "shortcut" | "appearance";
+type Section =
+  | "providers"
+  | "skills"
+  | "mcp"
+  | "websearch"
+  | "computerUse"
+  | "voice"
+  | "shortcut"
+  | "appearance";
 
 type NavGroup = "Agent" | "App";
 
@@ -41,13 +46,62 @@ type NavItem = {
 };
 
 const NAV: NavItem[] = [
-  { id: "providers", title: "Providers", icon: <Server className="size-5" />, group: "Agent", keywords: "models api keys" },
-  { id: "skills", title: "Skills", icon: <Wand2 className="size-5" />, group: "Agent", keywords: "instructions tools" },
-  { id: "mcp", title: "MCP Servers", icon: <Plug className="size-5" />, group: "Agent", keywords: "connections tools protocol" },
-  { id: "websearch", title: "Web Search", icon: <Globe className="size-5" />, group: "Agent", keywords: "internet search" },
-  { id: "voice", title: "Voice", icon: <Mic className="size-5" />, group: "App", keywords: "microphone audio transcription" },
-  { id: "shortcut", title: "Keyboard shortcuts", icon: <Keyboard className="size-5" />, group: "App", keywords: "hotkey command" },
-  { id: "appearance", title: "Appearance", icon: <Palette className="size-5" />, group: "App", keywords: "theme light dark system" },
+  {
+    id: "providers",
+    title: "Providers",
+    icon: <Server className="size-5" />,
+    group: "Agent",
+    keywords: "models api keys",
+  },
+  {
+    id: "skills",
+    title: "Skills",
+    icon: <Wand2 className="size-5" />,
+    group: "Agent",
+    keywords: "instructions tools",
+  },
+  {
+    id: "mcp",
+    title: "MCP Servers",
+    icon: <Plug className="size-5" />,
+    group: "Agent",
+    keywords: "connections tools protocol",
+  },
+  {
+    id: "websearch",
+    title: "Web Search",
+    icon: <Globe className="size-5" />,
+    group: "Agent",
+    keywords: "internet search",
+  },
+  {
+    id: "computerUse",
+    title: "Computer Use",
+    icon: <MousePointer2 className="size-5" />,
+    group: "Agent",
+    keywords: "desktop native apps accessibility screen recording cua beta",
+  },
+  {
+    id: "voice",
+    title: "Voice",
+    icon: <Mic className="size-5" />,
+    group: "App",
+    keywords: "microphone audio transcription",
+  },
+  {
+    id: "shortcut",
+    title: "Keyboard shortcuts",
+    icon: <Keyboard className="size-5" />,
+    group: "App",
+    keywords: "hotkey command",
+  },
+  {
+    id: "appearance",
+    title: "Appearance",
+    icon: <Palette className="size-5" />,
+    group: "App",
+    keywords: "theme light dark system",
+  },
 ];
 
 const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
@@ -57,6 +111,7 @@ const CONTENT: Record<Section, React.ComponentType> = {
   skills: SkillsSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
+  computerUse: ComputerUseSettings,
   voice: VoiceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
@@ -157,11 +212,10 @@ export function SettingsView() {
         </Sidebar>
       }
     >
-      <ScrollArea
-        className="h-full"
-        title="Settings"
-      >
-        <div className="mx-auto w-full max-w-2xl px-5 py-6"><ActiveSection /></div>
+      <ScrollArea className="h-full" title="Settings">
+        <div className="mx-auto w-full max-w-2xl px-5 py-6">
+          <ActiveSection />
+        </div>
       </ScrollArea>
     </SplitView>
   );
