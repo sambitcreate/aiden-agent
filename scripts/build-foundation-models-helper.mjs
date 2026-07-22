@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findBestFoundationModelsToolchain } from "./apple-developer-tools.mjs";
 
 const required = process.argv.includes("--required");
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -12,7 +13,12 @@ const scratchPath = path.join(projectRoot, "build", "native-swift");
 const moduleCachePath = path.join(projectRoot, "build", "native-module-cache");
 const helperAppName = "Aiden Foundation Models Helper.app";
 const destination = path.join(projectRoot, "build", "native", helperAppName);
-const destinationExecutable = path.join(destination, "Contents", "MacOS", "aiden-foundation-models-helper");
+const destinationExecutable = path.join(
+  destination,
+  "Contents",
+  "MacOS",
+  "aiden-foundation-models-helper",
+);
 const infoPlist = path.join(packagePath, "Info.plist");
 const product = "AidenFoundationModelsHelper";
 
@@ -30,6 +36,28 @@ if (process.platform !== "darwin") {
   fail("The Apple Foundation Models helper can only be built on macOS.");
 }
 
+const selection = findBestFoundationModelsToolchain();
+const explicitFailure = selection.inspected.find(
+  (candidate) => candidate.explicit && !candidate.compatible,
+);
+if (!selection.toolchain) {
+  const detail = explicitFailure
+    ? ` DEVELOPER_DIR was rejected because ${explicitFailure.reason}.`
+    : "";
+  fail(
+    `Could not find a full Xcode installation with a macOS 26+ SDK and FoundationModelsMacros.${detail}`,
+  );
+}
+const toolchain = selection.toolchain;
+if (explicitFailure) {
+  console.warn(
+    `Ignoring incompatible DEVELOPER_DIR ${explicitFailure.developerDir}: ${explicitFailure.reason}.`,
+  );
+}
+console.log(
+  `Apple developer tools: Xcode ${toolchain.xcodeVersion} (${toolchain.buildVersion}), macOS SDK ${toolchain.sdkVersion}, ${toolchain.developerDir}`,
+);
+
 fs.mkdirSync(scratchPath, { recursive: true });
 fs.mkdirSync(moduleCachePath, { recursive: true });
 fs.rmSync(destination, { force: true, recursive: true });
@@ -38,6 +66,7 @@ fs.mkdirSync(path.dirname(destinationExecutable), { recursive: true });
 const helperBuildEnv = {
   ...process.env,
   CLANG_MODULE_CACHE_PATH: moduleCachePath,
+  DEVELOPER_DIR: toolchain.developerDir,
   SWIFT_MODULECACHE_PATH: moduleCachePath,
   MACOSX_DEPLOYMENT_TARGET: "26.0",
 };

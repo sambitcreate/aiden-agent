@@ -104,7 +104,7 @@ Requirements:
 - Node.js 22.19 or newer
 - npm
 - Rust/Cargo (the pinned Computer Use broker is built from the checked-in Rust crate)
-- Xcode 26 or newer when building the Apple Foundation Models helper
+- A full Xcode 26 or newer when building the Apple Foundation Models helper
 - An Apple Development or Developer ID Application signing identity when running `npm run package` or `npm run dist`
 
 Install and launch the Electron app with Vite hot reload:
@@ -113,6 +113,12 @@ Install and launch the Electron app with Vite hot reload:
 npm install
 npm run dev
 ```
+
+The native-helper build checks `DEVELOPER_DIR`, the active `xcode-select` path,
+installed Xcode apps, and Spotlight results. It uses the newest compatible full
+Xcode containing the macOS 26+ Foundation Models SDK and compiler macros without
+changing the machine's global selection. Set `DEVELOPER_DIR` for an explicit
+per-command override.
 
 Verification commands:
 
