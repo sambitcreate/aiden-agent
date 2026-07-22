@@ -1,6 +1,6 @@
-// Model metadata is read exclusively from release assets plus provider metadata
-// captured during explicit local discovery. The running app never contacts a
-// public catalog.
+// Capability metadata comes from the packaged models.dev snapshot plus the
+// user's device-local Artificial Analysis cache. Reading model info never
+// performs a network request; only explicit connect/refresh actions update it.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -8,8 +8,10 @@ import { app, logger } from "../platform.js";
 import {
   EMPTY_ARTIFICIAL_ANALYSIS_SNAPSHOT,
   parseArtificialAnalysisSnapshot,
+  type ArtificialAnalysisCatalog,
   type ArtificialAnalysisSnapshot,
 } from "./artificial-analysis-catalog-core.js";
+import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
 import {
   parseModelCatalog,
   resolveModelInfo,
@@ -21,12 +23,8 @@ import type { ModelInfo } from "./types.js";
 const BUNDLED_MODELS_DEV_PARTS = ["resources", "model-capabilities.json"] as const;
 const BUNDLED_ARTIFICIAL_ANALYSIS_PARTS = ["resources", "artificial-analysis-models.json"] as const;
 
-interface CatalogSnapshots {
-  modelsDev: ModelCatalog;
-  artificialAnalysis: ArtificialAnalysisSnapshot;
-}
-
-let snapshots: Promise<CatalogSnapshots> | null = null;
+let modelsDevSnapshot: Promise<ModelCatalog> | null = null;
+let bundledArtificialAnalysisSnapshot: Promise<ArtificialAnalysisSnapshot> | null = null;
 
 function bundledPath(parts: readonly string[]): string {
   return join(app.getAppPath(), ...parts);
@@ -45,7 +43,7 @@ async function loadModelsDev(): Promise<ModelCatalog> {
   }
 }
 
-async function loadArtificialAnalysis(): Promise<ArtificialAnalysisSnapshot> {
+async function loadBundledArtificialAnalysis(): Promise<ArtificialAnalysisSnapshot> {
   const path = bundledPath(BUNDLED_ARTIFICIAL_ANALYSIS_PARTS);
   try {
     return parseArtificialAnalysisSnapshot(JSON.parse(await readFile(path, "utf8")));
@@ -58,18 +56,36 @@ async function loadArtificialAnalysis(): Promise<ArtificialAnalysisSnapshot> {
   }
 }
 
-function getSnapshots(): Promise<CatalogSnapshots> {
-  snapshots ??= Promise.all([loadModelsDev(), loadArtificialAnalysis()]).then(
-    ([modelsDev, artificialAnalysis]) => ({ modelsDev, artificialAnalysis }),
-  );
-  return snapshots;
+function getBundledArtificialAnalysis(): Promise<ArtificialAnalysisSnapshot> {
+  bundledArtificialAnalysisSnapshot ??= loadBundledArtificialAnalysis();
+  return bundledArtificialAnalysisSnapshot;
+}
+
+async function loadArtificialAnalysis(): Promise<ArtificialAnalysisCatalog> {
+  try {
+    const local = await artificialAnalysisRuntime.catalog();
+    if (local) return local;
+  } catch (error) {
+    logger.warn("models-catalog", "Could not read the device-local Artificial Analysis cache.", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return getBundledArtificialAnalysis();
+}
+
+function getModelsDev(): Promise<ModelCatalog> {
+  modelsDevSnapshot ??= loadModelsDev();
+  return modelsDevSnapshot;
 }
 
 export const modelsCatalog = {
   /** Capability info for one model. */
   async info(provider: ModelCatalogProvider, modelId: string): Promise<ModelInfo> {
-    const loaded = await getSnapshots();
-    return resolveModelInfo(loaded.modelsDev, loaded.artificialAnalysis, provider, modelId);
+    const [modelsDev, artificialAnalysis] = await Promise.all([
+      getModelsDev(),
+      loadArtificialAnalysis(),
+    ]);
+    return resolveModelInfo(modelsDev, artificialAnalysis, provider, modelId);
   },
 
   /** Capability info for many models under one provider. */
@@ -77,12 +93,12 @@ export const modelsCatalog = {
     provider: ModelCatalogProvider,
     modelIds: string[],
   ): Promise<Record<string, ModelInfo>> {
-    const loaded = await getSnapshots();
+    const [modelsDev, artificialAnalysis] = await Promise.all([
+      getModelsDev(),
+      loadArtificialAnalysis(),
+    ]);
     return Object.fromEntries(
-      modelIds.map((id) => [
-        id,
-        resolveModelInfo(loaded.modelsDev, loaded.artificialAnalysis, provider, id),
-      ]),
+      modelIds.map((id) => [id, resolveModelInfo(modelsDev, artificialAnalysis, provider, id)]),
     );
   },
 };

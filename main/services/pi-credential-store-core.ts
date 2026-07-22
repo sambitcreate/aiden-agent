@@ -26,6 +26,18 @@ interface EncryptedPiCredentialStoreOptions {
   cipher: CredentialCipher;
   /** Optional diagnostics hook used to make lock-order tests deterministic. */
   onLockQueued?(scope: string): void;
+  /** A committed write stays successful when directory fsync is unsupported. */
+  onDurabilityWarning?(error: Error): void;
+  syncDirectory?(directory: string): Promise<void>;
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await fs.open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 class AsyncMutex {
@@ -158,21 +170,26 @@ export class EncryptedPiCredentialStore implements CredentialStore {
     try {
       handle = await fs.open(temporary, "wx", 0o600);
       await handle.writeFile(JSON.stringify(document, null, 2), "utf8");
+      await handle.chmod(0o600);
       await handle.sync();
       await handle.close();
       handle = undefined;
       await fs.rename(temporary, destination);
-      await fs.chmod(destination, 0o600);
-      const directoryHandle = await fs.open(directory, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
     } catch (error) {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
       throw error;
+    }
+    try {
+      await (this.options.syncDirectory ?? syncDirectory)(directory);
+    } catch (error) {
+      try {
+        this.options.onDurabilityWarning?.(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      } catch {
+        // The file is already committed. Diagnostics must not turn success into failure.
+      }
     }
   }
 

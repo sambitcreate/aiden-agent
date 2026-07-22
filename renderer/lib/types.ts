@@ -396,6 +396,34 @@ export interface ModelInfo {
   matched: boolean;
 }
 
+export type ArtificialAnalysisTier = "free" | "pro" | "commercial";
+
+export interface ArtificialAnalysisStatus {
+  state: "not_connected" | "connected" | "ready";
+  hasKey: boolean;
+  ready: boolean;
+  cachedModelCount: number;
+  rankedModelCount: number;
+  fetchedAt?: string;
+  tier?: ArtificialAnalysisTier;
+  intelligenceIndexVersion?: number;
+}
+
+export type ArtificialAnalysisActionErrorCode =
+  | "invalid_key"
+  | "access_denied"
+  | "rate_limited"
+  | "service_unavailable"
+  | "network_error"
+  | "invalid_response"
+  | "invalid_input"
+  | "not_connected"
+  | "local_error";
+
+export type ArtificialAnalysisActionResult =
+  | { ok: true; status: ArtificialAnalysisStatus }
+  | { ok: false; code: ArtificialAnalysisActionErrorCode; message: string };
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;

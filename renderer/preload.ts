@@ -12,6 +12,7 @@ type NotificationHandler = (payload: unknown) => void;
 
 const INVOKE_PREFIXES = [
   "app:",
+  "artificialAnalysis:",
   "attachments:",
   "chat:",
   "chats:",

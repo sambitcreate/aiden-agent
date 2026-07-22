@@ -17,6 +17,7 @@ import { registerTitleProviderHandlers } from "./title-providers.js";
 import { registerUsageHandlers } from "./usage.js";
 import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
+import { registerArtificialAnalysisHandlers } from "./artificial-analysis.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -41,6 +42,7 @@ export function registerHandlers(): void {
   registerUsageHandlers();
   registerProfileHandlers();
   registerComputerUseHandlers();
+  registerArtificialAnalysisHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

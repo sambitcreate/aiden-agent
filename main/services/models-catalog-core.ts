@@ -1,7 +1,7 @@
 import {
   artificialAnalysisRanking,
   findArtificialAnalysisModel,
-  type ArtificialAnalysisSnapshot,
+  type ArtificialAnalysisCatalog,
 } from "./artificial-analysis-catalog-core.js";
 import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 
@@ -38,6 +38,7 @@ export function parseModelCatalog(value: unknown): ModelCatalog {
 
 const PROVIDER_SLUG: Record<string, string> = {
   openai: "openai",
+  "openai-codex": "openai",
   anthropic: "anthropic",
   gemini: "google",
   deepseek: "deepseek",
@@ -46,6 +47,7 @@ const PROVIDER_SLUG: Record<string, string> = {
 
 const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
   openai: "OpenAI",
+  "openai-codex": "OpenAI",
   anthropic: "Anthropic",
   gemini: "Google",
   deepseek: "DeepSeek",
@@ -160,7 +162,7 @@ function localInfo(
 }
 
 function hostedInfo(
-  snapshot: ArtificialAnalysisSnapshot,
+  snapshot: ArtificialAnalysisCatalog,
   provider: ModelCatalogProvider,
   modelId: string,
   fallback: ModelInfo,
@@ -196,7 +198,7 @@ function hostedInfo(
 /** Apply local > Artificial Analysis > models.dev precedence for one model. */
 export function resolveModelInfo(
   catalog: ModelCatalog,
-  artificialAnalysis: ArtificialAnalysisSnapshot,
+  artificialAnalysis: ArtificialAnalysisCatalog,
   provider: ModelCatalogProvider,
   modelId: string,
 ): ModelInfo {

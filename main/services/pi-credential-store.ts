@@ -1,5 +1,5 @@
 import * as path from "path";
-import { app, safeStorage } from "../platform.js";
+import { app, logger, safeStorage } from "../platform.js";
 import { EncryptedPiCredentialStore } from "./pi-credential-store-core.js";
 
 const FILE = "pi-provider-credentials.json";
@@ -11,5 +11,10 @@ export const piCredentialStore = new EncryptedPiCredentialStore({
     isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
     encryptString: (value) => safeStorage.encryptString(value),
     decryptString: (value) => safeStorage.decryptString(value),
+  },
+  onDurabilityWarning: (error) => {
+    logger.warn("pi-credential-store", "Credentials were saved without a directory sync.", {
+      error: error.message,
+    });
   },
 });

@@ -31,7 +31,11 @@ function cipher(overrides: Partial<CredentialCipher> = {}): CredentialCipher {
 
 async function fixture(
   overrides: Partial<CredentialCipher> = {},
-  storeOptions: { onLockQueued?: (scope: string) => void } = {},
+  storeOptions: {
+    onLockQueued?: (scope: string) => void;
+    onDurabilityWarning?: (error: Error) => void;
+    syncDirectory?: (directory: string) => Promise<void>;
+  } = {},
 ) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-pi-credentials-"));
   temporaryDirectories.push(directory);
@@ -68,6 +72,39 @@ test("stores full credentials encrypted and lists metadata only", async () => {
   const raw = await fs.readFile(file, "utf8");
   assert.doesNotMatch(raw, /access-secret|refresh-access-secret|account-test/);
   assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+});
+
+test("a post-commit directory sync failure warns without rejecting the committed credential", async () => {
+  const warnings: Error[] = [];
+  const { store } = await fixture(
+    {},
+    {
+      syncDirectory: async () => {
+        throw new Error("directory sync unsupported");
+      },
+      onDurabilityWarning: (error) => warnings.push(error),
+    },
+  );
+  await store.modify("artificial-analysis", async () => ({ type: "api_key", key: "secret" }));
+  assert.deepEqual(await store.read("artificial-analysis"), { type: "api_key", key: "secret" });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message, /unsupported/u);
+});
+
+test("a throwing durability reporter cannot turn a committed credential write into a failure", async () => {
+  const { store } = await fixture(
+    {},
+    {
+      syncDirectory: async () => {
+        throw new Error("directory sync unsupported");
+      },
+      onDurabilityWarning: () => {
+        throw new Error("diagnostic failure");
+      },
+    },
+  );
+  await store.modify("artificial-analysis", async () => ({ type: "api_key", key: "secret" }));
+  assert.deepEqual(await store.read("artificial-analysis"), { type: "api_key", key: "secret" });
 });
 
 test("serializes same-provider refreshes and preserves rotated credentials", async () => {

@@ -1,5 +1,7 @@
 import type { ModelRanking } from "./types.js";
 
+export const MAX_ARTIFICIAL_ANALYSIS_MODELS = 10_000;
+
 export interface ArtificialAnalysisSnapshotSource {
   name: "Artificial Analysis";
   url: string;
@@ -8,6 +10,17 @@ export interface ArtificialAnalysisSnapshotSource {
   intelligence_index_version: number | null;
   prompt_type: string;
   redistribution_confirmed: boolean;
+}
+
+export interface ArtificialAnalysisCatalog {
+  schema_version: 1;
+  source: {
+    name: "Artificial Analysis";
+    url: string;
+    fetched_at: string | null;
+    intelligence_index_version: number | null;
+  };
+  models: ArtificialAnalysisSnapshotModel[];
 }
 
 export interface ArtificialAnalysisSnapshotModel {
@@ -37,10 +50,24 @@ export interface ArtificialAnalysisSnapshotModel {
   };
 }
 
-export interface ArtificialAnalysisSnapshot {
-  schema_version: 1;
+export interface ArtificialAnalysisSnapshot extends ArtificialAnalysisCatalog {
   source: ArtificialAnalysisSnapshotSource;
-  models: ArtificialAnalysisSnapshotModel[];
+}
+
+export type ArtificialAnalysisTier = "free" | "pro" | "commercial";
+
+export interface ArtificialAnalysisUserCacheSource {
+  name: "Artificial Analysis";
+  url: "https://artificialanalysis.ai/data-api";
+  endpoint: "https://artificialanalysis.ai/api/v2/language/models/free";
+  generation: string;
+  fetched_at: string;
+  tier: ArtificialAnalysisTier;
+  intelligence_index_version: number;
+}
+
+export interface ArtificialAnalysisUserCache extends ArtificialAnalysisCatalog {
+  source: ArtificialAnalysisUserCacheSource;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -238,6 +265,72 @@ export function parseArtificialAnalysisSnapshot(value: unknown): ArtificialAnaly
   };
 }
 
+/** Validate the normalized device-local cache created from a user's own API request. */
+export function parseArtificialAnalysisUserCache(value: unknown): ArtificialAnalysisUserCache {
+  const cache = record(value);
+  if (!cache || cache.schema_version !== 1) {
+    throw new Error("Artificial Analysis user cache must use schema version 1.");
+  }
+  const rawSource = record(cache.source);
+  if (!rawSource || rawSource.name !== "Artificial Analysis") {
+    throw new Error("Artificial Analysis user cache has an invalid source.");
+  }
+  if (
+    rawSource.url !== "https://artificialanalysis.ai/data-api" ||
+    rawSource.endpoint !== "https://artificialanalysis.ai/api/v2/language/models/free"
+  ) {
+    throw new Error("Artificial Analysis user cache has an unexpected endpoint.");
+  }
+  if (
+    typeof rawSource.generation !== "string" ||
+    !/^[a-z0-9][a-z0-9-]{7,127}$/iu.test(rawSource.generation)
+  ) {
+    throw new Error("Artificial Analysis user cache has an invalid generation.");
+  }
+  if (
+    typeof rawSource.fetched_at !== "string" ||
+    !Number.isFinite(Date.parse(rawSource.fetched_at))
+  ) {
+    throw new Error("Artificial Analysis user cache fetched_at must be an ISO timestamp.");
+  }
+  if (rawSource.tier !== "free" && rawSource.tier !== "pro" && rawSource.tier !== "commercial") {
+    throw new Error("Artificial Analysis user cache has an invalid tier.");
+  }
+  if (
+    typeof rawSource.intelligence_index_version !== "number" ||
+    !Number.isFinite(rawSource.intelligence_index_version)
+  ) {
+    throw new Error("Artificial Analysis user cache has an invalid index version.");
+  }
+  if (
+    !Array.isArray(cache.models) ||
+    cache.models.length === 0 ||
+    cache.models.length > MAX_ARTIFICIAL_ANALYSIS_MODELS
+  ) {
+    throw new Error("Artificial Analysis user cache must contain models.");
+  }
+  const models = cache.models.map(parseModel);
+  if (new Set(models.map((model) => model.id)).size !== models.length) {
+    throw new Error("Artificial Analysis user cache contains duplicate model identifiers.");
+  }
+  if (!models.some((model) => model.ranking)) {
+    throw new Error("Artificial Analysis user cache contains no usable benchmark rankings.");
+  }
+  return {
+    schema_version: 1,
+    source: {
+      name: "Artificial Analysis",
+      url: "https://artificialanalysis.ai/data-api",
+      endpoint: "https://artificialanalysis.ai/api/v2/language/models/free",
+      generation: rawSource.generation,
+      fetched_at: rawSource.fetched_at,
+      tier: rawSource.tier,
+      intelligence_index_version: rawSource.intelligence_index_version,
+    },
+    models,
+  };
+}
+
 function identity(value: string): string {
   return value
     .toLocaleLowerCase()
@@ -272,7 +365,7 @@ function creatorMatches(model: ArtificialAnalysisSnapshotModel, creatorHint?: st
  * the creator matches and exactly one snapshot row qualifies.
  */
 export function findArtificialAnalysisModel(
-  snapshot: ArtificialAnalysisSnapshot,
+  snapshot: ArtificialAnalysisCatalog,
   modelId: string,
   creatorHint?: string,
   canonicalName?: string,
@@ -294,7 +387,7 @@ export function findArtificialAnalysisModel(
 }
 
 export function artificialAnalysisRanking(
-  snapshot: ArtificialAnalysisSnapshot,
+  snapshot: ArtificialAnalysisCatalog,
   model: ArtificialAnalysisSnapshotModel,
 ): ModelRanking | undefined {
   if (!model.ranking) return undefined;

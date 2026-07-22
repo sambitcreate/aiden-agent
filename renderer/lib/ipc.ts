@@ -2,6 +2,8 @@
 
 import type {
   AppSettings,
+  ArtificialAnalysisActionResult,
+  ArtificialAnalysisStatus,
   ApprovalDecision,
   Attachment,
   Chat,
@@ -118,6 +120,14 @@ export const providersApi = {
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
   set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+};
+
+export const artificialAnalysisApi = {
+  status: () => invoke<ArtificialAnalysisStatus>("artificialAnalysis:status"),
+  connect: (apiKey: string) =>
+    invoke<ArtificialAnalysisActionResult>("artificialAnalysis:connect", apiKey),
+  refresh: () => invoke<ArtificialAnalysisActionResult>("artificialAnalysis:refresh"),
+  disconnect: () => invoke<ArtificialAnalysisActionResult>("artificialAnalysis:disconnect"),
 };
 
 export const computerUseApi = {
