@@ -4,6 +4,10 @@ import { CheckCircle2, Loader2, RefreshCw, ShieldAlert, TriangleAlert } from "lu
 import { Badge, Button, Callout, Field, FieldSet, Switch, Text, toast } from "../ui";
 import { computerUseApi } from "../../lib/ipc";
 import { reduceComputerUseRefreshState } from "../../lib/computer-use-control";
+import {
+  restoreComputerUseNotice,
+  useComputerUseNoticeDismissed,
+} from "../../lib/computer-use-notice";
 import { queryKeys, useComputerUseStatus, useSettings } from "../../lib/queries";
 import type { AppSettings, ComputerUseStatus } from "../../lib/types";
 
@@ -38,6 +42,7 @@ export function ComputerUseSettings() {
   const [saving, setSaving] = React.useState(false);
   const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(null);
   const [requesting, setRequesting] = React.useState(false);
+  const computerUseNoticeDismissed = useComputerUseNoticeDismissed();
   const [refreshState, updateRefreshState] = React.useReducer(reduceComputerUseRefreshState, {
     refreshing: false,
     error: null,
@@ -215,9 +220,21 @@ export function ComputerUseSettings() {
             content; your provider handles it under its data policy. Read-only inspection runs
             without prompts, while every control action requires Allow once.
           </Text>
-          <div className="flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
-            <Badge className="whitespace-nowrap">Per-chat opt-in</Badge>
-            <Badge className="whitespace-nowrap">Actions ask first</Badge>
+          <div className="flex min-w-0 flex-col items-end gap-2 max-[640px]:items-start">
+            <div className="flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
+              <Badge className="whitespace-nowrap">Per-chat opt-in</Badge>
+              <Badge className="whitespace-nowrap">Actions ask first</Badge>
+            </div>
+            {computerUseNoticeDismissed ? (
+              <Button
+                size="small"
+                variant="transparent"
+                className="h-7 px-2 text-secondary"
+                onClick={restoreComputerUseNotice}
+              >
+                Show privacy notice again
+              </Button>
+            ) : null}
           </div>
         </div>
       </FieldSet>

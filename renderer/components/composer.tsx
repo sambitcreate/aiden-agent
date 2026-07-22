@@ -11,6 +11,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -21,6 +22,7 @@ import {
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
+  ChevronDown,
   FileText,
   Folder,
   Loader2,
@@ -41,6 +43,11 @@ import { attachmentsApi, onNotification, pickFiles } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
 import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
+import {
+  dismissComputerUseNotice,
+  shouldShowComputerUseNotice,
+  useComputerUseNoticeDismissed,
+} from "../lib/computer-use-notice";
 import { composerPlaceholder } from "../lib/composer-placeholder";
 
 interface ComposerProps {
@@ -154,6 +161,11 @@ export function Composer({
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
   const computerUseDescriptionId = React.useId();
+  const computerUseNoticeDismissed = useComputerUseNoticeDismissed();
+  const showComputerUseNotice = shouldShowComputerUseNotice(
+    computerUse?.enabled === true,
+    computerUseNoticeDismissed,
+  );
   const submissionAllowed = composerSubmissionAllowed({
     ready,
     isGenerating,
@@ -306,6 +318,46 @@ export function Composer({
     <>
       <div className="pointer-events-none mx-auto w-full max-w-3xl px-3 pb-4 pt-3 sm:px-5 sm:pb-5">
         <div className="pointer-events-auto">
+          {computerUse ? (
+            <span id={computerUseDescriptionId} className="sr-only">
+              Computer Use may send screenshots and accessibility text to the selected model. Every
+              input action asks for approval.
+            </span>
+          ) : null}
+          {showComputerUseNotice ? (
+            <aside
+              aria-label="Computer Use privacy notice"
+              className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
+            >
+              <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+              <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
+                <span className="font-medium text-primary">Computer Use is on.</span> Screen details
+                may go to your model; actions still ask.
+              </Text>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="transparent"
+                    size="small"
+                    className="h-6 shrink-0 gap-1 px-1.5 text-secondary"
+                    aria-label="Hide Computer Use privacy notice"
+                  >
+                    Hide
+                    <ChevronDown aria-hidden="true" className="size-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("session")}>
+                    Hide for this session
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("permanent")}>
+                    Don’t show again
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </aside>
+          ) : null}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
           <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
@@ -416,20 +468,6 @@ export function Composer({
             {!ready && readinessMessage ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
-              </Text>
-            ) : null}
-            {computerUse ? (
-              <Text
-                id={computerUseDescriptionId}
-                as="p"
-                variant="small"
-                color="tertiary"
-                className="px-1.5 pb-1"
-              >
-                Read-only captures and accessibility text may go to the selected model for this
-                response. Aiden does not save them to Aiden chat history or application logs; the
-                selected provider handles them under its own data policy. Input actions still ask
-                first.
               </Text>
             ) : null}
             <div className="mt-1.5 flex min-w-0 items-center justify-between gap-1.5">
