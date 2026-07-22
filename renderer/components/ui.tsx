@@ -626,7 +626,7 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
   const resolvedToolbar = toolbar ?? (title || leading || actions ? (
     <header
       data-toolbar
-      className="drag-region flex min-h-13 items-center gap-3 px-4"
+      className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4"
       style={{ paddingLeft: split?.collapsed ? 142 : undefined }}
     >
       <div className="no-drag flex shrink-0 items-center">{leading}</div>
@@ -636,13 +636,13 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
   ) : null);
 
   return (
-    <div className={cn("relative h-full min-h-0 overflow-hidden bg-background", className)}>
-      {resolvedToolbar ? <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-10">{resolvedToolbar}</div> : null}
+    <div className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}>
+      {resolvedToolbar ? <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">{resolvedToolbar}</div> : null}
       <div
         ref={viewport}
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
-        className="scroll-edge-mask h-full w-full overflow-y-auto overscroll-contain"
+        className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
         style={{ paddingTop: toolbarHeight, paddingBottom: footerHeight }}
         onScroll={(event) => {
           updateScrollEdges(event.currentTarget);
