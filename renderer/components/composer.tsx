@@ -41,12 +41,17 @@ import { attachmentsApi, onNotification, pickFiles } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
 import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
+import { composerPlaceholder } from "../lib/composer-placeholder";
 
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
   /** Actionable explanation for a disabled send state. */
   readinessMessage?: string;
+  /** True once this chat has a persisted message. */
+  hasMessages: boolean;
+  /** Stable identifier used to select an empty-chat prompt. */
+  chatId: string;
   onSend: (text: string, attachments: Attachment[]) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
@@ -115,6 +120,8 @@ const PERMISSION_META: Record<
 export function Composer({
   ready,
   readinessMessage,
+  hasMessages,
+  chatId,
   onSend,
   onStop,
   isGenerating,
@@ -402,9 +409,7 @@ export function Composer({
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={
-                ready ? "Do anything" : (readinessMessage ?? "Choose a chat model to start")
-              }
+              placeholder={composerPlaceholder({ ready, readinessMessage, hasMessages, chatId })}
               className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
               rows={1}
             />

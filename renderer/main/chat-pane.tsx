@@ -174,8 +174,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId]);
 
   const messages = chat.data?.messages ?? [];
+  const hasMessages = messages.length > 0;
   const isGenerating = streamingText !== null;
-  const isNewChat = !chat.isLoading && messages.length === 0 && !isGenerating;
+  const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
 
   React.useLayoutEffect(() => {
     environmentPanel.setAgentBusy(isGenerating || isStartingGeneration);
@@ -616,6 +617,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <Composer
             ready={ready}
             readinessMessage={readinessMessage}
+            hasMessages={hasMessages}
+            chatId={chatId}
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={isGenerating}
