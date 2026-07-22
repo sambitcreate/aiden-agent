@@ -1,5 +1,11 @@
 # Project History
 
+### 2026-07-22 — Repair theme safety and composer context layering
+
+- Corrected the Slate light accent so every built-in light/dark preset passes the same canvas-and-raised contrast checks enforced by the Appearance UI. Named presets now normalize back to their current canonical palette, migrating stale cached Aiden colors without changing explicit custom themes.
+- Replaced the composer context strip's compounded low-alpha control fill with a dedicated semantic surface derived from each theme's darker sidebar layer at exactly 80% opacity plus restrained backdrop blur, preserving the recessed visual register while preventing conversation text from reading through it.
+- Added preset-migration, runtime-safety, and light/dark context-token regressions. Strengthened `AGENTS.md` so every new or materially restyled UI element must consult both UI reference documents and reuse the shared semantic design tokens.
+
 ### 2026-07-22 — Refresh composer prompt state
 
 - Replaced the fixed empty-chat `Do anything` placeholder with ten approved task-starter prompts, selected deterministically from the chat ID so the copy remains stable while a chat is open.

@@ -103,7 +103,7 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
       raised: "#FFFFFF",
       foreground: "#1A2330",
       secondary: "#637083",
-      accent: "#087F8C",
+      accent: "#087A86",
       success: "#2DB67D",
       warning: "#E0A72E",
       danger: "#E24D5B",
@@ -265,6 +265,17 @@ function normalizeVariant(value: unknown, fallback: ThemeVariantConfig): ThemeVa
   };
 }
 
+function normalizeStoredVariant(
+  value: unknown,
+  fallback: ThemeVariantConfig,
+  scheme: AppearanceScheme,
+): ThemeVariantConfig {
+  if (isRecord(value) && isThemePresetId(value.preset)) {
+    return getPresetVariant(value.preset, scheme);
+  }
+  return normalizeVariant(value, fallback);
+}
+
 export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
   const fallback = createDefaultAppearanceConfig();
   if (!isRecord(value)) return fallback;
@@ -273,8 +284,8 @@ export function normalizeAppearanceConfig(value: unknown): AppearanceConfig {
     mode: value.mode === "light" || value.mode === "dark" || value.mode === "system"
       ? value.mode
       : fallback.mode,
-    light: normalizeVariant(value.light, fallback.light),
-    dark: normalizeVariant(value.dark, fallback.dark),
+    light: normalizeStoredVariant(value.light, fallback.light, "light"),
+    dark: normalizeStoredVariant(value.dark, fallback.dark, "dark"),
     pointerCursors: typeof value.pointerCursors === "boolean"
       ? value.pointerCursors
       : fallback.pointerCursors,
@@ -521,6 +532,7 @@ export function resolveThemeTokens(
     "--surface-background": alphaHex(background, 0.94),
     "--surface-sidebar": alphaHex(sidebar, variant.translucentSidebar ? 0.78 : 1),
     "--surface-popover": raised,
+    "--surface-context-bar": alphaHex(sidebar, 0.8),
     "--surface-control": alphaHex(foreground, controlAlpha),
     "--surface-control-hover": alphaHex(foreground, controlAlpha + 0.045),
     "--surface-control-active": alphaHex(foreground, controlAlpha + 0.1),

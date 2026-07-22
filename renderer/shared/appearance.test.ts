@@ -21,8 +21,35 @@ test("the built-in theme pairs remain readable and avoid black dark canvases", (
     assert.notEqual(preset.dark.raised, "#000000");
     assert.ok(colorContrastRatio(preset.light.accent, preset.light.raised) >= 4.5, `${preset.label} light accent contrast`);
     assert.ok(colorContrastRatio(preset.dark.accent, preset.dark.raised) >= 4.5, `${preset.label} dark accent contrast`);
+    assert.deepEqual(themeVariantSafetyIssues(getPresetVariant(preset.id, "light"), "light"), []);
+    assert.deepEqual(themeVariantSafetyIssues(getPresetVariant(preset.id, "dark"), "dark"), []);
   }
   assert.equal(THEME_PRESETS[0].dark.canvas, "#181B21");
+});
+
+test("appearance normalization refreshes named presets without overwriting custom themes", () => {
+  const stale = createDefaultAppearanceConfig();
+  stale.light = {
+    ...getPresetVariant("slate", "light"),
+    accent: "#087F8C",
+  };
+  stale.dark = {
+    ...getPresetVariant("aiden", "dark"),
+    accent: "#0A84FF",
+    background: "#0E1116",
+  };
+
+  const normalized = normalizeAppearanceConfig(stale);
+  assert.deepEqual(normalized.light, getPresetVariant("slate", "light"));
+  assert.deepEqual(normalized.dark, getPresetVariant("aiden", "dark"));
+
+  const custom = {
+    ...getPresetVariant("aiden", "dark"),
+    preset: "custom" as const,
+    accent: "#A18FFF",
+    background: "#20242C",
+  };
+  assert.deepEqual(normalizeAppearanceConfig({ dark: custom }).dark, custom);
 });
 
 test("appearance normalization safely clamps user-controlled values", () => {
@@ -54,6 +81,7 @@ test("strict appearance parsing rejects incomplete and unsafe IPC payloads", () 
   const wrongToggle = { ...createDefaultAppearanceConfig(), pointerCursors: "yes" };
   assert.throws(() => parseAppearanceConfig(wrongToggle), /boolean/i);
   const unreadable = createDefaultAppearanceConfig();
+  unreadable.light.preset = "custom";
   unreadable.light.foreground = unreadable.light.background;
   assert.throws(() => parseAppearanceConfig(unreadable), /4\.5:1 contrast/i);
 });
@@ -99,7 +127,16 @@ test("resolved dark tokens use the selected graphite canvas and accent", () => {
   assert.equal(tokens["--accent"], "#7C5CFC");
   assert.ok(colorContrastRatio(tokens["--accent"], tokens["--accent-foreground"]) >= 4.5);
   assert.match(tokens["--surface-background"], /^rgb\(32 36 44/);
+  assert.equal(tokens["--surface-context-bar"], "rgb(42 46 54 / 0.800)");
   assert.notEqual(tokens["--surface-popover"], "#000000");
+});
+
+test("composer context surfaces keep the darker theme tint at eighty percent opacity", () => {
+  const light = resolveThemeTokens(getPresetVariant("slate", "light"), "light");
+  const dark = resolveThemeTokens(getPresetVariant("aiden", "dark"), "dark");
+
+  assert.equal(light["--surface-context-bar"], "rgb(230 235 242 / 0.800)");
+  assert.equal(dark["--surface-context-bar"], "rgb(32 36 44 / 0.800)");
 });
 
 test("unsafe custom theme drafts report recovery guidance", () => {

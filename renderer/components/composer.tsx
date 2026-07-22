@@ -359,7 +359,7 @@ export function Composer({
             </aside>
           ) : null}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
-          <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-control/60 px-1.5 pb-2 pt-1">
+          <div className="mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
             {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
               <WorkspacePicker
                 workspaces={workspaces}

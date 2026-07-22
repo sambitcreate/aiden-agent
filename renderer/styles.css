@@ -8,6 +8,7 @@
   --color-background: var(--surface-background);
   --color-sidebar: var(--surface-sidebar);
   --color-popover: var(--surface-popover);
+  --color-context-bar: var(--surface-context-bar);
   --color-control: var(--surface-control);
   --color-control-hover: var(--surface-control-hover);
   --color-control-active: var(--surface-control-active);
@@ -73,6 +74,7 @@
   --surface-background: rgb(246 247 249 / 0.94);
   --surface-sidebar: rgb(238 240 243 / 0.78);
   --surface-popover: #ffffff;
+  --surface-context-bar: rgb(238 240 243 / 0.8);
   --surface-control: rgb(28 30 33 / 0.084);
   --surface-control-hover: rgb(28 30 33 / 0.129);
   --surface-control-active: rgb(28 30 33 / 0.184);
@@ -118,6 +120,7 @@
   --surface-background: rgb(24 27 33 / 0.94);
   --surface-sidebar: rgb(32 36 44 / 0.78);
   --surface-popover: #292e37;
+  --surface-context-bar: rgb(32 36 44 / 0.8);
   --surface-control: rgb(230 233 238 / 0.094);
   --surface-control-hover: rgb(230 233 238 / 0.139);
   --surface-control-active: rgb(230 233 238 / 0.194);
