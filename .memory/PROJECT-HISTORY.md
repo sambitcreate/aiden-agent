@@ -1,5 +1,11 @@
 # Project History
 
+### 2026-07-22 — Refresh composer prompt state
+
+- Replaced the fixed empty-chat `Do anything` placeholder with ten approved task-starter prompts, selected deterministically from the chat ID so the copy remains stable while a chat is open.
+- Once a chat has a persisted message, the composer now says `Follow up`; unavailable-model and setup guidance retains priority over conversational placeholder copy.
+- Added pure placeholder-policy regression coverage, registered it with the standard test suite, and updated the companion UI specimen.
+
 ### 2026-07-22 — Complete hardened Computer Use release acceptance
 
 - Separated development packages, distribution staging, and canonical release output so stale DMG/ZIP files cannot look current. Release cleanup rejects symlinked ancestors, staging promotes atomically only after verification, and private acceptance receipts are create-only, identity-bound, and invalidated before a new package or release attempt.
