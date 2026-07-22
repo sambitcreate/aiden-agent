@@ -12,6 +12,7 @@
   "main": "build/main/index.js",
   "scripts": {
     "build": "vite build && npm run build:electron",
+    "computer-use:vendor": "node scripts/vendor-cua-driver.mjs",
     "build:native": "node scripts/build-foundation-models-helper.mjs --required",
     "build:native:optional": "node scripts/build-foundation-models-helper.mjs --optional",
     "build:electron": "node scripts/build-electron.mjs",
@@ -19,20 +20,23 @@
     "dev:renderer": "vite --host 127.0.0.1 --port 4143 --strictPort",
     "dev:electron": "wait-on http-get://127.0.0.1:4143/main-window.html && AIDEN_RENDERER_URL=http://127.0.0.1:4143 electron .",
     "lint": "eslint .",
-    "test": "tsx --test main/services/chat-generation-start.test.ts main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/codex-provider.test.ts main/services/coding-tools.test.ts main/services/foundation-models-connection.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/model-runtime-core.test.ts main/services/models.test.ts main/services/pi-credential-store-core.test.ts main/services/pi-provider-contract.test.ts main/services/profile-share-core.test.ts main/services/profile-share-files.test.ts main/services/profile.test.ts main/services/provider-auth-flow-core.test.ts main/services/provider-auth-owner.test.ts main/services/provider-key-policy.test.ts main/services/provider-list-core.test.ts main/services/scratch-workspace.test.ts main/services/usage-store-core.test.ts main/services/workspace-files.test.ts renderer/components/usage/profile-share-card.test.tsx renderer/lib/chat-title-reveal.test.ts renderer/lib/codex-auth-session.test.ts renderer/lib/codex-auth-view-state.test.ts renderer/lib/codex-provider-cache.test.ts renderer/lib/editor-preference.test.ts renderer/lib/model-display.test.ts renderer/lib/model-picker-data.test.ts renderer/lib/profile-share-data.test.ts renderer/lib/usage-profile-data.test.ts renderer/shared/appearance.test.ts scripts/model-snapshot-core.test.mjs",
+    "test": "tsx --test main/services/chat-generation-start.test.ts main/services/chat-title-policy.test.ts main/services/chat-title-routing.test.ts main/services/chat-store-core.test.ts main/services/codex-provider.test.ts main/services/coding-tools.test.ts main/services/computer-use/computer-use-foundation.test.ts main/services/foundation-models-connection.test.ts main/services/generation-runtime.test.ts main/services/external-editors.test.ts main/services/git.test.ts main/services/model-runtime-core.test.ts main/services/models.test.ts main/services/pi-credential-store-core.test.ts main/services/pi-provider-contract.test.ts main/services/profile-share-core.test.ts main/services/profile-share-files.test.ts main/services/profile.test.ts main/services/provider-auth-flow-core.test.ts main/services/provider-auth-owner.test.ts main/services/provider-key-policy.test.ts main/services/provider-list-core.test.ts main/services/scratch-workspace.test.ts main/services/usage-store-core.test.ts main/services/workspace-files.test.ts renderer/components/usage/profile-share-card.test.tsx renderer/lib/chat-title-reveal.test.ts renderer/lib/codex-auth-session.test.ts renderer/lib/codex-auth-view-state.test.ts renderer/lib/codex-provider-cache.test.ts renderer/lib/editor-preference.test.ts renderer/lib/model-display.test.ts renderer/lib/model-picker-data.test.ts renderer/lib/profile-share-data.test.ts renderer/lib/usage-profile-data.test.ts renderer/shared/appearance.test.ts scripts/configure-electron-fuses.test.mjs scripts/model-snapshot-core.test.mjs scripts/sign-macos.test.mjs scripts/vendor-cua-driver.test.mjs scripts/verify-macos-package.test.mjs && npm run test:computer-use:native",
+    "test:computer-use": "tsx --test main/services/computer-use/computer-use-foundation.test.ts scripts/configure-electron-fuses.test.mjs scripts/sign-macos.test.mjs scripts/vendor-cua-driver.test.mjs scripts/verify-macos-package.test.mjs && npm run test:computer-use:native",
+    "test:computer-use:native": "cd native/computer-use-broker && CARGO_TARGET_DIR=../../build/computer-use-broker-test cargo fmt -- --check && CARGO_TARGET_DIR=../../build/computer-use-broker-test cargo test --locked && CARGO_TARGET_DIR=../../build/computer-use-broker-test cargo clippy --locked --all-targets -- -D warnings",
     "test:native": "CLANG_MODULE_CACHE_PATH=build/native-test-module-cache SWIFT_MODULECACHE_PATH=build/native-test-module-cache swift test --disable-sandbox --package-path native/apple-foundation-models --scratch-path build/native-swift-tests",
     "type-check": "tsc --noEmit",
     "format": "oxfmt .",
-    "package": "npm run build:native && npm run build && electron-builder --mac dir",
+    "package": "npm run computer-use:vendor && npm run build:native && npm run build && electron-builder --mac dir --config.mac.type=development",
+    "package:verify": "node scripts/verify-macos-package.mjs",
     "models:refresh": "node scripts/update-model-snapshots.mjs",
     "release:update-model-snapshots": "npm run models:refresh",
     "release:update-model-capabilities": "npm run release:update-model-snapshots",
-    "dist": "npm run release:update-model-snapshots && npm run build:native && npm run build && electron-builder --mac"
+    "dist": "npm run release:update-model-snapshots && npm run computer-use:vendor && npm run build:native && npm run build && electron-builder --mac"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.10",
     "@earendil-works/pi-ai": "0.80.10",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@radix-ui/colors": "^3.0.0",
     "@tanstack/react-query": "^5.87.4",
     "@tanstack/react-router": "^1.131.36",
@@ -57,6 +61,8 @@
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
+    "@electron/fuses": "2.1.3",
+    "@electron/osx-sign": "1.3.3",
     "@eslint/js": "^9.22.0",
     "@rolldown/plugin-babel": "^0.2.1",
     "@tailwindcss/vite": "^4.2.2",
@@ -88,6 +94,20 @@
   "build": {
     "appId": "com.sambitcreate.aiden-agent",
     "productName": "Aiden Agent",
+    "forceCodeSigning": true,
+    "afterPack": "./scripts/configure-electron-fuses.mjs",
+    "afterSign": "./scripts/verify-macos-package.mjs",
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "loadBrowserProcessSpecificV8Snapshot": false,
+      "grantFileProtocolExtraPrivileges": true,
+      "resetAdHocDarwinSignature": false
+    },
     "asar": true,
     "npmRebuild": false,
     "asarUnpack": [
@@ -114,11 +134,21 @@
       {
         "from": "resources/app-icon-monochrome.png",
         "to": "app-icon-monochrome.png"
+      },
+      {
+        "from": "resources/computer-use/cua-driver-artifact.json",
+        "to": "computer-use/cua-driver-artifact.json"
+      },
+      {
+        "from": "resources/computer-use/LICENSE.cua-driver.md",
+        "to": "computer-use/LICENSE.cua-driver.md"
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "resources/app-icon.icns",
+      "sign": "./scripts/sign-macos.mjs",
+      "signIgnore": "\\/Contents\\/Helpers\\/CuaDriver\\.app\\/Contents\\/MacOS\\/cua-driver$",
       "binaries": [
         "Contents/Helpers/Aiden Foundation Models Helper.app"
       ],
@@ -126,6 +156,10 @@
         {
           "from": "build/native/Aiden Foundation Models Helper.app",
           "to": "Helpers/Aiden Foundation Models Helper.app"
+        },
+        {
+          "from": "build/computer-use/CuaDriver.app",
+          "to": "Helpers/CuaDriver.app"
         }
       ],
       "target": [

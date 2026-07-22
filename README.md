@@ -103,7 +103,9 @@ Requirements:
 - macOS
 - Node.js 22.19 or newer
 - npm
+- Rust/Cargo (the pinned Computer Use broker is built from the checked-in Rust crate)
 - Xcode 26 or newer when building the Apple Foundation Models helper
+- An Apple Development or Developer ID Application signing identity when running `npm run package` or `npm run dist`
 
 Install and launch the Electron app with Vite hot reload:
 
@@ -144,4 +146,6 @@ Use `AA_API_KEY` as the shorter key variable if preferred. Set the redistributio
 
 Provider Settings exposes Apple Foundation Models only on macOS. On Apple Intelligence-capable Macs running macOS 26 or newer, chat titles can use Automatic, On-device only, or Selected chat model routing. Automatic prefers the on-device model when it is ready and otherwise uses the selected chat model; On-device only never falls back to a network provider after a native attempt.
 
-Unsigned local builds may require the usual macOS confirmation before first launch. Signing and notarization should be added before distributing the app to other Macs.
+`npm run package` requires and verifies a development-signed app. Distribution
+still requires a Developer ID release signature and successful notarization;
+the development package intentionally skips notarization.

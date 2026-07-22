@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "upstream": "https://github.com/trycua/cua",
+  "tag": "cua-driver-rs-v0.8.3",
+  "sourceCommit": "0612c26b2c7b8556f6de7f6b4f3927ecac914e4f",
+  "version": "0.8.3",
+  "platform": "darwin",
+  "architecture": "universal",
+  "asset": "cua-driver-rs-0.8.3-darwin-universal-binary.tar.gz",
+  "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.8.3/cua-driver-rs-0.8.3-darwin-universal-binary.tar.gz",
+  "sha256": "a2a29f3ccbd45989819df639d60fa68ac6f28b844f74d7d2b0a1495e4359c6a1",
+  "binarySha256": "c1c015ccceda4880b9e171dc438700a8276af0eeecfdf0bb4b3fb23298ae7305",
+  "upstreamSigningIdentifier": "cua-driver",
+  "upstreamSigningTeamId": "YCK386LBJ7",
+  "license": "MIT",
+  "releaseChannel": "pre-release"
+}

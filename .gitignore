@@ -4,6 +4,7 @@ node_modules/
 # Build and packaged output
 build/
 release/
+native/computer-use-broker/target/
 
 # Agent context (auto-generated, not worth versioning)
 .claude/

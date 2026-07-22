@@ -1,5 +1,16 @@
 # Project History
 
+### 2026-07-22 — Establish the external cua-driver Computer Use foundation
+
+- Archived the discarded Pi/Swift prototype on `archive/pi-computer-use-prototype-20260721` and pivoted to Hermes's intended architecture: Aiden uses the external Rust `cua-driver` MCP backend, while a small Rust/Objective-C helper supplies only macOS trust, permission, transport, and lifecycle boundaries. No Computer Use capture or input implementation lives in Swift.
+- Exact-pinned the pre-release `cua-driver` 0.8.3 universal artifact, archive and binary hashes, source tag/commit, signing identifier, Team ID, and cross-architecture CDHashes. The vendor flow never uses a moving installer or `PATH`, disables telemetry/update checks, and bounds descendants across success, timeout, and owner crash.
+- Added a separately identified `CuaDriver.app` broker that authenticates Aiden, bridge, broker, and driver process incarnations with kernel audit tokens and signed-code requirements. The broker owns the TCC identity, launches untouched `cua-driver mcp --embedded`, filters MCP to the exact reviewed 20-tool allowlist, and uses anonymous pipes plus a one-shot bridge-held lease.
+- Hardened constrained launch and teardown around `NSTask.launchRequirementData`, independent pre-auth guards, child-scanning watchdogs, occupied containment groups, retained child audit tokens, early fd-3 parent-death monitoring, exact process signaling, bounded TERM-to-KILL escalation, descriptor ownership, and strict startup-error frames. Candidate-owning launch-failure, PID-mismatch, and pre-return lease-revocation paths all terminate the occupied driver group.
+- Added bounded MCP framing, serialized per-session calls, exact start/end lifecycle, permanent catalog incompatibility errors, retryability-preserving diagnostics, immediate queued-cancellation poisoning, local oversize rejection without SDK handler leaks, and a test-only host excluded from production bundles.
+- Added hardened Electron fuses, minimal helper entitlements, exact helper-tree/resource/plist verification, nested signing rules that preserve the upstream driver signature, macOS 14.4 deployment enforcement, license/provenance packaging, and development package verification. Developer ID notarization/stapling remains Phase 4 work.
+- Final verification passed 350 TypeScript/JavaScript tests, 39 native tests with strict clippy, type-check, lint, production build, signed-package verification, and two signed real-driver smokes. The live boundary reported `cua-driver` 0.8.3, schema 1, exactly 20 tools, 175 installed apps, healthy session state, clean shutdown, and no surviving helper process. Three fresh post-fix reviewers returned ACCEPT for native containment, TypeScript lifecycle, and packaging/provenance.
+- The foundation remains intentionally absent from the production agent tool list until Phase 2 adds the Hermes-compatible adapter and Phase 3 adds persisted enablement, permissions/status, and UI.
+
 ### 2026-07-21 — Add the paired light and dark Appearance workbench
 
 - Replaced the one-choice native theme screen with a full Appearance workbench: visual System/Light/Dark cards, live light-versus-dark code preview, four paired theme presets, independent light/dark colors, font families, sidebar translucency, contrast, JSON import/copy, and app-wide preference controls.
