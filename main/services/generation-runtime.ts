@@ -2,7 +2,7 @@
 // keyless-provider and terminal-error contracts have fast, deterministic tests.
 
 import type { AgentOptions } from "@earendil-works/pi-agent-core";
-import type { ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
+import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -11,6 +11,22 @@ import type { ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
  * before a request leaves Aiden.
  */
 export const PI_AUTH_COMPATIBILITY_TOKEN = "aiden-local-no-auth";
+
+/**
+ * Pi's provider serializers use Model.input as the authoritative image gate.
+ * Merge only positive trusted metadata into a cloned generation snapshot so
+ * legacy vision models and tool screenshots follow the same decision.
+ */
+export function effectiveModelForGeneration<TApi extends Api>(
+  model: Model<TApi>,
+  trustedVision: boolean | undefined,
+): Model<TApi> {
+  const supportsImages = model.input.includes("image") || trustedVision === true;
+  return {
+    ...model,
+    input: supportsImages ? ["text", "image"] : ["text"],
+  };
+}
 
 /**
  * The Anthropic SDK owns its `/v1/messages` route. Aiden stores provider URLs
@@ -53,6 +69,53 @@ interface AgentRuntimeTransport {
   apiKey: string | undefined;
   headers: ProviderHeaders | undefined;
   streams: Pick<ProviderStreams, "streamSimple">;
+}
+
+export interface GenerationCleanupEntry {
+  reset(): void;
+  close?: () => Promise<unknown>;
+  completion?: Promise<unknown> | null;
+}
+
+/**
+ * Clear in-memory agent transcripts synchronously, then bound all slower
+ * helper/process and provider-loop teardown behind one deadline.
+ */
+export async function settleGenerationCleanup(
+  entries: readonly GenerationCleanupEntry[],
+  graceMs: number,
+  onResetError: (error: unknown) => void = () => {},
+): Promise<boolean> {
+  for (const entry of entries) {
+    try {
+      entry.reset();
+    } catch (error) {
+      onResetError(error);
+    }
+  }
+  const operations: Promise<unknown>[] = [];
+  for (const entry of entries) {
+    if (entry.close) {
+      try {
+        operations.push(entry.close());
+      } catch (error) {
+        operations.push(Promise.reject(error));
+      }
+    }
+    if (entry.completion) operations.push(entry.completion);
+  }
+  if (!operations.length) return true;
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (completed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(completed);
+    };
+    const timer = setTimeout(() => finish(false), Math.max(0, graceMs));
+    void Promise.allSettled(operations).then(() => finish(true));
+  });
 }
 
 /** Keep the chat identity and provider transport attached to every Pi Agent turn. */

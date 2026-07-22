@@ -9,7 +9,6 @@
 // hook and waits for the user to Allow or Deny in the UI.
 
 import { Agent } from "@earendil-works/pi-agent-core";
-import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
@@ -18,6 +17,8 @@ import { providerModelInfo } from "./provider-model-info.js";
 import { configStore } from "./config-store.js";
 import {
   buildAgentRuntimeOptions,
+  effectiveModelForGeneration,
+  settleGenerationCleanup,
   terminalAssistantTextFallback,
   terminalGenerationError,
   terminalGenerationInterruptionError,
@@ -27,24 +28,49 @@ import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type {
+  ComputerUseApprovalDescriptor,
+  ComputerUseController,
+} from "./computer-use/controller.js";
+import type { ComputerUseArgs } from "./computer-use/schema.js";
+import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
+import { ToolApprovalCoordinator } from "./tool-approval.js";
+import { toPiMessages } from "./generation-messages.js";
 
-const active = new Map<string, { agent: Agent; workspaceId?: string; cancelRequested: boolean }>();
+interface ActiveGeneration {
+  agent: Agent;
+  workspaceId?: string;
+  cancelRequested: boolean;
+  computerUse?: ComputerUseController;
+  completion: Promise<void> | null;
+}
+
+const active = new Map<string, ActiveGeneration>();
 const initializing = new Map<
   string,
-  { workspaceId?: string; cancelRequested: boolean; controller: AbortController }
+  {
+    workspaceId?: string;
+    cancelRequested: boolean;
+    controller: AbortController;
+    computerUse?: ComputerUseController;
+  }
 >();
-/** Approval requests awaiting a user decision, keyed by approvalId. */
-const pendingApprovals = new Map<string, (allowed: boolean) => void>();
+const approvals = new ToolApprovalCoordinator((prompt) => {
+  ipcMain.broadcast("chat:approval", prompt);
+});
+const SHUTDOWN_GENERATION_GRACE_MS = 5_000;
 
-const ZERO_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+function disabledComputerUseController(): ComputerUseController | undefined {
+  return undefined;
+}
+
+function resetGenerationAgent(agent: Agent, streamId: string): void {
+  try {
+    agent.reset();
+  } catch (error) {
+    logger.warn("pi", `Could not eagerly reset stream ${streamId}.`, error);
+  }
+}
 
 function buildSystemPrompt(
   folderPath: string | undefined,
@@ -69,58 +95,7 @@ function buildSystemPrompt(
   );
 }
 
-// Aiden Agent stores plain user/assistant text (+ optional attachments).
-// Rehydrate the transcript into pi messages so the agent continues from full
-// history. Image attachments are only sent when the model supports vision; text
-// attachments are always inlined as extra context.
-function toPiMessages(
-  params: ChatStartParams,
-  model: Model<Api>,
-  vision: boolean | undefined,
-): Message[] {
-  const now = Date.now();
-  return params.messages.map((m): Message => {
-    if (m.role === "assistant") {
-      return {
-        role: "assistant",
-        content: [{ type: "text", text: m.content }],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: ZERO_USAGE,
-        stopReason: "stop",
-        timestamp: now,
-      };
-    }
-
-    const attachments = m.attachments ?? [];
-    if (attachments.length === 0) {
-      return { role: "user", content: m.content, timestamp: now };
-    }
-
-    // Build a content block array: text files inlined, images as image blocks.
-    const parts: (TextContent | ImageContent)[] = [];
-    const textFiles = attachments.filter((a) => a.kind === "text" && a.text);
-    const textPrefix = textFiles
-      .map((a) => `Attached file: ${a.name}\n\`\`\`\n${a.text}\n\`\`\``)
-      .join("\n\n");
-    const combinedText = [textPrefix, m.content].filter(Boolean).join("\n\n");
-    if (combinedText) parts.push({ type: "text", text: combinedText });
-    if (vision !== false) {
-      for (const a of attachments) {
-        if (a.kind === "image" && a.data)
-          parts.push({ type: "image", data: a.data, mimeType: a.mimeType });
-      }
-    }
-    return { role: "user", content: parts.length ? parts : m.content, timestamp: now };
-  });
-}
-
-function newApprovalId(): string {
-  return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function prepareGeneration(params: ChatStartParams, signal: AbortSignal) {
+async function prepareGeneration(_streamId: string, params: ChatStartParams, signal: AbortSignal) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const workspace = params.workspaceId
     ? await configStore.getWorkspace(params.workspaceId)
@@ -128,24 +103,42 @@ async function prepareGeneration(params: ChatStartParams, signal: AbortSignal) {
   const permission: WorkspacePermission = workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
-  const tools = await buildAgentTools({ workspaceRoot: folderPath, permission });
   // Capability metadata is local: Pi owns Codex facts and the release snapshot
   // owns legacy-provider facts, so chat startup never waits on a public catalog.
   const modelInfo = await providerModelInfo.info(runtime.provider.id, params.model);
-  return { runtime, permission, folderPath, git, tools, modelInfo };
+  const model = effectiveModelForGeneration(runtime.model, modelInfo.vision);
+  const supportsImages = model.input.includes("image");
+  // Phase 3 supplies a generation-owned controller only after the persisted
+  // beta setting and permission/status UX are present. Keeping this undefined
+  // makes Phase 2's adapter unreachable from production while fully testable.
+  const computerUse = disabledComputerUseController();
+  const tools = await buildAgentTools({ workspaceRoot: folderPath, permission, computerUse });
+  return {
+    runtime: { ...runtime, model },
+    permission,
+    folderPath,
+    git,
+    tools,
+    supportsImages,
+    computerUse,
+  };
 }
 
 export const llmClient = {
   async start(streamId: string, params: ChatStartParams): Promise<boolean> {
+    if (initializing.has(streamId) || active.has(streamId)) {
+      throw new Error("A generation with this stream id is already running.");
+    }
     const initialization = {
       workspaceId: params.workspaceId,
       cancelRequested: false,
       controller: new AbortController(),
+      computerUse: undefined as ComputerUseController | undefined,
     };
     initializing.set(streamId, initialization);
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     try {
-      setup = await prepareGeneration(params, initialization.controller.signal);
+      setup = await prepareGeneration(streamId, params, initialization.controller.signal);
     } catch (error) {
       initializing.delete(streamId);
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
@@ -154,109 +147,170 @@ export const llmClient = {
       }
       throw error;
     }
-    const { runtime, permission, folderPath, git, tools, modelInfo } = setup;
+    const { runtime, permission, folderPath, git, tools, supportsImages, computerUse } = setup;
+    initialization.computerUse = computerUse;
     const { model } = runtime;
 
     const deniedToolCalls = new Set<string>();
-    const agent = new Agent({
-      ...buildAgentRuntimeOptions(params.chatId, runtime),
-      initialState: {
-        systemPrompt: buildSystemPrompt(folderPath, git.branch, permission),
-        model,
-        tools,
-        messages: toPiMessages(params, model, modelInfo.vision),
-      },
-      // In "ask" mode, pause before mutating tools until the user approves.
-      beforeToolCall: async (context, signal) => {
-        if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name))
-          return undefined;
-        const approvalId = newApprovalId();
-        const summary = summarizeToolCall(context.toolCall.name, context.args);
-        ipcMain.broadcast("chat:approval", {
-          streamId,
-          approvalId,
-          toolName: context.toolCall.name,
-          summary,
-        });
-        const allowed = await new Promise<boolean>((resolve) => {
-          pendingApprovals.set(approvalId, resolve);
-          if (signal?.aborted) resolve(false);
-          else signal?.addEventListener("abort", () => resolve(false), { once: true });
-        });
-        pendingApprovals.delete(approvalId);
-        if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
-        return allowed ? undefined : { block: true, reason: "The user denied this action." };
-      },
-    });
     let full = "";
     let errored: string | null = null;
     let aborted = false;
     let currentAssistantTurnHadTextDelta = false;
+    let candidate: Agent | null = null;
+    try {
+      candidate = new Agent({
+        ...buildAgentRuntimeOptions(params.chatId, runtime),
+        initialState: {
+          systemPrompt: buildSystemPrompt(folderPath, git.branch, permission),
+          model,
+          tools,
+          messages: toPiMessages(params, model, supportsImages),
+        },
+        // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
+        beforeToolCall: async (context, signal) => {
+          let summary: string;
+          let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
+          if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
+            if (!computerUse) {
+              deniedToolCalls.add(context.toolCall.id);
+              return { block: true, reason: "Computer Use is not enabled for this response." };
+            }
+            try {
+              const descriptor = await computerUse.approvalFor(
+                context.args as ComputerUseArgs,
+                signal,
+              );
+              if (!descriptor) return undefined;
+              computerUseApproval = descriptor;
+              summary = descriptor.summary;
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              return {
+                block: true,
+                reason:
+                  error instanceof Error ? error.message : "Computer Use rejected this action.",
+              };
+            }
+          } else {
+            if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name))
+              return undefined;
+            summary = summarizeToolCall(context.toolCall.name, context.args);
+          }
+          const allowed = await approvals.request(
+            { streamId, toolName: context.toolCall.name, summary },
+            signal,
+          );
+          if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
+          if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
+            try {
+              if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
+              computerUse.authorize(
+                context.toolCall.id,
+                context.args as ComputerUseArgs,
+                computerUseApproval,
+              );
+            } catch (error) {
+              deniedToolCalls.add(context.toolCall.id);
+              return {
+                block: true,
+                reason: error instanceof Error ? error.message : "Computer Use approval expired.",
+              };
+            }
+          }
+          return allowed ? undefined : { block: true, reason: "The user denied this action." };
+        },
+      });
 
-    agent.subscribe(async (event) => {
-      switch (event.type) {
-        case "message_start":
-          if (event.message.role === "assistant") currentAssistantTurnHadTextDelta = false;
-          break;
-        case "message_update": {
-          const e = event.assistantMessageEvent;
-          if (e.type === "text_delta") {
-            full += e.delta;
-            currentAssistantTurnHadTextDelta = true;
-            ipcMain.broadcast("chat:delta", { streamId, delta: e.delta });
-          } else if (e.type === "error" && e.reason === "error") {
-            errored = e.error.errorMessage ?? "Generation failed.";
+      candidate.subscribe(async (event) => {
+        switch (event.type) {
+          case "message_start":
+            if (event.message.role === "assistant") currentAssistantTurnHadTextDelta = false;
+            break;
+          case "message_update": {
+            const e = event.assistantMessageEvent;
+            if (e.type === "text_delta") {
+              full += e.delta;
+              currentAssistantTurnHadTextDelta = true;
+              ipcMain.broadcast("chat:delta", { streamId, delta: e.delta });
+            } else if (e.type === "error" && e.reason === "error") {
+              errored = e.error.errorMessage ?? "Generation failed.";
+            }
+            break;
           }
-          break;
-        }
-        case "message_end": {
-          if (event.message.role === "assistant") {
-            await usageStore.record(
-              assistantUsageRecord({
-                message: event.message,
-                provider: runtime.provider,
-                model,
-                source: "chat",
-              }),
-            );
+          case "message_end": {
+            if (event.message.role === "assistant") {
+              await usageStore.record(
+                assistantUsageRecord({
+                  message: event.message,
+                  provider: runtime.provider,
+                  model,
+                  source: "chat",
+                }),
+              );
+            }
+            const terminalError = terminalGenerationError(event.message);
+            if (terminalError) errored = terminalError;
+            if (terminalGenerationWasAborted(event.message)) aborted = true;
+            if (!terminalError) {
+              // Pi may finish any assistant turn without preceding text_delta
+              // events. Fall back per turn so a later tool-followup is retained
+              // without duplicating normally streamed text.
+              full += terminalAssistantTextFallback(
+                event.message,
+                currentAssistantTurnHadTextDelta,
+              );
+            }
+            break;
           }
-          const terminalError = terminalGenerationError(event.message);
-          if (terminalError) errored = terminalError;
-          if (terminalGenerationWasAborted(event.message)) aborted = true;
-          if (!terminalError) {
-            // Pi may finish any assistant turn without preceding text_delta
-            // events. Fall back per turn so a later tool-followup is retained
-            // without duplicating normally streamed text.
-            full += terminalAssistantTextFallback(event.message, currentAssistantTurnHadTextDelta);
+          case "tool_execution_start":
+            ipcMain.broadcast("chat:tool", { streamId, phase: "call", toolName: event.toolName });
+            break;
+          case "tool_execution_end": {
+            const denied = deniedToolCalls.delete(event.toolCallId);
+            ipcMain.broadcast("chat:tool", {
+              streamId,
+              phase: denied ? "blocked" : event.isError ? "error" : "result",
+              toolName: event.toolName,
+            });
+            break;
           }
-          break;
+          default:
+            break;
         }
-        case "tool_execution_start":
-          ipcMain.broadcast("chat:tool", { streamId, phase: "call", toolName: event.toolName });
-          break;
-        case "tool_execution_end": {
-          const denied = deniedToolCalls.delete(event.toolCallId);
-          ipcMain.broadcast("chat:tool", {
-            streamId,
-            phase: denied ? "blocked" : event.isError ? "error" : "result",
-            toolName: event.toolName,
-          });
-          break;
-        }
-        default:
-          break;
+      });
+    } catch (error) {
+      initializing.delete(streamId);
+      if (candidate) resetGenerationAgent(candidate, streamId);
+      await computerUse?.close().catch(() => {});
+      if (initialization.cancelRequested || initialization.controller.signal.aborted) {
+        ipcMain.broadcast("chat:done", { streamId, content: "" });
+        return false;
       }
-    });
+      throw error;
+    }
+    const agent = candidate;
+    if (!agent) throw new Error("Could not initialize the generation agent.");
 
+    const activeGeneration: ActiveGeneration = {
+      agent,
+      workspaceId: params.workspaceId,
+      cancelRequested: false,
+      computerUse,
+      completion: null,
+    };
+    // Publish the active owner before removing initialization so cancellation
+    // cannot fall into a map-transition gap and leave a privileged run alive.
+    active.set(streamId, activeGeneration);
     initializing.delete(streamId);
-    if (initialization.cancelRequested) {
+    if (initialization.cancelRequested || activeGeneration.cancelRequested) {
+      active.delete(streamId);
+      resetGenerationAgent(agent, streamId);
+      await computerUse?.close().catch(() => {});
       ipcMain.broadcast("chat:done", { streamId, content: "" });
       return false;
     }
-    const activeGeneration = { agent, workspaceId: params.workspaceId, cancelRequested: false };
-    active.set(streamId, activeGeneration);
 
-    void (async () => {
+    const completion = (async () => {
       try {
         await agent.continue();
         const wasCancelled = activeGeneration.cancelRequested;
@@ -286,16 +340,22 @@ export const llmClient = {
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         ipcMain.broadcast("chat:error", { streamId, message, content: full || undefined });
       } finally {
-        active.delete(streamId);
+        try {
+          resetGenerationAgent(agent, streamId);
+          await computerUse?.close().catch(() => {});
+        } finally {
+          active.delete(streamId);
+        }
       }
     })();
+    activeGeneration.completion = completion;
+    void completion;
     return true;
   },
 
   /** Resolve a pending tool-approval request from the UI. */
   approve(approvalId: string, decision: ApprovalDecision): void {
-    const resolve = pendingApprovals.get(approvalId);
-    if (resolve) resolve(decision === "allow");
+    approvals.decide(approvalId, decision === "allow");
   },
 
   cancel(streamId: string): void {
@@ -303,12 +363,15 @@ export const llmClient = {
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.controller.abort(new Error("Chat initialization cancelled."));
+      void initialization.computerUse?.close();
     }
     const generation = active.get(streamId);
     if (generation) {
       generation.cancelRequested = true;
       generation.agent.abort();
+      void generation.computerUse?.close();
     }
+    approvals.cancelStream(streamId);
   },
 
   /** Stop generations whose tool set was snapshotted from this workspace. */
@@ -317,13 +380,35 @@ export const llmClient = {
       if (initialization.workspaceId === workspaceId) {
         initialization.cancelRequested = true;
         initialization.controller.abort(new Error("Workspace generation cancelled."));
+        void initialization.computerUse?.close();
       }
     }
     for (const entry of active.values()) {
       if (entry.workspaceId === workspaceId) {
         entry.cancelRequested = true;
         entry.agent.abort();
+        void entry.computerUse?.close();
       }
     }
+  },
+
+  abortAll(): void {
+    for (const [streamId] of initializing) this.cancel(streamId);
+    for (const [streamId] of active) this.cancel(streamId);
+    approvals.shutdown();
+  },
+
+  async shutdown(): Promise<void> {
+    this.abortAll();
+    const generations = [...active.values()];
+    await settleGenerationCleanup(
+      generations.map((entry) => ({
+        reset: () => entry.agent.reset(),
+        close: entry.computerUse ? () => entry.computerUse!.close() : undefined,
+        completion: entry.completion,
+      })),
+      SHUTDOWN_GENERATION_GRACE_MS,
+      (error) => logger.warn("pi", "Could not clear one generation during shutdown.", error),
+    );
   },
 };

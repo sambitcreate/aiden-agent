@@ -13,6 +13,8 @@ import { collectMcpAgentTools } from "./mcp.js";
 import { buildCodingTools } from "./coding-tools.js";
 import { discoverSkills } from "./skills-discovery.js";
 import type { DiscoveredSkill, Skill, WorkspacePermission } from "./types.js";
+import type { ComputerUseController } from "./computer-use/controller.js";
+import { createComputerUseAgentTool } from "./computer-use/tool.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -78,11 +80,15 @@ export interface ToolContext {
   workspaceRoot?: string;
   /** Workspace permission level; "none" withholds all folder-scoped tools. */
   permission: WorkspacePermission;
+  /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
+  computerUse?: ComputerUseController;
 }
 
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   const tools: AgentTool[] = [];
   const settings = await configStore.getSettings();
+
+  if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
 
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.

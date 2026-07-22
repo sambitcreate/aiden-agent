@@ -1,5 +1,15 @@
 # Project History
 
+### 2026-07-22 — Add the Hermes-style cua-driver Computer Use adapter
+
+- Added one sequential, model-agnostic `computer_use` AgentTool over the authenticated external `cua-driver` boundary. The adapter supports capture, app/window discovery, exact focus, pointer/drag/scroll, typing/keys/value changes, and bounded waits without adding any Swift GUI automation implementation.
+- Mapped Aiden's `som`, vision, and accessibility modes to the pinned 0.8.3 schemas; preserved zero-based indices and opaque element tokens; converted element drags only from exact current screenshot dimensions; resolved desktop requests only to exact on-screen OS shell identities; and surfaced a sanitized `verified`/`effect`/`path`/`code`/`degraded`/`escalation` verdict for the background-to-pixel-to-foreground loop.
+- Added Pi-native transient image content and one positive generation capability snapshot so legacy vision metadata and Pi serialization cannot diverge. Screenshots never enter attachments, IPC, logs, details, or persisted chat data, and Agent transcript/image state is synchronously reset before bounded helper/provider teardown.
+- Made every non-read-only action approval-gated regardless of workspace permission. Prompts include the exact app, title, pid, and window; one-use grants bind generation, normalized arguments, and the prompt-time target revision; ambiguous targets and intervening captures fail closed; dangerous shell-like typing and destructive system shortcuts are blocked before approval; and every successful mutation invalidates stale elements/pixels.
+- Hardened cancellation and setup ownership across initializing/active map transitions, duplicate stream IDs, Agent construction/subscription failures, queued approvals, helper poisoning, and app shutdown. Follow-up capture failures report that the action already completed and explicitly prevent blind replay.
+- Expanded adapter, approval, capability, lifecycle, pinned-schema, desktop false-positive, Retina drag, structured-verdict, image-sanitization, cancellation, packaging, and native containment coverage. The full 379-test TypeScript/JavaScript suite and 39-test native suite, focused Computer Use/package/native gate, type-check, lint, diff check, and production build pass. Three fresh post-fix reviewers returned ACCEPT for lifecycle/integration, security/approval, and pinned-driver mapping.
+- Production construction remains intentionally disabled until Phase 3 adds persisted beta enablement, permission/status controls, and chat-facing state.
+
 ### 2026-07-22 — Establish the external cua-driver Computer Use foundation
 
 - Archived the discarded Pi/Swift prototype on `archive/pi-computer-use-prototype-20260721` and pivoted to Hermes's intended architecture: Aiden uses the external Rust `cua-driver` MCP backend, while a small Rust/Objective-C helper supplies only macOS trust, permission, transport, and lifecycle boundaries. No Computer Use capture or input implementation lives in Swift.

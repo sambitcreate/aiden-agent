@@ -1,0 +1,82 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { ToolApprovalCoordinator } from "./tool-approval.js";
+
+function trackedSignal() {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const originalAdd = signal.addEventListener.bind(signal);
+  const originalRemove = signal.removeEventListener.bind(signal);
+  let listeners = 0;
+  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    if (args[0] === "abort") listeners += 1;
+    return originalAdd(...args);
+  }) as AbortSignal["addEventListener"];
+  signal.removeEventListener = ((...args: Parameters<AbortSignal["removeEventListener"]>) => {
+    if (args[0] === "abort") listeners -= 1;
+    return originalRemove(...args);
+  }) as AbortSignal["removeEventListener"];
+  return { controller, signal, listenerCount: () => listeners };
+}
+
+test("approval decisions are one-shot and remove abort listeners", async () => {
+  const prompts: Array<{ approvalId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const tracked = trackedSignal();
+  const pending = approvals.request(
+    { streamId: "stream", toolName: "computer_use", summary: "click element 0" },
+    tracked.signal,
+  );
+  assert.equal(approvals.pendingCount, 1);
+  assert.equal(tracked.listenerCount(), 1);
+  assert.equal(approvals.decide(prompts[0].approvalId, true), true);
+  assert.equal(await pending, true);
+  assert.equal(approvals.pendingCount, 0);
+  assert.equal(tracked.listenerCount(), 0);
+  assert.equal(approvals.decide(prompts[0].approvalId, true), false);
+});
+
+test("deny, abort, stream cancellation, and shutdown leave no pending state", async () => {
+  const prompts: Array<{ approvalId: string; streamId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+
+  const denied = approvals.request({ streamId: "deny", toolName: "write_file", summary: "write" });
+  approvals.decide(prompts[prompts.length - 1]!.approvalId, false);
+  assert.equal(await denied, false);
+
+  const abortedSignal = trackedSignal();
+  const aborted = approvals.request(
+    { streamId: "abort", toolName: "computer_use", summary: "type" },
+    abortedSignal.signal,
+  );
+  abortedSignal.controller.abort();
+  assert.equal(await aborted, false);
+  assert.equal(abortedSignal.listenerCount(), 0);
+
+  const cancelled = approvals.request({ streamId: "cancel", toolName: "edit_file", summary: "edit" });
+  approvals.cancelStream("cancel");
+  assert.equal(await cancelled, false);
+
+  const shutdown = approvals.request({ streamId: "shutdown", toolName: "run_command", summary: "run" });
+  approvals.shutdown();
+  assert.equal(await shutdown, false);
+  assert.equal(approvals.pendingCount, 0);
+});
+
+test("an already-aborted request publishes nothing", async () => {
+  let publications = 0;
+  const approvals = new ToolApprovalCoordinator(() => {
+    publications += 1;
+  });
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(
+    await approvals.request(
+      { streamId: "stream", toolName: "computer_use", summary: "click" },
+      controller.signal,
+    ),
+    false,
+  );
+  assert.equal(publications, 0);
+  assert.equal(approvals.pendingCount, 0);
+});

@@ -19,6 +19,7 @@ import {
 import { configStore } from "./services/config-store.js";
 import { normalizeAppearanceConfig, type DockIconPreference } from "../renderer/shared/appearance.js";
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
+import { llmClient } from "./services/llm-client.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -83,6 +84,7 @@ function cleanupApplication(): void {
   cleanupStarted = true;
   disposeShortcut();
   disposeFoundationModelsConnection();
+  llmClient.abortAll();
   void mcpManager.closeAll();
 }
 
@@ -91,9 +93,9 @@ async function shutdownAndQuit(): Promise<void> {
   shutdownStarted = true;
   cleanupApplication();
   try {
-    await shutdownProviderAuthFlow();
+    await Promise.all([shutdownProviderAuthFlow(), llmClient.shutdown()]);
   } catch (error) {
-    logger.error("main", "Provider authentication shutdown did not complete cleanly.", error);
+    logger.error("main", "Application service shutdown did not complete cleanly.", error);
   }
   forceAppQuit = true;
   app.quit();
