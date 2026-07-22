@@ -7,7 +7,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
-import { ShieldQuestion, SlidersHorizontal, SquarePen, TerminalSquare } from "lucide-react";
+import { ShieldQuestion, SquarePen, TerminalSquare } from "lucide-react";
 import { MessageList, type ToolActivity } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
@@ -552,17 +552,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
             data-terminal-toggle
           >
             <TerminalSquare />
-          </Button>
-          <Button
-            iconOnly
-            variant="glass"
-            size="large"
-            onClick={() => navigate({ to: "/settings" })}
-            disabled={Boolean(settingsBlockedReason)}
-            aria-label="Settings"
-            title={settingsBlockedReason}
-          >
-            <SlidersHorizontal />
           </Button>
         </>
       }
