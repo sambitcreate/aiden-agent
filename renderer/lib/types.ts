@@ -401,6 +401,7 @@ export type ArtificialAnalysisTier = "free" | "pro" | "commercial";
 export interface ArtificialAnalysisStatus {
   state: "not_connected" | "connected" | "ready";
   hasKey: boolean;
+  cleanupNeeded: boolean;
   ready: boolean;
   cachedModelCount: number;
   rankedModelCount: number;

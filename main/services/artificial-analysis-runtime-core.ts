@@ -22,6 +22,7 @@ export type ArtificialAnalysisConnectionState = "not_connected" | "connected" | 
 export interface ArtificialAnalysisStatus {
   state: ArtificialAnalysisConnectionState;
   hasKey: boolean;
+  cleanupNeeded: boolean;
   ready: boolean;
   cachedModelCount: number;
   rankedModelCount: number;
@@ -582,9 +583,11 @@ function statusFrom(
 ): ArtificialAnalysisStatus {
   const hasKey = credential !== null;
   const ready = cacheMatchesCredential(credential, cache);
+  const cleanupNeeded = !hasKey && cache !== null;
   return {
     state: ready ? "ready" : hasKey ? "connected" : "not_connected",
     hasKey,
+    cleanupNeeded,
     ready,
     cachedModelCount: ready ? cache.models.length : 0,
     rankedModelCount: ready ? cache.models.filter((model) => model.ranking).length : 0,
@@ -603,7 +606,7 @@ export class ArtificialAnalysisRuntime {
   async status(): Promise<ArtificialAnalysisStatus> {
     return this.mutex.run(async () => {
       const credential = await this.dependencies.credentials.read();
-      const cache = credential ? await this.dependencies.cache.read() : null;
+      const cache = await this.dependencies.cache.read();
       return statusFrom(credential, cache);
     });
   }

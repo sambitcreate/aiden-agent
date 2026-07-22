@@ -11,6 +11,7 @@ import {
 const ready: ArtificialAnalysisStatus = {
   state: "ready",
   hasKey: true,
+  cleanupNeeded: false,
   ready: true,
   cachedModelCount: 3,
   rankedModelCount: 2,

@@ -663,6 +663,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 model={model}
                 onChange={select}
                 disabled={isGenerating}
+                settingsBlockedReason={settingsBlockedReason}
               />
             }
           />

@@ -3,6 +3,7 @@
 // in a separate, read-only detail surface beside the picker.
 
 import * as React from "react";
+import { useNavigate } from "@tanstack/react-router";
 import {
   Button,
   Command,
@@ -26,9 +27,10 @@ import {
   type ModelEntry,
   type PositionedModel,
 } from "../lib/model-picker-data";
-import { useProvidersModelInfo } from "../lib/queries";
+import { useArtificialAnalysisStatus, useProvidersModelInfo } from "../lib/queries";
+import { resolveModelPadGate, type ModelPadGate } from "../lib/model-data-control";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, ChevronsUpDown, Cloud, Cpu, Pin } from "lucide-react";
+import { Check, ChevronsUpDown, Cloud, Cpu, LockKeyhole, Pin } from "lucide-react";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -36,6 +38,7 @@ interface ModelPickerProps {
   model: string;
   onChange: (providerId: string, model: string) => void;
   disabled?: boolean;
+  settingsBlockedReason?: string;
 }
 
 function formatTokens(value: number | undefined): string | null {
@@ -126,6 +129,70 @@ function useExternalModelDetails(): boolean {
   }, []);
 
   return showDetails;
+}
+
+function LockedModelPad({
+  gate,
+  onOpenSettings,
+  settingsBlockedReason,
+}: {
+  gate: ModelPadGate;
+  onOpenSettings: () => void;
+  settingsBlockedReason?: string;
+}) {
+  const gridSize = 9;
+  const blockedReasonId = React.useId();
+  return (
+    <div
+      aria-busy={gate.title === "Checking Model Pad"}
+      className="model-pad relative aspect-square w-full overflow-hidden rounded-card"
+    >
+      <div aria-hidden="true" className="absolute inset-0 opacity-55">
+        {Array.from({ length: gridSize * gridSize }, (_, index) => {
+          const column = index % gridSize;
+          const row = Math.floor(index / gridSize);
+          return (
+            <span
+              key={index}
+              className="absolute size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/20"
+              style={{
+                left: `${8 + (column / (gridSize - 1)) * 84}%`,
+                top: `${8 + (row / (gridSize - 1)) * 84}%`,
+              }}
+            />
+          );
+        })}
+      </div>
+      <div className="absolute inset-0 bg-popover/45 backdrop-blur-[2px]" />
+      <div className="relative flex h-full flex-col items-center justify-center px-8 text-center">
+        <span className="mb-3 flex size-9 items-center justify-center rounded-full bg-control text-secondary shadow-control">
+          <LockKeyhole className="size-4.5" />
+        </span>
+        <Text variant="small-strong" as="h3">
+          {gate.title}
+        </Text>
+        <Text variant="small" color="secondary" as="p" className="mt-1 max-w-52 text-pretty">
+          {gate.detail}
+        </Text>
+        <Button
+          data-model-pad-settings
+          size="small"
+          className={cn("mt-4", settingsBlockedReason && "opacity-45")}
+          onClick={onOpenSettings}
+          aria-disabled={Boolean(settingsBlockedReason)}
+          aria-describedby={settingsBlockedReason ? blockedReasonId : undefined}
+          title={settingsBlockedReason}
+        >
+          Open Model data settings
+        </Button>
+        {settingsBlockedReason ? (
+          <Text id={blockedReasonId} variant="small" color="secondary" as="p" className="mt-2 max-w-52">
+            {settingsBlockedReason}.
+          </Text>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ModelHoverDetails({
@@ -239,9 +306,11 @@ export function ModelPicker({
   model,
   onChange,
   disabled,
+  settingsBlockedReason,
 }: ModelPickerProps) {
+  const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
-  const [view, setView] = React.useState<"pad" | "list">("pad");
+  const [view, setView] = React.useState<"pad" | "list">("list");
   const [previewValue, setPreviewValue] = React.useState<string>();
   const [pinned, setPinned] = React.useState<string[]>(readPinnedModels);
   const contentRef = React.useRef<HTMLDivElement | null>(null);
@@ -254,6 +323,11 @@ export function ModelPicker({
   const padPanelId = `${pickerId}-pad-panel`;
 
   const catalog = useProvidersModelInfo(providers);
+  const artificialAnalysis = useArtificialAnalysisStatus();
+  const padGate = resolveModelPadGate(artificialAnalysis.data, {
+    loading: artificialAnalysis.isLoading,
+    failed: artificialAnalysis.isError,
+  });
 
   const infoByValue: Record<string, ModelInfo | undefined> = {};
   providers.forEach((provider) => {
@@ -310,7 +384,7 @@ export function ModelPicker({
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
-      setView("pad");
+      setView(padGate.unlocked ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
       setPreviewValue(undefined);
@@ -326,10 +400,20 @@ export function ModelPicker({
         searchRef.current?.focus();
         return;
       }
+      if (!padGate.unlocked) {
+        contentRef.current?.querySelector<HTMLElement>("[data-model-pad-settings]")?.focus();
+        return;
+      }
       contentRef.current
         ?.querySelector<HTMLElement>('[aria-roledescription="two-dimensional model picker"]')
         ?.focus();
     });
+  };
+
+  const openModelDataSettings = () => {
+    if (settingsBlockedReason) return;
+    setOpen(false);
+    void navigate({ to: "/settings", search: { section: "modelData" } });
   };
 
   const handleViewTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -397,7 +481,7 @@ export function ModelPicker({
         sideOffset={8}
         collisionPadding={{
           top: 40,
-          right: showExternalDetails ? 244 : 12,
+          right: showExternalDetails && (view === "list" || padGate.unlocked) ? 244 : 12,
           bottom: 12,
           left: 12,
         }}
@@ -405,6 +489,10 @@ export function ModelPicker({
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
+            if (!padGate.unlocked) {
+              searchRef.current?.focus();
+              return;
+            }
             const pad = contentRef.current?.querySelector<HTMLElement>(
               '[aria-roledescription="two-dimensional model picker"]',
             );
@@ -451,7 +539,9 @@ export function ModelPicker({
               )}
               onClick={() => switchView("pad")}
               onKeyDown={handleViewTabKeyDown}
+              aria-label={padGate.unlocked ? "Pad" : "Pad, locked"}
             >
+              {!padGate.unlocked ? <LockKeyhole className="size-3" /> : null}
               Pad
             </Button>
           </div>
@@ -464,13 +554,21 @@ export function ModelPicker({
             aria-labelledby={padTabId}
             className="min-w-0 p-2"
           >
-            <ModelPickerPad
-              models={positioned}
-              selectedValue={selectedValue}
-              previewValue={previewValue}
-              onPreview={setPreviewValue}
-              onCommit={(entry) => commit(entry)}
-            />
+            {padGate.unlocked ? (
+              <ModelPickerPad
+                models={positioned}
+                selectedValue={selectedValue}
+                previewValue={previewValue}
+                onPreview={setPreviewValue}
+                onCommit={(entry) => commit(entry)}
+              />
+            ) : (
+              <LockedModelPad
+                gate={padGate}
+                onOpenSettings={openModelDataSettings}
+                settingsBlockedReason={settingsBlockedReason}
+              />
+            )}
           </section>
         ) : (
           <section
@@ -555,7 +653,7 @@ export function ModelPicker({
           </section>
         )}
 
-        {showExternalDetails ? (
+        {showExternalDetails && (view === "list" || padGate.unlocked) ? (
           <ModelHoverDetails
             model={activePosition}
             metadataLoading={metadataLoading}

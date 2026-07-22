@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import {
   chatsApi,
+  artificialAnalysisApi,
   computerUseApi,
   exaApi,
   gitApi,
@@ -24,6 +25,7 @@ import {
   workspacesApi,
 } from "./ipc";
 import type {
+  ArtificialAnalysisStatus,
   CodexProviderSnapshot,
   CodexProviderStatusChanged,
   ModelInfo,
@@ -38,6 +40,8 @@ export const queryKeys = {
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
+  artificialAnalysisStatus: ["artificialAnalysisStatus"] as const,
+  artificialAnalysisModelInfo: ["modelInfo"] as const,
   codexProviderStatus: ["codexProviderStatus", "openai-codex"] as const,
   profile: ["profile"] as const,
   usage: (range: UsageDateRange) => ["usage", range] as const,
@@ -63,6 +67,46 @@ export const queryKeys = {
     ["discoveredSkills", folderPath ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
+
+async function cancelArtificialAnalysisReads(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.cancelQueries({ queryKey: queryKeys.artificialAnalysisStatus }),
+    queryClient.cancelQueries({ queryKey: queryKeys.artificialAnalysisModelInfo }),
+  ]);
+}
+
+/** Freeze device-local AA reads before a connect, refresh, or disconnect mutation. */
+export async function beginArtificialAnalysisAction(queryClient: QueryClient): Promise<void> {
+  await cancelArtificialAnalysisReads(queryClient);
+}
+
+/** Make an action result authoritative and restart active model-info reads from local storage. */
+export async function commitArtificialAnalysisState(
+  queryClient: QueryClient,
+  status: ArtificialAnalysisStatus,
+): Promise<void> {
+  await cancelArtificialAnalysisReads(queryClient);
+  queryClient.setQueryData(queryKeys.artificialAnalysisStatus, status);
+  await queryClient.invalidateQueries({ queryKey: queryKeys.artificialAnalysisModelInfo });
+}
+
+/** Re-read only local credential/cache state after a failed or partially applied mutation. */
+export async function refreshArtificialAnalysisState(
+  queryClient: QueryClient,
+  readStatus: () => Promise<ArtificialAnalysisStatus> = artificialAnalysisApi.status,
+): Promise<ArtificialAnalysisStatus> {
+  await cancelArtificialAnalysisReads(queryClient);
+  try {
+    const status = await readStatus();
+    await commitArtificialAnalysisState(queryClient, status);
+    return status;
+  } catch (error) {
+    await cancelArtificialAnalysisReads(queryClient);
+    queryClient.removeQueries({ queryKey: queryKeys.artificialAnalysisModelInfo });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.artificialAnalysisStatus });
+    throw error;
+  }
+}
 
 export function useProviders() {
   return useQuery({ queryKey: queryKeys.providers, queryFn: providersApi.list });
@@ -255,6 +299,17 @@ export function useChat(id: string | undefined) {
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
+}
+
+/** Reads only device-local credential/cache state; this query never fetches catalog data. */
+export function useArtificialAnalysisStatus() {
+  return useQuery({
+    queryKey: queryKeys.artificialAnalysisStatus,
+    queryFn: artificialAnalysisApi.status,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
 }
 
 export function useComputerUseStatus(enabled = true) {

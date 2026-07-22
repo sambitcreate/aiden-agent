@@ -1,7 +1,7 @@
 // In-app full-screen settings: left nav + section content, with "Back to app".
 
 import * as React from "react";
-import { useRouter } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Button, ScrollArea, Sidebar, SplitView } from "../components/ui";
 import {
   ChevronLeft,
@@ -15,6 +15,7 @@ import {
   ListFilter,
   Search,
   MousePointer2,
+  ChartScatter,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -24,21 +25,13 @@ import { WebSearchSettings } from "../components/settings/web-search-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
-
-type Section =
-  | "providers"
-  | "skills"
-  | "mcp"
-  | "websearch"
-  | "computerUse"
-  | "voice"
-  | "shortcut"
-  | "appearance";
+import { ModelDataSettings } from "../components/settings/model-data-settings";
+import type { SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
 
 type NavItem = {
-  id: Section;
+  id: SettingsSection;
   title: string;
   icon: React.ReactNode;
   group: NavGroup;
@@ -52,6 +45,13 @@ const NAV: NavItem[] = [
     icon: <Server className="size-5" />,
     group: "Agent",
     keywords: "models api keys",
+  },
+  {
+    id: "modelData",
+    title: "Model data",
+    icon: <ChartScatter className="size-5" />,
+    group: "Agent",
+    keywords: "artificial analysis api key model pad rankings benchmarks offline cache",
   },
   {
     id: "skills",
@@ -106,8 +106,9 @@ const NAV: NavItem[] = [
 
 const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
 
-const CONTENT: Record<Section, React.ComponentType> = {
+const CONTENT: Record<SettingsSection, React.ComponentType> = {
   providers: ProvidersSettings,
+  modelData: ModelDataSettings,
   skills: SkillsSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
@@ -117,9 +118,10 @@ const CONTENT: Record<Section, React.ComponentType> = {
   appearance: AppearanceSettings,
 };
 
-export function SettingsView() {
+export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
   const router = useRouter();
-  const [section, setSection] = React.useState<Section>("providers");
+  const navigate = useNavigate();
+  const section = initialSection ?? "providers";
   const [search, setSearch] = React.useState("");
 
   const query = search.trim().toLocaleLowerCase();
@@ -185,7 +187,13 @@ export function SettingsView() {
                             key={item.id}
                             type="button"
                             aria-current={selected ? "page" : undefined}
-                            onClick={() => setSection(item.id)}
+                            onClick={() =>
+                              void navigate({
+                                to: "/settings",
+                                search: { section: item.id },
+                                replace: true,
+                              })
+                            }
                             className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring ${
                               selected
                                 ? "bg-list-selection text-primary hover:bg-list-selection"

@@ -362,6 +362,8 @@ function runtimeFixture(
   let storedCache = initialCache;
   let fetchCount = 0;
   let cacheWriteError: Error | null = null;
+  let keyDeleteError: Error | null = null;
+  let cacheDeleteError: Error | null = null;
   let fetchCatalog = async (requestedKey: string) => {
     fetchCount += 1;
     return catalog(`from-${requestedKey}`);
@@ -372,6 +374,7 @@ function runtimeFixture(
       credential = next;
     },
     deleteKey: async () => {
+      if (keyDeleteError) throw keyDeleteError;
       credential = null;
     },
   };
@@ -382,6 +385,7 @@ function runtimeFixture(
       storedCache = next;
     },
     delete: async () => {
+      if (cacheDeleteError) throw cacheDeleteError;
       storedCache = null;
     },
   };
@@ -407,6 +411,12 @@ function runtimeFixture(
     setCacheWriteError(error: Error | null) {
       cacheWriteError = error;
     },
+    setKeyDeleteError(error: Error | null) {
+      keyDeleteError = error;
+    },
+    setCacheDeleteError(error: Error | null) {
+      cacheDeleteError = error;
+    },
     setFetchCatalog(next: typeof fetchCatalog) {
       fetchCatalog = next;
     },
@@ -418,6 +428,7 @@ test("status and catalog reads are offline and connecting fetches exactly once",
   assert.deepEqual(await fixture.runtime.status(), {
     state: "not_connected",
     hasKey: false,
+    cleanupNeeded: false,
     ready: false,
     cachedModelCount: 0,
     rankedModelCount: 0,
@@ -444,6 +455,7 @@ test("a partial cross-file replacement fails closed until an explicit refresh re
   assert.deepEqual(await fixture.runtime.status(), {
     state: "connected",
     hasKey: true,
+    cleanupNeeded: false,
     ready: false,
     cachedModelCount: 0,
     rankedModelCount: 0,
@@ -491,6 +503,7 @@ test("refresh is explicit, uses the stored key, and disconnect removes both key 
   assert.deepEqual(await fixture.runtime.disconnect(), {
     state: "not_connected",
     hasKey: false,
+    cleanupNeeded: false,
     ready: false,
     cachedModelCount: 0,
     rankedModelCount: 0,
@@ -500,6 +513,50 @@ test("refresh is explicit, uses the stored key, and disconnect removes both key 
   });
   assert.equal(fixture.key, null);
   assert.equal(fixture.cache, null);
+});
+
+test("partial disconnect failures remain offline-readable and fail closed", async () => {
+  const keyDeleteFailure = runtimeFixture("saved-key", catalog("old-model"));
+  keyDeleteFailure.setKeyDeleteError(new Error("keychain unavailable"));
+  await assert.rejects(keyDeleteFailure.runtime.disconnect(), /keychain unavailable/u);
+  assert.equal(keyDeleteFailure.key, "saved-key");
+  assert.equal(keyDeleteFailure.cache, null);
+  assert.deepEqual(await keyDeleteFailure.runtime.status(), {
+    state: "connected",
+    hasKey: true,
+    cleanupNeeded: false,
+    ready: false,
+    cachedModelCount: 0,
+    rankedModelCount: 0,
+    fetchedAt: undefined,
+    tier: undefined,
+    intelligenceIndexVersion: undefined,
+  });
+  assert.equal(await keyDeleteFailure.runtime.catalog(), null);
+  keyDeleteFailure.setKeyDeleteError(null);
+  assert.equal((await keyDeleteFailure.runtime.disconnect()).cleanupNeeded, false);
+  assert.equal(keyDeleteFailure.key, null);
+
+  const cacheDeleteFailure = runtimeFixture("saved-key", catalog("old-model"));
+  cacheDeleteFailure.setCacheDeleteError(new Error("cache unavailable"));
+  await assert.rejects(cacheDeleteFailure.runtime.disconnect(), /cache unavailable/u);
+  assert.equal(cacheDeleteFailure.key, null);
+  assert.notEqual(cacheDeleteFailure.cache, null);
+  assert.deepEqual(await cacheDeleteFailure.runtime.status(), {
+    state: "not_connected",
+    hasKey: false,
+    cleanupNeeded: true,
+    ready: false,
+    cachedModelCount: 0,
+    rankedModelCount: 0,
+    fetchedAt: undefined,
+    tier: undefined,
+    intelligenceIndexVersion: undefined,
+  });
+  assert.equal(await cacheDeleteFailure.runtime.catalog(), null);
+  cacheDeleteFailure.setCacheDeleteError(null);
+  assert.equal((await cacheDeleteFailure.runtime.disconnect()).cleanupNeeded, false);
+  assert.equal(cacheDeleteFailure.cache, null);
 });
 
 test("disconnect queued behind an in-flight connect wins and prevents stale state", async () => {

@@ -11,6 +11,7 @@ import { SettingsView } from "./settings-view";
 import { ProfileView } from "./profile-view";
 import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
+import { parseSettingsSearch } from "../lib/settings-section";
 
 const rootRoute = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -62,7 +63,11 @@ const profileRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
-  component: SettingsView,
+  validateSearch: parseSettingsSearch,
+  component: function SettingsRoute() {
+    const { section } = settingsRoute.useSearch();
+    return <SettingsView initialSection={section} />;
+  },
   staticData: { title: "Settings" },
 });
 
