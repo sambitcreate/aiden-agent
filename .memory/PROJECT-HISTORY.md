@@ -1,5 +1,11 @@
 # Project History
 
+### 2026-07-22 — Add Command-number chat switching
+
+- Added native-style ⌘1–⌘9 chat navigation. Holding Command for half a second reveals quiet, theme-aware shortcut chips beside the first nine chats, while the shortcuts themselves work immediately.
+- Shortcut assignment projects from the sidebar's canonical ordered sections instead of maintaining a second recency sort. Search does not renumber chats, and future pinned or user-selected sorting can change the section order without changing keyboard handling.
+- Added pure regression coverage for order preservation, the nine-chat cap, exact modifier handling, key repeat/composition rejection, and the 500 ms reveal contract.
+
 ### 2026-07-22 — Simplify sidebar chat rows
 
 - Removed the repeated speech-bubble icon from ordinary chat rows so titles align directly with their time-bucket labels and the conversation-first sidebar reads more quietly. The temporary Apple rename spinner remains as a meaningful progress indicator.

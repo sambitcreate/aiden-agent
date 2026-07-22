@@ -46,6 +46,11 @@ import {
   createChatTitleReveal,
   type ChatTitleRevealEvent,
 } from "../lib/chat-title-reveal";
+import {
+  COMMAND_CHAT_SHORTCUT_REVEAL_MS,
+  commandChatShortcutNumber,
+  createSidebarChatShortcutAssignments,
+} from "../lib/sidebar-chat-shortcuts";
 import { queryKeys, useChats, useFoundationModelsConnection } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
@@ -152,11 +157,30 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
   const [deletingWorktree, setDeletingWorktree] = React.useState<Workspace | null>(null);
   const [deletingWorktreeBusy, setDeletingWorktreeBusy] = React.useState(false);
+  const [chatShortcutsVisible, setChatShortcutsVisible] = React.useState(false);
+  const shortcutRevealTimerRef = React.useRef<number | null>(null);
+  const heldCommandKeysRef = React.useRef(new Set<string>());
 
-  const items = (chats.data ?? []).filter((c) =>
-    c.title.toLowerCase().includes(search.trim().toLowerCase()),
+  const orderedGroups = React.useMemo(() => groupChats(chats.data ?? []), [chats.data]);
+  const groups = React.useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return orderedGroups;
+
+    return orderedGroups.flatMap((group) => {
+      const matches = group.chats.filter((chat) => chat.title.toLowerCase().includes(query));
+      return matches.length > 0 ? [{ ...group, chats: matches }] : [];
+    });
+  }, [orderedGroups, search]);
+  const shortcutAssignments = React.useMemo(
+    () => createSidebarChatShortcutAssignments(orderedGroups),
+    [orderedGroups],
   );
-  const groups = groupChats(items);
+  const shortcutAssignmentsRef = React.useRef(shortcutAssignments);
+  shortcutAssignmentsRef.current = shortcutAssignments;
+  const shortcutNumberByChatId = React.useMemo(
+    () => new Map(shortcutAssignments.map(({ chat, number }) => [chat.id, number])),
+    [shortcutAssignments],
+  );
   const appleRenameReady = foundationModels.data?.state === "ready";
   const appleRenameDetail = foundationModels.isLoading
     ? "Checking Apple Foundation Models availability."
@@ -170,6 +194,72 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
+
+  React.useEffect(() => {
+    const clearRevealTimer = () => {
+      if (shortcutRevealTimerRef.current === null) return;
+      window.clearTimeout(shortcutRevealTimerRef.current);
+      shortcutRevealTimerRef.current = null;
+    };
+    const hideShortcuts = () => {
+      heldCommandKeysRef.current.clear();
+      clearRevealTimer();
+      setChatShortcutsVisible(false);
+    };
+    const isCommandKey = (event: KeyboardEvent) =>
+      event.key === "Meta" || event.code === "MetaLeft" || event.code === "MetaRight";
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isCommandKey(event)) {
+        const commandKey = event.code || "Meta";
+        const wasAlreadyHeld = heldCommandKeysRef.current.has(commandKey);
+        heldCommandKeysRef.current.add(commandKey);
+        if (!wasAlreadyHeld && shortcutRevealTimerRef.current === null) {
+          shortcutRevealTimerRef.current = window.setTimeout(() => {
+            shortcutRevealTimerRef.current = null;
+            if (heldCommandKeysRef.current.size > 0) setChatShortcutsVisible(true);
+          }, COMMAND_CHAT_SHORTCUT_REVEAL_MS);
+        }
+        return;
+      }
+
+      if (
+        event.defaultPrevented ||
+        document.querySelector('[data-slot="dialog-content"][data-state="open"]')
+      ) {
+        return;
+      }
+
+      const shortcutNumber = commandChatShortcutNumber(event);
+      if (shortcutNumber === null) return;
+      const assignment = shortcutAssignmentsRef.current[shortcutNumber - 1];
+      if (!assignment) return;
+
+      event.preventDefault();
+      void navigate({ to: "/chat/$chatId", params: { chatId: assignment.chat.id } });
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (!isCommandKey(event)) return;
+      heldCommandKeysRef.current.delete(event.code || "Meta");
+      if (heldCommandKeysRef.current.size === 0) hideShortcuts();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") hideShortcuts();
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", hideShortcuts);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", hideShortcuts);
+      heldCommandKeysRef.current.clear();
+      clearRevealTimer();
+    };
+  }, [navigate]);
 
   // Move to a workspace and land on one of its chats (creating one if empty).
   const enterWorkspace = React.useCallback(
@@ -437,8 +527,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
           ) : (
             groups.map((group) => (
               <SidebarListGroup key={group.label} title={group.label}>
-                {group.chats.map((chat) => (
-                  <ContextMenu key={chat.id}>
+                {group.chats.map((chat) => {
+                  const shortcutNumber = shortcutNumberByChatId.get(chat.id);
+                  return <ContextMenu key={chat.id}>
                     <ContextMenuTrigger asChild>
                       <SidebarListItem
                         icon={
@@ -458,6 +549,17 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                             chat.title
                           )
                         }
+                        trailing={
+                          chatShortcutsVisible && shortcutNumber ? (
+                            <kbd
+                              aria-hidden="true"
+                              className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                            >
+                              ⌘{shortcutNumber}
+                            </kbd>
+                          ) : undefined
+                        }
+                        aria-keyshortcuts={shortcutNumber ? `Meta+${shortcutNumber}` : undefined}
                         selected={chat.id === activeChatId}
                         onClick={() =>
                           navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })
@@ -507,8 +609,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                         Delete
                       </ContextMenuItem>
                     </ContextMenuContent>
-                  </ContextMenu>
-                ))}
+                  </ContextMenu>;
+                })}
               </SidebarListGroup>
             ))
           )}
