@@ -6,10 +6,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app, logger } from "../platform.js";
 import {
-  EMPTY_ARTIFICIAL_ANALYSIS_SNAPSHOT,
-  parseArtificialAnalysisSnapshot,
+  EMPTY_ARTIFICIAL_ANALYSIS_CATALOG,
   type ArtificialAnalysisCatalog,
-  type ArtificialAnalysisSnapshot,
 } from "./artificial-analysis-catalog-core.js";
 import { artificialAnalysisRuntime } from "./artificial-analysis-runtime.js";
 import {
@@ -21,10 +19,8 @@ import {
 import type { ModelInfo } from "./types.js";
 
 const BUNDLED_MODELS_DEV_PARTS = ["resources", "model-capabilities.json"] as const;
-const BUNDLED_ARTIFICIAL_ANALYSIS_PARTS = ["resources", "artificial-analysis-models.json"] as const;
 
 let modelsDevSnapshot: Promise<ModelCatalog> | null = null;
-let bundledArtificialAnalysisSnapshot: Promise<ArtificialAnalysisSnapshot> | null = null;
 
 function bundledPath(parts: readonly string[]): string {
   return join(app.getAppPath(), ...parts);
@@ -43,24 +39,6 @@ async function loadModelsDev(): Promise<ModelCatalog> {
   }
 }
 
-async function loadBundledArtificialAnalysis(): Promise<ArtificialAnalysisSnapshot> {
-  const path = bundledPath(BUNDLED_ARTIFICIAL_ANALYSIS_PARTS);
-  try {
-    return parseArtificialAnalysisSnapshot(JSON.parse(await readFile(path, "utf8")));
-  } catch (error) {
-    logger.warn("models-catalog", "Could not read bundled Artificial Analysis snapshot.", {
-      path,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return EMPTY_ARTIFICIAL_ANALYSIS_SNAPSHOT;
-  }
-}
-
-function getBundledArtificialAnalysis(): Promise<ArtificialAnalysisSnapshot> {
-  bundledArtificialAnalysisSnapshot ??= loadBundledArtificialAnalysis();
-  return bundledArtificialAnalysisSnapshot;
-}
-
 async function loadArtificialAnalysis(): Promise<ArtificialAnalysisCatalog> {
   try {
     const local = await artificialAnalysisRuntime.catalog();
@@ -70,7 +48,7 @@ async function loadArtificialAnalysis(): Promise<ArtificialAnalysisCatalog> {
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  return getBundledArtificialAnalysis();
+  return EMPTY_ARTIFICIAL_ANALYSIS_CATALOG;
 }
 
 function getModelsDev(): Promise<ModelCatalog> {

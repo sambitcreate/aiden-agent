@@ -7,6 +7,7 @@ import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { extractFile, listPackage, statFile } from "@electron/asar";
 import {
   AIDEN_APP_BUNDLE_ID,
   AIDEN_COMPUTER_USE_BUNDLE_ID,
@@ -20,6 +21,10 @@ import {
   packagedComputerUsePaths,
 } from "./computer-use-signing-pins.mjs";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
+import {
+  MAX_MODELS_DEV_SNAPSHOT_BYTES,
+  validateModelsDevSnapshot,
+} from "./model-snapshot-core.mjs";
 
 const executeFile = promisify(execFile);
 const modulePath = fileURLToPath(import.meta.url);
@@ -42,6 +47,7 @@ const reviewedHelperInfoPlistPath = path.join(
   "computer-use-broker",
   "Info.plist",
 );
+const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
 const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
   [
     ["Contents", "directory"],
@@ -79,6 +85,50 @@ export async function assertRegularFile(file) {
     throw new Error(`Expected a regular non-symlinked package file: ${file}`);
   }
   return info;
+}
+
+export function assertPackagedModelCatalogEntries(entries) {
+  const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
+  if (!normalized.has("/resources/model-capabilities.json")) {
+    throw new Error("Packaged app.asar is missing the models.dev capability snapshot.");
+  }
+  if (
+    [...normalized].some((entry) => entry.split("/").at(-1) === "artificial-analysis-models.json")
+  ) {
+    throw new Error("Packaged app.asar contains the obsolete Artificial Analysis snapshot.");
+  }
+}
+
+export async function verifyPackagedModelCatalogResources(appAsar) {
+  await assertRegularFile(appAsar);
+  assertPackagedModelCatalogEntries(listPackage(appAsar, { isPack: false }));
+  const entry = statFile(appAsar, PACKAGED_MODELS_DEV_ENTRY, false);
+  if (
+    !entry ||
+    typeof entry.size !== "number" ||
+    !Number.isSafeInteger(entry.size) ||
+    entry.size <= 0 ||
+    entry.size > MAX_MODELS_DEV_SNAPSHOT_BYTES ||
+    typeof entry.offset !== "string" ||
+    entry.unpacked === true ||
+    "files" in entry ||
+    "link" in entry
+  ) {
+    throw new Error(
+      "Packaged models.dev capability snapshot must be a bounded packed regular file.",
+    );
+  }
+  const bytes = extractFile(appAsar, PACKAGED_MODELS_DEV_ENTRY, false);
+  if (bytes.byteLength !== entry.size) {
+    throw new Error("Packaged models.dev capability snapshot size does not match its ASAR entry.");
+  }
+  let snapshot;
+  try {
+    snapshot = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("Packaged models.dev capability snapshot is not valid JSON.");
+  }
+  validateModelsDevSnapshot(snapshot);
 }
 
 export function assertComputerUseExecutableMode(mode, file) {
@@ -294,6 +344,7 @@ export async function verifyMacPackage(appPath) {
     throw new Error("Packaged macOS verification can only run on macOS.");
   }
   const paths = packagedComputerUsePaths(appPath);
+  const appAsar = path.join(paths.app, "Contents", "Resources", "app.asar");
   for (const file of [
     paths.broker,
     paths.driver,
@@ -303,9 +354,11 @@ export async function verifyMacPackage(appPath) {
     paths.outerProvenance,
     paths.outerLicenseNotice,
     paths.electronExecutable,
+    appAsar,
   ]) {
     await assertRegularFile(file);
   }
+  await verifyPackagedModelCatalogResources(appAsar);
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);

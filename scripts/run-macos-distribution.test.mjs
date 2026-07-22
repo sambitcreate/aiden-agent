@@ -1,7 +1,7 @@
 /* global process */
 
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
   runDistributionTransaction,
   verifyMacDistributionArchives,
 } from "./run-macos-distribution.mjs";
+import { updateModelCapabilities } from "./update-model-capabilities.mjs";
 
 test("distribution failures discard staging before anything is promoted", async () => {
   const events = [];
@@ -30,6 +31,40 @@ test("distribution failures discard staging before anything is promoted", async 
     /missing notarization credentials/u,
   );
   assert.deepEqual(events, ["prepare", "preflight-or-build", "discard"]);
+});
+
+test("a model refresh timeout preserves the snapshot and discards distribution staging", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-distribution-model-timeout-"));
+  const destination = path.join(root, "model-capabilities.json");
+  const events = [];
+  try {
+    await writeFile(destination, "prior snapshot\n", "utf8");
+    await assert.rejects(
+      runDistributionTransaction({
+        prepare: async () => {
+          events.push("prepare");
+          return { staging: path.join(root, "stage"), distribution: path.join(root, "release") };
+        },
+        build: async () => {
+          events.push("refresh");
+          await updateModelCapabilities({
+            destination,
+            timeoutMs: 10,
+            fetch: async () => new Promise(() => undefined),
+            log: () => undefined,
+          });
+        },
+        verify: async () => events.push("verify"),
+        promote: async () => events.push("promote"),
+        discard: async () => events.push("discard"),
+      }),
+      /release refresh deadline/u,
+    );
+    assert.deepEqual(events, ["prepare", "refresh", "discard"]);
+    assert.equal(await readFile(destination, "utf8"), "prior snapshot\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("distribution promotion happens only after build and verification", async () => {

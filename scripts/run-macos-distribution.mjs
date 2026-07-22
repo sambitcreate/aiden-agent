@@ -185,7 +185,7 @@ export async function runMacDistribution() {
     prepare: () => beginMacDistribution(repositoryRoot),
     build: async ({ staging }) => {
       await npm("release:preflight");
-      await npm("release:update-model-snapshots");
+      await npm("release:update-model-capabilities");
       await npm("computer-use:vendor");
       await npm("build:native");
       await npm("build");

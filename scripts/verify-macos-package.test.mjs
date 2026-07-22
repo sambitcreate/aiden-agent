@@ -1,10 +1,11 @@
 /* global Buffer */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createPackage, createPackageWithOptions } from "@electron/asar";
 import {
   assertByteForByteMatch,
   assertComputerUseBundleExecutable,
@@ -15,11 +16,13 @@ import {
   assertElectronEntitlements,
   assertMinimalComputerUseEntitlements,
   assertMatchingHostCodeHashes,
+  assertPackagedModelCatalogEntries,
   assertSamePackagedArtifactIdentity,
   assertHardenedRuntime,
   assertRegularFile,
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
+  verifyPackagedModelCatalogResources,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
 
@@ -41,6 +44,20 @@ async function createComputerUseHelperTree(root) {
     writeFile(path.join(resources, "cua-driver-artifact.json"), "{}", "utf8"),
     writeFile(path.join(signature, "CodeResources"), "signature", "utf8"),
   ]);
+}
+
+function modelCatalogFixture() {
+  return {
+    openai: {
+      models: {
+        "openai/example": {
+          name: "Example",
+          modalities: { input: ["text"], output: ["text"] },
+          limit: { context: 128_000, output: 16_000 },
+        },
+      },
+    },
+  };
 }
 
 test("package verifier rejects symlinked Computer Use resources", async () => {
@@ -66,6 +83,99 @@ test("package verifier requires byte-identical Computer Use provenance and notic
     () => assertByteForByteMatch(Buffer.from("substituted\n"), Buffer.from("reviewed\n"), "notice"),
     /differs from the reviewed copy/,
   );
+});
+
+test("package verifier requires models.dev and rejects a bundled Artificial Analysis snapshot", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedModelCatalogEntries(["/resources/model-capabilities.json"]),
+  );
+  assert.throws(() => assertPackagedModelCatalogEntries([]), /missing the models.dev/u);
+  assert.throws(
+    () =>
+      assertPackagedModelCatalogEntries([
+        "/resources/model-capabilities.json",
+        "/resources/artificial-analysis-models.json",
+      ]),
+    /obsolete Artificial Analysis/u,
+  );
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-model-catalog-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const resources = path.join(source, "resources");
+  const rejectedAsar = path.join(root, "rejected.asar");
+  const acceptedAsar = path.join(root, "accepted.asar");
+  const malformedAsar = path.join(root, "malformed.asar");
+  try {
+    await mkdir(resources, { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(resources, "model-capabilities.json"),
+        `${JSON.stringify(modelCatalogFixture())}\n`,
+        "utf8",
+      ),
+      writeFile(path.join(resources, "artificial-analysis-models.json"), "{}\n", "utf8"),
+    ]);
+    await createPackage(source, rejectedAsar);
+    await assert.rejects(
+      verifyPackagedModelCatalogResources(rejectedAsar),
+      /obsolete Artificial Analysis/u,
+    );
+
+    await unlink(path.join(resources, "artificial-analysis-models.json"));
+    await createPackage(source, acceptedAsar);
+    await assert.doesNotReject(verifyPackagedModelCatalogResources(acceptedAsar));
+
+    await writeFile(
+      path.join(resources, "model-capabilities.json"),
+      JSON.stringify({
+        openai: { models: { broken: { name: "Broken", modalities: { input: { length: 1 } } } } },
+      }),
+      "utf8",
+    );
+    await createPackage(source, malformedAsar);
+    await assert.rejects(
+      verifyPackagedModelCatalogResources(malformedAsar),
+      /modalities\.input must be a string array/u,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier rejects directory, symlink, and unpacked catalog entries", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-model-catalog-entry-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const resources = path.join(source, "resources");
+  const catalog = path.join(resources, "model-capabilities.json");
+  try {
+    await mkdir(catalog, { recursive: true });
+    const directoryAsar = path.join(root, "directory.asar");
+    await createPackage(source, directoryAsar);
+    await assert.rejects(
+      verifyPackagedModelCatalogResources(directoryAsar),
+      /packed regular file/u,
+    );
+
+    await rm(catalog, { recursive: true, force: true });
+    const target = path.join(resources, "catalog-target.json");
+    await writeFile(target, `${JSON.stringify(modelCatalogFixture())}\n`, "utf8");
+    await symlink("catalog-target.json", catalog);
+    const symlinkAsar = path.join(root, "symlink.asar");
+    await createPackage(source, symlinkAsar);
+    await assert.rejects(verifyPackagedModelCatalogResources(symlinkAsar), /packed regular file/u);
+
+    await unlink(catalog);
+    await writeFile(catalog, `${JSON.stringify(modelCatalogFixture())}\n`, "utf8");
+    const unpackedAsar = path.join(root, "unpacked.asar");
+    await createPackageWithOptions(source, unpackedAsar, {
+      unpack: "**/model-capabilities.json",
+    });
+    await assert.rejects(verifyPackagedModelCatalogResources(unpackedAsar), /packed regular file/u);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test("package verifier rejects additional helper Info.plist keys", async () => {

@@ -597,14 +597,15 @@ function statusFrom(
   };
 }
 
-/** Serializes connect, refresh, and disconnect so stale requests cannot overwrite newer intent. */
+/** Serializes mutations while allowing fail-closed offline reads during a manual network fetch. */
 export class ArtificialAnalysisRuntime {
-  private readonly mutex = new AsyncMutex();
+  private readonly actionMutex = new AsyncMutex();
+  private readonly stateMutex = new AsyncMutex();
 
   constructor(private readonly dependencies: ArtificialAnalysisRuntimeDependencies) {}
 
   async status(): Promise<ArtificialAnalysisStatus> {
-    return this.mutex.run(async () => {
+    return this.stateMutex.run(async () => {
       const credential = await this.dependencies.credentials.read();
       const cache = await this.dependencies.cache.read();
       return statusFrom(credential, cache);
@@ -612,7 +613,7 @@ export class ArtificialAnalysisRuntime {
   }
 
   async catalog(): Promise<ArtificialAnalysisUserCache | null> {
-    return this.mutex.run(async () => {
+    return this.stateMutex.run(async () => {
       const credential = await this.dependencies.credentials.read();
       if (!credential) return null;
       const cache = await this.dependencies.cache.read();
@@ -622,66 +623,83 @@ export class ArtificialAnalysisRuntime {
 
   async connect(apiKey: unknown): Promise<ArtificialAnalysisStatus> {
     const key = normalizeArtificialAnalysisApiKey(apiKey);
-    return this.mutex.run(async () => {
-      const previousCredential = await this.dependencies.credentials.read();
+    return this.actionMutex.run(async () => {
       const cache = await this.dependencies.fetchCatalog(key);
-      await this.dependencies.credentials.write({ key, generation: cache.source.generation });
-      try {
-        await this.dependencies.cache.write(cache);
-      } catch (error) {
+      return this.stateMutex.run(async () => {
+        const previousCredential = await this.dependencies.credentials.read();
+        await this.dependencies.credentials.write({ key, generation: cache.source.generation });
         try {
-          if (previousCredential) await this.dependencies.credentials.write(previousCredential);
-          else await this.dependencies.credentials.deleteKey();
-        } catch {
-          throw new Error(
-            "Aiden could not save the Artificial Analysis cache or restore the previous key.",
-          );
+          await this.dependencies.cache.write(cache);
+        } catch (error) {
+          try {
+            if (previousCredential) await this.dependencies.credentials.write(previousCredential);
+            else await this.dependencies.credentials.deleteKey();
+          } catch {
+            throw new Error(
+              "Aiden could not save the Artificial Analysis cache or restore the previous key.",
+            );
+          }
+          throw error;
         }
-        throw error;
-      }
-      return statusFrom({ key, generation: cache.source.generation }, cache);
+        return statusFrom({ key, generation: cache.source.generation }, cache);
+      });
     });
   }
 
   async refresh(): Promise<ArtificialAnalysisStatus> {
-    return this.mutex.run(async () => {
-      const previousCredential = await this.dependencies.credentials.read();
+    return this.actionMutex.run(async () => {
+      const previousCredential = await this.stateMutex.run(() =>
+        this.dependencies.credentials.read(),
+      );
       if (!previousCredential) {
         throw new ArtificialAnalysisStateError(
           "Connect Artificial Analysis before fetching model data.",
         );
       }
       const cache = await this.dependencies.fetchCatalog(previousCredential.key);
-      const nextCredential = {
-        key: previousCredential.key,
-        generation: cache.source.generation,
-      };
-      await this.dependencies.credentials.write(nextCredential);
-      try {
-        await this.dependencies.cache.write(cache);
-      } catch (error) {
-        try {
-          await this.dependencies.credentials.write(previousCredential);
-        } catch {
-          throw new Error(
-            "Aiden could not save the Artificial Analysis cache or restore its previous generation.",
+      return this.stateMutex.run(async () => {
+        const currentCredential = await this.dependencies.credentials.read();
+        if (
+          currentCredential?.key !== previousCredential.key ||
+          currentCredential.generation !== previousCredential.generation
+        ) {
+          throw new ArtificialAnalysisStateError(
+            "Artificial Analysis connection changed while model data was being fetched. Try again.",
           );
         }
-        throw error;
-      }
-      return statusFrom(nextCredential, cache);
+        const nextCredential = {
+          key: previousCredential.key,
+          generation: cache.source.generation,
+        };
+        await this.dependencies.credentials.write(nextCredential);
+        try {
+          await this.dependencies.cache.write(cache);
+        } catch (error) {
+          try {
+            await this.dependencies.credentials.write(previousCredential);
+          } catch {
+            throw new Error(
+              "Aiden could not save the Artificial Analysis cache or restore its previous generation.",
+            );
+          }
+          throw error;
+        }
+        return statusFrom(nextCredential, cache);
+      });
     });
   }
 
   async disconnect(): Promise<ArtificialAnalysisStatus> {
-    return this.mutex.run(async () => {
-      const results = await Promise.allSettled([
-        this.dependencies.credentials.deleteKey(),
-        this.dependencies.cache.delete(),
-      ]);
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure?.status === "rejected") throw failure.reason;
-      return statusFrom(null, null);
+    return this.actionMutex.run(async () => {
+      return this.stateMutex.run(async () => {
+        const results = await Promise.allSettled([
+          this.dependencies.credentials.deleteKey(),
+          this.dependencies.cache.delete(),
+        ]);
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") throw failure.reason;
+        return statusFrom(null, null);
+      });
     });
   }
 }

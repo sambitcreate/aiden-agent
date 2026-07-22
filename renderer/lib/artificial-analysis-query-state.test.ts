@@ -11,9 +11,7 @@ import {
 } from "./queries.js";
 import type { ArtificialAnalysisStatus } from "./types.js";
 
-function status(
-  patch: Partial<ArtificialAnalysisStatus> = {},
-): ArtificialAnalysisStatus {
+function status(patch: Partial<ArtificialAnalysisStatus> = {}): ArtificialAnalysisStatus {
   return {
     state: "not_connected",
     hasKey: false,
@@ -123,5 +121,47 @@ test("failed actions can reconcile authoritative local status and refresh model 
   });
   assert.equal(modelReads, 1);
   unsubscribeModel();
+  queryClient.clear();
+});
+
+test("a failed post-switch model read cannot retain rankings from the previous key", async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+  });
+  const key = queryKeys.modelInfo("openrouter");
+  queryClient.setQueryData(key, { source: "previous-key" });
+  const modelObserver = new QueryObserver(queryClient, {
+    queryKey: key,
+    queryFn: async () => {
+      throw new Error("local cache read failed");
+    },
+  });
+  const unsubscribeModel = modelObserver.subscribe(() => undefined);
+
+  await commitArtificialAnalysisState(
+    queryClient,
+    status({ state: "ready", hasKey: true, ready: true }),
+  );
+  await waitFor(() => modelObserver.getCurrentResult().isError);
+
+  assert.equal(modelObserver.getCurrentResult().data, undefined);
+  assert.equal(queryClient.getQueryData(key), undefined);
+  unsubscribeModel();
+  queryClient.clear();
+});
+
+test("a successful identity change purges inactive model rankings", async () => {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const openrouter = queryKeys.modelInfo("openrouter");
+  const anthropic = queryKeys.modelInfo("anthropic");
+  queryClient.setQueryData(openrouter, { source: "previous-key" });
+  queryClient.setQueryData(anthropic, { source: "previous-key" });
+
+  await commitArtificialAnalysisState(queryClient, status());
+
+  assert.equal(queryClient.getQueryData(openrouter), undefined);
+  assert.equal(queryClient.getQueryData(anthropic), undefined);
   queryClient.clear();
 });

@@ -2,16 +2,6 @@ import type { ModelRanking } from "./types.js";
 
 export const MAX_ARTIFICIAL_ANALYSIS_MODELS = 10_000;
 
-export interface ArtificialAnalysisSnapshotSource {
-  name: "Artificial Analysis";
-  url: string;
-  fetched_at: string | null;
-  tier: "pro" | "commercial" | null;
-  intelligence_index_version: number | null;
-  prompt_type: string;
-  redistribution_confirmed: boolean;
-}
-
 export interface ArtificialAnalysisCatalog {
   schema_version: 1;
   source: {
@@ -48,10 +38,6 @@ export interface ArtificialAnalysisSnapshotModel {
     response_time_percentile: number;
     pace_metric: "median_end_to_end_response_time_seconds";
   };
-}
-
-export interface ArtificialAnalysisSnapshot extends ArtificialAnalysisCatalog {
-  source: ArtificialAnalysisSnapshotSource;
 }
 
 export type ArtificialAnalysisTier = "free" | "pro" | "commercial";
@@ -200,71 +186,6 @@ function parseModel(value: unknown, index: number): ArtificialAnalysisSnapshotMo
   };
 }
 
-/** Validate the release snapshot and reject accidental unlicensed payloads. */
-export function parseArtificialAnalysisSnapshot(value: unknown): ArtificialAnalysisSnapshot {
-  const snapshot = record(value);
-  if (!snapshot || snapshot.schema_version !== 1) {
-    throw new Error("Bundled Artificial Analysis snapshot must use schema version 1.");
-  }
-  const rawSource = record(snapshot.source);
-  if (!rawSource || rawSource.name !== "Artificial Analysis") {
-    throw new Error("Bundled Artificial Analysis snapshot has an invalid source.");
-  }
-  if (!Array.isArray(snapshot.models)) {
-    throw new Error("Bundled Artificial Analysis snapshot models must be an array.");
-  }
-  const redistributionConfirmed = rawSource.redistribution_confirmed;
-  if (typeof redistributionConfirmed !== "boolean") {
-    throw new Error("Artificial Analysis redistribution confirmation must be explicit.");
-  }
-  if (snapshot.models.length > 0 && !redistributionConfirmed) {
-    throw new Error(
-      "Artificial Analysis data cannot be bundled without redistribution confirmation.",
-    );
-  }
-  const tier = rawSource.tier;
-  if (tier !== null && tier !== "pro" && tier !== "commercial") {
-    throw new Error("Artificial Analysis snapshot tier must be pro, commercial, or null.");
-  }
-  const fetchedAt = rawSource.fetched_at;
-  if (
-    fetchedAt !== null &&
-    (typeof fetchedAt !== "string" || !Number.isFinite(Date.parse(fetchedAt)))
-  ) {
-    throw new Error("Artificial Analysis snapshot fetched_at must be an ISO timestamp or null.");
-  }
-  const indexVersion = rawSource.intelligence_index_version;
-  if (
-    indexVersion !== null &&
-    (typeof indexVersion !== "number" || !Number.isFinite(indexVersion))
-  ) {
-    throw new Error("Artificial Analysis snapshot index version must be a number or null.");
-  }
-  if (typeof rawSource.url !== "string" || typeof rawSource.prompt_type !== "string") {
-    throw new Error("Artificial Analysis snapshot source metadata is incomplete.");
-  }
-  if (
-    snapshot.models.length > 0 &&
-    (tier === null || fetchedAt === null || indexVersion === null)
-  ) {
-    throw new Error("Artificial Analysis data requires complete release provenance.");
-  }
-
-  return {
-    schema_version: 1,
-    source: {
-      name: "Artificial Analysis",
-      url: rawSource.url,
-      fetched_at: fetchedAt,
-      tier,
-      intelligence_index_version: indexVersion,
-      prompt_type: rawSource.prompt_type,
-      redistribution_confirmed: redistributionConfirmed,
-    },
-    models: snapshot.models.map(parseModel),
-  };
-}
-
 /** Validate the normalized device-local cache created from a user's own API request. */
 export function parseArtificialAnalysisUserCache(value: unknown): ArtificialAnalysisUserCache {
   const cache = record(value);
@@ -403,16 +324,13 @@ export function artificialAnalysisRanking(
   };
 }
 
-export const EMPTY_ARTIFICIAL_ANALYSIS_SNAPSHOT: ArtificialAnalysisSnapshot = {
+export const EMPTY_ARTIFICIAL_ANALYSIS_CATALOG: ArtificialAnalysisCatalog = {
   schema_version: 1,
   source: {
     name: "Artificial Analysis",
     url: "https://artificialanalysis.ai/data-api",
     fetched_at: null,
-    tier: null,
     intelligence_index_version: null,
-    prompt_type: "long",
-    redistribution_confirmed: false,
   },
   models: [],
 };

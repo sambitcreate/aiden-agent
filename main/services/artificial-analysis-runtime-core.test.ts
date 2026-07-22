@@ -423,6 +423,53 @@ function runtimeFixture(
   };
 }
 
+function delayedCatalogReadFixture() {
+  let credential: ArtificialAnalysisStoredCredential | null = {
+    key: "old-key",
+    generation: "generation-old-model",
+  };
+  let storedCache: ArtificialAnalysisUserCache | null = catalog("old-model");
+  let blockNextCacheRead = true;
+  let captured!: () => void;
+  const didCapture = new Promise<void>((resolve) => {
+    captured = resolve;
+  });
+  let release!: () => void;
+  const mayFinish = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const runtime = new ArtificialAnalysisRuntime({
+    credentials: {
+      read: async () => credential,
+      write: async (next) => {
+        credential = next;
+      },
+      deleteKey: async () => {
+        credential = null;
+      },
+    },
+    cache: {
+      read: async () => {
+        const snapshot = storedCache;
+        if (blockNextCacheRead) {
+          blockNextCacheRead = false;
+          captured();
+          await mayFinish;
+        }
+        return snapshot;
+      },
+      write: async (next) => {
+        storedCache = next;
+      },
+      delete: async () => {
+        storedCache = null;
+      },
+    },
+    fetchCatalog: async (key) => catalog(key === "old-key" ? "refreshed-model" : "new-model"),
+  });
+  return { runtime, didCapture, release };
+}
+
 test("status and catalog reads are offline and connecting fetches exactly once", async () => {
   const fixture = runtimeFixture();
   assert.deepEqual(await fixture.runtime.status(), {
@@ -447,6 +494,109 @@ test("status and catalog reads are offline and connecting fetches exactly once",
   assert.equal((await fixture.runtime.catalog())?.models[0].id, "from-new-key");
   assert.equal(fixture.generation, fixture.cache?.source.generation);
   assert.equal(fixture.fetchCount, 1);
+});
+
+test("offline reads do not wait for an in-flight manual fetch", async () => {
+  const oldCache = catalog("old-model");
+  const fixture = runtimeFixture("old-key", oldCache);
+  let release!: () => void;
+  const mayFinish = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let started!: () => void;
+  const didStart = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  fixture.setFetchCatalog(async () => {
+    started();
+    await mayFinish;
+    return catalog("new-model");
+  });
+
+  const connect = fixture.runtime.connect("new-key");
+  await didStart;
+  const [statusDuringFetch, catalogDuringFetch] = await Promise.all([
+    fixture.runtime.status(),
+    fixture.runtime.catalog(),
+  ]);
+
+  assert.equal(statusDuringFetch.state, "ready");
+  assert.equal(catalogDuringFetch?.models[0].id, "old-model");
+  release();
+  assert.equal((await connect).state, "ready");
+  assert.equal((await fixture.runtime.catalog())?.models[0].id, "new-model");
+});
+
+test("a captured catalog read completes before a connect replacement commits", async () => {
+  const fixture = delayedCatalogReadFixture();
+  const events: string[] = [];
+  const read = fixture.runtime.catalog().then((value) => {
+    events.push("read");
+    return value;
+  });
+  await fixture.didCapture;
+  let actionSettled = false;
+  const connect = fixture.runtime.connect("new-key").then((value) => {
+    actionSettled = true;
+    events.push("connect");
+    return value;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(actionSettled, false);
+
+  fixture.release();
+  assert.equal((await read)?.models[0].id, "old-model");
+  assert.equal((await connect).state, "ready");
+  assert.deepEqual(events, ["read", "connect"]);
+  assert.equal((await fixture.runtime.catalog())?.models[0].id, "new-model");
+});
+
+test("a captured catalog read completes before a refresh replacement commits", async () => {
+  const fixture = delayedCatalogReadFixture();
+  const events: string[] = [];
+  const read = fixture.runtime.catalog().then((value) => {
+    events.push("read");
+    return value;
+  });
+  await fixture.didCapture;
+  let actionSettled = false;
+  const refresh = fixture.runtime.refresh().then((value) => {
+    actionSettled = true;
+    events.push("refresh");
+    return value;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(actionSettled, false);
+
+  fixture.release();
+  assert.equal((await read)?.models[0].id, "old-model");
+  assert.equal((await refresh).state, "ready");
+  assert.deepEqual(events, ["read", "refresh"]);
+  assert.equal((await fixture.runtime.catalog())?.models[0].id, "refreshed-model");
+});
+
+test("a captured catalog read completes before disconnect removes local state", async () => {
+  const fixture = delayedCatalogReadFixture();
+  const events: string[] = [];
+  const read = fixture.runtime.catalog().then((value) => {
+    events.push("read");
+    return value;
+  });
+  await fixture.didCapture;
+  let actionSettled = false;
+  const disconnect = fixture.runtime.disconnect().then((value) => {
+    actionSettled = true;
+    events.push("disconnect");
+    return value;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(actionSettled, false);
+
+  fixture.release();
+  assert.equal((await read)?.models[0].id, "old-model");
+  assert.equal((await disconnect).state, "not_connected");
+  assert.deepEqual(events, ["read", "disconnect"]);
+  assert.equal(await fixture.runtime.catalog(), null);
 });
 
 test("a partial cross-file replacement fails closed until an explicit refresh repairs it", async () => {

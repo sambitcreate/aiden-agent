@@ -91,7 +91,7 @@ Network activity is still possible when a feature requires it:
 - Cloud voice providers receive audio selected for cloud transcription.
 - Exa receives web-search queries when web search is enabled.
 - Remote MCP servers receive their tool requests.
-- Model metadata is read from release-bundled models.dev and Artificial Analysis snapshots. The running app never contacts either catalog; local LM Studio and Ollama metadata is captured only when the user explicitly discovers models.
+- Baseline model metadata is read from the release-bundled models.dev snapshot. Artificial Analysis is contacted only when the user explicitly chooses Connect & fetch or Fetch latest in Model data settings; the key is encrypted and the normalized response is cached locally for offline reads. Local LM Studio and Ollama metadata is captured only when the user explicitly discovers models.
 - Parakeet model downloads come from the sherpa-onnx project release hosting.
 
 For a fully local session, select a local model endpoint, use on-device voice, disable Exa, and avoid remote MCP servers.
@@ -162,13 +162,13 @@ staging app. `npm run release:verify` repeats the canonical app validation. A
 development package or acceptance receipt does not claim that a notarized
 distribution was produced.
 
-Refresh both checked-in model snapshots manually during development with:
+Refresh the checked-in models.dev capability snapshot manually during development with:
 
 ```bash
-ARTIFICIAL_ANALYSIS_API_KEY=YOUR_KEY AA_REDISTRIBUTION_CONFIRMED=1 npm run models:refresh
+npm run models:refresh
 ```
 
-Use `AA_API_KEY` as the shorter key variable if preferred. Set the redistribution flag only after the applicable Artificial Analysis rights are confirmed. Until the first authorized refresh, the checked-in Artificial Analysis file is a schema-valid empty placeholder. The refresh validates every paginated response and both catalogs before replacing either checked-in snapshot. `npm run dist` runs this same guarded refresh before packaging; `npm run package`, ordinary development, and the running app use only the bundled files and make no public catalog request.
+`npm run dist` runs the same validated models.dev refresh before packaging. Artificial Analysis data and credentials are never bundled into a release: each user connects their own key in Settings → Model data, and only explicit Connect & fetch or Fetch latest actions update that device's encrypted credential and normalized offline cache. Ordinary model reads never make an Artificial Analysis network request.
 
 Provider Settings exposes Apple Foundation Models only on macOS. On Apple Intelligence-capable Macs running macOS 26 or newer, chat titles can use Automatic, On-device only, or Selected chat model routing. Automatic prefers the on-device model when it is ready and otherwise uses the selected chat model; On-device only never falls back to a network provider after a native attempt.
 

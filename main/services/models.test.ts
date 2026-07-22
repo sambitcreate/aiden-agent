@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import {
-  parseArtificialAnalysisSnapshot,
-  type ArtificialAnalysisSnapshot,
-} from "./artificial-analysis-catalog-core.js";
+import type { ArtificialAnalysisCatalog } from "./artificial-analysis-catalog-core.js";
 import {
   lookupCatalogModelInfo,
   parseModelCatalog,
@@ -22,20 +19,17 @@ const lmStudioProvider = {
   isPreset: true,
 };
 
-function snapshot(models: ArtificialAnalysisSnapshot["models"]): ArtificialAnalysisSnapshot {
-  return parseArtificialAnalysisSnapshot({
+function snapshot(models: ArtificialAnalysisCatalog["models"]): ArtificialAnalysisCatalog {
+  return {
     schema_version: 1,
     source: {
       name: "Artificial Analysis",
       url: "https://artificialanalysis.ai/data-api",
       fetched_at: "2026-07-20T12:00:00.000Z",
-      tier: "commercial",
       intelligence_index_version: 4.1,
-      prompt_type: "long",
-      redistribution_confirmed: true,
     },
     models,
-  });
+  };
 }
 
 test("LM Studio discovery uses its native metadata and excludes embeddings", async (t) => {
@@ -217,6 +211,17 @@ test("normalizes safe provider URLs and rejects credentials or request decoratio
 test("models.dev lookups retain unknown flags for unmatched model ids", () => {
   assert.throws(() => parseModelCatalog(null), /must be an object/u);
   assert.throws(() => parseModelCatalog([]), /must be an object/u);
+  assert.throws(
+    () =>
+      parseModelCatalog({
+        broken: {
+          models: {
+            unsafe: { name: "Unsafe", modalities: { input: { length: 1 } } },
+          },
+        },
+      }),
+    /modalities\.input must be a string array/u,
+  );
 
   const catalog = parseModelCatalog({
     local: {
@@ -255,7 +260,7 @@ test("models.dev lookups retain unknown flags for unmatched model ids", () => {
   });
 });
 
-test("local discovery metadata takes precedence over both bundled catalogs", () => {
+test("local discovery metadata takes precedence over catalog metadata", () => {
   const catalog = parseModelCatalog({
     google: {
       models: {
@@ -371,27 +376,7 @@ test("Artificial Analysis takes precedence for hosted models and models.dev fill
   assert.equal(info.ranking?.sourceUrl, "https://artificialanalysis.ai");
 });
 
-test("Artificial Analysis parser rejects data without explicit redistribution confirmation", () => {
-  assert.throws(
-    () =>
-      parseArtificialAnalysisSnapshot({
-        schema_version: 1,
-        source: {
-          name: "Artificial Analysis",
-          url: "https://artificialanalysis.ai/data-api",
-          fetched_at: "2026-07-20T12:00:00.000Z",
-          tier: "pro",
-          intelligence_index_version: 4.1,
-          prompt_type: "long",
-          redistribution_confirmed: false,
-        },
-        models: [{ id: "1", slug: "one", name: "One", creator: "Example" }],
-      }),
-    /redistribution confirmation/u,
-  );
-});
-
-test("runtime metadata stays offline and both release snapshots are packaged", async () => {
+test("runtime metadata stays offline and only models.dev data is packaged", async () => {
   const runtimeSource = await readFile(new URL("./models-catalog.ts", import.meta.url), "utf8");
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(/u);
 
@@ -404,23 +389,42 @@ test("runtime metadata stays offline and both release snapshots are packaged", a
   );
   assert.ok(namedModels.length > 0, "the release snapshot should include model display names");
 
-  const artificialAnalysisSnapshot = JSON.parse(
-    await readFile(
-      new URL("../../resources/artificial-analysis-models.json", import.meta.url),
-      "utf8",
-    ),
-  ) as unknown;
-  assert.doesNotThrow(() => parseArtificialAnalysisSnapshot(artificialAnalysisSnapshot));
+  await assert.rejects(
+    readFile(new URL("../../resources/artificial-analysis-models.json", import.meta.url), "utf8"),
+    (error: unknown) => {
+      assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
+      return true;
+    },
+  );
 
   const packageJson = JSON.parse(
     await readFile(new URL("../../package.json", import.meta.url), "utf8"),
   ) as { build?: { files?: string[] }; scripts?: Record<string, string> };
   assert.ok(packageJson.build?.files?.includes("resources/model-capabilities.json"));
-  assert.ok(packageJson.build?.files?.includes("resources/artificial-analysis-models.json"));
+  assert.equal(
+    packageJson.build?.files?.includes("resources/artificial-analysis-models.json"),
+    false,
+  );
+  assert.equal(packageJson.scripts?.["release:update-model-snapshots"], undefined);
+  assert.equal(
+    packageJson.scripts?.["release:update-model-capabilities"],
+    "npm run models:refresh",
+  );
   assert.match(packageJson.scripts?.dist ?? "", /run-macos-distribution/u);
   const distributionRunner = await readFile(
     new URL("../../scripts/run-macos-distribution.mjs", import.meta.url),
     "utf8",
   );
-  assert.match(distributionRunner, /npm\("release:update-model-snapshots"\)/u);
+  assert.match(distributionRunner, /npm\("release:update-model-capabilities"\)/u);
+  assert.doesNotMatch(distributionRunner, /release:update-model-snapshots/u);
+
+  const capabilityUpdater = await readFile(
+    new URL("../../scripts/update-model-capabilities.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(capabilityUpdater, /https:\/\/models\.dev\/api\.json/u);
+  assert.doesNotMatch(
+    capabilityUpdater,
+    /ARTIFICIAL_ANALYSIS_API_KEY|AA_API_KEY|AA_REDISTRIBUTION_CONFIRMED|x-api-key/u,
+  );
 });

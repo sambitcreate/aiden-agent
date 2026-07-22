@@ -12,7 +12,7 @@ Before adding any new UI element or component, review both `docs/chatgpt-desktop
 
 ## Release model metadata
 
-`npm run models:refresh` is the explicit development refresh, and `npm run dist` invokes the same release step before packaging. Those are the only paths that may contact models.dev or Artificial Analysis. Never add a public-catalog call to normal development, unpacked builds, or the live Electron app. Artificial Analysis refreshes require both an API key and explicit confirmation that redistribution rights are in place.
+`npm run models:refresh` is the explicit development refresh, and `npm run dist` invokes the same release step before packaging. Those are the only paths that may contact models.dev. Never add a models.dev call to normal development, unpacked builds, or ordinary live-app reads. Artificial Analysis data and credentials must never be bundled: the live Electron app may contact its fixed Free endpoint only after the user explicitly chooses Connect & fetch or Fetch latest with their own key, then reads the normalized device-local cache offline.
 
 ## Papercuts
 

@@ -80,14 +80,21 @@ export async function beginArtificialAnalysisAction(queryClient: QueryClient): P
   await cancelArtificialAnalysisReads(queryClient);
 }
 
-/** Make an action result authoritative and restart active model-info reads from local storage. */
+/** Make an action result authoritative without retaining rankings from a prior credential. */
 export async function commitArtificialAnalysisState(
   queryClient: QueryClient,
   status: ArtificialAnalysisStatus,
 ): Promise<void> {
   await cancelArtificialAnalysisReads(queryClient);
+  queryClient.removeQueries({
+    queryKey: queryKeys.artificialAnalysisModelInfo,
+    type: "inactive",
+  });
   queryClient.setQueryData(queryKeys.artificialAnalysisStatus, status);
-  await queryClient.invalidateQueries({ queryKey: queryKeys.artificialAnalysisModelInfo });
+  await queryClient.resetQueries({
+    queryKey: queryKeys.artificialAnalysisModelInfo,
+    type: "active",
+  });
 }
 
 /** Re-read only local credential/cache state after a failed or partially applied mutation. */
@@ -174,7 +181,7 @@ export function useWorkspaces() {
   return useQuery({ queryKey: queryKeys.workspaces, queryFn: workspacesApi.list });
 }
 
-/** Release-bundled capability info for a provider's models, keyed by model id. */
+/** Offline capability info for a provider's models, keyed by model id. */
 function modelMetadataKey(provider: Provider | undefined): string {
   if (!provider?.modelMetadata) return "";
   return JSON.stringify(
@@ -196,7 +203,7 @@ export function useModelInfo(
   });
 }
 
-/** Resolve release-bundled display and capability metadata for every picker connection. */
+/** Resolve offline display and capability metadata for every picker connection. */
 export function useProvidersModelInfo(providers: Provider[]) {
   const results = useQueries({
     queries: providers.map((provider) => {
