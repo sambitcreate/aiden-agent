@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-22 — Animate streaming answers and agent milestones
+
+- Added block-aware streaming reveal for prose, Markdown, lists, tables, and code so stable semantic units fade into place without repeatedly reparsing the whole transcript or exposing unfinished markup.
+- Projected Pi tool events into a versioned, renderer-safe timeline with opaque local IDs, bounded relative targets, stable parallel ordering, approval states, and correct completed/failed/blocked/cancelled settlement.
+- Replaced transient status pills with compact, unboxed agent milestones and grouped adjacent discovery work; live event, label, approval, error, and activity changes now crossfade with explicit Reduce Motion behavior.
+- Moved assistant response and timeline persistence into the main-process generation owner. Safe terminal steps survive reload, renderer-supplied timelines are rejected, and old chats without timelines remain compatible.
+
 ### 2026-07-22 — Show meaningful agent activity motion
 
 - Centered the transcript's scroll-to-bottom control above the composer and raised its surface opacity for clearer separation from conversation content.
@@ -138,6 +145,7 @@
 - Routed Codex chat and title requests through Pi's native provider stream with Pi-authoritative capabilities, per-Agent-turn OAuth refresh, a 60-second expiry safety window, bounded caller and shared-operation deadlines, guarded late one-time-token reconciliation, credential-generation dispatch barriers, automatic rotation, backend health, stale-model rejection, and chat-session identity. Pi `0.80.10` Codex requests are forced to SSE until its lazy WebSocket path checks cancellation before handshake construction.
 - Distinguished app-requested cancellation from credential-change interruption so partial old-generation responses are saved with an error instead of ordinary completion. Hardened abort fan-out and already-cancelled promise observation against Electron main-process crashes and unhandled rejections.
 - Implemented in five phases on an isolated worktree branch, with two independent memory/source-aware reviewer passes after every phase and repeated adversarial loops until both lanes were clean. Final verification passed 177 TypeScript tests, 4 Swift tests, type-check, lint, production build, `npm audit --omit=dev` with zero vulnerabilities, signed arm64 packaging, strict deep signature verification, asar content/version checks, and isolated packaged-app preload/provider/Codex IPC smoke. No live OAuth exchange or push was performed.
+
 ### 2026-07-21 — Add privacy-safe native profile sharing
 
 - Added a Profile-toolbar Share action and a live, theme-matched 3:4 SVG preview that rasterizes locally to a fixed 1200×1600 PNG. The curated image contains the chosen profile name and aggregate usage only; it never adds prompts, chats, workspace names, paths, or generated content.
@@ -152,6 +160,7 @@
 - Hardened locality around the actual loopback endpoint rather than provider names or authentication mode, separated Gemini cached prompt tokens from uncached input, and retained failed/invalid-response transcription attempts without double-counting.
 - Await best-effort ledger writes at model-call settlement boundaries so fast shutdown cannot drop completed calls. The in-memory mutation tail survives transient save failures, malformed/impossible persisted dates are discarded, corrupt local cost fields are stripped, and the main/preload/renderer IPC boundary exposes only privacy-safe summaries.
 - Added 9 focused accounting tests covering aggregation, inclusive ranges and streaks, concurrency/privacy, tool-loop/error/abort outcomes, local/hosted cost semantics, OpenAI/Gemini usage fields, corrupt data, and transient write recovery. The full 80-test suite, type-check, lint, and production build pass.
+
 ### 2026-07-20 — Add a spatial, magnetic model picker
 
 - Replaced the composer model dropdown with a Photographic Styles-inspired square Pad plus the preserved searchable List view. Horizontal position runs Faster → More deliberate; vertical position runs Everyday → More capable.
