@@ -14,7 +14,6 @@ import {
   ARTIFICIAL_ANALYSIS_ATTRIBUTION_URL,
   ARTIFICIAL_ANALYSIS_KEY_MANAGEMENT_URL,
   isArtificialAnalysisKeyError,
-  resolveModelPadGate,
 } from "../../lib/model-data-control";
 import {
   beginArtificialAnalysisAction,
@@ -23,6 +22,7 @@ import {
   useArtificialAnalysisStatus,
 } from "../../lib/queries";
 import type { ArtificialAnalysisStatus } from "../../lib/types";
+import { ModelPadSettings } from "./model-pad-settings";
 
 type Operation = "connect" | "refresh" | "disconnect";
 
@@ -36,6 +36,22 @@ function formattedDate(value: string | undefined): string | null {
   }).format(date);
 }
 
+function connectionDetail(
+  status: ArtificialAnalysisStatus | undefined,
+  state: { loading: boolean; failed: boolean },
+): string {
+  if (state.failed) return "Aiden couldn’t read the local Artificial Analysis connection.";
+  if (state.loading || !status) return "Aiden is checking for cached suggestions on this Mac.";
+  if (status.ready) {
+    return `${status.rankedModelCount} benchmark position${status.rankedModelCount === 1 ? " is" : "s are"} available as optional suggestions.`;
+  }
+  if (status.cleanupNeeded) {
+    return "The API key is gone, but Aiden still needs to remove cached Artificial Analysis data.";
+  }
+  if (status.hasKey) return "Your API key is saved. Fetch model data to enable suggestions.";
+  return "Off. Your personal Model Pad works without Artificial Analysis.";
+}
+
 export function ModelDataSettings() {
   const queryClient = useQueryClient();
   const statusQuery = useArtificialAnalysisStatus();
@@ -47,7 +63,7 @@ export function ModelDataSettings() {
   const keyInputRef = React.useRef<HTMLInputElement | null>(null);
   const disconnectButtonRef = React.useRef<HTMLButtonElement | null>(null);
   const status = statusQuery.data;
-  const gate = resolveModelPadGate(status, {
+  const detail = connectionDetail(status, {
     loading: statusQuery.isLoading,
     failed: statusQuery.isError,
   });
@@ -59,7 +75,7 @@ export function ModelDataSettings() {
     try {
       await refreshArtificialAnalysisState(queryClient);
     } catch {
-      // The helper purges model info and leaves the local status query failed/locked.
+      // The helper purges model info and leaves the optional suggestion source unavailable.
     }
   }, [queryClient]);
 
@@ -87,7 +103,7 @@ export function ModelDataSettings() {
       }
       setKeyDraft("");
       await commitStatus(result.status);
-      toast.success("Artificial Analysis is connected. Model data is cached on this Mac.");
+      toast.success("Artificial Analysis suggestions are cached on this Mac.");
     } catch {
       await reconcileAfterFailure();
       const message = "Aiden couldn’t connect to Artificial Analysis. Try again.";
@@ -142,7 +158,7 @@ export function ModelDataSettings() {
       setKeyDraft("");
       await commitStatus(result.status);
       setConfirmDisconnect(false);
-      toast.success("Artificial Analysis disconnected. Model Pad is locked.");
+      toast.success("Artificial Analysis disconnected. Your saved Pad is unchanged.");
     } catch {
       await reconcileAfterFailure();
       const message = "Aiden couldn’t remove the Artificial Analysis connection.";
@@ -154,32 +170,35 @@ export function ModelDataSettings() {
     }
   };
 
-  const statusIcon = statusQuery.isError || status?.cleanupNeeded
-    ? TriangleAlert
-    : gate.unlocked
-      ? CheckCircle2
-      : statusQuery.isLoading
-        ? Loader2
-        : KeyRound;
+  const statusIcon =
+    statusQuery.isError || status?.cleanupNeeded
+      ? TriangleAlert
+      : status?.ready
+        ? CheckCircle2
+        : statusQuery.isLoading
+          ? Loader2
+          : KeyRound;
   const StatusIcon = statusIcon;
   const statusLabel = statusQuery.isError
     ? "Check failed"
-    : gate.unlocked
-      ? "Ready"
+    : status?.ready
+      ? "Suggestions available"
       : status?.cleanupNeeded
         ? "Cleanup needed"
         : status?.hasKey
           ? "Connected"
           : statusQuery.isLoading
             ? "Checking"
-            : "Not connected";
+            : "Off";
 
   return (
     <>
-      <FieldSet title="Model data">
+      <ModelPadSettings />
+
+      <FieldSet title="Optional benchmark source">
         <Field
-          label="Model Pad"
-          description="Artificial Analysis rankings place supported cloud models by capability and response time."
+          label="Artificial Analysis"
+          description="Optionally suggest positions for supported hosted models. Personal placements always win, and the Pad works without this connection."
           orientation="vertical"
         >
           <Callout
@@ -191,16 +210,16 @@ export function ModelDataSettings() {
               <div className="flex min-w-0 flex-1 basis-72 items-start gap-2.5">
                 <StatusIcon
                   aria-hidden="true"
-                  className={`mt-0.5 size-4 shrink-0 ${statusQuery.isLoading ? "animate-spin" : gate.unlocked ? "text-green" : statusQuery.isError || status?.cleanupNeeded ? "text-red" : "text-tertiary"}`}
+                  className={`mt-0.5 size-4 shrink-0 ${statusQuery.isLoading ? "animate-spin" : status?.ready ? "text-green" : statusQuery.isError || status?.cleanupNeeded ? "text-red" : "text-tertiary"}`}
                 />
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <Text variant="small-strong">{statusLabel}</Text>
                     {status?.tier ? <Badge>{status.tier} tier</Badge> : null}
-                    {gate.unlocked ? (
+                    {status?.ready ? (
                       <Badge className="gap-1 text-primary">
                         <CheckCircle2 aria-hidden="true" className="size-3 text-green" />
-                        Offline cache ready
+                        Offline suggestions ready
                       </Badge>
                     ) : null}
                   </div>
@@ -208,9 +227,9 @@ export function ModelDataSettings() {
                     {error ??
                       (statusQuery.isError
                         ? "Aiden couldn’t read the local Artificial Analysis connection."
-                        : gate.detail)}
+                        : detail)}
                   </Text>
-                  {gate.unlocked && status ? (
+                  {status?.ready ? (
                     <Text as="p" variant="small" color="secondary" className="mt-1">
                       {status.cachedModelCount} models cached · {status.rankedModelCount} ranked
                       {fetchedAt ? ` · Fetched ${fetchedAt}` : ""}
@@ -369,11 +388,15 @@ export function ModelDataSettings() {
       <AlertDialog
         open={confirmDisconnect}
         onOpenChange={setConfirmDisconnect}
-        title={status?.cleanupNeeded ? "Finish disconnecting Artificial Analysis?" : "Disconnect Artificial Analysis?"}
+        title={
+          status?.cleanupNeeded
+            ? "Finish disconnecting Artificial Analysis?"
+            : "Disconnect Artificial Analysis?"
+        }
         description={
           status?.cleanupNeeded
             ? "Aiden will retry removing the remaining cached model data from this Mac."
-            : "Aiden will remove the encrypted API key and cached model data from this Mac. Model Pad will lock until you connect again."
+            : "Aiden will remove the encrypted API key and cached benchmark data from this Mac. Your saved personal Pad positions will remain available."
         }
         confirmLabel={status?.cleanupNeeded ? "Finish disconnect" : "Disconnect"}
         confirmVariant="destructive"

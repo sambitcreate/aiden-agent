@@ -23,14 +23,15 @@ import {
   encodeSelection,
   orderModelEntries,
   PINNED_MODELS_KEY,
+  positionSavedModels,
   positionModels,
   type ModelEntry,
   type PositionedModel,
 } from "../lib/model-picker-data";
-import { useArtificialAnalysisStatus, useProvidersModelInfo } from "../lib/queries";
-import { resolveModelPadGate, type ModelPadGate } from "../lib/model-data-control";
+import { useProvidersModelInfo } from "../lib/queries";
+import { useModelPadLayout } from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, ChevronsUpDown, Cloud, Cpu, LockKeyhole, Pin } from "lucide-react";
+import { Check, ChevronsUpDown, Cloud, Cpu, Pin, SlidersHorizontal } from "lucide-react";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -131,22 +132,17 @@ function useExternalModelDetails(): boolean {
   return showDetails;
 }
 
-function LockedModelPad({
-  gate,
+function EmptyModelPad({
   onOpenSettings,
   settingsBlockedReason,
 }: {
-  gate: ModelPadGate;
   onOpenSettings: () => void;
   settingsBlockedReason?: string;
 }) {
   const gridSize = 9;
   const blockedReasonId = React.useId();
   return (
-    <div
-      aria-busy={gate.title === "Checking Model Pad"}
-      className="model-pad relative aspect-square w-full overflow-hidden rounded-card"
-    >
+    <div className="model-pad relative aspect-square w-full overflow-hidden rounded-card">
       <div aria-hidden="true" className="absolute inset-0 opacity-55">
         {Array.from({ length: gridSize * gridSize }, (_, index) => {
           const column = index % gridSize;
@@ -166,13 +162,13 @@ function LockedModelPad({
       <div className="absolute inset-0 bg-popover/45 backdrop-blur-[2px]" />
       <div className="relative flex h-full flex-col items-center justify-center px-8 text-center">
         <span className="mb-3 flex size-9 items-center justify-center rounded-full bg-control text-secondary shadow-control">
-          <LockKeyhole className="size-4.5" />
+          <SlidersHorizontal className="size-4.5" />
         </span>
         <Text variant="small-strong" as="h3">
-          {gate.title}
+          Your Model Pad is empty
         </Text>
         <Text variant="small" color="secondary" as="p" className="mt-1 max-w-52 text-pretty">
-          {gate.detail}
+          Choose a few models and arrange them by capability and pace in Settings.
         </Text>
         <Button
           data-model-pad-settings
@@ -183,10 +179,16 @@ function LockedModelPad({
           aria-describedby={settingsBlockedReason ? blockedReasonId : undefined}
           title={settingsBlockedReason}
         >
-          Open Model data settings
+          Customize Model Pad
         </Button>
         {settingsBlockedReason ? (
-          <Text id={blockedReasonId} variant="small" color="secondary" as="p" className="mt-2 max-w-52">
+          <Text
+            id={blockedReasonId}
+            variant="small"
+            color="secondary"
+            as="p"
+            className="mt-2 max-w-52"
+          >
             {settingsBlockedReason}.
           </Text>
         ) : null}
@@ -316,6 +318,7 @@ export function ModelPicker({
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
   const showExternalDetails = useExternalModelDetails();
+  const modelPadLayout = useModelPadLayout();
   const pickerId = React.useId();
   const listTabId = `${pickerId}-list-tab`;
   const padTabId = `${pickerId}-pad-tab`;
@@ -323,11 +326,6 @@ export function ModelPicker({
   const padPanelId = `${pickerId}-pad-panel`;
 
   const catalog = useProvidersModelInfo(providers);
-  const artificialAnalysis = useArtificialAnalysisStatus();
-  const padGate = resolveModelPadGate(artificialAnalysis.data, {
-    loading: artificialAnalysis.isLoading,
-    failed: artificialAnalysis.isError,
-  });
 
   const infoByValue: Record<string, ModelInfo | undefined> = {};
   providers.forEach((provider) => {
@@ -338,16 +336,25 @@ export function ModelPicker({
   });
 
   const entries = createModelEntries(providers, infoByValue);
-  const usesArtificialAnalysis = entries.some(
-    (entry) => entry.info?.metadataSource === "artificial-analysis",
-  );
   const orderedEntries = orderModelEntries(entries, pinned);
-  const positioned = positionModels(entries);
+  const detailPositions = positionModels(entries);
+  const positioned = positionSavedModels(entries, modelPadLayout.placements);
+  const hasPadModels = positioned.length > 0;
+  const usesArtificialAnalysis =
+    entries.some((entry) => entry.info?.metadataSource === "artificial-analysis") ||
+    positioned.some((entry) => entry.confidence === "suggested");
   const selectedValue = providerId && model ? encodeSelection(providerId, model) : "";
   const selected = entries.find((entry) => entry.value === selectedValue);
   const selectedPosition = positioned.find((entry) => entry.value === selectedValue);
+  const detailPosition = detailPositions.find((entry) => entry.value === previewValue);
   const activePosition =
-    positioned.find((entry) => entry.value === previewValue) ?? selectedPosition ?? positioned[0];
+    view === "pad"
+      ? (positioned.find((entry) => entry.value === previewValue) ??
+        selectedPosition ??
+        positioned[0])
+      : (detailPosition ??
+        detailPositions.find((entry) => entry.value === selectedValue) ??
+        detailPositions[0]);
   const hasUnavailableSelection = Boolean(selectedValue && !selected);
   const hasModels = entries.length > 0;
   const metadataLoading = catalog.isLoading;
@@ -384,7 +391,7 @@ export function ModelPicker({
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
-      setView(padGate.unlocked ? "pad" : "list");
+      setView(hasPadModels ? "pad" : "list");
       setPreviewValue(selectedValue || positioned[0]?.value);
     } else {
       setPreviewValue(undefined);
@@ -400,7 +407,7 @@ export function ModelPicker({
         searchRef.current?.focus();
         return;
       }
-      if (!padGate.unlocked) {
+      if (!hasPadModels) {
         contentRef.current?.querySelector<HTMLElement>("[data-model-pad-settings]")?.focus();
         return;
       }
@@ -481,7 +488,7 @@ export function ModelPicker({
         sideOffset={8}
         collisionPadding={{
           top: 40,
-          right: showExternalDetails && (view === "list" || padGate.unlocked) ? 244 : 12,
+          right: showExternalDetails && (view === "list" || hasPadModels) ? 244 : 12,
           bottom: 12,
           left: 12,
         }}
@@ -489,7 +496,7 @@ export function ModelPicker({
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
-            if (!padGate.unlocked) {
+            if (!hasPadModels) {
               searchRef.current?.focus();
               return;
             }
@@ -539,9 +546,8 @@ export function ModelPicker({
               )}
               onClick={() => switchView("pad")}
               onKeyDown={handleViewTabKeyDown}
-              aria-label={padGate.unlocked ? "Pad" : "Pad, locked"}
+              aria-label="Personal Model Pad"
             >
-              {!padGate.unlocked ? <LockKeyhole className="size-3" /> : null}
               Pad
             </Button>
           </div>
@@ -554,7 +560,7 @@ export function ModelPicker({
             aria-labelledby={padTabId}
             className="min-w-0 p-2"
           >
-            {padGate.unlocked ? (
+            {hasPadModels ? (
               <ModelPickerPad
                 models={positioned}
                 selectedValue={selectedValue}
@@ -563,8 +569,7 @@ export function ModelPicker({
                 onCommit={(entry) => commit(entry)}
               />
             ) : (
-              <LockedModelPad
-                gate={padGate}
+              <EmptyModelPad
                 onOpenSettings={openModelDataSettings}
                 settingsBlockedReason={settingsBlockedReason}
               />
@@ -653,7 +658,7 @@ export function ModelPicker({
           </section>
         )}
 
-        {showExternalDetails && (view === "list" || padGate.unlocked) ? (
+        {showExternalDetails && (view === "list" || hasPadModels) ? (
           <ModelHoverDetails
             model={activePosition}
             metadataLoading={metadataLoading}

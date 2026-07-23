@@ -336,18 +336,15 @@ textarea {
 
 .model-pad-knob {
   transition:
-    left 150ms cubic-bezier(0.2, 0, 0, 1),
-    top 150ms cubic-bezier(0.2, 0, 0, 1),
-    transform 120ms ease-out,
-    box-shadow 120ms ease-out;
+    background-color 250ms cubic-bezier(0.25, 1, 0.5, 1),
+    box-shadow 250ms cubic-bezier(0.25, 1, 0.5, 1);
 }
 
-.model-pad[data-dragging="true"] .model-pad-knob {
-  transform: translate(-50%, -50%) scale(1.08);
-  transition:
-    left 90ms cubic-bezier(0.2, 0, 0, 1),
-    top 90ms cubic-bezier(0.2, 0, 0, 1),
-    transform 90ms ease-out;
+.model-pad-knob[data-confirmed="true"] {
+  background: var(--accent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent), transparent 58%),
+    var(--elevation-control-hover);
 }
 
 [data-toolbar] {

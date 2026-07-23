@@ -62,6 +62,7 @@ export function ModelPickerPad({
   const activeValueRef = React.useRef(previewValue ?? selectedValue);
   const draggingRef = React.useRef(false);
   const [dragging, setDragging] = React.useState(false);
+  const [confirmedValue, setConfirmedValue] = React.useState<string>();
   const gridSize = modelGridSize(models.length);
 
   activeValueRef.current = previewValue ?? selectedValue;
@@ -79,6 +80,7 @@ export function ModelPickerPad({
       const nearest = nearestModel(models, point, activeValueRef.current);
       if (nearest && nearest.value !== activeValueRef.current) {
         activeValueRef.current = nearest.value;
+        setConfirmedValue(undefined);
         onPreview(nearest.value);
       }
     },
@@ -147,6 +149,7 @@ export function ModelPickerPad({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (committed) onCommit(committed);
+    if (committed) setConfirmedValue(committed.value);
   };
 
   const handlePointerCancel = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -186,6 +189,7 @@ export function ModelPickerPad({
       const next = findDirectionalModel(models, activeValueRef.current, direction);
       if (next) {
         activeValueRef.current = next.value;
+        setConfirmedValue(undefined);
         onPreview(next.value);
       }
       return;
@@ -196,6 +200,7 @@ export function ModelPickerPad({
         event.preventDefault();
         event.stopPropagation();
         onCommit(next);
+        setConfirmedValue(next.value);
       }
       return;
     }
@@ -263,6 +268,8 @@ export function ModelPickerPad({
               aria-label={`${model.label}, ${model.providerLabel}, ${model.capabilityLabel}, ${model.paceLabel}, ${model.confidence}`}
               className={cn(
                 "model-pad-model absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/45 ring-1 ring-popover/55",
+                model.confidence === "personal" && "bg-accent",
+                model.confidence === "suggested" && "bg-accent/65 ring-accent/40",
                 model.confidence === "benchmark" && "bg-accent",
                 model.confidence === "unranked" && "bg-transparent ring-primary/35",
                 isSelected && !isPreview && "size-2 bg-transparent ring-2 ring-primary/45",
@@ -276,6 +283,7 @@ export function ModelPickerPad({
         {puckPoint ? (
           <span
             aria-hidden="true"
+            data-confirmed={confirmedValue === puckPoint.value ? "true" : "false"}
             className="model-pad-knob absolute z-10 size-6 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-popover ring-1 ring-black/20"
             style={{ left: `${padLeft(puckPoint.x)}%`, top: `${padTop(puckPoint.y)}%` }}
           />

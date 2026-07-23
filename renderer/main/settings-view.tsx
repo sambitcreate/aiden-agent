@@ -50,10 +50,10 @@ const NAV: NavItem[] = [
   },
   {
     id: "modelData",
-    title: "Model data",
+    title: "Model Pad",
     icon: <ChartScatter className="size-5" />,
     group: "Agent",
-    keywords: "artificial analysis api key model pad rankings benchmarks offline cache",
+    keywords: "personal models arrange rank capability speed pace artificial analysis suggestions",
   },
   {
     id: "skills",

@@ -465,7 +465,7 @@ export function Composer({
               className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
               rows={1}
             />
-            {!ready && readinessMessage ? (
+            {!ready && readinessMessage && text.trim().length > 0 ? (
               <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
                 {readinessMessage}
               </Text>

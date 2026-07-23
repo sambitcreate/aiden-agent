@@ -16,6 +16,22 @@
 - Added pinned-action macOS CI plus a gated main-push release workflow that derives monotonic versions, runs full gates before loading secrets, builds/signs/notarizes/verifies the DMG and ZIP, generates version-bound update metadata, and publishes only verified assets to a separate public binary repository.
 - Kept publication disabled until the public feed and protected Apple/GitHub secrets are explicitly configured through `RELEASES_ENABLED=true`; documented bootstrap, trust boundaries, recovery, and version-line changes in `docs/releasing.md`.
 
+### 2026-07-22 — Remove duplicate composer readiness guidance
+
+- The unavailable-model message now appears once as the empty textarea placeholder, then moves below the draft only after the user starts typing so the disabled send state remains explained without duplicate copy.
+
+### 2026-07-22 — Clarify Model Pad selection feedback
+
+- Removed the Pad puck's positional and press-scale transitions so previews snap directly to their target; the white puck now transitions only to the current theme accent over 250ms after pointer release, Enter, or Space.
+- Kept the feedback local to the picker without a toast. Preview movement clears the confirmation color, reduced-motion preferences collapse the transition through the shared motion contract, and the existing selected option state remains authoritative for assistive technology.
+
+### 2026-07-22 — Make the Model Pad personal and user-arranged
+
+- Replaced the Artificial Analysis gate with a device-local Personal Model Pad in Settings. Users choose a curated set of their usable chat models, drag them vertically by personal capability and horizontally by perceived response pace, or use accessible arrow-key nudging, then explicitly save the layout.
+- The picker now opens the Pad when saved placements exist and otherwise opens the complete searchable List. Only saved models are plotted; the List still exposes every usable chat model, and temporarily unavailable saved placements are preserved for their return.
+- Reframed Artificial Analysis as an optional suggestion source for unplaced hosted models. Suggestions never override personal positions, remain visibly attributed, and disconnecting the benchmark cache leaves the saved Pad unchanged.
+- Added a versioned fail-closed local layout contract, deterministic open-position placement, stale embedding-ID filtering, and pure regression coverage for parsing, persistence, geometry, and saved-only plotting. Live Electron QA verified add, keyboard movement, save, Pad-first display, complete List fallback, and removal; the temporary test preference was cleared afterward.
+
 ### 2026-07-22 — Correct composer context-strip depth
 
 - Isolated the attached context-strip/composer stack and assigned explicit local layers so the translucent, backdrop-blurred strip stays behind the raised composer edge. The existing overlap, darker theme-aware surface, and compact geometry remain unchanged.

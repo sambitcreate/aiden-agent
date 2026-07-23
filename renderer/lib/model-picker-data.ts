@@ -1,5 +1,6 @@
 import type { ModelInfo, ModelRanking, Provider } from "./types";
 import { resolveModelDisplay } from "./model-display";
+import type { ModelPadPlacement } from "./model-pad-layout";
 
 export type { ModelRanking } from "./types";
 
@@ -13,6 +14,7 @@ const DEEP_VARIANT_RE =
   /(?:^|[\s._/-])(reasoner|reasoning|thinking|think|deep|high|xhigh)(?:$|[\s._/-])/i;
 const CAPABLE_VARIANT_RE = /(?:^|[\s._/-])(sonnet|opus|pro|ultra|max|large)(?:$|[\s._/-])/i;
 const PARAMETER_COUNT_RE = /(?:^|[\s._/-])(\d+(?:\.\d+)?)b(?:$|[\s._/-])/i;
+const EMBEDDING_MODEL_RE = /(?:^|[\s._/-])embedd?(?:ing|ings)?(?:$|[\s._/-])/i;
 
 export interface ModelEntry {
   value: string;
@@ -26,7 +28,7 @@ export interface ModelEntry {
   ranking?: ModelRanking;
 }
 
-export type PositionConfidence = "benchmark" | "estimated" | "unranked";
+export type PositionConfidence = "personal" | "suggested" | "benchmark" | "estimated" | "unranked";
 
 export interface PositionedModel extends ModelEntry {
   /** Left (fast) to right (more deliberate), normalized to 0...1. */
@@ -102,7 +104,8 @@ export function createModelEntries(
       const info = infoByValue[value];
       if (
         provider.modelMetadata?.[model]?.type === "embedding" ||
-        info?.modelType === "embedding"
+        info?.modelType === "embedding" ||
+        EMBEDDING_MODEL_RE.test(model)
       ) {
         continue;
       }
@@ -237,9 +240,11 @@ export function positionModels(entries: ModelEntry[]): PositionedModel[] {
     y: Math.floor(index / gridSize) / (gridSize - 1),
   }));
   const confidenceOrder: Record<PositionConfidence, number> = {
-    benchmark: 0,
-    estimated: 1,
-    unranked: 2,
+    personal: 0,
+    suggested: 1,
+    benchmark: 2,
+    estimated: 3,
+    unranked: 4,
   };
   const assignments = new Map<string, ModelPoint>();
 
@@ -265,6 +270,30 @@ export function positionModels(entries: ModelEntry[]): PositionedModel[] {
   return models.map((model) => {
     const cell = assignments.get(model.value) ?? model;
     return { ...model, ...cell, ...labelsFor(cell.x, cell.y) };
+  });
+}
+
+/** Saved personal positions are the only models shown on the user-owned Pad. */
+export function positionSavedModels(
+  entries: ModelEntry[],
+  placements: Readonly<Record<string, ModelPadPlacement>>,
+): PositionedModel[] {
+  return entries.flatMap((entry) => {
+    const placement = placements[entry.value];
+    if (!placement) return [];
+    const x = Math.min(1, Math.max(0, placement.x));
+    const y = Math.min(1, Math.max(0, placement.y));
+    return [
+      {
+        ...entry,
+        x,
+        y,
+        confidence: placement.source === "user" ? ("personal" as const) : ("suggested" as const),
+        positionSource:
+          placement.source === "user" ? "Personal placement" : "Artificial Analysis suggestion",
+        ...labelsFor(x, y),
+      },
+    ];
   });
 }
 

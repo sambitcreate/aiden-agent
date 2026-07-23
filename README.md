@@ -91,7 +91,7 @@ Network activity is still possible when a feature requires it:
 - Cloud voice providers receive audio selected for cloud transcription.
 - Exa receives web-search queries when web search is enabled.
 - Remote MCP servers receive their tool requests.
-- Baseline model metadata is read from the release-bundled models.dev snapshot. Artificial Analysis is contacted only when the user explicitly chooses Connect & fetch or Fetch latest in Model data settings; the key is encrypted and the normalized response is cached locally for offline reads. Local LM Studio and Ollama metadata is captured only when the user explicitly discovers models.
+- Baseline model metadata is read from the release-bundled models.dev snapshot. Each user's Personal Model Pad is arranged and saved only on that Mac; Artificial Analysis is an optional source of suggestions for unplaced hosted models. It is contacted only when the user explicitly chooses Connect & fetch or Fetch latest in Model Pad settings, and its encrypted key and normalized cache remain device-local. Local LM Studio and Ollama metadata is captured only when the user explicitly discovers models.
 - Parakeet model downloads come from the sherpa-onnx project release hosting.
 
 For a fully local session, select a local model endpoint, use on-device voice, disable Exa, and avoid remote MCP servers.
@@ -184,7 +184,7 @@ Refresh the checked-in models.dev capability snapshot manually during developmen
 npm run models:refresh
 ```
 
-`npm run dist` runs the same validated models.dev refresh before packaging. Artificial Analysis data and credentials are never bundled into a release: each user connects their own key in Settings → Model data, and only explicit Connect & fetch or Fetch latest actions update that device's encrypted credential and normalized offline cache. Ordinary model reads never make an Artificial Analysis network request.
+`npm run dist` runs the same validated models.dev refresh before packaging. Personal Model Pad placements stay in device-local settings. Artificial Analysis data and credentials are never bundled into a release: users may connect their own key in Settings → Model Pad when they want benchmark suggestions, and only explicit Connect & fetch or Fetch latest actions update that device's encrypted credential and normalized offline cache. Ordinary model reads never make an Artificial Analysis network request.
 
 Provider Settings exposes Apple Foundation Models only on macOS. On Apple Intelligence-capable Macs running macOS 26 or newer, chat titles can use Automatic, On-device only, or Selected chat model routing. Automatic prefers the on-device model when it is ready and otherwise uses the selected chat model; On-device only never falls back to a network provider after a native attempt.
 

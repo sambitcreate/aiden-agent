@@ -9,6 +9,7 @@ import {
   nearestModel,
   orderModelEntries,
   parseModel,
+  positionSavedModels,
   positionModels,
   type ModelEntry,
 } from "./model-picker-data";
@@ -148,6 +149,30 @@ test("bundled rankings flow into the pad and stale embedding ids stay out of the
   );
   assert.deepEqual(entries[0].ranking, ranking);
   assert.equal(positionModels(entries)[0].confidence, "benchmark");
+});
+
+test("saved personal placements alone determine membership and exact Pad geometry", () => {
+  const entries = [entry("first"), entry("second")];
+  const positioned = positionSavedModels(entries, {
+    first: { x: 0.17, y: 0.83, source: "user" },
+  });
+  assert.deepEqual(
+    positioned.map(({ value, x, y, confidence }) => ({ value, x, y, confidence })),
+    [{ value: "first", x: 0.17, y: 0.83, confidence: "personal" }],
+  );
+});
+
+test("embedding-like ids stay out when stale discovery metadata is unavailable", () => {
+  const local = provider({
+    id: "local",
+    label: "Local",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    models: ["chat-model", "text-embedding-nomic-embed-text-v1.5"],
+  });
+  assert.deepEqual(
+    createModelEntries([local]).map((model) => model.model),
+    ["chat-model"],
+  );
 });
 
 test("explicit model variants create estimates while unknown models stay visibly unranked", () => {
