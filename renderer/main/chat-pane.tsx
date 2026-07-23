@@ -8,7 +8,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
 import { ShieldQuestion, SquarePen, TerminalSquare } from "lucide-react";
-import { MessageList, type ToolActivity } from "../components/message-list";
+import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
@@ -42,6 +42,7 @@ import {
   type WorkspacePermission,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
+import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -133,6 +134,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
+  const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
   const [toolActivity, setToolActivity] = React.useState<ToolActivity | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
@@ -167,6 +169,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     setStreamingText(null);
     setIsStartingGeneration(false);
+    setIsStoppingGeneration(false);
     setToolActivity(null);
     setError(null);
     setApprovals([]);
@@ -187,6 +190,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     (history: Chat["messages"]) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
+      setIsStoppingGeneration(false);
       setStreamingText("");
       setToolActivity(null);
       setApprovals([]);
@@ -212,12 +216,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onTool: (phase, toolName) => {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             const label = toolLabel(toolName);
-            if (phase === "call") setToolActivity({ state: "running", label: `${label}…` });
+            if (phase === "call")
+              setToolActivity({ state: "running", label: `${label}…`, toolName });
             else if (phase === "blocked")
-              setToolActivity({ state: "blocked", label: `${label} denied` });
+              setToolActivity({ state: "blocked", label: `${label} denied`, toolName });
             else if (phase === "error")
-              setToolActivity({ state: "failed", label: `${label} failed` });
-            else setToolActivity({ state: "finished", label: `${label} finished` });
+              setToolActivity({ state: "failed", label: `${label} failed`, toolName });
+            else setToolActivity({ state: "finished", label: `${label} finished`, toolName });
           },
           onApproval: (prompt) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
@@ -239,6 +244,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             if (mountedRef.current) {
               setStreamingText(null);
+              setIsStoppingGeneration(false);
               setToolActivity(null);
               setApprovals([]);
             }
@@ -273,6 +279,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             if (mountedRef.current) {
               setStreamingText(null);
+              setIsStoppingGeneration(false);
               setToolActivity(null);
               setApprovals([]);
               setError(
@@ -293,6 +300,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Wait for the Computer Use setting to finish saving before sending.");
       }
       const generationIntent = ++generationIntentRef.current;
+      setIsStoppingGeneration(false);
       setIsStartingGeneration(true);
       try {
         const updated = await chatsApi.appendMessage(
@@ -316,7 +324,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
-    generationRef.current?.cancel("user_stop");
+    if (!generationRef.current) return;
+    setIsStoppingGeneration(true);
+    generationRef.current.cancel("user_stop");
   }, []);
 
   const cancelAgentForContextChange = React.useCallback(() => {
@@ -325,6 +335,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationRef.current = null;
     setStreamingText(null);
     setIsStartingGeneration(false);
+    setIsStoppingGeneration(false);
     setToolActivity(null);
     setApprovals([]);
     setDecidingApprovalId(null);
@@ -348,8 +359,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
         );
         setToolActivity(
           decision === "allow"
-            ? { state: "running", label: `${toolLabel(prompt.toolName)}…` }
-            : { state: "blocked", label: `${toolLabel(prompt.toolName)} denied` },
+            ? {
+                state: "running",
+                label: `${toolLabel(prompt.toolName)}…`,
+                toolName: prompt.toolName,
+              }
+            : {
+                state: "blocked",
+                label: `${toolLabel(prompt.toolName)} denied`,
+                toolName: prompt.toolName,
+              },
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
@@ -518,6 +537,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
+  const agentActivity = resolveAgentActivity({
+    isStarting: isStartingGeneration,
+    isStopping: isStoppingGeneration,
+    streamingText,
+    pendingApproval: Boolean(pending),
+    toolActivity,
+  });
 
   React.useEffect(() => {
     if (!pending) return;
@@ -557,7 +583,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
         </>
       }
       autoScrollToBottom
-      autoScrollDeps={[messages.length, streamingText, toolActivity, approvals.length]}
+      autoScrollDeps={[
+        messages.length,
+        streamingText,
+        toolActivity,
+        agentActivity?.phase,
+        approvals.length,
+      ]}
       showScrollToBottomButton
       footer={
         <>
@@ -695,6 +727,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           messages={messages}
           streamingText={streamingText}
           toolActivity={toolActivity}
+          agentActivity={agentActivity}
           error={error}
         />
       )}

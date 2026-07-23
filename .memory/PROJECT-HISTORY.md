@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-22 — Show meaningful agent activity motion
+
+- Centered the transcript's scroll-to-bottom control above the composer and raised its surface opacity for clearer separation from conversation content.
+- Replaced the generic running spinner with the inline `thinking-orbs` canvas states, driven only by Aiden's real preparing, thinking, responding, discovery-tool, working-tool, approval-wait, and stopping lifecycle signals.
+- Removed the activity-row pill containers and reserved a restrained, Reduce Motion-aware text shimmer for the Thinking state.
+- Kept completion, denial, and failure static; respected Aiden's explicit appearance and Reduce Motion preferences; and added pure precedence/mapping coverage plus the packaged MIT notice.
+
 ### 2026-07-22 — Prepare the repository's public presentation
 
 - Reworked the README around a concise product story, a real Aiden screenshot, the privacy and Computer Use trust boundaries, essential development commands, and links to the detailed release and architecture documents.

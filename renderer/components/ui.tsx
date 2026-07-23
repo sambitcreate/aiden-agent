@@ -654,11 +654,11 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
         <Button
           iconOnly
           size="medium"
-          variant="glass"
+          variant="filled"
           onClick={() => scrollToBottom()}
           aria-label="Scroll to bottom"
-          className="absolute z-20 shadow-popover"
-          style={{ bottom: footerHeight + 12, right: "max(1rem, calc((100% - 48rem) / 2 + 1.25rem))" }}
+          className="absolute left-1/2 z-20 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
+          style={{ bottom: footerHeight + 12 }}
         >
           <ArrowDownToLine />
         </Button>
