@@ -1,7 +1,7 @@
 /* global console, process */
 
 import { spawn } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,37 @@ export async function discoverMacDistributionArchives(staging) {
     dmg: path.join(staging, dmgs[0].name),
     zip: path.join(staging, zips[0].name),
   };
+}
+
+export const AIDEN_UPDATE_FEED_URL =
+  "https://github.com/sambitcreate/aiden-agent-releases/releases/latest/download";
+
+export function distributionElectronBuilderArguments(staging, { enableAutoUpdates = false } = {}) {
+  const args = ["--mac", `--config.directories.output=${staging}`];
+  if (enableAutoUpdates) {
+    args.push(
+      "--config.publish.provider=generic",
+      `--config.publish.url=${AIDEN_UPDATE_FEED_URL}`,
+      "--publish",
+      "always",
+    );
+  }
+  return args;
+}
+
+export async function verifyMacUpdateMetadata(staging, expectedVersion) {
+  const metadataPath = path.join(staging, "latest-mac.yml");
+  const metadata = await readFile(metadataPath, "utf8");
+  if (!metadata.includes(`version: ${expectedVersion}`)) {
+    throw new Error("macOS update metadata does not match the packaged application version.");
+  }
+  if (!/^files:\s*$/mu.test(metadata) || !/^\s+- url: .+\.zip\s*$/mu.test(metadata)) {
+    throw new Error("macOS update metadata does not identify a ZIP update payload.");
+  }
+  if (!/^\s+sha512: [A-Za-z0-9+/=]+\s*$/mu.test(metadata)) {
+    throw new Error("macOS update metadata is missing its signed payload digest.");
+  }
+  return metadataPath;
 }
 
 async function exactArchiveApp(root, source) {
@@ -181,6 +212,7 @@ export async function runDistributionTransaction({ prepare, build, verify, promo
 
 export async function runMacDistribution() {
   const npm = (script) => runCommand("/usr/bin/env", ["npm", "run", script]);
+  const enableAutoUpdates = process.env.AIDEN_ENABLE_AUTO_UPDATES === "1";
   return runDistributionTransaction({
     prepare: () => beginMacDistribution(repositoryRoot),
     build: async ({ staging }) => {
@@ -189,16 +221,18 @@ export async function runMacDistribution() {
       await npm("computer-use:vendor");
       await npm("build:native");
       await npm("build");
-      await runCommand(path.join(repositoryRoot, "node_modules", ".bin", "electron-builder"), [
-        "--mac",
-        `--config.directories.output=${staging}`,
-      ]);
+      await runCommand(
+        path.join(repositoryRoot, "node_modules", ".bin", "electron-builder"),
+        distributionElectronBuilderArguments(staging, { enableAutoUpdates }),
+      );
     },
     verify: async ({ staging }) => {
       const appPath = await discoverPackagedApp(staging);
       await verifyMacPackage(appPath);
       await verifyNotarizedMacPackage(appPath);
-      await verifyMacDistributionArchives(staging, await packagedArtifactIdentity(appPath));
+      const identity = await packagedArtifactIdentity(appPath);
+      await verifyMacDistributionArchives(staging, identity);
+      if (enableAutoUpdates) await verifyMacUpdateMetadata(staging, identity.shortVersion);
     },
     promote: () => promoteMacDistribution(repositoryRoot),
     discard: () => discardMacDistributionStaging(repositoryRoot),

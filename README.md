@@ -114,6 +114,10 @@ npm install
 npm run dev
 ```
 
+The development launcher prepares a cached, ad-hoc-signed Aiden runtime from the installed
+Electron framework. macOS, Activity Monitor, and helper processes therefore show **Aiden Agent**
+instead of the stock Electron name while retaining development-only helper and resource paths.
+
 The native-helper build checks `DEVELOPER_DIR`, the active `xcode-select` path,
 installed Xcode apps, and Spotlight results. It uses the newest compatible full
 Xcode containing the macOS 26+ Foundation Models SDK and compiler macros without
@@ -167,6 +171,12 @@ their bundle versions, signed CDHash, and app-ASAR SHA-256 to match the verified
 staging app. `npm run release:verify` repeats the canonical app validation. A
 development package or acceptance receipt does not claim that a notarized
 distribution was produced.
+
+The private source repository can publish verified binaries from every enabled `main` push and
+deliver signed background updates through a separate public, binary-only release repository.
+The release workflow remains skipped until its public feed and protected signing secrets are
+configured and `RELEASES_ENABLED=true`. See [macOS releases and automatic updates](docs/releasing.md)
+for the exact trust boundary, secrets, versioning, first-release checklist, and recovery policy.
 
 Refresh the checked-in models.dev capability snapshot manually during development with:
 

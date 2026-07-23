@@ -1,0 +1,106 @@
+name: Release macOS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aiden-agent-macos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: vars.RELEASES_ENABLED == 'true'
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment: release
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      RELEASE_REPOSITORY: sambitcreate/aiden-agent-releases
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Assign the main-push version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_version="$(node scripts/prepare-ci-release.mjs "$GITHUB_RUN_NUMBER")"
+          npm version "$release_version" --no-git-tag-version
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$release_version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify TypeScript
+        run: npm run type-check
+
+      - name: Verify lint
+        run: npm run lint
+
+      - name: Verify branding, updater, and release policy
+        run: npm run test:branding
+
+      - name: Run JavaScript, TypeScript, and Computer Use tests
+        run: npm test
+
+      - name: Run Apple Foundation Models tests
+        run: npm run test:native
+
+      - name: Prepare App Store Connect key
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_API_KEY_ID"
+          test -n "$APPLE_API_KEY_P8"
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, and verify distribution
+        env:
+          AIDEN_ENABLE_AUTO_UPDATES: "1"
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+        run: npm run dist
+
+      - name: Publish verified release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to replace published update assets." >&2
+            exit 1
+          fi
+          cd release/distribution
+          shasum -a 256 -- *.dmg *.zip latest-mac.yml > SHA256SUMS
+          gh release create "$RELEASE_TAG" \
+            --repo "$RELEASE_REPOSITORY" \
+            --title "Aiden Agent $RELEASE_VERSION" \
+            --notes "Automated verified macOS release from Aiden's private source pipeline." \
+            --latest \
+            -- *.dmg *.zip latest-mac.yml SHA256SUMS

@@ -34,6 +34,8 @@ import { llmClient } from "./services/llm-client.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
+import { isPackagedRuntime } from "./runtime-mode.js";
+import { appUpdateService } from "./services/app-updater.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -105,6 +107,7 @@ function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload
 function cleanupApplication(): void {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  appUpdateService.dispose();
   disposeShortcut();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
@@ -305,10 +308,10 @@ async function applyDockIconPreference(preference: DockIconPreference): Promise<
   if (process.platform !== "darwin" || !app.dock) return false;
   const iconPath =
     preference === "monochrome"
-      ? app.isPackaged
+      ? isPackagedRuntime()
         ? path.join(process.resourcesPath, "app-icon-monochrome.png")
         : path.join(app.getAppPath(), "resources", "app-icon-monochrome.png")
-      : app.isPackaged
+      : isPackagedRuntime()
         ? path.join(process.resourcesPath, "app-icon.png")
         : path.join(app.getAppPath(), "resources", "app-icon.png");
   const icon = nativeImage.createFromPath(iconPath);
@@ -449,6 +452,10 @@ function setupApplicationMenu(): void {
       label: "Aiden Agent",
       submenu: [
         { role: "about" },
+        {
+          label: "Check for Updates…",
+          click: () => void appUpdateService.checkNow(true),
+        },
         { type: "separator" },
         {
           label: "Settings…",
@@ -561,6 +568,7 @@ if (!ownsSingleInstanceLock) {
       void foundationModelsConnection.status();
 
       await createMainWindow();
+      appUpdateService.start();
     })
     .catch((error: unknown) => {
       logger.error("main", "Failed to start Aiden Agent", error);

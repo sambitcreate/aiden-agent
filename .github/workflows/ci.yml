@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify TypeScript
+        run: npm run type-check
+
+      - name: Verify lint
+        run: npm run lint
+
+      - name: Verify branding, updater, and release policy
+        run: npm run test:branding
+
+      - name: Run JavaScript, TypeScript, and Computer Use tests
+        run: npm test
+
+      - name: Run Apple Foundation Models tests
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+        run: npm run test:native
+
+      - name: Build production bundles
+        run: npm run build

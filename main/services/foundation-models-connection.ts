@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { app } from "../platform.js";
+import { isPackagedRuntime } from "../runtime-mode.js";
 import {
   FOUNDATION_MODELS_PROTOCOL_VERSION,
   FoundationModelsConnectionError,
@@ -32,7 +33,7 @@ function helperEnvironment(): NodeJS.ProcessEnv {
 }
 
 function defaultHelperPath(): string {
-  if (app.isPackaged) {
+  if (isPackagedRuntime()) {
     return path.resolve(process.resourcesPath, "..", "Helpers", HELPER_APP_NAME);
   }
   return path.join(app.getAppPath(), "build", "native", HELPER_APP_NAME);

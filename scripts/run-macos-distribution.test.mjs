@@ -6,9 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  AIDEN_UPDATE_FEED_URL,
   discoverMacDistributionArchives,
+  distributionElectronBuilderArguments,
   runDistributionTransaction,
   verifyMacDistributionArchives,
+  verifyMacUpdateMetadata,
 } from "./run-macos-distribution.mjs";
 import { updateModelCapabilities } from "./update-model-capabilities.mjs";
 
@@ -98,6 +101,36 @@ test("distribution archive discovery requires exactly one current DMG and ZIP", 
     });
     await writeFile(path.join(staging, "stale.zip"), "stale", "utf8");
     await assert.rejects(discoverMacDistributionArchives(staging), /found 1\/2/u);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+});
+
+test("automatic-update distributions generate generic-feed metadata without changing local builds", () => {
+  assert.deepEqual(distributionElectronBuilderArguments("/stage"), [
+    "--mac",
+    "--config.directories.output=/stage",
+  ]);
+  assert.deepEqual(distributionElectronBuilderArguments("/stage", { enableAutoUpdates: true }), [
+    "--mac",
+    "--config.directories.output=/stage",
+    "--config.publish.provider=generic",
+    `--config.publish.url=${AIDEN_UPDATE_FEED_URL}`,
+    "--publish",
+    "always",
+  ]);
+});
+
+test("update metadata is version-bound and requires a hashed ZIP payload", async () => {
+  const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-update-metadata-"));
+  try {
+    await writeFile(
+      path.join(staging, "latest-mac.yml"),
+      "version: 1.0.9\nfiles:\n  - url: Aiden-Agent-1.0.9.zip\n    sha512: YWlkZW4=\n",
+      "utf8",
+    );
+    assert.equal(await verifyMacUpdateMetadata(staging, "1.0.9"), path.join(staging, "latest-mac.yml"));
+    await assert.rejects(verifyMacUpdateMetadata(staging, "1.0.10"), /does not match/u);
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

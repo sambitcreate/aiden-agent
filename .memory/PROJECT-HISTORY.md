@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-22 — Prepare branded publishing and automatic updates
+
+- Replaced the neuron app artwork with Raychat's compiled Aiden mascot icon, including a matching grayscale Dock variant, and made the hot-reload runtime rebrand the main and helper bundles as Aiden Agent with a separate development bundle ID and ad-hoc signature.
+- Preserved development security semantics despite Electron treating a renamed executable as packaged: hot reload still uses development-only native helper, Computer Use, resource, and updater paths.
+- Added packaged-only `electron-updater` checks with a quiet native menu action, background download, ready notification, six-hour polling, and install-on-normal-quit behavior.
+- Added pinned-action macOS CI plus a gated main-push release workflow that derives monotonic versions, runs full gates before loading secrets, builds/signs/notarizes/verifies the DMG and ZIP, generates version-bound update metadata, and publishes only verified assets to a separate public binary repository.
+- Kept publication disabled until the public feed and protected Apple/GitHub secrets are explicitly configured through `RELEASES_ENABLED=true`; documented bootstrap, trust boundaries, recovery, and version-line changes in `docs/releasing.md`.
+
 ### 2026-07-22 — Correct composer context-strip depth
 
 - Isolated the attached context-strip/composer stack and assigned explicit local layers so the translucent, backdrop-blurred strip stays behind the raised composer edge. The existing overlap, darker theme-aware surface, and compact geometry remain unchanged.
