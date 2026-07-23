@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { createChatStore } from "./chat-store-core.js";
+import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 
 async function testStore(t: test.TestContext) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-"));
@@ -51,6 +52,90 @@ test("serializes assistant persistence with a background title update", async (t
     updated?.messages.map((message) => message.role),
     ["user", "assistant"],
   );
+});
+
+test("persists safe assistant milestones and drops invalid timeline data", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  const timeline: GenerationTimeline = {
+    version: 1,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 10,
+    finishedAt: 20,
+    steps: [
+      {
+        id: "tool-1",
+        order: 0,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        label: "Read file",
+        status: "completed",
+        startedAt: 11,
+        updatedAt: 12,
+        finishedAt: 12,
+        target: "src/index.ts",
+      },
+    ],
+  };
+
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Done.",
+    timeline,
+  });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Unsafe data is ignored.",
+    timeline: {
+      ...timeline,
+      steps: [{ ...timeline.steps[0], target: "/Users/person/private.txt" }],
+    } as GenerationTimeline,
+  });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "A renderer cannot attach milestones here.",
+    timeline,
+  });
+
+  const updated = await store.get(chat.id);
+  assert.deepEqual(updated?.messages[0]?.timeline, timeline);
+  assert.equal(updated?.messages[1]?.timeline, undefined);
+  assert.equal(updated?.messages[2]?.timeline, undefined);
+});
+
+test("drops a timeline injected into a stored non-assistant message", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-store-tampered-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  const timeline: GenerationTimeline = {
+    version: 1,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 10,
+    finishedAt: 20,
+    steps: [],
+  };
+  await fs.writeFile(
+    path.join(directory, `${chat.id}.json`),
+    JSON.stringify({
+      ...chat,
+      messages: [
+        {
+          id: "tampered-user",
+          role: "user",
+          content: "Hello",
+          createdAt: 10,
+          timeline,
+        },
+      ],
+    }),
+    "utf-8",
+  );
+
+  assert.equal((await store.get(chat.id))?.messages[0]?.timeline, undefined);
 });
 
 test("an explicit generated rename preserves a newer manual title", async (t) => {

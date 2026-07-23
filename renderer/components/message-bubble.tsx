@@ -5,6 +5,7 @@ import { Text } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { FileText } from "lucide-react";
 import { Markdown } from "./markdown";
+import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 
@@ -14,9 +15,18 @@ interface MessageBubbleProps {
   attachments?: Attachment[];
   /** Show a blinking caret while streaming an assistant reply. */
   streaming?: boolean;
+  streamComplete?: boolean;
+  onStreamHandoffComplete?: () => void;
 }
 
-export function MessageBubble({ role, content, attachments, streaming }: MessageBubbleProps) {
+export function MessageBubble({
+  role,
+  content,
+  attachments,
+  streaming,
+  streamComplete,
+  onStreamHandoffComplete,
+}: MessageBubbleProps) {
   if (role === "user") {
     return (
       <div className="group flex justify-end">
@@ -63,11 +73,19 @@ export function MessageBubble({ role, content, attachments, streaming }: Message
   return (
     <div className="group flex w-full">
       <div className="min-w-0 flex-1">
-        <Markdown content={content} />
         {streaming ? (
+          <StreamingMarkdownReveal
+            content={content}
+            complete={streamComplete}
+            onHandoffComplete={onStreamHandoffComplete}
+          />
+        ) : (
+          <Markdown content={content} />
+        )}
+        {streaming && !streamComplete ? (
           <span
             className={cn(
-              "inline-block h-4 w-[2px] translate-y-0.5 bg-accent align-middle",
+              "streaming-cursor inline-block h-4 w-[2px] translate-y-0.5 bg-accent align-middle",
               "animate-pulse",
               content ? "ml-0.5" : "",
             )}

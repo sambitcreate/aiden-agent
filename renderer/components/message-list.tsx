@@ -1,13 +1,15 @@
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
-import { Ban, CircleAlert, CircleDot } from "lucide-react";
 import { ThinkingOrb, type OrbTheme } from "thinking-orbs";
 import { Callout, Text } from "./ui";
+import { AgentSteps } from "./agent-steps";
+import { EventPresence } from "./event-presence";
 import { MessageBubble } from "./message-bubble";
 import type { ChatMessage } from "../lib/types";
-import type { AgentActivity, ToolActivity } from "../lib/agent-activity";
+import type { AgentActivity } from "../lib/agent-activity";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import type { GenerationTimeline } from "../shared/generation-timeline";
 
 interface OrbAppearance {
   theme: OrbTheme;
@@ -39,8 +41,9 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
-  /** Transient, stateful tool activity for the current generation. */
-  toolActivity: ToolActivity | null;
+  streamComplete?: boolean;
+  onStreamHandoffComplete?: () => void;
+  timeline: GenerationTimeline | null;
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
   error: string | null;
@@ -49,88 +52,136 @@ interface MessageListProps {
 export function MessageList({
   messages,
   streamingText,
-  toolActivity,
+  streamComplete,
+  onStreamHandoffComplete,
+  timeline,
   agentActivity,
   error,
 }: MessageListProps) {
   const orbAppearance = useOrbAppearance();
-  const ActivityIcon = toolActivity
-    ? toolActivity.state === "finished"
-      ? CircleDot
-      : toolActivity.state === "failed"
-        ? CircleAlert
-        : toolActivity.state === "blocked"
-          ? Ban
-          : null
-    : null;
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-3 py-6 sm:px-5">
       {messages.map((m) => (
-        <MessageBubble key={m.id} role={m.role} content={m.content} attachments={m.attachments} />
+        <div key={m.id} className="flex min-w-0 flex-col gap-2">
+          {m.role === "assistant" && m.timeline?.steps.length ? (
+            <AgentSteps timeline={m.timeline} animate={false} />
+          ) : null}
+          <MessageBubble role={m.role} content={m.content} attachments={m.attachments} />
+        </div>
       ))}
 
-      {toolActivity && ActivityIcon ? (
-        <div
-          role={toolActivity.state === "failed" ? "alert" : "status"}
-          className="flex w-fit max-w-full items-center gap-2 py-0.5"
-        >
-          <ActivityIcon
-            className={
-              toolActivity.state === "finished"
-                ? "size-3.5 text-secondary"
-                : toolActivity.state === "failed"
-                  ? "size-3.5 text-red"
-                  : "size-3.5 text-support-warning"
-            }
-          />
-          <Text variant="small" color="secondary" className="min-w-0 break-words">
-            {toolActivity.label}
-          </Text>
-        </div>
+      <AgentSteps timeline={timeline} />
+
+      {streamingText ? (
+        <MessageBubble
+          role="assistant"
+          content={streamingText}
+          streaming
+          streamComplete={streamComplete}
+          onStreamHandoffComplete={onStreamHandoffComplete}
+        />
       ) : null}
 
-      {streamingText ? <MessageBubble role="assistant" content={streamingText} streaming /> : null}
+      <AgentActivityTransition activity={agentActivity} appearance={orbAppearance} />
 
-      {agentActivity ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="flex w-fit max-w-full items-center gap-2 py-0.5"
-          data-agent-activity={agentActivity.phase}
-        >
-          <ThinkingOrb
-            aria-hidden="true"
-            state={agentActivity.orbState}
-            size={20}
-            theme={orbAppearance.theme}
-            paused={orbAppearance.paused}
-            className="shrink-0 text-primary"
-          />
-          <Text
-            variant="small"
-            color="secondary"
-            className={
-              agentActivity.phase === "thinking"
-                ? "agent-thinking-shimmer min-w-0 break-words"
-                : "min-w-0 break-words"
-            }
-          >
-            {agentActivity.label}
-          </Text>
-        </div>
-      ) : null}
+      <EventPresence present={Boolean(error)}>
+        {error ? (
+          <Callout color="red">
+            <Text variant="small-strong" color="red">
+              Generation failed
+            </Text>
+            <Text variant="small" color="secondary" className="mt-0.5 block">
+              {error}
+            </Text>
+          </Callout>
+        ) : null}
+      </EventPresence>
+    </div>
+  );
+}
 
-      {error ? (
-        <Callout color="red">
-          <Text variant="small-strong" color="red">
-            Generation failed
-          </Text>
-          <Text variant="small" color="secondary" className="mt-0.5 block">
-            {error}
-          </Text>
-        </Callout>
-      ) : null}
+function AgentActivityTransition({
+  activity,
+  appearance,
+}: {
+  activity: AgentActivity | null;
+  appearance: OrbAppearance;
+}) {
+  interface ExitingActivity {
+    id: number;
+    value: AgentActivity;
+  }
+  const currentRef = React.useRef(activity);
+  const [current, setCurrent] = React.useState(activity);
+  const [exiting, setExiting] = React.useState<ExitingActivity[]>([]);
+  const exitIdRef = React.useRef(0);
+  const exitTimersRef = React.useRef(new Map<number, number>());
+
+  React.useEffect(() => {
+    const old = currentRef.current;
+    if (old?.phase === activity?.phase && old?.label === activity?.label) return;
+    currentRef.current = activity;
+    setCurrent(activity);
+    if (!old) return;
+    if (document.documentElement.dataset.reduceMotion === "true") {
+      setExiting([]);
+      return;
+    }
+    const id = ++exitIdRef.current;
+    setExiting((items) => [...items, { id, value: old }]);
+    const timer = window.setTimeout(() => {
+      exitTimersRef.current.delete(id);
+      setExiting((items) => items.filter((item) => item.id !== id));
+    }, 180);
+    exitTimersRef.current.set(id, timer);
+  }, [activity]);
+
+  React.useEffect(
+    () => () => {
+      for (const timer of exitTimersRef.current.values()) window.clearTimeout(timer);
+      exitTimersRef.current.clear();
+    },
+    [],
+  );
+
+  if (!current && exiting.length === 0) return null;
+  const row = (value: AgentActivity, presence: "in" | "out", key: string) => (
+    <div
+      key={key}
+      role="status"
+      aria-live={presence === "in" ? "polite" : "off"}
+      aria-hidden={presence === "out" ? "true" : undefined}
+      className={`agent-activity-layer flex w-fit max-w-full items-center gap-2 py-0.5 ${
+        presence === "in" ? "agent-event-in" : "agent-event-out"
+      }`}
+      data-agent-activity={value.phase}
+    >
+      <ThinkingOrb
+        aria-hidden="true"
+        state={value.orbState}
+        size={20}
+        theme={appearance.theme}
+        paused={appearance.paused}
+        className="shrink-0 text-primary"
+      />
+      <Text
+        variant="small"
+        color="secondary"
+        className={
+          value.phase === "thinking"
+            ? "agent-thinking-shimmer min-w-0 break-words"
+            : "min-w-0 break-words"
+        }
+      >
+        {value.label}
+      </Text>
+    </div>
+  );
+  return (
+    <div className="agent-activity-transition grid">
+      {exiting.map((item) => row(item.value, "out", `out:${item.id}`))}
+      {current ? row(current, "in", `in:${current.phase}:${current.label}`) : null}
     </div>
   );
 }

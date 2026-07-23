@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 export interface ToolApprovalPrompt {
   streamId: string;
   approvalId: string;
+  toolCallId: string;
   toolName: string;
   summary: string;
 }

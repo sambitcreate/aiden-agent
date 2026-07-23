@@ -11,6 +11,7 @@ import {
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
+import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -52,7 +53,13 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
   async function readChat(id: string): Promise<Chat | null> {
     try {
       const data = await fs.readFile(await chatPath(id), "utf-8");
-      return JSON.parse(data) as Chat;
+      const chat = JSON.parse(data) as Chat;
+      chat.messages = chat.messages.map((message) => ({
+        ...message,
+        timeline:
+          message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
+      }));
+      return chat;
     } catch {
       return null;
     }
@@ -232,6 +239,8 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
           content: message.content,
           model: message.model,
           attachments: message.attachments,
+          timeline:
+            message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
           createdAt: message.createdAt ?? Date.now(),
         };
         const isFirstUserMessage =

@@ -2,6 +2,7 @@
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { GenerationTimeline } from "../shared/generation-timeline";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -432,6 +433,7 @@ export interface ChatMessage {
   createdAt: number;
   model?: string;
   attachments?: Attachment[];
+  timeline?: GenerationTimeline;
 }
 
 export interface ChatMeta {

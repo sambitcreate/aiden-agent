@@ -39,6 +39,7 @@ import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { toPiMessages } from "./generation-messages.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
+import { GenerationTimelineProjector } from "./generation-timeline.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
   activatedComputerUseStreamIds,
@@ -232,6 +233,38 @@ export const llmClient = {
     const { model } = runtime;
 
     const deniedToolCalls = new Set<string>();
+    const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
+      sendGeneration(streamId, "chat:timeline", { streamId, timeline: snapshot });
+    });
+    const generationCancelRequested = () =>
+      initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
+    const persistAssistant = async (
+      content: string,
+      finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
+    ) => {
+      if (!content.trim() && finalTimeline.steps.length === 0) {
+        return { chat: undefined, error: undefined };
+      }
+      try {
+        const chat = await chatStore.appendMessage(
+          params.chatId,
+          {
+            role: "assistant",
+            content,
+            model: params.model,
+            timeline: finalTimeline.steps.length ? finalTimeline : undefined,
+          },
+          { providerId: params.providerId, model: params.model },
+        );
+        return { chat, error: undefined };
+      } catch (error) {
+        logger.error("pi", `Could not persist response for stream ${streamId}`, error);
+        return {
+          chat: undefined,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
     let full = "";
     let errored: string | null = null;
     let aborted = false;
@@ -248,11 +281,13 @@ export const llmClient = {
         },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
+          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
           let summary: string;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
               deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
               return { block: true, reason: "Computer Use is not enabled for this response." };
             }
             try {
@@ -260,11 +295,15 @@ export const llmClient = {
                 context.args as ComputerUseArgs,
                 signal,
               );
-              if (!descriptor) return undefined;
+              if (!descriptor) {
+                timeline.toolRunning(context.toolCall.id);
+                return undefined;
+              }
               computerUseApproval = descriptor;
               summary = descriptor.summary;
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
               return {
                 block: true,
                 reason:
@@ -272,16 +311,25 @@ export const llmClient = {
               };
             }
           } else {
-            if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name))
+            if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name)) {
+              timeline.toolRunning(context.toolCall.id);
               return undefined;
+            }
             summary = summarizeToolCall(context.toolCall.name, context.args);
           }
+          timeline.toolAwaitingApproval(context.toolCall.id);
           const allowed = await approvals.request(
-            { streamId, toolName: context.toolCall.name, summary },
+            (() => {
+              const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+              if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+              return { streamId, toolCallId, toolName: context.toolCall.name, summary };
+            })(),
             signal,
             owner.documentId,
           );
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
+          if (allowed) timeline.toolRunning(context.toolCall.id);
+          else if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
           if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             try {
               if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
@@ -292,6 +340,7 @@ export const llmClient = {
               );
             } catch (error) {
               deniedToolCalls.add(context.toolCall.id);
+              timeline.toolFinished(context.toolCall.id, "blocked");
               return {
                 block: true,
                 reason: error instanceof Error ? error.message : "Computer Use approval expired.",
@@ -344,14 +393,28 @@ export const llmClient = {
             break;
           }
           case "tool_execution_start":
+            timeline.toolStarted(event.toolCallId, event.toolName, event.args);
             sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: "call",
               toolName: event.toolName,
             });
             break;
+          case "tool_execution_update":
+            timeline.toolRunning(event.toolCallId);
+            break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
+            timeline.toolFinished(
+              event.toolCallId,
+              generationCancelRequested()
+                ? "cancelled"
+                : denied
+                  ? "blocked"
+                  : event.isError
+                    ? "failed"
+                    : "completed",
+            );
             sendGeneration(streamId, "chat:tool", {
               streamId,
               phase: denied ? "blocked" : event.isError ? "error" : "result",
@@ -417,27 +480,61 @@ export const llmClient = {
             agent.state.errorMessage?.trim() ??
             null);
         if (finalError) {
+          const finalTimeline = timeline.finish("failed");
+          const persisted = await persistAssistant(full, finalTimeline);
           sendGeneration(streamId, "chat:error", {
             streamId,
-            message: finalError,
+            message: persisted.error
+              ? `${finalError} The partial response could not be saved: ${persisted.error}`
+              : finalError,
             content: full || undefined,
+            timeline: finalTimeline,
+            chat: persisted.chat,
           });
         } else if (!full.trim() && !wasCancelled) {
+          const finalTimeline = timeline.finish("failed");
+          const persisted = await persistAssistant(full, finalTimeline);
           sendGeneration(streamId, "chat:error", {
             streamId,
-            message: "The model returned an empty response. Try again.",
+            message: persisted.error
+              ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
+              : "The model returned an empty response. Try again.",
+            timeline: finalTimeline,
+            chat: persisted.chat,
           });
         } else {
           // Covers both normal completion and user abort (partial `full`).
-          sendGeneration(streamId, "chat:done", { streamId, content: full });
+          const finalTimeline = timeline.finish(wasCancelled ? "cancelled" : "completed");
+          const persisted = await persistAssistant(full, finalTimeline);
+          if (persisted.error) {
+            sendGeneration(streamId, "chat:error", {
+              streamId,
+              message: `The response completed but could not be saved: ${persisted.error}`,
+              content: full || undefined,
+              timeline: finalTimeline,
+            });
+          } else {
+            sendGeneration(streamId, "chat:done", {
+              streamId,
+              content: full,
+              timeline: finalTimeline,
+              chat: persisted.chat,
+            });
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
+        const finalTimeline = timeline.finish("failed");
+        const persisted = await persistAssistant(full, finalTimeline);
         sendGeneration(streamId, "chat:error", {
           streamId,
-          message,
+          message: persisted.error
+            ? `${message} The partial response could not be saved: ${persisted.error}`
+            : message,
           content: full || undefined,
+          timeline: finalTimeline,
+          chat: persisted.chat,
         });
       } finally {
         try {

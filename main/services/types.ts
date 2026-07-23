@@ -1,6 +1,7 @@
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
+import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -146,6 +147,8 @@ export interface ChatMessage {
   model?: string;
   /** Files attached to a user message. */
   attachments?: Attachment[];
+  /** Renderer-safe tool milestones associated with this assistant response. */
+  timeline?: GenerationTimeline;
 }
 
 export interface ModelRanking {
@@ -415,10 +418,14 @@ export interface ChatDelta {
 export interface ChatDone {
   streamId: string;
   content: string;
+  timeline?: GenerationTimeline;
+  chat?: Chat;
 }
 export interface ChatError {
   streamId: string;
   message: string;
   /** Streamed text retained when a provider fails after beginning a response. */
   content?: string;
+  timeline?: GenerationTimeline;
+  chat?: Chat;
 }

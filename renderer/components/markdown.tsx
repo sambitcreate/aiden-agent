@@ -58,3 +58,20 @@ export const Markdown = React.memo(function Markdown({ content }: MarkdownProps)
     </div>
   );
 });
+
+const inlineComponents: Components = {
+  ...components,
+  p: ({ children }) => <>{children}</>,
+};
+
+export const MarkdownInline = React.memo(function MarkdownInline({ content }: MarkdownProps) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={inlineComponents}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});

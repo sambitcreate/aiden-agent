@@ -62,6 +62,7 @@ interface ComposerProps {
   onSend: (text: string, attachments: Attachment[]) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
+  canStopGeneration?: boolean;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   workspace?: Workspace;
   /** Current git branch of the workspace folder, or undefined if not a repo. */
@@ -132,6 +133,7 @@ export function Composer({
   onSend,
   onStop,
   isGenerating,
+  canStopGeneration = isGenerating,
   inputRef,
   workspace,
   gitBranch,
@@ -605,7 +607,7 @@ export function Composer({
                     <Mic className={cn(voice.recording && "animate-pulse")} />
                   )}
                 </Button>
-                {isGenerating ? (
+                {isGenerating && canStopGeneration ? (
                   <Button
                     variant="filled"
                     size="small"

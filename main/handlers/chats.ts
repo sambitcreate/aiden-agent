@@ -106,6 +106,9 @@ export function registerChatHistoryHandlers(): void {
           content: typeof m.content === "string" ? m.content : "",
           model: typeof m.model === "string" ? m.model : undefined,
           attachments: Array.isArray(m.attachments) ? (m.attachments as Attachment[]) : undefined,
+          // Generation timelines are persisted by the trusted main-process
+          // generation owner, never accepted from renderer-supplied chat data.
+          timeline: undefined,
         },
         {
           providerId: typeof metaObj.providerId === "string" ? metaObj.providerId : undefined,

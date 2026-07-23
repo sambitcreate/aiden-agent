@@ -35,6 +35,7 @@ import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
+import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
   type Attachment,
@@ -43,6 +44,7 @@ import {
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
 import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
+import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -133,9 +135,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [qc, navigate, activeId]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
+  const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
-  const [toolActivity, setToolActivity] = React.useState<ToolActivity | null>(null);
+  const [canStopGeneration, setCanStopGeneration] = React.useState(false);
+  const [generationTimeline, setGenerationTimeline] = React.useState<GenerationTimeline | null>(
+    null,
+  );
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [computerUseSaving, setComputerUseSaving] = React.useState(false);
@@ -146,6 +152,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
+  const approvalCardRef = React.useRef<HTMLElement | null>(null);
+  const pendingDeltaRef = React.useRef("");
+  const deltaFrameRef = React.useRef<number | null>(null);
+  const streamHandoffRef = React.useRef<(() => void) | null>(null);
+  const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
 
   chatIdRef.current = chatId;
 
@@ -162,15 +173,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
       generationIntentRef.current += 1;
       generationRef.current?.cancel("lifecycle");
       generationRef.current = null;
+      if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
+      deltaFrameRef.current = null;
+      pendingDeltaRef.current = "";
+      streamHandoffRef.current?.();
+      streamHandoffRef.current = null;
     };
   }, [chatId]);
 
   // Reset transient state when switching chats.
   React.useEffect(() => {
     setStreamingText(null);
+    setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
-    setToolActivity(null);
+    setCanStopGeneration(false);
+    setGenerationTimeline(null);
+    generationTimelineRef.current = null;
     setError(null);
     setApprovals([]);
     setDecidingApprovalId(null);
@@ -186,13 +205,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
     return () => environmentPanel.setAgentBusy(false);
   }, [environmentPanel.setAgentBusy, isGenerating, isStartingGeneration]);
 
+  const waitForStreamHandoff = React.useCallback(async (hasContent: boolean) => {
+    const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
+    if (reduceMotion || !hasContent) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(fallback);
+        if (streamHandoffRef.current === finish) streamHandoffRef.current = null;
+        resolve();
+      };
+      const fallback = window.setTimeout(finish, 700);
+      streamHandoffRef.current = finish;
+    });
+  }, []);
+
   const runGeneration = React.useCallback(
     (history: Chat["messages"]) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
       setIsStoppingGeneration(false);
+      setCanStopGeneration(true);
       setStreamingText("");
-      setToolActivity(null);
+      setStreamComplete(false);
+      pendingDeltaRef.current = "";
+      streamHandoffRef.current?.();
+      streamHandoffRef.current = null;
+      setGenerationTimeline(null);
+      generationTimelineRef.current = null;
       setApprovals([]);
       const handle = startGeneration(
         {
@@ -209,89 +251,110 @@ export function ChatPane({ chatId }: { chatId: string }) {
         {
           onDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setToolActivity(null);
-              setStreamingText((prev) => (prev ?? "") + delta);
+              pendingDeltaRef.current += delta;
+              if (deltaFrameRef.current !== null) return;
+              deltaFrameRef.current = window.requestAnimationFrame(() => {
+                deltaFrameRef.current = null;
+                const pendingDelta = pendingDeltaRef.current;
+                pendingDeltaRef.current = "";
+                if (
+                  !pendingDelta ||
+                  !mountedRef.current ||
+                  generationIntentRef.current !== generationIntent
+                ) {
+                  return;
+                }
+                setStreamingText((prev) => (prev ?? "") + pendingDelta);
+              });
             }
           },
-          onTool: (phase, toolName) => {
-            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
-            const label = toolLabel(toolName);
-            if (phase === "call")
-              setToolActivity({ state: "running", label: `${label}…`, toolName });
-            else if (phase === "blocked")
-              setToolActivity({ state: "blocked", label: `${label} denied`, toolName });
-            else if (phase === "error")
-              setToolActivity({ state: "failed", label: `${label} failed`, toolName });
-            else setToolActivity({ state: "finished", label: `${label} finished`, toolName });
+          onTimeline: (timeline) => {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              generationTimelineRef.current = timeline;
+              setGenerationTimeline(timeline);
+            }
           },
           onApproval: (prompt) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
-              setToolActivity(null);
               setApprovals((prev) => [...prev, prompt]);
             }
           },
-          onDone: async (full) => {
+          onDone: async (full, finalTimeline, updatedChat) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
-            if (full.trim()) {
-              const updated = await chatsApi.appendMessage(
-                chatId,
-                { role: "assistant", content: full, model },
-                { providerId, model },
-              );
-              qc.setQueryData(queryKeys.chat(chatId), updated);
+            setCanStopGeneration(false);
+            if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
+            deltaFrameRef.current = null;
+            pendingDeltaRef.current = "";
+            setStreamingText(full);
+            setStreamComplete(true);
+            if (finalTimeline) {
+              generationTimelineRef.current = finalTimeline;
+              setGenerationTimeline(finalTimeline);
+            }
+            await waitForStreamHandoff(Boolean(full.trim()));
+            if (generationIntentRef.current !== generationIntent) return;
+            if (updatedChat) {
+              qc.setQueryData(queryKeys.chat(chatId), updatedChat);
               void qc.invalidateQueries({ queryKey: queryKeys.chats });
             }
             if (mountedRef.current) {
               setStreamingText(null);
+              setStreamComplete(false);
               setIsStoppingGeneration(false);
-              setToolActivity(null);
+              setGenerationTimeline(null);
+              generationTimelineRef.current = null;
               setApprovals([]);
             }
           },
-          onError: (message, partialContent) => {
-            if (generationIntentRef.current !== generationIntent) return;
-            generationRef.current = null;
-            if (providerId === OPENAI_CODEX_PROVIDER_ID) {
-              void refreshCodexProviderState(qc);
-            }
-            const partial = partialContent?.trim();
-            if (partial) {
-              void chatsApi
-                .appendMessage(
-                  chatId,
-                  { role: "assistant", content: partial, model },
-                  { providerId, model },
-                )
-                .then((updated) => {
-                  qc.setQueryData(queryKeys.chat(chatId), updated);
-                  void qc.invalidateQueries({ queryKey: queryKeys.chats });
-                })
-                .catch((error: unknown) => {
-                  if (mountedRef.current) {
-                    toast.error(
-                      error instanceof Error
-                        ? error.message
-                        : "Couldn't save the partial assistant response.",
-                    );
-                  }
-                });
-            }
-            if (mountedRef.current) {
-              setStreamingText(null);
-              setIsStoppingGeneration(false);
-              setToolActivity(null);
-              setApprovals([]);
-              setError(
-                partial ? `Generation stopped after a partial response: ${message}` : message,
-              );
-            }
+          onError: (message, partialContent, finalTimeline, updatedChat) => {
+            void (async () => {
+              if (generationIntentRef.current !== generationIntent) return;
+              generationRef.current = null;
+              setCanStopGeneration(false);
+              if (deltaFrameRef.current !== null) {
+                window.cancelAnimationFrame(deltaFrameRef.current);
+              }
+              deltaFrameRef.current = null;
+              pendingDeltaRef.current = "";
+              if (finalTimeline) {
+                generationTimelineRef.current = finalTimeline;
+                setGenerationTimeline(finalTimeline);
+              }
+              if (providerId === OPENAI_CODEX_PROVIDER_ID) {
+                void refreshCodexProviderState(qc);
+              }
+              const partial = partialContent?.trim();
+              if (partial) {
+                setStreamingText(partialContent ?? partial);
+                setStreamComplete(true);
+                await waitForStreamHandoff(true);
+                if (generationIntentRef.current !== generationIntent) return;
+              }
+              if (updatedChat) {
+                qc.setQueryData(queryKeys.chat(chatId), updatedChat);
+                void qc.invalidateQueries({ queryKey: queryKeys.chats });
+              }
+              if (mountedRef.current) {
+                setStreamingText(null);
+                setStreamComplete(false);
+                setIsStoppingGeneration(false);
+                if (partial || updatedChat) {
+                  setGenerationTimeline(null);
+                  generationTimelineRef.current = null;
+                }
+                setApprovals([]);
+                setError(
+                  partial ? `Generation stopped after a partial response: ${message}` : message,
+                );
+              }
+            })();
           },
         },
       );
       generationRef.current = handle;
     },
-    [chatId, activeId, providerId, model, qc],
+    [chatId, activeId, providerId, model, qc, waitForStreamHandoff],
   );
 
   const handleSend = React.useCallback(
@@ -324,19 +387,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleStop = React.useCallback(() => {
-    if (!generationRef.current) return;
+    if (!generationRef.current || !canStopGeneration) return;
     setIsStoppingGeneration(true);
+    setCanStopGeneration(false);
     generationRef.current.cancel("user_stop");
-  }, []);
+  }, [canStopGeneration]);
 
   const cancelAgentForContextChange = React.useCallback(() => {
     generationIntentRef.current += 1;
     generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
+    if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
+    deltaFrameRef.current = null;
+    pendingDeltaRef.current = "";
+    streamHandoffRef.current?.();
+    streamHandoffRef.current = null;
     setStreamingText(null);
+    setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
-    setToolActivity(null);
+    setCanStopGeneration(false);
+    setGenerationTimeline(null);
+    generationTimelineRef.current = null;
     setApprovals([]);
     setDecidingApprovalId(null);
   }, []);
@@ -356,19 +428,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
-        );
-        setToolActivity(
-          decision === "allow"
-            ? {
-                state: "running",
-                label: `${toolLabel(prompt.toolName)}…`,
-                toolName: prompt.toolName,
-              }
-            : {
-                state: "blocked",
-                label: `${toolLabel(prompt.toolName)} denied`,
-                toolName: prompt.toolName,
-              },
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
@@ -537,10 +596,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
+  const activeStep = latestActiveAgentStep(generationTimeline);
+  const toolActivity: ToolActivity | null = activeStep
+    ? {
+        state: "running",
+        label: activeStep.label,
+        toolName: activeStep.toolName,
+      }
+    : null;
   const agentActivity = resolveAgentActivity({
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
-    streamingText,
+    streamingText: canStopGeneration || isStoppingGeneration ? streamingText : null,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
@@ -555,6 +622,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
     };
   }, [pending?.approvalId]);
+
+  React.useLayoutEffect(() => {
+    if (pending) return;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && approvalCardRef.current?.contains(focused)) {
+      composerRef.current?.focus({ preventScroll: true });
+    }
+  }, [pending]);
 
   return (
     <ScrollArea
@@ -586,66 +661,76 @@ export function ChatPane({ chatId }: { chatId: string }) {
       autoScrollDeps={[
         messages.length,
         streamingText,
-        toolActivity,
+        generationTimeline,
         agentActivity?.phase,
         approvals.length,
       ]}
       showScrollToBottomButton
       footer={
         <>
-          {pending ? (
-            <div className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5">
-              <p className="sr-only" role="status">
-                Approval needed for {toolLabel(pending.toolName)}
-              </p>
-              <section
-                aria-labelledby={`approval-title-${pending.approvalId}`}
-                aria-describedby={`approval-summary-${pending.approvalId}`}
-                className="rounded-card bg-popover p-3 shadow-popover"
-              >
-                <div className="flex items-start gap-2.5">
-                  <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
-                    <ShieldQuestion className="size-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <Text variant="small-strong" as="p" id={`approval-title-${pending.approvalId}`}>
-                      {toolLabel(pending.toolName)} needs approval
-                    </Text>
-                    <Text variant="small" color="secondary" as="p" className="mt-0.5">
-                      Review this one action before Aiden continues.
-                    </Text>
-                  </div>
-                </div>
-                <Text
-                  variant="small"
-                  as="p"
-                  id={`approval-summary-${pending.approvalId}`}
-                  className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+          <EventPresence
+            present={Boolean(pending)}
+            className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5"
+          >
+            {pending ? (
+              <div>
+                <p className="sr-only" role="status">
+                  Approval needed for {toolLabel(pending.toolName)}
+                </p>
+                <section
+                  ref={approvalCardRef}
+                  aria-labelledby={`approval-title-${pending.approvalId}`}
+                  aria-describedby={`approval-summary-${pending.approvalId}`}
+                  className="rounded-card bg-popover p-3 shadow-popover"
                 >
-                  {pending.summary}
-                </Text>
-                <div className="mt-2.5 flex justify-end gap-2">
-                  <Button
-                    ref={approvalDenyRef}
-                    variant="transparent"
-                    size="small"
-                    disabled={decidingApprovalId === pending.approvalId}
-                    onClick={() => void decideApproval(pending, "deny")}
+                  <div className="flex items-start gap-2.5">
+                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-support-warning/10 text-support-warning">
+                      <ShieldQuestion className="size-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <Text
+                        variant="small-strong"
+                        as="p"
+                        id={`approval-title-${pending.approvalId}`}
+                      >
+                        {toolLabel(pending.toolName)} needs approval
+                      </Text>
+                      <Text variant="small" color="secondary" as="p" className="mt-0.5">
+                        Review this one action before Aiden continues.
+                      </Text>
+                    </div>
+                  </div>
+                  <Text
+                    variant="small"
+                    as="p"
+                    id={`approval-summary-${pending.approvalId}`}
+                    className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
                   >
-                    Deny
-                  </Button>
-                  <Button
-                    variant="accent"
-                    size="small"
-                    disabled={decidingApprovalId === pending.approvalId}
-                    onClick={() => void decideApproval(pending, "allow")}
-                  >
-                    {decidingApprovalId === pending.approvalId ? "Sending…" : "Allow once"}
-                  </Button>
-                </div>
-              </section>
-            </div>
-          ) : null}
+                    {pending.summary}
+                  </Text>
+                  <div className="mt-2.5 flex justify-end gap-2">
+                    <Button
+                      ref={approvalDenyRef}
+                      variant="transparent"
+                      size="small"
+                      disabled={decidingApprovalId === pending.approvalId}
+                      onClick={() => void decideApproval(pending, "deny")}
+                    >
+                      Deny
+                    </Button>
+                    <Button
+                      variant="accent"
+                      size="small"
+                      disabled={decidingApprovalId === pending.approvalId}
+                      onClick={() => void decideApproval(pending, "allow")}
+                    >
+                      {decidingApprovalId === pending.approvalId ? "Sending…" : "Allow once"}
+                    </Button>
+                  </div>
+                </section>
+              </div>
+            ) : null}
+          </EventPresence>
           <Composer
             ready={ready}
             readinessMessage={readinessMessage}
@@ -654,6 +739,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onSend={handleSend}
             onStop={handleStop}
             isGenerating={isGenerating}
+            canStopGeneration={canStopGeneration}
             inputRef={composerRef}
             workspace={active}
             gitBranch={git.data?.isRepo ? git.data.branch : undefined}
@@ -726,7 +812,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <MessageList
           messages={messages}
           streamingText={streamingText}
-          toolActivity={toolActivity}
+          streamComplete={streamComplete}
+          onStreamHandoffComplete={() => streamHandoffRef.current?.()}
+          timeline={generationTimeline}
           agentActivity={agentActivity}
           error={error}
         />

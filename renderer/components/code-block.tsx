@@ -11,6 +11,7 @@ interface CodeBlockProps {
   code: string;
   /** Language hint parsed from the ```lang fence, if any. */
   lang?: string;
+  revealGroups?: Array<{ id: string; text: string }>;
 }
 
 function looksLikeJson(s: string): boolean {
@@ -18,7 +19,11 @@ function looksLikeJson(s: string): boolean {
   return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
 }
 
-export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlockProps) {
+export const CodeBlock = React.memo(function CodeBlock({
+  code,
+  lang,
+  revealGroups,
+}: CodeBlockProps) {
   const raw = code.replace(/\n$/, "");
 
   // Pretty-print JSON (explicit ```json or content that parses as JSON).
@@ -57,7 +62,15 @@ export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlock
         />
       </div>
       <pre className="code-font-sized overflow-x-auto p-3 leading-relaxed">
-        {html ? (
+        {revealGroups ? (
+          <code className="hljs font-mono text-small">
+            {revealGroups.map((group) => (
+              <span key={group.id} className="streaming-reveal-unit block">
+                {group.text}
+              </span>
+            ))}
+          </code>
+        ) : html ? (
           <code className="hljs font-mono text-small" dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <code className="hljs font-mono text-small">{display}</code>

@@ -51,6 +51,7 @@ import type {
   WorkspaceFileWriteResult,
   WorkspacePermission,
 } from "./types";
+import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -356,11 +357,15 @@ interface ChatDelta {
 interface ChatDone {
   streamId: string;
   content: string;
+  timeline?: GenerationTimeline;
+  chat?: Chat;
 }
 interface ChatError {
   streamId: string;
   message: string;
   content?: string;
+  timeline?: GenerationTimeline;
+  chat?: Chat;
 }
 
 export type ToolPhase = "call" | "result" | "error" | "blocked";
@@ -372,6 +377,7 @@ interface ChatTool {
 
 export interface ApprovalPrompt {
   approvalId: string;
+  toolCallId: string;
   toolName: string;
   summary: string;
 }
@@ -386,8 +392,14 @@ export interface GenerationHandle {
 
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
-  onDone: (fullContent: string) => void | Promise<void>;
-  onError: (message: string, partialContent?: string) => void;
+  onDone: (fullContent: string, timeline?: GenerationTimeline, chat?: Chat) => void | Promise<void>;
+  onError: (
+    message: string,
+    partialContent?: string,
+    timeline?: GenerationTimeline,
+    chat?: Chat,
+  ) => void;
+  onTimeline?: (timeline: GenerationTimeline) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
 }
@@ -420,7 +432,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
-      void Promise.resolve(callbacks.onDone(p.content))
+      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
         )
@@ -430,8 +442,13 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
-      callbacks.onError(p.message, p.content);
+      callbacks.onError(p.message, p.content, p.timeline, p.chat);
       dispose();
+    }),
+  );
+  unsubs.push(
+    onNotification<ChatTimelineNotification>("chat:timeline", (p) => {
+      if (p.streamId === streamId) callbacks.onTimeline?.(p.timeline);
     }),
   );
   unsubs.push(
@@ -444,6 +461,7 @@ export function startGeneration(
       if (p.streamId === streamId)
         callbacks.onApproval?.({
           approvalId: p.approvalId,
+          toolCallId: p.toolCallId,
           toolName: p.toolName,
           summary: p.summary,
         });

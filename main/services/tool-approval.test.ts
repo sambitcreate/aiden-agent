@@ -24,7 +24,12 @@ test("approval decisions are one-shot and remove abort listeners", async () => {
   const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
   const tracked = trackedSignal();
   const pending = approvals.request(
-    { streamId: "stream", toolName: "computer_use", summary: "click element 0" },
+    {
+      streamId: "stream",
+      toolCallId: "call-one",
+      toolName: "computer_use",
+      summary: "click element 0",
+    },
     tracked.signal,
   );
   assert.equal(approvals.pendingCount, 1);
@@ -40,13 +45,18 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
   const prompts: Array<{ approvalId: string; streamId: string }> = [];
   const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
 
-  const denied = approvals.request({ streamId: "deny", toolName: "write_file", summary: "write" });
+  const denied = approvals.request({
+    streamId: "deny",
+    toolCallId: "call-deny",
+    toolName: "write_file",
+    summary: "write",
+  });
   approvals.decide(prompts[prompts.length - 1]!.approvalId, false);
   assert.equal(await denied, false);
 
   const abortedSignal = trackedSignal();
   const aborted = approvals.request(
-    { streamId: "abort", toolName: "computer_use", summary: "type" },
+    { streamId: "abort", toolCallId: "call-abort", toolName: "computer_use", summary: "type" },
     abortedSignal.signal,
   );
   abortedSignal.controller.abort();
@@ -55,6 +65,7 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
 
   const cancelled = approvals.request({
     streamId: "cancel",
+    toolCallId: "call-cancel",
     toolName: "edit_file",
     summary: "edit",
   });
@@ -63,6 +74,7 @@ test("deny, abort, stream cancellation, and shutdown leave no pending state", as
 
   const shutdown = approvals.request({
     streamId: "shutdown",
+    toolCallId: "call-shutdown",
     toolName: "run_command",
     summary: "run",
   });
@@ -80,7 +92,12 @@ test("an already-aborted request publishes nothing", async () => {
   controller.abort();
   assert.equal(
     await approvals.request(
-      { streamId: "stream", toolName: "computer_use", summary: "click" },
+      {
+        streamId: "stream",
+        toolCallId: "call-aborted",
+        toolName: "computer_use",
+        summary: "click",
+      },
       controller.signal,
     ),
     false,
@@ -93,7 +110,12 @@ test("only the renderer document that received a prompt can decide it", async ()
   const prompts: Array<{ approvalId: string }> = [];
   const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
   const pending = approvals.request(
-    { streamId: "stream", toolName: "computer_use", summary: "click" },
+    {
+      streamId: "stream",
+      toolCallId: "call-owned",
+      toolName: "computer_use",
+      summary: "click",
+    },
     undefined,
     "document-one",
   );
