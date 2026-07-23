@@ -2,7 +2,23 @@
   "name": "aiden-agent",
   "version": "1.0.0",
   "private": true,
-  "description": "A private macOS AI workspace agent for local and cloud models",
+  "description": "A macOS AI workspace agent for local and hosted models",
+  "keywords": [
+    "ai-agent",
+    "developer-tools",
+    "electron",
+    "lm-studio",
+    "local-ai",
+    "macos",
+    "mcp",
+    "ollama",
+    "react",
+    "typescript"
+  ],
+  "homepage": "https://github.com/sambitcreate/aiden-agent#readme",
+  "bugs": {
+    "url": "https://github.com/sambitcreate/aiden-agent/issues"
+  },
   "author": "Sambit Biswas",
   "repository": {
     "type": "git",

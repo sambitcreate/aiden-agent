@@ -2,7 +2,7 @@
 
 Status: implementation plan only
 Date: 2026-07-19
-Pi source audited: `/Users/sambitbiswas/projects/pi` at `3da591ab`
+Pi source audited: [`earendil-works/pi`](https://github.com/earendil-works/pi) at `3da591ab`
 Target reviewed Pi release: `0.80.10`
 
 ## Outcome

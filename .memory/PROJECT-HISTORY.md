@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-22 — Prepare the repository's public presentation
+
+- Reworked the README around a concise product story, a real Aiden screenshot, the privacy and Computer Use trust boundaries, essential development commands, and links to the detailed release and architecture documents.
+- Added explicit public-readiness guidance with recommended GitHub description/topics and owner decisions for licensing, source visibility, contribution policy, history scanning, and repository protections.
+- Completed the package's public-facing description, homepage, issue URL, and search keywords while retaining `private: true` to prevent accidental npm publication.
+- Replaced developer-specific absolute checkout paths in public design and provider documents with their upstream repository links; remaining absolute user paths are synthetic test fixtures.
+- Confirmed that the current source tree has no `LICENSE`; the repository therefore does not claim to be open source, and choosing licensing terms remains an owner decision.
+
 ### 2026-07-22 — Align macOS window controls with the sidebar toggle
 
 - Lowered the native traffic-light cluster within the hidden titlebar so its center matches the renderer's 52px sidebar header and toggle. The sidebar geometry and all other toolbar controls remain unchanged.

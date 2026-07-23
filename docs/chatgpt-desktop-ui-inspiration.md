@@ -17,7 +17,7 @@ Interactive companion: [`chatgpt-ui-element-specimen.html`](./chatgpt-ui-element
 
 The app could not be live-controlled because the local automation layer blocks inspection of its own `com.openai.codex` host. Flow connections below are therefore inferred from shipped routes, controls, states, and labels; motion values and element geometry are directly present in the shipped renderer CSS.
 
-The local `/Users/sambitbiswas/projects/ghidra-mcp` checkout is healthy source-wise but is not operational on this Mac: Ghidra is not installed, the localhost server is not running, and preflight stops on missing Maven. Ghidra would mainly expose the native Electron shell and embedded frameworks. The product UI is React/CSS inside `app.asar`, so renderer inspection is the higher-value source for this task.
+The reviewed [`ghidra-mcp`](https://github.com/bethington/ghidra-mcp) checkout was healthy source-wise but was not operational during the audit: Ghidra was not installed, the localhost server was not running, and preflight stopped on missing Maven. Ghidra would mainly expose the native Electron shell and embedded frameworks. The product UI is React/CSS inside `app.asar`, so renderer inspection was the higher-value source for this task.
 
 ## Product structure
 
