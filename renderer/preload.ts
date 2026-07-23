@@ -44,6 +44,7 @@ const NOTIFICATION_CHANNELS = new Set([
   "chat:delta",
   "chat:done",
   "chat:error",
+  "chat:reasoning-delta",
   "chat:timeline",
   "chat:tool",
   "chats:metadata-updated",

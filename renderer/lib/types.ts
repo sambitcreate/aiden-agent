@@ -432,6 +432,7 @@ export interface ChatMessage {
   content: string;
   createdAt: number;
   model?: string;
+  reasoning?: string;
   attachments?: Attachment[];
   timeline?: GenerationTimeline;
 }

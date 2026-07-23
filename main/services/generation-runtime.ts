@@ -12,6 +12,13 @@ import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-wor
  */
 export const PI_AUTH_COMPATIBILITY_TOKEN = "aiden-local-no-auth";
 
+const LOCAL_REASONING_PROVIDER_IDS = new Set(["lmstudio", "ollama"]);
+
+/** Only explicit local presets expose provider-authored reasoning in the transcript. */
+export function shouldExposeLocalReasoning(providerId: string): boolean {
+  return LOCAL_REASONING_PROVIDER_IDS.has(providerId);
+}
+
 /**
  * Pi's provider serializers use Model.input as the authoritative image gate.
  * Merge only positive trusted metadata into a cloned generation snapshot so
@@ -185,4 +192,28 @@ export function terminalAssistantTextFallback(
   receivedTextDelta: boolean,
 ): string {
   return receivedTextDelta ? "" : terminalAssistantText(message);
+}
+
+/** Return visible, non-redacted thinking blocks from a terminal Pi assistant message. */
+export function terminalAssistantReasoning(message: { role?: string; content?: unknown }): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+  return message.content
+    .filter(
+      (part): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
+        typeof part === "object" &&
+        part !== null &&
+        (part as { type?: unknown }).type === "thinking" &&
+        typeof (part as { thinking?: unknown }).thinking === "string" &&
+        (part as { redacted?: unknown }).redacted !== true,
+    )
+    .map((part) => part.thinking)
+    .join("\n\n");
+}
+
+/** Add terminal reasoning only when this assistant turn did not already stream it. */
+export function terminalAssistantReasoningFallback(
+  message: { role?: string; content?: unknown },
+  receivedReasoningDelta: boolean,
+): string {
+  return receivedReasoningDelta ? "" : terminalAssistantReasoning(message);
 }

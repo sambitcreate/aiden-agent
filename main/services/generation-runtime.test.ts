@@ -11,6 +11,9 @@ import {
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
   settleGenerationCleanup,
+  shouldExposeLocalReasoning,
+  terminalAssistantReasoning,
+  terminalAssistantReasoningFallback,
   terminalAssistantText,
   terminalAssistantTextFallback,
   terminalGenerationError,
@@ -127,7 +130,7 @@ test("uses an in-memory non-secret credential for an explicitly keyless provider
   assert.equal(resolveRuntimeHeaders({ kind: "openai", needsKey: true }), undefined);
 });
 
-test("keeps Pi's keyless compatibility token off the wire", async (t) => {
+test("keeps keyless auth off the wire and normalizes local reasoning", async (t) => {
   let authorization: string | string[] | undefined;
   let apiKey: string | string[] | undefined;
   const server = createServer((request, response) => {
@@ -141,7 +144,25 @@ test("keeps Pi's keyless compatibility token off the wire", async (t) => {
         object: "chat.completion.chunk",
         created: 0,
         model: "local",
-        choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }],
+        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+      })}\n\n`,
+    );
+    response.write(
+      `data: ${JSON.stringify({
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "local",
+        choices: [{ index: 0, delta: { reasoning: "Compare locally." }, finish_reason: null }],
+      })}\n\n`,
+    );
+    response.write(
+      `data: ${JSON.stringify({
+        id: "chatcmpl-test",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "local",
+        choices: [{ index: 0, delta: { content: "ok" }, finish_reason: null }],
       })}\n\n`,
     );
     response.write(
@@ -193,7 +214,10 @@ test("keeps Pi's keyless compatibility token off the wire", async (t) => {
     .result();
 
   assert.equal(result.stopReason, "stop");
-  assert.deepEqual(result.content, [{ type: "text", text: "ok" }]);
+  assert.deepEqual(result.content, [
+    { type: "thinking", thinking: "Compare locally.", thinkingSignature: "reasoning" },
+    { type: "text", text: "ok" },
+  ]);
   assert.equal(authorization, undefined);
   assert.equal(apiKey, undefined);
 });
@@ -339,6 +363,30 @@ test("uses final assistant text when a provider does not stream text deltas", ()
     terminalAssistantText({ role: "toolResult", content: [{ type: "text", text: "Nope" }] }),
     "",
   );
+});
+
+test("exposes only explicit local-provider reasoning and ignores redacted blocks", () => {
+  assert.equal(shouldExposeLocalReasoning("lmstudio"), true);
+  assert.equal(shouldExposeLocalReasoning("ollama"), true);
+  assert.equal(shouldExposeLocalReasoning("openai"), false);
+  assert.equal(shouldExposeLocalReasoning("custom-local"), false);
+
+  const message = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "Inspect the request." },
+      { type: "thinking", thinking: "Do not expose this.", redacted: true },
+      { type: "thinking", thinking: "Draft the answer." },
+      { type: "text", text: "Final answer." },
+    ],
+  };
+  assert.equal(terminalAssistantReasoning(message), "Inspect the request.\n\nDraft the answer.");
+  assert.equal(
+    terminalAssistantReasoningFallback(message, false),
+    terminalAssistantReasoning(message),
+  );
+  assert.equal(terminalAssistantReasoningFallback(message, true), "");
+  assert.equal(terminalAssistantReasoning({ role: "user", content: message.content }), "");
 });
 
 test("falls back per assistant turn instead of dropping a later terminal-only result", () => {

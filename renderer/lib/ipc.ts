@@ -354,9 +354,14 @@ interface ChatDelta {
   streamId: string;
   delta: string;
 }
+interface ChatReasoningDelta {
+  streamId: string;
+  delta: string;
+}
 interface ChatDone {
   streamId: string;
   content: string;
+  reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
 }
@@ -364,6 +369,7 @@ interface ChatError {
   streamId: string;
   message: string;
   content?: string;
+  reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
 }
@@ -392,12 +398,19 @@ export interface GenerationHandle {
 
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
-  onDone: (fullContent: string, timeline?: GenerationTimeline, chat?: Chat) => void | Promise<void>;
+  onReasoningDelta?: (delta: string) => void;
+  onDone: (
+    fullContent: string,
+    timeline?: GenerationTimeline,
+    chat?: Chat,
+    reasoning?: string,
+  ) => void | Promise<void>;
   onError: (
     message: string,
     partialContent?: string,
     timeline?: GenerationTimeline,
     chat?: Chat,
+    reasoning?: string,
   ) => void;
   onTimeline?: (timeline: GenerationTimeline) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
@@ -430,9 +443,14 @@ export function startGeneration(
     }),
   );
   unsubs.push(
+    onNotification<ChatReasoningDelta>("chat:reasoning-delta", (p) => {
+      if (p.streamId === streamId) callbacks.onReasoningDelta?.(p.delta);
+    }),
+  );
+  unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
-      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat))
+      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
         .catch((error: unknown) =>
           callbacks.onError(error instanceof Error ? error.message : String(error)),
         )
@@ -442,7 +460,7 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatError>("chat:error", (p) => {
       if (p.streamId !== streamId) return;
-      callbacks.onError(p.message, p.content, p.timeline, p.chat);
+      callbacks.onError(p.message, p.content, p.timeline, p.chat, p.reasoning);
       dispose();
     }),
   );

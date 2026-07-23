@@ -56,6 +56,12 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
       const chat = JSON.parse(data) as Chat;
       chat.messages = chat.messages.map((message) => ({
         ...message,
+        reasoning:
+          message.role === "assistant" &&
+          typeof message.reasoning === "string" &&
+          message.reasoning.trim()
+            ? message.reasoning
+            : undefined,
         timeline:
           message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
       }));
@@ -238,6 +244,12 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
           role: message.role,
           content: message.content,
           model: message.model,
+          reasoning:
+            message.role === "assistant" &&
+            typeof message.reasoning === "string" &&
+            message.reasoning.trim()
+              ? message.reasoning
+              : undefined,
           attachments: message.attachments,
           timeline:
             message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,

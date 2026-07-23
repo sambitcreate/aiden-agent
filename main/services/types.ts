@@ -145,6 +145,8 @@ export interface ChatMessage {
   createdAt: number;
   /** Model that produced an assistant message. */
   model?: string;
+  /** Provider-emitted reasoning shown only for supported local-model responses. */
+  reasoning?: string;
   /** Files attached to a user message. */
   attachments?: Attachment[];
   /** Renderer-safe tool milestones associated with this assistant response. */
@@ -415,9 +417,14 @@ export interface ChatDelta {
   streamId: string;
   delta: string;
 }
+export interface ChatReasoningDelta {
+  streamId: string;
+  delta: string;
+}
 export interface ChatDone {
   streamId: string;
   content: string;
+  reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
 }
@@ -426,6 +433,8 @@ export interface ChatError {
   message: string;
   /** Streamed text retained when a provider fails after beginning a response. */
   content?: string;
+  /** Streamed local-model reasoning retained alongside a partial response. */
+  reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;
 }

@@ -54,6 +54,25 @@ test("serializes assistant persistence with a background title update", async (t
   );
 });
 
+test("persists reasoning only on assistant messages", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Final answer.",
+    reasoning: "Compare the available options.",
+  });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "A renderer cannot attach reasoning here.",
+    reasoning: "Spoofed reasoning",
+  });
+
+  const updated = await store.get(chat.id);
+  assert.equal(updated?.messages[0]?.reasoning, "Compare the available options.");
+  assert.equal(updated?.messages[1]?.reasoning, undefined);
+});
+
 test("persists safe assistant milestones and drops invalid timeline data", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({});

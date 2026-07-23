@@ -1,8 +1,8 @@
 // Chat generation via pi's embedded agent loop (@earendil-works/pi-agent-core +
 // pi-ai). A fresh Agent runs per generation: it owns multi-step tool calling
 // (folder-scoped coding tools, Exa search, Agent Skills, MCP servers) and
-// streams assistant text. Text deltas and tool activity are pushed to the
-// exact renderer document that owns the generation.
+// streams assistant text. Text, local-model reasoning, and tool activity are
+// pushed to the exact renderer document that owns the generation.
 //
 // Workspaces bind a folder + a permission level. In "ask" mode the agent pauses
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
@@ -20,6 +20,8 @@ import {
   buildAgentRuntimeOptions,
   effectiveModelForGeneration,
   settleGenerationCleanup,
+  shouldExposeLocalReasoning,
+  terminalAssistantReasoningFallback,
   terminalAssistantTextFallback,
   terminalGenerationError,
   terminalGenerationInterruptionError,
@@ -231,6 +233,7 @@ export const llmClient = {
     const { runtime, permission, folderPath, git, tools, supportsImages, computerUse } = setup;
     initialization.computerUse = computerUse;
     const { model } = runtime;
+    const exposeLocalReasoning = shouldExposeLocalReasoning(params.providerId);
 
     const deniedToolCalls = new Set<string>();
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
@@ -240,9 +243,10 @@ export const llmClient = {
       initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
     const persistAssistant = async (
       content: string,
+      reasoning: string,
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
     ) => {
-      if (!content.trim() && finalTimeline.steps.length === 0) {
+      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0) {
         return { chat: undefined, error: undefined };
       }
       try {
@@ -252,6 +256,7 @@ export const llmClient = {
             role: "assistant",
             content,
             model: params.model,
+            reasoning: reasoning.trim() ? reasoning : undefined,
             timeline: finalTimeline.steps.length ? finalTimeline : undefined,
           },
           { providerId: params.providerId, model: params.model },
@@ -266,9 +271,11 @@ export const llmClient = {
       }
     };
     let full = "";
+    let reasoning = "";
     let errored: string | null = null;
     let aborted = false;
     let currentAssistantTurnHadTextDelta = false;
+    let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
       candidate = new Agent({
@@ -354,7 +361,10 @@ export const llmClient = {
       candidate.subscribe(async (event) => {
         switch (event.type) {
           case "message_start":
-            if (event.message.role === "assistant") currentAssistantTurnHadTextDelta = false;
+            if (event.message.role === "assistant") {
+              currentAssistantTurnHadTextDelta = false;
+              currentAssistantTurnHadReasoningDelta = false;
+            }
             break;
           case "message_update": {
             const e = event.assistantMessageEvent;
@@ -362,6 +372,13 @@ export const llmClient = {
               full += e.delta;
               currentAssistantTurnHadTextDelta = true;
               sendGeneration(streamId, "chat:delta", { streamId, delta: e.delta });
+            } else if (e.type === "thinking_delta" && exposeLocalReasoning) {
+              const separator =
+                !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
+              const delta = `${separator}${e.delta}`;
+              reasoning += delta;
+              currentAssistantTurnHadReasoningDelta = true;
+              sendGeneration(streamId, "chat:reasoning-delta", { streamId, delta });
             } else if (e.type === "error" && e.reason === "error") {
               errored = e.error.errorMessage ?? "Generation failed.";
             }
@@ -389,6 +406,13 @@ export const llmClient = {
                 event.message,
                 currentAssistantTurnHadTextDelta,
               );
+              if (exposeLocalReasoning) {
+                const fallback = terminalAssistantReasoningFallback(
+                  event.message,
+                  currentAssistantTurnHadReasoningDelta,
+                );
+                if (fallback) reasoning += `${reasoning.trim() ? "\n\n" : ""}${fallback}`;
+              }
             }
             break;
           }
@@ -481,42 +505,46 @@ export const llmClient = {
             null);
         if (finalError) {
           const finalTimeline = timeline.finish("failed");
-          const persisted = await persistAssistant(full, finalTimeline);
+          const persisted = await persistAssistant(full, reasoning, finalTimeline);
           sendGeneration(streamId, "chat:error", {
             streamId,
             message: persisted.error
               ? `${finalError} The partial response could not be saved: ${persisted.error}`
               : finalError,
             content: full || undefined,
+            reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: persisted.chat,
           });
         } else if (!full.trim() && !wasCancelled) {
           const finalTimeline = timeline.finish("failed");
-          const persisted = await persistAssistant(full, finalTimeline);
+          const persisted = await persistAssistant(full, reasoning, finalTimeline);
           sendGeneration(streamId, "chat:error", {
             streamId,
             message: persisted.error
               ? `The model returned an empty response, and its steps could not be saved: ${persisted.error}`
               : "The model returned an empty response. Try again.",
+            reasoning: reasoning || undefined,
             timeline: finalTimeline,
             chat: persisted.chat,
           });
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = timeline.finish(wasCancelled ? "cancelled" : "completed");
-          const persisted = await persistAssistant(full, finalTimeline);
+          const persisted = await persistAssistant(full, reasoning, finalTimeline);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", {
               streamId,
               message: `The response completed but could not be saved: ${persisted.error}`,
               content: full || undefined,
+              reasoning: reasoning || undefined,
               timeline: finalTimeline,
             });
           } else {
             sendGeneration(streamId, "chat:done", {
               streamId,
               content: full,
+              reasoning: reasoning || undefined,
               timeline: finalTimeline,
               chat: persisted.chat,
             });
@@ -526,13 +554,14 @@ export const llmClient = {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = timeline.finish("failed");
-        const persisted = await persistAssistant(full, finalTimeline);
+        const persisted = await persistAssistant(full, reasoning, finalTimeline);
         sendGeneration(streamId, "chat:error", {
           streamId,
           message: persisted.error
             ? `${message} The partial response could not be saved: ${persisted.error}`
             : message,
           content: full || undefined,
+          reasoning: reasoning || undefined,
           timeline: finalTimeline,
           chat: persisted.chat,
         });
