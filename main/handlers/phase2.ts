@@ -9,51 +9,11 @@ import { authorizeMcpServer, clearOAuth, hasOAuthTokens } from "../services/mcp-
 import { discoverSkills } from "../services/skills-discovery.js";
 import { transcribe } from "../services/transcription.js";
 import { applyShortcutFromSettings } from "../services/shortcut.js";
-import type { McpServer, McpTransport, Skill } from "../services/types.js";
+import { asString } from "./voice-codec.js";
+import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 
-function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) throw new Error(`Expected non-empty string for "${name}".`);
-  return value;
-}
-
-function parseSkill(value: unknown): Skill {
-  if (typeof value !== "object" || value === null) throw new Error("Invalid skill payload.");
-  const s = value as Record<string, unknown>;
-  return {
-    id: asString(s.id, "id"),
-    name: asString(s.name, "name"),
-    description: typeof s.description === "string" ? s.description : "",
-    instructions: typeof s.instructions === "string" ? s.instructions : "",
-    enabled: typeof s.enabled === "boolean" ? s.enabled : true,
-  };
-}
-
-function parseStringRecord(value: unknown): Record<string, string> | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof v === "string") out[k] = v;
-  }
-  return Object.keys(out).length ? out : undefined;
-}
-
-function parseMcpServer(value: unknown): McpServer {
-  if (typeof value !== "object" || value === null) throw new Error("Invalid MCP server payload.");
-  const s = value as Record<string, unknown>;
-  const transport: McpTransport = s.transport === "http" || s.transport === "sse" ? s.transport : "stdio";
-  return {
-    id: asString(s.id, "id"),
-    name: asString(s.name, "name"),
-    transport,
-    command: typeof s.command === "string" ? s.command : undefined,
-    args: Array.isArray(s.args) ? s.args.filter((a): a is string => typeof a === "string") : undefined,
-    env: parseStringRecord(s.env),
-    url: typeof s.url === "string" ? s.url : undefined,
-    headers: parseStringRecord(s.headers),
-    oauth: typeof s.oauth === "boolean" ? s.oauth : undefined,
-    enabled: typeof s.enabled === "boolean" ? s.enabled : true,
-  };
-}
+// Re-exported so the IPC contract surface stays queryable from one module.
+export { asString, parseSkill, parseMcpServer };
 
 export function registerPhase2Handlers(): void {
   // ── Skills ───────────────────────────────────────────────────────────
