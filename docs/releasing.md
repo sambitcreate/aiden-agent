@@ -15,6 +15,9 @@ shipping a GitHub credential.
   produces `1.0.41` without committing a version-bump loop to `main`.
 - The release job runs the full TypeScript, lint, JavaScript/TypeScript, Rust, Swift, and build
   gates before preparing signing material.
+- GitHub-hosted macOS VMs do not enforce Aiden's live kernel launch constraint. CI still verifies
+  its exact pinned requirement bytes and the other 39 broker tests; the two live enforcement
+  checks remain mandatory on a physical Mac during packaged acceptance.
 - `npm run dist` refreshes only the approved release-time model snapshot, builds the app and
   native helpers, signs with Developer ID, notarizes, staples, and verifies the app, DMG, and ZIP.
 - Automatic-update builds also generate `latest-mac.yml`. The workflow publishes that file and

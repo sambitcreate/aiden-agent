@@ -40,6 +40,8 @@ jobs:
         run: npm run test:branding
 
       - name: Run JavaScript, TypeScript, and Computer Use tests
+        env:
+          AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS: "1"
         run: npm test
 
       - name: Run Apple Foundation Models tests

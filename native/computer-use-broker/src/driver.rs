@@ -575,6 +575,13 @@ mod tests {
     use std::process::Command;
     use std::time::Instant;
 
+    fn skip_virtualized_launch_constraint_tests() -> bool {
+        std::env::var("AIDEN_SKIP_VIRTUALIZED_LAUNCH_CONSTRAINT_TESTS")
+            .ok()
+            .as_deref()
+            == Some("1")
+    }
+
     #[test]
     fn launch_requirement_is_the_exact_reviewed_cross_architecture_constraint() {
         let bytes = darwin::launch_requirement_bytes();
@@ -591,6 +598,10 @@ mod tests {
 
     #[test]
     fn kernel_launch_requirement_kills_unrelated_code_before_it_runs() {
+        if skip_virtualized_launch_constraint_tests() {
+            eprintln!("skipped: GitHub-hosted macOS VMs do not enforce the live launch constraint");
+            return;
+        }
         let root = format!("/tmp/acu-launch-constraint-{}", std::process::id());
         let _ = fs::remove_file(&root);
         let input = File::open("/dev/null").unwrap();
@@ -614,6 +625,10 @@ mod tests {
 
     #[test]
     fn retained_nstask_does_not_retain_a_waitable_numeric_pid() {
+        if skip_virtualized_launch_constraint_tests() {
+            eprintln!("skipped: GitHub-hosted macOS VMs do not enforce the live launch constraint");
+            return;
+        }
         let input = File::open("/dev/null").unwrap();
         let output = OpenOptions::new().write(true).open("/dev/null").unwrap();
         let environment = vec![CString::new("PATH=/usr/bin:/bin").unwrap()];
