@@ -2197,7 +2197,11 @@ test("GitService rolls back a worktree when add times out after Git created it",
     '#!/bin/sh\nif [ "$1" = "worktree" ] && [ "$2" = "add" ]; then\n  /usr/bin/git "$@" || exit $?\n  sleep 30\n  exit 0\nfi\nexec /usr/bin/git "$@"\n',
     { encoding: "utf8", mode: 0o700 },
   );
-  const service = new GitService({ gitBinary: wrapper, mutationTimeoutMs: 100, readTimeoutMs: 2_000 });
+  const service = new GitService({
+    gitBinary: wrapper,
+    mutationTimeoutMs: 5_000,
+    readTimeoutMs: 10_000,
+  });
   await assert.rejects(
     service.createWorktree(repository, root, "codex/timeout"),
     (error) => error instanceof GitServiceError && error.code === "timeout",
