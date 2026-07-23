@@ -39,7 +39,24 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
   async function readIndex(): Promise<ChatMeta[]> {
     try {
       const data = await fs.readFile(await indexPath(), "utf-8");
-      return JSON.parse(data) as ChatMeta[];
+      const parsed: unknown = JSON.parse(data);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((value): value is ChatMeta => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+        const meta = value as Record<string, unknown>;
+        return (
+          typeof meta.id === "string" &&
+          meta.id.length > 0 &&
+          typeof meta.title === "string" &&
+          typeof meta.createdAt === "number" &&
+          Number.isFinite(meta.createdAt) &&
+          typeof meta.updatedAt === "number" &&
+          Number.isFinite(meta.updatedAt) &&
+          (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
+          (meta.providerId === undefined || typeof meta.providerId === "string") &&
+          (meta.model === undefined || typeof meta.model === "string")
+        );
+      });
     } catch {
       return [];
     }
