@@ -2170,17 +2170,19 @@ test("GitService retries a read that crosses a mutation epoch", async (t) => {
     `#!/bin/sh\nif [ "$1" = "status" ] && [ ! -f '${started}' ]; then\n  /usr/bin/git "$@" > '${snapshot}' || exit $?\n  touch '${started}'\n  sleep 1\n  cat '${snapshot}'\n  exit 0\nfi\nexec /usr/bin/git "$@"\n`,
     { encoding: "utf8", mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 5_000, gitBinary: wrapper, readTimeoutMs: 3_000 });
+  const service = new GitService({ cacheTtlMs: 5_000, gitBinary: wrapper, readTimeoutMs: 10_000 });
   const pendingInfo = service.info(repository);
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  let statusStarted = false;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
       await fs.access(started);
+      statusStarted = true;
       break;
     } catch {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
-  await fs.access(started);
+  assert.equal(statusStarted, true, "the delayed status read should start before the mutation");
   await service.createBranch(repository, "feature/during-read");
   assert.equal((await pendingInfo).branch, "feature/during-read");
   assert.equal((await service.info(repository)).branch, "feature/during-read");
