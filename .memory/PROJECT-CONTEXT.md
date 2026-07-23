@@ -68,6 +68,7 @@
 - `renderer/shared/appearance.ts` and `renderer/lib/appearance-runtime.ts` — versioned appearance contract, accessibility validation, semantic token resolution, cache, and live DOM application.
 - `docs/chatgpt-desktop-ui-inspiration.md` — installed ChatGPT/Codex desktop flow, element, and motion audit with an Aiden-specific borrow/adapt/avoid backlog.
 - `docs/chatgpt-ui-element-specimen.html` — interactive light/dark recreation of the recommended buttons, fields, menus, composer, approvals, shadows, detached Environment summary, expanded Review/Files states, and hover/focus/pressed states.
+- `docs/designer-mode-plan.md` — implementation-only plan for a Vite-first point → ask → approve workflow. Phase 0 is a mandatory preview-containment, source-identity, transaction, and provenance gate; no Designer Mode runtime is implemented yet.
 - `PRODUCT.md` — product register, users, personality, anti-references, and design principles for interface work.
 - `main/services/llm-client.ts` — Pi agent loop, streaming, and approvals.
 - `main/services/usage-store.ts`, `main/services/usage-store-core.ts`, and `main/services/usage-accounting.ts` — serialized aggregate usage persistence, date/model summaries, and provider-aware metering normalization.
@@ -108,6 +109,7 @@
 ## Pi provider-runtime status
 
 - `docs/pi-provider-integration-plan.md` remains the broader source-grounded plan for replacing Aiden's seven-provider/two-protocol adapter with Pi's provider-owned `Models` runtime.
+- `docs/gemini-native-upgrade-plan.md` scopes a staged Gemini upgrade from that broader plan: Phase 0 catalog-driven runtime limits (replacing the fabricated 128K/8192), Phase 1 native `google` provider via pi-ai's `google-generative-ai` transport (with `gemini`→`google` migration), and Phase 3 Thinking controls with a shimmer UX plus Gemini context caching. Native Google Search Grounding, cloud code execution, and Gemini Live realtime multimodal are explicitly deferred. Not yet implemented.
 - The first production slice is complete for `openai-codex`: public Pi `Models` owns the provider/model/OAuth contract, runtime objects and plaintext credentials remain in Electron main, and the renderer receives only typed snapshots and sanitized flow events.
 - The existing seven declarative API-key providers remain on their compatibility runtime for now. Codex is reserved from those generic key/edit/remove paths and is projected into the composer only when configured and not proven unhealthy.
 - Arbitrary executable Pi extensions remain excluded until Aiden has a separate trusted plugin design. The paired Pi packages are exact-pinned at `0.80.10`; Codex is forced to SSE until Pi checks an already-aborted signal before constructing its WebSocket handshake.

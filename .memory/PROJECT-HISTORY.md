@@ -68,6 +68,12 @@
 - Added a compact borderless reasoning surface with semantic muted fill, keyboard scrolling, live tail-following, scroll-edge gradient masks, and Reduce Motion-aware entrance behavior; the final answer remains visually dominant below it.
 - Verified the flow live against LM Studio's Gemma 4 reasoning stream and after reopening the saved chat. The pinned Pi adapter contract also covers OpenAI-compatible `reasoning` deltas used by local endpoints. Type-check, lint, the UI detector, production build, 491 TypeScript/JavaScript tests, and 41 Rust tests pass.
 
+### 2026-07-22 — Gate Designer Mode behind preview, identity, and trust proofs
+
+- Reworked the Designer Mode proposal against current Aiden and Onlook source with three independent review lanes. The product loop remains point → ask → approve → Action Review, but implementation is blocked on a Phase 0 preview-containment and DOM↔source identity proof.
+- Scoped the first supported slice to Vite + React + Tailwind, moved Next.js and direct manipulation post-MVP, replaced ordinary Pi writes with an always-approved, hash-bound Designer Action transaction, and replaced whole-worktree Git checkpoints with exact action-ledger undo plus an optional managed worktree before mutation.
+- Recorded the sandboxed iframe as the preferred preview candidate, a dedicated main-owned preview-server lifecycle, main-owned selection resolution, action-specific Review, packaged security/fixture gates, Apache-2.0 provenance obligations, and a revised 6–9 engineering-week MVP estimate. No Designer Mode implementation exists yet.
+
 ### 2026-07-22 — Animate streaming answers and agent milestones
 
 - Added block-aware streaming reveal for prose, Markdown, lists, tables, and code so stable semantic units fade into place without repeatedly reparsing the whole transcript or exposing unfinished markup.
