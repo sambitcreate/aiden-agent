@@ -18,6 +18,15 @@ import type {
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { shell, logger } from "../platform.js";
 import { mcpOAuthStore } from "./mcp-oauth-store.js";
+import {
+  hasMcpOAuthSessionData,
+  mcpAuthorizationBinding,
+  publicMcpClientInformation,
+  sessionMatchesMcpBinding,
+  sessionForFreshMcpAuthorization,
+} from "./mcp-oauth-session.js";
+import { McpOAuthOperationGate } from "./mcp-oauth-operation.js";
+import { assertMcpPresetServer } from "./mcp-presets.js";
 import type { McpServer } from "./types.js";
 
 // Fixed loopback redirect so the registered redirect_uri stays stable across
@@ -25,6 +34,7 @@ import type { McpServer } from "./types.js";
 const OAUTH_PORT = 41390;
 const OAUTH_REDIRECT_URI = `http://127.0.0.1:${OAUTH_PORT}/callback`;
 const AUTH_TIMEOUT_MS = 5 * 60 * 1000;
+const oauthOperations = new McpOAuthOperationGate();
 
 const CALLBACK_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Aiden Agent</title>
 <style>body{font-family:-apple-system,system-ui,sans-serif;background:#1c1c1e;color:#fff;display:flex;
@@ -42,7 +52,22 @@ class McpOAuthProvider implements OAuthClientProvider {
    * must never open a browser — an expired/absent session fails loudly instead so
    * the user can re-authorize from Settings on their own terms.
    */
-  constructor(private readonly serverId: string, private readonly interactive = false) {}
+  constructor(
+    private readonly serverId: string,
+    private readonly binding: string,
+    private readonly interactive = false,
+  ) {}
+
+  private async boundSession() {
+    const session = await mcpOAuthStore.get(this.serverId);
+    return sessionMatchesMcpBinding(session, this.binding)
+      ? session
+      : { authorizationBinding: this.binding };
+  }
+
+  private assertCanMutate(): void {
+    oauthOperations.assertMutationAllowed(this.serverId, this.interactive);
+  }
 
   get redirectUrl(): string {
     return OAUTH_REDIRECT_URI;
@@ -59,30 +84,49 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
-    return (await mcpOAuthStore.get(this.serverId)).clientInformation;
+    const information = (await this.boundSession()).clientInformation;
+    return information ? publicMcpClientInformation(information) : undefined;
   }
 
   async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {
-    const session = await mcpOAuthStore.get(this.serverId);
-    await mcpOAuthStore.set(this.serverId, { ...session, clientInformation: info });
+    this.assertCanMutate();
+    const session = await this.boundSession();
+    this.assertCanMutate();
+    await mcpOAuthStore.set(this.serverId, {
+      ...session,
+      authorizationBinding: this.binding,
+      clientInformation: publicMcpClientInformation(info),
+    });
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
-    return (await mcpOAuthStore.get(this.serverId)).tokens;
+    return (await this.boundSession()).tokens;
   }
 
   async saveTokens(tokens: OAuthTokens): Promise<void> {
-    const session = await mcpOAuthStore.get(this.serverId);
-    await mcpOAuthStore.set(this.serverId, { ...session, tokens });
+    this.assertCanMutate();
+    const session = await this.boundSession();
+    this.assertCanMutate();
+    await mcpOAuthStore.set(this.serverId, {
+      ...session,
+      authorizationBinding: this.binding,
+      tokens,
+    });
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
-    const session = await mcpOAuthStore.get(this.serverId);
-    await mcpOAuthStore.set(this.serverId, { ...session, codeVerifier });
+    this.assertCanMutate();
+    const session = await this.boundSession();
+    this.assertCanMutate();
+    await mcpOAuthStore.set(this.serverId, {
+      ...session,
+      authorizationBinding: this.binding,
+      codeVerifier,
+    });
   }
 
   async codeVerifier(): Promise<string> {
-    const verifier = (await mcpOAuthStore.get(this.serverId)).codeVerifier;
+    const verifier = (await this.boundSession()).codeVerifier;
     if (!verifier) throw new Error("Missing PKCE code verifier — restart the sign-in.");
     return verifier;
   }
@@ -95,11 +139,13 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
+    this.assertCanMutate();
     if (scope === "all") {
       await mcpOAuthStore.clear(this.serverId);
       return;
     }
-    const session = await mcpOAuthStore.get(this.serverId);
+    const session = await this.boundSession();
+    this.assertCanMutate();
     if (scope === "tokens") delete session.tokens;
     if (scope === "verifier") delete session.codeVerifier;
     if (scope === "client") delete session.clientInformation;
@@ -109,6 +155,7 @@ class McpOAuthProvider implements OAuthClientProvider {
 
 /** Build a remote transport wired with an OAuth provider for the given server. */
 export function makeOAuthTransport(server: McpServer, provider: OAuthClientProvider): StreamableHTTPClientTransport | SSEClientTransport {
+  assertMcpPresetServer(server);
   if (!server.url) throw new Error("This MCP server needs a URL.");
   const url = new URL(server.url);
   const requestInit = server.headers ? { headers: server.headers } : undefined;
@@ -119,12 +166,15 @@ export function makeOAuthTransport(server: McpServer, provider: OAuthClientProvi
 }
 
 /** Provider for background (non-interactive) connections — attaches stored tokens. */
-export function oauthProviderFor(serverId: string): OAuthClientProvider {
-  return new McpOAuthProvider(serverId);
+export function oauthProviderFor(server: McpServer): OAuthClientProvider {
+  if (!server.url) throw new Error("This MCP server needs a URL.");
+  return new McpOAuthProvider(server.id, mcpAuthorizationBinding(server.url));
 }
 
-export async function hasOAuthTokens(serverId: string): Promise<boolean> {
-  return mcpOAuthStore.has(serverId);
+export async function hasOAuthTokens(serverId: string, url?: string): Promise<boolean> {
+  const session = await mcpOAuthStore.get(serverId);
+  if (url && !sessionMatchesMcpBinding(session, mcpAuthorizationBinding(url))) return false;
+  return Boolean(session.tokens);
 }
 
 export async function clearOAuth(serverId: string): Promise<void> {
@@ -185,13 +235,24 @@ function startLoopbackServer(): Promise<Loopback> {
  * Tokens land in the encrypted store for future connections.
  */
 export async function authorizeMcpServer(server: McpServer): Promise<void> {
+  assertMcpPresetServer(server);
   if (server.transport === "stdio") throw new Error("OAuth applies only to remote (HTTP/SSE) MCP servers.");
   if (!server.url) throw new Error("Add the server URL before authorizing.");
 
-  const provider = new McpOAuthProvider(server.id, true);
-  const loopback = await startLoopbackServer();
+  const binding = mcpAuthorizationBinding(server.url);
+  oauthOperations.begin(server.id);
+  const previousSession = await mcpOAuthStore.get(server.id);
+  const provider = new McpOAuthProvider(server.id, binding, true);
+  let loopback: Loopback | null = null;
   try {
-    // First attempt: if we already hold valid tokens this connects outright.
+    loopback = await startLoopbackServer();
+    // This call comes from an explicit Settings action. Preserve dynamic client
+    // registration, but remove tokens/verifier so "Re-authorize" always opens a
+    // fresh browser flow instead of silently accepting the existing session.
+    await mcpOAuthStore.set(
+      server.id,
+      sessionForFreshMcpAuthorization(previousSession, binding),
+    );
     const transport = makeOAuthTransport(server, provider);
     const client = new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} });
     try {
@@ -212,9 +273,19 @@ export async function authorizeMcpServer(server: McpServer): Promise<void> {
     await verifyClient.connect(verifyTransport);
     await verifyClient.close().catch(() => {});
   } catch (error) {
+    try {
+      if (hasMcpOAuthSessionData(previousSession)) {
+        await mcpOAuthStore.set(server.id, previousSession);
+      } else {
+        await mcpOAuthStore.clear(server.id);
+      }
+    } catch (restoreError) {
+      logger.error("mcp-oauth", `Failed to restore the previous OAuth session for "${server.name}".`, restoreError);
+    }
     logger.warn("mcp-oauth", `Authorization failed for "${server.name}": ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   } finally {
-    loopback.close();
+    loopback?.close();
+    oauthOperations.end(server.id);
   }
 }

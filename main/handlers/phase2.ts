@@ -6,6 +6,13 @@ import { configStore } from "../services/config-store.js";
 import { secrets } from "../services/secrets.js";
 import { mcpManager } from "../services/mcp.js";
 import { authorizeMcpServer, clearOAuth, hasOAuthTokens } from "../services/mcp-oauth.js";
+import {
+  assertMcpPresetServer,
+  getMcpPresetForServerId,
+  MCP_PRESETS,
+  presetSecretId,
+  presetServerId,
+} from "../services/mcp-presets.js";
 import { discoverSkills } from "../services/skills-discovery.js";
 import { transcribe } from "../services/transcription.js";
 import { applyShortcutFromSettings } from "../services/shortcut.js";
@@ -27,8 +34,40 @@ export function registerPhase2Handlers(): void {
 
   // ── MCP servers ──────────────────────────────────────────────────────
   ipcMain.handle("mcp:list", async () => configStore.listMcpServers());
+  // Built-in provider catalog with per-preset connection state. Preset API keys
+  // live in the encrypted secrets store ("mcp:<serverId>"), never in config.json.
+  ipcMain.handle("mcp:presets", async () => {
+    const servers = await configStore.listMcpServers();
+    return Promise.all(
+      MCP_PRESETS.map(async (preset) => {
+        const serverId = presetServerId(preset.id);
+        const existing = servers.find(
+          (s) => s.id === serverId && s.presetId === preset.id,
+        );
+        const ready =
+          preset.auth.kind === "apiKey"
+            ? await secrets.hasKey(presetSecretId(serverId))
+            : await hasOAuthTokens(serverId, existing?.url ?? preset.url);
+        return { preset, serverId, configured: Boolean(existing), enabled: existing?.enabled ?? true, ready };
+      }),
+    );
+  });
+  // Save or clear a preset's API key. Empty key clears; the key is never returned.
+  ipcMain.handle("mcp:setPresetKey", async (_event, serverId: unknown, key: unknown) => {
+    const id = asString(serverId, "serverId");
+    const preset = getMcpPresetForServerId(id);
+    if (!preset || preset.auth.kind !== "apiKey") {
+      throw new Error("This MCP preset does not accept an API key.");
+    }
+    const value = typeof key === "string" ? key.trim() : "";
+    if (value) await secrets.setKey(presetSecretId(id), value);
+    else await secrets.deleteKey(presetSecretId(id));
+    await mcpManager.disconnect(id); // reconnect with the new key on next use
+    return { hasKey: Boolean(value) };
+  });
   ipcMain.handle("mcp:save", async (_event, server: unknown) => {
     const parsed = parseMcpServer(server);
+    assertMcpPresetServer(parsed);
     const existing = (await configStore.listMcpServers()).find((item) => item.id === parsed.id);
     await mcpManager.disconnect(parsed.id); // force reconnect with new config next use
     if (existing?.oauth && !parsed.oauth) await clearOAuth(parsed.id);
@@ -38,23 +77,33 @@ export function registerPhase2Handlers(): void {
     const serverId = asString(id, "id");
     await mcpManager.disconnect(serverId);
     await clearOAuth(serverId);
+    await secrets.deleteKey(presetSecretId(serverId));
     await configStore.removeMcpServer(serverId);
   });
   ipcMain.handle("mcp:status", async (_event, server: unknown) => {
     const parsed = parseMcpServer(server);
     const status = await mcpManager.status(parsed);
-    return { ...status, authorized: parsed.oauth ? await hasOAuthTokens(parsed.id) : undefined };
+    return {
+      ...status,
+      authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url) : undefined,
+    };
   });
   // Browser OAuth sign-in for a remote MCP server. Stores tokens on success.
   ipcMain.handle("mcp:authorize", async (_event, server: unknown) => {
     const parsed = parseMcpServer(server);
+    const preset = assertMcpPresetServer(parsed);
+    if (preset && preset.auth.kind !== "oauth") {
+      throw new Error("This MCP preset uses an API key instead of OAuth.");
+    }
     await mcpManager.disconnect(parsed.id);
     await authorizeMcpServer(parsed);
     return { authorized: true };
   });
-  ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => ({
-    authorized: await hasOAuthTokens(asString(id, "id")),
-  }));
+  ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
+    const serverId = asString(id, "id");
+    const server = (await configStore.listMcpServers()).find((item) => item.id === serverId);
+    return { authorized: await hasOAuthTokens(serverId, server?.url) };
+  });
   // Force-drop all cached MCP connections so the next message reconnects fresh.
   ipcMain.handle("mcp:reconnect", async () => {
     await mcpManager.closeAll();
@@ -83,6 +132,7 @@ export function registerPhase2Handlers(): void {
     return transcribe({
       audioBase64: asString(audioBase64, "audioBase64"),
       mimeType: typeof mimeType === "string" ? mimeType : "audio/webm",
+      signal: AbortSignal.timeout(120_000),
     });
   });
 

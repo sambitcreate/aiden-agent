@@ -6,17 +6,12 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { app, safeStorage, logger } from "../platform.js";
-import type { OAuthClientInformationFull, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { McpOAuthSession } from "./mcp-oauth-session.js";
 
 const FILE = "mcp-oauth.json";
 
-export interface McpOAuthSession {
-  clientInformation?: OAuthClientInformationFull;
-  tokens?: OAuthTokens;
-  codeVerifier?: string;
-}
-
 type SessionMap = Record<string, string>; // serverId -> base64 ciphertext of McpOAuthSession JSON
+let mutationQueue: Promise<void> = Promise.resolve();
 
 async function filePath(): Promise<string> {
   const userDataPath = app.getPath("userData");
@@ -33,7 +28,20 @@ async function readMap(): Promise<SessionMap> {
 }
 
 async function writeMap(map: SessionMap): Promise<void> {
-  await fs.writeFile(await filePath(), JSON.stringify(map, null, 2), "utf-8");
+  const target = await filePath();
+  const temporary = `${target}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(map, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.rename(temporary, target);
+  await fs.chmod(target, 0o600);
+}
+
+function mutate(operation: () => Promise<void>): Promise<void> {
+  const pending = mutationQueue.then(operation, operation);
+  mutationQueue = pending.catch(() => {});
+  return pending;
 }
 
 export const mcpOAuthStore = {
@@ -54,10 +62,12 @@ export const mcpOAuthStore = {
     if (!(await safeStorage.isEncryptionAvailable())) {
       throw new Error("Secure storage is unavailable on this system; cannot save the sign-in.");
     }
-    const map = await readMap();
     const encrypted = await safeStorage.encryptString(JSON.stringify(session));
-    map[serverId] = Buffer.from(encrypted).toString("base64");
-    await writeMap(map);
+    await mutate(async () => {
+      const map = await readMap();
+      map[serverId] = Buffer.from(encrypted).toString("base64");
+      await writeMap(map);
+    });
   },
 
   async has(serverId: string): Promise<boolean> {
@@ -66,10 +76,12 @@ export const mcpOAuthStore = {
   },
 
   async clear(serverId: string): Promise<void> {
-    const map = await readMap();
-    if (map[serverId]) {
-      delete map[serverId];
-      await writeMap(map);
-    }
+    await mutate(async () => {
+      const map = await readMap();
+      if (map[serverId]) {
+        delete map[serverId];
+        await writeMap(map);
+      }
+    });
   },
 };

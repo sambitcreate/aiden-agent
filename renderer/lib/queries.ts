@@ -48,6 +48,7 @@ export const queryKeys = {
   foundationModelsConnection: ["foundationModelsConnection"] as const,
   skills: ["skills"] as const,
   mcpServers: ["mcpServers"] as const,
+  mcpPresets: ["mcpPresets"] as const,
   exa: ["exa"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
@@ -356,6 +357,10 @@ export function useSkills() {
 
 export function useMcpServers() {
   return useQuery({ queryKey: queryKeys.mcpServers, queryFn: mcpApi.list });
+}
+
+export function useMcpPresets() {
+  return useQuery({ queryKey: queryKeys.mcpPresets, queryFn: mcpApi.presets });
 }
 
 export function useExaConfig() {

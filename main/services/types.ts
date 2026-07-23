@@ -230,6 +230,8 @@ export interface McpServer {
   headers?: Record<string, string>;
   /** Remote servers only: authenticate with OAuth (browser sign-in) instead of / in addition to headers. */
   oauth?: boolean;
+  /** Set when this record came from the built-in preset catalog (see mcp-presets.ts). */
+  presetId?: string;
   enabled: boolean;
 }
 
@@ -289,7 +291,7 @@ export interface AppSettings {
   localVoiceModel?: string;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
-  /** Global hotkey that toggles on-device dictation into the composer. */
+  /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
   /** Background chat-title generation policy. Defaults to automatic. */

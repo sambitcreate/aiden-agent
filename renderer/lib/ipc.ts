@@ -30,6 +30,7 @@ import type {
   GitWorktree,
   LocalVoiceModel,
   McpServer,
+  McpPresetState,
   McpStatus,
   ModelInfo,
   FoundationModelsConnectionStatus,
@@ -171,6 +172,10 @@ export const skillsApi = {
 // ── MCP servers ───────────────────────────────────────────────────────
 export const mcpApi = {
   list: () => invoke<McpServer[]>("mcp:list"),
+  /** Built-in provider catalog plus per-preset connection state. */
+  presets: () => invoke<McpPresetState[]>("mcp:presets"),
+  /** Save (or clear, with an empty string) a preset's API key. Keys never come back. */
+  setPresetKey: (serverId: string, key: string) => invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
   save: (server: McpServer) => invoke<McpServer>("mcp:save", server),
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
@@ -179,6 +184,11 @@ export const mcpApi = {
   oauthStatus: (id: string) => invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
+};
+
+// ── Dev log (renderer error forwarding, dev builds only) ─────────────
+export const devlogApi = {
+  write: (level: "info" | "warn" | "error", message: string) => invoke<void>("devlog:write", level, message),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────
@@ -216,6 +226,18 @@ export interface ModelDownloadProgress {
 
 export const shortcutApi = {
   apply: () => invoke<void>("shortcut:apply"),
+};
+
+// ── Global dictation (pill + auto-paste) ──────────────────────────────
+export const dictationApi = {
+  /** Pill reports the finished transcript to the main-process coordinator. */
+  reportResult: (text: string) => invoke<void>("dictation:result", text),
+  /** Pill reports a capture/transcription failure. */
+  reportError: (message: string) => invoke<void>("dictation:error", message),
+  /** Pill cancel button: discard the in-flight recording/transcription. */
+  cancel: () => invoke<void>("dictation:cancel"),
+  /** Pill renderer is mounted and subscribed to dictation state broadcasts. */
+  ready: () => invoke<void>("dictation:ready"),
 };
 
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */

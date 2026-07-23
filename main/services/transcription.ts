@@ -15,6 +15,7 @@ import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 interface TranscribeInput {
   audioBase64: string;
   mimeType: string;
+  signal?: AbortSignal;
 }
 
 async function recordTranscription(input: {
@@ -70,6 +71,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
       method: "POST",
       headers: { Authorization: `Bearer ${key}` },
       body: form,
+      signal: input.signal,
     });
   } catch (error) {
     await recordTranscription({ provider, model, status: "failed" });
@@ -135,6 +137,7 @@ async function transcribeGemini(input: TranscribeInput): Promise<string> {
             },
           ],
         }),
+        signal: input.signal,
       },
     );
   } catch (error) {

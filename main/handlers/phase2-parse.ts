@@ -44,6 +44,7 @@ export function parseMcpServer(value: unknown): McpServer {
     url: typeof s.url === "string" ? s.url : undefined,
     headers: parseStringRecord(s.headers),
     oauth: typeof s.oauth === "boolean" ? s.oauth : undefined,
+    presetId: typeof s.presetId === "string" && s.presetId ? s.presetId : undefined,
     enabled: typeof s.enabled === "boolean" ? s.enabled : true,
   };
 }

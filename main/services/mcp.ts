@@ -10,10 +10,29 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { logger } from "../platform.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
+import {
+  assertMcpPresetServer,
+  createNoRedirectFetch,
+  presetSecretId,
+} from "./mcp-presets.js";
+import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 
 interface Transport {
   close?: () => Promise<void>;
+}
+
+/**
+ * Resolve a server record into connection-ready form. For built-in presets
+ * authenticated by API key, the key lives in the encrypted secrets store
+ * (never in config.json) and is injected as the preset's auth header here.
+ */
+async function resolveAuth(server: McpServer): Promise<McpServer> {
+  const preset = assertMcpPresetServer(server);
+  if (!preset || preset.auth.kind !== "apiKey") return server;
+  const key = await secrets.getKey(presetSecretId(server.id));
+  if (!key) throw new Error(`${preset.name} needs an API key — add one in Settings → MCP Servers.`);
+  return { ...server, headers: { ...server.headers, [preset.auth.headerName]: key } };
 }
 
 function makeTransport(server: McpServer): Transport {
@@ -26,15 +45,26 @@ function makeTransport(server: McpServer): Transport {
     });
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
+  const preset = assertMcpPresetServer(server);
   const url = new URL(server.url);
   const requestInit = server.headers ? { headers: server.headers } : undefined;
+  const presetFetch =
+    preset?.auth.kind === "apiKey" ? createNoRedirectFetch() : undefined;
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
-  const authProvider = server.oauth ? oauthProviderFor(server.id) : undefined;
+  const authProvider = server.oauth ? oauthProviderFor(server) : undefined;
   if (server.transport === "sse") {
-    return new SSEClientTransport(url, { requestInit, authProvider });
+    return new SSEClientTransport(url, {
+      requestInit,
+      authProvider,
+      fetch: presetFetch,
+    });
   }
-  return new StreamableHTTPClientTransport(url, { requestInit, authProvider });
+  return new StreamableHTTPClientTransport(url, {
+    requestInit,
+    authProvider,
+    fetch: presetFetch,
+  });
 }
 
 interface McpToolInfo {
@@ -67,7 +97,7 @@ class McpManager {
     if (existing) return existing;
     const client = new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} });
     // The MCP SDK transports satisfy the client's transport interface.
-    await client.connect(makeTransport(server) as never);
+    await client.connect(makeTransport(await resolveAuth(server)) as never);
     this.clients.set(server.id, client);
     return client;
   }
@@ -88,7 +118,7 @@ class McpManager {
   async status(server: McpServer): Promise<{ connected: boolean; toolCount: number; tools: string[]; error?: string }> {
     const client = new Client({ name: "aiden-agent-test", version: "1.0.0" }, { capabilities: {} });
     try {
-      await client.connect(makeTransport(server) as never);
+      await client.connect(makeTransport(await resolveAuth(server)) as never);
       const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
       return { connected: true, toolCount: tools.length, tools: tools.map((t) => t.name) };
     } catch (error) {

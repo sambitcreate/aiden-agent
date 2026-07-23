@@ -24,8 +24,13 @@ import {
 } from "../ui";
 import { Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
-import { queryKeys, useMcpServers } from "../../lib/queries";
-import type { McpServer, McpTransport } from "../../lib/types";
+import {
+  mcpPresetConnectionBadge,
+  mcpServerEditorKind,
+} from "../../lib/mcp-preset-state";
+import { queryKeys, useMcpPresets, useMcpServers } from "../../lib/queries";
+import type { McpPresetState, McpServer, McpTransport } from "../../lib/types";
+import { PresetSetupDialog } from "./mcp-preset-setup";
 
 function newServer(): McpServer {
   return { id: `mcp-${Date.now().toString(36)}`, name: "", transport: "stdio", enabled: true, args: [] };
@@ -49,85 +54,167 @@ function recordToLines(record: Record<string, string> | undefined): string {
 export function McpSettings() {
   const qc = useQueryClient();
   const servers = useMcpServers();
+  const presets = useMcpPresets();
   const [editing, setEditing] = React.useState<McpServer | null>(null);
+  const [setup, setSetup] = React.useState<{ state: McpPresetState; server?: McpServer } | null>(null);
   const [removing, setRemoving] = React.useState<McpServer | null>(null);
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.mcpServers });
+  const invalidate = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: queryKeys.mcpServers }),
+      qc.invalidateQueries({ queryKey: queryKeys.mcpPresets }),
+    ]);
+  };
 
   const toggle = async (server: McpServer, enabled: boolean) => {
     await mcpApi.save({ ...server, enabled });
     await invalidate();
   };
 
+  const openServer = (server: McpServer) => {
+    const kind = mcpServerEditorKind(server, presets.isSuccess, presets.data ?? []);
+    if (kind === "loading") {
+      toast.info("MCP provider details are still loading.");
+      return;
+    }
+    if (kind === "missing-preset") {
+      toast.error("This built-in MCP definition is unavailable. Reload Settings and try again.");
+      return;
+    }
+    if (kind === "preset") {
+      const state = presets.data!.find((p) => p.serverId === server.id)!;
+      setSetup({ state, server });
+      return;
+    }
+    setEditing(server);
+  };
+
   const list = servers.data ?? [];
+  const catalogReady = servers.isSuccess && presets.isSuccess;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <Text variant="strong">MCP Servers</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Add local commands or remote services. Tool inputs may be shared with the configured server.
+            Connect tool providers or add your own server. Tool inputs may be shared with the configured server.
           </Text>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="transparent"
-            size="small"
-            onClick={async () => {
-              await mcpApi.reconnect();
-              toast.success("Connections reset. Enabled servers reconnect with your next message.");
-            }}
-          >
-            <RefreshCw className="size-4" />
-            Reset connections
-          </Button>
-          <Button variant="filled" size="small" onClick={() => setEditing(newServer())}>
-            <Plus className="size-4" />
-            Add server
-          </Button>
-        </div>
+        <Button
+          variant="transparent"
+          size="small"
+          className="shrink-0"
+          onClick={async () => {
+            await mcpApi.reconnect();
+            toast.success("Connections reset. Enabled servers reconnect with your next message.");
+          }}
+        >
+          <RefreshCw className="size-4" />
+          Reset connections
+        </Button>
       </div>
 
-      {list.length === 0 ? (
-        <Text variant="small" color="tertiary">
-          No MCP servers configured. Add a local command or remote server when you need extra tools.
-        </Text>
-      ) : (
-        <div className="rounded-card border border-separator">
-          {list.map((s, i) => (
-            <React.Fragment key={s.id}>
-              {i > 0 ? <Separator /> : null}
-              <div className="flex items-center gap-3 px-3.5 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <Text variant="strong" truncate>
-                      {s.name || "Untitled server"}
+      {list.length > 0 ? (
+        <section className="flex flex-col gap-2">
+          <Text variant="small-strong" color="secondary">
+            Configured MCP servers · {list.length}
+          </Text>
+          <div className="rounded-card border border-separator">
+            {list.map((s, i) => (
+              <React.Fragment key={s.id}>
+                {i > 0 ? <Separator /> : null}
+                <div className="flex items-center gap-3 px-3.5 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Text variant="strong" truncate>
+                        {s.name || "Untitled server"}
+                      </Text>
+                      <Badge color="secondary">{s.transport}</Badge>
+                      {s.presetId ? <Badge color="blue">built-in</Badge> : null}
+                    </div>
+                    <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
+                      {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
                     </Text>
-                    <Badge color="secondary">{s.transport}</Badge>
                   </div>
-                  <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                    {s.transport === "stdio" ? [s.command, ...(s.args ?? [])].filter(Boolean).join(" ") || "No command" : s.url || "No URL"}
-                  </Text>
+                  <Button
+                    variant="filled"
+                    size="small"
+                    disabled={Boolean(s.presetId) && !catalogReady}
+                    onClick={() => openServer(s)}
+                  >
+                    {s.presetId ? "Manage" : "Edit"}
+                  </Button>
+                  <Switch aria-label={`Enable ${s.name || "MCP server"}`} checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
+                  <Button variant="transparent" size="small" iconOnly aria-label="Remove server" onClick={() => setRemoving(s)}>
+                    <Trash2 className="size-4" />
+                  </Button>
                 </div>
-                <Button variant="filled" size="small" onClick={() => setEditing(s)}>
-                  Edit
-                </Button>
-                <Switch aria-label={`Enable ${s.name || "MCP server"}`} checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
-                <Button variant="transparent" size="small" iconOnly aria-label="Remove server" onClick={() => setRemoving(s)}>
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
-            </React.Fragment>
-          ))}
+              </React.Fragment>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {catalogReady && presets.data.length > 0 ? (
+        <section className="flex flex-col gap-2">
+          <div>
+            <Text variant="small-strong" color="secondary">
+              Popular MCPs
+            </Text>
+            <Text variant="small" color="tertiary" className="mt-0.5 block">
+              Hand-picked MCP servers with a simple setup.
+            </Text>
+          </div>
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+            {presets.data.map((state) => (
+              <PresetCard
+                key={state.preset.id}
+                state={state}
+                onSetup={() =>
+                  setSetup({
+                    state,
+                    server: list.find(
+                      (s) =>
+                        s.id === state.serverId &&
+                        s.presetId === state.preset.id,
+                    ),
+                  })
+                }
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <div className="flex items-center justify-between gap-4 rounded-card border border-separator px-3.5 py-3">
+        <div className="min-w-0 flex-1">
+          <Text variant="small-strong">Manual MCP server setup</Text>
+          <Text variant="small" color="secondary" className="mt-0.5 block">
+            Add a local command or remote MCP server.
+          </Text>
         </div>
-      )}
+        <Button variant="filled" size="small" className="shrink-0" onClick={() => setEditing(newServer())}>
+          <Plus className="size-4" />
+          Add custom MCP
+        </Button>
+      </div>
 
       {editing ? (
         <McpEditor
           server={editing}
           open={editing !== null}
           onOpenChange={(open) => !open && setEditing(null)}
+          onSaved={invalidate}
+        />
+      ) : null}
+
+      {setup ? (
+        <PresetSetupDialog
+          state={setup.state}
+          server={setup.server}
+          open={setup !== null}
+          onOpenChange={(open) => !open && setSetup(null)}
           onSaved={invalidate}
         />
       ) : null}
@@ -147,6 +234,36 @@ export function McpSettings() {
           setRemoving(null);
         }}
       />
+    </div>
+  );
+}
+
+function PresetCard({ state, onSetup }: { state: McpPresetState; onSetup: () => void }) {
+  const { preset } = state;
+  const badge = mcpPresetConnectionBadge(state);
+  return (
+    <div className="flex flex-col gap-2 rounded-card border border-separator p-4">
+      <div
+        aria-hidden
+        className="flex size-9 items-center justify-center rounded-lg border border-separator bg-well text-strong font-semibold"
+      >
+        {preset.name.charAt(0)}
+      </div>
+      <Text variant="strong">{preset.name}</Text>
+      <Text variant="small" color="secondary" className="block">
+        {preset.tagline}
+      </Text>
+      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+        <Text variant="small" color="tertiary">
+          {preset.vendor}
+        </Text>
+        <div className="flex items-center gap-2">
+          {badge ? <Badge color={badge.color}>{badge.label}</Badge> : null}
+          <Button variant="filled" size="small" onClick={onSetup}>
+            {state.configured ? "Manage" : "Set Up"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

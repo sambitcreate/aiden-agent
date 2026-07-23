@@ -94,3 +94,10 @@ test("parseMcpServer returns undefined env/headers/args when empty or absent", (
   assert.equal(server.headers, undefined);
   assert.equal(server.args, undefined);
 });
+
+test("parseMcpServer passes through presetId only when it is a non-empty string", () => {
+  assert.equal(parseMcpServer({ id: "a", name: "A", presetId: "composio" }).presetId, "composio");
+  assert.equal(parseMcpServer({ id: "b", name: "B" }).presetId, undefined);
+  assert.equal(parseMcpServer({ id: "c", name: "C", presetId: "" }).presetId, undefined);
+  assert.equal(parseMcpServer({ id: "d", name: "D", presetId: 42 }).presetId, undefined);
+});

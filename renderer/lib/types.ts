@@ -475,7 +475,35 @@ export interface McpServer {
   url?: string;
   headers?: Record<string, string>;
   oauth?: boolean;
+  /** Set when this record came from the built-in preset catalog. */
+  presetId?: string;
   enabled: boolean;
+}
+
+export type McpPresetAuth =
+  | { kind: "apiKey"; headerName: string; keyLabel: string; keyHelpUrl: string }
+  | { kind: "oauth" };
+
+/** A built-in MCP provider definition from the main-process catalog. */
+export interface McpPreset {
+  id: string;
+  name: string;
+  tagline: string;
+  vendor: string;
+  transport: "http";
+  url: string;
+  auth: McpPresetAuth;
+  docsUrl: string;
+}
+
+/** Catalog entry plus the user's connection state for it. */
+export interface McpPresetState {
+  preset: McpPreset;
+  serverId: string;
+  configured: boolean;
+  enabled: boolean;
+  /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
+  ready: boolean;
 }
 
 export interface Skill {
