@@ -8,6 +8,7 @@ export const SETTINGS_SECTIONS = [
   "voice",
   "shortcut",
   "appearance",
+  "about",
 ] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];

@@ -16,6 +16,7 @@ import {
   Search,
   MousePointer2,
   ChartScatter,
+  Info,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -26,6 +27,7 @@ import { VoiceSettings } from "../components/settings/voice-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
 import { ModelDataSettings } from "../components/settings/model-data-settings";
+import { AboutSettings } from "../components/settings/about-settings";
 import type { SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
@@ -102,6 +104,13 @@ const NAV: NavItem[] = [
     group: "App",
     keywords: "theme light dark system",
   },
+  {
+    id: "about",
+    title: "About",
+    icon: <Info className="size-5" />,
+    group: "App",
+    keywords: "version build github repository app information",
+  },
 ];
 
 const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
@@ -116,6 +125,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   voice: VoiceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,
+  about: AboutSettings,
 };
 
 export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {

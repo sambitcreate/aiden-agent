@@ -56,6 +56,12 @@ function bridge() {
   return window.aidenAPI.ipc;
 }
 
+export interface AppInfo {
+  name: string;
+  version: string;
+  environment: string;
+}
+
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return bridge().invoke(channel, ...args) as Promise<T>;
 }
@@ -65,6 +71,7 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
 }
 
 export const appApi = {
+  getInfo: () => invoke<AppInfo>("app:getInfo"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>

@@ -1,5 +1,9 @@
 # Project History
 
+### 2026-07-22 — Add a compact Settings About view
+
+- Added an App → About destination with the Aiden icon, runtime version/build type, and one external GitHub repository link. The view reuses the existing app-info bridge and settings visual vocabulary without adding explanatory copy or a new privileged IPC surface.
+
 ### 2026-07-22 — Prepare branded publishing and automatic updates
 
 - Replaced the neuron app artwork with Raychat's compiled Aiden mascot icon, including a matching grayscale Dock variant, and made the hot-reload runtime rebrand the main and helper bundles as Aiden Agent with a separate development bundle ID and ad-hoc signature.
