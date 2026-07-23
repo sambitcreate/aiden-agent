@@ -31,6 +31,32 @@ shipping a GitHub credential.
 Local `npm run dist` builds do not embed a feed or perform automatic update checks. The release
 workflow opts in with `AIDEN_ENABLE_AUTO_UPDATES=1`.
 
+## Physical Mac acceptance on a personal Mac Studio
+
+A spare Mac is not required. For now, keep pull-request CI, release builds, signing,
+notarization, and publication on GitHub-hosted runners. Use the personal Mac Studio only to run
+the required physical-Mac packaged acceptance checks, then approve publication. Do not install a
+persistent GitHub Actions runner inside a personal macOS account merely to automate those checks.
+
+If manual acceptance becomes burdensome, create a separate standard macOS user such as
+`aiden-runner` on the same Mac Studio. This is useful separation, but it is not as strong as a
+separate or ephemeral machine. The runner account should:
+
+- remain disconnected from iCloud and contain no personal files, browser sessions, SSH keys, or
+  GitHub CLI credentials;
+- register only with this private repository and accept only trusted `main` or manually
+  dispatched release/acceptance jobs, never pull-request jobs;
+- receive signing and notarization material only for the job, then remove temporary keychains,
+  API keys, build output, and the runner workspace whether the job succeeds or fails;
+- be logged into its own desktop session only when packaged UI checks require Accessibility or
+  Screen Recording permission, with those grants limited to the exact signed Aiden helper; and
+- stay updated and be unregistered or offline whenever it is not needed.
+
+GitHub recommends ephemeral self-hosted runners over persistent ones because persistent hosts
+retain job state. Environment approvals delay secret access but do not isolate a self-hosted
+machine. See GitHub's [self-hosted runner reference](https://docs.github.com/en/actions/reference/runners/self-hosted-runners)
+and [secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use).
+
 ## One-time GitHub setup
 
 Creating the public repository makes the signed application binaries publicly downloadable.
