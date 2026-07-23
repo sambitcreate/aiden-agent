@@ -1,8 +1,10 @@
+import type { NotificationChannel } from "../../renderer/preload-channels.js";
+
 export interface RendererDocumentOwner {
   id: number;
   documentId: string;
   isDestroyed(): boolean;
-  send(channel: string, payload: unknown): void;
+  send(channel: NotificationChannel, payload: unknown): void;
   onInvalidated(listener: () => void): () => void;
 }
 

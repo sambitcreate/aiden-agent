@@ -13,6 +13,7 @@ import {
   type IpcMain,
   type OpenDialogOptions,
 } from "electron";
+import type { NotificationChannel } from "../renderer/preload-channels.js";
 
 type LogValue = unknown;
 
@@ -39,7 +40,7 @@ export const logger = {
   error: (scope: string, ...values: LogValue[]) => writeLog("error", scope, values),
 };
 
-function broadcast(channel: string, payload: unknown): void {
+function broadcast(channel: NotificationChannel, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send(channel, payload);
   }

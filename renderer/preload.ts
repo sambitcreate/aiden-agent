@@ -1,5 +1,14 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { OpenDialogOptions, OpenDialogReturnValue } from "electron";
+import {
+  INVOKE_PREFIXES,
+  NATIVE_INVOKE_CHANNELS,
+  NOTIFICATION_CHANNELS,
+} from "./preload-channels.js";
+
+// Re-exported so the contract test can assert coverage without importing this
+// Electron-bound module.
+export { INVOKE_PREFIXES, NATIVE_INVOKE_CHANNELS, NOTIFICATION_CHANNELS };
 
 export interface NativeThemeInfo {
   themeSource: "system" | "light" | "dark";
@@ -9,55 +18,6 @@ export interface NativeThemeInfo {
 }
 
 type NotificationHandler = (payload: unknown) => void;
-
-const INVOKE_PREFIXES = [
-  "app:",
-  "artificialAnalysis:",
-  "attachments:",
-  "chat:",
-  "chats:",
-  "computerUse:",
-  "exa:",
-  "git:",
-  "localModels:",
-  "localVoice:",
-  "mcp:",
-  "models:",
-  "providers:",
-  "profile:",
-  "settings:",
-  "shortcut:",
-  "skills:",
-  "terminal:",
-  "titleProviders:",
-  "usage:",
-  "voice:",
-  "workspaces:",
-] as const;
-
-const NOTIFICATION_CHANNELS = new Set([
-  "app:dictate-toggle",
-  "app:focus-composer",
-  "app:navigate",
-  "app:open-workspace-preferred-editor",
-  "chat:approval",
-  "chat:delta",
-  "chat:done",
-  "chat:error",
-  "chat:reasoning-delta",
-  "chat:timeline",
-  "chat:tool",
-  "chats:metadata-updated",
-  "localModels:progress",
-  "providers:auth:done",
-  "providers:auth:error",
-  "providers:auth:event",
-  "providers:auth:prompt",
-  "providers:auth:status-changed",
-  "terminal:data",
-  "terminal:exit",
-  "aiden:theme:changed",
-]);
 
 function assertInvokeChannel(channel: string): void {
   if (!INVOKE_PREFIXES.some((prefix) => channel.startsWith(prefix))) {
@@ -84,21 +44,24 @@ const aidenAPI = {
   },
   dialog: {
     showOpenDialog: (options?: OpenDialogOptions): Promise<OpenDialogReturnValue> =>
-      ipcRenderer.invoke("aiden:dialog:open", options) as Promise<OpenDialogReturnValue>,
+      ipcRenderer.invoke(
+        NATIVE_INVOKE_CHANNELS.dialogOpen,
+        options,
+      ) as Promise<OpenDialogReturnValue>,
   },
   nativeTheme: {
     getInfo: (): Promise<NativeThemeInfo> =>
-      ipcRenderer.invoke("aiden:theme:get") as Promise<NativeThemeInfo>,
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.themeGet) as Promise<NativeThemeInfo>,
     setThemeSource: (source: "system" | "light" | "dark"): Promise<boolean> =>
-      ipcRenderer.invoke("aiden:theme:set", source) as Promise<boolean>,
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.themeSet, source) as Promise<boolean>,
     onChanged: (callback: (info: NativeThemeInfo) => void): (() => void) =>
       subscribe("aiden:theme:changed", (payload) => callback(payload as NativeThemeInfo)),
   },
   systemPreferences: {
     getMediaAccessStatus: (mediaType: "microphone" | "camera" | "screen"): Promise<string> =>
-      ipcRenderer.invoke("aiden:media:status", mediaType) as Promise<string>,
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.mediaStatus, mediaType) as Promise<string>,
     askForMediaAccess: (mediaType: "microphone" | "camera"): Promise<boolean> =>
-      ipcRenderer.invoke("aiden:media:request", mediaType) as Promise<boolean>,
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.mediaRequest, mediaType) as Promise<boolean>,
   },
 };
 

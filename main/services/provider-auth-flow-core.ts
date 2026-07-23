@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 
 import { OPENAI_CODEX_PROVIDER_ID, type CodexProviderSnapshot } from "./codex-provider.js";
+import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
 const FLOW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const MAX_RESPONSE_LENGTH = 8_192;
@@ -108,7 +109,7 @@ export interface ProviderAuthOwner {
   readonly id: number;
   readonly documentId: string;
   isDestroyed(): boolean;
-  send(channel: string, payload: unknown): void;
+  send(channel: NotificationChannel, payload: unknown): void;
   onInvalidated(listener: () => void): () => void;
 }
 
@@ -351,7 +352,10 @@ function promptCopy(type: ProviderAuthPromptType): { message: string; placeholde
   return { message: "Enter the requested sign-in information." };
 }
 
-function selectOptionCopy(providerOptionId: string, index: number): Omit<ProviderAuthSelectOptionDto, "id"> {
+function selectOptionCopy(
+  providerOptionId: string,
+  index: number,
+): Omit<ProviderAuthSelectOptionDto, "id"> {
   if (providerOptionId === "browser") {
     return {
       label: "Browser login",
@@ -367,11 +371,7 @@ function selectOptionCopy(providerOptionId: string, index: number): Omit<Provide
   return { label: `Sign-in option ${index + 1}` };
 }
 
-function preparePrompt(
-  session: AuthSession,
-  promptId: string,
-  prompt: AuthPrompt,
-): PreparedPrompt {
+function preparePrompt(session: AuthSession, promptId: string, prompt: AuthPrompt): PreparedPrompt {
   const copy = promptCopy(prompt.type);
   const base = {
     flowId: session.flowId,
@@ -838,7 +838,7 @@ export class ProviderAuthFlowCoordinator {
     } satisfies ProviderAuthErrorDto);
   }
 
-  private safeSend(session: AuthSession, channel: string, payload: unknown): boolean {
+  private safeSend(session: AuthSession, channel: NotificationChannel, payload: unknown): boolean {
     if (session.suppressNotifications || session.owner.isDestroyed()) return false;
     try {
       session.owner.send(channel, payload);

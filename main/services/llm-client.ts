@@ -48,6 +48,7 @@ import {
   ChatComputerUseMutationGate,
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
+import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
 interface ActiveGeneration {
   agent: Agent;
@@ -80,7 +81,7 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
 
-function sendGeneration(streamId: string, channel: string, payload: unknown): boolean {
+function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const owner = ownerForStream(streamId);
   if (!owner || owner.isDestroyed()) return false;
   try {

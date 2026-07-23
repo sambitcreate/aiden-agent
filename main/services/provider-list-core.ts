@@ -6,6 +6,7 @@ import {
   type CodexProviderSnapshot,
 } from "./codex-provider.js";
 import type { Provider } from "./types.js";
+import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
 export const CODEX_PROVIDER_STATUS_CHANGED_CHANNEL = "providers:auth:status-changed";
 
@@ -17,7 +18,7 @@ export interface CodexProviderStatusChangedEvent {
 /** Electron-free bridge contract: every service notification becomes one global renderer event. */
 export function forwardCodexProviderStatusChanges(
   source: { onStatusChange(listener: (needsAttention: boolean) => void): () => void },
-  broadcast: (channel: string, event: CodexProviderStatusChangedEvent) => void,
+  broadcast: (channel: NotificationChannel, event: CodexProviderStatusChangedEvent) => void,
 ): () => void {
   return source.onStatusChange((needsAttention) => {
     broadcast(CODEX_PROVIDER_STATUS_CHANGED_CHANNEL, {
