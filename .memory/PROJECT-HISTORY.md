@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-23 — Bound Pi agent context during tool-heavy generations
+
+- Added a model-aware Pi `transformContext` to every Aiden generation. Pi's provider usage stays anchored through the assistant response that measured it while trailing tool results use per-message estimates; the system prompt, serialized tool schemas, response reserve, and a safety margin are included in the budget.
+- Adapted OpenCode's retention policy to Aiden's fresh-per-generation agent: keep the two newest user turns and roughly 40K tokens of recent completed tool evidence, replace older tool payloads with neutral already-completed placeholders, and remove only complete assistant/tool-result batches so provider protocol pairs remain valid.
+- Kept compaction deterministic and local instead of adding a second summarization model request. The Agent's stored state and persisted chat are not mutated; only the request context is transformed, oversized results retain bounded head/tail evidence and images, an active turn that cannot fit becomes a bounded non-tool recovery notice, and an impossible static prompt/tool set fails before provider I/O.
+- Added a regression reproducing the reported 38-read/8-search Codex loop against a 128K context window, plus prefix-anchored provider usage, trailing results, images, oversized active requests, tiny static contexts, history retention, protocol pairing, non-mutation, and observer-failure coverage. The focused suite, type-check, lint, production build, all 623 TypeScript/JavaScript tests, and all 41 Rust tests pass.
+
 ### 2026-07-23 — Adversarial dictation, MCP OAuth, and dev-log hardening
 
 - Replaced the dictation lifecycle with a tested serialized state machine covering cold pill startup, duplicate readiness, cancellation during transcription, and delivery-before-restart ordering. Pending microphone starts and late transcription results are generation-gated, and cloud/UI transcription paths have bounded 120-second deadlines.

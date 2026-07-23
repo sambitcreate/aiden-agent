@@ -42,6 +42,10 @@ import { toPiMessages } from "./generation-messages.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
+import {
+  assertGenerationContextCapacity,
+  createGenerationContextTransform,
+} from "./generation-context.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
   activatedComputerUseStreamIds,
@@ -279,10 +283,36 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
+      const systemPrompt = buildSystemPrompt(folderPath, git.branch, permission);
+      assertGenerationContextCapacity({
+        contextWindow: model.contextWindow,
+        systemPrompt,
+        tools,
+      });
       candidate = new Agent({
         ...buildAgentRuntimeOptions(params.chatId, runtime),
+        transformContext: createGenerationContextTransform(
+          {
+            contextWindow: model.contextWindow,
+            systemPrompt,
+            tools,
+          },
+          (result) => {
+            logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+              model: model.id,
+              estimatedTokensBefore: result.estimatedTokensBefore,
+              estimatedTokensAfter: result.estimatedTokensAfter,
+              inputBudgetTokens: result.inputBudgetTokens,
+              truncatedToolResults: result.truncatedToolResults,
+              compactedToolResults: result.compactedToolResults,
+              removedHistoryMessages: result.removedHistoryMessages,
+              removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+              usedContextFallback: result.usedContextFallback,
+            });
+          },
+        ),
         initialState: {
-          systemPrompt: buildSystemPrompt(folderPath, git.branch, permission),
+          systemPrompt,
           model,
           tools,
           messages: toPiMessages(params, model, supportsImages),
