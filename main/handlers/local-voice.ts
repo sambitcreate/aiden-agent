@@ -13,21 +13,10 @@ import {
 import { configStore } from "../services/config-store.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
+import { asString, pcmToFloat32 } from "./voice-codec.js";
 
-function asString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Expected non-empty string for "${name}".`);
-  }
-  return value;
-}
-
-/** Base64 of a raw little-endian Float32 PCM buffer → Float32Array. */
-function pcmToFloat32(base64: string): Float32Array {
-  const buf = Buffer.from(base64, "base64");
-  const out = new Float32Array(Math.floor(buf.length / 4));
-  for (let i = 0; i < out.length; i++) out[i] = buf.readFloatLE(i * 4);
-  return out;
-}
+// Re-exported so the IPC contract surface stays queryable from one module.
+export { asString, pcmToFloat32 };
 
 export function registerLocalVoiceHandlers(): void {
   // ── Engine ───────────────────────────────────────────────────────────
