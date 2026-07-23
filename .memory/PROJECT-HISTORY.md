@@ -1,5 +1,38 @@
 # Project History
 
+### 2026-07-23 — Adversarial dictation, MCP OAuth, and dev-log hardening
+
+- Replaced the dictation lifecycle with a tested serialized state machine covering cold pill startup, duplicate readiness, cancellation during transcription, and delivery-before-restart ordering. Pending microphone starts and late transcription results are generation-gated, and cloud/UI transcription paths have bounded 120-second deadlines.
+- Made auto-paste one compiled AppleScript transaction: it captures the complete native pasteboard record, revalidates the exact frontmost process and focused element immediately before ⌘V, and restores only if the transcript is still on the clipboard, preserving rich clipboard content and user copies.
+- Restricted dictation result/error/cancel/ready IPC to the current pill main document and moved the pill to a least-privilege preload exposing only settings read, microphone access, transcription, and dictation lifecycle channels.
+- Added the Apple Events automation entitlement to the main signed Electron executable and pinned it in package verification.
+- Bound MCP OAuth tokens and dynamic registration to the normalized protected-resource endpoint, stripped public-client DCR secrets, blocked background OAuth mutations while interactive PKCE owns a server, and serialized/atomically replaced the encrypted OAuth map.
+- Removed MCP query-order fallthrough into the custom editor, refreshed preset state after key tests, added explicit stored-key removal, and refresh Accessibility status after returning from System Settings.
+- Added development-only file logging with serialized rotation, bounded renderer messages, credential redaction, and no packaged-runtime writes.
+- Added focused regressions for the lifecycle races, paste transaction compilation, pill sender/preload boundaries, OAuth endpoint/PKCE behavior, preset query ordering, Accessibility refresh, timeouts, and log redaction.
+
+### 2026-07-23 — Global dictation pill with auto-paste
+
+- The dictation hotkey (default `⌘⇧D`, unchanged setting) no longer raises Aiden and dictates into the composer; it now toggles system-wide dictation into whatever app is focused, modelled on handy's architecture (`TranscriptionCoordinator` + overlay window + clipboard-swap paste).
+- `main/services/dictation.ts` is a serialized idle → recording → transcribing coordinator. It drives a new transparent, non-focusable, always-on-top pill window (`main/windows/pill-window.ts`, `pill.html` vite entry, `renderer/pill/`) positioned bottom-center of the display containing the cursor. The pill renderer owns MediaRecorder capture (`backgroundThrottling: false`), so dictation works with the main window closed or hidden; it signals subscription readiness via `dictation:ready` so a freshly created pill never misses the first "recording" broadcast.
+- Recording/transcription logic was extracted from `use-voice-recorder.ts` into `renderer/lib/voice-recorder-core.ts` (`ensureMicrophoneAccess`, `transcribeBlob`), shared by the composer mic button and the pill. The stale "whisper.cpp" comment is corrected to sherpa-onnx.
+- `main/services/dictation-paste.ts` (Electron-free, unit-tested) delivers the transcript: save clipboard → write transcript → System Events role check of the focused UI element → ⌘V via `osascript` + clipboard restore for text-entry roles (`AXTextField/AXTextArea/AXSearchField/AXComboBox`), otherwise the transcript stays on the clipboard and the pill shows "Copied to clipboard". Failures never throw; they degrade to the clipboard fallback.
+- Accessibility access for the main app is new: `aiden:accessibility:status`/`request` native channels wrap `systemPreferences.isTrustedAccessibilityClient`, with a Grant row in Settings → Voice; the TCC prompt is shown at most once per session, and packaged builds declare `NSAppleEventsUsageDescription` for the System Events keystroke.
+- IPC: new `dictation:` invoke prefix (`result`/`error`/`cancel`/`ready`), `dictation:state` notification replaces the removed `app:dictate-toggle`; the composer's hotkey subscription is gone (its mic button is unchanged). The IPC contract test passes against the new surface.
+- Pill UI follows the design docs' motion contract: 200ms `.98`-scale/4px entrance, popover elevation, design tokens, reduced-motion safe; states are recording (9-bar waveform + elapsed + cancel), transcribing, pasted, copied, error.
+- Verification: type-check, lint, production build (pill chunk emitted), IPC contract tests, and 5 focused paste tests pass.
+
+### 2026-07-23 — First-class MCP providers (built-in preset catalog)
+
+- Added a built-in MCP provider catalog (`main/services/mcp-presets.ts`, Electron-free and unit-tested) with Composio (streamable HTTP `https://connect.composio.dev/mcp`, official `x-consumer-api-key` header), Notion (`https://mcp.notion.com/mcp`, OAuth), and Linear (`https://mcp.linear.app/mcp`, OAuth). Adding a provider requires a catalog entry plus an explicit allowed origin.
+- `McpServer` gained an optional `presetId`; preset API keys are stored encrypted in the keychain-backed secrets store under `mcp:<serverId>` and injected as the preset's auth header at connect time by `resolveAuth` in `mcp.ts` — keys never touch `config.json` or the renderer. Custom server headers/env remain plaintext as before (explicit non-goal).
+- Main now validates a preset's deterministic ID, declared preset, transport, auth mode, and exact official HTTPS origin before it reads or sends credentials. Provider-specific API-key requests refuse HTTP redirects so a cross-origin redirect cannot retain the custom key header.
+- New IPC: `mcp:presets` (catalog + per-preset configured/enabled/ready state) and `mcp:setPresetKey` (save/clear + forced reconnect); `mcp:remove` now also deletes the preset secret. `parseMcpServer` passes through `presetId`.
+- Settings → MCP Servers redesigned after the LM Studio "Connected Apps" reference: a configured-server list (preset rows open a Manage dialog), a Popular MCPs card grid with Set Up, and a Manual setup footer hosting the existing custom `McpEditor`. The new `PresetSetupDialog` mirrors the reference setup sheet — race-safe status toggle, name, editable provider-owned server address (e.g. Composio Tool Router session URLs), encrypted access-token field with keychain help link for API-key presets, and browser OAuth for Notion/Linear. Connect/Test stay disabled until the required key or completed OAuth login exists, and cards say Ready rather than claiming an unverified live connection.
+- Explicit OAuth re-authorization starts a fresh browser flow while retaining dynamic client registration. The prior encrypted token/session snapshot is restored if browser authorization, token exchange, or the verification connection fails; changing an OAuth endpoint requires a fresh authorization in the dialog.
+- The agent loop is unchanged: preset connections are ordinary enabled `McpServer` records flowing through `collectMcpAgentTools`.
+- Verification covers catalog shape, the official Composio header, identity/origin/auth-mode rejection, redirect refusal, OAuth re-authorization session behavior, renderer credential readiness/badges, and `presetId` parsing. Type-check, lint, the production build, all 592 TypeScript/JavaScript tests, and all 41 Rust tests pass. Live OAuth/API-key connect is not smoke-tested because no provider credentials were used.
+
 ### 2026-07-23 — Close high-value test-coverage gaps (Phase 1)
 
 - Audited the whole app's test coverage with three parallel explorations (main/services, renderer, build/integration) and prioritized gaps by bug-catching value.
