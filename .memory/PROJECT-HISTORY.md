@@ -1,5 +1,22 @@
 # Project History
 
+### 2026-07-23 — Make streaming reveal visible for fast local responses
+
+- Changed short prose to settle at safe sentence or line boundaries so LM Studio and Ollama replies produce visible, prefix-stable reveal units without exposing unfinished inline Markdown.
+- Replaced the reset-on-chunk timeout with a persistent reveal schedule, preventing fast continuous streams from starving the animation. Completion drains through bounded waves, waits for the final entrance to settle, and retains a guarded emergency fallback.
+- Removed the overlapping source/final Markdown crossfade. Streaming and persisted answers now use the same canonical Markdown renderer, reserve identical action-row geometry, and hand off without a cursor-induced height jump.
+- Kept inline prose on a 160ms opacity-only entrance so baselines never move or blur; complete semantic blocks retain a restrained 180ms 4px rise. Reduce Motion reveals immediately without resetting progress.
+- Keeps fenced code, lists, and tables visible while they grow under stable block keys; synthetic fence closure preserves canonical code layout without remounting on the real closing newline, and code source formatting is no longer mutated by validity-sensitive JSON prettifying. Long run-on prose reveals in stable word groups instead of arriving as one large completion jump.
+- Preserved final buffered text and reasoning on error, retains the only rendered answer and timeline when persistence fails, co-located live tool steps with the transient assistant shell, and bounded exiting status layers to prevent ghost stacks.
+- Added pure scheduler/parser regressions and source/CSS motion contracts for starvation, text retraction, open-structure growth, closing-fence key stability, persistence-error retention, canonical Markdown handoff, reduced-motion toggles, stable geometry, and cursor removal. The full 491-test TypeScript/JavaScript suite, 41-test Rust suite, type-check, lint, and production build pass.
+
+### 2026-07-23 — Show local-model reasoning in the transcript
+
+- Routed Pi `thinking_delta` events from the explicit LM Studio and Ollama presets through a dedicated, document-owned IPC channel while keeping hosted-provider and redacted reasoning outside the renderer boundary.
+- Persisted local reasoning only on trusted main-process assistant messages, retained it across cancellation and provider errors, and continued to reject renderer-authored or non-assistant reasoning metadata.
+- Added a compact borderless reasoning surface with semantic muted fill, keyboard scrolling, live tail-following, scroll-edge gradient masks, and Reduce Motion-aware entrance behavior; the final answer remains visually dominant below it.
+- Verified the flow live against LM Studio's Gemma 4 reasoning stream and after reopening the saved chat. The pinned Pi adapter contract also covers OpenAI-compatible `reasoning` deltas used by local endpoints. Type-check, lint, the UI detector, production build, 491 TypeScript/JavaScript tests, and 41 Rust tests pass.
+
 ### 2026-07-22 — Animate streaming answers and agent milestones
 
 - Added block-aware streaming reveal for prose, Markdown, lists, tables, and code so stable semantic units fade into place without repeatedly reparsing the whole transcript or exposing unfinished markup.
