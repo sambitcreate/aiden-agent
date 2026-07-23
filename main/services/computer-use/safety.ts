@@ -395,7 +395,7 @@ export function normalizeComputerUseArgs(input: ComputerUseArgs): ComputerUseArg
     case "set_value":
       result.element = nonNegativeIndex(source.element, "element");
       if (typeof source.value !== "string") fail("invalid_value", "set_value requires value.");
-      result.value = source.value;
+      result.value = validateTypedText(source.value);
       copyCaptureAfter(source, result);
       break;
     case "wait": {
