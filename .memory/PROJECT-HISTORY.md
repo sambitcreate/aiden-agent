@@ -1,5 +1,9 @@
 # Project History
 
+### 2026-07-22 — Align macOS window controls with the sidebar toggle
+
+- Lowered the native traffic-light cluster within the hidden titlebar so its center matches the renderer's 52px sidebar header and toggle. The sidebar geometry and all other toolbar controls remain unchanged.
+
 ### 2026-07-22 — Add a compact Settings About view
 
 - Added an App → About destination with the Aiden icon, runtime version/build type, and one external GitHub repository link. The view reuses the existing app-info bridge and settings visual vocabulary without adding explanatory copy or a new privileged IPC surface.

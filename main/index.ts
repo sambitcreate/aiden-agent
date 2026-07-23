@@ -367,6 +367,8 @@ async function createMainWindow(): Promise<void> {
     minHeight: 456,
     title: "Aiden Agent",
     titleBarStyle: "hiddenInset",
+    // Center the 12px macOS window controls in the renderer's 52px top bar.
+    trafficLightPosition: { x: 14, y: 20 },
     backgroundColor: "#00000000",
     transparent: true,
     vibrancy: "sidebar",
