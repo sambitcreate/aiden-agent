@@ -1,6 +1,7 @@
 // Global shortcut manager. Registers two configurable hotkeys:
 //  • focus   (default ⌘⌥Space)  — brings the app forward and focuses the composer
-//  • dictate (default ⌘⇧D)      — brings the app forward and toggles on-device dictation
+//  • dictate (default ⌘⇧D)      — toggles global dictation into the focused app
+//    (floating pill + auto-paste, clipboard fallback)
 
 import { globalShortcut, logger } from "../platform.js";
 import { configStore } from "./config-store.js";

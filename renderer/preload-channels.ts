@@ -11,6 +11,8 @@ export const INVOKE_PREFIXES = [
   "chat:",
   "chats:",
   "computerUse:",
+  "devlog:",
+  "dictation:",
   "exa:",
   "git:",
   "localModels:",
@@ -30,6 +32,8 @@ export const INVOKE_PREFIXES = [
 ] as const;
 
 export const NATIVE_INVOKE_CHANNELS = {
+  accessibilityRequest: "aiden:accessibility:request",
+  accessibilityStatus: "aiden:accessibility:status",
   dialogOpen: "aiden:dialog:open",
   themeGet: "aiden:theme:get",
   themeSet: "aiden:theme:set",
@@ -38,7 +42,6 @@ export const NATIVE_INVOKE_CHANNELS = {
 } as const;
 
 export const NOTIFICATION_CHANNEL_VALUES = [
-  "app:dictate-toggle",
   "app:focus-composer",
   "app:navigate",
   "app:open-workspace-preferred-editor",
@@ -50,6 +53,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:timeline",
   "chat:tool",
   "chats:metadata-updated",
+  "dictation:state",
   "localModels:progress",
   "providers:auth:done",
   "providers:auth:error",

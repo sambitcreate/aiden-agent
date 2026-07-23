@@ -18,8 +18,11 @@ import { registerUsageHandlers } from "./usage.js";
 import { registerProfileHandlers } from "./profile.js";
 import { registerComputerUseHandlers } from "./computer-use.js";
 import { registerArtificialAnalysisHandlers } from "./artificial-analysis.js";
+import { registerDictationHandlers } from "./dictation.js";
 
 import { ipcMain, logger } from "../platform.js";
+import { writeDevLog } from "../services/dev-log.js";
+import { isPackagedRuntime } from "../runtime-mode.js";
 
 export function registerHandlers(): void {
   logger.info("handlers", "Registering IPC handlers...");
@@ -27,6 +30,14 @@ export function registerHandlers(): void {
   // Register app handlers using ipcMain API
   ipcMain.handle("app:getInfo", async (_event) => {
     return await appHandlers.getInfo();
+  });
+
+  // Renderer error forwarding for the dev log file (see services/dev-log.ts).
+  ipcMain.handle("devlog:write", async (_event, level: unknown, message: unknown) => {
+    if (isPackagedRuntime()) return;
+    const safeLevel = level === "warn" || level === "error" ? level : "info";
+    const text = (typeof message === "string" ? message : String(message)).slice(0, 16_384);
+    writeDevLog(safeLevel, "renderer", [text]);
   });
 
   // AI chat client handlers
@@ -43,6 +54,7 @@ export function registerHandlers(): void {
   registerProfileHandlers();
   registerComputerUseHandlers();
   registerArtificialAnalysisHandlers();
+  registerDictationHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

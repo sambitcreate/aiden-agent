@@ -63,6 +63,12 @@ const aidenAPI = {
     askForMediaAccess: (mediaType: "microphone" | "camera"): Promise<boolean> =>
       ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.mediaRequest, mediaType) as Promise<boolean>,
   },
+  accessibility: {
+    isTrusted: (): Promise<boolean> =>
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.accessibilityStatus) as Promise<boolean>,
+    request: (): Promise<boolean> =>
+      ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.accessibilityRequest) as Promise<boolean>,
+  },
 };
 
 contextBridge.exposeInMainWorld("aidenAPI", aidenAPI);

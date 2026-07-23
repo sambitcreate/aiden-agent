@@ -23,4 +23,11 @@ await Promise.all([
     format: "cjs",
     external: ["electron"],
   }),
+  build({
+    ...common,
+    entryPoints: ["renderer/preload-pill.ts"],
+    outfile: "build/preload/preload-pill.cjs",
+    format: "cjs",
+    external: ["electron"],
+  }),
 ]);

@@ -11,6 +11,7 @@ import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../l
 import { prettyAccelerator, toAccelerator } from "../../lib/accelerator";
 import type { AppSettings } from "../../lib/types";
 import { ModelManagerView } from "./model-manager-view";
+import { installAccessibilityRefresh } from "../../lib/accessibility-refresh";
 
 const DEFAULT_DICTATION_ACCELERATOR = "Command+Shift+D";
 
@@ -78,6 +79,40 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
   );
 }
 
+function AccessibilityAccess() {
+  const [trusted, setTrusted] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    const refresh = () => void window.aidenAPI.accessibility.isTrusted().then(setTrusted);
+    refresh();
+    return installAccessibilityRefresh(refresh);
+  }, []);
+
+  const grant = async () => {
+    const granted = await window.aidenAPI.accessibility.request();
+    setTrusted(granted);
+    if (!granted) {
+      toast.info("Enable Aiden Agent in System Settings → Privacy & Security → Accessibility, then come back.");
+    }
+  };
+
+  if (trusted === null) return null;
+  return (
+    <Field
+      label="Accessibility access"
+      description="Lets Aiden paste dictated text into the focused text field. Without it, transcripts are copied to the clipboard instead."
+    >
+      {trusted ? (
+        <Badge color="green">Granted</Badge>
+      ) : (
+        <Button variant="filled" onClick={() => void grant()}>
+          Grant Access
+        </Button>
+      )}
+    </Field>
+  );
+}
+
 function DictationHotkey() {
   const qc = useQueryClient();
   const settings = useSettings();
@@ -109,7 +144,7 @@ function DictationHotkey() {
     <>
       <Field
         label="Dictation hotkey"
-        description="Press it from anywhere to start and stop on-device dictation into the composer."
+        description="Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
       >
         <Switch checked={enabled} onCheckedChange={(v) => void apply({ dictationEnabled: v })} />
       </Field>
@@ -155,6 +190,7 @@ export function LocalVoiceSettings() {
 
       <FieldSet title="Dictation Shortcut">
         <DictationHotkey />
+        <AccessibilityAccess />
       </FieldSet>
     </div>
   );

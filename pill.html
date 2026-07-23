@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' http://localhost:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob: file: https: http:; font-src 'self' data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; media-src 'self' data: blob: file: https:; worker-src 'self' blob:"
+    />
+    <title>Aiden Dictation</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- The secure Electron preload is injected through webPreferences.preload. -->
+    <script type="module" src="./renderer/pill/main.tsx"></script>
+  </body>
+</html>

@@ -6,12 +6,14 @@ import "../styles.css";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider, Toaster } from "../components/ui";
 import { initLogging } from "../lib/ui-utils";
+import { installDevErrorLogging } from "../lib/dev-log";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
 import { subscribeCodexProviderState } from "../lib/queries";
 
 declare const __APP_DISPLAY_NAME__: string | undefined;
 
 initLogging();
+installDevErrorLogging();
 applyCachedAppearance();
 
 const unsubscribeCodexProviderState = subscribeCodexProviderState(queryClient);

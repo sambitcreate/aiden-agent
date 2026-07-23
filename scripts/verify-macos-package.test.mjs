@@ -330,6 +330,7 @@ test("package verifier rejects privileged Computer Use broker entitlements", () 
 
 test("package verifier requires the normal Electron runtime entitlements", () => {
   const expected = [
+    "com.apple.security.automation.apple-events",
     "com.apple.security.cs.allow-jit",
     "com.apple.security.cs.allow-unsigned-executable-memory",
     "com.apple.security.cs.disable-library-validation",

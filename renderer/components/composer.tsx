@@ -39,7 +39,7 @@ import {
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
-import { attachmentsApi, onNotification, pickFiles } from "../lib/ipc";
+import { attachmentsApi, pickFiles } from "../lib/ipc";
 import { useSettings } from "../lib/queries";
 import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
 import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
@@ -186,20 +186,6 @@ export function Composer({
       localModel: settings.data?.localVoiceModel,
     },
   );
-
-  // Global dictation hotkey toggles the same recorder (uses the selected provider).
-  const voiceRef = React.useRef(voice);
-  voiceRef.current = voice;
-  const isGeneratingRef = React.useRef(isGenerating);
-  isGeneratingRef.current = isGenerating;
-  React.useEffect(() => {
-    return onNotification("app:dictate-toggle", () => {
-      const v = voiceRef.current;
-      if (v.transcribing || isGeneratingRef.current) return;
-      if (v.recording) v.stop();
-      else void v.start();
-    });
-  }, []);
 
   const handleAttach = async () => {
     if (gitOperationBusy) {

@@ -34,8 +34,10 @@ import { llmClient } from "./services/llm-client.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
+import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { appUpdateService } from "./services/app-updater.js";
+import { devLogPath, initDevLog } from "./services/dev-log.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -109,6 +111,7 @@ function cleanupApplication(): void {
   cleanupStarted = true;
   appUpdateService.dispose();
   disposeShortcut();
+  disposeDictation();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
   llmClient.abortAll();
@@ -552,6 +555,10 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      if (!isPackagedRuntime()) {
+        initDevLog(path.join(app.getPath("userData"), "logs", "aiden-dev.log"));
+        logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
+      }
       const settings = await configStore.getSettings();
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
@@ -563,8 +570,7 @@ if (!ownsSingleInstanceLock) {
         ipcMain.broadcast("app:focus-composer", {});
       });
       initDictationShortcut(() => {
-        showMainWindow();
-        ipcMain.broadcast("app:dictate-toggle", {});
+        toggleDictation();
       });
       void applyShortcutFromSettings();
       void foundationModelsConnection.status();

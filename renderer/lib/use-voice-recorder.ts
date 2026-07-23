@@ -1,61 +1,15 @@
-// Microphone capture → transcription. Records via MediaRecorder, then either
-// sends compressed audio to a cloud provider, or (for the on-device provider)
-// decodes to a 16 kHz mono WAV in the renderer and runs whisper.cpp locally.
+// Microphone capture → transcription for the composer mic button. Thin React
+// wrapper over voice-recorder-core (shared with the dictation pill).
 
 import * as React from "react";
 import { toast } from "../components/ui";
-import { voiceApi } from "./ipc";
-import type { VoiceProvider } from "./types";
+import {
+  ensureMicrophoneAccess,
+  transcribeBlob,
+  type TranscribeOptions,
+} from "./voice-recorder-core";
 
-interface RecorderOptions {
-  provider: VoiceProvider;
-  /** Selected on-device model id — required when provider === "local". */
-  localModel?: string;
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(",")[1] ?? "");
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
-
-function float32ToBase64(samples: Float32Array): string {
-  const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-/** Decode recorded audio and resample to 16 kHz mono Float32 PCM (base64) for the on-device engine. */
-async function blobToPcm16k(blob: Blob): Promise<string> {
-  const arrayBuf = await blob.arrayBuffer();
-  const decodeCtx = new AudioContext();
-  let decoded: AudioBuffer;
-  try {
-    decoded = await decodeCtx.decodeAudioData(arrayBuf);
-  } finally {
-    void decodeCtx.close();
-  }
-  const targetRate = 16000;
-  const frames = Math.max(1, Math.ceil(decoded.duration * targetRate));
-  const offline = new OfflineAudioContext(1, frames, targetRate);
-  const source = offline.createBufferSource();
-  source.buffer = decoded;
-  source.connect(offline.destination);
-  source.start();
-  const rendered = await offline.startRendering();
-  // Copy into a standalone Float32Array so the base64 covers exactly the samples.
-  return float32ToBase64(Float32Array.from(rendered.getChannelData(0)));
-}
+type RecorderOptions = TranscribeOptions;
 
 export function useVoiceRecorder(onTranscript: (text: string) => void, options: RecorderOptions) {
   const [recording, setRecording] = React.useState(false);
@@ -76,16 +30,13 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
     try {
       // Native permission gate before capture.
       const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
-      if (status === "denied" || status === "restricted") {
-        toast.error("Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone.");
+      if (!(await ensureMicrophoneAccess())) {
+        toast.error(
+          status === "not-determined"
+            ? "Microphone permission was not granted."
+            : "Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone.",
+        );
         return;
-      }
-      if (status === "not-determined") {
-        const granted = await window.aidenAPI.systemPreferences.askForMediaAccess("microphone");
-        if (!granted) {
-          toast.error("Microphone permission was not granted.");
-          return;
-        }
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -101,22 +52,10 @@ export function useVoiceRecorder(onTranscript: (text: string) => void, options: 
         setRecording(false);
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         if (blob.size === 0) return;
-        const opts = optionsRef.current;
         setTranscribing(true);
         try {
-          let text: string;
-          if (opts.provider === "local") {
-            if (!opts.localModel) {
-              toast.error("Download and select an on-device model in Settings → Voice.");
-              return;
-            }
-            const pcm = await blobToPcm16k(blob);
-            text = await voiceApi.transcribeLocal(pcm, opts.localModel);
-          } else {
-            const base64 = await blobToBase64(blob);
-            text = await voiceApi.transcribe(base64, blob.type);
-          }
-          if (text.trim()) onTranscript(text.trim());
+          const text = await transcribeBlob(blob, optionsRef.current);
+          if (text) onTranscript(text);
           else toast.error("No speech detected.");
         } catch (error) {
           toast.error(error instanceof Error ? error.message : String(error));

@@ -18,7 +18,10 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: true,
     rollupOptions: {
-      input: { "main-window": resolve(import.meta.dirname, "main-window.html") },
+      input: {
+        "main-window": resolve(import.meta.dirname, "main-window.html"),
+        pill: resolve(import.meta.dirname, "pill.html"),
+      },
     },
   },
 });

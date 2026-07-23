@@ -2,18 +2,21 @@ import {
   BrowserWindow,
   ShareMenu,
   app,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain as electronIpcMain,
   nativeImage,
   nativeTheme,
   safeStorage,
+  screen,
   shell,
   systemPreferences,
   type IpcMain,
   type OpenDialogOptions,
 } from "electron";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
+import { writeDevLog } from "./services/dev-log.js";
 
 type LogValue = unknown;
 
@@ -31,6 +34,8 @@ function writeLog(
           ? console.warn
           : console.error;
   method(`[${scope}]`, ...values);
+  // Mirrored to the dev log file when initialized (dev runs only).
+  writeDevLog(level, scope, values);
 }
 
 export const logger = {
@@ -87,6 +92,12 @@ export function registerNativeHandlers(): void {
   electronIpcMain.handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
     systemPreferences.askForMediaAccess(mediaType),
   );
+  electronIpcMain.handle("aiden:accessibility:status", () =>
+    systemPreferences.isTrustedAccessibilityClient(false),
+  );
+  electronIpcMain.handle("aiden:accessibility:request", () =>
+    systemPreferences.isTrustedAccessibilityClient(true),
+  );
 
   nativeTheme.on("updated", () => {
     broadcast("aiden:theme:changed", {
@@ -102,10 +113,12 @@ export {
   app,
   BrowserWindow,
   ShareMenu,
+  clipboard,
   dialog,
   globalShortcut,
   nativeImage,
   safeStorage,
+  screen,
   shell,
   systemPreferences,
 };
