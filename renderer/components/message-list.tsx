@@ -6,6 +6,7 @@ import { Callout, Text } from "./ui";
 import { AgentSteps } from "./agent-steps";
 import { EventPresence } from "./event-presence";
 import { MessageBubble } from "./message-bubble";
+import { ReasoningBlock } from "./reasoning-block";
 import type { ChatMessage } from "../lib/types";
 import type { AgentActivity } from "../lib/agent-activity";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
@@ -41,6 +42,8 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
+  /** Reasoning explicitly emitted by the current local model. */
+  streamingReasoning: string | null;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
@@ -52,6 +55,7 @@ interface MessageListProps {
 export function MessageList({
   messages,
   streamingText,
+  streamingReasoning,
   streamComplete,
   onStreamHandoffComplete,
   timeline,
@@ -63,24 +67,31 @@ export function MessageList({
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-3 py-6 sm:px-5">
       {messages.map((m) => (
-        <div key={m.id} className="flex min-w-0 flex-col gap-2">
+        <div key={m.id} className="flex min-w-0 flex-col gap-3">
           {m.role === "assistant" && m.timeline?.steps.length ? (
             <AgentSteps timeline={m.timeline} animate={false} />
           ) : null}
+          {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
           <MessageBubble role={m.role} content={m.content} attachments={m.attachments} />
         </div>
       ))}
 
-      <AgentSteps timeline={timeline} />
-
-      {streamingText ? (
-        <MessageBubble
-          role="assistant"
-          content={streamingText}
-          streaming
-          streamComplete={streamComplete}
-          onStreamHandoffComplete={onStreamHandoffComplete}
-        />
+      {timeline || streamingReasoning || streamingText ? (
+        <div className="flex min-w-0 flex-col gap-3">
+          <AgentSteps timeline={timeline} />
+          {streamingReasoning ? (
+            <ReasoningBlock content={streamingReasoning} streaming={!streamComplete} />
+          ) : null}
+          {streamingText ? (
+            <MessageBubble
+              role="assistant"
+              content={streamingText}
+              streaming
+              streamComplete={streamComplete}
+              onStreamHandoffComplete={onStreamHandoffComplete}
+            />
+          ) : null}
+        </div>
       ) : null}
 
       <AgentActivityTransition activity={agentActivity} appearance={orbAppearance} />
@@ -129,7 +140,7 @@ function AgentActivityTransition({
       return;
     }
     const id = ++exitIdRef.current;
-    setExiting((items) => [...items, { id, value: old }]);
+    setExiting([{ id, value: old }]);
     const timer = window.setTimeout(() => {
       exitTimersRef.current.delete(id);
       setExiting((items) => items.filter((item) => item.id !== id));

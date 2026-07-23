@@ -1,11 +1,14 @@
 import * as React from "react";
-import { CodeBlock } from "./code-block";
-import { Markdown, MarkdownInline } from "./markdown";
+import { MARKDOWN_CLASSNAME, MarkdownContent, MarkdownInline } from "./markdown";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import {
+  advanceStreamingRevealSchedule,
   parseStreamingReveal,
-  revealDelayMs,
+  splitStreamingRevealUnit,
+  streamingRevealHandoffDelay,
   type StreamingRevealBlock,
+  type StreamingRevealScheduleInput,
+  type StreamingRevealScheduleState,
 } from "../lib/streaming-reveal";
 
 interface StreamingMarkdownRevealProps {
@@ -58,27 +61,38 @@ export function StreamingMarkdownReveal({
   );
   const [revealedCount, setRevealedCount] = React.useState(0);
   const handoffNotified = React.useRef(false);
+  const scheduleRef = React.useRef<StreamingRevealScheduleState>({
+    revealedCount: 0,
+    dueAt: null,
+  });
+  const scheduleInputRef = React.useRef<StreamingRevealScheduleInput>({
+    unitCount,
+    complete,
+    reducedMotion,
+  });
+  scheduleInputRef.current = { unitCount, complete, reducedMotion };
 
   React.useEffect(() => {
-    if (reducedMotion || complete) {
-      setRevealedCount(unitCount);
-      return;
-    }
-    if (revealedCount >= unitCount) return;
-    const pending = unitCount - revealedCount;
-    const timer = window.setTimeout(
-      () => setRevealedCount((current) => Math.min(current + 1, unitCount)),
-      revealedCount === 0 ? 0 : revealDelayMs(pending, complete),
-    );
-    return () => window.clearTimeout(timer);
-  }, [complete, reducedMotion, revealedCount, unitCount]);
+    let frame = 0;
+    const tick = (now: number) => {
+      const next = advanceStreamingRevealSchedule(
+        scheduleRef.current,
+        scheduleInputRef.current,
+        now,
+      );
+      if (next.revealedCount !== scheduleRef.current.revealedCount) {
+        setRevealedCount(next.revealedCount);
+      }
+      scheduleRef.current = next;
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
-  const visible = visibleBlocks(blocks, revealedCount);
-  React.useEffect(() => {
-    if (!complete || !reducedMotion || handoffNotified.current) return;
-    handoffNotified.current = true;
-    onHandoffComplete?.();
-  }, [complete, onHandoffComplete, reducedMotion]);
+  const visibleCount = reducedMotion ? unitCount : revealedCount;
+  const visible = visibleBlocks(blocks, visibleCount);
+  const handoffReady = complete && visibleCount >= unitCount;
 
   const notifyHandoffComplete = React.useCallback(() => {
     if (handoffNotified.current) return;
@@ -86,70 +100,38 @@ export function StreamingMarkdownReveal({
     onHandoffComplete?.();
   }, [onHandoffComplete]);
 
-  const streamingContent = (
-    <div className="streaming-reveal select-text text-regular text-primary leading-relaxed">
+  React.useEffect(() => {
+    if (!handoffReady || handoffNotified.current) return;
+    const delay = streamingRevealHandoffDelay(reducedMotion);
+    const timer = window.setTimeout(notifyHandoffComplete, delay);
+    return () => window.clearTimeout(timer);
+  }, [handoffReady, notifyHandoffComplete, reducedMotion]);
+
+  return (
+    <div className={`streaming-reveal ${MARKDOWN_CLASSNAME}`}>
       {visible.map((block) => {
         if (block.kind === "prose") {
           return (
-            <p key={block.id} className="my-2 first:mt-0 last:mb-0 whitespace-pre-wrap">
-              {block.units.map((unit) => (
-                <span key={unit.id} className="streaming-reveal-unit">
-                  <MarkdownInline content={unit.text} />
-                </span>
-              ))}
+            <p key={block.id} className="my-2 first:mt-0 last:mb-0">
+              {block.units.map((unit) => {
+                const parts = splitStreamingRevealUnit(unit.text);
+                return (
+                  <span key={unit.id} className="streaming-reveal-unit">
+                    {parts.leadingWhitespace}
+                    {parts.markdown ? <MarkdownInline content={parts.markdown} /> : null}
+                    {parts.trailingWhitespace}
+                  </span>
+                );
+              })}
             </p>
           );
         }
-        if (block.kind === "code") {
-          const code = block.units.map((unit) => unit.text).join("");
-          return (
-            <CodeBlock
-              key={block.id}
-              code={code}
-              lang={block.language}
-              revealGroups={block.units}
-            />
-          );
-        }
-        if (block.kind === "list") {
-          const List = block.ordered ? "ol" : "ul";
-          return (
-            <List
-              key={block.id}
-              className={block.ordered ? "my-2 list-decimal pl-5" : "my-2 list-disc pl-5"}
-            >
-              {block.units.map((unit) => (
-                <li key={unit.id} className="streaming-reveal-unit my-0.5">
-                  <MarkdownInline content={unit.text} />
-                </li>
-              ))}
-            </List>
-          );
-        }
         return block.units.map((unit) => (
-          <div key={unit.id} className="streaming-reveal-unit">
-            <Markdown content={unit.text} />
+          <div key={unit.id} className="streaming-reveal-block">
+            <MarkdownContent content={unit.text} />
           </div>
         ));
       })}
-    </div>
-  );
-
-  return (
-    <div className="streaming-reveal-handoff">
-      <div className="streaming-reveal-source" data-complete={complete ? "true" : "false"}>
-        {streamingContent}
-      </div>
-      {complete ? (
-        <div
-          className="streaming-reveal-final"
-          onAnimationEnd={(event) => {
-            if (event.currentTarget === event.target) notifyHandoffComplete();
-          }}
-        >
-          <Markdown content={content} />
-        </div>
-      ) : null}
     </div>
   );
 }

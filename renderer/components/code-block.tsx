@@ -1,5 +1,6 @@
 // Fenced code block for the chat transcript: syntax highlighting via highlight.js,
-// pretty-printed JSON, a language label, and a per-block copy button.
+// a language label, and a per-block copy button. Source formatting is preserved
+// so a valid-looking JSON prefix never reformats and jumps while streaming.
 // Highlighting is memoized so streaming re-renders stay cheap.
 
 import * as React from "react";
@@ -11,32 +12,11 @@ interface CodeBlockProps {
   code: string;
   /** Language hint parsed from the ```lang fence, if any. */
   lang?: string;
-  revealGroups?: Array<{ id: string; text: string }>;
 }
 
-function looksLikeJson(s: string): boolean {
-  const t = s.trim();
-  return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
-}
-
-export const CodeBlock = React.memo(function CodeBlock({
-  code,
-  lang,
-  revealGroups,
-}: CodeBlockProps) {
-  const raw = code.replace(/\n$/, "");
-
-  // Pretty-print JSON (explicit ```json or content that parses as JSON).
-  const { display, language } = React.useMemo(() => {
-    if (lang === "json" || (!lang && looksLikeJson(raw))) {
-      try {
-        return { display: JSON.stringify(JSON.parse(raw), null, 2), language: "json" };
-      } catch {
-        // Incomplete/invalid JSON (common mid-stream): fall through to raw.
-      }
-    }
-    return { display: raw, language: lang };
-  }, [raw, lang]);
+export const CodeBlock = React.memo(function CodeBlock({ code, lang }: CodeBlockProps) {
+  const display = code.replace(/\n$/, "");
+  const language = lang;
 
   const html = React.useMemo(() => {
     try {
@@ -62,15 +42,7 @@ export const CodeBlock = React.memo(function CodeBlock({
         />
       </div>
       <pre className="code-font-sized overflow-x-auto p-3 leading-relaxed">
-        {revealGroups ? (
-          <code className="hljs font-mono text-small">
-            {revealGroups.map((group) => (
-              <span key={group.id} className="streaming-reveal-unit block">
-                {group.text}
-              </span>
-            ))}
-          </code>
-        ) : html ? (
+        {html ? (
           <code className="hljs font-mono text-small" dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
           <code className="hljs font-mono text-small">{display}</code>

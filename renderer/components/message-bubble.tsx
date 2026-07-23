@@ -2,7 +2,6 @@
 // messages render markdown full-width, native-transcript style.
 
 import { Text } from "./ui";
-import { cn } from "../lib/ui-utils";
 import { FileText } from "lucide-react";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
@@ -13,7 +12,7 @@ interface MessageBubbleProps {
   role: ChatMessage["role"];
   content: string;
   attachments?: Attachment[];
-  /** Show a blinking caret while streaming an assistant reply. */
+  /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
@@ -82,17 +81,11 @@ export function MessageBubble({
         ) : (
           <Markdown content={content} />
         )}
-        {streaming && !streamComplete ? (
-          <span
-            className={cn(
-              "streaming-cursor inline-block h-4 w-[2px] translate-y-0.5 bg-accent align-middle",
-              "animate-pulse",
-              content ? "ml-0.5" : "",
-            )}
-          />
-        ) : null}
-        {content && !streaming ? (
-          <div className="mt-1">
+        {content ? (
+          <div
+            className={`mt-1 ${streaming && !streamComplete ? "invisible" : ""}`}
+            aria-hidden={streaming && !streamComplete}
+          >
             <CopyButton
               text={content}
               label="Copy message"

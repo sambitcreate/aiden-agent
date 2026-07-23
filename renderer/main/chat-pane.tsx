@@ -44,6 +44,7 @@ import {
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
 import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
+import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
 import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
 
 const TOOL_LABELS: Record<string, string> = {
@@ -135,10 +136,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [qc, navigate, activeId]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
+  const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
+  const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
   const [generationTimeline, setGenerationTimeline] = React.useState<GenerationTimeline | null>(
     null,
   );
@@ -154,6 +157,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
   const pendingDeltaRef = React.useRef("");
+  const pendingReasoningDeltaRef = React.useRef("");
+  const streamedTextRef = React.useRef("");
+  const streamedReasoningRef = React.useRef("");
   const deltaFrameRef = React.useRef<number | null>(null);
   const streamHandoffRef = React.useRef<(() => void) | null>(null);
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
@@ -176,6 +182,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltaRef.current = "";
+      pendingReasoningDeltaRef.current = "";
+      streamedTextRef.current = "";
+      streamedReasoningRef.current = "";
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
     };
@@ -184,10 +193,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   // Reset transient state when switching chats.
   React.useEffect(() => {
     setStreamingText(null);
+    setStreamingReasoning(null);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setCanStopGeneration(false);
+    setHasUnpersistedResponse(false);
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
     setError(null);
@@ -197,7 +208,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const messages = chat.data?.messages ?? [];
   const hasMessages = messages.length > 0;
-  const isGenerating = streamingText !== null;
+  const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
 
   React.useLayoutEffect(() => {
@@ -217,7 +228,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (streamHandoffRef.current === finish) streamHandoffRef.current = null;
         resolve();
       };
-      const fallback = window.setTimeout(finish, 700);
+      const fallback = window.setTimeout(finish, STREAMING_REVEAL_FALLBACK_MS);
       streamHandoffRef.current = finish;
     });
   }, []);
@@ -228,14 +239,38 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setError(null);
       setIsStoppingGeneration(false);
       setCanStopGeneration(true);
+      setHasUnpersistedResponse(false);
       setStreamingText("");
+      setStreamingReasoning(null);
       setStreamComplete(false);
       pendingDeltaRef.current = "";
+      pendingReasoningDeltaRef.current = "";
+      streamedTextRef.current = "";
+      streamedReasoningRef.current = "";
       streamHandoffRef.current?.();
       streamHandoffRef.current = null;
       setGenerationTimeline(null);
       generationTimelineRef.current = null;
       setApprovals([]);
+      const scheduleStreamFlush = () => {
+        if (deltaFrameRef.current !== null) return;
+        deltaFrameRef.current = window.requestAnimationFrame(() => {
+          deltaFrameRef.current = null;
+          const pendingDelta = pendingDeltaRef.current;
+          const pendingReasoningDelta = pendingReasoningDeltaRef.current;
+          pendingDeltaRef.current = "";
+          pendingReasoningDeltaRef.current = "";
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+          if (pendingDelta) {
+            streamedTextRef.current += pendingDelta;
+            setStreamingText(streamedTextRef.current);
+          }
+          if (pendingReasoningDelta) {
+            streamedReasoningRef.current += pendingReasoningDelta;
+            setStreamingReasoning(streamedReasoningRef.current);
+          }
+        });
+      };
       const handle = startGeneration(
         {
           chatId,
@@ -252,20 +287,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               pendingDeltaRef.current += delta;
-              if (deltaFrameRef.current !== null) return;
-              deltaFrameRef.current = window.requestAnimationFrame(() => {
-                deltaFrameRef.current = null;
-                const pendingDelta = pendingDeltaRef.current;
-                pendingDeltaRef.current = "";
-                if (
-                  !pendingDelta ||
-                  !mountedRef.current ||
-                  generationIntentRef.current !== generationIntent
-                ) {
-                  return;
-                }
-                setStreamingText((prev) => (prev ?? "") + pendingDelta);
-              });
+              scheduleStreamFlush();
+            }
+          },
+          onReasoningDelta: (delta) => {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              pendingReasoningDeltaRef.current += delta;
+              scheduleStreamFlush();
             }
           },
           onTimeline: (timeline) => {
@@ -279,14 +307,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setApprovals((prev) => [...prev, prompt]);
             }
           },
-          onDone: async (full, finalTimeline, updatedChat) => {
+          onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
             setCanStopGeneration(false);
             if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
             deltaFrameRef.current = null;
             pendingDeltaRef.current = "";
+            pendingReasoningDeltaRef.current = "";
+            streamedTextRef.current = full;
+            streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
+            setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
             setStreamComplete(true);
             if (finalTimeline) {
               generationTimelineRef.current = finalTimeline;
@@ -300,6 +332,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             if (mountedRef.current) {
               setStreamingText(null);
+              setStreamingReasoning(null);
+              streamedTextRef.current = "";
+              streamedReasoningRef.current = "";
               setStreamComplete(false);
               setIsStoppingGeneration(false);
               setGenerationTimeline(null);
@@ -307,7 +342,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setApprovals([]);
             }
           },
-          onError: (message, partialContent, finalTimeline, updatedChat) => {
+          onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -316,7 +351,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 window.cancelAnimationFrame(deltaFrameRef.current);
               }
               deltaFrameRef.current = null;
+              const bufferedPartial = streamedTextRef.current + pendingDeltaRef.current;
+              const bufferedReasoning =
+                streamedReasoningRef.current + pendingReasoningDeltaRef.current;
               pendingDeltaRef.current = "";
+              pendingReasoningDeltaRef.current = "";
+              const resolvedPartialContent = partialContent ?? bufferedPartial;
+              const resolvedReasoning = finalReasoning ?? bufferedReasoning;
+              streamedTextRef.current = resolvedPartialContent;
+              streamedReasoningRef.current = resolvedReasoning;
+              setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
+              setStreamComplete(true);
               if (finalTimeline) {
                 generationTimelineRef.current = finalTimeline;
                 setGenerationTimeline(finalTimeline);
@@ -324,9 +369,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
               if (providerId === OPENAI_CODEX_PROVIDER_ID) {
                 void refreshCodexProviderState(qc);
               }
-              const partial = partialContent?.trim();
+              const partial = resolvedPartialContent.trim();
               if (partial) {
-                setStreamingText(partialContent ?? partial);
+                setStreamingText(resolvedPartialContent);
                 setStreamComplete(true);
                 await waitForStreamHandoff(true);
                 if (generationIntentRef.current !== generationIntent) return;
@@ -336,10 +381,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
               if (mountedRef.current) {
-                setStreamingText(null);
-                setStreamComplete(false);
+                if (!partial || updatedChat) {
+                  setStreamingText(null);
+                  setStreamingReasoning(null);
+                  streamedTextRef.current = "";
+                  streamedReasoningRef.current = "";
+                  setStreamComplete(false);
+                }
+                setHasUnpersistedResponse(Boolean(partial && !updatedChat));
                 setIsStoppingGeneration(false);
-                if (partial || updatedChat) {
+                if (!partial || updatedChat) {
                   setGenerationTimeline(null);
                   generationTimelineRef.current = null;
                 }
@@ -400,9 +451,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
     deltaFrameRef.current = null;
     pendingDeltaRef.current = "";
+    pendingReasoningDeltaRef.current = "";
+    streamedTextRef.current = "";
+    streamedReasoningRef.current = "";
     streamHandoffRef.current?.();
     streamHandoffRef.current = null;
     setStreamingText(null);
+    setStreamingReasoning(null);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
@@ -477,7 +532,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const changeComputerUse = React.useCallback(
     async (enabled: boolean) => {
-      if (computerUseSaving || isStartingGeneration || streamingText !== null) return;
+      if (computerUseSaving || isStartingGeneration || isGenerating) return;
       setComputerUseSaving(true);
       try {
         const updated = await chatsApi.setComputerUse(chatId, enabled);
@@ -492,7 +547,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setComputerUseSaving(false);
       }
     },
-    [chatId, computerUseSaving, isStartingGeneration, qc, streamingText],
+    [chatId, computerUseSaving, isGenerating, isStartingGeneration, qc],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -661,6 +716,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       autoScrollDeps={[
         messages.length,
         streamingText,
+        streamingReasoning,
         generationTimeline,
         agentActivity?.phase,
         approvals.length,
@@ -812,6 +868,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <MessageList
           messages={messages}
           streamingText={streamingText}
+          streamingReasoning={streamingReasoning}
           streamComplete={streamComplete}
           onStreamHandoffComplete={() => streamHandoffRef.current?.()}
           timeline={generationTimeline}
