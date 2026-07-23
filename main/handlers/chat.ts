@@ -7,32 +7,10 @@ import { isExplicitUserStop } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
-import type { Attachment, ChatRole, ChatStartParams } from "../services/types.js";
+import { parseParams } from "./chat-params.js";
 
-const ROLES: ChatRole[] = ["user", "assistant", "system"];
-
-function parseParams(value: unknown): ChatStartParams {
-  if (typeof value !== "object" || value === null) throw new Error("Invalid generation params.");
-  const p = value as Record<string, unknown>;
-  if (typeof p.providerId !== "string" || !p.providerId) throw new Error("Missing providerId.");
-  if (typeof p.model !== "string" || !p.model) throw new Error("Missing model.");
-  if (!Array.isArray(p.messages)) throw new Error("Missing messages.");
-  const messages = p.messages.map((raw) => {
-    const m = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
-    return {
-      role: ROLES.includes(m.role as ChatRole) ? (m.role as ChatRole) : "user",
-      content: typeof m.content === "string" ? m.content : "",
-      attachments: Array.isArray(m.attachments) ? (m.attachments as Attachment[]) : undefined,
-    };
-  });
-  return {
-    chatId: typeof p.chatId === "string" ? p.chatId : "",
-    workspaceId: typeof p.workspaceId === "string" ? p.workspaceId : undefined,
-    providerId: p.providerId,
-    model: p.model,
-    messages,
-  };
-}
+// Re-exported so the IPC contract surface stays queryable from one module.
+export { parseParams };
 
 function newStreamId(): string {
   return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;

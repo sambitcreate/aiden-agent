@@ -6,8 +6,9 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { Attachment } from "./types.js";
 
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB
-const MAX_TEXT_CHARS = 100_000;
+export const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB
+export const MAX_TEXT_CHARS = 100_000;
+const TEXT_TRUNCATION_SUFFIX = "\n… [truncated]";
 
 const IMAGE_MIME: Record<string, string> = {
   png: "image/png",
@@ -41,7 +42,14 @@ async function readOne(filePath: string): Promise<Attachment | null> {
       throw new Error(`${name} is too large to attach (max 8 MB).`);
     }
     const buf = await fs.readFile(filePath);
-    return { id: newId(), name, mimeType: imageMime, kind: "image", size: stat.size, data: buf.toString("base64") };
+    return {
+      id: newId(),
+      name,
+      mimeType: imageMime,
+      kind: "image",
+      size: stat.size,
+      data: buf.toString("base64"),
+    };
   }
 
   // Treat everything else as text; reject obvious binaries (contain NUL bytes).
@@ -50,8 +58,18 @@ async function readOne(filePath: string): Promise<Attachment | null> {
     throw new Error(`${name} isn't a supported text or image file.`);
   }
   const text = buf.toString("utf-8");
-  const truncated = text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}\n… [truncated]` : text;
-  return { id: newId(), name, mimeType: "text/plain", kind: "text", size: stat.size, text: truncated };
+  const truncated =
+    text.length > MAX_TEXT_CHARS
+      ? `${text.slice(0, MAX_TEXT_CHARS - TEXT_TRUNCATION_SUFFIX.length)}${TEXT_TRUNCATION_SUFFIX}`
+      : text;
+  return {
+    id: newId(),
+    name,
+    mimeType: "text/plain",
+    kind: "text",
+    size: stat.size,
+    text: truncated,
+  };
 }
 
 /** Read attachments for the given file paths, skipping unreadable ones. */
