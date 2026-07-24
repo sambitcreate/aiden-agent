@@ -9,6 +9,7 @@ import { ShieldCheck } from "lucide-react";
 import { mcpApi } from "../../lib/ipc";
 import { mcpPresetCredentialReady } from "../../lib/mcp-preset-state";
 import type { McpPresetState, McpServer } from "../../lib/types";
+import { McpPresetIcon } from "./mcp-preset-icons";
 
 export function PresetSetupDialog({
   state,
@@ -137,7 +138,17 @@ export function PresetSetupDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={server ? `Manage ${preset.name}` : `Set up ${preset.name}`}
+      title={
+        <span className="flex items-center gap-2.5">
+          <span
+            aria-hidden
+            className="flex size-7 shrink-0 items-center justify-center rounded-md border border-separator bg-well text-strong"
+          >
+            <McpPresetIcon presetId={preset.id} name={preset.name} className="size-3.5" />
+          </span>
+          {server ? `Manage ${preset.name}` : `Set up ${preset.name}`}
+        </span>
+      }
       description={preset.tagline}
       size="large"
       confirmLabel={saving ? "Saving…" : server ? "Save" : "Connect"}
