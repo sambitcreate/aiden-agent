@@ -1,6 +1,6 @@
 # Gemini Native Upgrade Plan
 
-Status: Phases 0, 1, and 3a implemented; Phase 3b remains planned
+Status: Phases 0, 1, and 3 implemented on 2026-07-23–24; deferred tracks remain planned
 Date: 2026-07-22
 Depends on: `docs/pi-provider-integration-plan.md` (broader registry migration)
 Pi packages pinned: `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` `0.80.10`
@@ -20,16 +20,16 @@ This plan deliberately **narrows** `docs/pi-provider-integration-plan.md` to the
 
 ## Why
 
-Verified against the current codebase:
+Original gaps and shipped outcomes, verified against the current codebase:
 
-| Gap | Evidence | Consequence |
+| Gap | Evidence | Outcome |
 | --- | --- | --- |
-| Gemini chat rides the OpenAI-compat endpoint | `main/services/config-store.ts:52-61` (`kind: "openai"`, `baseUrl: .../v1beta/openai`), `main/services/model-runtime-core.ts:33-35` | Native Gemini features (system instructions, safety settings, `responseSchema`, thinking config, context caching) are unreachable. |
+| Gemini chat rode the OpenAI-compat endpoint | Before Phase 1, the `gemini` preset used Google's `/v1beta/openai` compatibility route. | Phase 1 replaced it with Pi's native `google-generative-ai` transport and migrated legacy state to `google`. |
 | Runtime limits were fabricated | Before Phase 0, `model-runtime-core.ts` hardcoded `contextWindow: 128_000`, `maxTokens: 8192`, `reasoning: false`, and text-only input for every non-Codex model. | Phase 0 now resolves connection-discovered overrides over provider-scoped Pi metadata, then the bundled snapshot and conservative fallback. |
 | Catalog already knows the real limits | `resources/model-capabilities.json` → `models-catalog-core.ts` → `models-catalog.ts` | Phase 0 now uses this offline snapshot for runtime limits as well as display metadata; the running app still makes no catalog network request. |
 | No reasoning UI or payload mapping | Before Phase 3a, `model-picker-pad.tsx` was selection-only and no thinking level reached the Pi Agent; Phase 0 identified reasoning-capable runtime models. | Phase 3a now provides a bounded per-model control and native request mapping. |
-| No context caching | No `cachedContent`/`createCachedContent` in app TS; `usage-accounting.ts:27-36` only *reads* `cachedContentTokenCount` if returned | Workspace repo context is re-transmitted every turn, costing latency and tokens. |
-| Voice is one-shot REST, chat is OpenAI adapter | `main/services/transcription.ts:105-137` (`generateContent`) vs chat OpenAI-compat | Dual integration; voice stays one-shot (acceptable — Live is deferred). |
+| No context caching before Phase 3b | `main/services/gemini-context-cache.ts` now owns explicit cache creation, reuse, invalidation, and cleanup. | Eligible native Google workspace turns reuse the stable Pi prefix and report cache-read usage without caching transcript or file contents. |
+| Voice and chat use distinct native paths | Voice uses one-shot `generateContent`; chat uses Pi's native streaming transport. | The split is intentional: one-shot voice remains adequate while Gemini Live is deferred. |
 
 ## Non-goals
 
@@ -46,22 +46,23 @@ The fastest correct fix: stop fabricating `128K/8192` and feed the release-bundl
 
 **Implemented 2026-07-23.** Runtime resolution follows Pi's provider-owned model composition: a mapped built-in provider keeps its exact Pi metadata even when its base URL routes through a proxy, connection-discovered per-model fields override that metadata, the provider-scoped bundled snapshot fills remaining fields, and an unknown custom provider falls back conservatively without borrowing another provider's model. Image gating now reads only the resolved runtime model. The existing compatibility transport is intentionally unchanged until Phase 1.
 
-### Files
+### Shipped files
 
 - `main/services/model-runtime-core.ts`
-- `main/services/models-catalog-core.ts` (expose a lookup)
-- `main/services/generation-runtime.ts` (if base-url/key resolution needs the provider id for catalog slug mapping)
-- focused test: `main/services/model-runtime-core.test.ts`
+- `main/services/models-catalog-core.ts`
+- `main/services/generation-runtime.ts`
+- `main/services/chat-title.ts`
+- focused runtime, generation, model, and title tests
 
-### Tasks
+### Shipped behavior
 
-1. Add a catalog lookup `resolveRuntimeLimits(providerId, modelId): { contextWindow, maxTokens, reasoning, input }` that reads the bundled `model-capabilities.json` snapshot via the existing provider→slug mapping (`models-catalog-core.ts:42`, `gemini` → `google`).
-2. In `buildModel()` (`model-runtime-core.ts:37-49`), replace the hardcoded `contextWindow`, `maxTokens`, `reasoning: false`, and `input: ["text"]` with catalog values when present.
-3. Precedence: Pi-exact model metadata (when available) → bundled snapshot → conservative fallback (`128_000`/`8192`, `reasoning: false`, text-only). Unknown stays unknown; never inflate.
-4. Set `input: ["text","image"]` only when the catalog marks the model vision-capable, so image attachments keep gating correctly.
-5. Do **not** contact models.dev or Artificial Analysis at runtime. The bundled snapshot only.
+1. `resolveProviderRuntimeLimits(...)` composes connection-discovered fields, an exact Pi model, and the bundled `model-capabilities.json` entry for the selected provider/model.
+2. `buildModel()` resolves `contextWindow`, `maxTokens`, reasoning, and input capabilities instead of fabricating one profile for every non-Codex model.
+3. Precedence is connection-discovered fields → provider-scoped Pi exact metadata → provider-scoped bundled snapshot → conservative fallback (`128_000`/`8192`, no reasoning, text-only). Unknown providers cannot borrow another provider's model.
+4. Image attachments are enabled only when the resolved runtime model includes image input.
+5. The running app does not contact models.dev or Artificial Analysis; it reads the bundled snapshot only.
 
-### Exit gate
+### Verification
 
 `gemini-2.5-pro` resolves to `contextWindow ≈ 1_048_576`, `maxTokens ≈ 65_536`, `reasoning: true`; a model absent from the snapshot still falls back to `128K/8192`. Unit tests cover hit, miss, and partial-field cases. No network in the running app.
 
@@ -69,7 +70,7 @@ The fastest correct fix: stop fabricating `128K/8192` and feed the release-bundl
 
 ## Phase 1 — Native Google provider via pi-ai
 
-Move Gemini chat from the generic OpenAI-compat adapter to pi-ai's `google-generative-ai` transport. This is a **single-provider** slice of the broader registry plan, reusing its contracts so the work is not throwaway.
+Phase 1 moved Gemini chat from the generic OpenAI-compat adapter to pi-ai's `google-generative-ai` transport. It is a **single-provider** slice of the broader registry plan and reuses the same contracts.
 
 **Implemented 2026-07-24.** A process-wide Pi registry now owns the native `google` model and stream. The compatibility `gemini` preset, encrypted credential, backend settings, renderer provider selection, pinned models, Model Pad placements, chat metadata, and scheduled tasks migrate idempotently to `google`. Settings keeps Google's endpoint and authentication contract fixed, while model discovery intersects Google's live `generateContent` catalog with Pi's supported native models. Title generation inherits the native route through the shared runtime resolver; one-shot cloud transcription keeps its existing REST implementation while reading the migrated Google credential.
 
@@ -79,28 +80,26 @@ Use pi-ai's native Google stream, not a hand-rolled `@google/genai` client. pi-a
 
 Google is registered as a **Pi built-in provider** (`google`), reached through the same registry-lookup path the broader plan defines, rather than as a seventh preset with `kind: "openai"`.
 
-### Files
+### Shipped files
 
-- `main/services/provider-registry.ts` (new, or extend the Codex-established lookup seam)
+- `main/services/provider-registry.ts`
+- `main/services/google-provider.ts`
 - `main/services/model-runtime-core.ts`
 - `main/services/llm-client.ts`
-- `main/services/config-store.ts` (stop seeding `gemini` as `kind: "openai"`; map to `google`)
-- `main/services/types.ts` / `renderer/lib/types.ts` (provider id `google`; no new `ProviderKind` string needed if we route by Pi provider id)
-- `main/services/provider-migration.ts` (or a scoped migration step)
-- `main/services/chat-title.ts` (route through the same native model)
+- `main/services/config-store.ts`, `main/services/secrets.ts`, and `main/services/schedule-store.ts`
+- `renderer/lib/google-provider-migration.ts` and `renderer/shared/google-provider.ts`
+- provider, model, migration, chat-store, schedule, settings, and protocol tests
 
-### Tasks
+### Shipped behavior
 
-1. Register Pi's built-in `google` provider and resolve the exact Pi `Model` by (`google`, modelId) at send time — mirroring how `openai-codex` already resolves through Pi `Models` (see `.memory/PROJECT-CONTEXT.md` "Pi provider-runtime status").
-2. Set `streamFn` to Pi's native Google stream so requests use `google-generative-ai` against `https://generativelanguage.googleapis.com/v1beta` (not the `/openai` shim).
-3. Authentication: reuse the encrypted credential layer; map the legacy `gemini` API key to the `google` provider. Reject OAuth-only credentials that are not valid for the AI Studio endpoint.
-4. Migration: remap `gemini` → `google` for the stored credential, chat/settings selection, pinned models (`aiden-agent.pinnedModels` entries `gemini::<model>` → `google::<model>`), and the renderer selection keys (`aiden-agent.providerId`, `aiden-agent.model`). Preserve the user's chosen model id.
-5. Model catalog: source the selectable list from Pi availability for `google`, falling back to the bundled snapshot for metadata. Keep `gemini-2.0-flash` as a safe default only if present; prefer current 2.x ids. Stop listing `gemini-1.5-*` (absent from the current bundled `google` snapshot).
-6. Chat titles: route title generation through the same native `google` model via the shared runtime stream, preserving existing timeout/fallback semantics and the Apple Foundation Models routing preference.
-7. Vision: use `model.input.includes("image")` from Pi metadata (Phase 0 supplies this) to gate image attachments.
-8. Keep cloud voice transcription's one-shot native `generateContent` implementation; only its provider/key lookup migrates to `google`.
+1. Pi's built-in `google` provider resolves the exact model at send time and uses the native Google stream against the fixed AI Studio endpoint rather than `/openai`.
+2. The encrypted credential layer migrated the legacy `gemini` API key to `google` without exposing plaintext.
+3. Stored settings, chat metadata, scheduled tasks, renderer selection, pinned models, and Model Pad placement remap `gemini` to `google` idempotently while preserving the chosen model.
+4. Model discovery intersects Google's live `generateContent` list with Pi's supported native models and uses the bundled snapshot for offline metadata.
+5. Chat titles inherit native Google routing through the shared runtime resolver, and vision remains gated by the resolved runtime model.
+6. Cloud voice transcription intentionally retains one-shot native `generateContent` and reads the migrated Google credential.
 
-### Exit gate
+### Verification
 
 A chat on the `google` provider streams through `google-generative-ai` (asserted in tests via a faux Google endpoint), uses the migrated credential, honors catalog-driven context/output limits from Phase 0, and legacy `gemini` selections/pins survive migration. OpenAI/Anthropic and the remaining presets are untouched.
 
@@ -112,40 +111,42 @@ Two coupled features that only make sense on the native transport from Phase 1.
 
 ### 3a — Thinking / reasoning controls
 
-Expose Gemini's thinking config in the composer and pass it through the backend IPC to the Pi stream.
+Phase 3a exposes Gemini's thinking config in the composer and passes it through the backend IPC to the Pi stream.
 
 **Implemented 2026-07-24.** Reasoning-capable native Google models now show a compact composer control drawn from the bounded `off | low | medium | high` contract, while model metadata removes choices that Pi would collapse to the same native outcome. Models that cannot truly disable thinking say **Hide** instead of **Off** and explain that their minimum thinking remains internal. The backend atomically owns each saved per-model preference, validates the small enum and exact model-supported subset, and fails closed to the no-exposed-thoughts state outside a supported native Google model. A fresh Pi Agent receives the selected `thinkingLevel`; Pi maps it to the correct Google `thinkingConfig`. Deliberately exposed thought deltas render in a collapsible transcript surface, with shimmer limited to the pre-answer thinking interval and suppressed by Aiden's Reduce Motion contract.
 
 **Backend**
 
-- Thread a per-request `thinkingLevel` from the renderer through chat IPC into Pi Agent state. Pi's simple-stream path maps `off | low | medium | high` to the model-appropriate native Google thinking level or token budget.
-- Define the DTO in both `main/services/types.ts` and `renderer/lib/types.ts`. Never accept arbitrary provider payloads from the renderer; the shared contract is the small `off | low | medium | high` enum.
-- Only enable when the resolved Pi model reports `reasoning: true` (from Phase 0/1 metadata). Ignore or no-op for non-reasoning models.
+- A per-request `thinkingLevel` travels from the renderer through chat IPC into Pi Agent state. Pi's simple-stream path maps `off | low | medium | high` to the model-appropriate native Google level or token budget.
+- Main and renderer share the bounded DTO; arbitrary provider payloads are never accepted from the renderer.
+- Runtime exposure requires a native Google model reporting `reasoning: true`; unsupported providers and models fail closed to `off`.
 
 **Renderer / UX**
 
-- Add a **Thinking** control in the composer near the model picker (a compact segmented/stepped control, not the 2D pad — the pad stays selection-only). Surface it only for reasoning-capable models.
-- **Shimmer effect:** while the model is in its thinking phase, render the assistant's pending/thinking region with a shimmer (an animated gradient sweep) to signal active reasoning distinct from normal token streaming. Implement with the existing Tailwind/component layer — a CSS keyframed background-position sweep on a muted surface, gated by `prefers-reduced-motion`/the Reduce Motion preference (render a static "Thinking…" state instead).
-- Stream thinking distinctly: if the Pi stream exposes thinking/reasoning deltas, render them in a collapsible "Thinking" affordance above the final answer, shimmering until the first content delta arrives.
-- Persist the last-used thinking level per model in backend settings (consistent with model-selection persistence), not `localStorage` as the authority.
+- A compact **Thinking** control appears near the model picker only for reasoning-capable native Google models; the 2D pad remains selection-only.
+- The pending thinking surface uses a muted shimmer until answer content begins. Aiden's Reduce Motion contract replaces the animation with a static state.
+- Deliberately exposed thought deltas render in a collapsible affordance above the answer.
+- Main-process settings, rather than `localStorage`, own the last-used thinking level per model.
 
 ### 3b — Gemini context caching
 
 Cache the stable workspace/system prefix so long sessions and large repo contexts are not re-transmitted each turn.
 
-**What to cache** (stable prefix only): system prompt, tool definitions, and the workspace repo context snapshot (git status summary + project file summaries) that Aiden already assembles. Do **not** cache volatile per-turn transcript history.
+**Implemented 2026-07-24.** Eligible native Google turns in mounted workspaces now cache Pi's exact stable system instruction and tool definitions plus a bounded deterministic metadata-only workspace file/Git index. The cache excludes transcript history and file contents. Aiden fingerprints the credential, model, stable Pi payload, and workspace snapshot; reuses identical caches for one hour; retains at most eight live fingerprints per workspace; shares in-flight creation while preserving per-waiter cancellation; and uses bounded create/delete requests. Unsupported, undersized, timed-out, or unavailable caches fail open with a short negative backoff. Changed content receives a distinct cache; older entries remain only within the eight-entry/TTL bound and are deleted on eviction, expiry cleanup, explicit workspace invalidation or removal, and shutdown. Google cache-read tokens flow into the existing usage ledger.
+
+**What is cached** (stable prefix only): system prompt, tool definitions, and a bounded metadata-only workspace index containing relative file names and Git status. Do **not** cache volatile transcript history or workspace file contents.
 
 **Backend**
 
-- New `main/services/gemini-context-cache.ts` owning cache lifecycle through the Google `cachedContents` API: create on workspace mount / first turn, reuse by cache name, refresh on TTL or when the workspace fingerprint changes, and delete on workspace unmount/app shutdown.
-- Key the cache by a content fingerprint (hash of system prompt + tool set + workspace snapshot) so identical prefixes reuse one cache; bump on change.
+- `main/services/gemini-context-cache.ts` owns lifecycle through Google's fixed `cachedContents` API: create on the first eligible turn, reuse by cache name, create a distinct entry when the fingerprint changes, and delete on expiry cleanup, invalidation, eviction, or app shutdown.
+- Key the cache by a content fingerprint of the credential, model, system prompt, tool set, and workspace snapshot so identical prefixes reuse one cache and changed content cannot.
 - Thread the cache reference into the Pi Google request. Surface `cachedContentTokenCount` (already read by `usage-accounting.ts:27-36`) into the usage ledger as cache-read tokens.
-- Fail open: if cache creation fails or is unsupported for the model, fall back to an uncached request without failing the turn.
-- Respect the privacy boundary: caching sends workspace content to Google; only do it when the `google` provider is active and the user has not required a local-only session.
+- Fail open with bounded requests and negative backoff: if cache creation fails or is unsupported for the model, continue the turn uncached.
+- Respect the privacy boundary: cache only native `google` turns with a mounted folder and workspace permission above **No Access**. Credentials stay in request headers, and no cache metadata crosses the preload boundary.
 
 **Exit gate (Phase 3)**
 
-Phase 3a is complete: a reasoning-capable `google` model shows the Thinking control; selecting a level changes the streamed request's thinking config; the shimmer renders during the thinking phase and respects Reduce Motion. Phase 3 completes when a mounted workspace reuses a context cache (verified by fingerprint reuse and cache-read token accounting) and cache failure never blocks a turn.
+Phase 3 is complete: a reasoning-capable `google` model shows the Thinking control; selecting a level changes the streamed request's thinking config; the shimmer renders during the thinking phase and respects Reduce Motion. Eligible mounted workspaces reuse context caches with fingerprint and TTL bounds, cache reads are metered, and cache failure never blocks a turn.
 
 ---
 
@@ -155,20 +156,20 @@ Intentionally out of scope. Rationale captured so a future plan can pick it up:
 
 - Product surface is large (floating window / menu-bar tray presence, interruptibility, mic & screen permissions, UX for live screen/canvas streaming) — not a transport swap.
 - Current one-shot voice (`MediaRecorder` → `generateContent`) is adequate for dictation; Live is a new interaction model, not a fix.
-- Depends on the native transport landing first (Phase 1) but adds a WebSocket bridge in `main/services/` plus significant renderer work.
+- Builds on the native transport from Phase 1 but would add a WebSocket bridge in `main/services/` plus significant renderer work.
 
 Revisit as a standalone plan once Phases 0–3 are stable and there is validated product demand for low-latency interruptible voice / real-time screen share.
 
 ---
 
-## Sequencing & PR split
+## Completed delivery split
 
-1. **PR 1 — Phase 0:** catalog-driven runtime limits + tests.
-2. **PR 2 — Phase 1:** native `google` provider, credential/selection/pin migration, title routing.
-3. **PR 3 — Phase 3a:** thinking config plumbing + composer Thinking control + shimmer.
-4. **PR 4 — Phase 3b:** Gemini context cache service + usage accounting.
+1. **Phase 0:** catalog-driven runtime limits + tests.
+2. **Phase 1:** native `google` provider, credential/selection/pin migration, title routing.
+3. **Phase 3a:** thinking config plumbing + composer Thinking control + shimmer.
+4. **Phase 3b:** Gemini context cache service + usage accounting.
 
-Each PR keeps prior behavior available until its replacement is test-covered, matching the repository's staged-migration convention.
+The phases landed as isolated local commits. Their focused coverage and the current full verification matrix pass.
 
 ## Test matrix (delta, in addition to the broader plan's matrix)
 
@@ -177,7 +178,7 @@ Each PR keeps prior behavior available until its replacement is test-covered, ma
 | Runtime limits | catalog hit/miss/partial, vision gating, fallback stays 128K/8192, no runtime network |
 | Native Google | `google-generative-ai` dispatch via faux endpoint, credential mapping, migrated selection/pins, 1.5 ids removed |
 | Thinking | level→budget mapping in main, renderer enum validation, no-op on non-reasoning models, Reduce Motion shimmer fallback |
-| Context cache | fingerprint reuse, TTL/invalidation on workspace change, fail-open on cache error, cache-read token accounting, local-only session never caches |
+| Context cache | fingerprint reuse, TTL/invalidation on workspace change, bounded churn and requests, per-waiter cancellation, fail-open on cache error, cache-read token accounting, folderless and **No Access** workspaces never cache |
 
 No test requires real Google credentials, paid tokens, or public network access.
 

@@ -1,6 +1,6 @@
 # Taracodlab Learnings Plan
 
-Status: implementation plan only  
+Status: Phases A–B and D implemented; Phase E core implemented; remaining roadmap retained
 Date: 2026-07-22  
 Source audited: `/Users/sambitbiswas/projects/opp/taracodlab-aiden` (`aiden-runtime` ~4.15)  
 Aiden baseline: workspace `origin-main` (Electron macOS coding agent on Pi)
@@ -36,7 +36,7 @@ It should **not** become a personal multi-messenger AI OS, a Windows computer-us
 | Safety | `moat/` (honesty, autonomy dial, approvals, scanners) | Workspace Full/Ask/None + path confinement + Ask approvals | Extend existing permission model; no parallel `moat/` package |
 | Memory | `SOUL.md` / `USER.md` / `MEMORY.md` + FTS/semantic | Chat JSON + workspace binding | Optional identity files later; not phase 1 |
 | Tools | ~100+ tools, profiles, planner narrowing | Coding tools + Exa + skills + MCP | Profiles / per-turn narrowing |
-| Streaming UX | Activity ≠ chat; structured `ui_*` events | IPC `chat:delta` / `tool` / `approval` | Richer events + Activity panel |
+| Streaming UX | Activity ≠ chat; structured `ui_*` events | Persisted generation timeline over `chat:timeline` | Keep the inline Activity trail compact and progressive |
 | Providers | 19 adapters + billing-aware fallback | Compat presets + Pi Codex OAuth | Catalog limits + no silent paid fallback |
 | License | AGPL-3.0 core | Private app | Study ideas only; do not vendor AGPL code |
 
@@ -61,15 +61,15 @@ Related plans (do not duplicate):
 **Implement as three concrete behaviors on existing seams, not a new `moat/` subsystem.**
 
 ```text
-Renderer (chat + Activity)
-    │ IPC: delta | tool | approval | activity | done | error
+Renderer (chat + inline Activity)
+    │ IPC: delta | timeline | approval | done | error
     ▼
 Main generation runtime (Pi Agent)
     ├── beforeToolCall  → existing Ask approvals (+ tier metadata later)
-    ├── tool results    → fence MCP + redact secrets
-    ├── after turn      → honesty / claim check (append-only footer or structured flag)
+    ├── tool results    → preserve MCP failures; fence + redact planned
+    ├── after turn      → action-aware claim check (append-only timeline outcome)
     ├── context         → catalog limits + compressor (tool-chain safe)
-    └── tool assembly   → profiles or per-turn narrowing
+    └── tool assembly   → profiles or per-turn narrowing (planned)
 ```
 
 Principles:
@@ -88,11 +88,14 @@ Principles:
 
 **Goal:** Transcript shows human + assistant prose (and compact tool chips if needed). A dedicated Activity surface shows running/done/blocked tools, approvals, exits, and verification.
 
-**Likely touchpoints:**
+**Implemented 2026-07-24.** Aiden reuses the persisted, renderer-safe generation timeline already delivered over `chat:timeline` and stores it with each assistant turn. Every response can expose an inline native `<details>` Activity trail: active, failed, and warning states open automatically, while successful history defaults collapsed. The surface has no dashboard-like empty state, keeps ordered tool outcomes available, supports keyboard interaction, and disables its chevron motion under Reduce Motion.
 
-- `main/services/llm-client.ts` — emit structured activity events (start/progress/end/error/approval)
-- `renderer/` chat transcript + a collapsible Activity panel or Environment-adjacent strip
-- Existing tool IPC (`chat:tool`, `chat:approval`) — normalize into an activity model rather than only inline bubbles
+**Shipped touchpoints:**
+
+- `main/services/generation-timeline.ts` — owns renderer-safe ordered step state
+- `main/services/llm-client.ts` — emits timeline snapshots and persists the settled timeline on the assistant response
+- `renderer/components/agent-steps.tsx` — renders the collapsible per-response Activity trail
+- Existing `chat:timeline` / `chat:approval` IPC — no parallel Activity event channel
 
 **Acceptance:**
 
@@ -106,11 +109,13 @@ Principles:
 
 **Goal:** If the model claims success after a failed `edit_file` / `run_command` / MCP tool, the UI shows a clear non-success state. Prefer structured turn outcome over LLM rewriting.
 
-**Likely touchpoints:**
+**Implemented 2026-07-24.** Generation settlement now runs a deterministic, category-aware claim check against the persisted timeline. A relevant failed file, command, Computer Use, schedule, or MCP action paired with concrete success prose adds an append-only structured `unverified_success` outcome. A later explicit acknowledgement suppresses that failure category; different categories remain independent, while distinct failures inside one category are intentionally not target-matched. The assistant's prose is never rewritten and no second model call or next-turn system injection is added. Standard MCP `{ isError: true }` results now remain failures through Pi so Activity and the checker see the real outcome.
 
-- Generation completion path in `llm-client.ts` / `generation-runtime.ts`
-- Tool result records already streamed to the renderer
-- Optional small pure module: `claim-check-core.ts` (input: assistant text + tool results → warnings)
+**Shipped touchpoints:**
+
+- Generation settlement paths in `main/services/llm-client.ts`
+- `renderer/shared/claim-check.ts` (assistant text + settled tool timeline → structured warning)
+- `main/services/mcp-tool-result.ts` for preserving provider-declared MCP failures
 
 **Acceptance:**
 
@@ -141,20 +146,23 @@ Principles:
 
 **Goal:** Stop relying on fabricated 128K/8K for non-Codex models; compress when fill crosses a threshold without splitting tool-call / tool-result pairs.
 
+**Core implemented 2026-07-23.** Runtime limits now resolve from provider-owned Pi metadata, connection overrides, and the bundled offline catalog before conservative fallback. Every generation receives a model-aware `transformContext` from `main/services/generation-context.ts`: it accounts for the static system/tool budget and response reserve, preserves Pi's provider-measured prefix, keeps the newest user turns and recent completed tool evidence, truncates or replaces older tool payloads, and removes only complete assistant/tool-result batches. Persisted chat state is not mutated. An active turn that still cannot fit becomes a bounded non-tool recovery notice, while an impossible static prompt/tool set fails before provider I/O. Compaction is currently written to the development log; a visible Activity row remains a small follow-up.
+
 **Depends on / aligns with:** `docs/gemini-native-upgrade-plan.md` Phase 0 for wiring catalog limits into runtime `Model`.
 
-**Compression rules (draft):**
+**Compression rules:**
 
-- Trigger near ~50–70% of true context window (tune with tests)
+- Trigger from Pi's configured model-aware compaction threshold, including static context and response/safety reserves
 - Never orphan a `tool_use` without its `tool_result`
-- Prefer summarizing older user/assistant prose; keep recent N turns verbatim
-- Record compression events in Activity (not as fake assistant messages)
+- Keep the newest user turns and recent tool evidence; truncate or replace older tool payloads before removing complete older turns
+- Keep compaction local and deterministic; do not add a summarization-model call
+- Record compression events in Activity rather than as fake assistant messages (follow-up)
 
-**Likely touchpoints:**
+**Shipped touchpoints:**
 
-- `model-runtime-core.ts`, `models-catalog-core.ts`
-- New pure compressor used from `llm-client.ts` before `agent.continue()`
-- Usage accounting may note compressed turns
+- `main/services/model-runtime-core.ts`, `main/services/models-catalog-core.ts`
+- `main/services/generation-context.ts`, installed as Pi's `transformContext` from `main/services/llm-client.ts`
+- Development logging records compaction metrics; a renderer-visible Activity step remains pending
 
 **Acceptance:**
 
@@ -232,18 +240,18 @@ Ship only if P0–P2 pay off and product still wants more “agent OS” depth w
 ## Suggested implementation order
 
 ```text
-Phase A  Chat Activity model + IPC events          (P0.1)
-Phase B  Honesty/claim check on turn complete      (P0.2)
+Phase A  Chat Activity model + persisted timeline  (P0.1, implemented)
+Phase B  Honesty/claim check on turn complete      (P0.2, implemented)
 Phase C  Composer queue + redirect/cancel UX       (P0.3)
-Phase D  Catalog limits (shared with Gemini plan)  (P1.4a)
-Phase E  Context compressor                        (P1.4b)
+Phase D  Catalog limits (shared with Gemini plan)  (P1.4a, implemented)
+Phase E  Context compressor                        (P1.4b, core implemented; Activity row pending)
 Phase F  Tool profiles (then optional narrowing)   (P1.5)
 Phase G  MCP fence + redact                        (P2.6)
 Phase H  Paid-fallback consent (when fallbacks exist) (P2.7)
 Phase I  Identity files / probe / artifacts        (P3, optional)
 ```
 
-Do not start Phase I until A–C are validated in daily use. Phase D may ship earlier if bundled with the Gemini Phase 0 PR.
+Do not start Phase I until A–C are validated in daily use. Phases D and the core of E are already shipped; surface compaction as an Activity row when that feedback becomes useful.
 
 ## Mapping “moat” without cargo-culting
 
@@ -251,7 +259,7 @@ taracodlab’s `moat/` is a useful *checklist*, not a folder to recreate.
 
 | taracodlab idea | Aiden translation |
 | --- | --- |
-| Honesty enforcement | Post-turn claim check + Activity outcome (Phase B) |
+| Honesty enforcement | Implemented post-turn claim check + Activity outcome (Phase B) |
 | Approval engine | Existing Ask `beforeToolCall`; add risk labels later if needed |
 | Autonomy dial | Keep Full / Ask / None; document mapping in settings copy |
 | MemoryGuard | Only after durable MEMORY writes exist |
@@ -282,7 +290,7 @@ taracodlab’s `moat/` is a useful *checklist*, not a folder to recreate.
 
 | Risk | Mitigation |
 | --- | --- |
-| Activity panel becomes a busy dashboard | Progressive disclosure; hide when idle; conversation-first layout tests |
+| Activity trail becomes a busy dashboard | Progressive disclosure; omit empty state; conversation-first layout tests |
 | Claim check false positives | Pure functions + golden fixtures; warn, don’t block send |
 | Compression breaks tool history | Invariant tests; abort compress if pairs would split |
 | Tool narrowing hides needed MCP tools | Easy “use all tools” escape; per-chat override |
@@ -296,22 +304,25 @@ taracodlab’s `moat/` is a useful *checklist*, not a folder to recreate.
 - Context errors decline after catalog limits + compression
 - No increase in accidental paid provider use
 
-## Open questions
+## Decisions and open questions
 
-1. Activity as **inline collapsible trail** vs **Environment-adjacent panel** vs **both**?
-2. Queue default: always queue on Enter while busy, or prefer interrupt (Codex-like)?
-3. Claim check: UI-only warning vs also inject a model-visible system note on the *next* turn?
-4. Tool profiles: settings-global only, or per-workspace / per-chat?
-5. Identity files: workspace-root vs Aiden-managed metadata directory (avoid polluting repos by default)?
+Resolved in Phases A–B:
 
-Resolve these in a short product pass before Phase A UI lands.
+- Activity is an inline collapsible trail backed by the persisted generation timeline.
+- Claim checking is an append-only structured UI warning; it does not mutate assistant prose or inject a next-turn system note.
+
+Still open:
+
+1. Queue default: always queue on Enter while busy, or prefer interrupt (Codex-like)?
+2. Tool profiles: settings-global only, or per-workspace / per-chat?
+3. Identity files: workspace-root vs Aiden-managed metadata directory (avoid polluting repos by default)?
 
 ## References
 
 - taracodlab (ideas only): `core/v4/aidenAgent.ts`, `moat/honestyEnforcement.ts`, `moat/approvalEngine.ts`, `core/v4/contextCompressor.ts`, `core/v4/mcpClient.ts`, dashboard Activity separation
-- Aiden: `main/services/llm-client.ts`, `main/services/tools.ts`, `main/services/coding-tools.ts`, `main/services/mcp.ts`, `main/services/generation-runtime.ts`, `PRODUCT.md`, `AGENTS.md`
+- Aiden: `main/services/llm-client.ts`, `main/services/generation-timeline.ts`, `main/services/mcp-tool-result.ts`, `renderer/shared/claim-check.ts`, `renderer/components/agent-steps.tsx`, `main/services/tools.ts`, `main/services/coding-tools.ts`, `main/services/mcp.ts`, `main/services/generation-runtime.ts`, `PRODUCT.md`, `AGENTS.md`
 - Prior exploration notes from multi-agent review (2026-07-22): chat/activity, honesty, compression, tool narrowing, mid-run control, MCP fencing, billing-safe fallbacks
 
 ## Next action
 
-When implementing, start with **Phase A (Activity events + panel)** and **Phase B (claim check)** in one vertical slice on a multi-tool coding turn. Defer identity files, daemon-like automation, and picker badge polish until that slice feels native to Aiden.
+Validate the shipped inline Activity and claim warning during daily multi-tool coding turns, then take **Phase C (composer queue + explicit redirect/cancel UX)** as the next product slice. Follow with **Phase G (MCP result fencing, size caps, and secret redaction)** or **Phase F (tool profiles/narrowing)** based on whether trust-boundary risk or tool-schema cost is the larger observed problem. Keep identity files, daemon-like automation, and picker badge polish deferred.

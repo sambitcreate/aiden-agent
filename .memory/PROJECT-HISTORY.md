@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-24 — Add honest per-turn Activity trails
+
+- Recast the persisted renderer-safe generation timeline as a per-response inline Activity trail. Active, failed, and warning states default open, successful historical turns collapse, native details/summary preserves keyboard access, and reduced-motion settings remove the chevron transition.
+- Added a category-aware deterministic claim checker that attaches an append-only `unverified_success` outcome when concrete success prose conflicts with a relevant failed file, command, Computer Use, schedule, or MCP action. Explicit acknowledgement suppresses the matching failure category while other categories remain independent; failures are not target-matched within one category, and the assistant's response is never rewritten.
+- Preserved standard MCP `{ isError: true }` results as failures through Pi so the timeline and claim checker see the provider's actual outcome.
+- Verification passed all 660 TypeScript/JavaScript tests, all 41 Rust tests, type-check, lint, production build, and diff validation. The existing large renderer chunk warning remains.
+
 ### 2026-07-24 — Add bounded Gemini workspace context caching
 
 - Added main-process explicit caching for native Google workspace turns. The cached prefix is Pi's exact system instruction and tool schema plus a deterministic, metadata-only workspace file/Git index; transcript history and file contents stay outside the cache.
