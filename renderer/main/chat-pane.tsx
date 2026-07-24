@@ -66,9 +66,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
-  const { active, activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
+  const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
+  const chatWorkspaceId = chat.data?.workspaceId;
+  const effectiveWorkspace = workspaces.find((workspace) => workspace.id === chatWorkspaceId);
+  const effectiveWorkspaceId = chatWorkspaceId;
   const terminal = useWorkspaceTerminal();
-  const git = useGitInfo(active?.id);
+  const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
@@ -119,8 +122,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Checking Computer Use readiness…"
         : computerUseStatusDetail
       : undefined;
-  const ready = modelReady && !computerUseReadinessMessage;
-  const readinessMessage = modelReadinessMessage ?? computerUseReadinessMessage;
+  const chatReadinessMessage = chat.isLoading
+    ? "Loading chat…"
+    : chat.isError
+      ? "This chat could not be loaded. Try again."
+      : undefined;
+  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
+  const readinessMessage =
+    chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -128,6 +137,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
   const modelInfo = useModelInfo(providerId, providerModels, selectedProvider);
   const visionSupported = model ? modelInfo.data?.[model]?.vision : undefined;
+
+  React.useEffect(() => {
+    if (chat.data && chatWorkspaceId && chatWorkspaceId !== activeId) {
+      selectWorkspace(chatWorkspaceId);
+    }
+  }, [activeId, chat.data, chatWorkspaceId, selectWorkspace]);
+
+  React.useEffect(() => {
+    if (!chat.data || effectiveWorkspace) return;
+    if (terminal.open) terminal.toggle();
+    environmentPanel.close();
+  }, [chat.data, effectiveWorkspace, environmentPanel.close, terminal.open, terminal.toggle]);
 
   const newChat = React.useCallback(async () => {
     const created = await chatsApi.create({ workspaceId: activeId });
@@ -274,7 +295,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       const handle = startGeneration(
         {
           chatId,
-          workspaceId: activeId,
+          workspaceId: effectiveWorkspaceId,
           providerId,
           model,
           messages: history.map((m) => ({
@@ -405,7 +426,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       );
       generationRef.current = handle;
     },
-    [chatId, activeId, providerId, model, qc, waitForStreamHandoff],
+    [chatId, effectiveWorkspaceId, providerId, model, qc, waitForStreamHandoff],
   );
 
   const handleSend = React.useCallback(
@@ -499,12 +520,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const openFolder = React.useCallback(() => {
-    if (active?.folderPath) void workspacesApi.openFolder(active.id);
-  }, [active?.folderPath, active?.id]);
+    if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
+  }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
 
   const changePermission = React.useCallback(
     async (permission: WorkspacePermission) => {
-      if (!active) return;
+      if (!effectiveWorkspace) return;
       if (environmentPanel.gitOperationBusy)
         throw new Error(
           "Wait for the current Git operation to finish before changing workspace access.",
@@ -516,11 +537,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      await workspacesApi.update(active.id, { permission });
+      await workspacesApi.update(effectiveWorkspace.id, { permission });
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     },
     [
-      active,
+      effectiveWorkspace,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
       environmentPanel.editorState.dirty,
@@ -564,14 +585,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty) {
         throw new Error("Save or discard the open file's edits before switching workspaces.");
       }
-      if (workspaceId === activeId) return;
+      if (workspaceId === effectiveWorkspaceId) return;
       const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
       qc.setQueryData(queryKeys.chat(chatId), updated);
       selectWorkspace(workspaceId);
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
     },
     [
-      activeId,
+      effectiveWorkspaceId,
       chatId,
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
@@ -608,7 +629,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
-      if (!active) throw new Error("Choose a Git workspace first.");
+      if (!effectiveWorkspace) throw new Error("Choose a Git workspace first.");
       if (isGenerating || isStartingGeneration)
         throw new Error("Stop the current response before changing Git workspaces.");
       if (environmentPanel.gitOperationBusy)
@@ -619,7 +640,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Wait for the open file to finish saving before changing Git workspaces.");
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing Git workspaces.");
-      const workspace = await gitApi.createWorktree(active.id, branchName);
+      const workspace = await gitApi.createWorktree(effectiveWorkspace.id, branchName);
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       if (isNewChat) {
         await moveNewChatToWorkspace(workspace.id);
@@ -631,7 +652,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
     },
     [
-      active,
+      effectiveWorkspace,
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
@@ -692,17 +713,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
       title={chat.data?.title ?? "New chat"}
       actions={
         <>
-          <OpenInEditorPicker workspaceId={active?.id} folderPath={active?.folderPath} />
+          <OpenInEditorPicker
+            workspaceId={effectiveWorkspace?.id}
+            folderPath={effectiveWorkspace?.folderPath}
+          />
           <Button iconOnly variant="glass" size="large" onClick={newChat} aria-label="New chat">
             <SquarePen />
           </Button>
-          <EnvironmentPanelToggle />
+          <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
           <Button
             iconOnly
             variant="glass"
             size="large"
             onClick={terminal.toggle}
-            disabled={!terminal.canOpen}
+            disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
             aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
             aria-pressed={terminal.open}
             title="Toggle terminal (⌘J)"
@@ -797,7 +821,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             isGenerating={isGenerating}
             canStopGeneration={canStopGeneration}
             inputRef={composerRef}
-            workspace={active}
+            workspace={effectiveWorkspace}
             gitBranch={git.data?.isRepo ? git.data.branch : undefined}
             gitDetached={git.data?.detached}
             gitUnborn={git.data?.unborn}

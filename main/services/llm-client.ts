@@ -30,12 +30,18 @@ import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
+import type { UsageRequestSource } from "./usage-store-core.js";
 import type {
   ComputerUseApprovalDescriptor,
   ComputerUseController,
 } from "./computer-use/controller.js";
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
+import {
+  SCHEDULE_TOOL_NAME,
+  scheduleToolRequiresApproval,
+  summarizeScheduleToolCall,
+} from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { toPiMessages } from "./generation-messages.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
@@ -52,6 +58,21 @@ import {
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
+
+type GenerationPermission = WorkspacePermission | "read-only";
+
+export interface GenerationExecutionOptions {
+  /** Internal-only execution policy. Renderer chat starts always use the workspace permission. */
+  permission?: GenerationPermission;
+  /** Scheduled and other background runs can withhold tools that would recurse or mutate. */
+  excludeToolNames?: ReadonlySet<string>;
+  /** Computer Use always requires a live renderer approval surface unless explicitly enabled. */
+  allowComputerUse?: boolean;
+  /** Privacy-safe accounting category for this model call. */
+  usageSource?: UsageRequestSource;
+  /** Withhold connector tools when their mutation semantics cannot be enforced. */
+  allowMcpTools?: boolean;
+}
 
 interface ActiveGeneration {
   agent: Agent;
@@ -113,7 +134,7 @@ function resetGenerationAgent(agent: Agent, streamId: string): void {
 function buildSystemPrompt(
   folderPath: string | undefined,
   branch: string | undefined,
-  permission: WorkspacePermission,
+  permission: GenerationPermission,
 ): string {
   const base =
     "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
@@ -121,15 +142,24 @@ function buildSystemPrompt(
     return `${base} Call the available tools when they help answer the user's request.`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
+  const capability =
+    permission === "read-only"
+      ? "You have tools to read, search, and list files in this folder. You cannot edit files or run commands. "
+      : "You have tools to read, search, list, and edit files and to run shell commands in this folder. ";
+  const workflow =
+    permission === "read-only"
+      ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
+      : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
   return (
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
-    "You have tools to read, search, list, and edit files and to run shell commands in this folder. " +
-    "All file paths are relative to this folder. Prefer editing existing files over creating new ones, " +
-    "read a file before editing it, and keep changes surgical. " +
+    capability +
+    workflow +
     (permission === "ask"
       ? "The user must approve each file write and shell command before it runs."
-      : "You may make changes and run commands directly.")
+      : permission === "full"
+        ? "You may make changes and run commands directly."
+        : "")
   );
 }
 
@@ -139,12 +169,13 @@ async function prepareGeneration(
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
+  options: GenerationExecutionOptions,
 ) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const workspace = params.workspaceId
     ? await configStore.getWorkspace(params.workspaceId)
     : undefined;
-  const permission: WorkspacePermission = workspace?.permission ?? "ask";
+  const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
   // The resolved runtime model is the connection-bound capability authority.
@@ -155,6 +186,7 @@ async function prepareGeneration(
   const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
   let computerUse: ComputerUseController | undefined;
   if (
+    options.allowComputerUse !== false &&
     settings.computerUseEnabled === true &&
     chat?.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
@@ -172,7 +204,17 @@ async function prepareGeneration(
       activatedComputerUse(computerUse);
     }
   }
-  const tools = await buildAgentTools({ workspaceRoot: folderPath, permission, computerUse });
+  const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
+  const tools = (
+    await buildAgentTools({
+      workspaceId: workspace?.id,
+      workspaceRoot: folderPath,
+      permission: toolPermission,
+      computerUse,
+      allowScheduling: !options.excludeToolNames?.has("schedule_task"),
+      allowMcpTools: options.allowMcpTools,
+    })
+  ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   return {
     runtime: { ...runtime, model },
     permission,
@@ -189,12 +231,16 @@ export const llmClient = {
     streamId: string,
     params: ChatStartParams,
     owner: ChatGenerationOwner,
+    options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
     if (chatComputerUseMutationGate.isChanging(params.chatId)) {
       throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
     }
     if (initializing.has(streamId) || active.has(streamId)) {
       throw new Error("A generation with this stream id is already running.");
+    }
+    if (this.isChatBusy(params.chatId)) {
+      throw new Error("This chat already has a response in progress.");
     }
     const initialization = {
       chatId: params.chatId,
@@ -221,6 +267,7 @@ export const llmClient = {
         (computerUse) => {
           initialization.computerUse = computerUse;
         },
+        options,
       );
     } catch (error) {
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
@@ -347,11 +394,18 @@ export const llmClient = {
               };
             }
           } else {
-            if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name)) {
+            const scheduleApproval =
+              context.toolCall.name === SCHEDULE_TOOL_NAME &&
+              scheduleToolRequiresApproval(context.args);
+            const workspaceApproval =
+              permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            if (!scheduleApproval && !workspaceApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
-            summary = summarizeToolCall(context.toolCall.name, context.args);
+            summary = scheduleApproval
+              ? summarizeScheduleToolCall(context.args)
+              : summarizeToolCall(context.toolCall.name, context.args);
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
           const allowed = await approvals.request(
@@ -420,7 +474,7 @@ export const llmClient = {
                   message: event.message,
                   provider: runtime.provider,
                   model,
-                  source: "chat",
+                  source: options.usageSource ?? "chat",
                 }),
               );
             }

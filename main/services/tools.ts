@@ -15,6 +15,7 @@ import { discoverSkills } from "./skills-discovery.js";
 import type { DiscoveredSkill, Skill, WorkspacePermission } from "./types.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
+import { scheduleTaskToolsForContext } from "./schedule-tool.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -23,7 +24,11 @@ function textResult(text: string): AgentToolResult<null> {
 }
 
 function skillToolKey(skill: Skill | DiscoveredSkill): string {
-  const slug = skill.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+  const slug = skill.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
   return `skill_${slug || skill.id}`;
 }
 
@@ -36,7 +41,11 @@ function makeExaTool(apiKey: string): AgentTool {
     parameters: Type.Object({
       query: Type.String({ description: "The web search query." }),
       numResults: Type.Optional(
-        Type.Integer({ minimum: 1, maximum: 10, description: "How many results to return (default 5)." }),
+        Type.Integer({
+          minimum: 1,
+          maximum: 10,
+          description: "How many results to return (default 5).",
+        }),
       ),
     }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
@@ -44,7 +53,11 @@ function makeExaTool(apiKey: string): AgentTool {
       const response = await fetch(EXA_ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": apiKey },
-        body: JSON.stringify({ query, numResults: numResults ?? 5, contents: { text: { maxCharacters: 1200 } } }),
+        body: JSON.stringify({
+          query,
+          numResults: numResults ?? 5,
+          contents: { text: { maxCharacters: 1200 } },
+        }),
       });
       if (!response.ok) {
         const body = await response.text().catch(() => "");
@@ -52,7 +65,9 @@ function makeExaTool(apiKey: string): AgentTool {
           `Exa search failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
         );
       }
-      const data = (await response.json()) as { results?: Array<{ title?: string; url?: string; text?: string }> };
+      const data = (await response.json()) as {
+        results?: Array<{ title?: string; url?: string; text?: string }>;
+      };
       const results = (data.results ?? []).map((r) => ({
         title: r.title ?? "",
         url: r.url ?? "",
@@ -76,12 +91,24 @@ function makeSkillTool(skill: Skill | DiscoveredSkill): AgentTool {
 
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
+  /** Workspace identity used as the default target for agent-created schedules. */
+  workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
   workspaceRoot?: string;
   /** Workspace permission level; "none" withholds all folder-scoped tools. */
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
   computerUse?: ComputerUseController;
+  /** Background scheduled runs disable this to prevent recursive task creation. */
+  allowScheduling?: boolean;
+  /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
+  allowMcpTools?: boolean;
+}
+
+export function buildSchedulingTools(
+  context: Pick<ToolContext, "workspaceId" | "allowScheduling">,
+): AgentTool[] {
+  return scheduleTaskToolsForContext(context);
 }
 
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
@@ -89,6 +116,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   const settings = await configStore.getSettings();
 
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  tools.push(...buildSchedulingTools(ctx));
 
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.
@@ -125,8 +153,10 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   }
 
   // MCP server tools.
-  const servers = await configStore.listMcpServers();
-  tools.push(...(await collectMcpAgentTools(servers)));
+  if (ctx.allowMcpTools !== false) {
+    const servers = await configStore.listMcpServers();
+    tools.push(...(await collectMcpAgentTools(servers)));
+  }
 
   return tools;
 }

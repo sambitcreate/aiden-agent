@@ -38,6 +38,8 @@ import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { appUpdateService } from "./services/app-updater.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
+import { scheduleService } from "./services/schedule-service.js";
+import { registerAppPathOpener } from "./services/app-navigation.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -114,6 +116,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
+  scheduleService.stop();
   llmClient.abortAll();
   void mcpManager.closeAll();
 }
@@ -137,6 +140,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
       llmClient.shutdown(),
+      scheduleService.stopAndSettle(),
     ]);
   } catch (error) {
     logger.error("main", "Application service shutdown did not complete cleanly.", error);
@@ -451,6 +455,16 @@ function showMainWindow(): void {
   }
 }
 
+registerAppPathOpener(async (path) => {
+  await createMainWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    ipcMain.broadcast("app:navigate", { path });
+  }
+});
+
 function setupApplicationMenu(): void {
   const menu = Menu.buildFromTemplate([
     {
@@ -576,6 +590,7 @@ if (!ownsSingleInstanceLock) {
       void foundationModelsConnection.status();
 
       await createMainWindow();
+      await scheduleService.start();
       appUpdateService.start();
     })
     .catch((error: unknown) => {

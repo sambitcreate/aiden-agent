@@ -10,11 +10,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { logger } from "../platform.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
-import {
-  assertMcpPresetServer,
-  createNoRedirectFetch,
-  presetSecretId,
-} from "./mcp-presets.js";
+import { assertMcpPresetServer, createNoRedirectFetch, presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 
@@ -48,8 +44,7 @@ function makeTransport(server: McpServer): Transport {
   const preset = assertMcpPresetServer(server);
   const url = new URL(server.url);
   const requestInit = server.headers ? { headers: server.headers } : undefined;
-  const presetFetch =
-    preset?.auth.kind === "apiKey" ? createNoRedirectFetch() : undefined;
+  const presetFetch = preset?.auth.kind === "apiKey" ? createNoRedirectFetch() : undefined;
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
   const authProvider = server.oauth ? oauthProviderFor(server) : undefined;
@@ -115,14 +110,21 @@ class McpManager {
   }
 
   /** Connect and return status (used by the settings "test" action). */
-  async status(server: McpServer): Promise<{ connected: boolean; toolCount: number; tools: string[]; error?: string }> {
+  async status(
+    server: McpServer,
+  ): Promise<{ connected: boolean; toolCount: number; tools: string[]; error?: string }> {
     const client = new Client({ name: "aiden-agent-test", version: "1.0.0" }, { capabilities: {} });
     try {
       await client.connect(makeTransport(await resolveAuth(server)) as never);
       const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
       return { connected: true, toolCount: tools.length, tools: tools.map((t) => t.name) };
     } catch (error) {
-      return { connected: false, toolCount: 0, tools: [], error: error instanceof Error ? error.message : String(error) };
+      return {
+        connected: false,
+        toolCount: 0,
+        tools: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       await client.close().catch(() => {});
     }
@@ -133,17 +135,23 @@ class McpManager {
     const client = await this.ensureConnected(server);
     const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
     const prefix = sanitize(server.name || server.id);
-    return tools.map((t): AgentTool => ({
-      name: `${prefix}__${sanitize(t.name)}`,
-      label: t.name,
-      description: t.description ?? t.name,
-      // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
-      parameters: Type.Unsafe((t.inputSchema as object) ?? { type: "object", properties: {} }),
-      execute: async (_id, args): Promise<AgentToolResult<null>> => {
-        const result = await client.callTool({ name: t.name, arguments: (args ?? {}) as Record<string, unknown> });
-        return { content: [{ type: "text", text: toText(result) }], details: null };
-      },
-    }));
+    return tools.map(
+      (t): AgentTool => ({
+        name: `${prefix}__${sanitize(t.name)}`,
+        label: t.name,
+        description: t.description ?? t.name,
+        // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
+        parameters: Type.Unsafe((t.inputSchema as object) ?? { type: "object", properties: {} }),
+        execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
+          const result = await client.callTool(
+            { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
+            undefined,
+            { signal },
+          );
+          return { content: [{ type: "text", text: toText(result) }], details: null };
+        },
+      }),
+    );
   }
 }
 
@@ -157,7 +165,10 @@ export async function collectMcpAgentTools(servers: McpServer[]): Promise<AgentT
     try {
       all.push(...(await mcpManager.agentToolsFor(server)));
     } catch (error) {
-      logger.warn("mcp", `Skipping MCP server "${server.name}": ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(
+        "mcp",
+        `Skipping MCP server "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
   return all;

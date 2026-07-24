@@ -111,3 +111,20 @@ test("filesystem tools do not follow workspace symlinks outside the root", async
     await fs.rm(outside, { recursive: true, force: true });
   }
 });
+
+test("run_command cancellation kills the shell process group", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-"));
+  try {
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command");
+    assert.ok(runCommand);
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const running = runCommand.execute("test", { command: "sleep 30 & exit 0" }, controller.signal);
+    setTimeout(() => controller.abort(new Error("test cancellation")), 50);
+    await assert.rejects(running, /test cancellation/);
+    assert.ok(Date.now() - startedAt < 3_000, "command process group should settle promptly");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

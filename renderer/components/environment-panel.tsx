@@ -1,5 +1,13 @@
 import * as React from "react";
-import { Files, GitCompareArrows, List, PanelRightClose, PanelRightOpen, Plus, X } from "lucide-react";
+import {
+  Files,
+  GitCompareArrows,
+  List,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  X,
+} from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -80,9 +88,7 @@ function storedPanelWidth(): number {
 
 function storedTab(): EnvironmentPanelTab {
   const stored = localStorage.getItem(TAB_STORAGE_KEY);
-  return stored === "review" || stored === "files" || stored === "overview"
-    ? stored
-    : "overview";
+  return stored === "review" || stored === "files" || stored === "overview" ? stored : "overview";
 }
 
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
@@ -103,7 +109,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const returnFocusRef = React.useRef<HTMLElement | null>(null);
 
   const rememberFocus = React.useCallback(() => {
-    if (document.activeElement instanceof HTMLElement) returnFocusRef.current = document.activeElement;
+    if (document.activeElement instanceof HTMLElement)
+      returnFocusRef.current = document.activeElement;
   }, []);
 
   const show = React.useCallback(
@@ -124,8 +131,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     localStorage.setItem(OPEN_STORAGE_KEY, "0");
     const returnTarget = returnFocusRef.current?.isConnected
       ? returnFocusRef.current
-      : document.querySelector<HTMLElement>("[data-environment-toggle]")
-        ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+      : (document.querySelector<HTMLElement>("[data-environment-toggle]") ??
+        document.querySelector<HTMLElement>("[data-app-focus-root]"));
     if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
   }, []);
 
@@ -152,33 +159,36 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [activeId, show],
   );
 
-  const openReview = React.useCallback((mode: EnvironmentReviewMode) => {
-    setReviewMode(mode);
-    show("review");
-  }, [show]);
+  const openReview = React.useCallback(
+    (mode: EnvironmentReviewMode) => {
+      setReviewMode(mode);
+      show("review");
+    },
+    [show],
+  );
 
   React.useEffect(() => {
     setRendererLifecycleGuard({ dirty: false, saving: false });
     setEditorState({ ...EMPTY_EDITOR_STATE, workspaceId: activeId });
   }, [activeId]);
 
-  const reportEditorState = React.useCallback((
-    next: FilesEditorState,
-    options?: FilesEditorStateChangeOptions,
-  ) => {
-    setRendererLifecycleGuard(
-      { dirty: next.dirty, saving: next.saving },
-      { touch: options?.touch },
-    );
-    setEditorState((current) =>
-      current.workspaceId === next.workspaceId &&
-      current.path === next.path &&
-      current.dirty === next.dirty &&
-      current.saving === next.saving
-        ? current
-        : next,
-    );
-  }, []);
+  const reportEditorState = React.useCallback(
+    (next: FilesEditorState, options?: FilesEditorStateChangeOptions) => {
+      setRendererLifecycleGuard(
+        { dirty: next.dirty, saving: next.saving },
+        { touch: options?.touch },
+      );
+      setEditorState((current) =>
+        current.workspaceId === next.workspaceId &&
+        current.path === next.path &&
+        current.dirty === next.dirty &&
+        current.saving === next.saving
+          ? current
+          : next,
+      );
+    },
+    [],
+  );
 
   const setGitOperationBusy = React.useCallback((busy: boolean) => {
     gitBusyCountRef.current = Math.max(0, gitBusyCountRef.current + (busy ? 1 : -1));
@@ -187,10 +197,13 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     setGitOperationBusyState(nextBusy);
   }, []);
 
-  React.useEffect(() => () => {
-    gitBusyCountRef.current = 0;
-    setRendererLifecycleGuard({ dirty: false, gitBusy: false, saving: false });
-  }, []);
+  React.useEffect(
+    () => () => {
+      gitBusyCountRef.current = 0;
+      setRendererLifecycleGuard({ dirty: false, gitBusy: false, saving: false });
+    },
+    [],
+  );
 
   const setCreateWorktreeHandler = React.useCallback(
     (handler: ((branchName: string) => Promise<void>) | null) => {
@@ -208,10 +221,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     : agentBusy
       ? "Stop the current response before changing Git state."
       : activeEditorState.saving
-      ? "Wait for the open file to finish saving before changing Git state."
-      : activeEditorState.dirty
-        ? "Save or discard the open file's edits before changing Git state."
-        : null;
+        ? "Wait for the open file to finish saving before changing Git state."
+        : activeEditorState.dirty
+          ? "Save or discard the open file's edits before changing Git state."
+          : null;
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -284,15 +297,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     ],
   );
   return (
-    <EnvironmentPanelContext.Provider value={value}>
-      {children}
-    </EnvironmentPanelContext.Provider>
+    <EnvironmentPanelContext.Provider value={value}>{children}</EnvironmentPanelContext.Provider>
   );
 }
 
 export function useEnvironmentPanel(): EnvironmentPanelContextValue {
   const context = React.useContext(EnvironmentPanelContext);
-  if (!context) throw new Error("useEnvironmentPanel must be used inside EnvironmentPanelProvider.");
+  if (!context)
+    throw new Error("useEnvironmentPanel must be used inside EnvironmentPanelProvider.");
   return context;
 }
 
@@ -344,22 +356,33 @@ function EnvironmentPanelSurface({
       "[contenteditable='true']",
       "[tabindex]:not([tabindex='-1'])",
     ].join(",");
-    const getFocusable = () => Array.from(
-      surfaceRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
-    ).filter((element) => element.offsetParent !== null && !element.closest("[inert]"));
+    const getFocusable = () =>
+      Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter(
+        (element) => element.offsetParent !== null && !element.closest("[inert]"),
+      );
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.key !== "Tab") return;
-      if (document.querySelector('[data-slot="dialog-content"][data-state="open"], [data-slot="popover-content"][data-state="open"]')) return;
+      if (
+        document.querySelector(
+          '[data-slot="dialog-content"][data-state="open"], [data-slot="popover-content"][data-state="open"]',
+        )
+      )
+        return;
       const focusable = getFocusable();
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const activeElement = document.activeElement;
-      if (event.shiftKey && (activeElement === first || !focusable.includes(activeElement as HTMLElement))) {
+      if (
+        event.shiftKey &&
+        (activeElement === first || !focusable.includes(activeElement as HTMLElement))
+      ) {
         event.preventDefault();
         last.focus();
-      }
-      else if (!event.shiftKey && (activeElement === last || !focusable.includes(activeElement as HTMLElement))) {
+      } else if (
+        !event.shiftKey &&
+        (activeElement === last || !focusable.includes(activeElement as HTMLElement))
+      ) {
         event.preventDefault();
         first.focus();
       }
@@ -390,9 +413,7 @@ function EnvironmentPanelSurface({
       };
       const finish = (endEvent: PointerEvent) => {
         commitWidth(
-          endEvent.type === "pointerup"
-            ? startWidth + startX - endEvent.clientX
-            : widthRef.current,
+          endEvent.type === "pointerup" ? startWidth + startX - endEvent.clientX : widthRef.current,
         );
         setResizing(false);
         window.removeEventListener("pointermove", move);
@@ -434,9 +455,7 @@ function EnvironmentPanelSurface({
         "environment-panel z-30 flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-popover text-primary",
         fullOpen ? "border-l border-separator" : "border-l-0",
         inline ? "relative" : "absolute inset-y-0 right-0 shadow-dialog",
-        resizing
-          ? "transition-none"
-          : "transition-[width,opacity,transform] duration-300 ease-out",
+        resizing ? "transition-none" : "transition-[width,opacity,transform] duration-300 ease-out",
         !fullOpen && !inline && "translate-x-full",
       )}
       style={{
@@ -496,14 +515,17 @@ function EnvironmentPanelSurface({
                   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                   event.preventDefault();
                   const currentIndex = ENVIRONMENT_PANEL_TABS.indexOf(tab);
-                  const nextTab = event.key === "Home"
-                    ? ENVIRONMENT_PANEL_TABS[0]
-                    : event.key === "End"
-                      ? ENVIRONMENT_PANEL_TABS[ENVIRONMENT_PANEL_TABS.length - 1]
-                      : ENVIRONMENT_PANEL_TABS[
-                          (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + ENVIRONMENT_PANEL_TABS.length) %
-                            ENVIRONMENT_PANEL_TABS.length
-                        ];
+                  const nextTab =
+                    event.key === "Home"
+                      ? ENVIRONMENT_PANEL_TABS[0]
+                      : event.key === "End"
+                        ? ENVIRONMENT_PANEL_TABS[ENVIRONMENT_PANEL_TABS.length - 1]
+                        : ENVIRONMENT_PANEL_TABS[
+                            (currentIndex +
+                              (event.key === "ArrowRight" ? 1 : -1) +
+                              ENVIRONMENT_PANEL_TABS.length) %
+                              ENVIRONMENT_PANEL_TABS.length
+                          ];
                   panel.setTab(nextTab);
                 }}
                 className={cn(
@@ -561,7 +583,9 @@ function EnvironmentPanelSurface({
             requestedPath={activeFileRequest?.path ?? null}
             requestedPathKey={activeFileRequest?.id ?? 0}
             compact={width < 540}
-            interactionBlockedReason={panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null}
+            interactionBlockedReason={
+              panel.gitOperationBusy ? "Wait for the current Git operation to finish." : null
+            }
             onEditorStateChange={panel.reportEditorState}
           />
         </div>
@@ -751,17 +775,20 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
   );
 }
 
-export function EnvironmentPanelToggle() {
+export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolean }) {
   const panel = useEnvironmentPanel();
   return (
     <Button
       iconOnly
       variant="glass"
       size="large"
-      onClick={() => panel.open ? panel.close() : panel.show("overview")}
+      onClick={() => (panel.open ? panel.close() : panel.show("overview"))}
+      disabled={disabled}
       aria-label={panel.open ? "Hide environment" : "Show environment"}
       aria-pressed={panel.open}
-      aria-controls={panel.open && panel.tab !== "overview" ? "environment-panel" : "environment-summary-card"}
+      aria-controls={
+        panel.open && panel.tab !== "overview" ? "environment-panel" : "environment-summary-card"
+      }
       title="Toggle environment (⌘⇧E)"
       data-environment-toggle
     >
