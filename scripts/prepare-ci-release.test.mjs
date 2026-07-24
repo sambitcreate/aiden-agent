@@ -4,6 +4,7 @@ import test from "node:test";
 import { automaticReleaseVersion } from "./prepare-ci-release.mjs";
 
 test("main pushes receive a monotonic patch version inside the declared release line", () => {
+  assert.equal(automaticReleaseVersion("0.27.0", "41"), "0.27.41");
   assert.equal(automaticReleaseVersion("1.0.0", "41"), "1.0.41");
   assert.equal(automaticReleaseVersion("2.3.0", 42), "2.3.42");
 });
