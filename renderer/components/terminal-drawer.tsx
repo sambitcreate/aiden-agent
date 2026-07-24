@@ -406,7 +406,7 @@ export function TerminalDrawer() {
   return (
     <section
       className="terminal-drawer relative shrink-0 overflow-hidden border-t border-separator bg-popover"
-      style={{ height }}
+      style={{ "--terminal-drawer-height": `${height}px` } as React.CSSProperties}
     >
       <div
         role="separator"

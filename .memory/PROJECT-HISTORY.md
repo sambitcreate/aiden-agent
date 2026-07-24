@@ -1,5 +1,11 @@
 # Project History
 
+### 2026-07-23 — Animate the terminal drawer opening
+
+- The workspace terminal now expands upward from the chat edge over 300ms with the app's existing enter easing, using its persisted drawer height instead of appearing abruptly.
+- The closed terminal remains unmounted, and both the app's explicit setting and the system Reduce Motion preference open it immediately.
+- The UI detector, type-check, lint, and production build pass; the existing large-renderer-chunk warning remains.
+
 ### 2026-07-23 — Bound Pi agent context during tool-heavy generations
 
 - Added a model-aware Pi `transformContext` to every Aiden generation. Pi's provider usage stays anchored through the assistant response that measured it while trailing tool results use per-message estimates; the system prompt, serialized tool schemas, response reserve, and a safety margin are included in the budget.

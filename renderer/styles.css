@@ -436,6 +436,8 @@ textarea {
 
 .terminal-drawer {
   min-height: 0;
+  height: var(--terminal-drawer-height);
+  animation: aiden-terminal-drawer-in 300ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
 
 .terminal-drawer .xterm {
@@ -444,6 +446,17 @@ textarea {
 
 .terminal-drawer .xterm-viewport {
   background-color: transparent !important;
+}
+
+@keyframes aiden-terminal-drawer-in {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--terminal-drawer-height);
+    opacity: 1;
+  }
 }
 
 @keyframes aiden-dialog-in {
@@ -1506,6 +1519,10 @@ textarea {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .terminal-drawer {
+    animation: none;
+  }
+
   .aiden-pill {
     animation: none;
   }
