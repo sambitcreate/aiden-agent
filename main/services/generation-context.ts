@@ -74,6 +74,31 @@ function isToolResult(message: AgentMessage): message is ToolResultMessage {
   return message.role === "toolResult";
 }
 
+/** Keep only the newest Computer Use screenshots while preserving every text result. */
+export function limitComputerUseImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
+  const imageIndexes: number[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (
+      message?.role === "toolResult" &&
+      message.toolName === "computer_use" &&
+      message.content.some((part) => part.type === "image")
+    ) {
+      imageIndexes.push(index);
+    }
+  }
+  const keepCount = Number.isFinite(keep) ? Math.max(0, Math.floor(keep)) : imageIndexes.length;
+  if (imageIndexes.length <= keepCount) return messages;
+  const strip = new Set(imageIndexes.slice(0, imageIndexes.length - keepCount));
+  return messages.map((message, index) => {
+    if (!strip.has(index) || !isToolResult(message)) return message;
+    return {
+      ...message,
+      content: message.content.filter((part) => part.type !== "image"),
+    };
+  });
+}
+
 function compactedToolResult(message: ToolResultMessage): ToolResultMessage {
   const outcome = message.isError ? "error payload" : "result payload";
   return {
@@ -262,9 +287,10 @@ export function compactGenerationContext(
   messages: AgentMessage[],
   options: GenerationContextOptions,
 ): GenerationContextCompaction {
+  const retained = limitComputerUseImages(messages);
   const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } = contextLimits(options);
-  const estimatedMessageTokensBefore = messageTokens(messages);
-  const providerEstimate = estimateContextTokens(messages);
+  const estimatedMessageTokensBefore = messageTokens(retained);
+  const providerEstimate = estimateContextTokens(retained);
   const providerAwareTokens = providerEstimate.tokens;
   const estimatedTokensBefore = Math.max(
     providerAwareTokens,
@@ -273,11 +299,11 @@ export function compactGenerationContext(
   const usageAnchor =
     providerEstimate.lastUsageIndex === null
       ? undefined
-      : messages[providerEstimate.lastUsageIndex];
+      : retained[providerEstimate.lastUsageIndex];
   const estimatedPrefixTokens =
     providerEstimate.lastUsageIndex === null
       ? 0
-      : messageTokens(messages.slice(0, providerEstimate.lastUsageIndex + 1));
+      : messageTokens(retained.slice(0, providerEstimate.lastUsageIndex + 1));
   const providerPrefixRatio =
     providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
       ? Math.max(1, (providerEstimate.usageTokens - staticTokens) / estimatedPrefixTokens)
@@ -313,7 +339,7 @@ export function compactGenerationContext(
 
   if (!shouldCompact(estimatedTokensBefore, contextWindow, settings)) {
     return {
-      messages,
+      messages: retained,
       compacted: false,
       estimatedTokensBefore,
       estimatedTokensAfter: estimatedTokensBefore,
@@ -327,7 +353,7 @@ export function compactGenerationContext(
   }
 
   let truncatedToolResults = 0;
-  const transformed = messages.map((message) => {
+  const transformed = retained.map((message) => {
     if (!isToolResult(message)) return message;
     const truncated = truncateToolResult(message);
     if (truncated.truncated) truncatedToolResults += 1;
@@ -409,7 +435,7 @@ export function compactGenerationContext(
   // that cannot continue the tool loop. Persisted Agent/chat state is untouched.
   if (overBudget()) {
     removedCurrentTurnMessages += transformed.length;
-    transformed.splice(0, transformed.length, contextFallback(messages));
+    transformed.splice(0, transformed.length, contextFallback(retained));
     usedContextFallback = true;
   }
 
