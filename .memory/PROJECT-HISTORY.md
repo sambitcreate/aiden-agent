@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-24 — Add bounded Gemini workspace context caching
+
+- Added main-process explicit caching for native Google workspace turns. The cached prefix is Pi's exact system instruction and tool schema plus a deterministic, metadata-only workspace file/Git index; transcript history and file contents stay outside the cache.
+- Reused caches by credential/model/content fingerprint, bounded workspace churn to eight live fingerprints, refreshed on metadata changes, and deleted orphaned entries on eviction, workspace invalidation, and app shutdown.
+- Kept cache create/delete requests on Google's fixed endpoint with header-only API-key authentication, an owned deadline, per-waiter cancellation, shared in-flight creation, and fail-open backoff for unsupported, undersized, or unavailable caches.
+- Confirmed Pi's `cachedContentTokenCount` becomes cache-read usage without double-counting ordinary input, and added focused coverage for reuse, privacy boundaries, churn, cancellation, timeout, invalidation, shutdown, and cleanup races.
+
 ### 2026-07-24 — Add native Gemini thinking controls
 
 - Added a compact per-model thinking control for reasoning-capable native Google models, showing only choices with distinct native outcomes and labeling the no-exposed-thoughts state Hide when Google cannot truly disable thinking.

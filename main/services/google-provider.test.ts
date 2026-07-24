@@ -172,6 +172,7 @@ test("native Google streaming sends Gemini thinking through the google-generativ
           usageMetadata: {
             promptTokenCount: 3,
             candidatesTokenCount: 4,
+            cachedContentTokenCount: 2,
             totalTokenCount: 7,
           },
         })}\n\n`,
@@ -204,6 +205,8 @@ test("native Google streaming sends Gemini thinking through the google-generativ
   assert.equal(result.api, "google-generative-ai");
   assert.equal(result.provider, GOOGLE_PROVIDER_ID);
   assert.equal(result.stopReason, "stop");
+  assert.equal(result.usage.input, 1);
+  assert.equal(result.usage.cacheRead, 2);
   assert.equal(result.content[0]?.type, "thinking");
   assert.equal(
     result.content[0]?.type === "thinking" ? result.content[0].thinking : "",

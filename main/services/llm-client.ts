@@ -52,6 +52,12 @@ import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "./generation-context.js";
+import {
+  buildGeminiWorkspaceSnapshot,
+  GeminiContextCache,
+} from "./gemini-context-cache.js";
+import { listWorkspaceFiles } from "./workspace-files.js";
+import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
   activatedComputerUseStreamIds,
@@ -101,6 +107,9 @@ const initializing = new Map<
 >();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
+const geminiContextCache = new GeminiContextCache({
+  onWarning: (message, error) => logger.warn("pi", message, error),
+});
 
 function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
@@ -221,6 +230,27 @@ async function prepareGeneration(
       allowMcpTools: options.allowMcpTools,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  let googleWorkspaceSnapshot: string | undefined;
+  if (
+    params.providerId === GOOGLE_PROVIDER_ID &&
+    workspace?.id &&
+    folderPath &&
+    permission !== "none"
+  ) {
+    try {
+      googleWorkspaceSnapshot = buildGeminiWorkspaceSnapshot(
+        await listWorkspaceFiles(folderPath, signal),
+        git,
+      );
+    } catch (error) {
+      if (signal.aborted) throw error;
+      logger.warn(
+        "pi",
+        `Could not prepare Gemini workspace context for ${workspace.id}; continuing without a cache.`,
+        error,
+      );
+    }
+  }
   return {
     runtime: { ...runtime, model },
     permission,
@@ -230,6 +260,8 @@ async function prepareGeneration(
     supportsImages,
     thinkingLevel,
     computerUse,
+    googleWorkspaceSnapshot,
+    workspaceId: workspace?.id,
   };
 }
 
@@ -296,6 +328,8 @@ export const llmClient = {
       supportsImages,
       thinkingLevel,
       computerUse,
+      googleWorkspaceSnapshot,
+      workspaceId,
     } = setup;
     initialization.computerUse = computerUse;
     const { model } = runtime;
@@ -352,6 +386,18 @@ export const llmClient = {
       });
       candidate = new Agent({
         ...buildAgentRuntimeOptions(params.chatId, runtime),
+        ...(params.providerId === GOOGLE_PROVIDER_ID &&
+        runtime.apiKey &&
+        workspaceId &&
+        googleWorkspaceSnapshot
+          ? {
+              onPayload: geminiContextCache.onPayload({
+                apiKey: runtime.apiKey,
+                workspaceId,
+                workspaceSnapshot: googleWorkspaceSnapshot,
+              }),
+            }
+          : {}),
         transformContext: createGenerationContextTransform(
           {
             contextWindow: model.contextWindow,
@@ -745,6 +791,7 @@ export const llmClient = {
         void entry.computerUse?.close();
       }
     }
+    void geminiContextCache.invalidateWorkspace(workspaceId);
   },
 
   abortAll(): void {
@@ -765,5 +812,6 @@ export const llmClient = {
       SHUTDOWN_GENERATION_GRACE_MS,
       (error) => logger.warn("pi", "Could not clear one generation during shutdown.", error),
     );
+    await geminiContextCache.shutdown();
   },
 };
