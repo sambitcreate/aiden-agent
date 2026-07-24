@@ -11,8 +11,9 @@ shipping a GitHub credential.
 - `.github/workflows/release.yml` is considered enabled only when the source repository variable
   `RELEASES_ENABLED` is exactly `true`.
 - Each enabled push to `main` derives a monotonically increasing version from the workflow run
-  number. The base `package.json` version supplies the release line, so `1.0.0` plus run `41`
-  produces `1.0.41` without committing a version-bump loop to `main`.
+  number. The beta line starts at `0.27.0`; the base `package.json` version supplies that release
+  line, so `0.27.0` plus run `41` produces `0.27.41` without committing a version-bump loop to
+  `main`.
 - The release job runs the full TypeScript, lint, JavaScript/TypeScript, Rust, Swift, and build
   gates before preparing signing material.
 - GitHub-hosted macOS VMs do not enforce Aiden's live kernel launch constraint. CI still verifies
@@ -91,6 +92,6 @@ in `package.json`, workflow logs, an application resource, or the public release
 ## Version-line changes
 
 For a planned minor or major release, change only the major/minor line in `package.json` and
-`package-lock.json` (for example, `1.0.0` to `1.1.0`). The next workflow run becomes
-`1.1.<run number>`, which remains greater than every `1.0.x` build. Do not lower the major/minor
-line or manually reuse a published version.
+`package-lock.json` (for example, `0.27.0` to `0.28.0`). The next workflow run becomes
+`0.28.<run number>`, which remains greater than every `0.27.x` build. Do not lower the
+major/minor line or manually reuse a published version.
