@@ -153,6 +153,20 @@ test("serializes concurrent writes and never persists extra content fields", asy
   assert.doesNotMatch(serialized, /private prompt|workspacePath|\/private\//u);
 });
 
+test("persists scheduled model calls as a separate privacy-safe usage source", async () => {
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence, () => NOW);
+  await store.record(
+    record({
+      source: "scheduled",
+      providerId: "openai",
+      modelId: "gpt-test",
+    }),
+  );
+  assert.equal(persistence.read().buckets[0]?.source, "scheduled");
+  assert.equal((await store.summary("1y")).totals.requests, 1);
+});
+
 test("normalizes provider usage without inventing unavailable token counts or local cost", () => {
   assert.equal(
     reportedTokens({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 }),

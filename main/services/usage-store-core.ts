@@ -5,7 +5,7 @@ import type {
   UsageTokenBreakdown,
 } from "./types.js";
 
-export type UsageRequestSource = "chat" | "chat-title" | "voice-transcription";
+export type UsageRequestSource = "chat" | "chat-title" | "voice-transcription" | "scheduled";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
 
@@ -64,7 +64,12 @@ const RANGE_DAYS: Record<Exclude<UsageDateRange, "all">, number> = {
   "1y": 365,
 };
 
-const REQUEST_SOURCES = new Set<UsageRequestSource>(["chat", "chat-title", "voice-transcription"]);
+const REQUEST_SOURCES = new Set<UsageRequestSource>([
+  "chat",
+  "chat-title",
+  "voice-transcription",
+  "scheduled",
+]);
 
 export function emptyUsageTokens(): UsageTokenBreakdown {
   return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0 };

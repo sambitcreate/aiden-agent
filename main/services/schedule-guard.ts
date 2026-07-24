@@ -32,10 +32,17 @@ const INVISIBLE_UNICODE_POINTS = new Set([
 ]);
 const ZWJ = "\u200d";
 const VARIATION_SELECTOR = "\ufe0f";
-const EXTENDED_PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
 
 function isEmojiCodePoint(value: string | undefined): boolean {
-  return value !== undefined && EXTENDED_PICTOGRAPHIC.test(value);
+  if (value === undefined) return false;
+  const codePoint = value.codePointAt(0) as number;
+  return (
+    (codePoint >= 0x1f000 && codePoint <= 0x1ffff) ||
+    (codePoint >= 0x2600 && codePoint <= 0x27bf) ||
+    (codePoint >= 0x2300 && codePoint <= 0x23ff) ||
+    (codePoint >= 0x1f1e6 && codePoint <= 0x1f1ff) ||
+    codePoint === 0x20e3
+  );
 }
 
 function previousCodePoint(text: string, index: number): string | undefined {
@@ -83,9 +90,7 @@ export function assertSafeScheduledPrompt(prompt: string): void {
 }
 
 export function recommendedScheduledPermission(prompt: string): "read-only" | "full" {
-  return /\b(?:write|edit|modify|rename|move|delete|remove|create|commit|push|install|run|execute|command|script|deploy|publish)\b/iu.test(
-    prompt,
-  )
+  return /\b(?:edit|modify|rename|move|delete|remove|commit|push|install|deploy|publish)\b|\b(?:write|create)\s+(?:a\s+|the\s+)?(?:file|folder|directory|code|script|commit|branch)\b|\b(?:run|execute)\s+(?:a\s+|the\s+)?(?:command|script|test|build|program)\b/iu.test(prompt)
     ? "full"
     : "read-only";
 }

@@ -136,6 +136,7 @@ export function ScheduledTasksView() {
   const [editing, setEditing] = React.useState<ScheduledTaskInput | null>(null);
   const [removing, setRemoving] = React.useState<ScheduledTask | null>(null);
   const [busyTaskId, setBusyTaskId] = React.useState<string | null>(null);
+  const [enablingAll, setEnablingAll] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const visible = React.useMemo(
     () => filterScheduledTasks(tasks.data ?? [], query, tab),
@@ -194,6 +195,18 @@ export function ScheduledTasksView() {
   };
 
   const globallyEnabled = settings.data?.enabled ?? true;
+  const enableAll = async () => {
+    if (enablingAll) return;
+    setEnablingAll(true);
+    try {
+      const next = await scheduleApi.settings({ enabled: true });
+      queryClient.setQueryData(queryKeys.scheduledSettings, next);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't enable scheduled tasks.");
+    } finally {
+      setEnablingAll(false);
+    }
+  };
   return (
     <>
       <ScrollArea
@@ -226,10 +239,8 @@ export function ScheduledTasksView() {
               </div>
               <Button
                 size="small"
-                onClick={async () => {
-                  const next = await scheduleApi.settings({ enabled: true });
-                  queryClient.setQueryData(queryKeys.scheduledSettings, next);
-                }}
+                onClick={() => void enableAll()}
+                disabled={enablingAll}
               >
                 Turn on
               </Button>

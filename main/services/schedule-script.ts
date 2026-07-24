@@ -14,6 +14,7 @@ export interface ScriptProcessResult {
   signal: NodeJS.Signals | null;
   timedOut: boolean;
   outputLimitExceeded: boolean;
+  aborted: boolean;
 }
 
 function pathInside(root: string, candidate: string): boolean {
@@ -105,11 +106,22 @@ function scriptCommand(scriptPath: string): { command: string; args: string[] } 
 
 export function runScheduledScript(
   scriptPath: string,
-  options: { cwd: string; timeoutMs?: number; outputLimit?: number },
+  options: { cwd: string; timeoutMs?: number; outputLimit?: number; signal?: AbortSignal },
 ): Promise<ScriptProcessResult> {
   const { command, args } = scriptCommand(scriptPath);
   const timeoutMs = options.timeoutMs ?? SCRIPT_TIMEOUT_MS;
   const outputLimit = options.outputLimit ?? SCRIPT_OUTPUT_LIMIT;
+  if (options.signal?.aborted) {
+    return Promise.resolve({
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      signal: null,
+      timedOut: false,
+      outputLimitExceeded: false,
+      aborted: true,
+    });
+  }
   return new Promise((resolve, reject) => {
     const child = (() => {
       try {
@@ -131,6 +143,7 @@ export function runScheduledScript(
     let bytes = 0;
     let timedOut = false;
     let outputLimitExceeded = false;
+    let aborted = false;
     let settled = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
 
@@ -153,6 +166,10 @@ export function runScheduledScript(
       }, 1_000);
       forceKill.unref?.();
     };
+    const abort = () => {
+      aborted = true;
+      terminate();
+    };
     const capture = (target: Buffer[]) => (chunk: Buffer | string) => {
       const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       const remaining = Math.max(0, outputLimit - bytes);
@@ -170,6 +187,7 @@ export function runScheduledScript(
       settled = true;
       clearTimeout(timeout);
       clearTimeout(forceKill);
+      options.signal?.removeEventListener("abort", abort);
       reject(error);
     });
     child.once("close", (exitCode, signal) => {
@@ -177,6 +195,7 @@ export function runScheduledScript(
       settled = true;
       clearTimeout(timeout);
       clearTimeout(forceKill);
+      options.signal?.removeEventListener("abort", abort);
       resolve({
         stdout: Buffer.concat(stdout).toString("utf-8"),
         stderr: Buffer.concat(stderr).toString("utf-8"),
@@ -184,8 +203,10 @@ export function runScheduledScript(
         signal,
         timedOut,
         outputLimitExceeded,
+        aborted,
       });
     });
+    options.signal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(() => {
       timedOut = true;
       terminate();

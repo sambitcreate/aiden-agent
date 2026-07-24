@@ -11,6 +11,7 @@ test("scheduled prompt guard allows ordinary monitoring instructions and emoji",
     "Run pytest and report the failures.",
     "Summarize family updates 👨‍👩‍👧 every morning.",
     "Report developer activity 🧑‍💻 each weekday.",
+    "Report developer activity 🧑🏽‍💻 each weekday.",
   ]) {
     assert.doesNotThrow(() => assertSafeScheduledPrompt(prompt));
   }
@@ -37,5 +38,6 @@ test("scheduled prompt guard blocks injection, secret access, exfiltration, and 
 
 test("permission recommendation stays read-only unless a prompt clearly needs mutation", () => {
   assert.equal(recommendedScheduledPermission("Summarize open issues."), "read-only");
+  assert.equal(recommendedScheduledPermission("Create a summary of open issues."), "read-only");
   assert.equal(recommendedScheduledPermission("Edit the changelog and commit it."), "full");
 });

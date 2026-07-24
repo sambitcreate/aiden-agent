@@ -140,17 +140,20 @@ function buildSystemPrompt(
     permission === "read-only"
       ? "You have tools to read, search, and list files in this folder. You cannot edit files or run commands. "
       : "You have tools to read, search, list, and edit files and to run shell commands in this folder. ";
+  const workflow =
+    permission === "read-only"
+      ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
+      : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
   return (
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
     capability +
-    "All file paths are relative to this folder. Prefer editing existing files over creating new ones, " +
-    "read a file before editing it, and keep changes surgical. " +
+    workflow +
     (permission === "ask"
       ? "The user must approve each file write and shell command before it runs."
-      : permission === "read-only"
-        ? "If the request requires a mutation, explain that this scheduled run is read-only."
-      : "You may make changes and run commands directly.")
+      : permission === "full"
+        ? "You may make changes and run commands directly."
+        : "")
   );
 }
 

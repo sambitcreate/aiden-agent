@@ -71,7 +71,7 @@ test("script resolution rejects a symlink that escapes an allowed root", async (
   }
 });
 
-test("script runner maps stdout, nonzero exit, timeout, and output bounds", async () => {
+test("script runner maps stdout, nonzero exit, timeout, output bounds, and cancellation", async () => {
   const files = await fixture();
   try {
     const ok = path.join(files.root, "ok.sh");
@@ -95,6 +95,14 @@ test("script runner maps stdout, nonzero exit, timeout, and output bounds", asyn
     const bounded = await runScheduledScript(noisy, { cwd: files.root, outputLimit: 5 });
     assert.equal(bounded.outputLimitExceeded, true);
     assert.equal(bounded.stdout, "12345");
+    const abort = new AbortController();
+    const cancelled = runScheduledScript(slow, {
+      cwd: files.root,
+      timeoutMs: 5_000,
+      signal: abort.signal,
+    });
+    setTimeout(() => abort.abort(), 25);
+    assert.equal((await cancelled).aborted, true);
   } finally {
     await files.cleanup();
   }

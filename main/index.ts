@@ -39,6 +39,7 @@ import { isPackagedRuntime } from "./runtime-mode.js";
 import { appUpdateService } from "./services/app-updater.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { registerAppPathOpener } from "./services/app-navigation.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -452,6 +453,16 @@ function showMainWindow(): void {
     void createMainWindow();
   }
 }
+
+registerAppPathOpener(async (path) => {
+  await createMainWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    ipcMain.broadcast("app:navigate", { path });
+  }
+});
 
 function setupApplicationMenu(): void {
   const menu = Menu.buildFromTemplate([

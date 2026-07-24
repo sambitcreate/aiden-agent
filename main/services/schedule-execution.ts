@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { Notification, ipcMain, logger } from "../platform.js";
+import { requestAppPath } from "./app-navigation.js";
 import { APPROVAL_TOOL_NAMES } from "./coding-tools.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
@@ -7,6 +8,7 @@ import { llmClient } from "./llm-client.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
 import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
+import { showScheduledNotification } from "./schedule-notification.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
@@ -52,17 +54,19 @@ async function appendChatMessage(chatId: string, content: string): Promise<void>
   });
 }
 
-function notify(task: ScheduledTask, body: string): void {
-  if (!task.notify || !Notification.isSupported()) return;
-  const notification = new Notification({
-    title: task.name,
-    body: body.replace(/\s+/gu, " ").trim().slice(0, 120),
+function notify(task: ScheduledTask, body: string, chatId: string | undefined): void {
+  showScheduledNotification(task, body, chatId, {
+    isSupported: () => Notification.isSupported(),
+    create: (options) => new Notification(options),
+    openChat: async (id) => {
+      await requestAppPath(`/chat/${encodeURIComponent(id)}`);
+    },
   });
-  notification.show();
 }
 
 export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeStreams = new Map<string, string>();
+  const activeControllers = new Map<string, AbortController>();
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
     const chatId = await store.ensureChatId(task.id, () =>
@@ -85,7 +89,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     return chatId;
   }
 
-  async function executeScript(task: ScheduledTask, chatId: string): Promise<{
+  async function executeScript(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+  ): Promise<{
     result: ScheduledRun["result"];
     output: string;
     error?: string;
@@ -99,7 +107,13 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     });
     const processResult = await runScheduledScript(script, {
       cwd: workspace?.folderPath ?? path.dirname(script),
+      signal,
     });
+    if (processResult.aborted) {
+      const error = "Scheduled task was cancelled.";
+      await appendChatMessage(chatId, error);
+      return { result: "blocked", output: processResult.stdout, error };
+    }
     if (processResult.timedOut) {
       const error = "Script timed out after 60 seconds.";
       await appendChatMessage(chatId, `Scheduled task failed: ${error}`);
@@ -121,7 +135,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     return { result: "success", output: processResult.stdout };
   }
 
-  async function executeLlm(task: ScheduledTask, chatId: string): Promise<{
+  async function executeLlm(
+    task: ScheduledTask,
+    chatId: string,
+    signal: AbortSignal,
+  ): Promise<{
     result: ScheduledRun["result"];
     output: string;
     error?: string;
@@ -138,6 +156,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     if (!model) throw new Error("Choose a model before running this scheduled task.");
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
+    if (signal.aborted) throw new Error("Scheduled task was cancelled.");
 
     await chatStore.appendMessage(
       chatId,
@@ -148,6 +167,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const background = createBackgroundOwner(streamId);
     activeStreams.set(task.id, streamId);
     try {
+      if (signal.aborted) throw new Error("Scheduled task was cancelled.");
       const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
       if (task.permission === "read-only") {
         for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
@@ -166,10 +186,16 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           permission: task.permission,
           excludeToolNames: excluded,
           allowComputerUse: false,
+          usageSource: "scheduled",
         },
       );
       if (!started) throw new Error("The scheduled generation was cancelled before it started.");
       const terminal = await background.terminal;
+      if (signal.aborted) {
+        const error = "Scheduled task was cancelled.";
+        await appendChatMessage(chatId, error);
+        return { result: "blocked", output: "", error };
+      }
       if ("message" in terminal) {
         const error = terminal.message;
         return {
@@ -187,6 +213,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
 
   return {
     async run(task: ScheduledTask): Promise<ScheduledRun> {
+      if (activeControllers.has(task.id)) {
+        throw new Error("This scheduled task is already running.");
+      }
+      const controller = new AbortController();
+      activeControllers.set(task.id, controller);
       const startedAt = Date.now();
       let chatId: string | undefined;
       let result: ScheduledRun["result"] = "error";
@@ -196,8 +227,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         chatId = await ensureChat(task);
         const execution =
           task.mode === "script"
-            ? await executeScript(task, chatId)
-            : await executeLlm(task, chatId);
+            ? await executeScript(task, chatId, controller.signal)
+            : await executeLlm(task, chatId, controller.signal);
         result = execution.result;
         output = execution.output;
         error = execution.error;
@@ -209,27 +240,38 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           });
         }
       }
-      const run = await store.recordRun({
-        taskId: task.id,
-        startedAt,
-        finishedAt: Date.now(),
-        result,
-        output,
-        error,
-        chatId,
-      });
-      if (result !== "silent") notify(task, error ?? output);
-      ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
-      return run;
+      try {
+        const run = await store.recordRun({
+          taskId: task.id,
+          startedAt,
+          finishedAt: Date.now(),
+          result,
+          output,
+          error,
+          chatId,
+        });
+        if (result !== "silent") notify(task, error ?? output, chatId);
+        ipcMain.broadcast("schedule:updated", { taskId: task.id, run });
+        return run;
+      } finally {
+        activeControllers.delete(task.id);
+      }
     },
 
     cancel(taskId: string): boolean {
+      const controller = activeControllers.get(taskId);
+      controller?.abort();
       const streamId = activeStreams.get(taskId);
-      return streamId ? llmClient.cancel(streamId) : false;
+      const streamCancelled = streamId ? llmClient.cancel(streamId) : false;
+      return Boolean(controller) || streamCancelled;
     },
 
     cancelAll(): void {
-      for (const streamId of activeStreams.values()) llmClient.cancel(streamId);
+      for (const [taskId, controller] of activeControllers) {
+        controller.abort();
+        const streamId = activeStreams.get(taskId);
+        if (streamId) llmClient.cancel(streamId);
+      }
     },
   };
 }
