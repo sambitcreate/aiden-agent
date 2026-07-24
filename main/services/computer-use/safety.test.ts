@@ -7,6 +7,7 @@ import {
   normalizeComputerUseArgs,
   parseComputerUseKeyChord,
   summarizeComputerUseApproval,
+  summarizeTypedApprovalPayload,
 } from "./safety.js";
 
 /** Helper: assert a call throws a ComputerUseSafetyError with the given code. */
@@ -404,11 +405,11 @@ test("set_value applies the same dangerous-text policy as type", () => {
       normalizeComputerUseArgs({ action: "set_value", element: 0, value } as never),
     );
   }
-  assertSafetyError("invalid_text", () =>
+  assertSafetyError("payload_too_large", () =>
     normalizeComputerUseArgs({
       action: "set_value",
       element: 0,
-      value: "a".repeat(65_537),
+      value: "a".repeat(4_001),
     } as never),
   );
 });
@@ -451,11 +452,11 @@ test("validateTypedText normalizes obfuscation before matching", () => {
 });
 
 test("validateTypedText rejects oversized input", () => {
-  assertSafetyError("invalid_text", () =>
-    normalizeComputerUseArgs({ action: "type", text: "a".repeat(65_537) } as never),
+  assertSafetyError("payload_too_large", () =>
+    normalizeComputerUseArgs({ action: "type", text: "a".repeat(4_001) } as never),
   );
   assert.doesNotThrow(() =>
-    normalizeComputerUseArgs({ action: "type", text: "a".repeat(65_536) } as never),
+    normalizeComputerUseArgs({ action: "type", text: "a".repeat(4_000) } as never),
   );
 });
 
@@ -477,6 +478,12 @@ test("computerUseNeedsApproval: read-only actions do not need approval", () => {
   ]) {
     assert.equal(computerUseNeedsApproval({ action } as never), true);
   }
+});
+
+test("summarizeTypedApprovalPayload returns full JSON encoding", () => {
+  assert.equal(summarizeTypedApprovalPayload("hello"), JSON.stringify("hello"));
+  const huge = "z".repeat(5_000);
+  assert.equal(summarizeTypedApprovalPayload(huge), JSON.stringify(huge));
 });
 
 test("summarizeComputerUseApproval renders element vs coordinate and suffixes", () => {
@@ -502,11 +509,28 @@ test("summarizeComputerUseApproval renders element vs coordinate and suffixes", 
   } as never);
   assert.ok(fg.includes("[VISIBLE FOREGROUND]"), fg);
   assert.ok(fg.endsWith("then capture"), fg);
-  // Type preview truncates at 60 chars.
+  // Type approval shows the full JSON-encoded payload.
   const long = "x".repeat(80);
   const summary = summarizeComputerUseApproval({ action: "type", text: long } as never);
-  assert.ok(summary.includes("…"), summary);
-  assert.ok(summary.length < long.length + 20, summary);
+  assert.ok(summary.includes(JSON.stringify(long)), summary);
+  assert.equal(summary.includes("…"), false, summary);
+  const atLimit = "y".repeat(4_000);
+  const limitSummary = summarizeComputerUseApproval({ action: "type", text: atLimit } as never);
+  assert.ok(limitSummary.includes(JSON.stringify(atLimit)), limitSummary);
+  assert.throws(
+    () => summarizeComputerUseApproval({ action: "type", text: "y".repeat(4_001) } as never),
+    (error: unknown) =>
+      error instanceof ComputerUseSafetyError && error.code === "payload_too_large",
+  );
+  const setValueSummary = summarizeComputerUseApproval({
+    action: "set_value",
+    element: 2,
+    value: "full-value-visible-to-user",
+  } as never);
+  assert.ok(
+    setValueSummary.includes(JSON.stringify("full-value-visible-to-user")),
+    setValueSummary,
+  );
   // Key press.
   assert.equal(
     summarizeComputerUseApproval({ action: "key", keys: "cmd+c" } as never),
@@ -534,8 +558,38 @@ test("ComputerUseGrantLedger happy path: prepare -> authorize -> consume", () =>
   ledger.authorize("call-1", args, prepared);
   assert.equal(ledger.size, 1);
   // Consume must not throw and must clear the grant.
-  ledger.consume("call-1", args);
+  assert.deepEqual(ledger.consume("call-1", args), {});
   assert.equal(ledger.size, 0);
+});
+
+test("ComputerUseGrantLedger stores boundTarget for focus_app grants", () => {
+  const ledger = new ComputerUseGrantLedger("gen-1", () => 1);
+  const args = { action: "focus_app", app: "Safari" } as never;
+  const boundTarget = { pid: 42, windowId: 7 };
+  const prepared = ledger.prepare(args, boundTarget);
+  assert.deepEqual(prepared.boundTarget, boundTarget);
+  ledger.authorize("focus", args, prepared);
+  assert.deepEqual(ledger.consume("focus", args), { boundTarget });
+});
+
+test("ComputerUseGrantLedger fingerprints boundTarget through authorize and consume", () => {
+  const args = { action: "focus_app", app: "Safari" } as never;
+
+  const beforeAuthorize = new ComputerUseGrantLedger("gen-1", () => 1);
+  const changedPrepared = beforeAuthorize.prepare(args, { pid: 42, windowId: 7 });
+  changedPrepared.boundTarget!.windowId = 8;
+  assertSafetyError("approval_expired", () =>
+    beforeAuthorize.authorize("changed-before-authorize", args, changedPrepared),
+  );
+
+  const afterAuthorize = new ComputerUseGrantLedger("gen-1", () => 1);
+  const boundTarget = { pid: 42, windowId: 7 };
+  const prepared = afterAuthorize.prepare(args, boundTarget);
+  afterAuthorize.authorize("changed-before-consume", args, prepared);
+  boundTarget.windowId = 8;
+  assertSafetyError("approval_required", () =>
+    afterAuthorize.consume("changed-before-consume", args),
+  );
 });
 
 test("ComputerUseGrantLedger expires when the target revision changes", () => {
