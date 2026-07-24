@@ -40,7 +40,8 @@ export function AboutSettings() {
           <p className="mt-0.5 text-small text-secondary">
             {appInfo ? (
               <>
-                Version {appInfo.version} <span aria-hidden="true">·</span>{" "}
+                Version {appInfo.version} <span aria-hidden="true">·</span> Beta{" "}
+                <span aria-hidden="true">·</span>{" "}
                 {buildLabel(appInfo.environment)}
               </>
             ) : loadFailed ? (
