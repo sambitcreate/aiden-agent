@@ -30,6 +30,7 @@ import {
 } from "../../lib/mcp-preset-state";
 import { queryKeys, useMcpPresets, useMcpServers } from "../../lib/queries";
 import type { McpPresetState, McpServer, McpTransport } from "../../lib/types";
+import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 
 function newServer(): McpServer {
@@ -125,6 +126,14 @@ export function McpSettings() {
               <React.Fragment key={s.id}>
                 {i > 0 ? <Separator /> : null}
                 <div className="flex items-center gap-3 px-3.5 py-3">
+                  {s.presetId ? (
+                    <div
+                      aria-hidden
+                      className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-separator bg-well text-strong"
+                    >
+                      <McpPresetIcon presetId={s.presetId} name={s.name} className="size-4" />
+                    </div>
+                  ) : null}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Text variant="strong" truncate>
@@ -245,9 +254,9 @@ function PresetCard({ state, onSetup }: { state: McpPresetState; onSetup: () => 
     <div className="flex flex-col gap-2 rounded-card border border-separator p-4">
       <div
         aria-hidden
-        className="flex size-9 items-center justify-center rounded-lg border border-separator bg-well text-strong font-semibold"
+        className="flex size-9 items-center justify-center rounded-lg border border-separator bg-well text-strong"
       >
-        {preset.name.charAt(0)}
+        <McpPresetIcon presetId={preset.id} name={preset.name} className="size-5" />
       </div>
       <Text variant="strong">{preset.name}</Text>
       <Text variant="small" color="secondary" className="block">
