@@ -254,7 +254,7 @@ export async function authorizeMcpServer(server: McpServer): Promise<void> {
       sessionForFreshMcpAuthorization(previousSession, binding),
     );
     const transport = makeOAuthTransport(server, provider);
-    const client = new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} });
+    const client = new Client({ name: "aiden-agent", version: "0.27.0" }, { capabilities: {} });
     try {
       await client.connect(transport);
       await client.close().catch(() => {});
@@ -269,7 +269,7 @@ export async function authorizeMcpServer(server: McpServer): Promise<void> {
 
     // Verify the freshly minted tokens actually authorize a connection.
     const verifyTransport = makeOAuthTransport(server, provider);
-    const verifyClient = new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} });
+    const verifyClient = new Client({ name: "aiden-agent", version: "0.27.0" }, { capabilities: {} });
     await verifyClient.connect(verifyTransport);
     await verifyClient.close().catch(() => {});
   } catch (error) {
