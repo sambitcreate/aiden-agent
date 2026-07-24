@@ -33,14 +33,22 @@ const Action = Type.Union([
   Type.Literal("list_windows"),
   Type.Literal("focus_app"),
 ]);
-const Coordinate = Type.Tuple([
-  Type.Number({ minimum: 0 }),
-  Type.Number({ minimum: 0 }),
-]);
+const Coordinate = Type.Tuple([Type.Number({ minimum: 0 }), Type.Number({ minimum: 0 })]);
 const Modifier = Type.Union(
-  ["cmd", "command", "shift", "option", "alt", "ctrl", "control", "fn", "win", "windows", "super", "meta"].map(
-    (modifier) => Type.Literal(modifier),
-  ),
+  [
+    "cmd",
+    "command",
+    "shift",
+    "option",
+    "alt",
+    "ctrl",
+    "control",
+    "fn",
+    "win",
+    "windows",
+    "super",
+    "meta",
+  ].map((modifier) => Type.Literal(modifier)),
 );
 
 /**
@@ -61,7 +69,7 @@ export const ComputerUseParameters = Type.Object(
         minLength: 1,
         maxLength: 512,
         description:
-          "App name or bundle id for capture/focus_app. Use screen or desktop for a desktop capture.",
+          "App name or bundle id for capture/focus_app, or screen/desktop for a desktop capture. Capture otherwise requires exact pid and window_id together.",
       }),
     ),
     pid: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -91,8 +99,8 @@ export const ComputerUseParameters = Type.Object(
       ]),
     ),
     amount: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 3 })),
-    value: Type.Optional(Type.String({ maxLength: 65_536 })),
-    text: Type.Optional(Type.String({ maxLength: 65_536 })),
+    value: Type.Optional(Type.String({ maxLength: 4_000 })),
+    text: Type.Optional(Type.String({ maxLength: 4_000 })),
     keys: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
     seconds: Type.Optional(Type.Number({ minimum: 0, maximum: 30, default: 1 })),
     raise_window: Type.Optional(
