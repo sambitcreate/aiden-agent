@@ -5,6 +5,7 @@ export const SETTINGS_SECTIONS = [
   "mcp",
   "websearch",
   "computerUse",
+  "scheduledTasks",
   "voice",
   "shortcut",
   "appearance",

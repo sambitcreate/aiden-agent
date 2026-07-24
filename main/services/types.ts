@@ -214,6 +214,68 @@ export interface Chat extends ChatMeta {
   messages: ChatMessage[];
 }
 
+export type ScheduledTaskMode = "llm" | "script";
+export type ScheduledTaskPermission = "read-only" | "full";
+export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  enabled: boolean;
+  mode: ScheduledTaskMode;
+  cron: string;
+  timezone: string;
+  nextRunAt?: number;
+  lastRunAt?: number;
+  workspaceId?: string;
+  providerId?: string;
+  model?: string;
+  prompt?: string;
+  script?: string;
+  permission: ScheduledTaskPermission;
+  chatId?: string;
+  notify: boolean;
+  lastResult?: ScheduledRunResult;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ScheduledRun {
+  id: string;
+  taskId: string;
+  startedAt: number;
+  finishedAt: number;
+  result: ScheduledRunResult;
+  output: string;
+  error?: string;
+  chatId?: string;
+}
+
+export interface ScheduledTaskInput {
+  id?: string;
+  name: string;
+  enabled?: boolean;
+  mode: ScheduledTaskMode;
+  cron: string;
+  timezone?: string;
+  workspaceId?: string;
+  providerId?: string;
+  model?: string;
+  prompt?: string;
+  script?: string;
+  permission?: ScheduledTaskPermission;
+  notify?: boolean;
+}
+
+export interface ScheduledTaskSettings {
+  enabled: boolean;
+  defaultMode: ScheduledTaskMode;
+  defaultPermission: ScheduledTaskPermission;
+  defaultNotify: boolean;
+  defaultTimezone: string;
+}
+
 export type McpTransport = "stdio" | "http" | "sse";
 
 /** A user-configured MCP server connection. */
@@ -300,6 +362,12 @@ export interface AppSettings {
   appearance?: AppearanceConfig;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
+  /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
+  scheduledTasksEnabled?: boolean;
+  scheduledDefaultMode?: ScheduledTaskMode;
+  scheduledDefaultPermission?: ScheduledTaskPermission;
+  scheduledDefaultNotify?: boolean;
+  scheduledDefaultTimezone?: string;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
 }

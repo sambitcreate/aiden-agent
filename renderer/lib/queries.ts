@@ -18,6 +18,7 @@ import {
   modelsApi,
   profileApi,
   providersApi,
+  scheduleApi,
   settingsApi,
   skillsApi,
   titleProvidersApi,
@@ -39,6 +40,9 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  scheduledTasks: ["scheduledTasks"] as const,
+  scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
+  scheduledSettings: ["scheduledSettings"] as const,
   computerUseStatus: ["computerUseStatus"] as const,
   artificialAnalysisStatus: ["artificialAnalysisStatus"] as const,
   artificialAnalysisModelInfo: ["modelInfo"] as const,
@@ -307,6 +311,22 @@ export function useChat(id: string | undefined) {
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
+}
+
+export function useScheduledTasks() {
+  return useQuery({ queryKey: queryKeys.scheduledTasks, queryFn: scheduleApi.list });
+}
+
+export function useScheduledRuns(taskId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.scheduledRuns(taskId),
+    queryFn: () => scheduleApi.runs(taskId as string),
+    enabled: Boolean(taskId),
+  });
+}
+
+export function useScheduledTaskSettings() {
+  return useQuery({ queryKey: queryKeys.scheduledSettings, queryFn: () => scheduleApi.settings() });
 }
 
 /** Reads only device-local credential/cache state; this query never fetches catalog data. */

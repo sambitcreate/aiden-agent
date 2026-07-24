@@ -452,6 +452,68 @@ export interface Chat extends ChatMeta {
   messages: ChatMessage[];
 }
 
+export type ScheduledTaskMode = "llm" | "script";
+export type ScheduledTaskPermission = "read-only" | "full";
+export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  enabled: boolean;
+  mode: ScheduledTaskMode;
+  cron: string;
+  timezone: string;
+  nextRunAt?: number;
+  lastRunAt?: number;
+  workspaceId?: string;
+  providerId?: string;
+  model?: string;
+  prompt?: string;
+  script?: string;
+  permission: ScheduledTaskPermission;
+  chatId?: string;
+  notify: boolean;
+  lastResult?: ScheduledRunResult;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ScheduledRun {
+  id: string;
+  taskId: string;
+  startedAt: number;
+  finishedAt: number;
+  result: ScheduledRunResult;
+  output: string;
+  error?: string;
+  chatId?: string;
+}
+
+export interface ScheduledTaskInput {
+  id?: string;
+  name: string;
+  enabled?: boolean;
+  mode: ScheduledTaskMode;
+  cron: string;
+  timezone?: string;
+  workspaceId?: string;
+  providerId?: string;
+  model?: string;
+  prompt?: string;
+  script?: string;
+  permission?: ScheduledTaskPermission;
+  notify?: boolean;
+}
+
+export interface ScheduledTaskSettings {
+  enabled: boolean;
+  defaultMode: ScheduledTaskMode;
+  defaultPermission: ScheduledTaskPermission;
+  defaultNotify: boolean;
+  defaultTimezone: string;
+}
+
 export interface ChatMetadataUpdated {
   chatId: string;
   workspaceId?: string;
@@ -562,6 +624,11 @@ export interface AppSettings {
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
   computerUseEnabled?: boolean;
+  scheduledTasksEnabled?: boolean;
+  scheduledDefaultMode?: ScheduledTaskMode;
+  scheduledDefaultPermission?: ScheduledTaskPermission;
+  scheduledDefaultNotify?: boolean;
+  scheduledDefaultTimezone?: string;
   profileName?: string;
 }
 

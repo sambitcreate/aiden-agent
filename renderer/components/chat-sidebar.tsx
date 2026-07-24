@@ -39,6 +39,7 @@ import {
   Loader2,
   Settings,
   UserRound,
+  Clock3,
 } from "lucide-react";
 import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import {
@@ -615,6 +616,14 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             ))
           )}
         </SidebarList>
+        <div className="px-2.5 pb-2 pt-1">
+          <SidebarListItem
+            icon={<Clock3 />}
+            title="Scheduled"
+            selected={pathname === "/scheduled"}
+            onClick={() => navigate({ to: "/scheduled" })}
+          />
+        </div>
       </Sidebar>
 
       <Dialog

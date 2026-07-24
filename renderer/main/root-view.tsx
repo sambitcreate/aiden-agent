@@ -1,4 +1,5 @@
 import { Outlet, useNavigate } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { appApi, onNotification } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
@@ -6,6 +7,7 @@ import { WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
+import { queryKeys } from "../lib/queries";
 import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
@@ -26,6 +28,7 @@ export function RootView() {
 
 function RootContent() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
   const navigationBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish before leaving the chat."
@@ -62,6 +65,16 @@ function RootContent() {
     window.addEventListener("beforeunload", preventUnprotectedUnload);
     return () => window.removeEventListener("beforeunload", preventUnprotectedUnload);
   }, []);
+
+  React.useEffect(() => {
+    return onNotification("schedule:updated", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.scheduledTasks }),
+        queryClient.invalidateQueries({ queryKey: ["scheduledRuns"] }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+      ]);
+    });
+  }, [queryClient]);
 
   React.useEffect(() => {
     return onNotification<{ path: string }>("app:navigate", (payload) => {

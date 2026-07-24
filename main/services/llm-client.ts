@@ -31,6 +31,7 @@ import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
+import type { UsageRequestSource } from "./usage-store-core.js";
 import type {
   ComputerUseApprovalDescriptor,
   ComputerUseController,
@@ -53,6 +54,19 @@ import {
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
+
+type GenerationPermission = WorkspacePermission | "read-only";
+
+export interface GenerationExecutionOptions {
+  /** Internal-only execution policy. Renderer chat starts always use the workspace permission. */
+  permission?: GenerationPermission;
+  /** Scheduled and other background runs can withhold tools that would recurse or mutate. */
+  excludeToolNames?: ReadonlySet<string>;
+  /** Computer Use always requires a live renderer approval surface unless explicitly enabled. */
+  allowComputerUse?: boolean;
+  /** Privacy-safe accounting category for this model call. */
+  usageSource?: UsageRequestSource;
+}
 
 interface ActiveGeneration {
   agent: Agent;
@@ -114,7 +128,7 @@ function resetGenerationAgent(agent: Agent, streamId: string): void {
 function buildSystemPrompt(
   folderPath: string | undefined,
   branch: string | undefined,
-  permission: WorkspacePermission,
+  permission: GenerationPermission,
 ): string {
   const base =
     "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
@@ -122,14 +136,20 @@ function buildSystemPrompt(
     return `${base} Call the available tools when they help answer the user's request.`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
+  const capability =
+    permission === "read-only"
+      ? "You have tools to read, search, and list files in this folder. You cannot edit files or run commands. "
+      : "You have tools to read, search, list, and edit files and to run shell commands in this folder. ";
   return (
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
-    "You have tools to read, search, list, and edit files and to run shell commands in this folder. " +
+    capability +
     "All file paths are relative to this folder. Prefer editing existing files over creating new ones, " +
     "read a file before editing it, and keep changes surgical. " +
     (permission === "ask"
       ? "The user must approve each file write and shell command before it runs."
+      : permission === "read-only"
+        ? "If the request requires a mutation, explain that this scheduled run is read-only."
       : "You may make changes and run commands directly.")
   );
 }
@@ -140,12 +160,13 @@ async function prepareGeneration(
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
+  options: GenerationExecutionOptions,
 ) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const workspace = params.workspaceId
     ? await configStore.getWorkspace(params.workspaceId)
     : undefined;
-  const permission: WorkspacePermission = workspace?.permission ?? "ask";
+  const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
   // Capability metadata is local: Pi owns Codex facts and the release snapshot
@@ -157,6 +178,7 @@ async function prepareGeneration(
   const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
   let computerUse: ComputerUseController | undefined;
   if (
+    options.allowComputerUse !== false &&
     settings.computerUseEnabled === true &&
     chat?.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
@@ -174,7 +196,10 @@ async function prepareGeneration(
       activatedComputerUse(computerUse);
     }
   }
-  const tools = await buildAgentTools({ workspaceRoot: folderPath, permission, computerUse });
+  const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
+  const tools = (
+    await buildAgentTools({ workspaceRoot: folderPath, permission: toolPermission, computerUse })
+  ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   return {
     runtime: { ...runtime, model },
     permission,
@@ -191,6 +216,7 @@ export const llmClient = {
     streamId: string,
     params: ChatStartParams,
     owner: ChatGenerationOwner,
+    options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
     if (chatComputerUseMutationGate.isChanging(params.chatId)) {
       throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
@@ -223,6 +249,7 @@ export const llmClient = {
         (computerUse) => {
           initialization.computerUse = computerUse;
         },
+        options,
       );
     } catch (error) {
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
@@ -422,7 +449,7 @@ export const llmClient = {
                   message: event.message,
                   provider: runtime.provider,
                   model,
-                  source: "chat",
+                  source: options.usageSource ?? "chat",
                 }),
               );
             }

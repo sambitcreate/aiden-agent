@@ -9,6 +9,7 @@ import { ChatLayout, ChatIndex } from "./chat-layout";
 import { ChatPane } from "./chat-pane";
 import { SettingsView } from "./settings-view";
 import { ProfileView } from "./profile-view";
+import { ScheduledTasksView } from "../components/scheduled-tasks-view";
 import { QueryClient } from "@tanstack/react-query";
 import { ErrorBoundaryView } from "../components/ui";
 import { parseSettingsSearch } from "../lib/settings-section";
@@ -59,6 +60,13 @@ const profileRoute = createRoute({
   staticData: { title: "Profile" },
 });
 
+const scheduledRoute = createRoute({
+  getParentRoute: () => chatLayoutRoute,
+  path: "/scheduled",
+  component: ScheduledTasksView,
+  staticData: { title: "Scheduled tasks" },
+});
+
 // Full-screen settings (outside the chat shell).
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -72,7 +80,7 @@ const settingsRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-  chatLayoutRoute.addChildren([indexRoute, chatRoute, profileRoute]),
+  chatLayoutRoute.addChildren([indexRoute, chatRoute, profileRoute, scheduledRoute]),
   settingsRoute,
 ]);
 

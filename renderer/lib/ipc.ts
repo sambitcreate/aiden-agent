@@ -44,6 +44,10 @@ import type {
   ProviderAuthEvent,
   ProviderAuthPrompt,
   Skill,
+  ScheduledRun,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskSettings,
   UsageDateRange,
   UsageSummary,
   Workspace,
@@ -152,6 +156,21 @@ export const titleProvidersApi = {
 
 export const usageApi = {
   summary: (range: UsageDateRange = "1y") => invoke<UsageSummary>("usage:summary", range),
+};
+
+export const scheduleApi = {
+  list: () => invoke<ScheduledTask[]>("schedule:list"),
+  save: (task: ScheduledTaskInput) => invoke<ScheduledTask>("schedule:save", task),
+  remove: (id: string) => invoke<void>("schedule:remove", id),
+  pause: (id: string) => invoke<ScheduledTask>("schedule:pause", id),
+  resume: (id: string) => invoke<ScheduledTask>("schedule:resume", id),
+  runNow: (id: string) => invoke<ScheduledRun>("schedule:runNow", id),
+  runs: (id: string) => invoke<ScheduledRun[]>("schedule:runs", id),
+  preview: (cron: string, timezone: string, count = 3) =>
+    invoke<number[]>("schedule:preview", cron, timezone, count),
+  scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),
+  settings: (patch?: Partial<ScheduledTaskSettings>) =>
+    invoke<ScheduledTaskSettings>("schedule:settings", patch),
 };
 
 export const profileApi = {

@@ -38,6 +38,7 @@ import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { appUpdateService } from "./services/app-updater.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
+import { scheduleService } from "./services/schedule-service.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
@@ -114,6 +115,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
+  scheduleService.stop();
   llmClient.abortAll();
   void mcpManager.closeAll();
 }
@@ -576,6 +578,7 @@ if (!ownsSingleInstanceLock) {
       void foundationModelsConnection.status();
 
       await createMainWindow();
+      await scheduleService.start();
       appUpdateService.start();
     })
     .catch((error: unknown) => {
