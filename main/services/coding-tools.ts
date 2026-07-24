@@ -5,17 +5,16 @@
 //
 // Tool inputs use typebox schemas (pi's AgentTool.parameters), matching tools.ts.
 
-import { exec } from "child_process";
+import { spawn } from "node:child_process";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { promisify } from "util";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 
-const execAsync = promisify(exec);
-
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
+const MAX_COMMAND_OUTPUT_BYTES = 10 * 1024 * 1024;
+const COMMAND_TIMEOUT_MS = 120_000;
 const MAX_GREP_MATCHES = 200;
 const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".cache"]);
 
@@ -351,26 +350,115 @@ function makeRunCommand(root: string): AgentTool {
     description:
       "Run a shell command with the workspace folder as the working directory. Returns combined stdout/stderr (capped). Use for builds, tests, git, package managers, etc.",
     parameters: Type.Object({ command: Type.String({ description: "The shell command to run." }) }),
-    execute: async (_id, params): Promise<AgentToolResult<null>> => {
+    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { command } = params as { command: string };
-      try {
-        const { stdout, stderr } = await execAsync(command, {
-          cwd: root,
-          timeout: 120_000,
-          maxBuffer: 10 * 1024 * 1024,
-        });
-        const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
-        return textResult(truncate(combined || "[no output]", MAX_OUTPUT_CHARS));
-      } catch (error) {
-        const e = error as { stdout?: string; stderr?: string; message?: string; code?: number };
-        const combined = [e.stdout, e.stderr, e.message].filter(Boolean).join("\n").trim();
-        return textResult(
-          truncate(
-            `Command exited with error (code ${e.code ?? "?"}):\n${combined}`,
-            MAX_OUTPUT_CHARS,
-          ),
-        );
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
+      const result = await new Promise<{
+        stdout: string;
+        stderr: string;
+        exitCode: number | null;
+        timedOut: boolean;
+        outputLimitExceeded: boolean;
+        aborted: boolean;
+      }>((resolve, reject) => {
+        const child = spawn(command, {
+          cwd: root,
+          detached: process.platform !== "win32",
+          env: process.env,
+          shell: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        let bytes = 0;
+        let timedOut = false;
+        let outputLimitExceeded = false;
+        let aborted = false;
+        let settled = false;
+        let terminationRequested = false;
+        let forceKill: ReturnType<typeof setTimeout> | undefined;
+
+        const signalProcess = (processSignal: NodeJS.Signals) => {
+          if (process.platform !== "win32" && child.pid) {
+            try {
+              process.kill(-child.pid, processSignal);
+              return;
+            } catch {
+              // The process group may have exited; fall back to the child handle.
+            }
+          }
+          child.kill(processSignal);
+        };
+        const terminate = () => {
+          if (terminationRequested) return;
+          terminationRequested = true;
+          signalProcess("SIGTERM");
+          forceKill = setTimeout(() => {
+            if (!settled) signalProcess("SIGKILL");
+          }, 1_000);
+          forceKill.unref?.();
+        };
+        const abort = () => {
+          aborted = true;
+          terminate();
+        };
+        const capture = (target: Buffer[]) => (chunk: Buffer | string) => {
+          const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          const remaining = Math.max(0, MAX_COMMAND_OUTPUT_BYTES - bytes);
+          if (remaining > 0) target.push(value.subarray(0, remaining));
+          bytes += value.length;
+          if (bytes > MAX_COMMAND_OUTPUT_BYTES && !outputLimitExceeded) {
+            outputLimitExceeded = true;
+            terminate();
+          }
+        };
+        child.stdout.on("data", capture(stdout));
+        child.stderr.on("data", capture(stderr));
+        child.once("error", (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          clearTimeout(forceKill);
+          signal?.removeEventListener("abort", abort);
+          reject(error);
+        });
+        child.once("close", (exitCode) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          clearTimeout(forceKill);
+          signal?.removeEventListener("abort", abort);
+          resolve({
+            stdout: Buffer.concat(stdout).toString("utf-8"),
+            stderr: Buffer.concat(stderr).toString("utf-8"),
+            exitCode,
+            timedOut,
+            outputLimitExceeded,
+            aborted,
+          });
+        });
+        signal?.addEventListener("abort", abort, { once: true });
+        const timeout = setTimeout(() => {
+          timedOut = true;
+          terminate();
+        }, COMMAND_TIMEOUT_MS);
+        timeout.unref?.();
+      });
+      if (result.aborted) {
+        throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
+      }
+      const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
+        return textResult(truncate(combined || "[no output]", MAX_OUTPUT_CHARS));
+      }
+      const reason = result.timedOut
+        ? "Command timed out."
+        : result.outputLimitExceeded
+          ? "Command exceeded the output limit."
+          : `Command exited with error (code ${result.exitCode ?? "?"}).`;
+      return textResult(truncate(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS));
     },
   };
 }

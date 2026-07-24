@@ -8,12 +8,8 @@ import {
   systemTimezone,
   validateTimezone,
 } from "../services/schedule-store.js";
-import type {
-  ScheduledTaskInput,
-  ScheduledTaskMode,
-  ScheduledTaskPermission,
-  ScheduledTaskSettings,
-} from "../services/types.js";
+import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
+import type { ScheduledTaskSettings } from "../services/types.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -26,38 +22,9 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function taskInput(value: unknown): ScheduledTaskInput {
-  const input = (value && typeof value === "object" && !Array.isArray(value)
-    ? value
-    : {}) as Record<string, unknown>;
-  const mode: ScheduledTaskMode =
-    input.mode === "script" ? "script" : input.mode === "llm" ? "llm" : (() => {
-      throw new Error("Invalid scheduled task mode.");
-    })();
-  const permission: ScheduledTaskPermission | undefined =
-    input.permission === "full"
-      ? "full"
-      : input.permission === "read-only"
-        ? "read-only"
-        : undefined;
-  return {
-    id: optionalString(input.id),
-    name: requiredString(input.name, "name"),
-    enabled: typeof input.enabled === "boolean" ? input.enabled : undefined,
-    mode,
-    cron: requiredString(input.cron, "cron"),
-    timezone: optionalString(input.timezone),
-    workspaceId: optionalString(input.workspaceId),
-    providerId: optionalString(input.providerId),
-    model: optionalString(input.model),
-    prompt: optionalString(input.prompt),
-    script: optionalString(input.script),
-    permission,
-    notify: typeof input.notify === "boolean" ? input.notify : undefined,
-  };
-}
-
-function settingsDefaults(input: Awaited<ReturnType<typeof configStore.getSettings>>): ScheduledTaskSettings {
+function settingsDefaults(
+  input: Awaited<ReturnType<typeof configStore.getSettings>>,
+): ScheduledTaskSettings {
   return {
     enabled: input.scheduledTasksEnabled !== false,
     defaultMode: input.scheduledDefaultMode === "script" ? "script" : "llm",
@@ -69,7 +36,9 @@ function settingsDefaults(input: Awaited<ReturnType<typeof configStore.getSettin
 
 export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:list", () => scheduleStore.list());
-  ipcMain.handle("schedule:save", (_event, input: unknown) => scheduleService.save(taskInput(input)));
+  ipcMain.handle("schedule:save", (_event, input: unknown) =>
+    scheduleService.save(parseScheduledTaskInput(input)),
+  );
   ipcMain.handle("schedule:remove", (_event, id: unknown) =>
     scheduleService.remove(requiredString(id, "id")),
   );
@@ -85,14 +54,12 @@ export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:runs", (_event, id: unknown) =>
     scheduleStore.runs(requiredString(id, "id")),
   );
-  ipcMain.handle(
-    "schedule:preview",
-    (_event, cron: unknown, timezone: unknown, count: unknown) =>
-      nextScheduledRuns(
-        requiredString(cron, "cron"),
-        optionalString(timezone) ?? systemTimezone(),
-        typeof count === "number" ? count : 3,
-      ),
+  ipcMain.handle("schedule:preview", (_event, cron: unknown, timezone: unknown, count: unknown) =>
+    nextScheduledRuns(
+      requiredString(cron, "cron"),
+      optionalString(timezone) ?? systemTimezone(),
+      typeof count === "number" ? count : 3,
+    ),
   );
   ipcMain.handle("schedule:scripts", async (_event, workspaceId?: unknown) => {
     const id = optionalString(workspaceId);
@@ -103,9 +70,9 @@ export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:settings", async (_event, patch?: unknown) => {
     const current = await configStore.getSettings();
     if (patch === undefined) return settingsDefaults(current);
-    const input = (patch && typeof patch === "object" && !Array.isArray(patch)
-      ? patch
-      : {}) as Record<string, unknown>;
+    const input = (
+      patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {}
+    ) as Record<string, unknown>;
     const next = {
       scheduledTasksEnabled:
         typeof input.enabled === "boolean" ? input.enabled : current.scheduledTasksEnabled,

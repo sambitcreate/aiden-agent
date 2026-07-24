@@ -5,7 +5,9 @@ import type { ScheduledRun, ScheduledTask, ScheduledTaskInput, Workspace } from 
 import {
   createScheduleTaskTool,
   scheduleTaskToolsForContext,
+  scheduleToolRequiresApproval,
   SCHEDULE_TOOL_NAME,
+  summarizeScheduleToolCall,
   type ScheduleToolDependencies,
 } from "./schedule-tool.js";
 
@@ -107,13 +109,17 @@ test("schedule_task supports the full create/list/pause/resume/run/remove lifecy
   assert.equal((listed.tasks as ScheduledTask[])[0]?.prompt, undefined);
 
   assert.equal(
-    ((jsonResult(await tool.execute("pause", { action: "pause", id: "task-1" })).task as ScheduledTask)
-      .enabled),
+    (
+      jsonResult(await tool.execute("pause", { action: "pause", id: "task-1" }))
+        .task as ScheduledTask
+    ).enabled,
     false,
   );
   assert.equal(
-    ((jsonResult(await tool.execute("resume", { action: "resume", id: "task-1" })).task as ScheduledTask)
-      .enabled),
+    (
+      jsonResult(await tool.execute("resume", { action: "resume", id: "task-1" }))
+        .task as ScheduledTask
+    ).enabled,
     true,
   );
   assert.equal(
@@ -138,6 +144,7 @@ test("schedule_task validates scripts in the bound workspace and rejects unsafe 
     mode: "script",
     script: "report.sh",
   });
+  assert.equal(fake.tasks[0]?.permission, "full");
   assert.deepEqual(fake.calls.validatedScripts, [
     { script: "report.sh", workspaceRoot: "/project" },
   ]);
@@ -176,4 +183,17 @@ test("scheduled generation contexts omit schedule_task to prevent recursion", ()
     scheduleTaskToolsForContext({ workspaceId: "workspace-1", allowScheduling: true })[0]?.name,
     SCHEDULE_TOOL_NAME,
   );
+});
+
+test("schedule mutations require live approval without exposing prompt contents", () => {
+  assert.equal(scheduleToolRequiresApproval({ action: "list" }), false);
+  assert.equal(scheduleToolRequiresApproval({ action: "create" }), true);
+  const summary = summarizeScheduleToolCall({
+    action: "create",
+    name: "Daily report",
+    cron: "0 9 * * *",
+    prompt: "private prompt contents",
+  });
+  assert.match(summary, /Daily report/);
+  assert.doesNotMatch(summary, /private prompt contents/);
 });

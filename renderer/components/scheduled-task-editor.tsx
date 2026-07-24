@@ -55,7 +55,12 @@ export function ScheduledTaskEditor({
   const [scripts, setScripts] = React.useState<string[]>([]);
 
   React.useEffect(() => {
-    if (open) setDraft(initial);
+    if (open) {
+      setDraft({
+        ...initial,
+        permission: initial.mode === "script" ? "full" : initial.permission,
+      });
+    }
   }, [initial, open]);
 
   React.useEffect(() => {
@@ -102,7 +107,11 @@ export function ScheduledTaskEditor({
   }, [draft.mode, draft.workspaceId, open]);
 
   const setMode = (mode: ScheduledTaskMode) => {
-    setDraft((current) => ({ ...current, mode }));
+    setDraft((current) => ({
+      ...current,
+      mode,
+      permission: mode === "script" ? "full" : current.permission,
+    }));
   };
   const setPermission = (permission: ScheduledTaskPermission) => {
     setDraft((current) => ({ ...current, permission }));
@@ -135,7 +144,10 @@ export function ScheduledTaskEditor({
             placeholder="Daily repository brief"
           />
         </Field>
-        <Field label="Mode" description="Ask Aiden with a prompt or run a local script without a model.">
+        <Field
+          label="Mode"
+          description="Ask Aiden with a prompt or run a local script without a model."
+        >
           <div className="grid grid-cols-2 rounded-control bg-control p-0.5">
             <Button
               size="small"
@@ -233,7 +245,10 @@ export function ScheduledTaskEditor({
             </Text>
           )}
         </Field>
-        <Field label="Workspace" description="Paths are always re-resolved by Aiden when the task runs.">
+        <Field
+          label="Workspace"
+          description="Paths are always re-resolved by Aiden when the task runs."
+        >
           <Select
             value={draft.workspaceId ?? "__none__"}
             onValueChange={(workspaceId) =>
@@ -274,13 +289,22 @@ export function ScheduledTaskEditor({
               </SelectContent>
             </Select>
           </Field>
-        ) : null}
-        {draft.mode === "llm" && draft.permission === "full" ? (
+        ) : (
+          <Field
+            label="Permission"
+            description="Scripts can change files or the system, so scheduled scripts always require Full access."
+          >
+            <Text variant="small-strong">Full</Text>
+          </Field>
+        )}
+        {draft.permission === "full" ? (
           <div className="px-4 pb-4">
             <Callout className="flex-row gap-2" color="red">
               <ShieldAlert className="mt-0.5 size-4 shrink-0" />
               <Text variant="small" color="secondary">
-                Full tasks run edits and commands unattended. Use it only for a prompt you trust.
+                {draft.mode === "script"
+                  ? "Scripts run unattended with Full access. Only select a script you trust."
+                  : "Full tasks run edits and commands unattended. Use it only for a prompt you trust."}
               </Text>
             </Callout>
           </div>

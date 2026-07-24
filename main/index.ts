@@ -140,6 +140,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
       llmClient.shutdown(),
+      scheduleService.stopAndSettle(),
     ]);
   } catch (error) {
     logger.error("main", "Application service shutdown did not complete cleanly.", error);

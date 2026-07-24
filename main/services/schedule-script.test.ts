@@ -33,10 +33,10 @@ test("workspace scripts win over global scripts and traversal is rejected", asyn
       fs.writeFile(globalScript, "#!/bin/bash\nprintf global", "utf-8"),
     ]);
     const resolved = await resolveScheduledScript({
-        script: "report.sh",
-        workspaceRoot: files.workspace,
-        homeDirectory: files.home,
-      });
+      script: "report.sh",
+      workspaceRoot: files.workspace,
+      homeDirectory: files.home,
+    });
     assert.equal(resolved, await fs.realpath(workspaceScript));
     await assert.rejects(
       resolveScheduledScript({
@@ -103,6 +103,27 @@ test("script runner maps stdout, nonzero exit, timeout, output bounds, and cance
     });
     setTimeout(() => abort.abort(), 25);
     assert.equal((await cancelled).aborted, true);
+  } finally {
+    await files.cleanup();
+  }
+});
+
+test("cancellation kills descendants even after the script leader exits", async () => {
+  if (process.platform === "win32") return;
+  const files = await fixture();
+  try {
+    const detached = path.join(files.root, "detached.sh");
+    await fs.writeFile(detached, "#!/bin/bash\nsleep 30 &\nexit 0", { mode: 0o755 });
+    const abort = new AbortController();
+    const startedAt = Date.now();
+    const result = runScheduledScript(detached, {
+      cwd: files.root,
+      timeoutMs: 35_000,
+      signal: abort.signal,
+    });
+    setTimeout(() => abort.abort(), 50);
+    assert.equal((await result).aborted, true);
+    assert.ok(Date.now() - startedAt < 3_000, "process group should settle after cancellation");
   } finally {
     await files.cleanup();
   }

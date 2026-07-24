@@ -24,7 +24,11 @@ function textResult(text: string): AgentToolResult<null> {
 }
 
 function skillToolKey(skill: Skill | DiscoveredSkill): string {
-  const slug = skill.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+  const slug = skill.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 40);
   return `skill_${slug || skill.id}`;
 }
 
@@ -37,7 +41,11 @@ function makeExaTool(apiKey: string): AgentTool {
     parameters: Type.Object({
       query: Type.String({ description: "The web search query." }),
       numResults: Type.Optional(
-        Type.Integer({ minimum: 1, maximum: 10, description: "How many results to return (default 5)." }),
+        Type.Integer({
+          minimum: 1,
+          maximum: 10,
+          description: "How many results to return (default 5).",
+        }),
       ),
     }),
     execute: async (_id, params): Promise<AgentToolResult<null>> => {
@@ -45,7 +53,11 @@ function makeExaTool(apiKey: string): AgentTool {
       const response = await fetch(EXA_ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": apiKey },
-        body: JSON.stringify({ query, numResults: numResults ?? 5, contents: { text: { maxCharacters: 1200 } } }),
+        body: JSON.stringify({
+          query,
+          numResults: numResults ?? 5,
+          contents: { text: { maxCharacters: 1200 } },
+        }),
       });
       if (!response.ok) {
         const body = await response.text().catch(() => "");
@@ -53,7 +65,9 @@ function makeExaTool(apiKey: string): AgentTool {
           `Exa search failed: ${response.status} ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
         );
       }
-      const data = (await response.json()) as { results?: Array<{ title?: string; url?: string; text?: string }> };
+      const data = (await response.json()) as {
+        results?: Array<{ title?: string; url?: string; text?: string }>;
+      };
       const results = (data.results ?? []).map((r) => ({
         title: r.title ?? "",
         url: r.url ?? "",
@@ -87,6 +101,8 @@ export interface ToolContext {
   computerUse?: ComputerUseController;
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
+  /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
+  allowMcpTools?: boolean;
 }
 
 export function buildSchedulingTools(
@@ -137,8 +153,10 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   }
 
   // MCP server tools.
-  const servers = await configStore.listMcpServers();
-  tools.push(...(await collectMcpAgentTools(servers)));
+  if (ctx.allowMcpTools !== false) {
+    const servers = await configStore.listMcpServers();
+    tools.push(...(await collectMcpAgentTools(servers)));
+  }
 
   return tools;
 }

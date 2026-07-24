@@ -1,5 +1,14 @@
 # Project History
 
+### 2026-07-23 — Ship Scheduled Tasks through Phase 4
+
+- Added a first-class Electron-main scheduler with `croner`, serialized per-task lifecycle changes, launch catch-up without stacked missed windows, pre-execution next-run advancement, global and per-task pause/resume, bounded 50-run history, task-specific chats, macOS notifications, and privacy-safe `"scheduled"` usage attribution.
+- Added bounded script execution from workspace/global `.aiden/scripts` roots, basename and realpath confinement, timeout/output limits, and TERM-to-KILL process-group cancellation that still reaches descendants after the direct leader exits. Script tasks require explicit Full permission.
+- Added `/scheduled`, sidebar navigation, search/status tabs, suggestions, create/edit/delete/run-now controls, cron/timezone previews, global defaults, recoverable authoritative-load errors, notification-to-chat navigation, and workspace-authoritative follow-up chat behavior.
+- Added the compressed `schedule_task` agent tool for create/list/pause/resume/remove/run-now. Interactive mutations always require the existing live hash-bound approval surface; scheduled runs cannot recurse. Prompt guards cover injection, hidden Unicode, secret access/exfiltration, and conservative mutation recommendations.
+- Hardened unattended execution after two fresh source/memory-aware reviews: read-only runs withhold mutating built-ins and unknown-capability MCP connectors, MCP and command calls receive cancellation, workspace permission/removal changes stop jobs and settle runs without a late-dispatch gap, app shutdown waits through a bounded barrier, concurrent chat generations are rejected, stale/deleted task chats recover, workspace changes reset chat identity, malformed persisted schedules quarantine as disabled `Needs attention` tasks, and malformed IPC permissions fail closed.
+- Focused Scheduled Tasks coverage is 32 tests. Final verification passed type-check, lint, production build, the full 625-test TypeScript/JavaScript suite, all 41 Rust tests with fmt/clippy, and a fresh hardened signed arm64 development package. The existing Vite large-chunk warning and electron-builder duplicate-dependency noise remain.
+
 ### 2026-07-23 — Animate the terminal drawer opening
 
 - The workspace terminal now expands upward from the chat edge over 300ms with the app's existing enter easing, using its persisted drawer height instead of appearing abruptly.

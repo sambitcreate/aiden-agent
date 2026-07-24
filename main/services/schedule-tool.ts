@@ -1,12 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { assertSafeScheduledPrompt, recommendedScheduledPermission } from "./schedule-guard.js";
-import type {
-  ScheduledRun,
-  ScheduledTask,
-  ScheduledTaskInput,
-  Workspace,
-} from "./types.js";
+import type { ScheduledRun, ScheduledTask, ScheduledTaskInput, Workspace } from "./types.js";
 
 export const SCHEDULE_TOOL_NAME = "schedule_task";
 
@@ -24,6 +19,34 @@ interface ScheduleToolParams {
   workspaceId?: string;
   permission?: "read-only" | "full";
   notify?: boolean;
+}
+
+function scheduleToolParams(value: unknown): Partial<ScheduleToolParams> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Partial<ScheduleToolParams>)
+    : {};
+}
+
+export function scheduleToolRequiresApproval(value: unknown): boolean {
+  return scheduleToolParams(value).action !== "list";
+}
+
+export function summarizeScheduleToolCall(value: unknown): string {
+  const params = scheduleToolParams(value);
+  switch (params.action) {
+    case "create":
+      return `Create scheduled task "${params.name?.trim() || "Untitled"}" (${params.cron?.trim() || "no schedule"}) with ${params.mode === "script" ? "Full" : params.permission === "full" ? "Full" : "read-only"} access`;
+    case "pause":
+      return `Pause scheduled task ${params.id?.trim() || "?"}`;
+    case "resume":
+      return `Resume scheduled task ${params.id?.trim() || "?"}`;
+    case "remove":
+      return `Delete scheduled task ${params.id?.trim() || "?"}`;
+    case "run_now":
+      return `Run scheduled task ${params.id?.trim() || "?"} now`;
+    default:
+      return "Manage scheduled tasks";
+  }
 }
 
 export interface ScheduleToolDependencies {
@@ -109,18 +132,28 @@ export function createScheduleTaskTool(
         Type.Literal("remove"),
         Type.Literal("run_now"),
       ]),
-      id: Type.Optional(Type.String({ description: "Exact task ID for pause, resume, remove, or run_now." })),
+      id: Type.Optional(
+        Type.String({ description: "Exact task ID for pause, resume, remove, or run_now." }),
+      ),
       name: Type.Optional(Type.String({ description: "Task name. Required for create." })),
-      cron: Type.Optional(Type.String({ description: "Five- or six-part cron expression. Required for create." })),
-      timezone: Type.Optional(Type.String({ description: "IANA timezone. Defaults to the device timezone." })),
+      cron: Type.Optional(
+        Type.String({ description: "Five- or six-part cron expression. Required for create." }),
+      ),
+      timezone: Type.Optional(
+        Type.String({ description: "IANA timezone. Defaults to the device timezone." }),
+      ),
       mode: Type.Optional(
         Type.Union([Type.Literal("llm"), Type.Literal("script")], {
           description: "Execution mode. Defaults to llm.",
         }),
       ),
-      prompt: Type.Optional(Type.String({ description: "LLM instruction. Required for llm mode." })),
+      prompt: Type.Optional(
+        Type.String({ description: "LLM instruction. Required for llm mode." }),
+      ),
       script: Type.Optional(
-        Type.String({ description: "File name from the workspace or global .aiden/scripts folder." }),
+        Type.String({
+          description: "File name from the workspace or global .aiden/scripts folder.",
+        }),
       ),
       workspaceId: Type.Optional(
         Type.String({ description: "Workspace ID. Defaults to the current chat workspace." }),
@@ -130,7 +163,9 @@ export function createScheduleTaskTool(
           description: "LLM task permission. Defaults to read-only.",
         }),
       ),
-      notify: Type.Optional(Type.Boolean({ description: "Show a macOS notification after non-silent runs." })),
+      notify: Type.Optional(
+        Type.Boolean({ description: "Show a macOS notification after non-silent runs." }),
+      ),
     }),
     execute: async (_toolCallId, rawParams): Promise<AgentToolResult<null>> => {
       const params = rawParams as ScheduleToolParams;
@@ -161,7 +196,7 @@ export function createScheduleTaskTool(
           prompt,
           script,
           workspaceId,
-          permission: params.permission ?? "read-only",
+          permission: mode === "script" ? "full" : (params.permission ?? "read-only"),
           notify: params.notify,
           enabled: true,
         });
@@ -175,8 +210,10 @@ export function createScheduleTaskTool(
       }
 
       const id = required(params.id, "id");
-      if (params.action === "pause") return result({ task: taskSummary(await dependencies.pause(id)) });
-      if (params.action === "resume") return result({ task: taskSummary(await dependencies.resume(id)) });
+      if (params.action === "pause")
+        return result({ task: taskSummary(await dependencies.pause(id)) });
+      if (params.action === "resume")
+        return result({ task: taskSummary(await dependencies.resume(id)) });
       if (params.action === "remove") {
         await dependencies.remove(id);
         return result({ removed: id });

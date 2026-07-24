@@ -117,9 +117,17 @@ function normalizeInput(
   const script = input.mode === "script" ? validateScriptName(input.script ?? "") : undefined;
   if (input.mode === "llm" && !prompt) throw new Error("LLM tasks require a prompt.");
   if (prompt) assertSafeScheduledPrompt(prompt);
-  if (input.permission !== undefined && input.permission !== "read-only" && input.permission !== "full") {
+  if (
+    input.permission !== undefined &&
+    input.permission !== "read-only" &&
+    input.permission !== "full"
+  ) {
     throw new Error("Invalid scheduled task permission.");
   }
+  if (input.mode === "script" && input.permission !== "full") {
+    throw new Error("Script tasks require Full permission because scripts can change the system.");
+  }
+  const workspaceId = cleanOptional(input.workspaceId);
   const nextRunAt = enabled ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
   return {
     id: existing?.id ?? cleanOptional(input.id, 160) ?? randomUUID(),
@@ -130,13 +138,13 @@ function normalizeInput(
     timezone,
     nextRunAt,
     lastRunAt: existing?.lastRunAt,
-    workspaceId: cleanOptional(input.workspaceId),
+    workspaceId,
     providerId: cleanOptional(input.providerId),
     model: cleanOptional(input.model),
     prompt,
     script,
     permission: input.permission ?? existing?.permission ?? "read-only",
-    chatId: existing?.chatId,
+    chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
@@ -166,14 +174,31 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
   ) {
     return null;
   }
+  let scheduleError: string | undefined;
+  try {
+    nextScheduledRun(task.cron, task.timezone);
+    if (task.mode === "llm") {
+      if (typeof task.prompt !== "string" || !task.prompt.trim()) {
+        throw new Error("LLM tasks require a prompt.");
+      }
+      assertSafeScheduledPrompt(task.prompt);
+    } else {
+      validateScriptName(typeof task.script === "string" ? task.script : "");
+      if (task.permission !== "full") {
+        throw new Error("Script tasks require Full permission.");
+      }
+    }
+  } catch (error) {
+    scheduleError = error instanceof Error ? error.message : "Invalid stored schedule.";
+  }
   return {
     id: task.id,
     name: task.name,
-    enabled: task.enabled !== false,
+    enabled: scheduleError ? false : task.enabled !== false,
     mode: task.mode,
     cron: task.cron,
     timezone: task.timezone,
-    nextRunAt: finiteTimestamp(task.nextRunAt),
+    nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId: typeof task.workspaceId === "string" ? task.workspaceId : undefined,
     providerId: typeof task.providerId === "string" ? task.providerId : undefined,
@@ -183,8 +208,16 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     permission: task.permission,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
     notify: task.notify !== false,
-    lastResult: isRunResult(task.lastResult) ? task.lastResult : undefined,
-    lastError: typeof task.lastError === "string" ? task.lastError : undefined,
+    lastResult: scheduleError
+      ? "error"
+      : isRunResult(task.lastResult)
+        ? task.lastResult
+        : undefined,
+    lastError: scheduleError
+      ? `Needs attention: ${scheduleError}`
+      : typeof task.lastError === "string"
+        ? task.lastError
+        : undefined,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -239,10 +272,8 @@ export function createScheduleStore(
 
     async save(input: ScheduledTaskInput): Promise<ScheduledTask> {
       return tasks.update((draft) => {
-        const index = draft
-          .map(normalizeStoredTask)
-          .findIndex((task) => task?.id === input.id);
-        const existing = index >= 0 ? normalizeStoredTask(draft[index]) ?? undefined : undefined;
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === input.id);
+        const existing = index >= 0 ? (normalizeStoredTask(draft[index]) ?? undefined) : undefined;
         if (input.id && !existing) throw new Error(`Scheduled task ${input.id} not found.`);
         const task = normalizeInput(input, existing, now());
         if (index >= 0) draft[index] = task;
@@ -253,9 +284,7 @@ export function createScheduleStore(
 
     async setEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
       return tasks.update((draft) => {
-        const index = draft
-          .map(normalizeStoredTask)
-          .findIndex((task) => task?.id === id);
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
         const timestamp = now();
@@ -282,9 +311,7 @@ export function createScheduleStore(
       >,
     ): Promise<ScheduledTask> {
       return tasks.update((draft) => {
-        const index = draft
-          .map(normalizeStoredTask)
-          .findIndex((task) => task?.id === id);
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
         const task = { ...existing, ...patch, updatedAt: now() };
@@ -309,6 +336,16 @@ export function createScheduleStore(
       })().finally(() => chatClaims.delete(id));
       chatClaims.set(id, claim);
       return claim;
+    },
+
+    async clearChatId(id: string, expectedChatId: string): Promise<void> {
+      await tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+        if (existing.chatId !== expectedChatId) return;
+        draft[index] = { ...existing, chatId: undefined, updatedAt: now() };
+      });
     },
 
     async remove(id: string): Promise<void> {

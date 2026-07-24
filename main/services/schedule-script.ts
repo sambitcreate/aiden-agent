@@ -28,7 +28,10 @@ function pathInside(root: string, candidate: string): boolean {
 async function existingScriptInRoot(root: string, script: string): Promise<string | null> {
   const candidate = path.join(root, script);
   try {
-    const [realRoot, realCandidate] = await Promise.all([fs.realpath(root), fs.realpath(candidate)]);
+    const [realRoot, realCandidate] = await Promise.all([
+      fs.realpath(root),
+      fs.realpath(candidate),
+    ]);
     if (!pathInside(realRoot, realCandidate)) {
       throw new Error(`Script "${script}" resolves outside ${root}.`);
     }
@@ -146,6 +149,7 @@ export function runScheduledScript(
     let aborted = false;
     let settled = false;
     let forceKill: ReturnType<typeof setTimeout> | undefined;
+    let terminationRequested = false;
 
     const signalProcess = (signal: NodeJS.Signals) => {
       if (process.platform !== "win32" && child.pid) {
@@ -159,10 +163,11 @@ export function runScheduledScript(
       child.kill(signal);
     };
     const terminate = () => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
+      if (terminationRequested) return;
+      terminationRequested = true;
       signalProcess("SIGTERM");
       forceKill = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) signalProcess("SIGKILL");
+        if (!settled) signalProcess("SIGKILL");
       }, 1_000);
       forceKill.unref?.();
     };

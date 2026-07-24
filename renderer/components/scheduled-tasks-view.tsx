@@ -32,11 +32,7 @@ import {
 } from "./ui";
 import { ScheduledTaskEditor } from "./scheduled-task-editor";
 import { scheduleApi } from "../lib/ipc";
-import {
-  queryKeys,
-  useScheduledTasks,
-  useScheduledTaskSettings,
-} from "../lib/queries";
+import { queryKeys, useScheduledTasks, useScheduledTaskSettings } from "../lib/queries";
 import {
   filterScheduledTasks,
   formatNextRun,
@@ -44,11 +40,7 @@ import {
   type ScheduledTaskTab,
 } from "../lib/scheduled-task-view";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import type {
-  ScheduledTask,
-  ScheduledTaskInput,
-  ScheduledTaskSettings,
-} from "../lib/types";
+import type { ScheduledTask, ScheduledTaskInput, ScheduledTaskSettings } from "../lib/types";
 
 const TEMPLATES: Array<{
   name: string;
@@ -113,7 +105,10 @@ function newTask(
     workspaceId,
     prompt: template?.prompt ?? "",
     script: "",
-    permission: settings?.defaultPermission ?? "read-only",
+    permission:
+      (settings?.defaultMode ?? "llm") === "script"
+        ? "full"
+        : (settings?.defaultPermission ?? "read-only"),
     notify: settings?.defaultNotify ?? true,
   };
 }
@@ -194,7 +189,7 @@ export function ScheduledTasksView() {
     void navigate({ to: "/chat/$chatId", params: { chatId: task.chatId } });
   };
 
-  const globallyEnabled = settings.data?.enabled ?? true;
+  const globallyEnabled = settings.data?.enabled;
   const enableAll = async () => {
     if (enablingAll) return;
     setEnablingAll(true);
@@ -215,6 +210,7 @@ export function ScheduledTasksView() {
           <Button
             variant="accent"
             onClick={() => setEditing(newTask(settings.data, activeId))}
+            disabled={tasks.isError || settings.isError}
           >
             <Plus />
             Create
@@ -229,7 +225,22 @@ export function ScheduledTasksView() {
             </Text>
           </div>
 
-          {!globallyEnabled ? (
+          {tasks.isError || settings.isError ? (
+            <Callout className="mb-4 flex-row items-center justify-between gap-4" color="red">
+              <div>
+                <Text variant="strong">Scheduled tasks are unavailable</Text>
+                <Text as="p" variant="small" color="secondary" className="mt-0.5">
+                  Aiden could not load the authoritative task state. Retry before making changes.
+                </Text>
+              </div>
+              <Button
+                size="small"
+                onClick={() => void Promise.all([tasks.refetch(), settings.refetch()])}
+              >
+                Retry
+              </Button>
+            </Callout>
+          ) : globallyEnabled === false ? (
             <Callout className="mb-4 flex-row items-center justify-between gap-4">
               <div>
                 <Text variant="strong">Automatic runs are paused</Text>
@@ -237,11 +248,7 @@ export function ScheduledTasksView() {
                   Your tasks are preserved. Turn them back on from Scheduled tasks settings.
                 </Text>
               </div>
-              <Button
-                size="small"
-                onClick={() => void enableAll()}
-                disabled={enablingAll}
-              >
+              <Button size="small" onClick={() => void enableAll()} disabled={enablingAll}>
                 Turn on
               </Button>
             </Callout>
@@ -290,7 +297,7 @@ export function ScheduledTasksView() {
                 Loading scheduled tasks…
               </Text>
             </div>
-          ) : visible.length === 0 ? (
+          ) : tasks.isError ? null : visible.length === 0 ? (
             <div className="rounded-card border border-separator">
               <EmptyState
                 title={query.trim() || tab !== "all" ? "No matching tasks" : "No scheduled tasks"}
@@ -326,7 +333,8 @@ export function ScheduledTasksView() {
                           <Badge color={status.badge}>{status.label}</Badge>
                         </span>
                         <Text variant="small" color="secondary" truncate className="mt-1 block">
-                          {task.mode === "script" ? task.script : task.cron}
+                          {task.cron}
+                          {task.mode === "script" && task.script ? ` · ${task.script}` : ""}
                           {task.enabled
                             ? ` · Next run ${formatNextRun(task.nextRunAt)}`
                             : " · Automatic runs paused"}
@@ -366,9 +374,7 @@ export function ScheduledTasksView() {
                             <MessageSquare className="size-4" />
                             Open chat
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onSelect={() => void toggle(task, !task.enabled)}
-                          >
+                          <DropdownMenuItem onSelect={() => void toggle(task, !task.enabled)}>
                             {task.enabled ? "Pause" : "Resume"}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
@@ -454,7 +460,9 @@ export function ScheduledTasksView() {
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
         title="Delete this scheduled task?"
-        description={removing ? `“${removing.name}” and its run history will be removed.` : undefined}
+        description={
+          removing ? `“${removing.name}” and its run history will be removed.` : undefined
+        }
         confirmLabel="Delete"
         confirmVariant="destructive"
         onConfirm={async () => {

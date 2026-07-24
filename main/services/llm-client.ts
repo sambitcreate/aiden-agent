@@ -38,6 +38,11 @@ import type {
 } from "./computer-use/controller.js";
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
+import {
+  SCHEDULE_TOOL_NAME,
+  scheduleToolRequiresApproval,
+  summarizeScheduleToolCall,
+} from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { toPiMessages } from "./generation-messages.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
@@ -66,6 +71,8 @@ export interface GenerationExecutionOptions {
   allowComputerUse?: boolean;
   /** Privacy-safe accounting category for this model call. */
   usageSource?: UsageRequestSource;
+  /** Withhold connector tools when their mutation semantics cannot be enforced. */
+  allowMcpTools?: boolean;
 }
 
 interface ActiveGeneration {
@@ -207,6 +214,7 @@ async function prepareGeneration(
       permission: toolPermission,
       computerUse,
       allowScheduling: !options.excludeToolNames?.has("schedule_task"),
+      allowMcpTools: options.allowMcpTools,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   return {
@@ -232,6 +240,9 @@ export const llmClient = {
     }
     if (initializing.has(streamId) || active.has(streamId)) {
       throw new Error("A generation with this stream id is already running.");
+    }
+    if (this.isChatBusy(params.chatId)) {
+      throw new Error("This chat already has a response in progress.");
     }
     const initialization = {
       chatId: params.chatId,
@@ -385,11 +396,18 @@ export const llmClient = {
               };
             }
           } else {
-            if (permission !== "ask" || !APPROVAL_TOOL_NAMES.has(context.toolCall.name)) {
+            const scheduleApproval =
+              context.toolCall.name === SCHEDULE_TOOL_NAME &&
+              scheduleToolRequiresApproval(context.args);
+            const workspaceApproval =
+              permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            if (!scheduleApproval && !workspaceApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
-            summary = summarizeToolCall(context.toolCall.name, context.args);
+            summary = scheduleApproval
+              ? summarizeScheduleToolCall(context.args)
+              : summarizeToolCall(context.toolCall.name, context.args);
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
           const allowed = await approvals.request(

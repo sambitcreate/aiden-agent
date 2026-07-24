@@ -1,10 +1,12 @@
 # Scheduled Tasks Plan
 
-Status: frozen implementation plan; ready to start Phase 1  
+Status: implemented through Phase 4 on 2026-07-23; retained as the original implementation plan
 Date: 2026-07-23  
 UI reference: ChatGPT/Codex "Scheduled tasks" workbench (sidebar destination, task list, suggestions), adapted to Aiden's existing tokens and component system.
 
 Source basis: current Aiden source, Hermes Agent cron subsystem (`/Users/sambitbiswas/projects/opp/hermes-agent`: `cron/jobs.py`, `cron/scheduler.py`, `cron/scheduler_provider.py`, `tools/cronjob_tools.py`), Aiden project memory and UI references, and the confirmed product decisions below.
+
+Implementation hardening amendment: read-only scheduled LLM runs withhold MCP tools because connector schemas do not currently carry enforceable read/write capability metadata. Script tasks require explicit Full permission. Interactive `schedule_task` mutations always require the live approval surface. See `.memory/SCHEDULED-TASKS.md` for the shipped architecture and review-driven amendments.
 
 ## Verdict
 

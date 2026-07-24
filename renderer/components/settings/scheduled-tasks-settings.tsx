@@ -5,6 +5,7 @@ import { Clock3, ExternalLink, Trash2 } from "lucide-react";
 import {
   AlertDialog,
   Button,
+  Callout,
   Field,
   FieldSet,
   Input,
@@ -19,11 +20,7 @@ import {
   toast,
 } from "../ui";
 import { scheduleApi } from "../../lib/ipc";
-import {
-  queryKeys,
-  useScheduledTasks,
-  useScheduledTaskSettings,
-} from "../../lib/queries";
+import { queryKeys, useScheduledTasks, useScheduledTaskSettings } from "../../lib/queries";
 import type { ScheduledTask, ScheduledTaskSettings } from "../../lib/types";
 
 export function ScheduledTasksSettings() {
@@ -53,8 +50,25 @@ export function ScheduledTasksSettings() {
   };
 
   const value = settings.data;
+  const authoritativeError = settings.isError || tasks.isError;
   return (
     <>
+      {authoritativeError ? (
+        <Callout className="mb-4 flex-row items-center justify-between gap-4" color="red">
+          <div>
+            <Text variant="strong">Scheduled task settings are unavailable</Text>
+            <Text as="p" variant="small" color="secondary" className="mt-0.5">
+              Aiden could not load the authoritative state. Retry before changing settings.
+            </Text>
+          </div>
+          <Button
+            size="small"
+            onClick={() => void Promise.all([settings.refetch(), tasks.refetch()])}
+          >
+            Retry
+          </Button>
+        </Callout>
+      ) : null}
       <FieldSet title="Scheduled tasks">
         <Field
           label="Enable scheduled tasks"
@@ -62,9 +76,9 @@ export function ScheduledTasksSettings() {
         >
           <div className="flex justify-end">
             <Switch
-              checked={value?.enabled ?? true}
+              checked={value?.enabled ?? false}
               onCheckedChange={(enabled) => void save({ enabled })}
-              disabled={settings.isLoading || saving}
+              disabled={settings.isLoading || saving || authoritativeError}
               aria-label="Enable scheduled tasks"
             />
           </div>
@@ -75,7 +89,7 @@ export function ScheduledTasksSettings() {
             onValueChange={(defaultMode) =>
               void save({ defaultMode: defaultMode === "script" ? "script" : "llm" })
             }
-            disabled={settings.isLoading || saving}
+            disabled={settings.isLoading || saving || authoritativeError}
           >
             <SelectTrigger aria-label="Default scheduled task mode">
               <SelectValue />
@@ -95,7 +109,7 @@ export function ScheduledTasksSettings() {
             onValueChange={(defaultPermission) =>
               void save({ defaultPermission: defaultPermission === "full" ? "full" : "read-only" })
             }
-            disabled={settings.isLoading || saving}
+            disabled={settings.isLoading || saving || authoritativeError}
           >
             <SelectTrigger aria-label="Default scheduled task permission">
               <SelectValue />
@@ -111,7 +125,7 @@ export function ScheduledTasksSettings() {
             <Switch
               checked={value?.defaultNotify ?? true}
               onCheckedChange={(defaultNotify) => void save({ defaultNotify })}
-              disabled={settings.isLoading || saving}
+              disabled={settings.isLoading || saving || authoritativeError}
               aria-label="Notify for new scheduled tasks"
             />
           </div>
@@ -127,7 +141,7 @@ export function ScheduledTasksSettings() {
             onKeyDown={(event) => {
               if (event.key === "Enter") event.currentTarget.blur();
             }}
-            disabled={settings.isLoading || saving}
+            disabled={settings.isLoading || saving || authoritativeError}
             placeholder="America/New_York"
           />
         </Field>
@@ -145,7 +159,13 @@ export function ScheduledTasksSettings() {
       </FieldSet>
 
       <FieldSet title="Current tasks">
-        {(tasks.data ?? []).length === 0 ? (
+        {tasks.isError ? (
+          <div className="p-4">
+            <Text variant="small" color="secondary">
+              Current tasks could not be loaded.
+            </Text>
+          </div>
+        ) : (tasks.data ?? []).length === 0 ? (
           <div className="flex items-center gap-3 p-4">
             <Clock3 className="size-4 shrink-0 text-tertiary" />
             <Text variant="small" color="secondary">
@@ -190,6 +210,7 @@ export function ScheduledTasksSettings() {
                   iconOnly
                   aria-label={`Delete ${task.name}`}
                   onClick={() => setRemoving(task)}
+                  disabled={authoritativeError}
                 >
                   <Trash2 />
                 </Button>
@@ -203,7 +224,9 @@ export function ScheduledTasksSettings() {
         open={removing !== null}
         onOpenChange={(open) => !open && setRemoving(null)}
         title="Delete this scheduled task?"
-        description={removing ? `“${removing.name}” and its run history will be removed.` : undefined}
+        description={
+          removing ? `“${removing.name}” and its run history will be removed.` : undefined
+        }
         confirmLabel="Delete"
         confirmVariant="destructive"
         onConfirm={async () => {

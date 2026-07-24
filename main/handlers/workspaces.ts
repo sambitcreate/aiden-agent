@@ -29,6 +29,7 @@ import {
   type GitPushInput,
 } from "../services/git.js";
 import { llmClient } from "../services/llm-client.js";
+import { scheduleService } from "../services/schedule-service.js";
 import { createScratchWorkspaceDirectory } from "../services/scratch-workspace.js";
 import { terminalService } from "../services/terminal.js";
 import type { Workspace, WorkspacePermission } from "../services/types.js";
@@ -54,7 +55,10 @@ function asText(value: unknown, name: string): string {
 }
 
 function asGitCommitInput(value: unknown): GitCommitInput {
-  const input = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   const mode = input.mode;
   if (mode !== "staged" && mode !== "all") {
     throw new Error('Expected "mode" to be "staged" or "all".');
@@ -67,7 +71,10 @@ function asGitCommitInput(value: unknown): GitCommitInput {
 }
 
 function asGitDiffInput(value: unknown): GitDiffInput {
-  const input = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   return {
     expectedSnapshot: asString(input.expectedSnapshot, "expectedSnapshot"),
     path: asString(input.path, "path"),
@@ -75,7 +82,10 @@ function asGitDiffInput(value: unknown): GitDiffInput {
 }
 
 function asGitPushInput(value: unknown): GitPushInput {
-  const input = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   if (typeof input.setUpstream !== "boolean") throw new Error('Expected boolean "setUpstream".');
   return {
     destinationBranch: asString(input.destinationBranch, "destinationBranch"),
@@ -88,7 +98,10 @@ function asGitPushInput(value: unknown): GitPushInput {
 }
 
 function asGitComparisonDiffInput(value: unknown): GitComparisonDiffInput {
-  const input = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
+  const input = (typeof value === "object" && value !== null ? value : {}) as Record<
+    string,
+    unknown
+  >;
   return {
     expectedHead: asString(input.expectedHead, "expectedHead"),
     expectedTarget: asString(input.expectedTarget, "expectedTarget"),
@@ -121,7 +134,8 @@ async function withWorkspaceOperation<T>(
   allowNoAccess = false,
 ): Promise<T> {
   const workspaceId = asString(workspaceIdValue, "workspaceId");
-  if (workspacesUpdating.has(workspaceId)) throw new Error("The workspace is changing. Try again in a moment.");
+  if (workspacesUpdating.has(workspaceId))
+    throw new Error("The workspace is changing. Try again in a moment.");
   const controller = new AbortController();
   const controllers = workspaceOperations.get(workspaceId) ?? new Set<AbortController>();
   controllers.add(controller);
@@ -141,9 +155,13 @@ async function withWorkspaceOperation<T>(
   }
 }
 
-async function saveWorkspaceForFolder(folderPath: string, permission: WorkspacePermission): Promise<Workspace> {
+async function saveWorkspaceForFolder(
+  folderPath: string,
+  permission: WorkspacePermission,
+): Promise<Workspace> {
   const canonicalPath = await fs.realpath(folderPath);
-  if (!(await fs.stat(canonicalPath)).isDirectory()) throw new Error("Choose a folder for this workspace.");
+  if (!(await fs.stat(canonicalPath)).isDirectory())
+    throw new Error("Choose a folder for this workspace.");
   const now = Date.now();
   return configStore.saveWorkspace({
     id: newId(),
@@ -186,13 +204,15 @@ async function workspaceDirectory(
 export function registerWorkspaceHandlers(): void {
   ipcMain.handle("workspaces:list", async () => configStore.listWorkspaces());
 
-  ipcMain.handle("workspaces:get", async (_event, id: unknown) =>
-    (await configStore.getWorkspace(asString(id, "id"))) ?? null,
+  ipcMain.handle(
+    "workspaces:get",
+    async (_event, id: unknown) => (await configStore.getWorkspace(asString(id, "id"))) ?? null,
   );
 
   ipcMain.handle("workspaces:create", async (_event, input: unknown) => {
     const i = (typeof input === "object" && input !== null ? input : {}) as Record<string, unknown>;
-    if ("folderPath" in i) throw new Error("Choose workspace folders through Aiden's folder picker.");
+    if ("folderPath" in i)
+      throw new Error("Choose workspace folders through Aiden's folder picker.");
     const name = (typeof i.name === "string" && i.name.trim()) || "Workspace";
     const permission = PERMISSIONS.includes(i.permission as WorkspacePermission)
       ? (i.permission as WorkspacePermission)
@@ -236,11 +256,16 @@ export function registerWorkspaceHandlers(): void {
     const workspaceId = asString(id, "id");
     workspacesUpdating.add(workspaceId);
     cancelWorkspaceOperations(workspaceId);
+    let restoreScheduledTasks = false;
     try {
       const existing = await configStore.getWorkspace(workspaceId);
       if (!existing) throw new Error(`Workspace ${String(id)} not found.`);
-      const p = (typeof patch === "object" && patch !== null ? patch : {}) as Record<string, unknown>;
-      if ("folderPath" in p) throw new Error("Workspace folders cannot be changed from renderer input.");
+      const p = (typeof patch === "object" && patch !== null ? patch : {}) as Record<
+        string,
+        unknown
+      >;
+      if ("folderPath" in p)
+        throw new Error("Workspace folders cannot be changed from renderer input.");
       const next: Workspace = {
         ...existing,
         name: typeof p.name === "string" && p.name.trim() ? p.name.trim() : existing.name,
@@ -248,11 +273,28 @@ export function registerWorkspaceHandlers(): void {
           ? (p.permission as WorkspacePermission)
           : existing.permission,
       };
-      if (next.permission !== existing.permission) llmClient.cancelWorkspace(existing.id);
+      if (next.permission !== existing.permission) {
+        llmClient.cancelWorkspace(existing.id);
+        await scheduleService.cancelWorkspace(existing.id);
+        restoreScheduledTasks = existing.permission !== "none";
+      }
       const saved = await configStore.saveWorkspace(next);
+      if (next.permission !== existing.permission) {
+        if (saved.permission !== "none") await scheduleService.resumeWorkspace(saved.id);
+        restoreScheduledTasks = false;
+      }
       if (saved.permission === "none") terminalService.closeForWorkspace(existing.id);
       return saved;
     } finally {
+      if (restoreScheduledTasks) {
+        await scheduleService.resumeWorkspace(workspaceId).catch((error) => {
+          logger.error(
+            "schedule",
+            "Could not restore scheduled tasks after workspace update failed.",
+            error,
+          );
+        });
+      }
       workspacesUpdating.delete(workspaceId);
     }
   });
@@ -261,11 +303,25 @@ export function registerWorkspaceHandlers(): void {
     const workspaceId = asString(id, "id");
     workspacesUpdating.add(workspaceId);
     cancelWorkspaceOperations(workspaceId);
+    let restoreScheduledTasks = false;
     try {
+      const existing = await configStore.getWorkspace(workspaceId);
       llmClient.cancelWorkspace(workspaceId);
+      await scheduleService.cancelWorkspace(workspaceId);
+      restoreScheduledTasks = existing?.permission !== "none";
       terminalService.closeForWorkspace(workspaceId);
       await configStore.removeWorkspace(workspaceId);
+      restoreScheduledTasks = false;
     } finally {
+      if (restoreScheduledTasks) {
+        await scheduleService.resumeWorkspace(workspaceId).catch((error) => {
+          logger.error(
+            "schedule",
+            "Could not restore scheduled tasks after workspace removal failed.",
+            error,
+          );
+        });
+      }
       workspacesUpdating.delete(workspaceId);
     }
   });
@@ -282,12 +338,10 @@ export function registerWorkspaceHandlers(): void {
     ),
   );
 
-  ipcMain.handle(
-    "workspaces:readFile",
-    async (event, workspaceId: unknown, filePath: unknown) =>
-      withWorkspaceOperation(event.sender, workspaceId, (resolved, signal) =>
-        readWorkspaceFile(resolved.folderPath, asString(filePath, "path"), signal),
-      ),
+  ipcMain.handle("workspaces:readFile", async (event, workspaceId: unknown, filePath: unknown) =>
+    withWorkspaceOperation(event.sender, workspaceId, (resolved, signal) =>
+      readWorkspaceFile(resolved.folderPath, asString(filePath, "path"), signal),
+    ),
   );
 
   ipcMain.handle(
@@ -310,7 +364,7 @@ export function registerWorkspaceHandlers(): void {
           (document) => ({ ok: true as const, document }),
           (error: unknown) => ({
             ok: false as const,
-            code: error instanceof WorkspaceFileError ? error.code : "io_error" as const,
+            code: error instanceof WorkspaceFileError ? error.code : ("io_error" as const),
             message: error instanceof Error ? error.message : "Aiden could not save this file.",
           }),
         ),
@@ -323,12 +377,10 @@ export function registerWorkspaceHandlers(): void {
     ),
   );
 
-  ipcMain.handle(
-    "git:diff",
-    async (event, workspaceId: unknown, input: unknown) =>
-      withWorkspaceOperation(event.sender, workspaceId, (resolved, signal) =>
-        gitDiff(resolved.folderPath, asGitDiffInput(input), signal),
-      ),
+  ipcMain.handle("git:diff", async (event, workspaceId: unknown, input: unknown) =>
+    withWorkspaceOperation(event.sender, workspaceId, (resolved, signal) =>
+      gitDiff(resolved.folderPath, asGitDiffInput(input), signal),
+    ),
   );
 
   ipcMain.handle("git:commit", async (event, workspaceId: unknown, input: unknown) =>
@@ -427,7 +479,11 @@ export function registerWorkspaceHandlers(): void {
         try {
           await gitRollbackWorktree(resolved.folderPath, worktree);
         } catch (rollbackError) {
-          logger.error("git", "Could not roll back a managed worktree after workspace persistence failed", rollbackError);
+          logger.error(
+            "git",
+            "Could not roll back a managed worktree after workspace persistence failed",
+            rollbackError,
+          );
           throw new Error(
             "Aiden could not save or fully roll back the worktree. Inspect `git worktree list` before retrying.",
           );
@@ -439,21 +495,27 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("git:deleteManagedWorktree", async (event, workspaceId: unknown) => {
     const id = asString(workspaceId, "workspaceId");
-    return withWorkspaceOperation(event.sender, id, async (resolved, signal) => {
-      const managed = resolved.workspace.managedWorktree;
-      if (!managed) throw new Error("This workspace is not an Aiden-managed worktree.");
-      const result = await gitDeleteManagedWorktree(
-        managed.repositoryPath,
-        managed.worktreePath,
-        managed.branch,
-        managed.createdFromHead,
-        signal,
-      );
-      llmClient.cancelWorkspace(id);
-      terminalService.closeForWorkspace(id);
-      await configStore.removeWorkspace(id);
-      return result;
-    }, true);
+    return withWorkspaceOperation(
+      event.sender,
+      id,
+      async (resolved, signal) => {
+        const managed = resolved.workspace.managedWorktree;
+        if (!managed) throw new Error("This workspace is not an Aiden-managed worktree.");
+        const result = await gitDeleteManagedWorktree(
+          managed.repositoryPath,
+          managed.worktreePath,
+          managed.branch,
+          managed.createdFromHead,
+          signal,
+        );
+        llmClient.cancelWorkspace(id);
+        await scheduleService.cancelWorkspace(id);
+        terminalService.closeForWorkspace(id);
+        await configStore.removeWorkspace(id);
+        return result;
+      },
+      true,
+    );
   });
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.

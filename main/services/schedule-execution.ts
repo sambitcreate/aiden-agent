@@ -13,9 +13,11 @@ import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.j
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
-function createBackgroundOwner(
-  streamId: string,
-): { owner: ChatGenerationOwner; terminal: Promise<ChatDone | ChatError>; destroy(): void } {
+function createBackgroundOwner(streamId: string): {
+  owner: ChatGenerationOwner;
+  terminal: Promise<ChatDone | ChatError>;
+  destroy(): void;
+} {
   let destroyed = false;
   let settle: ((payload: ChatDone | ChatError) => void) | undefined;
   const terminal = new Promise<ChatDone | ChatError>((resolve) => {
@@ -27,7 +29,8 @@ function createBackgroundOwner(
     isDestroyed: () => destroyed,
     send: (channel: NotificationChannel, payload: unknown) => {
       if (destroyed) throw new Error("The scheduled generation is no longer active.");
-      if (channel === "chat:done" || channel === "chat:error") settle?.(payload as ChatDone | ChatError);
+      if (channel === "chat:done" || channel === "chat:error")
+        settle?.(payload as ChatDone | ChatError);
     },
     onInvalidated: () => () => undefined,
   };
@@ -69,7 +72,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeControllers = new Map<string, AbortController>();
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
-    const chatId = await store.ensureChatId(task.id, () =>
+    let chatId = await store.ensureChatId(task.id, () =>
       chatStore.create({
         title: task.name,
         workspaceId: task.workspaceId,
@@ -77,7 +80,20 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         model: task.model,
       }),
     );
-    const chat = await chatStore.get(chatId);
+    let chat = await chatStore.get(chatId);
+    if (!chat) {
+      await store.clearChatId(task.id, chatId);
+      chatId = await store.ensureChatId(task.id, () =>
+        chatStore.create({
+          title: task.name,
+          workspaceId: task.workspaceId,
+          providerId: task.providerId,
+          model: task.model,
+        }),
+      );
+      chat = await chatStore.get(chatId);
+      if (!chat) throw new Error("Could not create the scheduled task's dedicated chat.");
+    }
     if (chat) {
       ipcMain.broadcast("chats:metadata-updated", {
         chatId: chat.id,
@@ -98,7 +114,14 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     output: string;
     error?: string;
   }> {
-    const workspace = task.workspaceId ? await configStore.getWorkspace(task.workspaceId) : undefined;
+    if (task.permission !== "full") {
+      throw new Error(
+        "Script tasks require Full permission because scripts can change the system.",
+      );
+    }
+    const workspace = task.workspaceId
+      ? await configStore.getWorkspace(task.workspaceId)
+      : undefined;
     if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
     const script = await resolveScheduledScript({
@@ -125,7 +148,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       return { result: "error", output: processResult.stdout, error };
     }
     if (processResult.exitCode !== 0) {
-      const detail = processResult.stderr.trim() || `Process exited with code ${String(processResult.exitCode)}.`;
+      const detail =
+        processResult.stderr.trim() ||
+        `Process exited with code ${String(processResult.exitCode)}.`;
       const error = detail.slice(0, 4_096);
       await appendChatMessage(chatId, `Scheduled task failed: ${error}`);
       return { result: "error", output: processResult.stdout, error };
@@ -144,7 +169,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     output: string;
     error?: string;
   }> {
-    const workspace = task.workspaceId ? await configStore.getWorkspace(task.workspaceId) : undefined;
+    const workspace = task.workspaceId
+      ? await configStore.getWorkspace(task.workspaceId)
+      : undefined;
     if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
     const settings = await configStore.getSettings();
@@ -157,12 +184,11 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
+    if (llmClient.isChatBusy(chatId)) {
+      throw new Error("The scheduled task's dedicated chat already has a response in progress.");
+    }
 
-    await chatStore.appendMessage(
-      chatId,
-      { role: "user", content: prompt },
-      { providerId, model },
-    );
+    await chatStore.appendMessage(chatId, { role: "user", content: prompt }, { providerId, model });
     const streamId = `scheduled-${task.id}-${Date.now().toString(36)}`;
     const background = createBackgroundOwner(streamId);
     activeStreams.set(task.id, streamId);
@@ -186,6 +212,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           permission: task.permission,
           excludeToolNames: excluded,
           allowComputerUse: false,
+          allowMcpTools: task.permission === "full",
           usageSource: "scheduled",
         },
       );
@@ -234,10 +261,17 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         error = execution.error;
       } catch (cause) {
         error = resultError(cause).slice(0, 4_096);
+        if (controller.signal.aborted) result = "blocked";
         if (chatId) {
-          await appendChatMessage(chatId, `Scheduled task failed: ${error}`).catch((appendError) => {
-            logger.warn("schedule", "Could not append a scheduled task error to its chat.", appendError);
-          });
+          await appendChatMessage(chatId, `Scheduled task failed: ${error}`).catch(
+            (appendError) => {
+              logger.warn(
+                "schedule",
+                "Could not append a scheduled task error to its chat.",
+                appendError,
+              );
+            },
+          );
         }
       }
       try {

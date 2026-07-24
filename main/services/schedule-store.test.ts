@@ -99,6 +99,7 @@ test("run history is capped at the newest 50 entries per task", async () => {
     cron: "0 * * * *",
     timezone: "UTC",
     script: "report.sh",
+    permission: "full",
   });
   for (let index = 0; index < 55; index += 1) {
     await store.recordRun({
@@ -136,4 +137,85 @@ test("task store applies the prompt guard to UI and IPC-created tasks", async ()
     }),
     /blocked/iu,
   );
+});
+
+test("stored invalid schedules are quarantined instead of aborting startup", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "broken",
+      name: "Broken schedule",
+      enabled: true,
+      mode: "llm",
+      cron: "not a cron",
+      timezone: "Mars/Olympus",
+      prompt: "Summarize changes.",
+      permission: "read-only",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const [task] = await store.list();
+  assert.equal(task?.id, "broken");
+  assert.equal(task?.enabled, false);
+  assert.equal(task?.nextRunAt, undefined);
+  assert.equal(task?.lastResult, "error");
+  assert.match(task?.lastError ?? "", /needs attention/iu);
+});
+
+test("script tasks require explicit Full permission", async () => {
+  const store = testStore();
+  await assert.rejects(
+    store.save({
+      name: "Unsafe default",
+      mode: "script",
+      cron: "0 * * * *",
+      timezone: "UTC",
+      script: "report.sh",
+      permission: "read-only",
+    }),
+    /require Full permission/iu,
+  );
+});
+
+test("changing task workspace clears the dedicated chat binding", async () => {
+  const store = testStore();
+  const created = await store.save({
+    name: "Workspace task",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    workspaceId: "workspace-a",
+    prompt: "Summarize changes.",
+  });
+  await store.updateRuntime(created.id, { chatId: "chat-a" });
+  const updated = await store.save({
+    id: created.id,
+    name: created.name,
+    mode: created.mode,
+    cron: created.cron,
+    timezone: created.timezone,
+    workspaceId: "workspace-b",
+    prompt: created.prompt,
+    permission: created.permission,
+  });
+  assert.equal(updated.chatId, undefined);
+});
+
+test("a missing dedicated chat can be cleared and recreated", async () => {
+  const store = testStore();
+  const task = await store.save({
+    name: "Recover chat",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize changes.",
+  });
+  let created = 0;
+  const create = async () => ({ id: `chat-${++created}` });
+  assert.equal(await store.ensureChatId(task.id, create), "chat-1");
+  await store.clearChatId(task.id, "different-chat");
+  assert.equal((await store.get(task.id))?.chatId, "chat-1");
+  await store.clearChatId(task.id, "chat-1");
+  assert.equal(await store.ensureChatId(task.id, create), "chat-2");
 });

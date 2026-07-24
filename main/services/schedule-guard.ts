@@ -25,6 +25,10 @@ const EXFILTRATION_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
     /\bwget\s+[^\n]*--post-(?:data|file)=[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?/iu,
     "secret exfiltration",
   ],
+  [
+    /\bcurl\s+[^\n]*(?:-H|--header)\s+["']?(?:authorization|x-api-key)\s*:[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)\w*\}?/iu,
+    "secret exfiltration",
+  ],
 ];
 
 const INVISIBLE_UNICODE_POINTS = new Set([
@@ -52,7 +56,9 @@ function previousCodePoint(text: string, index: number): string | undefined {
 }
 
 function nextCodePoint(text: string, index: number): string | undefined {
-  return [...text.slice(index + ZWJ.length).replace(new RegExp(`^${VARIATION_SELECTOR}+`, "u"), "")][0];
+  return [
+    ...text.slice(index + ZWJ.length).replace(new RegExp(`^${VARIATION_SELECTOR}+`, "u"), ""),
+  ][0];
 }
 
 function hasSuspiciousInvisibleUnicode(prompt: string): boolean {
@@ -90,7 +96,9 @@ export function assertSafeScheduledPrompt(prompt: string): void {
 }
 
 export function recommendedScheduledPermission(prompt: string): "read-only" | "full" {
-  return /\b(?:edit|modify|rename|move|delete|remove|commit|push|install|deploy|publish)\b|\b(?:write|create)\s+(?:a\s+|the\s+)?(?:file|folder|directory|code|script|commit|branch)\b|\b(?:run|execute)\s+(?:a\s+|the\s+)?(?:command|script|test|build|program)\b/iu.test(prompt)
+  return /\b(?:edit|modify|update|fix|format|append|rename|move|delete|remove|commit|push|merge|rebase|checkout|install|deploy|publish|send)\b|\bopen\s+(?:a\s+|the\s+)?(?:pull request|pr)\b|\b(?:write|create)\s+(?:a\s+|the\s+)?(?:file|folder|directory|code|script|commit|branch)\b|\b(?:run|execute)\s+(?:a\s+|the\s+)?(?:command|script|test|build|program)\b/iu.test(
+    prompt,
+  )
     ? "full"
     : "read-only";
 }
