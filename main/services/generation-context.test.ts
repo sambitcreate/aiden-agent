@@ -6,6 +6,7 @@ import {
   assertGenerationContextCapacity,
   compactGenerationContext,
   createGenerationContextTransform,
+  limitComputerUseImages,
 } from "./generation-context.js";
 
 const options = {
@@ -47,14 +48,14 @@ function assistant(toolCallId: string, toolName = "read_file"): AssistantMessage
 
 function toolResult(
   toolCallId: string,
-  content: string,
+  content: string | ToolResultMessage["content"],
   toolName = "read_file",
 ): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId,
     toolName,
-    content: [{ type: "text", text: content }],
+    content: typeof content === "string" ? [{ type: "text", text: content }] : content,
     isError: false,
     timestamp: Date.now(),
   };
@@ -82,6 +83,123 @@ test("returns the original context when it fits the model window", () => {
   assert.equal(result.messages, messages);
   assert.equal(result.estimatedTokensAfter, result.estimatedTokensBefore);
   assert.equal(result.usedContextFallback, false);
+});
+
+test("limitComputerUseImages keeps the newest screenshots and leaves other results alone", () => {
+  const messages: AgentMessage[] = [user("Use the desktop.")];
+  for (let index = 0; index < 5; index += 1) {
+    const id = `cu-${index}`;
+    messages.push(
+      assistant(id, "computer_use"),
+      toolResult(
+        id,
+        [
+          { type: "text", text: `capture-${index}` },
+          { type: "image", data: `img-${index}`, mimeType: "image/png" },
+        ],
+        "computer_use",
+      ),
+      assistant(`cu-text-${index}`, "computer_use"),
+      toolResult(`cu-text-${index}`, `status-${index}`, "computer_use"),
+    );
+  }
+  const otherImage = toolResult(
+    "other-image",
+    [
+      { type: "text", text: "unrelated image" },
+      { type: "image", data: "other", mimeType: "image/png" },
+    ],
+    "read_file",
+  );
+  messages.push(assistant("other-image"), otherImage);
+  const limited = limitComputerUseImages(messages, 3);
+  const computerUseResults = limited.filter(
+    (message): message is ToolResultMessage =>
+      message.role === "toolResult" && message.toolName === "computer_use",
+  );
+  const captures = computerUseResults.filter((result) =>
+    result.content.some((part) => part.type === "text" && part.text.startsWith("capture-")),
+  );
+  assert.equal(computerUseResults.length, 10);
+  assert.equal(
+    computerUseResults.filter((r) => r.content.some((p) => p.type === "image")).length,
+    3,
+  );
+  assert.equal(
+    captures[0]?.content.some((part) => part.type === "image"),
+    false,
+  );
+  assert.equal(
+    captures[1]?.content.some((part) => part.type === "image"),
+    false,
+  );
+  assert.equal(
+    captures[2]?.content.some((part) => part.type === "image"),
+    true,
+  );
+  assert.equal(
+    captures[4]?.content.some((part) => part.type === "image"),
+    true,
+  );
+  assert.equal(limited[limited.length - 1], otherImage);
+  assert.equal(
+    otherImage.content.some((part) => part.type === "image"),
+    true,
+  );
+  assert.match(
+    String(captures[0]?.content[0]?.type === "text" ? captures[0].content[0].text : ""),
+    /capture-0/u,
+  );
+});
+
+test("compactGenerationContext always applies computer_use image retention", () => {
+  const messages: AgentMessage[] = [
+    user("Hello"),
+    assistant("cu-1", "computer_use"),
+    toolResult(
+      "cu-1",
+      [
+        { type: "text", text: "first" },
+        { type: "image", data: "one", mimeType: "image/png" },
+      ],
+      "computer_use",
+    ),
+    assistant("cu-2", "computer_use"),
+    toolResult(
+      "cu-2",
+      [
+        { type: "text", text: "second" },
+        { type: "image", data: "two", mimeType: "image/png" },
+      ],
+      "computer_use",
+    ),
+    assistant("cu-3", "computer_use"),
+    toolResult(
+      "cu-3",
+      [
+        { type: "text", text: "third" },
+        { type: "image", data: "three", mimeType: "image/png" },
+      ],
+      "computer_use",
+    ),
+    assistant("cu-4", "computer_use"),
+    toolResult(
+      "cu-4",
+      [
+        { type: "text", text: "fourth" },
+        { type: "image", data: "four", mimeType: "image/png" },
+      ],
+      "computer_use",
+    ),
+  ];
+  const result = compactGenerationContext(messages, options);
+  const imagesKept = result.messages.filter(
+    (message): message is ToolResultMessage =>
+      message.role === "toolResult" &&
+      message.toolName === "computer_use" &&
+      message.content.some((part) => part.type === "image"),
+  );
+  assert.equal(imagesKept.length, 3);
 });
 
 test("bounds a Codex-sized discovery loop while preserving recent evidence and tool pairs", () => {
