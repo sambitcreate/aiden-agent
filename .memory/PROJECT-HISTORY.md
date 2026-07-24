@@ -9,6 +9,14 @@
 - Hardened unattended execution after two fresh source/memory-aware reviews: read-only runs withhold mutating built-ins and unknown-capability MCP connectors, MCP and command calls receive cancellation, workspace permission/removal changes stop jobs and settle runs without a late-dispatch gap, app shutdown waits through a bounded barrier, concurrent chat generations are rejected, stale/deleted task chats recover, workspace changes reset chat identity, malformed persisted schedules quarantine as disabled `Needs attention` tasks, and malformed IPC permissions fail closed.
 - Focused Scheduled Tasks coverage is 32 tests. Final verification passed type-check, lint, production build, the full 625-test TypeScript/JavaScript suite, all 41 Rust tests with fmt/clippy, and a fresh hardened signed arm64 development package. The existing Vite large-chunk warning and electron-builder duplicate-dependency noise remain.
 
+### 2026-07-23 — Resolve runtime limits from Pi and the bundled model catalog
+
+- Replaced the hardcoded text-only `128K/8192` non-Codex runtime model with field-by-field resolution from connection-discovered per-model overrides, provider-scoped Pi exact metadata, the packaged offline model snapshot, and the conservative fallback.
+- Matched Pi's provider composition: mapped built-in providers retain their model metadata when routed through a proxy, while unknown custom provider IDs cannot borrow Pi or bundled entries from another provider.
+- Made the resolved runtime model's input capabilities the sole image gate for generation and chat titles, so display-only Artificial Analysis metadata cannot re-enable images or Computer Use.
+- Added a one-shot shared packaged-catalog loader that fails closed on missing, malformed, or diagnostic failures without adding runtime models.dev or Artificial Analysis requests. Native Google transport remains deferred to Gemini Phase 1.
+- Covered catalog hit/miss/partial resolution, proxy routing, connection overrides, provider isolation, actual bundled Gemini limits, loader failure/concurrency, transport preservation, and image gating. Two fresh adversarial reviews found no remaining issue; all 629 TypeScript/JavaScript tests, all 41 Rust tests, type-check, lint, production build, and diff validation pass.
+
 ### 2026-07-23 — Animate the terminal drawer opening
 
 - The workspace terminal now expands upward from the chat edge over 300ms with the app's existing enter easing, using its persisted drawer height instead of appearing abruptly.

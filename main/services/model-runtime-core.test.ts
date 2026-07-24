@@ -3,6 +3,7 @@ import test from "node:test";
 import type { Api, Model, ProviderStreams } from "@earendil-works/pi-ai";
 
 import { resolveModelRuntimeWith, type ModelRuntimeDependencies } from "./model-runtime-core.js";
+import { CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
 const codexModel: Model<Api> = {
@@ -25,10 +26,12 @@ const codexStream = (() => {
 function dependencies(options?: {
   provider?: StoredProvider;
   key?: string | null;
+  limits?: RuntimeModelLimits;
 }): ModelRuntimeDependencies {
   return {
     getProvider: async () => options?.provider,
     getApiKey: async () => options?.key ?? null,
+    resolveRuntimeLimits: async () => options?.limits ?? CONSERVATIVE_RUNTIME_LIMITS,
     codex: {
       prepareRuntimeModel: async (modelId) => {
         assert.equal(modelId, codexModel.id);
@@ -58,12 +61,7 @@ test("routes Codex through Pi without consulting API-key providers", async () =>
   };
   const controller = new AbortController();
 
-  const runtime = await resolveModelRuntimeWith(
-    deps,
-    "openai-codex",
-    "gpt-5.4",
-    controller.signal,
-  );
+  const runtime = await resolveModelRuntimeWith(deps, "openai-codex", "gpt-5.4", controller.signal);
   assert.equal(legacyReads, 0);
   assert.strictEqual(receivedSignal, controller.signal);
   assert.strictEqual(runtime.model, codexModel);
@@ -93,6 +91,44 @@ test("keeps the legacy API-key runtime contract unchanged", async () => {
   assert.equal(runtime.model.baseUrl, provider.baseUrl);
   assert.equal(runtime.apiKey, "saved-key");
   assert.equal(runtime.headers, undefined);
+});
+
+test("applies catalog-driven limits without changing the legacy provider transport", async () => {
+  const provider: StoredProvider = {
+    id: "gemini",
+    kind: "openai",
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    models: ["gemini-2.5-pro"],
+    needsKey: true,
+    isPreset: true,
+  };
+  const limits: RuntimeModelLimits = {
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+    reasoning: true,
+    input: ["text", "image"],
+  };
+  let receivedProvider: StoredProvider | undefined;
+  let receivedModelId: string | undefined;
+  const deps = dependencies({ provider, key: "saved-key", limits });
+  deps.resolveRuntimeLimits = async (candidate, modelId) => {
+    receivedProvider = candidate;
+    receivedModelId = modelId;
+    return limits;
+  };
+
+  const runtime = await resolveModelRuntimeWith(deps, provider.id, "gemini-2.5-pro");
+
+  assert.strictEqual(receivedProvider, provider);
+  assert.equal(receivedModelId, "gemini-2.5-pro");
+  assert.equal(runtime.model.api, "openai-completions");
+  assert.equal(runtime.model.provider, "gemini");
+  assert.equal(runtime.model.baseUrl, provider.baseUrl);
+  assert.equal(runtime.model.contextWindow, 1_048_576);
+  assert.equal(runtime.model.maxTokens, 65_536);
+  assert.equal(runtime.model.reasoning, true);
+  assert.deepEqual(runtime.model.input, ["text", "image"]);
 });
 
 test("keeps missing legacy API keys on the existing actionable error path", async () => {
