@@ -1,9 +1,26 @@
 # Project History
 
+### 2026-07-24 — Harden Computer Use follow-ups
+
+- Bound focus approvals to the exact resolved pid/window capability, rejected incomplete or undeclared drag-driver argument schemas, made bare captures fail closed, and limited approval-visible type/set-value payloads to 4,000 characters in both runtime validation and the public tool schema.
+- Computer Use context retention now preserves the newest three actual screenshots rather than counting image-free Computer Use results; unrelated tool images remain untouched.
+- The focused 73-test suite and TypeScript type-check pass.
+
 ### 2026-07-24 — MCP preset brand logos
 
 - Replaced the Popular MCPs initial placeholders with official SVG logomarks for Composio (Brand Hub), Notion, and Linear, rendered with `currentColor` so they follow light/dark tokens.
 - The same marks appear on configured preset rows and in the Set up / Manage dialog title.
+
+### 2026-07-23 — Establish the 0.27 beta release line
+
+- Reset the package and MCP OAuth client version to `0.27.0`, establishing the `0.27.x` beta line for subsequent CI releases.
+- The About surface now explicitly identifies builds as Beta, release documentation records the new versioning policy, and signed installers are titled and named `Aiden Agent Beta` without changing the installed app's product name.
+
+### 2026-07-23 — Branded macOS DMG installer
+
+- Added a 600×448 Finder installer layout with the Aiden app and `/Applications` drop target aligned over the supplied `Presentation slide background (4).png` artwork. The original artwork is retained as the `@2x` asset and a matching 1× variant lets the packaged DMG render sharply on Retina and standard displays.
+- The disk image build now finalizes Finder support assets with the native invisible attribute, so the background and volume-icon resources do not appear in normal Finder views. The finalizer is isolated to `.dmg` artifacts, uses a private writable staging image, validates its paths before mutating them, and atomically replaces the artifact only after recompression.
+- The focused finalizer test, lint, package verification, image checksum verification, and Developer ID/hardened-runtime signature verification passed for `release/development/Aiden Agent-1.0.0-arm64.dmg`. Notarization remains blocked until the App Store Connect notary credentials are configured.
 
 ### 2026-07-23 — Ship Scheduled Tasks through Phase 4
 
