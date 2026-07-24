@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
-import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
+import {
+  anthropicMessagesApi,
+  openAICompletionsApi,
+} from "@earendil-works/pi-ai/compat";
 import type { Model, ProviderStreams } from "@earendil-works/pi-ai";
 import {
   PI_AUTH_COMPATIBILITY_TOKEN,
   buildAgentRuntimeOptions,
+  resolveGenerationThinkingLevel,
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
   runtimeSupportsImages,
   settleGenerationCleanup,
-  shouldExposeLocalReasoning,
+  shouldExposeReasoning,
   terminalAssistantReasoning,
   terminalAssistantReasoningFallback,
   terminalAssistantText,
@@ -24,6 +28,39 @@ import {
 test("uses only the connection-bound runtime model as the image gate", () => {
   assert.equal(runtimeSupportsImages({ input: ["text"] }), false);
   assert.equal(runtimeSupportsImages({ input: ["text", "image"] }), true);
+});
+
+test("native Google thinking stays a small fail-closed runtime contract", () => {
+  assert.equal(
+    resolveGenerationThinkingLevel("google", { reasoning: true }, "high"),
+    "high",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel("google", { reasoning: true }, undefined),
+    "off",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel("google", { reasoning: false }, "high"),
+    "off",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel("openai", { reasoning: true }, "high"),
+    "off",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "google",
+      {
+        reasoning: true,
+        thinkingLevelMap: { off: null, low: "LOW", medium: null, high: "HIGH" },
+      },
+      "medium",
+    ),
+    "off",
+  );
+  assert.equal(shouldExposeReasoning("google"), true);
+  assert.equal(shouldExposeReasoning("ollama"), true);
+  assert.equal(shouldExposeReasoning("openai"), false);
 });
 
 test("clears transient agent state before bounded helper teardown", async () => {
@@ -82,7 +119,12 @@ test("forwards the chat identity through Pi Agent options into the native stream
 
   assert.equal(agentOptions.sessionId, "chat-session-123");
   assert.throws(
-    () => agentOptions.streamFn?.(model, { messages: [] }, { sessionId: agentOptions.sessionId }),
+    () =>
+      agentOptions.streamFn?.(
+        model,
+        { messages: [] },
+        { sessionId: agentOptions.sessionId },
+      ),
     /captured/u,
   );
   assert.equal(receivedSessionId, "chat-session-123");
@@ -91,7 +133,10 @@ test("forwards the chat identity through Pi Agent options into the native stream
 });
 
 test("uses an in-memory non-secret credential for an explicitly keyless provider", () => {
-  assert.equal(resolveRuntimeApiKey({ needsKey: false }, null), PI_AUTH_COMPATIBILITY_TOKEN);
+  assert.equal(
+    resolveRuntimeApiKey({ needsKey: false }, null),
+    PI_AUTH_COMPATIBILITY_TOKEN,
+  );
   assert.equal(
     resolveRuntimeApiKey({ needsKey: false }, "old saved key"),
     PI_AUTH_COMPATIBILITY_TOKEN,
@@ -99,11 +144,17 @@ test("uses an in-memory non-secret credential for an explicitly keyless provider
   assert.deepEqual(resolveRuntimeHeaders({ kind: "openai", needsKey: false }), {
     Authorization: null,
   });
-  assert.deepEqual(resolveRuntimeHeaders({ kind: "anthropic", needsKey: false }), {
-    Authorization: null,
-    "x-api-key": null,
-  });
-  assert.equal(resolveRuntimeHeaders({ kind: "openai", needsKey: true }), undefined);
+  assert.deepEqual(
+    resolveRuntimeHeaders({ kind: "anthropic", needsKey: false }),
+    {
+      Authorization: null,
+      "x-api-key": null,
+    },
+  );
+  assert.equal(
+    resolveRuntimeHeaders({ kind: "openai", needsKey: true }),
+    undefined,
+  );
 });
 
 test("keeps keyless auth off the wire and normalizes local reasoning", async (t) => {
@@ -120,7 +171,9 @@ test("keeps keyless auth off the wire and normalizes local reasoning", async (t)
         object: "chat.completion.chunk",
         created: 0,
         model: "local",
-        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+        choices: [
+          { index: 0, delta: { role: "assistant" }, finish_reason: null },
+        ],
       })}\n\n`,
     );
     response.write(
@@ -129,7 +182,13 @@ test("keeps keyless auth off the wire and normalizes local reasoning", async (t)
         object: "chat.completion.chunk",
         created: 0,
         model: "local",
-        choices: [{ index: 0, delta: { reasoning: "Compare locally." }, finish_reason: null }],
+        choices: [
+          {
+            index: 0,
+            delta: { reasoning: "Compare locally." },
+            finish_reason: null,
+          },
+        ],
       })}\n\n`,
     );
     response.write(
@@ -191,7 +250,11 @@ test("keeps keyless auth off the wire and normalizes local reasoning", async (t)
 
   assert.equal(result.stopReason, "stop");
   assert.deepEqual(result.content, [
-    { type: "thinking", thinking: "Compare locally.", thinkingSignature: "reasoning" },
+    {
+      type: "thinking",
+      thinking: "Compare locally.",
+      thinkingSignature: "reasoning",
+    },
     { type: "text", text: "ok" },
   ]);
   assert.equal(authorization, undefined);
@@ -210,7 +273,10 @@ test("uses Anthropic's single version path without sending keyless auth headers"
       [
         {
           event: "message_start",
-          data: { type: "message_start", message: { id: "msg_test", usage: { input_tokens: 1 } } },
+          data: {
+            type: "message_start",
+            message: { id: "msg_test", usage: { input_tokens: 1 } },
+          },
         },
         {
           event: "content_block_start",
@@ -228,7 +294,10 @@ test("uses Anthropic's single version path without sending keyless auth headers"
             delta: { type: "text_delta", text: "ok" },
           },
         },
-        { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+        {
+          event: "content_block_stop",
+          data: { type: "content_block_stop", index: 0 },
+        },
         {
           event: "message_delta",
           data: {
@@ -239,7 +308,10 @@ test("uses Anthropic's single version path without sending keyless auth headers"
         },
         { event: "message_stop", data: { type: "message_stop" } },
       ]
-        .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+        .map(
+          ({ event, data }) =>
+            `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
+        )
         .join(""),
     );
   });
@@ -291,7 +363,10 @@ test("uses Anthropic's single version path without sending keyless auth headers"
 });
 
 test("preserves normal API-key requirements for authenticated providers", () => {
-  assert.equal(resolveRuntimeApiKey({ needsKey: true }, "  live-key  "), "live-key");
+  assert.equal(
+    resolveRuntimeApiKey({ needsKey: true }, "  live-key  "),
+    "live-key",
+  );
   assert.equal(resolveRuntimeApiKey({ needsKey: true }, "   "), undefined);
   assert.equal(resolveRuntimeApiKey({ needsKey: true }, null), undefined);
 });
@@ -306,12 +381,25 @@ test("classifies terminal Pi errors without turning an aborted turn into an erro
     "No API key for provider: lmstudio",
   );
   assert.equal(
-    terminalGenerationError({ role: "assistant", stopReason: "error", errorMessage: "   " }),
+    terminalGenerationError({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "   ",
+    }),
     "The model couldn't complete this response.",
   );
-  assert.equal(terminalGenerationError({ role: "assistant", stopReason: "aborted" }), null);
-  assert.equal(terminalGenerationWasAborted({ role: "assistant", stopReason: "aborted" }), true);
-  assert.equal(terminalGenerationWasAborted({ role: "toolResult", stopReason: "aborted" }), false);
+  assert.equal(
+    terminalGenerationError({ role: "assistant", stopReason: "aborted" }),
+    null,
+  );
+  assert.equal(
+    terminalGenerationWasAborted({ role: "assistant", stopReason: "aborted" }),
+    true,
+  );
+  assert.equal(
+    terminalGenerationWasAborted({ role: "toolResult", stopReason: "aborted" }),
+    false,
+  );
 });
 
 test("surfaces a dependency abort unless the app explicitly requested cancellation", () => {
@@ -336,16 +424,20 @@ test("uses final assistant text when a provider does not stream text deltas", ()
     "Final answer from the provider",
   );
   assert.equal(
-    terminalAssistantText({ role: "toolResult", content: [{ type: "text", text: "Nope" }] }),
+    terminalAssistantText({
+      role: "toolResult",
+      content: [{ type: "text", text: "Nope" }],
+    }),
     "",
   );
 });
 
-test("exposes only explicit local-provider reasoning and ignores redacted blocks", () => {
-  assert.equal(shouldExposeLocalReasoning("lmstudio"), true);
-  assert.equal(shouldExposeLocalReasoning("ollama"), true);
-  assert.equal(shouldExposeLocalReasoning("openai"), false);
-  assert.equal(shouldExposeLocalReasoning("custom-local"), false);
+test("exposes only deliberate provider reasoning and ignores redacted blocks", () => {
+  assert.equal(shouldExposeReasoning("google"), true);
+  assert.equal(shouldExposeReasoning("lmstudio"), true);
+  assert.equal(shouldExposeReasoning("ollama"), true);
+  assert.equal(shouldExposeReasoning("openai"), false);
+  assert.equal(shouldExposeReasoning("custom-local"), false);
 
   const message = {
     role: "assistant",
@@ -356,25 +448,37 @@ test("exposes only explicit local-provider reasoning and ignores redacted blocks
       { type: "text", text: "Final answer." },
     ],
   };
-  assert.equal(terminalAssistantReasoning(message), "Inspect the request.\n\nDraft the answer.");
+  assert.equal(
+    terminalAssistantReasoning(message),
+    "Inspect the request.\n\nDraft the answer.",
+  );
   assert.equal(
     terminalAssistantReasoningFallback(message, false),
     terminalAssistantReasoning(message),
   );
   assert.equal(terminalAssistantReasoningFallback(message, true), "");
-  assert.equal(terminalAssistantReasoning({ role: "user", content: message.content }), "");
+  assert.equal(
+    terminalAssistantReasoning({ role: "user", content: message.content }),
+    "",
+  );
 });
 
 test("falls back per assistant turn instead of dropping a later terminal-only result", () => {
   let full = "I'll check the workspace.\n";
   full += terminalAssistantTextFallback(
-    { role: "assistant", content: [{ type: "text", text: "Found the issue." }] },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Found the issue." }],
+    },
     false,
   );
   assert.equal(full, "I'll check the workspace.\nFound the issue.");
   assert.equal(
     terminalAssistantTextFallback(
-      { role: "assistant", content: [{ type: "text", text: "Already streamed." }] },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Already streamed." }],
+      },
       true,
     ),
     "",

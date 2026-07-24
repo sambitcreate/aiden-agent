@@ -24,6 +24,17 @@ test("parseParams requires providerId, model, and messages", () => {
   );
 });
 
+test("parseParams accepts only the bounded Google thinking enum", () => {
+  const base = { providerId: "google", model: "gemini-2.5-pro", messages: [] };
+  for (const thinkingLevel of ["off", "low", "medium", "high"] as const) {
+    assert.equal(parseParams({ ...base, thinkingLevel }).thinkingLevel, thinkingLevel);
+  }
+  assert.equal(parseParams(base).thinkingLevel, undefined);
+  for (const thinkingLevel of ["minimal", "xhigh", "dynamic", "", 1, null]) {
+    assert.throws(() => parseParams({ ...base, thinkingLevel }), /Invalid thinking level/u);
+  }
+});
+
 test("parseParams coerces unknown roles to user and missing content to empty string", () => {
   const result = parseParams({
     providerId: "p",

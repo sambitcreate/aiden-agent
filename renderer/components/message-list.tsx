@@ -42,7 +42,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   /** Text of the assistant reply currently streaming, or null when idle. */
   streamingText: string | null;
-  /** Reasoning explicitly emitted by the current local model. */
+  /** Reasoning explicitly emitted by the current supported provider. */
   streamingReasoning: string | null;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
@@ -80,7 +80,11 @@ export function MessageList({
         <div className="flex min-w-0 flex-col gap-3">
           <AgentSteps timeline={timeline} />
           {streamingReasoning ? (
-            <ReasoningBlock content={streamingReasoning} streaming={!streamComplete} />
+            <ReasoningBlock
+              content={streamingReasoning}
+              streaming={!streamComplete}
+              active={!streamComplete && !streamingText}
+            />
           ) : null}
           {streamingText ? (
             <MessageBubble

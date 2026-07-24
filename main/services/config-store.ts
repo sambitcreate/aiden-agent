@@ -7,6 +7,10 @@ import {
   migrateGoogleProviderConfig,
   migrateGoogleProviderKeyMap,
 } from "./google-provider.js";
+import {
+  mergeGoogleThinkingPreference,
+  type GoogleThinkingLevel,
+} from "../../renderer/shared/google-thinking.js";
 import { secrets } from "./secrets.js";
 import type {
   AppSettings,
@@ -56,7 +60,11 @@ const PRESETS: StoredProvider[] = [
     kind: "anthropic",
     label: "Anthropic (Claude)",
     baseUrl: "https://api.anthropic.com/v1",
-    models: ["claude-sonnet-4-20250514", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
+    models: [
+      "claude-sonnet-4-20250514",
+      "claude-3-7-sonnet-latest",
+      "claude-3-5-haiku-latest",
+    ],
     defaultModel: "claude-sonnet-4-20250514",
     needsKey: true,
     isPreset: true,
@@ -124,7 +132,10 @@ async function ensureSeeded(): Promise<ConfigShape> {
         // Backfill arrays added after the initial release.
         if (!Array.isArray(config.mcpServers)) config.mcpServers = [];
         if (!Array.isArray(config.skills)) config.skills = [];
-        if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) {
+        if (
+          !Array.isArray(config.workspaces) ||
+          config.workspaces.length === 0
+        ) {
           config.workspaces = [defaultWorkspace()];
         }
         migrateGoogleProviderConfig(config);
@@ -183,9 +194,12 @@ export const configStore = {
   async saveProvider(provider: StoredProvider): Promise<Provider> {
     const stored = await mutateConfig((config) => {
       const idx = config.providers.findIndex((p) => p.id === provider.id);
-      if (idx >= 0) config.providers[idx] = { ...config.providers[idx], ...provider };
+      if (idx >= 0)
+        config.providers[idx] = { ...config.providers[idx], ...provider };
       else config.providers.push(provider);
-      return structuredClone(config.providers.find((p) => p.id === provider.id)!);
+      return structuredClone(
+        config.providers.find((p) => p.id === provider.id)!,
+      );
     });
     return toProvider(stored);
   },
@@ -210,6 +224,21 @@ export const configStore = {
       config.settings = { ...config.settings, ...patch };
       return structuredClone(config.settings);
     }, isCurrent);
+  },
+
+  /** Atomically merge one validated native-Google preference into current settings. */
+  async setGoogleThinkingLevel(
+    modelId: string,
+    level: GoogleThinkingLevel,
+  ): Promise<AppSettings> {
+    return mutateConfig((config) => {
+      config.settings.googleThinkingByModel = mergeGoogleThinkingPreference(
+        config.settings.googleThinkingByModel,
+        modelId,
+        level,
+      );
+      return structuredClone(config.settings);
+    });
   },
 
   // ── MCP servers ──────────────────────────────────────────────────────
@@ -270,7 +299,8 @@ export const configStore = {
     const next = normalizeWorkspace({ ...workspace, updatedAt: Date.now() });
     return mutateConfig((config) => {
       const idx = config.workspaces.findIndex((w) => w.id === next.id);
-      if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
+      if (idx >= 0)
+        config.workspaces[idx] = { ...config.workspaces[idx], ...next };
       else config.workspaces.push(next);
       return structuredClone(config.workspaces.find((w) => w.id === next.id)!);
     });
@@ -280,7 +310,8 @@ export const configStore = {
     await mutateConfig((config) => {
       config.workspaces = config.workspaces.filter((w) => w.id !== id);
       // Never leave the app without a workspace.
-      if (config.workspaces.length === 0) config.workspaces = [defaultWorkspace()];
+      if (config.workspaces.length === 0)
+        config.workspaces = [defaultWorkspace()];
     });
   },
 };

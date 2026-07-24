@@ -17,9 +17,10 @@ import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
 import {
   buildAgentRuntimeOptions,
+  resolveGenerationThinkingLevel,
   runtimeSupportsImages,
   settleGenerationCleanup,
-  shouldExposeLocalReasoning,
+  shouldExposeReasoning,
   terminalAssistantReasoningFallback,
   terminalAssistantTextFallback,
   terminalGenerationError,
@@ -183,6 +184,11 @@ async function prepareGeneration(
   const model = runtime.model;
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
+  const thinkingLevel = resolveGenerationThinkingLevel(
+    params.providerId,
+    model,
+    params.thinkingLevel ?? settings.googleThinkingByModel?.[params.model],
+  );
   const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
   let computerUse: ComputerUseController | undefined;
   if (
@@ -222,6 +228,7 @@ async function prepareGeneration(
     git,
     tools,
     supportsImages,
+    thinkingLevel,
     computerUse,
   };
 }
@@ -280,10 +287,19 @@ export const llmClient = {
       initialization.removeOwnerInvalidation();
       throw error;
     }
-    const { runtime, permission, folderPath, git, tools, supportsImages, computerUse } = setup;
+    const {
+      runtime,
+      permission,
+      folderPath,
+      git,
+      tools,
+      supportsImages,
+      thinkingLevel,
+      computerUse,
+    } = setup;
     initialization.computerUse = computerUse;
     const { model } = runtime;
-    const exposeLocalReasoning = shouldExposeLocalReasoning(params.providerId);
+    const exposeReasoning = shouldExposeReasoning(params.providerId);
 
     const deniedToolCalls = new Set<string>();
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
@@ -359,6 +375,7 @@ export const llmClient = {
         initialState: {
           systemPrompt,
           model,
+          thinkingLevel,
           tools,
           messages: toPiMessages(params, model, supportsImages),
         },
@@ -455,7 +472,7 @@ export const llmClient = {
               full += e.delta;
               currentAssistantTurnHadTextDelta = true;
               sendGeneration(streamId, "chat:delta", { streamId, delta: e.delta });
-            } else if (e.type === "thinking_delta" && exposeLocalReasoning) {
+            } else if (e.type === "thinking_delta" && exposeReasoning) {
               const separator =
                 !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
@@ -489,7 +506,7 @@ export const llmClient = {
                 event.message,
                 currentAssistantTurnHadTextDelta,
               );
-              if (exposeLocalReasoning) {
+              if (exposeReasoning) {
                 const fallback = terminalAssistantReasoningFallback(
                   event.message,
                   currentAssistantTurnHadReasoningDelta,

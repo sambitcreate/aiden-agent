@@ -443,7 +443,7 @@ export function ModelPicker({
           variant="transparent"
           size="small"
           disabled={disabled || !hasModels}
-          className="min-w-0 max-w-[min(14rem,45vw)] gap-1.5"
+          className="min-w-0 shrink max-w-[min(14rem,45vw)] gap-1.5"
           aria-label={
             hasUnavailableSelection
               ? "Selected model is unavailable. Choose a model."

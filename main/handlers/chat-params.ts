@@ -3,6 +3,7 @@
 
 import type { Attachment, ChatRole, ChatStartParams } from "../services/types.js";
 import { MAX_IMAGE_BYTES, MAX_TEXT_CHARS } from "../services/attachments.js";
+import { isGoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 
 const ROLES: ChatRole[] = ["user", "assistant", "system"];
 const MAX_ATTACHMENTS_PER_MESSAGE = 20;
@@ -76,6 +77,9 @@ export function parseParams(value: unknown): ChatStartParams {
   if (typeof p.providerId !== "string" || !p.providerId) throw new Error("Missing providerId.");
   if (typeof p.model !== "string" || !p.model) throw new Error("Missing model.");
   if (!Array.isArray(p.messages)) throw new Error("Missing messages.");
+  if (p.thinkingLevel !== undefined && !isGoogleThinkingLevel(p.thinkingLevel)) {
+    throw new Error("Invalid thinking level.");
+  }
   const messages = p.messages.map((raw) => {
     const m = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
     return {
@@ -84,11 +88,14 @@ export function parseParams(value: unknown): ChatStartParams {
       attachments: parseAttachments(m.attachments),
     };
   });
+  const thinkingLevel = isGoogleThinkingLevel(p.thinkingLevel) ? p.thinkingLevel : undefined;
+
   return {
     chatId: typeof p.chatId === "string" ? p.chatId : "",
     workspaceId: typeof p.workspaceId === "string" ? p.workspaceId : undefined,
     providerId: p.providerId,
     model: p.model,
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     messages,
   };
 }

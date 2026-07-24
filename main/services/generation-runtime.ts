@@ -2,7 +2,18 @@
 // keyless-provider and terminal-error contracts have fast, deterministic tests.
 
 import type { AgentOptions } from "@earendil-works/pi-agent-core";
-import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  Model,
+  ProviderHeaders,
+  ProviderStreams,
+} from "@earendil-works/pi-ai";
+import {
+  googleThinkingLevelsForModel,
+  isGoogleThinkingLevel,
+  type GoogleThinkingLevel,
+} from "../../renderer/shared/google-thinking.js";
+import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -12,15 +23,34 @@ import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-wor
  */
 export const PI_AUTH_COMPATIBILITY_TOKEN = "aiden-local-no-auth";
 
-const LOCAL_REASONING_PROVIDER_IDS = new Set(["lmstudio", "ollama"]);
+const EXPOSED_REASONING_PROVIDER_IDS = new Set([
+  "lmstudio",
+  "ollama",
+  GOOGLE_PROVIDER_ID,
+]);
 
-/** Only explicit local presets expose provider-authored reasoning in the transcript. */
-export function shouldExposeLocalReasoning(providerId: string): boolean {
-  return LOCAL_REASONING_PROVIDER_IDS.has(providerId);
+/** Expose only provider-authored reasoning that Aiden deliberately supports in the transcript. */
+export function shouldExposeReasoning(providerId: string): boolean {
+  return EXPOSED_REASONING_PROVIDER_IDS.has(providerId);
+}
+
+/** Fail closed outside Pi's native, reasoning-capable Google runtime. */
+export function resolveGenerationThinkingLevel(
+  providerId: string,
+  model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
+  requested: GoogleThinkingLevel | undefined,
+): GoogleThinkingLevel {
+  return providerId === GOOGLE_PROVIDER_ID &&
+    isGoogleThinkingLevel(requested) &&
+    googleThinkingLevelsForModel(model).includes(requested)
+    ? requested
+    : "off";
 }
 
 /** The connection-bound runtime model is the sole request-time image authority. */
-export function runtimeSupportsImages(model: Pick<Model<Api>, "input">): boolean {
+export function runtimeSupportsImages(
+  model: Pick<Model<Api>, "input">,
+): boolean {
   return model.input.includes("image");
 }
 
@@ -34,7 +64,9 @@ export function resolveRuntimeBaseUrl(provider: {
   baseUrl: string;
 }): string {
   const baseUrl = provider.baseUrl.replace(/\/+$/u, "");
-  return provider.kind === "anthropic" ? baseUrl.replace(/\/v1$/iu, "") : baseUrl;
+  return provider.kind === "anthropic"
+    ? baseUrl.replace(/\/v1$/iu, "")
+    : baseUrl;
 }
 
 export function resolveRuntimeApiKey(
@@ -128,7 +160,9 @@ export function buildAgentRuntimeOptions(
         apiKey: options?.apiKey ?? runtime.apiKey,
         // Runtime headers are last so a keyless provider cannot inherit an
         // Authorization header from Pi's default client setup.
-        headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
+        headers: runtime.headers
+          ? { ...options?.headers, ...runtime.headers }
+          : options?.headers,
       }),
   };
 }
@@ -140,13 +174,20 @@ type TerminalAssistantMessage = {
 };
 
 /** Extract a Pi protocol-level terminal error from an Agent message. */
-export function terminalGenerationError(message: TerminalAssistantMessage): string | null {
-  if (message.role !== "assistant" || message.stopReason !== "error") return null;
-  return message.errorMessage?.trim() || "The model couldn't complete this response.";
+export function terminalGenerationError(
+  message: TerminalAssistantMessage,
+): string | null {
+  if (message.role !== "assistant" || message.stopReason !== "error")
+    return null;
+  return (
+    message.errorMessage?.trim() || "The model couldn't complete this response."
+  );
 }
 
 /** Pi reports user-initiated stops as a terminal assistant message as well. */
-export function terminalGenerationWasAborted(message: TerminalAssistantMessage): boolean {
+export function terminalGenerationWasAborted(
+  message: TerminalAssistantMessage,
+): boolean {
   return message.role === "assistant" && message.stopReason === "aborted";
 }
 
@@ -161,8 +202,12 @@ export function terminalGenerationInterruptionError(
 }
 
 /** Return final text when a provider completes without emitting text deltas. */
-export function terminalAssistantText(message: { role?: string; content?: unknown }): string {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+export function terminalAssistantText(message: {
+  role?: string;
+  content?: unknown;
+}): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content))
+    return "";
   return message.content
     .filter(
       (part): part is { type: "text"; text: string } =>
@@ -184,11 +229,17 @@ export function terminalAssistantTextFallback(
 }
 
 /** Return visible, non-redacted thinking blocks from a terminal Pi assistant message. */
-export function terminalAssistantReasoning(message: { role?: string; content?: unknown }): string {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+export function terminalAssistantReasoning(message: {
+  role?: string;
+  content?: unknown;
+}): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content))
+    return "";
   return message.content
     .filter(
-      (part): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
+      (
+        part,
+      ): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
         typeof part === "object" &&
         part !== null &&
         (part as { type?: unknown }).type === "thinking" &&

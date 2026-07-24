@@ -56,7 +56,11 @@ import type {
   WorkspaceFileWriteResult,
   WorkspacePermission,
 } from "./types";
-import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import type { GoogleThinkingLevel } from "../shared/google-thinking";
+import type {
+  ChatTimelineNotification,
+  GenerationTimeline,
+} from "../shared/generation-timeline";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -72,14 +76,21 @@ export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return bridge().invoke(channel, ...args) as Promise<T>;
 }
 
-export function onNotification<T>(method: string, handler: (payload: T) => void): () => void {
+export function onNotification<T>(
+  method: string,
+  handler: (payload: T) => void,
+): () => void {
   return bridge().onNotification(method, handler as (params: unknown) => void);
 }
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
-  setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
-    invoke<boolean>("app:setCloseGuard", guard),
+  setCloseGuard: (guard: {
+    dirty: boolean;
+    gitBusy: boolean;
+    path?: string;
+    saving: boolean;
+  }) => invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
 };
@@ -91,7 +102,11 @@ export const providersApi = {
     invoke<Provider>("providers:save", provider, keyOverride),
   remove: (id: string) => invoke<void>("providers:remove", id),
   setKey: (id: string, key: string) =>
-    invoke<{ hasKey: boolean; provider: Provider | null }>("providers:setKey", id, key),
+    invoke<{ hasKey: boolean; provider: Provider | null }>(
+      "providers:setKey",
+      id,
+      key,
+    ),
   test: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<{
       ok: true;
@@ -132,35 +147,50 @@ export const providersApi = {
 
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
-  set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
+  set: (patch: Partial<AppSettings>) =>
+    invoke<AppSettings>("settings:set", patch),
+  setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
+    invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
 };
 
 export const artificialAnalysisApi = {
   status: () => invoke<ArtificialAnalysisStatus>("artificialAnalysis:status"),
   connect: (apiKey: string) =>
-    invoke<ArtificialAnalysisActionResult>("artificialAnalysis:connect", apiKey),
-  refresh: () => invoke<ArtificialAnalysisActionResult>("artificialAnalysis:refresh"),
-  disconnect: () => invoke<ArtificialAnalysisActionResult>("artificialAnalysis:disconnect"),
+    invoke<ArtificialAnalysisActionResult>(
+      "artificialAnalysis:connect",
+      apiKey,
+    ),
+  refresh: () =>
+    invoke<ArtificialAnalysisActionResult>("artificialAnalysis:refresh"),
+  disconnect: () =>
+    invoke<ArtificialAnalysisActionResult>("artificialAnalysis:disconnect"),
 };
 
 export const computerUseApi = {
-  status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
-  setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
-  requestPermissions: () => invoke<ComputerUseStatus>("computerUse:requestPermissions"),
+  status: (force = false) =>
+    invoke<ComputerUseStatus>("computerUse:status", force),
+  setEnabled: (enabled: boolean) =>
+    invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
+  requestPermissions: () =>
+    invoke<ComputerUseStatus>("computerUse:requestPermissions"),
 };
 
 export const titleProvidersApi = {
-  status: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
-  refresh: () => invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
+  status: () =>
+    invoke<FoundationModelsConnectionStatus | null>("titleProviders:status"),
+  refresh: () =>
+    invoke<FoundationModelsConnectionStatus | null>("titleProviders:refresh"),
 };
 
 export const usageApi = {
-  summary: (range: UsageDateRange = "1y") => invoke<UsageSummary>("usage:summary", range),
+  summary: (range: UsageDateRange = "1y") =>
+    invoke<UsageSummary>("usage:summary", range),
 };
 
 export const scheduleApi = {
   list: () => invoke<ScheduledTask[]>("schedule:list"),
-  save: (task: ScheduledTaskInput) => invoke<ScheduledTask>("schedule:save", task),
+  save: (task: ScheduledTaskInput) =>
+    invoke<ScheduledTask>("schedule:save", task),
   remove: (id: string) => invoke<void>("schedule:remove", id),
   pause: (id: string) => invoke<ScheduledTask>("schedule:pause", id),
   resume: (id: string) => invoke<ScheduledTask>("schedule:resume", id),
@@ -168,7 +198,8 @@ export const scheduleApi = {
   runs: (id: string) => invoke<ScheduledRun[]>("schedule:runs", id),
   preview: (cron: string, timezone: string, count = 3) =>
     invoke<number[]>("schedule:preview", cron, timezone, count),
-  scripts: (workspaceId?: string) => invoke<string[]>("schedule:scripts", workspaceId),
+  scripts: (workspaceId?: string) =>
+    invoke<string[]>("schedule:scripts", workspaceId),
   settings: (patch?: Partial<ScheduledTaskSettings>) =>
     invoke<ScheduledTaskSettings>("schedule:settings", patch),
 };
@@ -185,7 +216,8 @@ export const skillsApi = {
   save: (skill: Skill) => invoke<Skill>("skills:save", skill),
   remove: (id: string) => invoke<void>("skills:remove", id),
   /** Read-only skills discovered from `.agents` folders (workspace + global). */
-  discovered: (folderPath?: string) => invoke<DiscoveredSkill[]>("skills:discovered", folderPath),
+  discovered: (folderPath?: string) =>
+    invoke<DiscoveredSkill[]>("skills:discovered", folderPath),
 };
 
 // ── MCP servers ───────────────────────────────────────────────────────
@@ -194,27 +226,32 @@ export const mcpApi = {
   /** Built-in provider catalog plus per-preset connection state. */
   presets: () => invoke<McpPresetState[]>("mcp:presets"),
   /** Save (or clear, with an empty string) a preset's API key. Keys never come back. */
-  setPresetKey: (serverId: string, key: string) => invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
+  setPresetKey: (serverId: string, key: string) =>
+    invoke<{ hasKey: boolean }>("mcp:setPresetKey", serverId, key),
   save: (server: McpServer) => invoke<McpServer>("mcp:save", server),
   remove: (id: string) => invoke<void>("mcp:remove", id),
   status: (server: McpServer) => invoke<McpStatus>("mcp:status", server),
   /** Browser OAuth sign-in for a remote server. Resolves once tokens are stored. */
-  authorize: (server: McpServer) => invoke<{ authorized: boolean }>("mcp:authorize", server),
-  oauthStatus: (id: string) => invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
+  authorize: (server: McpServer) =>
+    invoke<{ authorized: boolean }>("mcp:authorize", server),
+  oauthStatus: (id: string) =>
+    invoke<{ authorized: boolean }>("mcp:oauthStatus", id),
   /** Drop cached connections so the next message reconnects with current config. */
   reconnect: () => invoke<void>("mcp:reconnect"),
 };
 
 // ── Dev log (renderer error forwarding, dev builds only) ─────────────
 export const devlogApi = {
-  write: (level: "info" | "warn" | "error", message: string) => invoke<void>("devlog:write", level, message),
+  write: (level: "info" | "warn" | "error", message: string) =>
+    invoke<void>("devlog:write", level, message),
 };
 
 // ── Exa web search ────────────────────────────────────────────────────
 export const exaApi = {
   get: () => invoke<{ enabled: boolean; hasKey: boolean }>("exa:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("exa:setKey", key),
-  setEnabled: (enabled: boolean) => invoke<AppSettings>("exa:setEnabled", enabled),
+  setEnabled: (enabled: boolean) =>
+    invoke<AppSettings>("exa:setEnabled", enabled),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
@@ -261,7 +298,9 @@ export const dictationApi = {
 
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
-  const res = await window.aidenAPI.dialog.showOpenDialog({ properties: ["openDirectory"] });
+  const res = await window.aidenAPI.dialog.showOpenDialog({
+    properties: ["openDirectory"],
+  });
   if (res.canceled || !res.filePaths?.length) return null;
   return res.filePaths[0];
 }
@@ -291,21 +330,32 @@ export const workspacesApi = {
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
-  createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
+  createFromFolder: () =>
+    invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
-  update: (id: string, patch: { name?: string; permission?: WorkspacePermission }) =>
-    invoke<Workspace>("workspaces:update", id, patch),
+  update: (
+    id: string,
+    patch: { name?: string; permission?: WorkspacePermission },
+  ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
-  gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
-  openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
+  gitInfo: (workspaceId: string) =>
+    invoke<GitInfo>("workspaces:gitInfo", workspaceId),
+  openFolder: (workspaceId: string) =>
+    invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
   openInEditor: (workspaceId: string, editorId: string) =>
     invoke<void>("workspaces:openInEditor", workspaceId, editorId),
-  files: (workspaceId: string) => invoke<WorkspaceFileIndex>("workspaces:files", workspaceId),
+  files: (workspaceId: string) =>
+    invoke<WorkspaceFileIndex>("workspaces:files", workspaceId),
   readFile: (workspaceId: string, path: string) =>
     invoke<WorkspaceFileDocument>("workspaces:readFile", workspaceId, path),
-  writeFile: (workspaceId: string, path: string, content: string, expectedVersion: string) =>
+  writeFile: (
+    workspaceId: string,
+    path: string,
+    content: string,
+    expectedVersion: string,
+  ) =>
     invoke<WorkspaceFileWriteResult>(
       "workspaces:writeFile",
       workspaceId,
@@ -328,9 +378,12 @@ export interface TerminalSnapshot {
 }
 
 export const terminalApi = {
-  create: (workspaceId: string) => invoke<TerminalSession>("terminal:create", workspaceId),
-  snapshot: (sessionId: string) => invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
-  write: (sessionId: string, data: string) => invoke<void>("terminal:write", sessionId, data),
+  create: (workspaceId: string) =>
+    invoke<TerminalSession>("terminal:create", workspaceId),
+  snapshot: (sessionId: string) =>
+    invoke<TerminalSnapshot>("terminal:snapshot", sessionId),
+  write: (sessionId: string, data: string) =>
+    invoke<void>("terminal:write", sessionId, data),
   resize: (sessionId: string, cols: number, rows: number) =>
     invoke<void>("terminal:resize", sessionId, cols, rows),
   close: (sessionId: string) => invoke<void>("terminal:close", sessionId),
@@ -351,24 +404,35 @@ export const gitApi = {
     invoke<GitComparison>("git:compare", workspaceId, targetRef),
   comparisonDiff: (workspaceId: string, input: GitComparisonDiffInput) =>
     invoke<GitFileDiff>("git:comparisonDiff", workspaceId, input),
-  branches: (workspaceId: string) => invoke<GitBranches>("git:branches", workspaceId),
-  checkout: (workspaceId: string, name: string) => invoke<void>("git:checkout", workspaceId, name),
+  branches: (workspaceId: string) =>
+    invoke<GitBranches>("git:branches", workspaceId),
+  checkout: (workspaceId: string, name: string) =>
+    invoke<void>("git:checkout", workspaceId, name),
   createBranch: (workspaceId: string, name: string) =>
     invoke<void>("git:createBranch", workspaceId, name),
-  worktrees: (workspaceId: string) => invoke<GitWorktree[]>("git:worktrees", workspaceId),
+  worktrees: (workspaceId: string) =>
+    invoke<GitWorktree[]>("git:worktrees", workspaceId),
   createWorktree: (workspaceId: string, name: string) =>
     invoke<Workspace>("git:createWorktree", workspaceId, name),
   deleteManagedWorktree: (workspaceId: string) =>
-    invoke<{ branchDeleted: boolean }>("git:deleteManagedWorktree", workspaceId),
+    invoke<{ branchDeleted: boolean }>(
+      "git:deleteManagedWorktree",
+      workspaceId,
+    ),
 };
 
 // ── Chats ─────────────────────────────────────────────────────────────
 export const chatsApi = {
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: (id: string) => invoke<Chat | null>("chats:get", id),
-  create: (input: { title?: string; workspaceId?: string; providerId?: string; model?: string }) =>
-    invoke<Chat>("chats:create", input),
-  rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
+  create: (input: {
+    title?: string;
+    workspaceId?: string;
+    providerId?: string;
+    model?: string;
+  }) => invoke<Chat>("chats:create", input),
+  rename: (id: string, title: string) =>
+    invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
@@ -491,9 +555,13 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatDone>("chat:done", (p) => {
       if (p.streamId !== streamId) return;
-      void Promise.resolve(callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning))
+      void Promise.resolve(
+        callbacks.onDone(p.content, p.timeline, p.chat, p.reasoning),
+      )
         .catch((error: unknown) =>
-          callbacks.onError(error instanceof Error ? error.message : String(error)),
+          callbacks.onError(
+            error instanceof Error ? error.message : String(error),
+          ),
         )
         .finally(dispose);
     }),
@@ -527,10 +595,12 @@ export function startGeneration(
     }),
   );
 
-  void invoke<{ streamId: string }>("chat:start", streamId, params).catch((error: unknown) => {
-    callbacks.onError(error instanceof Error ? error.message : String(error));
-    dispose();
-  });
+  void invoke<{ streamId: string }>("chat:start", streamId, params).catch(
+    (error: unknown) => {
+      callbacks.onError(error instanceof Error ? error.message : String(error));
+      dispose();
+    },
+  );
 
   return {
     streamId,

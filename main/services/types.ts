@@ -2,6 +2,7 @@
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -15,6 +16,10 @@ export interface ProviderModelMetadata {
   vision?: boolean;
   toolCall?: boolean;
   reasoning?: boolean;
+  /** Distinct Aiden thinking choices supported by this native Google model. */
+  thinkingLevels?: GoogleThinkingLevel[];
+  /** False when Google's minimum thinking can only be hidden, not disabled. */
+  thinkingCanDisable?: boolean;
   contextLength?: number;
   parameterCount?: string;
   format?: string;
@@ -145,7 +150,7 @@ export interface ChatMessage {
   createdAt: number;
   /** Model that produced an assistant message. */
   model?: string;
-  /** Provider-emitted reasoning shown only for supported local-model responses. */
+  /** Deliberately exposed provider reasoning retained on an assistant message. */
   reasoning?: string;
   /** Files attached to a user message. */
   attachments?: Attachment[];
@@ -164,11 +169,7 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "artificial-analysis"
-  | "models-dev"
-  | "fallback";
+  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
@@ -320,7 +321,8 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
+export type ChatTitleProviderId =
+  "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -360,6 +362,8 @@ export interface AppSettings {
   chatTitleProviderId?: ChatTitleProviderId;
   /** Paired light/dark palettes and global appearance preferences. */
   appearance?: AppearanceConfig;
+  /** Last explicit native-Google thinking level, keyed by exact model id. */
+  googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
@@ -468,7 +472,13 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
-  messages: Array<{ role: ChatRole; content: string; attachments?: Attachment[] }>;
+  /** Small main-validated enum; ignored outside reasoning-capable native Google models. */
+  thinkingLevel?: GoogleThinkingLevel;
+  messages: Array<{
+    role: ChatRole;
+    content: string;
+    attachments?: Attachment[];
+  }>;
 }
 
 /** A pending request for the user to approve a mutating tool call ("ask" mode). */
@@ -503,7 +513,7 @@ export interface ChatError {
   message: string;
   /** Streamed text retained when a provider fails after beginning a response. */
   content?: string;
-  /** Streamed local-model reasoning retained alongside a partial response. */
+  /** Deliberately exposed provider reasoning retained alongside a partial response. */
   reasoning?: string;
   timeline?: GenerationTimeline;
   chat?: Chat;

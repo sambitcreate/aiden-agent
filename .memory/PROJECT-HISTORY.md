@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-24 — Add native Gemini thinking controls
+
+- Added a compact per-model thinking control for reasoning-capable native Google models, showing only choices with distinct native outcomes and labeling the no-exposed-thoughts state Hide when Google cannot truly disable thinking.
+- Made the per-model preference an atomic main-process mutation so concurrent renderer snapshots cannot discard another model's saved choice; strict validation remains at renderer, IPC, settings, and runtime boundaries.
+- Passed the effective level through Pi Agent state so Pi emits the model-appropriate native Google thinking configuration, while unsupported providers and non-reasoning models fail closed to `off`.
+- Extended the transcript's reasoning surface to deliberate Google thought deltas, with collapsible live tail-following and a pre-answer shimmer that respects Aiden's Reduce Motion setting.
+- Covered the preference contract, accessible control, request parsing, runtime gating, reasoning exposure, and a faux native Google high-effort request payload.
+
 ### 2026-07-24 — Move Gemini chat to Pi's native Google transport
 
 - Replaced the OpenAI-compatible `gemini` preset with Pi's built-in `google` provider and exact `google-generative-ai` model/stream dispatch, including native Google model discovery and fixed endpoint/authentication settings.

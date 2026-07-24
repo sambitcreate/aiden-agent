@@ -3,6 +3,7 @@
 
 import type { AppearanceConfig } from "../shared/appearance";
 import type { GenerationTimeline } from "../shared/generation-timeline";
+import type { GoogleThinkingLevel } from "../shared/google-thinking";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -15,6 +16,8 @@ export interface ProviderModelMetadata {
   vision?: boolean;
   toolCall?: boolean;
   reasoning?: boolean;
+  thinkingLevels?: GoogleThinkingLevel[];
+  thinkingCanDisable?: boolean;
   contextLength?: number;
   parameterCount?: string;
   format?: string;
@@ -115,7 +118,12 @@ export interface ProviderAuthDone {
 export interface ProviderAuthError {
   flowId: string;
   providerId: typeof OPENAI_CODEX_PROVIDER_ID;
-  code: "port_busy" | "rate_limited" | "timed_out" | "verification_failed" | "sign_in_failed";
+  code:
+    | "port_busy"
+    | "rate_limited"
+    | "timed_out"
+    | "verification_failed"
+    | "sign_in_failed";
   message: string;
 }
 
@@ -371,11 +379,7 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "artificial-analysis"
-  | "models-dev"
-  | "fallback";
+  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
 
 export interface ModelInfo {
   id: string;
@@ -588,7 +592,8 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
+export type ChatTitleProviderId =
+  "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -623,6 +628,7 @@ export interface AppSettings {
   dictationAccelerator?: string;
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
+  googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   computerUseEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
@@ -753,7 +759,12 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
-  messages: Array<{ role: ChatRole; content: string; attachments?: Attachment[] }>;
+  thinkingLevel?: GoogleThinkingLevel;
+  messages: Array<{
+    role: ChatRole;
+    content: string;
+    attachments?: Attachment[];
+  }>;
 }
 
 export interface ApprovalRequest {

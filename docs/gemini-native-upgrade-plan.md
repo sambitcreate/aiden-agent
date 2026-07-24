@@ -1,6 +1,6 @@
 # Gemini Native Upgrade Plan
 
-Status: Phases 0 and 1 implemented; Phase 3 remains planned
+Status: Phases 0, 1, and 3a implemented; Phase 3b remains planned
 Date: 2026-07-22
 Depends on: `docs/pi-provider-integration-plan.md` (broader registry migration)
 Pi packages pinned: `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` `0.80.10`
@@ -27,7 +27,7 @@ Verified against the current codebase:
 | Gemini chat rides the OpenAI-compat endpoint | `main/services/config-store.ts:52-61` (`kind: "openai"`, `baseUrl: .../v1beta/openai`), `main/services/model-runtime-core.ts:33-35` | Native Gemini features (system instructions, safety settings, `responseSchema`, thinking config, context caching) are unreachable. |
 | Runtime limits were fabricated | Before Phase 0, `model-runtime-core.ts` hardcoded `contextWindow: 128_000`, `maxTokens: 8192`, `reasoning: false`, and text-only input for every non-Codex model. | Phase 0 now resolves connection-discovered overrides over provider-scoped Pi metadata, then the bundled snapshot and conservative fallback. |
 | Catalog already knows the real limits | `resources/model-capabilities.json` → `models-catalog-core.ts` → `models-catalog.ts` | Phase 0 now uses this offline snapshot for runtime limits as well as display metadata; the running app still makes no catalog network request. |
-| No reasoning UI or payload mapping | `model-picker-pad.tsx` is selection-only and no `thinkingConfig` is sent; Phase 0 now identifies reasoning-capable runtime models. | Users still cannot control Gemini thinking budget/level. |
+| No reasoning UI or payload mapping | Before Phase 3a, `model-picker-pad.tsx` was selection-only and no thinking level reached the Pi Agent; Phase 0 identified reasoning-capable runtime models. | Phase 3a now provides a bounded per-model control and native request mapping. |
 | No context caching | No `cachedContent`/`createCachedContent` in app TS; `usage-accounting.ts:27-36` only *reads* `cachedContentTokenCount` if returned | Workspace repo context is re-transmitted every turn, costing latency and tokens. |
 | Voice is one-shot REST, chat is OpenAI adapter | `main/services/transcription.ts:105-137` (`generateContent`) vs chat OpenAI-compat | Dual integration; voice stays one-shot (acceptable — Live is deferred). |
 
@@ -114,10 +114,12 @@ Two coupled features that only make sense on the native transport from Phase 1.
 
 Expose Gemini's thinking config in the composer and pass it through the backend IPC to the Pi stream.
 
+**Implemented 2026-07-24.** Reasoning-capable native Google models now show a compact composer control drawn from the bounded `off | low | medium | high` contract, while model metadata removes choices that Pi would collapse to the same native outcome. Models that cannot truly disable thinking say **Hide** instead of **Off** and explain that their minimum thinking remains internal. The backend atomically owns each saved per-model preference, validates the small enum and exact model-supported subset, and fails closed to the no-exposed-thoughts state outside a supported native Google model. A fresh Pi Agent receives the selected `thinkingLevel`; Pi maps it to the correct Google `thinkingConfig`. Deliberately exposed thought deltas render in a collapsible transcript surface, with shimmer limited to the pre-answer thinking interval and suppressed by Aiden's Reduce Motion contract.
+
 **Backend**
 
-- Add a per-request `thinking` option threaded from the renderer through the chat IPC to the Pi Google stream. Per pi-ai docs, the Google path accepts `thinking: { enabled, budgetTokens }` (`budgetTokens: -1` dynamic, `0` disable) and `thinkingLevelMap` for level mapping.
-- Define the DTO in both `main/services/types.ts` and `renderer/lib/types.ts`. Never accept arbitrary provider payloads from the renderer — map a small enum (e.g. `off | low | medium | high | dynamic`) to `budgetTokens`/level in main.
+- Thread a per-request `thinkingLevel` from the renderer through chat IPC into Pi Agent state. Pi's simple-stream path maps `off | low | medium | high` to the model-appropriate native Google thinking level or token budget.
+- Define the DTO in both `main/services/types.ts` and `renderer/lib/types.ts`. Never accept arbitrary provider payloads from the renderer; the shared contract is the small `off | low | medium | high` enum.
 - Only enable when the resolved Pi model reports `reasoning: true` (from Phase 0/1 metadata). Ignore or no-op for non-reasoning models.
 
 **Renderer / UX**
@@ -143,7 +145,7 @@ Cache the stable workspace/system prefix so long sessions and large repo context
 
 **Exit gate (Phase 3)**
 
-A reasoning-capable `google` model shows the Thinking control; selecting a level changes the streamed request's thinking config; the shimmer renders during the thinking phase and respects Reduce Motion. With a workspace mounted, repeat turns reuse a context cache (verified by fingerprint reuse and cache-read token accounting), and cache failure never blocks a turn.
+Phase 3a is complete: a reasoning-capable `google` model shows the Thinking control; selecting a level changes the streamed request's thinking config; the shimmer renders during the thinking phase and respects Reduce Motion. Phase 3 completes when a mounted workspace reuses a context cache (verified by fingerprint reuse and cache-read token accounting) and cache failure never blocks a turn.
 
 ---
 
