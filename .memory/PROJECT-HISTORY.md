@@ -1,5 +1,10 @@
 # Project History
 
+### 2026-07-24 — MCP preset brand logos
+
+- Replaced the Popular MCPs initial placeholders with official SVG logomarks for Composio (Brand Hub), Notion, and Linear, rendered with `currentColor` so they follow light/dark tokens.
+- The same marks appear on configured preset rows and in the Set up / Manage dialog title.
+
 ### 2026-07-23 — Ship Scheduled Tasks through Phase 4
 
 - Added a first-class Electron-main scheduler with `croner`, serialized per-task lifecycle changes, launch catch-up without stacked missed windows, pre-execution next-run advancement, global and per-task pause/resume, bounded 50-run history, task-specific chats, macOS notifications, and privacy-safe `"scheduled"` usage attribution.
