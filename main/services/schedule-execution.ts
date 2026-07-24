@@ -6,11 +6,10 @@ import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
+import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-
-const SCHEDULE_TOOL_NAME = "schedule_task";
 
 function createBackgroundOwner(
   streamId: string,

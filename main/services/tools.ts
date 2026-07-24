@@ -15,6 +15,7 @@ import { discoverSkills } from "./skills-discovery.js";
 import type { DiscoveredSkill, Skill, WorkspacePermission } from "./types.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
+import { scheduleTaskToolsForContext } from "./schedule-tool.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -76,12 +77,22 @@ function makeSkillTool(skill: Skill | DiscoveredSkill): AgentTool {
 
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
+  /** Workspace identity used as the default target for agent-created schedules. */
+  workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
   workspaceRoot?: string;
   /** Workspace permission level; "none" withholds all folder-scoped tools. */
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
   computerUse?: ComputerUseController;
+  /** Background scheduled runs disable this to prevent recursive task creation. */
+  allowScheduling?: boolean;
+}
+
+export function buildSchedulingTools(
+  context: Pick<ToolContext, "workspaceId" | "allowScheduling">,
+): AgentTool[] {
+  return scheduleTaskToolsForContext(context);
 }
 
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
@@ -89,6 +100,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   const settings = await configStore.getSettings();
 
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
+  tools.push(...buildSchedulingTools(ctx));
 
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.

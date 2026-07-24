@@ -198,7 +198,13 @@ async function prepareGeneration(
   }
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
   const tools = (
-    await buildAgentTools({ workspaceRoot: folderPath, permission: toolPermission, computerUse })
+    await buildAgentTools({
+      workspaceId: workspace?.id,
+      workspaceRoot: folderPath,
+      permission: toolPermission,
+      computerUse,
+      allowScheduling: !options.excludeToolNames?.has("schedule_task"),
+    })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   return {
     runtime: { ...runtime, model },

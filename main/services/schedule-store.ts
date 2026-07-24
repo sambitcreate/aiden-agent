@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { DataStore } from "./data-store.js";
+import { assertSafeScheduledPrompt } from "./schedule-guard.js";
 import type {
   ScheduledRun,
   ScheduledRunResult,
@@ -115,6 +116,7 @@ function normalizeInput(
   const prompt = input.mode === "llm" ? cleanOptional(input.prompt, 32 * 1024) : undefined;
   const script = input.mode === "script" ? validateScriptName(input.script ?? "") : undefined;
   if (input.mode === "llm" && !prompt) throw new Error("LLM tasks require a prompt.");
+  if (prompt) assertSafeScheduledPrompt(prompt);
   if (input.permission !== undefined && input.permission !== "read-only" && input.permission !== "full") {
     throw new Error("Invalid scheduled task permission.");
   }
