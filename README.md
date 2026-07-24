@@ -87,7 +87,7 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 
 ## Project status
 
-Aiden Agent is under active development for macOS. Public binary distribution is prepared but remains disabled until the signing, notarization, release-repository, and protected-environment setup in [the release guide](docs/releasing.md) is complete.
+Aiden Agent is a beta macOS release, starting at version 0.27.0. Public binary distribution is prepared but remains disabled until the signing, notarization, release-repository, and protected-environment setup in [the release guide](docs/releasing.md) is complete.
 
 This source repository does not currently include a public license. Add an explicit `LICENSE` before presenting the project as open source or accepting outside contributions.
 
