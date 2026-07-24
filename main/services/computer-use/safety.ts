@@ -33,6 +33,8 @@ const BLOCKED_KEY_COMBOS = [
   ["ctrl", "option", "del"],
   ["option", "f4"],
 ] as const;
+const APPROVAL_PAYLOAD_MAX_CHARS = 4_000;
+
 const BLOCKED_TYPE_PATTERNS = [
   /\b(?:curl|wget)\b[^|]{0,8192}\|\s*(?:(?:\/(?:usr\/)?bin\/)?(?:env|command|exec|sudo)\s+)*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da|k)?sh\b/iu,
   /:\s*\(\)\s*\{\s*:\|:\s*&\s*\}/iu,
@@ -190,7 +192,12 @@ export function parseComputerUseKeyChord(value: unknown): ParsedKeyChord {
 
 function validateTypedText(value: unknown): string {
   if (typeof value !== "string") fail("invalid_text", "type requires text.");
-  if (value.length > 65_536) fail("invalid_text", "type text is too large.");
+  if (value.length > APPROVAL_PAYLOAD_MAX_CHARS) {
+    fail(
+      "payload_too_large",
+      "type and set_value payloads are limited to 4,000 characters for approval safety.",
+    );
+  }
   // Normalize compatibility characters, quoted executable names, escaped
   // newlines, and whitespace before matching. Approval is not a substitute
   // for a hard block on obvious shell bootstrap/destruction payloads.
@@ -423,6 +430,11 @@ export function computerUseNeedsApproval(args: ComputerUseArgs): boolean {
   return !COMPUTER_USE_READ_ONLY_ACTIONS.has(args.action);
 }
 
+/** Approval summaries show the full JSON-encoded payload the user is authorizing. */
+export function summarizeTypedApprovalPayload(value: string): string {
+  return JSON.stringify(value);
+}
+
 export function summarizeComputerUseApproval(args: ComputerUseArgs): string {
   const normalized = normalizeComputerUseArgs(args) as Record<string, unknown>;
   const foreground = normalized.delivery_mode === "foreground" ? " [VISIBLE FOREGROUND]" : "";
@@ -437,15 +449,12 @@ export function summarizeComputerUseApproval(args: ComputerUseArgs): string {
       return `drag ${String(normalized.from_element ?? JSON.stringify(normalized.from_coordinate))} to ${String(normalized.to_element ?? JSON.stringify(normalized.to_coordinate))}${foreground}${after}`;
     case "scroll":
       return `scroll ${String(normalized.direction)} x${String(normalized.amount)}${foreground}${after}`;
-    case "type": {
-      const text = String(normalized.text);
-      const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
-      return `type ${JSON.stringify(preview)}${foreground}${after}`;
-    }
+    case "type":
+      return `type ${summarizeTypedApprovalPayload(String(normalized.text))}${foreground}${after}`;
     case "key":
       return `press ${JSON.stringify(normalized.keys)}${foreground}${after}`;
     case "set_value":
-      return `set element ${String(normalized.element)} to ${JSON.stringify(String(normalized.value).slice(0, 60))}${after}`;
+      return `set element ${String(normalized.element)} to ${summarizeTypedApprovalPayload(String(normalized.value))}${after}`;
     case "focus_app":
       return `target ${JSON.stringify(normalized.app)}${normalized.raise_window === true ? " and bring it to front [VISIBLE FOREGROUND]" : " in the background"}${after}`;
     default:
@@ -463,16 +472,36 @@ function canonicalJson(value: unknown): string {
     .join(",")}}`;
 }
 
+export interface ComputerUseBoundTarget {
+  pid: number;
+  windowId: number;
+}
+
+export interface ComputerUseGrantPrepared {
+  targetRevision: number;
+  fingerprint: string;
+  boundTarget?: ComputerUseBoundTarget;
+}
+
+export interface ComputerUseGrantConsumed {
+  boundTarget?: ComputerUseBoundTarget;
+}
+
+interface StoredGrant {
+  fingerprint: string;
+  boundTarget?: ComputerUseBoundTarget;
+}
+
 /** Per-generation, one-use approval capabilities for privileged Computer Use calls. */
 export class ComputerUseGrantLedger {
-  private readonly grants = new Map<string, string>();
+  private readonly grants = new Map<string, StoredGrant>();
 
   constructor(
     private readonly generationId: string,
     private readonly targetRevision: () => number,
   ) {}
 
-  prepare(args: ComputerUseArgs): { targetRevision: number; fingerprint: string } {
+  prepare(args: ComputerUseArgs, boundTarget?: ComputerUseBoundTarget): ComputerUseGrantPrepared {
     const normalized = normalizeComputerUseArgs(args);
     if (!computerUseNeedsApproval(normalized)) {
       fail("approval_invalid", "A read-only Computer Use action does not need approval.");
@@ -480,15 +509,12 @@ export class ComputerUseGrantLedger {
     const targetRevision = this.targetRevision();
     return {
       targetRevision,
-      fingerprint: this.fingerprint(normalized, targetRevision),
+      fingerprint: this.fingerprint(normalized, targetRevision, boundTarget),
+      ...(boundTarget ? { boundTarget } : {}),
     };
   }
 
-  authorize(
-    toolCallId: string,
-    args: ComputerUseArgs,
-    prepared: { targetRevision: number; fingerprint: string },
-  ): void {
+  authorize(toolCallId: string, args: ComputerUseArgs, prepared: ComputerUseGrantPrepared): void {
     const normalized = normalizeComputerUseArgs(args);
     if (!computerUseNeedsApproval(normalized)) return;
     if (!toolCallId || this.grants.has(toolCallId)) {
@@ -496,27 +522,36 @@ export class ComputerUseGrantLedger {
     }
     if (
       prepared.targetRevision !== this.targetRevision() ||
-      prepared.fingerprint !== this.fingerprint(normalized, prepared.targetRevision)
+      prepared.fingerprint !==
+        this.fingerprint(normalized, prepared.targetRevision, prepared.boundTarget)
     ) {
       fail(
         "approval_expired",
         "The Computer Use target or action changed after the approval prompt. Capture and approve it again.",
       );
     }
-    this.grants.set(toolCallId, prepared.fingerprint);
+    this.grants.set(toolCallId, {
+      fingerprint: prepared.fingerprint,
+      ...(prepared.boundTarget ? { boundTarget: prepared.boundTarget } : {}),
+    });
   }
 
-  consume(toolCallId: string, args: ComputerUseArgs): void {
+  consume(toolCallId: string, args: ComputerUseArgs): ComputerUseGrantConsumed {
     const normalized = normalizeComputerUseArgs(args);
-    if (!computerUseNeedsApproval(normalized)) return;
+    if (!computerUseNeedsApproval(normalized)) return {};
     const expected = this.grants.get(toolCallId);
     this.grants.delete(toolCallId);
-    if (!expected || expected !== this.fingerprint(normalized, this.targetRevision())) {
+    if (
+      !expected ||
+      expected.fingerprint !==
+        this.fingerprint(normalized, this.targetRevision(), expected.boundTarget)
+    ) {
       fail(
         "approval_required",
         "This Computer Use action was not approved, changed after approval, or was already used.",
       );
     }
+    return expected.boundTarget ? { boundTarget: expected.boundTarget } : {};
   }
 
   clear(): void {
@@ -527,12 +562,17 @@ export class ComputerUseGrantLedger {
     return this.grants.size;
   }
 
-  private fingerprint(args: ComputerUseArgs, targetRevision: number): string {
+  private fingerprint(
+    args: ComputerUseArgs,
+    targetRevision: number,
+    boundTarget?: ComputerUseBoundTarget,
+  ): string {
     return createHash("sha256")
       .update(
         canonicalJson({
           generation: this.generationId,
           targetRevision,
+          ...(boundTarget ? { boundTarget } : {}),
           args,
         }),
       )
