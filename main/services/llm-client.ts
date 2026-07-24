@@ -13,12 +13,11 @@ import { logger } from "../platform.js";
 import { buildAgentTools } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
-import { providerModelInfo } from "./provider-model-info.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
 import {
   buildAgentRuntimeOptions,
-  effectiveModelForGeneration,
+  runtimeSupportsImages,
   settleGenerationCleanup,
   shouldExposeLocalReasoning,
   terminalAssistantReasoningFallback,
@@ -148,11 +147,10 @@ async function prepareGeneration(
   const permission: WorkspacePermission = workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
-  // Capability metadata is local: Pi owns Codex facts and the release snapshot
-  // owns legacy-provider facts, so chat startup never waits on a public catalog.
-  const modelInfo = await providerModelInfo.info(runtime.provider.id, params.model);
-  const model = effectiveModelForGeneration(runtime.model, modelInfo.vision);
-  const supportsImages = model.input.includes("image");
+  // The resolved runtime model is the connection-bound capability authority.
+  // Display metadata must not re-enable an input that Pi or discovery rejected.
+  const model = runtime.model;
+  const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
   const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
   let computerUse: ComputerUseController | undefined;

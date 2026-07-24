@@ -1,6 +1,6 @@
 # Gemini Native Upgrade Plan
 
-Status: implementation plan only
+Status: Phase 0 implemented on 2026-07-23; Phases 1 and 3 remain planned
 Date: 2026-07-22
 Depends on: `docs/pi-provider-integration-plan.md` (broader registry migration)
 Pi packages pinned: `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` `0.80.10`
@@ -25,9 +25,9 @@ Verified against the current codebase:
 | Gap | Evidence | Consequence |
 | --- | --- | --- |
 | Gemini chat rides the OpenAI-compat endpoint | `main/services/config-store.ts:52-61` (`kind: "openai"`, `baseUrl: .../v1beta/openai`), `main/services/model-runtime-core.ts:33-35` | Native Gemini features (system instructions, safety settings, `responseSchema`, thinking config, context caching) are unreachable. |
-| Runtime limits are fabricated | `main/services/model-runtime-core.ts:37-49` hardcodes `contextWindow: 128_000`, `maxTokens: 8192`, `reasoning: false` for every non-Codex model | Gemini's true ~1M context and 65K output (2.5 Pro/Flash) are throttled to 128K/8K. |
-| Catalog already knows the real limits | `resources/model-capabilities.json` → `models-catalog-core.ts:104-105` → `model-picker.tsx:88-89` (UI display only) | The data exists but is never wired into the runtime `Model`. |
-| No reasoning UI or payload mapping | `model-picker-pad.tsx` is selection-only; no `thinkingConfig` anywhere; `model-runtime-core.ts:44` sets `reasoning: false` | Users cannot control Gemini thinking budget/level. |
+| Runtime limits were fabricated | Before Phase 0, `model-runtime-core.ts` hardcoded `contextWindow: 128_000`, `maxTokens: 8192`, `reasoning: false`, and text-only input for every non-Codex model. | Phase 0 now resolves connection-discovered overrides over provider-scoped Pi metadata, then the bundled snapshot and conservative fallback. |
+| Catalog already knows the real limits | `resources/model-capabilities.json` → `models-catalog-core.ts` → `models-catalog.ts` | Phase 0 now uses this offline snapshot for runtime limits as well as display metadata; the running app still makes no catalog network request. |
+| No reasoning UI or payload mapping | `model-picker-pad.tsx` is selection-only and no `thinkingConfig` is sent; Phase 0 now identifies reasoning-capable runtime models. | Users still cannot control Gemini thinking budget/level. |
 | No context caching | No `cachedContent`/`createCachedContent` in app TS; `usage-accounting.ts:27-36` only *reads* `cachedContentTokenCount` if returned | Workspace repo context is re-transmitted every turn, costing latency and tokens. |
 | Voice is one-shot REST, chat is OpenAI adapter | `main/services/transcription.ts:105-137` (`generateContent`) vs chat OpenAI-compat | Dual integration; voice stays one-shot (acceptable — Live is deferred). |
 
@@ -43,6 +43,8 @@ Verified against the current codebase:
 ## Phase 0 — Catalog-driven runtime limits
 
 The fastest correct fix: stop fabricating `128K/8192` and feed the release-bundled capability snapshot into the runtime `Model`. This helps **all** providers, not just Gemini, and ships before any transport change.
+
+**Implemented 2026-07-23.** Runtime resolution follows Pi's provider-owned model composition: a mapped built-in provider keeps its exact Pi metadata even when its base URL routes through a proxy, connection-discovered per-model fields override that metadata, the provider-scoped bundled snapshot fills remaining fields, and an unknown custom provider falls back conservatively without borrowing another provider's model. Image gating now reads only the resolved runtime model. The existing compatibility transport is intentionally unchanged until Phase 1.
 
 ### Files
 

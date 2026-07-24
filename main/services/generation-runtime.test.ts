@@ -6,10 +6,10 @@ import type { Model, ProviderStreams } from "@earendil-works/pi-ai";
 import {
   PI_AUTH_COMPATIBILITY_TOKEN,
   buildAgentRuntimeOptions,
-  effectiveModelForGeneration,
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
+  runtimeSupportsImages,
   settleGenerationCleanup,
   shouldExposeLocalReasoning,
   terminalAssistantReasoning,
@@ -20,6 +20,11 @@ import {
   terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
 } from "./generation-runtime.js";
+
+test("uses only the connection-bound runtime model as the image gate", () => {
+  assert.equal(runtimeSupportsImages({ input: ["text"] }), false);
+  assert.equal(runtimeSupportsImages({ input: ["text", "image"] }), true);
+});
 
 test("clears transient agent state before bounded helper teardown", async () => {
   const events: string[] = [];
@@ -45,35 +50,6 @@ test("clears transient agent state before bounded helper teardown", async () => 
   assert.equal(completed, false);
   assert.equal(transientScreenshot, null);
   assert.deepEqual(events, ["reset", "close"]);
-});
-
-test("uses one positive, cloned image-capability snapshot for each generation", () => {
-  const textModel: Model<"openai-completions"> = {
-    id: "legacy",
-    name: "Legacy",
-    api: "openai-completions",
-    provider: "legacy",
-    baseUrl: "https://example.test/v1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
-  };
-  const originalInput = textModel.input;
-  const vision = effectiveModelForGeneration(textModel, true);
-  const unknown = effectiveModelForGeneration(textModel, undefined);
-  const negative = effectiveModelForGeneration(textModel, false);
-
-  assert.notEqual(vision, textModel);
-  assert.deepEqual(vision.input, ["text", "image"]);
-  assert.deepEqual(unknown.input, ["text"]);
-  assert.deepEqual(negative.input, ["text"]);
-  assert.equal(textModel.input, originalInput);
-  assert.deepEqual(textModel.input, ["text"]);
-
-  const piVision = { ...textModel, input: ["text", "image"] as ("text" | "image")[] };
-  assert.deepEqual(effectiveModelForGeneration(piVision, undefined).input, ["text", "image"]);
 });
 
 test("forwards the chat identity through Pi Agent options into the native stream", () => {

@@ -15,8 +15,8 @@ import {
 import { resolveChatTitleRoute } from "./chat-title-routing.js";
 import { configStore } from "./config-store.js";
 import { foundationModelsConnection } from "./foundation-models-connection.js";
+import { runtimeSupportsImages } from "./generation-runtime.js";
 import { resolveModelRuntime } from "./model-runtime.js";
-import { providerModelInfo } from "./provider-model-info.js";
 import {
   assistantUsageRecord,
   isLocalModelProvider,
@@ -86,7 +86,6 @@ async function generateWithChatModel(input: {
     input.selection.model,
     input.signal,
   );
-  const modelInfo = await providerModelInfo.info(input.selection.providerId, input.selection.model);
   const promptContent: Array<TextContent | ImageContent> = [
     {
       type: "text",
@@ -96,7 +95,7 @@ async function generateWithChatModel(input: {
   const firstImage = input.firstMessage.attachments?.find(
     (attachment) => attachment.kind === "image" && attachment.data,
   );
-  if (modelInfo.vision !== false && firstImage?.data) {
+  if (runtimeSupportsImages(runtime.model) && firstImage?.data) {
     promptContent.push({
       type: "image",
       data: firstImage.data,
