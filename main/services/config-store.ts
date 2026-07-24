@@ -2,6 +2,11 @@
 // Seeds a set of preset providers on first run so users can just drop in a key.
 
 import { DataStore } from "./data-store.js";
+import {
+  canonicalGoogleProvider,
+  migrateGoogleProviderConfig,
+  migrateGoogleProviderKeyMap,
+} from "./google-provider.js";
 import { secrets } from "./secrets.js";
 import type {
   AppSettings,
@@ -56,16 +61,7 @@ const PRESETS: StoredProvider[] = [
     needsKey: true,
     isPreset: true,
   },
-  {
-    id: "gemini",
-    kind: "openai",
-    label: "Google Gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    models: ["gemini-2.0-flash", "gemini-1.5-pro", "gemini-1.5-flash"],
-    defaultModel: "gemini-2.0-flash",
-    needsKey: true,
-    isPreset: true,
-  },
+  canonicalGoogleProvider(),
   {
     id: "deepseek",
     kind: "openai",
@@ -131,7 +127,9 @@ async function ensureSeeded(): Promise<ConfigShape> {
         if (!Array.isArray(config.workspaces) || config.workspaces.length === 0) {
           config.workspaces = [defaultWorkspace()];
         }
+        migrateGoogleProviderConfig(config);
       })
+      .then(() => secrets.migrateKeys(migrateGoogleProviderKeyMap))
       .catch((error: unknown) => {
         seedPromise = null;
         throw error;

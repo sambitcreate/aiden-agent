@@ -182,6 +182,27 @@ test("preserves every index entry during concurrent chat creation", async (t) =>
   assert.equal(new Set(chats.map((chat) => chat.id)).size, 12);
 });
 
+test("loads legacy Gemini chat identities through the native Google provider", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-google-migration-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chat = {
+    id: "legacy-chat",
+    title: "Legacy Gemini",
+    workspaceId: "default",
+    providerId: "gemini",
+    model: "gemini-2.5-pro",
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [],
+  };
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat]), "utf-8");
+  await fs.writeFile(path.join(directory, "legacy-chat.json"), JSON.stringify(chat), "utf-8");
+  const store = createChatStore(async () => directory);
+
+  assert.equal((await store.list())[0]?.providerId, "google");
+  assert.equal((await store.get("legacy-chat"))?.providerId, "google");
+});
+
 test("moves an empty chat between workspace lists", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({ workspaceId: "first" });

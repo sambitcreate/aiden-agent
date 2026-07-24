@@ -1,5 +1,12 @@
 # Project History
 
+### 2026-07-24 — Move Gemini chat to Pi's native Google transport
+
+- Replaced the OpenAI-compatible `gemini` preset with Pi's built-in `google` provider and exact `google-generative-ai` model/stream dispatch, including native Google model discovery and fixed endpoint/authentication settings.
+- Migrated the encrypted API key without decrypting it, plus backend selection, renderer selection, pinned models, Model Pad placement, chat metadata, and scheduled-task provider identities from `gemini` to `google`; every migration is idempotent and preserves an already-native value.
+- Kept one-shot Gemini transcription on native `generateContent` while moving its key lookup, and let chat-title routing inherit the native Google transport through the shared runtime resolver.
+- Added a faux-endpoint protocol test plus focused configuration, credential-map, runtime, discovery, chat, schedule, and renderer-preference migration coverage.
+
 ### 2026-07-24 — Harden Computer Use follow-ups
 
 - Bound focus approvals to the exact resolved pid/window capability, rejected incomplete or undeclared drag-driver argument schemas, made bare captures fail closed, and limited approval-visible type/set-value payloads to 4,000 characters in both runtime validation and the public tool schema.

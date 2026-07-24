@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { DataStore } from "./data-store.js";
+import { migrateLegacyGoogleProviderId } from "../../renderer/shared/google-provider.js";
 import { assertSafeScheduledPrompt } from "./schedule-guard.js";
 import type {
   ScheduledRun,
@@ -201,7 +202,10 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId: typeof task.workspaceId === "string" ? task.workspaceId : undefined,
-    providerId: typeof task.providerId === "string" ? task.providerId : undefined,
+    providerId:
+      typeof task.providerId === "string"
+        ? migrateLegacyGoogleProviderId(task.providerId)
+        : undefined,
     model: typeof task.model === "string" ? task.model : undefined,
     prompt: typeof task.prompt === "string" ? task.prompt : undefined,
     script: typeof task.script === "string" ? task.script : undefined,

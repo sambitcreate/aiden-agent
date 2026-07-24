@@ -5,6 +5,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_LABEL,
 } from "./codex-provider.js";
+import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import {
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
@@ -70,6 +71,10 @@ export interface ModelRuntimeDependencies {
     prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
   };
+  google: {
+    getModel(modelId: string): Model<Api> | undefined;
+    streamSimple: ProviderStreams["streamSimple"];
+  };
 }
 
 /** Electron-free resolver so legacy and OAuth routing stay deterministic under test. */
@@ -102,6 +107,22 @@ export async function resolveModelRuntimeWith(
   const apiKey = resolveRuntimeApiKey(provider, storedApiKey);
   if (provider.needsKey && !apiKey) {
     throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
+  }
+
+  if (providerId === GOOGLE_PROVIDER_ID) {
+    const model = dependencies.google.getModel(modelId);
+    if (!model) {
+      throw new Error(
+        `Model "${modelId}" is not supported by Aiden's native Google connection. Choose another model and try again.`,
+      );
+    }
+    return {
+      provider,
+      model,
+      apiKey,
+      headers: undefined,
+      streams: { streamSimple: dependencies.google.streamSimple },
+    };
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);

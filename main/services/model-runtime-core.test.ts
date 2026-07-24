@@ -22,6 +22,21 @@ const codexModel: Model<Api> = {
 const codexStream = (() => {
   throw new Error("not called");
 }) as ProviderStreams["streamSimple"];
+const googleModel: Model<Api> = {
+  id: "gemini-2.5-pro",
+  name: "Gemini 2.5 Pro",
+  api: "google-generative-ai",
+  provider: "google",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_048_576,
+  maxTokens: 65_536,
+};
+const googleStream = (() => {
+  throw new Error("not called");
+}) as ProviderStreams["streamSimple"];
 
 function dependencies(options?: {
   provider?: StoredProvider;
@@ -38,6 +53,10 @@ function dependencies(options?: {
         return codexModel;
       },
       streamSimple: codexStream,
+    },
+    google: {
+      getModel: (modelId) => (modelId === googleModel.id ? googleModel : undefined),
+      streamSimple: googleStream,
     },
   };
 }
@@ -93,42 +112,56 @@ test("keeps the legacy API-key runtime contract unchanged", async () => {
   assert.equal(runtime.headers, undefined);
 });
 
-test("applies catalog-driven limits without changing the legacy provider transport", async () => {
+test("routes Google through Pi's native model and transport", async () => {
   const provider: StoredProvider = {
-    id: "gemini",
+    id: "google",
     kind: "openai",
     label: "Google Gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     models: ["gemini-2.5-pro"],
     needsKey: true,
     isPreset: true,
   };
-  const limits: RuntimeModelLimits = {
-    contextWindow: 1_048_576,
-    maxTokens: 65_536,
-    reasoning: true,
-    input: ["text", "image"],
-  };
-  let receivedProvider: StoredProvider | undefined;
-  let receivedModelId: string | undefined;
-  const deps = dependencies({ provider, key: "saved-key", limits });
-  deps.resolveRuntimeLimits = async (candidate, modelId) => {
-    receivedProvider = candidate;
-    receivedModelId = modelId;
-    return limits;
+  let limitReads = 0;
+  const deps = dependencies({ provider, key: "saved-key" });
+  deps.resolveRuntimeLimits = async () => {
+    limitReads += 1;
+    return CONSERVATIVE_RUNTIME_LIMITS;
   };
 
   const runtime = await resolveModelRuntimeWith(deps, provider.id, "gemini-2.5-pro");
 
-  assert.strictEqual(receivedProvider, provider);
-  assert.equal(receivedModelId, "gemini-2.5-pro");
-  assert.equal(runtime.model.api, "openai-completions");
-  assert.equal(runtime.model.provider, "gemini");
-  assert.equal(runtime.model.baseUrl, provider.baseUrl);
+  assert.equal(limitReads, 0);
+  assert.strictEqual(runtime.provider, provider);
+  assert.strictEqual(runtime.model, googleModel);
+  assert.strictEqual(runtime.streams.streamSimple, googleStream);
+  assert.equal(runtime.apiKey, "saved-key");
+  assert.equal(runtime.model.api, "google-generative-ai");
+  assert.equal(runtime.model.provider, "google");
+  assert.equal(runtime.model.baseUrl, "https://generativelanguage.googleapis.com/v1beta");
   assert.equal(runtime.model.contextWindow, 1_048_576);
   assert.equal(runtime.model.maxTokens, 65_536);
   assert.equal(runtime.model.reasoning, true);
-  assert.deepEqual(runtime.model.input, ["text", "image"]);
+});
+
+test("rejects models absent from Pi's native Google catalog", async () => {
+  const provider: StoredProvider = {
+    id: "google",
+    kind: "openai",
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    models: ["gemini-retired"],
+    needsKey: true,
+    isPreset: true,
+  };
+  await assert.rejects(
+    resolveModelRuntimeWith(
+      dependencies({ provider, key: "saved-key" }),
+      "google",
+      "gemini-retired",
+    ),
+    /not supported by Aiden's native Google connection/iu,
+  );
 });
 
 test("keeps missing legacy API keys on the existing actionable error path", async () => {

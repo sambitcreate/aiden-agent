@@ -16,6 +16,7 @@ import {
 import { providerAuthFlow } from "../services/provider-auth-flow.js";
 import { providerAuthOwner } from "../services/provider-auth-owner.js";
 import { providerRegistry } from "../services/provider-registry.js";
+import { canonicalGoogleProvider, GOOGLE_PROVIDER_ID } from "../services/google-provider.js";
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
@@ -95,7 +96,7 @@ function parseProvider(value: unknown): StoredProvider {
     typeof p.defaultModel === "string" && models.includes(p.defaultModel)
       ? p.defaultModel
       : undefined;
-  return {
+  const provider: StoredProvider = {
     id: asString(p.id, "id"),
     kind,
     label: asString(p.label, "label"),
@@ -106,6 +107,7 @@ function parseProvider(value: unknown): StoredProvider {
     needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
     isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
   };
+  return provider.id === GOOGLE_PROVIDER_ID ? canonicalGoogleProvider(provider) : provider;
 }
 
 async function connectionKey(

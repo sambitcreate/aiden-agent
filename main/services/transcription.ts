@@ -2,6 +2,7 @@
 // Reuses the API keys already configured for those providers.
 
 import { configStore } from "./config-store.js";
+import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import { secrets } from "./secrets.js";
 import {
   geminiTranscriptionTokens,
@@ -105,12 +106,12 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
 }
 
 async function transcribeGemini(input: TranscribeInput): Promise<string> {
-  const key = await secrets.getKey("gemini");
+  const key = await secrets.getKey(GOOGLE_PROVIDER_ID);
   if (!key)
     throw new Error("Add a Google Gemini API key (Settings → Providers) to use voice input.");
   const settings = await configStore.getSettings();
   const model = settings.voiceModel || "gemini-2.0-flash";
-  const provider = await configStore.getProvider("gemini");
+  const provider = await configStore.getProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
 
   let response: Response;

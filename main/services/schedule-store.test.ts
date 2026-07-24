@@ -163,6 +163,27 @@ test("stored invalid schedules are quarantined instead of aborting startup", asy
   assert.match(task?.lastError ?? "", /needs attention/iu);
 });
 
+test("loads legacy Gemini scheduled tasks through the native Google provider", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "google-task",
+      name: "Google task",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      providerId: "gemini",
+      model: "gemini-2.5-pro",
+      prompt: "Summarize changes.",
+      permission: "read-only",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  assert.equal((await store.list())[0]?.providerId, "google");
+});
+
 test("script tasks require explicit Full permission", async () => {
   const store = testStore();
   await assert.rejects(

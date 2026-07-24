@@ -46,6 +46,7 @@ interface ProviderEditorProps {
 }
 
 export function ProviderEditor({ provider, open, onOpenChange, onSaved }: ProviderEditorProps) {
+  const nativeGoogle = provider.id === "google";
   const [label, setLabel] = React.useState(provider.label);
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
@@ -181,20 +182,22 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     >
       <FieldSet>
         <Field label="Name">
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} />
+          <Input value={label} disabled={nativeGoogle} onChange={(e) => setLabel(e.target.value)} />
         </Field>
 
         <Field
           label="Base URL"
           description={
-            provider.isPreset
-              ? "Base address used for API requests."
-              : "Base address of an OpenAI- or Anthropic-compatible API."
+            nativeGoogle
+              ? "Pi's native Google transport uses the fixed Google Generative Language API."
+              : provider.isPreset
+                ? "Base address used for API requests."
+                : "Base address of an OpenAI- or Anthropic-compatible API."
           }
         >
           <Input
             value={baseUrl}
-            disabled={testing}
+            disabled={testing || nativeGoogle}
             onChange={(e) => {
               setBaseUrl(e.target.value);
               markDiscoveryStale();
@@ -236,7 +239,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
         >
           <Select
             value={needsKey ? "api-key" : "none"}
-            disabled={testing}
+            disabled={testing || nativeGoogle}
             onValueChange={(value) => {
               setNeedsKey(value === "api-key");
               markDiscoveryStale();

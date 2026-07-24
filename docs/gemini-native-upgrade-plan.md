@@ -1,6 +1,6 @@
 # Gemini Native Upgrade Plan
 
-Status: Phase 0 implemented on 2026-07-23; Phases 1 and 3 remain planned
+Status: Phases 0 and 1 implemented; Phase 3 remains planned
 Date: 2026-07-22
 Depends on: `docs/pi-provider-integration-plan.md` (broader registry migration)
 Pi packages pinned: `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` `0.80.10`
@@ -71,6 +71,8 @@ The fastest correct fix: stop fabricating `128K/8192` and feed the release-bundl
 
 Move Gemini chat from the generic OpenAI-compat adapter to pi-ai's `google-generative-ai` transport. This is a **single-provider** slice of the broader registry plan, reusing its contracts so the work is not throwaway.
 
+**Implemented 2026-07-24.** A process-wide Pi registry now owns the native `google` model and stream. The compatibility `gemini` preset, encrypted credential, backend settings, renderer provider selection, pinned models, Model Pad placements, chat metadata, and scheduled tasks migrate idempotently to `google`. Settings keeps Google's endpoint and authentication contract fixed, while model discovery intersects Google's live `generateContent` catalog with Pi's supported native models. Title generation inherits the native route through the shared runtime resolver; one-shot cloud transcription keeps its existing REST implementation while reading the migrated Google credential.
+
 ### Strategy decision
 
 Use pi-ai's native Google stream, not a hand-rolled `@google/genai` client. pi-ai `0.80.10` already ships the `google-generative-ai` API with thinking support, and it is the same runtime the broader migration standardizes on. Adding `@google/genai` directly would create a second Google dependency to keep in lock-step and would not integrate with Pi's `Models`/`streamSimple` dispatch.
@@ -94,9 +96,9 @@ Google is registered as a **Pi built-in provider** (`google`), reached through t
 3. Authentication: reuse the encrypted credential layer; map the legacy `gemini` API key to the `google` provider. Reject OAuth-only credentials that are not valid for the AI Studio endpoint.
 4. Migration: remap `gemini` → `google` for the stored credential, chat/settings selection, pinned models (`aiden-agent.pinnedModels` entries `gemini::<model>` → `google::<model>`), and the renderer selection keys (`aiden-agent.providerId`, `aiden-agent.model`). Preserve the user's chosen model id.
 5. Model catalog: source the selectable list from Pi availability for `google`, falling back to the bundled snapshot for metadata. Keep `gemini-2.0-flash` as a safe default only if present; prefer current 2.x ids. Stop listing `gemini-1.5-*` (absent from the current bundled `google` snapshot).
-6. Chat titles: route title generation through the same native `google` model via `completeSimple`, preserving existing timeout/fallback semantics and the Apple Foundation Models routing preference.
+6. Chat titles: route title generation through the same native `google` model via the shared runtime stream, preserving existing timeout/fallback semantics and the Apple Foundation Models routing preference.
 7. Vision: use `model.input.includes("image")` from Pi metadata (Phase 0 supplies this) to gate image attachments.
-8. Keep cloud voice transcription (`transcription.ts`) unchanged in this phase — it already uses native `generateContent` and stays one-shot.
+8. Keep cloud voice transcription's one-shot native `generateContent` implementation; only its provider/key lookup migrates to `google`.
 
 ### Exit gate
 

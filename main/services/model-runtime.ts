@@ -24,6 +24,7 @@ export function resolveModelRuntime(
         return modelsCatalog.runtimeLimits(provider, id, exact);
       },
       codex: providerRegistry.codex,
+      google: providerRegistry.google,
     },
     providerId,
     modelId,

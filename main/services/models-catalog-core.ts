@@ -181,6 +181,7 @@ const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
   "openai-codex": "OpenAI",
   anthropic: "Anthropic",
   gemini: "Google",
+  google: "Google",
   deepseek: "DeepSeek",
   moonshot: "Moonshot AI",
 };

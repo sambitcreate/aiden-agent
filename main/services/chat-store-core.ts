@@ -12,6 +12,7 @@ import {
 } from "./chat-title-policy.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { migrateLegacyGoogleProviderId } from "../../renderer/shared/google-provider.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -41,22 +42,27 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
       const data = await fs.readFile(await indexPath(), "utf-8");
       const parsed: unknown = JSON.parse(data);
       if (!Array.isArray(parsed)) return [];
-      return parsed.filter((value): value is ChatMeta => {
-        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-        const meta = value as Record<string, unknown>;
-        return (
-          typeof meta.id === "string" &&
-          meta.id.length > 0 &&
-          typeof meta.title === "string" &&
-          typeof meta.createdAt === "number" &&
-          Number.isFinite(meta.createdAt) &&
-          typeof meta.updatedAt === "number" &&
-          Number.isFinite(meta.updatedAt) &&
-          (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
-          (meta.providerId === undefined || typeof meta.providerId === "string") &&
-          (meta.model === undefined || typeof meta.model === "string")
-        );
-      });
+      return parsed
+        .filter((value): value is ChatMeta => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+          const meta = value as Record<string, unknown>;
+          return (
+            typeof meta.id === "string" &&
+            meta.id.length > 0 &&
+            typeof meta.title === "string" &&
+            typeof meta.createdAt === "number" &&
+            Number.isFinite(meta.createdAt) &&
+            typeof meta.updatedAt === "number" &&
+            Number.isFinite(meta.updatedAt) &&
+            (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
+            (meta.providerId === undefined || typeof meta.providerId === "string") &&
+            (meta.model === undefined || typeof meta.model === "string")
+          );
+        })
+        .map((meta) => {
+          const providerId = migrateLegacyGoogleProviderId(meta.providerId);
+          return providerId === meta.providerId ? meta : { ...meta, providerId };
+        });
     } catch {
       return [];
     }
@@ -71,6 +77,8 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
     try {
       const data = await fs.readFile(await chatPath(id), "utf-8");
       const chat = JSON.parse(data) as Chat;
+      const providerId = migrateLegacyGoogleProviderId(chat.providerId);
+      if (providerId !== chat.providerId) chat.providerId = providerId;
       chat.messages = chat.messages.map((message) => ({
         ...message,
         reasoning:

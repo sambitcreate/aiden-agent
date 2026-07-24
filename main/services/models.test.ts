@@ -12,6 +12,7 @@ import {
   resolveRuntimeLimits,
 } from "./models-catalog-core.js";
 import { normalizeProviderBaseUrl, testConnection } from "./models.js";
+import { canonicalGoogleProvider } from "./google-provider.js";
 
 const lmStudioProvider = {
   id: "lmstudio",
@@ -22,6 +23,60 @@ const lmStudioProvider = {
   needsKey: false,
   isPreset: true,
 };
+
+test("Google discovery validates the native endpoint and returns only Pi-supported models", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const requests: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    requests.push(url);
+    assert.deepEqual(init?.headers, { "x-goog-api-key": "google-key" });
+    assert.equal(init?.redirect, "error");
+    if (url.endsWith("pageSize=1000")) {
+      return new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: "models/gemini-embedding-001",
+              supportedGenerationMethods: ["embedContent"],
+            },
+            {
+              name: "models/unpinned-future-model",
+              supportedGenerationMethods: ["generateContent"],
+            },
+          ],
+          nextPageToken: "second page",
+        }),
+        { status: 200 },
+      );
+    }
+    assert.equal(
+      url,
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&pageToken=second+page",
+    );
+    return new Response(
+      JSON.stringify({
+        models: [
+          {
+            name: "models/gemini-2.5-pro",
+            supportedGenerationMethods: ["generateContent"],
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  const result = await testConnection(canonicalGoogleProvider(), "google-key");
+  assert.deepEqual(result.models, ["gemini-2.5-pro"]);
+  assert.equal(result.modelCount, 1);
+  assert.equal(result.modelMetadata["gemini-2.5-pro"]?.reasoning, true);
+  assert.equal(result.modelMetadata["gemini-2.5-pro"]?.vision, true);
+  assert.equal(requests.length, 2);
+});
 
 function snapshot(models: ArtificialAnalysisCatalog["models"]): ArtificialAnalysisCatalog {
   return {

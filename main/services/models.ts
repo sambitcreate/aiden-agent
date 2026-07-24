@@ -1,6 +1,11 @@
 // Discover provider models and retain provider-reported metadata for local runtimes.
 
 import type { ProviderModelMetadata, StoredProvider } from "./types.js";
+import {
+  GOOGLE_PROVIDER_ID,
+  googleProviderModelMetadata,
+  googleProviderModels,
+} from "./google-provider.js";
 
 interface GenericModelEntry {
   id?: string;
@@ -19,6 +24,16 @@ interface GenericModelEntry {
 interface ModelsResponse {
   data?: GenericModelEntry[];
   models?: GenericModelEntry[];
+}
+
+interface GoogleModelEntry {
+  name?: string;
+  supportedGenerationMethods?: string[];
+}
+
+interface GoogleModelsResponse {
+  models?: GoogleModelEntry[];
+  nextPageToken?: string;
 }
 
 interface OllamaTag {
@@ -49,6 +64,7 @@ export interface ConnectionTestResult extends DiscoveredModels {
 
 /** Keep a settings request responsive when a local or private server is offline. */
 export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+const MAX_GOOGLE_MODEL_PAGES = 10;
 
 class ModelDiscoveryHttpError extends Error {
   constructor(
@@ -108,7 +124,7 @@ function providerEndpoint(provider: StoredProvider, pathname: string): string {
 async function fetchJson(
   url: string,
   headers: Record<string, string>,
-  init: { method?: "GET" | "POST"; body?: string } = {},
+  init: { method?: "GET" | "POST"; body?: string; redirect?: RequestRedirect } = {},
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_DISCOVERY_TIMEOUT_MS);
@@ -117,6 +133,7 @@ async function fetchJson(
       method: init.method ?? "GET",
       body: init.body,
       headers: init.body ? { ...headers, "content-type": "application/json" } : headers,
+      redirect: init.redirect,
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -135,6 +152,58 @@ async function fetchJson(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function discoverGoogle(
+  provider: StoredProvider,
+  apiKey: string | null,
+): Promise<DiscoveredModels> {
+  const key = apiKey?.trim();
+  if (!key) throw new Error("Enter a Gemini API key before discovering models.");
+  const available = new Set<string>();
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
+  let pageCount = 0;
+  do {
+    pageCount += 1;
+    if (pageCount > MAX_GOOGLE_MODEL_PAGES) {
+      throw new Error("Google's model endpoint returned too many pages.");
+    }
+    const url = new URL(providerEndpoint(provider, "/v1beta/models"));
+    url.searchParams.set("pageSize", "1000");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const value = object(
+      await fetchJson(url.toString(), { "x-goog-api-key": key }, { redirect: "error" }),
+    ) as GoogleModelsResponse | null;
+    if (!Array.isArray(value?.models)) {
+      throw new Error("Google's model endpoint returned an unexpected response.");
+    }
+    for (const model of value.models) {
+      if (
+        Array.isArray(model.supportedGenerationMethods) &&
+        !model.supportedGenerationMethods.includes("generateContent")
+      ) {
+        continue;
+      }
+      const modelId = model.name?.replace(/^models\//u, "");
+      if (modelId) available.add(modelId);
+    }
+    pageToken = value.nextPageToken?.trim() || undefined;
+    if (pageToken) {
+      if (seenPageTokens.has(pageToken)) {
+        throw new Error("Google's model endpoint repeated a pagination token.");
+      }
+      seenPageTokens.add(pageToken);
+    }
+  } while (pageToken);
+  const models = googleProviderModels()
+    .map((model) => model.id)
+    .filter((modelId) => available.has(modelId));
+  const metadata = googleProviderModelMetadata();
+  return {
+    models,
+    modelMetadata: Object.fromEntries(models.map((modelId) => [modelId, metadata[modelId]])),
+  };
 }
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -358,6 +427,7 @@ export async function discoverModels(
   provider: StoredProvider,
   apiKey: string | null,
 ): Promise<DiscoveredModels> {
+  if (provider.id === GOOGLE_PROVIDER_ID) return discoverGoogle(provider, apiKey);
   const headers = headersFor(provider, apiKey);
   if (provider.id === "lmstudio") {
     try {

@@ -3,11 +3,13 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import { randomUUID } from "node:crypto";
 import { app, safeStorage, logger } from "../platform.js";
 
 const FILE = "provider-keys.json";
 
 type KeyMap = Record<string, string>; // providerId -> base64 ciphertext
+let mutationTail: Promise<void> = Promise.resolve();
 
 async function filePath(): Promise<string> {
   const userDataPath = app.getPath("userData");
@@ -25,21 +27,43 @@ async function readMap(): Promise<KeyMap> {
 }
 
 async function writeMap(map: KeyMap): Promise<void> {
-  await fs.writeFile(await filePath(), JSON.stringify(map, null, 2), "utf-8");
+  const destination = await filePath();
+  const staged = path.join(
+    path.dirname(destination),
+    `.${path.basename(destination)}.${randomUUID()}.tmp`,
+  );
+  try {
+    await fs.writeFile(staged, JSON.stringify(map, null, 2), { encoding: "utf-8", mode: 0o600 });
+    await fs.rename(staged, destination);
+  } finally {
+    await fs.rm(staged, { force: true }).catch(() => undefined);
+  }
+}
+
+function serialized<R>(operation: () => Promise<R>): Promise<R> {
+  const result = mutationTail.then(operation, operation);
+  mutationTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
 }
 
 export const secrets = {
   async setKey(providerId: string, key: string): Promise<void> {
-    if (!(await safeStorage.isEncryptionAvailable())) {
-      throw new Error("Secure storage is unavailable on this system; cannot save the API key.");
-    }
-    const map = await readMap();
-    const encrypted = await safeStorage.encryptString(key);
-    map[providerId] = Buffer.from(encrypted).toString("base64");
-    await writeMap(map);
+    return serialized(async () => {
+      if (!(await safeStorage.isEncryptionAvailable())) {
+        throw new Error("Secure storage is unavailable on this system; cannot save the API key.");
+      }
+      const map = await readMap();
+      const encrypted = await safeStorage.encryptString(key);
+      map[providerId] = Buffer.from(encrypted).toString("base64");
+      await writeMap(map);
+    });
   },
 
   async getKey(providerId: string): Promise<string | null> {
+    await mutationTail;
     const map = await readMap();
     const b64 = map[providerId];
     if (!b64) return null;
@@ -52,15 +76,25 @@ export const secrets = {
   },
 
   async hasKey(providerId: string): Promise<boolean> {
+    await mutationTail;
     const map = await readMap();
     return Boolean(map[providerId]);
   },
 
   async deleteKey(providerId: string): Promise<void> {
-    const map = await readMap();
-    if (map[providerId]) {
-      delete map[providerId];
-      await writeMap(map);
-    }
+    return serialized(async () => {
+      const map = await readMap();
+      if (map[providerId]) {
+        delete map[providerId];
+        await writeMap(map);
+      }
+    });
+  },
+
+  async migrateKeys(migrate: (map: KeyMap) => boolean): Promise<void> {
+    return serialized(async () => {
+      const map = await readMap();
+      if (migrate(map)) await writeMap(map);
+    });
   },
 };
