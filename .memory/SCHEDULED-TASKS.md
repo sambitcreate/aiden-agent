@@ -1,6 +1,6 @@
 # Scheduled Tasks
 
-Status: implemented through Phase 4 on `codex/scheduled-tasks-phases-3-4` (2026-07-23). The original frozen plan remains in `docs/scheduled-tasks-plan.md`.
+Status: implemented through Phase 4 on `main` (2026-07-23). The original frozen plan remains in `docs/scheduled-tasks-plan.md`.
 
 ## Frozen decisions
 

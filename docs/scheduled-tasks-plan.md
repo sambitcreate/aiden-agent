@@ -10,7 +10,7 @@ Implementation hardening amendment: read-only scheduled LLM runs withhold MCP to
 
 ## Verdict
 
-Scheduled tasks fit Aiden's existing architecture cleanly: a new main-process service, JSON persistence via `DataStore`, a typed IPC prefix, a dedicated chat thread per task, and an agent tool registered in `buildAgentTools`. No scheduler exists today, so this is a new vertical, but every seam it needs (persistence, IPC, agent tools, chat store, settings, split-view UI) already has an established pattern.
+Scheduled tasks fit Aiden's existing architecture cleanly: a new main-process service, JSON persistence via `DataStore`, a typed IPC prefix, a dedicated chat thread per task, and an agent tool registered in `buildAgentTools`. At planning time no scheduler existed, so this was a new vertical, but every seam it needed (persistence, IPC, agent tools, chat store, settings, split-view UI) already had an established pattern.
 
 Hermes is the reference for behavior, not for code: its Python JSON-registry + 60s ticker + delivery-target design translates directly into a croner-driven TypeScript service.
 

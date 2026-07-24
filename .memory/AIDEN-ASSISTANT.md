@@ -21,9 +21,12 @@ Key decisions:
   one batched LLM decision call (urgency ≥ 7), strict `[SILENT]` parser,
   nudge store with permanent dismiss latching by dedupKey, quiet hours,
   daily cap, first-run deferral, fail-closed on broken model pin.
-- Delivery: macOS `Notification` (precedent: scheduled-tasks plan) +
-  `assistant:nudge` broadcast + mirrored dedicated chat thread.
-- Composes with `docs/scheduled-tasks-plan.md` (shared notification/scheduler
-  seams); does not duplicate it.
+- Delivery: macOS `Notification` using the shipped Scheduled Tasks
+  delivery/navigation boundary + `assistant:nudge` broadcast + mirrored
+  dedicated chat thread.
+- Scheduled Tasks is implemented through Phase 4. Reuse its `croner`
+  dependency, cancellation/shutdown rules, notification navigation, dedicated
+  chat pattern, and usage attribution, but keep assistant cadence/state
+  separate from user-authored `ScheduledTask` records and `/scheduled`.
 - No file watcher exists (no chokidar/fs.watch); real-time watching deferred
   to Phase 4 as an explicit dependency decision.

@@ -26,16 +26,20 @@ fail-closed unattended runs, and no recursive self-scheduling.
 
 ## Relationship to existing plans
 
-`docs/scheduled-tasks-plan.md` (frozen, unimplemented) already earmarks:
-a croner-based scheduler, macOS `Notification` delivery, dedicated chat threads
-per task, and a `schedule:` IPC prefix. Aiden should **share** those seams, not
-duplicate them:
+Scheduled Tasks is implemented through Phase 4; its original plan remains
+frozen in `docs/scheduled-tasks-plan.md`. The shipped implementation establishes
+the `croner` dependency, main-owned lifecycle and shutdown barriers, macOS
+`Notification` delivery, dedicated task chats, usage attribution, and the
+`schedule:` IPC surface. Aiden should **reuse those proven boundaries without
+turning private assistant polling into hidden user schedules**:
 
-- The assistant's proactive engine uses the same notification + broadcast seam.
-- Nudge threads use the same "dedicated chat" pattern as scheduled-task output.
-- If scheduled tasks land first, the assistant ticker can ride the same
-  scheduler; if Aiden lands first, keep its tick loop minimal so the scheduler
-  can absorb it later.
+- Use the same main-owned notification, navigation, cancellation, shutdown, and
+  dedicated-chat patterns.
+- Reuse `croner` for the assistant ticker, but keep assistant state and cadence
+  separate from user-authored `ScheduledTask` records and `/scheduled`.
+- Preserve the scheduler's fail-closed unattended-execution rules: no recursive
+  scheduling, no silent provider fallback, and no work after permission
+  revocation or shutdown.
 
 ## UX
 
@@ -69,8 +73,9 @@ New "Aiden" section in Settings (group "Agent"), following the established
 1. add id `assistant` to `SETTINGS_SECTIONS` in `renderer/lib/settings-section.ts`,
 2. `NAV` + `CONTENT` entries in `renderer/main/settings-view.tsx`,
 3. new `renderer/components/settings/assistant-settings.tsx`,
-4. whitelist the new keys in `settings:set` (`main/handlers/providers.ts:243`)
-   and extend `AppSettings` (`main/services/types.ts:284`).
+4. whitelist the new keys in the `settings:set` handler
+   (`main/handlers/providers.ts`) and extend `AppSettings`
+   (`main/services/types.ts`).
 
 Settings (all under a nested `assistant?: AssistantConfig`):
 
@@ -99,7 +104,7 @@ Settings (all under a nested `assistant?: AssistantConfig`):
 4. `main/windows/assistant-window.ts` — modeled on `pill-window.ts`:
    module-level singleton + loading promise, `setWindowOpenHandler` deny,
    `will-navigate` lockdown, `showInactive()`/hide, show-or-focus helper like
-   `showMainWindow()` (`main/index.ts:445`). Reuse sender-validation pattern
+   `showMainWindow()` (`main/index.ts`). Reuse the sender-validation pattern
    from `main/windows/pill-window-security.ts` for privileged channels.
 5. `renderer/preload-assistant-channels.ts` + test (pattern:
    `pill-preload-channels.ts` + its test) — exact channel names, not prefixes:
@@ -114,13 +119,13 @@ Settings (all under a nested `assistant?: AssistantConfig`):
   (`main/services/chat-store-core.ts`), kept in a dedicated workspace id
   (e.g. reserved `"assistant"`) so they don't clutter the main sidebar; the
   assistant window lists only its own threads.
-- Streaming reuses `startGeneration` (`renderer/lib/ipc.ts:451`) and the
+- Streaming reuses `startGeneration` (`renderer/lib/ipc.ts`) and the
   `chat:delta/done/...` channels. Generation ownership
   (`rendererDocumentOwner`) works naturally: the assistant window's document
   owns its generations. One thing to verify: `chat:start` currently requires
   the "active application document" — confirm the assistant document passes
   this check or extend it deliberately.
-- System prompt: `buildSystemPrompt` (`main/services/llm-client.ts:114`) is
+- System prompt: `buildSystemPrompt` (`main/services/llm-client.ts`) is
   workspace-hardcoded. Add a params-driven variant (e.g.
   `ChatStartParams.mode: "assistant"`) that builds the Aiden persona: what the
   app is, what settings exist, what signals it watches, how to use its tools,
@@ -128,7 +133,7 @@ Settings (all under a nested `assistant?: AssistantConfig`):
 
 ### Assistant tools
 
-New tools registered in `buildAgentTools` (`main/services/tools.ts:87`),
+New tools registered in `buildAgentTools` (`main/services/tools.ts`),
 gated to assistant mode:
 
 - `get_settings` — returns `configStore.getSettings()` (redacted; no secrets).
@@ -150,7 +155,7 @@ arbitrary shell; Computer Use.
 
 ```
 main/services/assistant/
-  ticker.ts          — interval loop (setInterval, default 30 min)
+  ticker.ts          — croner-backed interval loop (default 30 min)
   signals.ts         — mechanical collectors (no LLM)
   nudge-store.ts     — DataStore<NudgeRecord[]> (<userData>/assistant-nudges.json)
   decide.ts          — builds the decision prompt, runs the LLM, parses [SILENT]
@@ -206,11 +211,11 @@ mechanical work" pattern):**
 
 **Delivery:**
 
-- macOS `new Notification({ title, body })` from main (precedent already
-  decided in `docs/scheduled-tasks-plan.md:206-208`); click → show/focus the
+- macOS `new Notification({ title, body })` from main, following the shipped
+  Scheduled Tasks delivery and navigation boundary; click → show/focus the
   assistant window and open the nudge's thread.
 - Broadcast `assistant:nudge` (add to `NOTIFICATION_CHANNELS` in
-  `renderer/preload-channels.ts:44` + contract test) so the main window can
+  `renderer/preload-channels.ts` + contract test) so the main window can
   show a subtle badge/toast.
 - Every delivered nudge is mirrored as a message in a dedicated assistant
   chat thread (continuable — replying continues with the nudge context
