@@ -7,6 +7,8 @@ import type { ComputerUseArgs, ComputerUseMode } from "./schema.js";
 import {
   ComputerUseGrantLedger,
   ComputerUseSafetyError,
+  type ComputerUseBoundTarget,
+  type ComputerUseGrantPrepared,
   computerUseNeedsApproval,
   normalizeComputerUseArgs,
   parseComputerUseKeyChord,
@@ -68,7 +70,7 @@ export interface ComputerUseApprovalDescriptor {
   toolName: "computer_use";
   summary: string;
   target: ComputerUseTargetDetails;
-  grant: { targetRevision: number; fingerprint: string };
+  grant: ComputerUseGrantPrepared;
 }
 
 interface Bounds {
@@ -504,18 +506,22 @@ export class ComputerUseController {
     const normalized = normalizeComputerUseArgs(args);
     if (!computerUseNeedsApproval(normalized)) return null;
     const signal = this.signalFor(callerSignal);
-    let target: ActiveTarget;
+    // focus_app only previews the resolved window. Committing setTarget here
+    // would wipe a prior capture when the user denies the prompt.
     if (normalized.action === "focus_app") {
-      this.clearTarget();
-      try {
-        target = this.setTarget(await this.resolveTarget({ app: normalized.app }, signal));
-      } catch (error) {
-        this.clearTarget();
-        throw error;
-      }
-    } else {
-      target = this.requireTarget();
+      const preview = await this.resolveTarget({ app: normalized.app }, signal);
+      const boundTarget: ComputerUseBoundTarget = {
+        pid: preview.pid,
+        windowId: preview.windowId,
+      };
+      return {
+        toolName: "computer_use",
+        summary: `${summarizeComputerUseApproval(normalized)} — ${this.approvalTargetSummary(preview)}`,
+        target: this.targetDetails(preview)!,
+        grant: this.grants.prepare(normalized, boundTarget),
+      };
     }
+    const target = this.requireTarget();
     this.validateApprovalTarget(normalized, target);
     return {
       toolName: "computer_use",
@@ -541,7 +547,7 @@ export class ComputerUseController {
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
     this.assertUsable();
     const args = normalizeComputerUseArgs(rawArgs);
-    this.grants.consume(toolCallId, args);
+    const { boundTarget: focusBinding } = this.grants.consume(toolCallId, args);
     const signal = this.signalFor(callerSignal);
     try {
       switch (args.action) {
@@ -558,7 +564,7 @@ export class ComputerUseController {
         case "list_windows":
           return await this.listWindowsResult(signal);
         case "focus_app":
-          return await this.focusApp(args, signal);
+          return await this.focusApp(args, signal, focusBinding);
         default:
           return await this.mutate(args, signal);
       }
@@ -656,7 +662,9 @@ export class ComputerUseController {
     return target;
   }
 
-  private targetDetails(target = this.target): ComputerUseTargetDetails | undefined {
+  private targetDetails(
+    target: Pick<WindowRecord, "pid" | "windowId" | "appName" | "title"> | null = this.target,
+  ): ComputerUseTargetDetails | undefined {
     return target
       ? {
           pid: target.pid,
@@ -667,7 +675,9 @@ export class ComputerUseController {
       : undefined;
   }
 
-  private approvalTargetSummary(target: ActiveTarget): string {
+  private approvalTargetSummary(
+    target: Pick<WindowRecord, "appName" | "title" | "pid" | "windowId">,
+  ): string {
     const app = target.appName || "Unknown app";
     const title = target.title ? `, title ${JSON.stringify(target.title)}` : "";
     return `${JSON.stringify(app)}${title}, pid ${target.pid}, window ${target.windowId}`;
@@ -706,9 +716,9 @@ export class ComputerUseController {
       return exact;
     }
     if (!input.app) {
-      const first = windows[0];
-      if (!first) throw new ComputerUseDriverActionError("No desktop windows are available.");
-      return first;
+      throw new ComputerUseDriverActionError(
+        "Capture requires app or exact pid and window_id. Call list_windows, then capture the intended target.",
+      );
     }
     const query = input.app.trim().toLowerCase();
     const directExact = windows.filter((window) => window.appName.trim().toLowerCase() === query);
@@ -888,8 +898,21 @@ export class ComputerUseController {
   private async focusApp(
     args: ComputerUseArgs,
     signal: AbortSignal,
+    approvedTarget?: { pid: number; windowId: number },
   ): Promise<AgentToolResult<ComputerUseResultDetails>> {
-    const target = this.requireTarget();
+    // Bind the active target only after Allow-once consumed the grant.
+    const resolved = await this.resolveTarget({ app: args.app }, signal);
+    if (
+      !approvedTarget ||
+      resolved.pid !== approvedTarget.pid ||
+      resolved.windowId !== approvedTarget.windowId
+    ) {
+      throw new ComputerUseSafetyError(
+        "approval_expired",
+        "The focus target changed after the approval prompt. Approve the exact window again.",
+      );
+    }
+    const target = this.setTarget(resolved);
     let effect = "targeted_background_window";
     let verdict: DriverVerdict = {};
     try {
@@ -976,6 +999,20 @@ export class ComputerUseController {
   }
 
   private validateApprovalTarget(args: ComputerUseArgs, target: ActiveTarget): void {
+    const dragTool = this.session?.toolCatalog.get("drag");
+    const dragCommonProperties = [
+      "pid",
+      "window_id",
+      "button",
+      ...(args.modifiers?.length ? ["modifier"] : []),
+      ...(args.delivery_mode === "foreground" ? ["delivery_mode"] : []),
+    ];
+    const elementOk = [...dragCommonProperties, "from_element", "to_element"].every((property) =>
+      schemaDeclaresProperty(dragTool, property),
+    );
+    const pixelOk = [...dragCommonProperties, "from_x", "from_y", "to_x", "to_y"].every(
+      (property) => schemaDeclaresProperty(dragTool, property),
+    );
     switch (args.action) {
       case "click":
       case "double_click":
@@ -984,12 +1021,42 @@ export class ComputerUseController {
         if (args.element !== undefined) this.requireCapturedElement(target, args.element);
         else if (args.coordinate) this.pointArgs(target, args.coordinate);
         break;
-      case "drag":
-        if (args.from_element !== undefined) this.elementCenter(target, args.from_element);
-        else if (args.from_coordinate) this.pointArgs(target, args.from_coordinate);
-        if (args.to_element !== undefined) this.elementCenter(target, args.to_element);
-        else if (args.to_coordinate) this.pointArgs(target, args.to_coordinate);
+      case "drag": {
+        const usesElements = args.from_element !== undefined && args.to_element !== undefined;
+        const usesCoordinates =
+          args.from_coordinate !== undefined && args.to_coordinate !== undefined;
+        if (usesElements && elementOk) {
+          const fromElement = args.from_element!;
+          const toElement = args.to_element!;
+          this.requireCapturedElement(target, fromElement);
+          this.requireCapturedElement(target, toElement);
+        } else if (
+          (usesElements ||
+            usesCoordinates ||
+            args.from_element !== undefined ||
+            args.to_element !== undefined ||
+            args.from_coordinate !== undefined ||
+            args.to_coordinate !== undefined) &&
+          pixelOk
+        ) {
+          const from =
+            args.from_element !== undefined
+              ? this.elementCenter(target, args.from_element)
+              : args.from_coordinate!;
+          const to =
+            args.to_element !== undefined
+              ? this.elementCenter(target, args.to_element)
+              : args.to_coordinate!;
+          this.pointArgs(target, from);
+          this.pointArgs(target, to);
+        } else {
+          throw new ComputerUseSafetyError(
+            "unsupported_drag",
+            "The pinned cua-driver drag schema does not support this drag target combination.",
+          );
+        }
         break;
+      }
       case "scroll":
         if (args.element !== undefined) this.requireCapturedElement(target, args.element);
         else if (args.coordinate) this.pointArgs(target, args.coordinate);
@@ -1138,25 +1205,69 @@ export class ComputerUseController {
       }
       case "drag": {
         tool = "drag";
-        const from =
-          args.from_element !== undefined
-            ? this.elementCenter(target, args.from_element)
-            : args.from_coordinate!;
-        const to =
-          args.to_element !== undefined
-            ? this.elementCenter(target, args.to_element)
-            : args.to_coordinate!;
-        this.pointArgs(target, from);
-        this.pointArgs(target, to);
-        driverArgs = {
-          ...driverArgs,
-          from_x: from[0],
-          from_y: from[1],
-          to_x: to[0],
-          to_y: to[1],
-          button: args.button ?? "left",
-          ...(args.modifiers?.length ? { modifier: args.modifiers } : {}),
-        };
+        const dragTool = session.toolCatalog.get("drag");
+        const dragCommonProperties = [
+          "pid",
+          "window_id",
+          "button",
+          ...(args.modifiers?.length ? ["modifier"] : []),
+          ...(args.delivery_mode === "foreground" ? ["delivery_mode"] : []),
+        ];
+        const elementOk = [...dragCommonProperties, "from_element", "to_element"].every(
+          (property) => schemaDeclaresProperty(dragTool, property),
+        );
+        const pixelOk = [...dragCommonProperties, "from_x", "from_y", "to_x", "to_y"].every(
+          (property) => schemaDeclaresProperty(dragTool, property),
+        );
+        const usesElements = args.from_element !== undefined && args.to_element !== undefined;
+        const usesCoordinates =
+          args.from_coordinate !== undefined && args.to_coordinate !== undefined;
+        if (usesElements && elementOk) {
+          const fromElement = args.from_element!;
+          const toElement = args.to_element!;
+          this.requireCapturedElement(target, fromElement);
+          this.requireCapturedElement(target, toElement);
+          driverArgs = {
+            ...driverArgs,
+            from_element: fromElement,
+            to_element: toElement,
+            button: args.button ?? "left",
+            ...(args.modifiers?.length ? { modifier: args.modifiers } : {}),
+          };
+        } else if (
+          (usesElements ||
+            usesCoordinates ||
+            args.from_element !== undefined ||
+            args.to_element !== undefined ||
+            args.from_coordinate !== undefined ||
+            args.to_coordinate !== undefined) &&
+          pixelOk
+        ) {
+          const from =
+            args.from_element !== undefined
+              ? this.elementCenter(target, args.from_element)
+              : args.from_coordinate!;
+          const to =
+            args.to_element !== undefined
+              ? this.elementCenter(target, args.to_element)
+              : args.to_coordinate!;
+          this.pointArgs(target, from);
+          this.pointArgs(target, to);
+          driverArgs = {
+            ...driverArgs,
+            from_x: from[0],
+            from_y: from[1],
+            to_x: to[0],
+            to_y: to[1],
+            button: args.button ?? "left",
+            ...(args.modifiers?.length ? { modifier: args.modifiers } : {}),
+          };
+        } else {
+          throw new ComputerUseSafetyError(
+            "unsupported_drag",
+            "The pinned cua-driver drag schema does not support this drag target combination.",
+          );
+        }
         break;
       }
       case "scroll":
