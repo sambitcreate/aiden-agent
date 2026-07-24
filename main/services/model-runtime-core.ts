@@ -10,6 +10,7 @@ import {
   resolveRuntimeBaseUrl,
   resolveRuntimeHeaders,
 } from "./generation-runtime.js";
+import type { RuntimeModelLimits } from "./models-catalog-core.js";
 import type { StoredProvider } from "./types.js";
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -34,18 +35,22 @@ function apiFor(provider: StoredProvider): Api {
   return provider.kind === "anthropic" ? "anthropic-messages" : "openai-completions";
 }
 
-function buildModel(provider: StoredProvider, modelId: string): Model<Api> {
+function buildModel(
+  provider: StoredProvider,
+  modelId: string,
+  limits: RuntimeModelLimits,
+): Model<Api> {
   return {
     id: modelId,
     name: modelId,
     api: apiFor(provider),
     provider: provider.id,
     baseUrl: resolveRuntimeBaseUrl(provider),
-    reasoning: false,
-    input: ["text"],
+    reasoning: limits.reasoning,
+    input: limits.input,
     cost: ZERO_COST,
-    contextWindow: 128_000,
-    maxTokens: 8192,
+    contextWindow: limits.contextWindow,
+    maxTokens: limits.maxTokens,
   };
 }
 
@@ -60,6 +65,7 @@ export interface ResolvedModelRuntime {
 export interface ModelRuntimeDependencies {
   getProvider(providerId: string): Promise<StoredProvider | undefined>;
   getApiKey(providerId: string): Promise<string | null>;
+  resolveRuntimeLimits(provider: StoredProvider, modelId: string): Promise<RuntimeModelLimits>;
   codex: {
     prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
@@ -98,7 +104,8 @@ export async function resolveModelRuntimeWith(
     throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
   }
 
-  const model = buildModel(provider, modelId);
+  const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
+  const model = buildModel(provider, modelId, limits);
   return {
     provider,
     model,

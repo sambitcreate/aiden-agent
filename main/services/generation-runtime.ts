@@ -19,20 +19,9 @@ export function shouldExposeLocalReasoning(providerId: string): boolean {
   return LOCAL_REASONING_PROVIDER_IDS.has(providerId);
 }
 
-/**
- * Pi's provider serializers use Model.input as the authoritative image gate.
- * Merge only positive trusted metadata into a cloned generation snapshot so
- * legacy vision models and tool screenshots follow the same decision.
- */
-export function effectiveModelForGeneration<TApi extends Api>(
-  model: Model<TApi>,
-  trustedVision: boolean | undefined,
-): Model<TApi> {
-  const supportsImages = model.input.includes("image") || trustedVision === true;
-  return {
-    ...model,
-    input: supportsImages ? ["text", "image"] : ["text"],
-  };
+/** The connection-bound runtime model is the sole request-time image authority. */
+export function runtimeSupportsImages(model: Pick<Model<Api>, "input">): boolean {
+  return model.input.includes("image");
 }
 
 /**

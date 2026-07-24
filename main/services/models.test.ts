@@ -3,9 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { ArtificialAnalysisCatalog } from "./artificial-analysis-catalog-core.js";
 import {
+  CONSERVATIVE_RUNTIME_LIMITS,
+  createModelCatalogLoader,
   lookupCatalogModelInfo,
   parseModelCatalog,
   resolveModelInfo,
+  resolveProviderRuntimeLimits,
+  resolveRuntimeLimits,
 } from "./models-catalog-core.js";
 import { normalizeProviderBaseUrl, testConnection } from "./models.js";
 
@@ -260,6 +264,218 @@ test("models.dev lookups retain unknown flags for unmatched model ids", () => {
   });
 });
 
+test("runtime limits use provider-scoped bundled metadata with conservative partial fallbacks", () => {
+  const catalog = parseModelCatalog({
+    google: {
+      models: {
+        "gemini-2.5-pro": {
+          name: "Gemini 2.5 Pro",
+          attachment: true,
+          reasoning: true,
+          modalities: { input: ["text", "image", "audio"] },
+          limit: { context: 1_048_576, output: 65_536 },
+        },
+        "gemini-partial": {
+          name: "Gemini Partial",
+          reasoning: true,
+          modalities: { input: ["text"] },
+          limit: { context: 256_000 },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(resolveRuntimeLimits(catalog, "gemini", "gemini-2.5-pro"), {
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+    reasoning: true,
+    input: ["text", "image"],
+  });
+  assert.deepEqual(resolveRuntimeLimits(catalog, "gemini", "gemini-partial"), {
+    contextWindow: 256_000,
+    maxTokens: 8_192,
+    reasoning: true,
+    input: ["text"],
+  });
+  assert.deepEqual(
+    resolveRuntimeLimits(catalog, "custom-openai", "gemini-2.5-pro"),
+    CONSERVATIVE_RUNTIME_LIMITS,
+  );
+  assert.deepEqual(
+    resolveRuntimeLimits(catalog, "gemini", "missing-model"),
+    CONSERVATIVE_RUNTIME_LIMITS,
+  );
+});
+
+test("exact Pi metadata wins field by field over bundled runtime metadata", () => {
+  const catalog = parseModelCatalog({
+    google: {
+      models: {
+        "gemini-exact": {
+          name: "Gemini Exact",
+          attachment: true,
+          reasoning: true,
+          limit: { context: 1_000_000, output: 64_000 },
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(
+    resolveRuntimeLimits(catalog, "gemini", "gemini-exact", {
+      contextWindow: 2_000_000,
+      reasoning: false,
+      input: ["text"],
+    }),
+    {
+      contextWindow: 2_000_000,
+      maxTokens: 64_000,
+      reasoning: false,
+      input: ["text"],
+    },
+  );
+});
+
+test("provider-scoped Pi metadata survives proxy routing with discovered overrides", () => {
+  const catalog = parseModelCatalog({
+    google: {
+      models: {
+        "gemini-2.5-pro": {
+          name: "Gemini 2.5 Pro",
+          attachment: true,
+          reasoning: true,
+          limit: { context: 1_048_576, output: 65_536 },
+        },
+      },
+    },
+  });
+  const canonical = {
+    id: "gemini",
+    kind: "openai" as const,
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  };
+  const edited = {
+    ...canonical,
+    baseUrl: "https://models.example.test/v1",
+    modelMetadata: {
+      "gemini-2.5-pro": {
+        source: "provider" as const,
+        vision: false,
+        reasoning: false,
+        contextLength: 16_384,
+      },
+    },
+  };
+  const piExact = {
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+    reasoning: true,
+    input: ["text", "image"],
+  };
+
+  assert.deepEqual(
+    resolveProviderRuntimeLimits(catalog, canonical, "gemini-2.5-pro", {
+      ...piExact,
+      input: ["text"],
+    }),
+    {
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      reasoning: true,
+      input: ["text"],
+    },
+  );
+  assert.deepEqual(resolveProviderRuntimeLimits(catalog, edited, "gemini-2.5-pro", piExact), {
+    contextWindow: 16_384,
+    maxTokens: 65_536,
+    reasoning: false,
+    input: ["text"],
+  });
+  assert.deepEqual(
+    resolveProviderRuntimeLimits(
+      catalog,
+      {
+        id: "custom-openai",
+        kind: "openai",
+        baseUrl: "https://models.example.test/v1",
+      },
+      "gemini-2.5-pro",
+      piExact,
+    ),
+    CONSERVATIVE_RUNTIME_LIMITS,
+  );
+});
+
+test("connection-bound discovery enables local vision without trusting a colliding catalog id", () => {
+  const catalog = parseModelCatalog({
+    google: {
+      models: {
+        "gemini-2.5-pro": {
+          name: "Gemini 2.5 Pro",
+          attachment: false,
+          reasoning: false,
+          limit: { context: 1_048_576, output: 65_536 },
+        },
+      },
+    },
+  });
+  const local = {
+    id: "lmstudio",
+    kind: "openai" as const,
+    baseUrl: "http://localhost:1234/v1",
+    modelMetadata: {
+      "gemini-2.5-pro": {
+        source: "lmstudio" as const,
+        vision: true,
+        reasoning: true,
+        contextLength: 32_768,
+      },
+    },
+  };
+
+  assert.deepEqual(resolveProviderRuntimeLimits(catalog, local, "gemini-2.5-pro"), {
+    contextWindow: 32_768,
+    maxTokens: 8_192,
+    reasoning: true,
+    input: ["text", "image"],
+  });
+});
+
+test("bundled catalog loader fails closed and shares one concurrent load", async () => {
+  let attempts = 0;
+  const errors: unknown[] = [];
+  const missing = createModelCatalogLoader(async () => {
+    attempts += 1;
+    throw Object.assign(new Error("missing"), { code: "ENOENT" });
+  }, errors.push.bind(errors));
+
+  const [first, second, third] = await Promise.all([missing(), missing(), missing()]);
+  assert.deepEqual(first, {});
+  assert.strictEqual(second, first);
+  assert.strictEqual(third, first);
+  assert.equal(attempts, 1);
+  assert.equal(errors.length, 1);
+  assert.deepEqual(
+    resolveRuntimeLimits(first, "gemini", "gemini-2.5-pro"),
+    CONSERVATIVE_RUNTIME_LIMITS,
+  );
+
+  const malformed = createModelCatalogLoader(async () => ({
+    google: { models: { broken: { name: "", limit: { context: "many" } } } },
+  }));
+  assert.deepEqual(await malformed(), {});
+
+  const throwingDiagnostic = createModelCatalogLoader(
+    async () => {
+      throw new Error("unavailable");
+    },
+    () => {
+      throw new Error("diagnostic failed");
+    },
+  );
+  assert.deepEqual(await throwingDiagnostic(), {});
+});
+
 test("local discovery metadata takes precedence over catalog metadata", () => {
   const catalog = parseModelCatalog({
     google: {
@@ -388,6 +604,12 @@ test("runtime metadata stays offline and only models.dev data is packaged", asyn
     Object.values(provider.models ?? {}).filter((model) => Boolean(model.name?.trim())),
   );
   assert.ok(namedModels.length > 0, "the release snapshot should include model display names");
+  assert.deepEqual(resolveRuntimeLimits(catalog, "gemini", "gemini-2.5-pro"), {
+    contextWindow: 1_048_576,
+    maxTokens: 65_536,
+    reasoning: true,
+    input: ["text", "image"],
+  });
 
   await assert.rejects(
     readFile(new URL("../../resources/artificial-analysis-models.json", import.meta.url), "utf8"),

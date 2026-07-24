@@ -27,6 +27,51 @@ interface RawProvider {
 
 export type ModelCatalog = Record<string, RawProvider>;
 export type ModelCatalogProvider = Pick<StoredProvider, "id" | "baseUrl" | "modelMetadata">;
+export type RuntimeCatalogProvider = Pick<
+  StoredProvider,
+  "id" | "kind" | "baseUrl" | "modelMetadata"
+>;
+
+export interface RuntimeModelMetadata {
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  input?: readonly string[];
+}
+
+export interface RuntimeModelLimits {
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+}
+
+export const CONSERVATIVE_RUNTIME_LIMITS: RuntimeModelLimits = {
+  contextWindow: 128_000,
+  maxTokens: 8_192,
+  reasoning: false,
+  input: ["text"],
+};
+
+export function createModelCatalogLoader(
+  load: () => Promise<unknown>,
+  onError: (error: unknown) => void = () => {},
+): () => Promise<ModelCatalog> {
+  let snapshot: Promise<ModelCatalog> | null = null;
+  return () => {
+    snapshot ??= load()
+      .then(parseModelCatalog)
+      .catch((error: unknown) => {
+        try {
+          onError(error);
+        } catch {
+          // Diagnostics cannot turn a safe catalog fallback into a chat failure.
+        }
+        return {};
+      });
+    return snapshot;
+  };
+}
 
 function rawRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -125,8 +170,10 @@ const PROVIDER_SLUG: Record<string, string> = {
   "openai-codex": "openai",
   anthropic: "anthropic",
   gemini: "google",
+  google: "google",
   deepseek: "deepseek",
   moonshot: "moonshotai",
+  moonshotai: "moonshotai",
 };
 
 const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
@@ -138,6 +185,11 @@ const ARTIFICIAL_ANALYSIS_CREATOR: Record<string, string> = {
   moonshot: "Moonshot AI",
 };
 
+/** Map Aiden's stored provider IDs to the shared Pi/models.dev provider IDs. */
+export function catalogProviderSlug(providerId: string): string | undefined {
+  return PROVIDER_SLUG[providerId];
+}
+
 function normalizeId(id: string): string {
   const slash = id.lastIndexOf("/");
   return (slash >= 0 ? id.slice(slash + 1) : id).toLocaleLowerCase();
@@ -147,11 +199,26 @@ function entries(provider: RawProvider | undefined): Array<[string, RawModel]> {
   return provider?.models ? Object.entries(provider.models) : [];
 }
 
+function findRawForProvider(
+  catalog: ModelCatalog,
+  providerId: string,
+  modelId: string,
+): RawModel | null {
+  const provider = catalog[catalogProviderSlug(providerId) ?? ""];
+  if (!provider) return null;
+
+  const exact = modelId.toLocaleLowerCase();
+  const normalized = normalizeId(modelId);
+  const exactMatch = entries(provider).find(([key]) => key.toLocaleLowerCase() === exact);
+  if (exactMatch) return exactMatch[1];
+  return entries(provider).find(([key]) => normalizeId(key) === normalized)?.[1] ?? null;
+}
+
 /** Exact matches across the catalog must win before any lossy normalized match. */
 function findRaw(catalog: ModelCatalog, providerId: string, modelId: string): RawModel | null {
   const exact = modelId.toLocaleLowerCase();
   const normalized = normalizeId(modelId);
-  const preferred = catalog[PROVIDER_SLUG[providerId] ?? ""];
+  const preferred = catalog[catalogProviderSlug(providerId) ?? ""];
 
   const preferredExact = entries(preferred).find(([key]) => key.toLocaleLowerCase() === exact);
   if (preferredExact) return preferredExact[1];
@@ -204,6 +271,110 @@ export function lookupCatalogModelInfo(
   modelId: string,
 ): ModelInfo {
   return modelsDevInfo(catalog, providerId, modelId);
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  const integer = Math.floor(value);
+  return integer > 0 ? integer : undefined;
+}
+
+function supportsImage(input: readonly string[] | undefined): boolean | undefined {
+  return input === undefined ? undefined : input.includes("image");
+}
+
+/**
+ * Resolve request-time limits without public-catalog or device-cache access.
+ *
+ * Each field uses exact Pi metadata first, then the provider-scoped bundled
+ * models.dev snapshot, then the conservative legacy fallback.
+ */
+export function resolveRuntimeLimits(
+  catalog: ModelCatalog,
+  providerId: string,
+  modelId: string,
+  exact?: RuntimeModelMetadata,
+): RuntimeModelLimits {
+  const bundled = findRawForProvider(catalog, providerId, modelId);
+  const bundledInputs = bundled?.modalities?.input;
+  const bundledVision =
+    bundled === null
+      ? undefined
+      : bundled.attachment === true || supportsImage(bundledInputs) === true
+        ? true
+        : bundled.attachment === false || bundledInputs !== undefined
+          ? false
+          : undefined;
+  const exactVision = supportsImage(exact?.input);
+  const vision = exactVision ?? bundledVision ?? false;
+
+  return {
+    contextWindow:
+      positiveInteger(exact?.contextWindow) ??
+      positiveInteger(bundled?.limit?.context) ??
+      CONSERVATIVE_RUNTIME_LIMITS.contextWindow,
+    maxTokens:
+      positiveInteger(exact?.maxTokens) ??
+      positiveInteger(bundled?.limit?.output) ??
+      CONSERVATIVE_RUNTIME_LIMITS.maxTokens,
+    reasoning:
+      exact?.reasoning ??
+      (typeof bundled?.reasoning === "boolean"
+        ? bundled.reasoning
+        : CONSERVATIVE_RUNTIME_LIMITS.reasoning),
+    input: vision ? ["text", "image"] : ["text"],
+  };
+}
+
+function discoveredRuntimeMetadata(
+  provider: RuntimeCatalogProvider,
+  modelId: string,
+): RuntimeModelMetadata | undefined {
+  const metadata = provider.modelMetadata?.[modelId];
+  if (!metadata) return undefined;
+  return {
+    contextWindow: metadata.contextLength,
+    reasoning: metadata.reasoning,
+    input:
+      metadata.vision === undefined ? undefined : metadata.vision ? ["text", "image"] : ["text"],
+  };
+}
+
+function mergeRuntimeMetadata(
+  primary: RuntimeModelMetadata | undefined,
+  fallback: RuntimeModelMetadata | undefined,
+): RuntimeModelMetadata | undefined {
+  if (!primary) return fallback;
+  if (!fallback) return primary;
+  return {
+    contextWindow: primary.contextWindow ?? fallback.contextWindow,
+    maxTokens: primary.maxTokens ?? fallback.maxTokens,
+    reasoning: primary.reasoning ?? fallback.reasoning,
+    input: primary.input ?? fallback.input,
+  };
+}
+
+/**
+ * Follow Pi's provider composition semantics for request-time metadata.
+ *
+ * Built-in provider metadata survives a proxy/base-URL override, while
+ * connection-discovered fields act like per-model overrides. Unrelated custom
+ * provider IDs cannot borrow another provider's catalog entry.
+ */
+export function resolveProviderRuntimeLimits(
+  catalog: ModelCatalog,
+  provider: RuntimeCatalogProvider,
+  modelId: string,
+  piExact?: RuntimeModelMetadata,
+): RuntimeModelLimits {
+  const runtimeSlug = catalogProviderSlug(provider.id);
+  const discovered = discoveredRuntimeMetadata(provider, modelId);
+  return resolveRuntimeLimits(
+    catalog,
+    runtimeSlug ? provider.id : "",
+    modelId,
+    runtimeSlug ? mergeRuntimeMetadata(discovered, piExact) : discovered,
+  );
 }
 
 function isLocalProvider(provider: ModelCatalogProvider): boolean {
