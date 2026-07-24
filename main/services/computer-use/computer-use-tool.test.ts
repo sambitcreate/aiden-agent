@@ -24,15 +24,28 @@ interface Call {
 }
 
 function toolInfo(name: string, capabilities: string[] = []): CuaDriverToolInfo {
+  const properties: Record<string, unknown> = {
+    delivery_mode: { type: "string" },
+    element_token: { type: "string" },
+    pid: { type: "integer" },
+    window_id: { type: "integer" },
+  };
+  if (name === "drag") {
+    properties.button = { type: "string" };
+    properties.from_element = { type: "integer" };
+    properties.to_element = { type: "integer" };
+    properties.from_x = { type: "number" };
+    properties.from_y = { type: "number" };
+    properties.modifier = { type: "array" };
+    properties.to_x = { type: "number" };
+    properties.to_y = { type: "number" };
+  }
   return {
     name,
     inputSchema: {
       type: "object",
       additionalProperties: false,
-      properties: {
-        delivery_mode: { type: "string" },
-        element_token: { type: "string" },
-      },
+      properties,
     },
     capabilities: new Set(capabilities),
   };
@@ -227,8 +240,12 @@ function harness(supportsImages = true, createDelayMs = 0) {
   return { controller, host, session, factoryCount: () => factoryCount };
 }
 
-async function capture(controller: ComputerUseController, mode: "som" | "vision" | "ax" = "som") {
-  return controller.execute("capture-call", { action: "capture", mode });
+async function capture(
+  controller: ComputerUseController,
+  mode: "som" | "vision" | "ax" = "som",
+  target: { app?: string; pid?: number; window_id?: number } = { app: "Safari" },
+) {
+  return controller.execute("capture-call", { action: "capture", mode, ...target });
 }
 
 async function approved(
@@ -241,6 +258,159 @@ async function approved(
   controller.authorize(id, args, approval);
   return controller.execute(id, args);
 }
+
+test("capture without app or exact pid/window_id is rejected", async () => {
+  const { controller } = harness(false);
+  await assert.rejects(
+    () => controller.execute("capture-missing-target", { action: "capture", mode: "ax" }),
+    /requires app or exact pid and window_id/u,
+  );
+  await controller.execute("capture-by-app", { action: "capture", mode: "ax", app: "Safari" });
+  await controller.execute("capture-by-id", {
+    action: "capture",
+    mode: "ax",
+    pid: 42,
+    window_id: 7,
+  });
+  await controller.close();
+});
+
+test("partial drag schema with only from_element is rejected", async () => {
+  const { controller, session } = harness(false);
+  session.toolCatalog.set("drag", {
+    name: "drag",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        from_element: { type: "integer" },
+      },
+    },
+    capabilities: new Set(),
+  });
+  await capture(controller, "ax");
+  await assert.rejects(
+    () =>
+      controller.approvalFor({
+        action: "drag",
+        from_element: 0,
+        to_element: 1,
+      }),
+    /unsupported drag schema|drag schema does not support/u,
+  );
+  assert.equal(
+    session.calls.some((call) => call.name === "drag"),
+    false,
+  );
+  await controller.close();
+});
+
+test("drag rejects a schema missing an argument the controller would send", async () => {
+  const { controller, session } = harness(false);
+  session.toolCatalog.set("drag", {
+    name: "drag",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        pid: { type: "integer" },
+        window_id: { type: "integer" },
+        from_element: { type: "integer" },
+        to_element: { type: "integer" },
+      },
+    },
+    capabilities: new Set(),
+  });
+  await capture(controller, "ax");
+  await assert.rejects(
+    () =>
+      controller.approvalFor({
+        action: "drag",
+        from_element: 0,
+        to_element: 1,
+      }),
+    /drag schema does not support/u,
+  );
+  assert.equal(
+    session.calls.some((call) => call.name === "drag"),
+    false,
+  );
+  await controller.close();
+});
+
+test("focus_app authorize binds grant.boundTarget even if approval.target is mutated", async () => {
+  const { controller, session } = harness(false);
+  const args = {
+    action: "focus_app",
+    app: "com.apple.Safari",
+    raise_window: true,
+  } as const;
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  assert.equal(approval.grant.boundTarget?.pid, 42);
+  assert.equal(approval.grant.boundTarget?.windowId, 7);
+  approval.target = { pid: 999, windowId: 999, app: "Spoofed", title: "Spoofed" };
+  controller.authorize("focus-bound", args, approval);
+  await controller.execute("focus-bound", args);
+  assert.equal(
+    session.calls.some(
+      (call) => call.name === "bring_to_front" && call.args.pid === 42 && call.args.window_id === 7,
+    ),
+    true,
+  );
+  await controller.close();
+});
+
+test("focus_app TOCTOU after authorize rejects stale re-resolve without raising or clearing capture", async () => {
+  const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  const before = controller.targetRevision;
+  let safariWindow = {
+    pid: 42,
+    window_id: 7,
+    app_name: "Safari",
+    title: "Example",
+    z_index: 9,
+    is_on_screen: true,
+    bounds: { x: 100, y: 50, width: 200, height: 100 },
+  };
+  session.handler = (call) => {
+    if (call.name === "list_windows") {
+      return {
+        content: [{ type: "text", text: "windows" }],
+        structuredContent: { windows: [safariWindow] },
+      };
+    }
+    if (call.name === "list_apps") return fakeResponse(call);
+    if (call.name === "get_window_state") return fakeResponse(call);
+    return fakeResponse(call);
+  };
+  const args = { action: "focus_app", app: "Safari", raise_window: true } as const;
+  const approval = await controller.approvalFor(args);
+  assert.ok(approval);
+  safariWindow = {
+    pid: 84,
+    window_id: 8,
+    app_name: "Safari",
+    title: "Other",
+    z_index: 1,
+    is_on_screen: true,
+    bounds: { x: 0, y: 0, width: 300, height: 200 },
+  };
+  controller.authorize("focus-toctou", args, approval);
+  await assert.rejects(
+    () => controller.execute("focus-toctou", args),
+    /focus target changed|approval/i,
+  );
+  assert.equal(
+    session.calls.some((call) => call.name === "bring_to_front"),
+    false,
+  );
+  assert.equal(controller.targetRevision, before);
+  const clickApproval = await controller.approvalFor({ action: "click", element: 0 });
+  assert.ok(clickApproval);
+  await controller.close();
+});
 
 test("publishes the consolidated tool as sequential and preserves zero-based indices", () => {
   const { controller } = harness();
@@ -340,7 +510,7 @@ test("an approval cannot move from its prompted window to a later target", async
     }
     return fakeResponse(call);
   };
-  await capture(controller, "ax");
+  await capture(controller, "ax", { app: "App A" });
   const args = { action: "click", element: 0 } as const;
   const approval = await controller.approvalFor(args);
   assert.ok(approval);
@@ -353,7 +523,7 @@ test("an approval cannot move from its prompted window to a later target", async
     title: "B",
     element_token: "B:0",
   };
-  await capture(controller, "ax");
+  await capture(controller, "ax", { app: "App B" });
   assert.throws(
     () => controller.authorize("target-swap", args, approval),
     /target or action changed/u,
@@ -445,8 +615,84 @@ test("successful mutations invalidate element and screenshot snapshots", async (
   await controller.close();
 });
 
-test("element drag requires dimensions from the exact current screenshot", async () => {
+test("element drag prefers from_element/to_element without requiring screenshot dims", async () => {
   const { controller, session } = harness(false);
+  await capture(controller, "ax");
+  await approved(controller, "drag-ax", {
+    action: "drag",
+    from_element: 0,
+    to_element: 1,
+  });
+  const drag = session.calls.find((call) => call.name === "drag");
+  assert.ok(drag);
+  assert.deepEqual(drag.args, {
+    pid: 42,
+    window_id: 7,
+    from_element: 0,
+    to_element: 1,
+    button: "left",
+  });
+  await controller.close();
+});
+
+test("element drag falls back to pixels when the driver omits from_element", async () => {
+  const { controller, session } = harness(true);
+  session.toolCatalog.set("drag", {
+    name: "drag",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        button: { type: "string" },
+        from_x: { type: "number" },
+        from_y: { type: "number" },
+        pid: { type: "integer" },
+        to_x: { type: "number" },
+        to_y: { type: "number" },
+        window_id: { type: "integer" },
+      },
+    },
+    capabilities: new Set(),
+  });
+  await capture(controller, "som");
+  await approved(controller, "drag-pixels", {
+    action: "drag",
+    from_element: 0,
+    to_element: 1,
+  });
+  const drag = session.calls.find((call) => call.name === "drag");
+  assert.ok(drag);
+  assert.deepEqual(drag.args, {
+    pid: 42,
+    window_id: 7,
+    from_x: 40,
+    from_y: 40,
+    to_x: 320,
+    to_y: 120,
+    button: "left",
+  });
+  await controller.close();
+});
+
+test("element drag without frames still needs screenshot dims on pixel-only drivers", async () => {
+  const { controller, session } = harness(false);
+  session.toolCatalog.set("drag", {
+    name: "drag",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        button: { type: "string" },
+        from_x: { type: "number" },
+        from_y: { type: "number" },
+        pid: { type: "integer" },
+        to_x: { type: "number" },
+        to_y: { type: "number" },
+        window_id: { type: "integer" },
+      },
+    },
+    capabilities: new Set(),
+  });
   await capture(controller, "ax");
   await assert.rejects(
     () =>
@@ -455,12 +701,28 @@ test("element drag requires dimensions from the exact current screenshot", async
         from_element: 0,
         to_element: 1,
       }),
-    /mapped into screenshot coordinates/u,
+    /mapped into screenshot coordinates|fresh screenshot|no safe frame/u,
   );
   assert.equal(
     session.calls.some((call) => call.name === "drag"),
     false,
   );
+  await controller.close();
+});
+
+test("denied focus_app leaves the prior capture target intact", async () => {
+  const { controller } = harness(false);
+  await capture(controller, "ax");
+  const before = controller.targetRevision;
+  const approval = await controller.approvalFor({
+    action: "focus_app",
+    app: "com.apple.Safari",
+  });
+  assert.ok(approval);
+  assert.equal(controller.targetRevision, before);
+  // Prior AX elements remain usable after a denied (never-authorized) focus preview.
+  const clickApproval = await controller.approvalFor({ action: "click", element: 0 });
+  assert.ok(clickApproval);
   await controller.close();
 });
 
@@ -686,10 +948,8 @@ test("maps pointer, drag, scroll, keyboard, and value actions to pinned schemas"
   assert.deepEqual(calls[3].args, {
     pid: 42,
     window_id: 7,
-    from_x: 40,
-    from_y: 40,
-    to_x: 320,
-    to_y: 120,
+    from_element: 0,
+    to_element: 1,
     button: "left",
   });
   assert.equal(calls[4].name, "scroll");
@@ -729,7 +989,15 @@ test("focus_app resolves bundle ids, optionally raises, and captures the exact t
     capture_after: true,
   });
   const names = session.calls.map((call) => call.name);
-  assert.deepEqual(names, ["list_windows", "list_apps", "bring_to_front", "get_window_state"]);
+  // Preview resolves during approval; execute resolves again and binds only then.
+  assert.deepEqual(names, [
+    "list_windows",
+    "list_apps",
+    "list_windows",
+    "list_apps",
+    "bring_to_front",
+    "get_window_state",
+  ]);
   assert.equal(result.details.action, "focus_app");
   assert.equal(result.details.capturedAfter, true);
   assert.equal(result.details.target?.pid, 42);
