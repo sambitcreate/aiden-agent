@@ -28,6 +28,12 @@ export type AgentStep = AgentToolStep;
 
 export type GenerationTimelineStatus = "running" | "completed" | "failed" | "cancelled";
 
+export interface GenerationClaimCheck {
+  kind: "unverified_success";
+  /** Renderer-safe local step IDs whose outcomes conflict with the response. */
+  stepIds: string[];
+}
+
 export interface GenerationTimeline {
   version: typeof GENERATION_TIMELINE_VERSION;
   generationId: string;
@@ -35,6 +41,8 @@ export interface GenerationTimeline {
   startedAt: number;
   finishedAt?: number;
   steps: AgentStep[];
+  /** Append-only post-turn outcome. The assistant's prose is never rewritten. */
+  claimCheck?: GenerationClaimCheck;
 }
 
 export interface ChatTimelineNotification {
@@ -139,6 +147,37 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
     });
   }
 
+  let claimCheck: GenerationClaimCheck | undefined;
+  if (candidate.claimCheck !== undefined) {
+    if (!candidate.claimCheck || typeof candidate.claimCheck !== "object") return undefined;
+    const rawClaimCheck = candidate.claimCheck as Record<string, unknown>;
+    if (
+      candidate.status === "running" ||
+      rawClaimCheck.kind !== "unverified_success" ||
+      !Array.isArray(rawClaimCheck.stepIds) ||
+      rawClaimCheck.stepIds.length === 0 ||
+      rawClaimCheck.stepIds.length > 20 ||
+      rawClaimCheck.stepIds.some(
+        (id) =>
+          typeof id !== "string" ||
+          !steps.some(
+            (step) =>
+              step.id === id &&
+              (step.status === "failed" ||
+                step.status === "blocked" ||
+                step.status === "cancelled"),
+          ),
+      ) ||
+      new Set(rawClaimCheck.stepIds).size !== rawClaimCheck.stepIds.length
+    ) {
+      return undefined;
+    }
+    claimCheck = {
+      kind: "unverified_success",
+      stepIds: rawClaimCheck.stepIds as string[],
+    };
+  }
+
   return {
     version: GENERATION_TIMELINE_VERSION,
     generationId: candidate.generationId,
@@ -146,6 +185,7 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
     startedAt: candidate.startedAt,
     ...(candidate.finishedAt === undefined ? {} : { finishedAt: candidate.finishedAt }),
     steps,
+    ...(claimCheck ? { claimCheck } : {}),
   };
 }
 

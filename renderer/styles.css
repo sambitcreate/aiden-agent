@@ -767,6 +767,10 @@ textarea {
   animation: none;
 }
 
+:root[data-reduce-motion="true"] .agent-activity-chevron {
+  transition: none;
+}
+
 [data-sonner-toaster] {
   --normal-bg: var(--surface-popover) !important;
   --normal-border: var(--border-field) !important;

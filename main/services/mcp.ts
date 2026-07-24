@@ -13,6 +13,7 @@ import { oauthProviderFor } from "./mcp-oauth.js";
 import { assertMcpPresetServer, createNoRedirectFetch, presetSecretId } from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
+import { executeMcpAgentTool } from "./mcp-tool-result.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -66,18 +67,6 @@ interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema?: unknown;
-}
-
-function toText(result: unknown): string {
-  const r = result as { content?: Array<{ type?: string; text?: string }> };
-  if (Array.isArray(r?.content)) {
-    const text = r.content
-      .map((c) => (c.type === "text" ? c.text : undefined))
-      .filter((t): t is string => Boolean(t))
-      .join("\n");
-    if (text) return text;
-  }
-  return JSON.stringify(result);
 }
 
 function sanitize(name: string): string {
@@ -143,12 +132,13 @@ class McpManager {
         // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
         parameters: Type.Unsafe((t.inputSchema as object) ?? { type: "object", properties: {} }),
         execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
-          const result = await client.callTool(
-            { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
-            undefined,
-            { signal },
+          return executeMcpAgentTool(() =>
+            client.callTool(
+              { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
+              undefined,
+              { signal },
+            ),
           );
-          return { content: [{ type: "text", text: toText(result) }], details: null };
         },
       }),
     );

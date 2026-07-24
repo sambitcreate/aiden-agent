@@ -168,4 +168,19 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
     }),
     undefined,
   );
+  assert.deepEqual(
+    parseGenerationTimeline({
+      ...final,
+      steps: [{ ...final.steps[0], status: "failed" }],
+      claimCheck: { kind: "unverified_success", stepIds: ["tool-1"] },
+    })?.claimCheck,
+    { kind: "unverified_success", stepIds: ["tool-1"] },
+  );
+  assert.equal(
+    parseGenerationTimeline({
+      ...final,
+      claimCheck: { kind: "unverified_success", stepIds: ["tool-404"] },
+    }),
+    undefined,
+  );
 });

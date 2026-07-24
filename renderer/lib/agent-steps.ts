@@ -1,4 +1,4 @@
-import type { AgentToolStep } from "../shared/generation-timeline";
+import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
 
 const DISCOVERY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep"]);
 
@@ -30,6 +30,30 @@ export function groupAgentSteps(steps: AgentToolStep[]): AgentStepGroup[] {
 export function isActiveStep(step: AgentToolStep): boolean {
   return (
     step.status === "pending" || step.status === "awaiting_approval" || step.status === "running"
+  );
+}
+
+export function activityTrailSummary(timeline: GenerationTimeline): string {
+  if (timeline.claimCheck) return "Check needed";
+  const failed = timeline.steps.filter(
+    (step) => step.status === "failed" || step.status === "blocked" || step.status === "cancelled",
+  ).length;
+  if (failed) return `${failed} ${failed === 1 ? "issue" : "issues"}`;
+  if (timeline.status === "running") {
+    const complete = timeline.steps.filter((step) => step.status === "completed").length;
+    return complete ? `${complete} of ${timeline.steps.length} complete` : "Working";
+  }
+  return `${timeline.steps.length} ${timeline.steps.length === 1 ? "step" : "steps"}`;
+}
+
+export function activityTrailNeedsAttention(timeline: GenerationTimeline): boolean {
+  return (
+    timeline.status === "running" ||
+    Boolean(timeline.claimCheck) ||
+    timeline.steps.some(
+      (step) =>
+        step.status === "failed" || step.status === "blocked" || step.status === "cancelled",
+    )
   );
 }
 

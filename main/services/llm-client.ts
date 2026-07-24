@@ -52,10 +52,8 @@ import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "./generation-context.js";
-import {
-  buildGeminiWorkspaceSnapshot,
-  GeminiContextCache,
-} from "./gemini-context-cache.js";
+import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
+import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -650,7 +648,7 @@ export const llmClient = {
             agent.state.errorMessage?.trim() ??
             null);
         if (finalError) {
-          const finalTimeline = timeline.finish("failed");
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           sendGeneration(streamId, "chat:error", {
             streamId,
@@ -663,7 +661,7 @@ export const llmClient = {
             chat: persisted.chat,
           });
         } else if (!full.trim() && !wasCancelled) {
-          const finalTimeline = timeline.finish("failed");
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           sendGeneration(streamId, "chat:error", {
             streamId,
@@ -676,7 +674,10 @@ export const llmClient = {
           });
         } else {
           // Covers both normal completion and user abort (partial `full`).
-          const finalTimeline = timeline.finish(wasCancelled ? "cancelled" : "completed");
+          const finalTimeline = attachClaimCheck(
+            timeline.finish(wasCancelled ? "cancelled" : "completed"),
+            full,
+          );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", {
@@ -699,7 +700,7 @@ export const llmClient = {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
-        const finalTimeline = timeline.finish("failed");
+        const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
         const persisted = await persistAssistant(full, reasoning, finalTimeline);
         sendGeneration(streamId, "chat:error", {
           streamId,
