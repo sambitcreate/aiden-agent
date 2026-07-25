@@ -349,7 +349,17 @@ function makeRunCommand(root: string): AgentTool {
     label: "Run Command",
     description:
       "Run a shell command with the workspace folder as the working directory. Returns combined stdout/stderr (capped). Use for builds, tests, git, package managers, etc.",
-    parameters: Type.Object({ command: Type.String({ description: "The shell command to run." }) }),
+    // `description` is what the activity feed shows; the command itself is
+    // never written to the timeline or to chat history.
+    parameters: Type.Object({
+      command: Type.String({ description: "The shell command to run." }),
+      description: Type.Optional(
+        Type.String({
+          description:
+            'A short present-tense description of what the command does, in 5-10 words, e.g. "Run the unit test suite".',
+        }),
+      ),
+    }),
     execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
       const { command } = params as { command: string };
       if (signal?.aborted) {
