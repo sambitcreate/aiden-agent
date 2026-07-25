@@ -107,6 +107,10 @@ test("distribution archive discovery requires exactly one current DMG and ZIP", 
 });
 
 test("automatic-update distributions generate generic-feed metadata without changing local builds", () => {
+  assert.equal(
+    AIDEN_UPDATE_FEED_URL,
+    "https://github.com/sambitcreate/aiden-agent/releases/latest/download",
+  );
   assert.deepEqual(distributionElectronBuilderArguments("/stage"), [
     "--mac",
     "--config.directories.output=/stage",
