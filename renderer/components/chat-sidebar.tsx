@@ -421,6 +421,18 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     setDeleting(null);
   };
 
+  // Warm the transcript before the click lands so opening a chat does not blank
+  // the pane on `chat.isLoading`. Cached entries resolve without a second read.
+  const prefetchChat = React.useCallback(
+    (id: string) => {
+      void qc.prefetchQuery({
+        queryKey: queryKeys.chat(id),
+        queryFn: () => chatsApi.get(id),
+      });
+    },
+    [qc],
+  );
+
   const newAgent = React.useCallback(async () => {
     if (!activeId) return;
     const created = await chatsApi.create({ workspaceId: activeId });
@@ -589,6 +601,8 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                         }
                         aria-keyshortcuts={shortcutNumber ? `Meta+${shortcutNumber}` : undefined}
                         selected={chat.id === activeChatId}
+                        onPointerEnter={() => prefetchChat(chat.id)}
+                        onFocus={() => prefetchChat(chat.id)}
                         onClick={() =>
                           navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })
                         }
