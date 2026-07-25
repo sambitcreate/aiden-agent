@@ -2,6 +2,7 @@
 
 @theme inline {
   --color-primary: var(--text-primary);
+  --color-toolbar-icon: var(--toolbar-icon);
   --color-secondary: var(--text-secondary);
   --color-tertiary: var(--text-tertiary);
   --color-quaternary: var(--text-quaternary);
@@ -68,6 +69,7 @@
   --ui-font-size: 14px;
   --code-font-size: 12px;
   --text-primary: #3d3f41;
+  --toolbar-icon: color-mix(in srgb, var(--text-primary) 70%, white);
   --text-secondary: rgb(61 63 65 / 0.67);
   --text-tertiary: rgb(61 63 65 / 0.49);
   --text-quaternary: rgb(61 63 65 / 0.33);
@@ -114,6 +116,7 @@
 :root.dark {
   color-scheme: dark;
   --text-primary: #d1d4da;
+  --toolbar-icon: color-mix(in srgb, var(--text-primary) 92%, white);
   --text-secondary: rgb(209 212 218 / 0.7);
   --text-tertiary: rgb(209 212 218 / 0.52);
   --text-quaternary: rgb(209 212 218 / 0.35);
