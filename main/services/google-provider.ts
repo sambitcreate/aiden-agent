@@ -117,6 +117,7 @@ export function canonicalGoogleProvider(
     ),
     defaultModel,
     needsKey: true,
+    deployment: "hosted",
     isPreset: true,
   };
 }
