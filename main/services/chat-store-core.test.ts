@@ -77,7 +77,7 @@ test("persists safe assistant milestones and drops invalid timeline data", async
   const store = await testStore(t);
   const chat = await store.create({});
   const timeline: GenerationTimeline = {
-    version: 1,
+    version: 2,
     generationId: "generation-1",
     status: "completed",
     startedAt: 10,
@@ -130,7 +130,7 @@ test("drops a timeline injected into a stored non-assistant message", async (t) 
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   const timeline: GenerationTimeline = {
-    version: 1,
+    version: 2,
     generationId: "generation-1",
     status: "completed",
     startedAt: 10,
