@@ -1,16 +1,20 @@
 import * as React from "react";
-import { ArrowUp, Plus, Square, X } from "lucide-react";
-import { invoke } from "../lib/ipc";
-import { ASSISTANT_SUGGESTED_PROMPTS } from "../shared/assistant";
+import { ArrowUp, Minus, Plus, Square } from "lucide-react";
+import { ASSISTANT_SUGGESTED_PROMPTS } from "../../shared/assistant";
 import { AssistantRecent } from "./assistant-recent";
 import { AssistantThread } from "./assistant-thread";
-import { canSendAssistantMessage, useAssistantChat } from "./use-assistant-chat";
+import { canSendAssistantMessage, type AssistantChat } from "./use-assistant-chat";
 
-const DRAG = { WebkitAppRegion: "drag" } as React.CSSProperties;
-const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
+const AIDEN_MARK_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 
-export function AssistantApp(): React.ReactElement {
-  const chat = useAssistantChat();
+/** The expanded Aiden surface, docked inside the main window. */
+export function AssistantPanel({
+  chat,
+  onMinimize,
+}: {
+  chat: AssistantChat;
+  onMinimize: () => void;
+}): React.ReactElement {
   const [draft, setDraft] = React.useState("");
   const canSend = canSendAssistantMessage(draft, {
     streaming: chat.streaming,
@@ -24,13 +28,15 @@ export function AssistantApp(): React.ReactElement {
   };
 
   return (
-    <div className="flex h-screen flex-col text-primary">
-      <header
-        className="flex h-11 shrink-0 items-center justify-between border-b border-separator pl-20 pr-2"
-        style={DRAG}
-      >
-        <span className="text-sm font-medium">Aiden</span>
-        <div className="flex items-center gap-0.5" style={NO_DRAG}>
+    <div className="pointer-events-auto flex h-[min(34rem,calc(100vh-8rem))] w-[min(23rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl bg-popover shadow-composer outline outline-1 outline-field/80">
+      <header className="flex h-11 shrink-0 items-center justify-between border-b border-separator pl-3 pr-2">
+        <span className="flex items-center gap-2">
+          <span className="block size-5 overflow-hidden rounded-full">
+            <img src={AIDEN_MARK_URL} alt="" className="size-full scale-[1.32] object-cover" />
+          </span>
+          <span className="text-sm font-medium text-primary">Aiden</span>
+        </span>
+        <span className="flex items-center gap-0.5">
           <button
             type="button"
             aria-label="New conversation"
@@ -41,13 +47,13 @@ export function AssistantApp(): React.ReactElement {
           </button>
           <button
             type="button"
-            aria-label="Close Aiden"
+            aria-label="Minimize Aiden"
             className="rounded-md p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary"
-            onClick={() => void invoke("assistant:hide-window")}
+            onClick={onMinimize}
           >
-            <X className="size-4" />
+            <Minus className="size-4" />
           </button>
-        </div>
+        </span>
       </header>
 
       {chat.messages.length === 0 ? (
@@ -75,10 +81,10 @@ export function AssistantApp(): React.ReactElement {
       <div className="shrink-0 p-2.5">
         {!chat.ready ? (
           <p className="px-1 pb-2 text-xs text-tertiary">
-            Choose a provider and model in the main window before chatting here.
+            Choose a provider and model before chatting here.
           </p>
         ) : null}
-        <div className="flex items-end gap-1.5 rounded-2xl bg-popover p-2 outline outline-1 outline-field/80">
+        <div className="flex items-end gap-1.5 rounded-2xl bg-background p-2 outline outline-1 outline-field/80">
           <textarea
             rows={1}
             value={draft}

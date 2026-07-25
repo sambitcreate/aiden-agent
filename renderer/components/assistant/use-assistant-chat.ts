@@ -10,9 +10,9 @@ import {
   settingsApi,
   startGeneration,
   type GenerationHandle,
-} from "../lib/ipc";
-import type { Chat, ChatMeta } from "../lib/types";
-import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
+} from "../../lib/ipc";
+import type { Chat, ChatMeta } from "../../lib/types";
+import { ASSISTANT_WORKSPACE_ID } from "../../shared/assistant";
 
 export interface AssistantMessage {
   role: "user" | "assistant";
@@ -35,6 +35,13 @@ interface AssistantModel {
   model: string;
 }
 
+/** The most recently completed reply, for the minimized bubble's preview. */
+export interface AssistantReply {
+  content: string;
+  /** Monotonic marker so consumers can tell a new reply from a re-render. */
+  at: number;
+}
+
 export interface AssistantChat {
   messages: AssistantMessage[];
   streaming: boolean;
@@ -42,6 +49,7 @@ export interface AssistantChat {
   ready: boolean;
   threads: ChatMeta[];
   activeChatId: string | null;
+  lastReply: AssistantReply | null;
   send: (text: string) => void;
   stop: () => void;
   openThread: (chatId: string) => void;
@@ -55,6 +63,7 @@ export function useAssistantChat(): AssistantChat {
   const [selection, setSelection] = React.useState<AssistantModel | null>(null);
   const [threads, setThreads] = React.useState<ChatMeta[]>([]);
   const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
+  const [lastReply, setLastReply] = React.useState<AssistantReply | null>(null);
   const handleRef = React.useRef<GenerationHandle | null>(null);
 
   const refreshThreads = React.useCallback(() => {
@@ -97,15 +106,6 @@ export function useAssistantChat(): AssistantChat {
       })
       .catch(() => setMessages([]));
   }, []);
-
-  // A delivered nudge asks the window to surface its thread.
-  React.useEffect(
-    () =>
-      onNotification<{ chatId?: string }>("assistant:open-thread", (payload) => {
-        if (payload.chatId) loadThread(payload.chatId);
-      }),
-    [loadThread],
-  );
 
   const newThread = React.useCallback(() => {
     handleRef.current?.cancel("lifecycle");
@@ -154,9 +154,10 @@ export function useAssistantChat(): AssistantChat {
           },
           {
             onDelta: appendDelta,
-            onDone: () => {
+            onDone: (fullContent) => {
               setStreaming(false);
               handleRef.current = null;
+              setLastReply({ content: fullContent, at: Date.now() });
               refreshThreads();
             },
             onError: (message) => {
@@ -205,6 +206,7 @@ export function useAssistantChat(): AssistantChat {
     ready: selection !== null,
     threads,
     activeChatId,
+    lastReply,
     send,
     stop,
     openThread: loadThread,

@@ -21,10 +21,6 @@ import {
   applyShortcutFromSettings,
   disposeShortcut,
 } from "./services/shortcut.js";
-import {
-  destroyAssistantWindow,
-  showAssistantWindow,
-} from "./windows/assistant-window.js";
 import { mcpManager } from "./services/mcp.js";
 import {
   disposeFoundationModelsConnection,
@@ -122,7 +118,6 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
-  destroyAssistantWindow();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
   scheduleService.stop();
@@ -605,7 +600,10 @@ if (!ownsSingleInstanceLock) {
         toggleDictation();
       });
       initAssistantShortcut(() => {
-        void showAssistantWindow();
+        // Aiden lives inside the main window, so the hotkey brings that window
+        // forward and asks its renderer to open the docked panel.
+        showMainWindow();
+        ipcMain.broadcast("assistant:open-panel", {});
       });
       void applyShortcutFromSettings();
       void foundationModelsConnection.status();

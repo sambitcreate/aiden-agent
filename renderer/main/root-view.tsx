@@ -7,6 +7,7 @@ import { WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
+import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import {
   consumeRendererLifecycleUnloadApproval,
@@ -118,6 +119,7 @@ function RootContent() {
   return (
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
+      <AssistantDock />
     </div>
   );
 }

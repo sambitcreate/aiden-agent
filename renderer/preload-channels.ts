@@ -7,7 +7,6 @@
 export const INVOKE_PREFIXES = [
   "app:",
   "artificialAnalysis:",
-  "assistant:",
   "attachments:",
   "chat:",
   "chats:",
@@ -48,9 +47,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:focus-composer",
   "app:navigate",
   "app:open-workspace-preferred-editor",
-  "assistant:nudge",
-  "assistant:open-thread",
-  "assistant:state-changed",
+  "assistant:open-panel",
   "chat:approval",
   "chat:delta",
   "chat:done",

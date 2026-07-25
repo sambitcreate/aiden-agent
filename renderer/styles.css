@@ -1527,16 +1527,6 @@ textarea {
   background-color: transparent;
 }
 
-/* ── Aiden assistant window (renderer/assistant) ───────────────────────── */
-/* The assistant BrowserWindow is transparent with native vibrancy behind it,
-   so the document must not paint over the material. */
-.aiden-assistant-window,
-.aiden-assistant-window body,
-.aiden-assistant-window #root {
-  background: none;
-  background-color: transparent;
-}
-
 @keyframes aiden-pill-enter {
   from {
     opacity: 0;

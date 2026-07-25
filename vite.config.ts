@@ -21,7 +21,6 @@ export default defineConfig({
       input: {
         "main-window": resolve(import.meta.dirname, "main-window.html"),
         pill: resolve(import.meta.dirname, "pill.html"),
-        assistant: resolve(import.meta.dirname, "assistant.html"),
       },
     },
   },

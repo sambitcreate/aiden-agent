@@ -1,5 +1,5 @@
 import * as React from "react";
-import type { ChatMeta } from "../lib/types";
+import type { ChatMeta } from "../../lib/types";
 
 const RECENT_LIMIT = 5;
 
