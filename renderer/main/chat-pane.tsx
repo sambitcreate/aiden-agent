@@ -259,6 +259,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
+  const [isModelLoading, setIsModelLoading] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
   const [hasUnpersistedResponse, setHasUnpersistedResponse] =
     React.useState(false);
@@ -315,13 +316,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     };
   }, [chatId]);
 
-  // Reset transient state when switching chats.
-  React.useEffect(() => {
+  // Reset transient state when switching chats. This runs as a layout effect so
+  // the incoming chatId never paints a frame carrying the outgoing chat's
+  // stream, timeline, or approvals.
+  React.useLayoutEffect(() => {
     setStreamingText(null);
     setStreamingReasoning(null);
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
+    setIsModelLoading(false);
     setCanStopGeneration(false);
     setHasUnpersistedResponse(false);
     setGenerationTimeline(null);
@@ -372,6 +376,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setError(null);
       setIsStoppingGeneration(false);
       setCanStopGeneration(true);
+      setIsModelLoading(false);
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
@@ -433,6 +438,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               mountedRef.current &&
               generationIntentRef.current === generationIntent
             ) {
+              setIsModelLoading(false);
               pendingDeltaRef.current += delta;
               scheduleStreamFlush();
             }
@@ -442,9 +448,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
               mountedRef.current &&
               generationIntentRef.current === generationIntent
             ) {
+              setIsModelLoading(false);
               pendingReasoningDeltaRef.current += delta;
               scheduleStreamFlush();
             }
+          },
+          onStatus: (phase) => {
+            if (
+              !mountedRef.current ||
+              generationIntentRef.current !== generationIntent
+            )
+              return;
+            if (phase === "model_loading") setIsModelLoading(true);
+            else if (phase === "model_ready") setIsModelLoading(false);
           },
           onTimeline: (timeline) => {
             if (
@@ -496,6 +512,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               streamedReasoningRef.current = "";
               setStreamComplete(false);
               setIsStoppingGeneration(false);
+              setIsModelLoading(false);
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
@@ -558,6 +575,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setHasUnpersistedResponse(Boolean(partial && !updatedChat));
                 setIsStoppingGeneration(false);
+                setIsModelLoading(false);
                 if (!partial || updatedChat) {
                   setGenerationTimeline(null);
                   generationTimelineRef.current = null;
@@ -645,6 +663,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setStreamComplete(false);
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
+    setIsModelLoading(false);
     setCanStopGeneration(false);
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
@@ -970,13 +989,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const agentActivity = resolveAgentActivity({
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
+    isModelLoading,
     streamingText:
       canStopGeneration || isStoppingGeneration ? streamingText : null,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
   const visibleAgentActivity =
-    streamingReasoning && agentActivity?.phase === "thinking"
+    streamingReasoning &&
+    (agentActivity?.phase === "thinking" || agentActivity?.phase === "loading")
       ? null
       : agentActivity;
 
@@ -1114,6 +1135,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
             ) : null}
           </EventPresence>
           <Composer
+            // Keyed so the draft and attachments stay scoped to one chat. The
+            // route no longer remounts the pane, and Composer owns that text
+            // without a chatId reset of its own.
+            key={chatId}
             ready={ready}
             readinessMessage={readinessMessage}
             hasMessages={hasMessages}
