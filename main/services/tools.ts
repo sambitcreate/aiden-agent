@@ -7,6 +7,8 @@
 
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import * as fs from "fs/promises";
+import * as path from "path";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
 import { collectMcpAgentTools } from "./mcp.js";
@@ -23,13 +25,17 @@ function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
 }
 
-function skillToolKey(skill: Skill | DiscoveredSkill): string {
-  const slug = skill.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 40);
-  return `skill_${slug || skill.id}`;
+export function skillToolKey(skill: Skill | DiscoveredSkill): string {
+  const slugify = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 40);
+  const slug = slugify(skill.name);
+  // Names without any ASCII alphanumeric characters (e.g. CJK-only) slug to
+  // nothing; fall back to the id so the tool name stays API-valid.
+  return `skill_${slug || slugify(skill.id) || "unnamed"}`;
 }
 
 function makeExaTool(apiKey: string): AgentTool {
@@ -78,6 +84,26 @@ function makeExaTool(apiKey: string): AgentTool {
   };
 }
 
+const SKILL_FILE_SAMPLE_LIMIT = 10;
+
+/** Supporting files bundled next to a discovered skill's SKILL.md (sampled). */
+async function listSkillSupportingFiles(skillMdPath: string): Promise<string[]> {
+  const dir = path.dirname(skillMdPath);
+  const files: string[] = [];
+  try {
+    for await (const entry of fs.glob("**/*", { cwd: dir, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const absolute = path.join(entry.parentPath, entry.name);
+      if (absolute === skillMdPath) continue;
+      files.push(absolute);
+      if (files.length >= SKILL_FILE_SAMPLE_LIMIT) break;
+    }
+  } catch {
+    // Unreadable skill directory — the instructions still stand alone.
+  }
+  return files.sort();
+}
+
 function makeSkillTool(skill: Skill | DiscoveredSkill): AgentTool {
   const summary = skill.description ? `${skill.name}: ${skill.description}` : skill.name;
   return {
@@ -85,7 +111,27 @@ function makeSkillTool(skill: Skill | DiscoveredSkill): AgentTool {
     label: skill.name,
     description: `${summary} — call this to load detailed instructions before performing the task.`,
     parameters: Type.Object({}),
-    execute: async (): Promise<AgentToolResult<null>> => textResult(skill.instructions),
+    execute: async (): Promise<AgentToolResult<null>> => {
+      if (!("path" in skill)) return textResult(skill.instructions);
+      // Discovered skill: mirror opencode's skill tool output — instructions
+      // plus the base directory and a sample of bundled files, so relative
+      // paths like scripts/ or reference/ inside the skill stay usable.
+      const base = path.dirname(skill.path);
+      const files = await listSkillSupportingFiles(skill.path);
+      return textResult(
+        [
+          `<skill_content name="${skill.name.replace(/"/g, "&quot;")}">`,
+          skill.instructions,
+          "",
+          `Base directory for this skill: ${base}`,
+          "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
+          ...(files.length > 0
+            ? ["", "Files bundled with this skill (sampled):", ...files.map((file) => `- ${file}`)]
+            : []),
+          "</skill_content>",
+        ].join("\n"),
+      );
+    },
   };
 }
 
@@ -131,9 +177,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   }
 
   // Agent Skills — each enabled skill becomes a tool that returns its instructions.
-  // Config-defined skills first, then skills discovered on disk (workspace +
-  // global `.agents` folders). Dedupe by tool key so a disk skill can't collide
-  // with a configured one.
+  // Config-defined skills first, then skills discovered on disk (see
+  // skills-discovery.ts for the scanned roots). Dedupe by tool key so a disk
+  // skill can't collide with a configured one.
   const seenSkillKeys = new Set<string>();
   const skills = await configStore.listSkills();
   for (const skill of skills) {
