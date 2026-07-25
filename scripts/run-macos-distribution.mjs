@@ -54,7 +54,7 @@ export async function discoverMacDistributionArchives(staging) {
 }
 
 export const AIDEN_UPDATE_FEED_URL =
-  "https://github.com/sambitcreate/aiden-agent-releases/releases/latest/download";
+  "https://github.com/sambitcreate/aiden-agent/releases/latest/download";
 
 export function distributionElectronBuilderArguments(staging, { enableAutoUpdates = false } = {}) {
   const args = ["--mac", `--config.directories.output=${staging}`];
