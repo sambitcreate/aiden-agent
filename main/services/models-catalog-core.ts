@@ -4,6 +4,7 @@ import {
   type ArtificialAnalysisCatalog,
 } from "./artificial-analysis-catalog-core.js";
 import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
+import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 
 interface RawModel {
@@ -27,10 +28,13 @@ interface RawProvider {
 }
 
 export type ModelCatalog = Record<string, RawProvider>;
-export type ModelCatalogProvider = Pick<StoredProvider, "id" | "baseUrl" | "modelMetadata">;
+export type ModelCatalogProvider = Pick<
+  StoredProvider,
+  "id" | "baseUrl" | "modelMetadata" | "deployment"
+>;
 export type RuntimeCatalogProvider = Pick<
   StoredProvider,
-  "id" | "kind" | "baseUrl" | "modelMetadata"
+  "id" | "kind" | "baseUrl" | "modelMetadata" | "deployment"
 >;
 
 export interface RuntimeModelMetadata {
@@ -394,13 +398,7 @@ export function resolveProviderRuntimeLimits(
 }
 
 function isLocalProvider(provider: ModelCatalogProvider): boolean {
-  if (provider.id === "lmstudio" || provider.id === "ollama") return true;
-  try {
-    const hostname = new URL(provider.baseUrl).hostname.toLocaleLowerCase();
-    return hostname === "localhost" || hostname === "::1" || /^127\./u.test(hostname);
-  } catch {
-    return false;
-  }
+  return isLocalProviderDeployment(provider);
 }
 
 function localInfo(
