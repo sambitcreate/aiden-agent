@@ -24,12 +24,19 @@ import type { Skill } from "../../lib/types";
 /** Folder path of the active workspace, read from localStorage (settings sits outside WorkspaceProvider). */
 function useActiveFolderPath(): string | undefined {
   const workspaces = useWorkspaces();
-  const activeId = typeof localStorage !== "undefined" ? localStorage.getItem("aiden-agent.workspaceId") : null;
+  const activeId =
+    typeof localStorage !== "undefined" ? localStorage.getItem("aiden-agent.workspaceId") : null;
   return workspaces.data?.find((w) => w.id === activeId)?.folderPath;
 }
 
 function newSkill(): Skill {
-  return { id: `skill-${Date.now().toString(36)}`, name: "", description: "", instructions: "", enabled: true };
+  return {
+    id: `skill-${Date.now().toString(36)}`,
+    name: "",
+    description: "",
+    instructions: "",
+    enabled: true,
+  };
 }
 
 export function SkillsSettings() {
@@ -60,7 +67,12 @@ export function SkillsSettings() {
             Reusable instruction sets the assistant can invoke as tools when a task matches.
           </Text>
         </div>
-        <Button className="shrink-0" variant="filled" size="small" onClick={() => setEditing(newSkill())}>
+        <Button
+          className="shrink-0"
+          variant="filled"
+          size="small"
+          onClick={() => setEditing(newSkill())}
+        >
           <Plus className="size-4" />
           New skill
         </Button>
@@ -68,7 +80,8 @@ export function SkillsSettings() {
 
       {list.length === 0 ? (
         <Text variant="small" color="tertiary">
-          No skills yet. Create one — e.g. “Code Reviewer” with your review checklist as its instructions.
+          No skills yet. Create one — e.g. “Code Reviewer” with your review checklist as its
+          instructions.
         </Text>
       ) : (
         <div className="rounded-card border border-separator">
@@ -87,8 +100,18 @@ export function SkillsSettings() {
                 <Button variant="filled" size="small" onClick={() => setEditing(s)}>
                   Edit
                 </Button>
-                <Switch aria-label={`Enable ${s.name || "skill"}`} checked={s.enabled} onCheckedChange={(v) => toggle(s, v)} />
-                <Button variant="transparent" size="small" iconOnly aria-label="Delete skill" onClick={() => setRemoving(s)}>
+                <Switch
+                  aria-label={`Enable ${s.name || "skill"}`}
+                  checked={s.enabled}
+                  onCheckedChange={(v) => toggle(s, v)}
+                />
+                <Button
+                  variant="transparent"
+                  size="small"
+                  iconOnly
+                  aria-label="Delete skill"
+                  onClick={() => setRemoving(s)}
+                >
                   <Trash2 className="size-4" />
                 </Button>
               </div>
@@ -100,9 +123,11 @@ export function SkillsSettings() {
       {discoveredList.length > 0 ? (
         <div className="mt-2 flex flex-col gap-2">
           <div>
-            <Text variant="strong">From .agents folders</Text>
+            <Text variant="strong">From skill folders</Text>
             <Text variant="small" color="secondary" className="mt-0.5 block">
-              Auto-discovered SKILL.md files in the workspace and your global <code>~/.agents</code>. Always available.
+              Auto-discovered SKILL.md files in workspace and global <code>.agents/skills</code>,{" "}
+              <code>.claude/skills</code>, and <code>.aiden/&#123;skill,skills&#125;</code> folders.
+              Always available.
             </Text>
           </div>
           <div className="rounded-card border border-separator">
@@ -116,7 +141,9 @@ export function SkillsSettings() {
                       <Text variant="strong" truncate>
                         {s.name}
                       </Text>
-                      <Badge color={s.source === "workspace" ? "blue" : "secondary"}>{s.source}</Badge>
+                      <Badge color={s.source === "workspace" ? "blue" : "secondary"}>
+                        {s.source}
+                      </Badge>
                     </div>
                     <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
                       {s.description || s.path}
@@ -190,23 +217,40 @@ function SkillEditor({
       confirmLabel="Save"
       confirmDisabled={!name.trim() || !instructions.trim()}
       onConfirm={async () => {
-        await skillsApi.save({ ...skill, name: name.trim(), description: description.trim(), instructions });
+        await skillsApi.save({
+          ...skill,
+          name: name.trim(),
+          description: description.trim(),
+          instructions,
+        });
         onSaved();
         onOpenChange(false);
       }}
     >
       <FieldSet>
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Code Reviewer" autoFocus />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Code Reviewer"
+            autoFocus
+          />
         </Field>
-        <Field label="Description" description="Shown to the model so it knows when to use this skill.">
+        <Field
+          label="Description"
+          description="Shown to the model so it knows when to use this skill."
+        >
           <Input
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="Reviews code for bugs, style, and security issues"
           />
         </Field>
-        <Field label="Instructions" description="Required. Loaded when the model invokes the skill." orientation="vertical">
+        <Field
+          label="Instructions"
+          description="Required. Loaded when the model invokes the skill."
+          orientation="vertical"
+        >
           <Textarea
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
