@@ -1,6 +1,16 @@
 # Aiden — Proactive In-App Assistant Plan
 
-Status: ready to implement. Spec date 2026-07-23; implementation plan 2026-07-25.
+Status: Phase 1 implemented, then redesigned as an in-window dock (see "Assistant dock").
+Spec date 2026-07-23; implementation plan 2026-07-25; dock revision 2026-07-25.
+
+**Phases 2 and 3 below still describe the separate-window design in places.** Their
+substance — settings tools, the Aiden settings section, and the whole proactive engine —
+is unaffected by the dock change, because none of it depended on the window. The specific
+deltas are: `assistant:` must be re-added to `INVOKE_PREFIXES` alongside the first config
+handler (Task 7), and Phase 3's `assistant:nudge` / `assistant:open-thread` /
+`assistant:state-changed` channels must be added to `NOTIFICATION_CHANNEL_VALUES` in the
+task that first broadcasts them, not before — the contract test asserts exact set equality,
+and declaring them early is what made it deliberately red the first time through.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:subagent-driven-development`
 > (recommended) or `superpowers:executing-plans` to implement the task list below
@@ -128,18 +138,34 @@ schedules: assistant state and cadence stay entirely separate from user-authored
 
 ## UX
 
-### Assistant window
+### Assistant dock (revised 2026-07-25)
 
-- Frameless compact window modeled on `main/windows/pill-window.ts`, but focusable,
-  closable, and resizable: 400×640 default, `titleBarStyle: "hidden"`, transparent +
-  vibrancy, `alwaysOnTop` off.
-- Content: header with "Aiden" title and close control; chat transcript; compact composer;
-  a "Recent" list of assistant threads; empty state with three suggested prompts ("Any
-  uncommitted changes?", "What did I change today?", "Summarize my settings").
+Aiden is **pinned inside the main window**, not a separate `BrowserWindow`. The first
+implementation shipped it as a fourth Electron surface; seeing it run made clear it wanted
+to live with the work rather than float beside it, so it was rebuilt as a docked panel.
+
+- **Expanded:** a card anchored to the bottom-right of the main window, sized to the window
+  (`min(23rem, 100vw − 3rem)` × `min(34rem, 100vh − 8rem)`) so it never overflows a small
+  window. Header carries the circular Aiden mark, the title, a new-conversation control,
+  and minimize. Below it: transcript, then a compact composer.
+- **Minimized:** a 48px circular button in the same corner showing the app mark, with an
+  unread badge (1–9, then `9+`) and a one-line preview of the latest reply that fades after
+  eight seconds.
+- The mark is `resources/app-icon.png` — the macOS squircle carries transparent padding, so
+  the `<img>` is scaled `1.32×` inside a circular mask to make the artwork bleed to the
+  edge instead of leaving a ring of empty pixels.
+- Mounted in `RootView`, so it is present on every route and survives navigation.
+- Empty state offers three suggested prompts; a "Recent" list surfaces earlier threads.
 - No attachments, no Computer Use, no model picker in v1.
-- Entry points: ⌘⌥A global hotkey and nudge-notification clicks.
-- Renderer entry mirrors `renderer/pill/main.tsx`: imports `../styles.css`, calls
-  `applyCachedAppearance()`.
+- Entry points: the ⌘⌥A global hotkey (focuses the main window, then broadcasts
+  `assistant:open-panel`) and, from Phase 3, clicking a nudge notification.
+
+**What this removed**, relative to the original separate-window design: `assistant.html`,
+`renderer/preload-assistant.ts`, `renderer/preload-assistant-channels.ts`,
+`main/windows/assistant-window.ts`, all four build touch points, and the
+`window-sender.ts` extraction (the pill became its only caller again). The main window's
+existing preload already reaches every channel the panel needs, so the dock required no new
+IPC surface at all beyond the one broadcast.
 
 ### Settings section
 
