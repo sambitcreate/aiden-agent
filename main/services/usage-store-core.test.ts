@@ -178,6 +178,16 @@ test("normalizes provider usage without inventing unavailable token counts or lo
   );
   assert.equal(
     isLocalModelProvider({
+      id: "custom-remote-local",
+      label: "Remote Ollama marked local",
+      baseUrl: "https://model-server.example/v1",
+      needsKey: false,
+      deployment: "local",
+    }),
+    true,
+  );
+  assert.equal(
+    isLocalModelProvider({
       id: "custom",
       label: "Private model",
       baseUrl: "http://127.0.0.1:9000/v1",
