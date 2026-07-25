@@ -9,6 +9,9 @@ native/computer-use-broker/target/
 # Agent context (auto-generated, not worth versioning)
 .claude/
 .agents/
+.impeccable/live/
+.memory/
+.zcode/plans/
 
 # App icons (binary, auto-generated)
 /app-icon.*
