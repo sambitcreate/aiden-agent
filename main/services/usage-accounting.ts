@@ -1,4 +1,5 @@
 import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
+import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 import type {
   UsageRequestRecord,
@@ -63,19 +64,9 @@ export function reportedTokens(
 }
 
 export function isLocalModelProvider(
-  provider: Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey">,
+  provider: Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">,
 ): boolean {
-  try {
-    const hostname = new URL(provider.baseUrl).hostname
-      .toLowerCase()
-      .replace(/^\[|\]$/gu, "")
-      .replace(/\.$/u, "");
-    return (
-      hostname === "localhost" || hostname === "::1" || /^127(?:\.\d{1,3}){3}$/u.test(hostname)
-    );
-  } catch {
-    return false;
-  }
+  return isLocalProviderDeployment(provider);
 }
 
 function modelHasPricing(model: Model<Api>): boolean {
