@@ -631,6 +631,32 @@ export interface FoundationModelsConnectionStatus {
   retryable: boolean;
 }
 
+/** How much the Aiden assistant may do with app settings through its tools. */
+export type AssistantSettingsPermission = "full" | "ask" | "none";
+
+/** Aiden assistant window, hotkey, and proactive-watching settings. */
+export interface AssistantConfig {
+  /** Proactivity master switch. Off by default — nudging is opt-in. */
+  enabled: boolean;
+  hotkeyEnabled: boolean;
+  hotkeyAccelerator: string;
+  /** Required pin before proactivity may run. See main/services/types.ts. */
+  providerId?: string;
+  model?: string;
+  watchUncommitted: boolean;
+  watchUntouchedProjects: boolean;
+  watchConfigChanges: boolean;
+  pollIntervalMinutes: number;
+  untouchedThresholdDays: number;
+  quietHoursEnabled: boolean;
+  /** "HH:MM" local time. */
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  maxNudgesPerDay: number;
+  urgencyThreshold: number;
+  settingsPermission: AssistantSettingsPermission;
+}
+
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
@@ -653,6 +679,7 @@ export interface AppSettings {
   scheduledDefaultPermission?: ScheduledTaskPermission;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  assistant?: AssistantConfig;
   profileName?: string;
 }
 

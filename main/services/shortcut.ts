@@ -1,18 +1,22 @@
-// Global shortcut manager. Registers two configurable hotkeys:
-//  • focus   (default ⌘⌥Space)  — brings the app forward and focuses the composer
-//  • dictate (default ⌘⇧D)      — toggles global dictation into the focused app
+// Global shortcut manager. Registers three configurable hotkeys:
+//  • focus     (default ⌘⌥Space) — brings the app forward and focuses the composer
+//  • dictate   (default ⌘⇧D)     — toggles global dictation into the focused app
 //    (floating pill + auto-paste, clipboard fallback)
+//  • assistant (default ⌘⌥A)     — opens the Aiden assistant window
 
 import { globalShortcut, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
 
 export const DEFAULT_ACCELERATOR = "Command+Alt+Space";
 export const DEFAULT_DICTATION_ACCELERATOR = "Command+Shift+D";
+export const DEFAULT_ASSISTANT_ACCELERATOR = "Command+Alt+A";
 
 let onTrigger: (() => void) | null = null;
 let onDictate: (() => void) | null = null;
+let onAssistant: (() => void) | null = null;
 let registered: string | null = null;
 let registeredDictation: string | null = null;
+let registeredAssistant: string | null = null;
 
 /** Called once at startup with the callback that focuses the app + composer. */
 export function initShortcut(trigger: () => void): void {
@@ -22,6 +26,11 @@ export function initShortcut(trigger: () => void): void {
 /** Called once at startup with the callback that toggles on-device dictation. */
 export function initDictationShortcut(trigger: () => void): void {
   onDictate = trigger;
+}
+
+/** Called once at startup with the callback that opens the Aiden window. */
+export function initAssistantShortcut(trigger: () => void): void {
+  onAssistant = trigger;
 }
 
 async function register(accelerator: string, handler: () => void): Promise<boolean> {
@@ -61,6 +70,23 @@ export async function applyShortcutFromSettings(): Promise<void> {
   if (dictationEnabled && onDictate && dictationAccel !== registered) {
     if (await register(dictationAccel, onDictate)) registeredDictation = dictationAccel;
   }
+
+  // ── Assistant shortcut ──────────────────────────────────────────────
+  if (registeredAssistant) {
+    globalShortcut.unregister(registeredAssistant);
+    registeredAssistant = null;
+  }
+  const assistantEnabled = settings.assistant?.hotkeyEnabled !== false;
+  const assistantAccel = settings.assistant?.hotkeyAccelerator || DEFAULT_ASSISTANT_ACCELERATOR;
+  // Skip collisions with the (already-registered) focus and dictation shortcuts.
+  if (
+    assistantEnabled &&
+    onAssistant &&
+    assistantAccel !== registered &&
+    assistantAccel !== registeredDictation
+  ) {
+    if (await register(assistantAccel, onAssistant)) registeredAssistant = assistantAccel;
+  }
 }
 
 export function disposeShortcut(): void {
@@ -71,4 +97,5 @@ export function disposeShortcut(): void {
   }
   registered = null;
   registeredDictation = null;
+  registeredAssistant = null;
 }

@@ -17,9 +17,14 @@ import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import {
   initShortcut,
   initDictationShortcut,
+  initAssistantShortcut,
   applyShortcutFromSettings,
   disposeShortcut,
 } from "./services/shortcut.js";
+import {
+  destroyAssistantWindow,
+  showAssistantWindow,
+} from "./windows/assistant-window.js";
 import { mcpManager } from "./services/mcp.js";
 import {
   disposeFoundationModelsConnection,
@@ -117,6 +122,7 @@ function cleanupApplication(): void {
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
+  destroyAssistantWindow();
   disposeFoundationModelsConnection();
   computerUseStatus.invalidate();
   scheduleService.stop();
@@ -597,6 +603,9 @@ if (!ownsSingleInstanceLock) {
       });
       initDictationShortcut(() => {
         toggleDictation();
+      });
+      initAssistantShortcut(() => {
+        void showAssistantWindow();
       });
       void applyShortcutFromSettings();
       void foundationModelsConnection.status();

@@ -371,6 +371,37 @@ export interface FoundationModelsConnectionStatus {
   retryable: boolean;
 }
 
+/** How much the Aiden assistant may do with app settings through its tools. */
+export type AssistantSettingsPermission = "full" | "ask" | "none";
+
+/** Aiden assistant window, hotkey, and proactive-watching settings. */
+export interface AssistantConfig {
+  /** Proactivity master switch. Off by default — nudging is opt-in. */
+  enabled: boolean;
+  hotkeyEnabled: boolean;
+  hotkeyAccelerator: string;
+  /**
+   * Required pin for proactivity. An unattended loop must never inherit
+   * whichever model the user happens to have selected, so the ticker refuses to
+   * run until both of these are set. Interactive Aiden chat still follows
+   * lastProviderId/lastModel.
+   */
+  providerId?: string;
+  model?: string;
+  watchUncommitted: boolean;
+  watchUntouchedProjects: boolean;
+  watchConfigChanges: boolean;
+  pollIntervalMinutes: number;
+  untouchedThresholdDays: number;
+  quietHoursEnabled: boolean;
+  /** "HH:MM" local time. */
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  maxNudgesPerDay: number;
+  urgencyThreshold: number;
+  settingsPermission: AssistantSettingsPermission;
+}
+
 /** Persisted lightweight app settings. */
 export interface AppSettings {
   lastProviderId?: string;
@@ -403,6 +434,8 @@ export interface AppSettings {
   scheduledDefaultPermission?: ScheduledTaskPermission;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Aiden assistant window, hotkey, and proactivity settings. */
+  assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
 }
