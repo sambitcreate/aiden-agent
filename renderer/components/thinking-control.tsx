@@ -86,10 +86,10 @@ export function ThinkingControl<TLevel extends GenerationThinkingLevel>({
               radios?.[nextIndex]?.focus();
             }}
             className={cn(
-              "h-6 rounded-pill px-1.5 text-small outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45",
+              "h-6 rounded-pill px-1.5 text-small outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45",
               selected
-                ? "bg-popover text-primary shadow-control"
-                : "text-tertiary hover:bg-list-hover hover:text-secondary active:bg-list-selection",
+                ? "bg-popover text-primary shadow-control focus-visible:bg-popover"
+                : "text-tertiary hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection",
             )}
           >
             {label}
