@@ -804,6 +804,8 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
+  /** Renderers may only request the attended Aiden mode. */
+  mode?: "assistant";
   thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{
     role: ChatRole;

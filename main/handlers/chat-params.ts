@@ -80,6 +80,9 @@ export function parseParams(value: unknown): ChatStartParams {
   if (p.thinkingLevel !== undefined && !isGenerationThinkingLevel(p.thinkingLevel)) {
     throw new Error("Invalid thinking level.");
   }
+  // "assistant-unattended" is deliberately not accepted here: only main may run
+  // the unattended prompt, which carries the [SILENT] contract.
+  if (p.mode !== undefined && p.mode !== "assistant") throw new Error("Invalid chat mode.");
   const messages = p.messages.map((raw) => {
     const m = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
     return {
@@ -96,6 +99,7 @@ export function parseParams(value: unknown): ChatStartParams {
     providerId: p.providerId,
     model: p.model,
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    ...(p.mode === "assistant" ? { mode: "assistant" as const } : {}),
     messages,
   };
 }

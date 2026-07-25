@@ -77,6 +77,8 @@ import {
   type LocalModelLoadMonitor,
 } from "./local-runtime-status.js";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
+import { buildAssistantSystemPrompt } from "./assistant/system-prompt.js";
+import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 
 type GenerationPermission = WorkspacePermission | "read-only";
 
@@ -367,6 +369,10 @@ async function prepareGeneration(
     computerUse,
     googleWorkspaceSnapshot,
     workspaceId: workspace?.id,
+    // The Aiden system prompt reads its approval posture from settings, which
+    // are already loaded here; re-reading them at the prompt site would be a
+    // second disk round trip inside the generation's hot path.
+    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -436,6 +442,7 @@ export const llmClient = {
       computerUse,
       googleWorkspaceSnapshot,
       workspaceId,
+      assistantSettingsPermission,
     } = setup;
     initialization.computerUse = computerUse;
     const { model } = runtime;
@@ -515,7 +522,17 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
-      const systemPrompt = await buildSystemPrompt(folderPath, git.branch, permission);
+      const systemPrompt =
+        params.mode === "assistant" || params.mode === "assistant-unattended"
+          ? buildAssistantSystemPrompt({
+              workspaceNames: (await configStore.listWorkspaces()).map(
+                (workspace) => workspace.name,
+              ),
+              settingsSections: SETTINGS_SECTIONS,
+              settingsPermission: assistantSettingsPermission,
+              unattended: params.mode === "assistant-unattended",
+            })
+          : await buildSystemPrompt(folderPath, git.branch, permission);
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,

@@ -536,6 +536,12 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
+  /**
+   * Selects the system prompt and tool set. Absent means the normal workspace
+   * chat. "assistant-unattended" is main-only: parseParams never produces it, so
+   * a renderer cannot request the [SILENT] prompt.
+   */
+  mode?: "assistant" | "assistant-unattended";
   /** Small main-validated enum; provider/model support is enforced at runtime. */
   thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{

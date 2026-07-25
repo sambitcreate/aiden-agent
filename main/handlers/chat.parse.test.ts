@@ -2,6 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseParams } from "./chat-params.js";
 
+test("parseParams accepts the assistant mode and rejects the unattended mode", () => {
+  const base = { chatId: "c1", providerId: "p", model: "m", messages: [] };
+  assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");
+  assert.equal(parseParams(base).mode, undefined);
+  assert.throws(() => parseParams({ ...base, mode: "assistant-unattended" }), /Invalid chat mode/);
+  assert.throws(() => parseParams({ ...base, mode: "workspace" }), /Invalid chat mode/);
+});
+
 test("parseParams rejects non-object envelopes", () => {
   assert.throws(() => parseParams(null), /Invalid generation params/);
   assert.throws(() => parseParams("hi"), /Invalid generation params/);
