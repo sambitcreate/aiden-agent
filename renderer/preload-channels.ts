@@ -43,6 +43,7 @@ export const NATIVE_INVOKE_CHANNELS = {
 } as const;
 
 export const NOTIFICATION_CHANNEL_VALUES = [
+  "app:config-externally-changed",
   "app:focus-composer",
   "app:navigate",
   "app:open-workspace-preferred-editor",

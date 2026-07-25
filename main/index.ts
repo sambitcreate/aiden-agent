@@ -4,6 +4,7 @@ import {
   dialog,
   ipcMain,
   logger,
+  powerMonitor,
   registerNativeHandlers,
   shell,
 } from "./platform.js";
@@ -25,6 +26,8 @@ import {
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
 import { configStore } from "./services/config-store.js";
+import { reloadPortableConfig } from "./services/portable-config.js";
+import { createPortableConfigWatcher } from "./services/portable-config-watch-core.js";
 import {
   normalizeAppearanceConfig,
   type DockIconPreference,
@@ -566,6 +569,15 @@ if (!ownsSingleInstanceLock) {
 
   app.on("will-quit", cleanupApplication);
 
+  // Only a real content change reaches the renderer, and concurrent triggers
+  // coalesce, which is what makes this affordable on every focus.
+  const portableConfigWatcher = createPortableConfigWatcher(
+    reloadPortableConfig,
+    () => ipcMain.broadcast("app:config-externally-changed", {}),
+    (error: unknown) =>
+      logger.warn("portable-config", "Failed to re-read the portable config", error),
+  );
+
   app
     .whenReady()
     .then(async () => {
@@ -588,6 +600,12 @@ if (!ownsSingleInstanceLock) {
       });
       void applyShortcutFromSettings();
       void foundationModelsConnection.status();
+
+      // ~/.aiden/config.json is the user's to edit, so pick hand-edits up
+      // without a restart. Registered after whenReady because powerMonitor is
+      // only usable once the app is ready.
+      app.on("browser-window-focus", () => void portableConfigWatcher.refresh());
+      powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       await createMainWindow();
       await scheduleService.start();

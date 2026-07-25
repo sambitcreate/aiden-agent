@@ -51,9 +51,12 @@ function RootContent() {
     environmentPanel.gitOperationBusy,
   ]);
 
-  React.useEffect(() => () => {
-    void appApi.setCloseGuard({ dirty: false, gitBusy: false, saving: false });
-  }, []);
+  React.useEffect(
+    () => () => {
+      void appApi.setCloseGuard({ dirty: false, gitBusy: false, saving: false });
+    },
+    [],
+  );
 
   React.useEffect(() => {
     const preventUnprotectedUnload = (event: BeforeUnloadEvent) => {
@@ -77,6 +80,19 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
+    // ~/.aiden/config.json was edited outside the app. Only the lists sourced
+    // from the portable file are stale; workspaces and UI settings are stored
+    // machine-locally and cannot change behind our back.
+    return onNotification("app:config-externally-changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.providers }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
     return onNotification<{ path: string }>("app:navigate", (payload) => {
       if (!payload?.path) return;
       if (navigationBlockedReason) {
@@ -88,7 +104,8 @@ function RootContent() {
   }, [navigate, navigationBlockedReason]);
 
   React.useEffect(() => {
-    const syncFocus = () => document.documentElement.classList.toggle("window-blurred", !document.hasFocus());
+    const syncFocus = () =>
+      document.documentElement.classList.toggle("window-blurred", !document.hasFocus());
     syncFocus();
     window.addEventListener("focus", syncFocus);
     window.addEventListener("blur", syncFocus);
@@ -98,5 +115,9 @@ function RootContent() {
     };
   }, []);
 
-  return <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none"><Outlet /></div>;
+  return (
+    <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
+      <Outlet />
+    </div>
+  );
 }
