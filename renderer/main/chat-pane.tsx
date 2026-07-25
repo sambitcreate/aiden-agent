@@ -1023,7 +1023,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
           <Button
             iconOnly
-            variant="glass"
+            variant="toolbar"
             size="large"
             onClick={newChat}
             aria-label="New chat"
@@ -1033,7 +1033,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
           <Button
             iconOnly
-            variant="glass"
+            variant="toolbar"
             size="large"
             onClick={terminal.toggle}
             disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
