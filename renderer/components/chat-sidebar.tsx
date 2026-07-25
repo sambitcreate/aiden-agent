@@ -34,14 +34,16 @@ import {
 } from "./ui";
 import {
   ChevronsUpDown,
+  Clock3,
   Folder,
   FolderGit2,
   Loader2,
   Settings,
+  SquarePen,
   UserRound,
-  Clock3,
 } from "lucide-react";
 import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
+import { truncatePathMiddle } from "../lib/truncate-path";
 import {
   CHAT_TITLE_FADE_OUT_MS,
   createChatTitleReveal,
@@ -419,6 +421,13 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     setDeleting(null);
   };
 
+  const newAgent = React.useCallback(async () => {
+    if (!activeId) return;
+    const created = await chatsApi.create({ workspaceId: activeId });
+    await qc.invalidateQueries({ queryKey: queryKeys.chats });
+    void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+  }, [activeId, navigate, qc]);
+
   return (
     <>
       <Sidebar
@@ -448,6 +457,21 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
           </SidebarFooter>
         }
       >
+        <div className="flex flex-col gap-0.5 px-2.5 pb-2">
+          <SidebarListItem
+            icon={<SquarePen />}
+            title="New Agent"
+            disabled={!activeId}
+            onClick={() => void newAgent()}
+          />
+          <SidebarListItem
+            icon={<Clock3 />}
+            title="Scheduled"
+            selected={pathname === "/scheduled"}
+            onClick={() => navigate({ to: "/scheduled" })}
+          />
+        </div>
+
         {/* Workspace switcher — change the folder Pi works in. */}
         <div className="px-2.5 pb-3">
           <DropdownMenu>
@@ -474,7 +498,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   key={w.id}
                   checked={w.id === activeId}
                   disabled={workspaceSwitchBlocked}
-                  sublabel={w.folderPath ?? undefined}
+                  sublabel={
+                    w.folderPath ? truncatePathMiddle(w.folderPath) : undefined
+                  }
+                  title={w.folderPath ?? undefined}
                   onCheckedChange={() => switchWorkspace(w.id)}
                 >
                   {w.name}
@@ -616,14 +643,6 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             ))
           )}
         </SidebarList>
-        <div className="px-2.5 pb-2 pt-1">
-          <SidebarListItem
-            icon={<Clock3 />}
-            title="Scheduled"
-            selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
-          />
-        </div>
       </Sidebar>
 
       <Dialog
