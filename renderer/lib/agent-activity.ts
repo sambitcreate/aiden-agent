@@ -8,6 +8,7 @@ export interface ToolActivity {
 
 export type AgentActivityPhase =
   | "preparing"
+  | "loading"
   | "thinking"
   | "responding"
   | "searching"
@@ -24,6 +25,8 @@ export interface AgentActivity {
 interface AgentActivityInput {
   isStarting: boolean;
   isStopping: boolean;
+  /** True while a local model is still loading into memory. */
+  isModelLoading?: boolean;
   streamingText: string | null;
   pendingApproval: boolean;
   toolActivity: ToolActivity | null;
@@ -42,6 +45,7 @@ function isSearchTool(toolName: string): boolean {
 export function resolveAgentActivity({
   isStarting,
   isStopping,
+  isModelLoading = false,
   streamingText,
   pendingApproval,
   toolActivity,
@@ -62,6 +66,10 @@ export function resolveAgentActivity({
 
   if (isStarting) {
     return { phase: "preparing", label: "Preparing…", orbState: "shaping" };
+  }
+
+  if (isModelLoading) {
+    return { phase: "loading", label: "Model loading…", orbState: "shaping" };
   }
 
   if (streamingText === null) return null;
