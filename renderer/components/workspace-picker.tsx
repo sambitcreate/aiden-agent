@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Check, Folder, FolderX, Loader2 } from "lucide-react";
 import type { Workspace } from "../lib/types";
+import { truncatePathMiddle } from "../lib/truncate-path";
 import {
   Command,
   CommandEmpty,
@@ -79,8 +80,8 @@ export function WorkspacePicker({
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-regular">{workspace.name}</span>
                   {workspace.folderPath ? (
-                    <span className="truncate text-small text-tertiary">
-                      {workspace.folderPath}
+                    <span className="text-small text-tertiary" title={workspace.folderPath}>
+                      {truncatePathMiddle(workspace.folderPath)}
                     </span>
                   ) : null}
                 </span>
