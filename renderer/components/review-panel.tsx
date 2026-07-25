@@ -337,7 +337,7 @@ function ReviewFileContent({
                   : ""
               }`}
               className={cn(
-                "group flex min-h-10 w-full items-center gap-2 rounded-control px-2 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-focus-ring",
+                "group flex min-h-10 w-full items-center gap-2 rounded-control px-2 text-left outline-none transition-colors duration-150 focus-visible:bg-list-selection focus-visible:outline-none",
                 selected ? "bg-list-selection" : "hover:bg-list-hover active:bg-list-selection",
               )}
             >
@@ -750,8 +750,10 @@ export function ReviewPanel({
                 requestAnimationFrame(() => document.querySelector<HTMLElement>(`#environment-review-${modes[nextIndex]}-tab`)?.focus());
               }}
               className={cn(
-                "h-7 rounded-[9px] px-2.5 text-small-strong outline-none transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring",
-                mode === nextMode ? "bg-popover text-primary shadow-control" : "text-secondary hover:text-primary",
+                "h-7 rounded-[9px] px-2.5 text-small-strong outline-none transition-colors focus-visible:outline-none",
+                mode === nextMode
+                  ? "bg-popover text-primary shadow-control focus-visible:bg-popover"
+                  : "text-secondary hover:text-primary focus-visible:bg-list-selection",
               )}
             >
               {nextMode === "changes" ? "Changes" : "Compare"}
