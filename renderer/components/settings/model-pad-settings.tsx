@@ -220,11 +220,11 @@ export function ModelPadSettings() {
                     type="button"
                     aria-label={`${placementLabel(entry)}. Drag to arrange; use arrow keys to nudge.`}
                     className={cn(
-                      "absolute z-10 max-w-28 -translate-x-1/2 -translate-y-1/2 cursor-grab truncate rounded-pill px-2 py-1 text-[11px] font-medium outline-none transition-[background-color,box-shadow,color] duration-150 ease-out active:cursor-grabbing focus-visible:ring-2 focus-visible:ring-focus-ring",
+                      "absolute z-10 max-w-28 -translate-x-1/2 -translate-y-1/2 cursor-grab truncate rounded-pill px-2 py-1 text-[11px] font-medium outline-none transition-[background-color,box-shadow,color] duration-150 ease-out active:cursor-grabbing focus-visible:outline-none",
                       placement.source === "user"
-                        ? "bg-accent text-accent-foreground"
-                        : "bg-popover text-primary ring-1 ring-accent/45",
-                      selected && "ring-2 ring-focus-ring",
+                        ? "bg-accent text-accent-foreground focus-visible:bg-accent-hover"
+                        : "bg-popover text-primary ring-1 ring-accent/45 focus-visible:bg-list-selection",
+                      selected && "bg-list-selection ring-1 ring-accent focus-visible:bg-list-selection",
                     )}
                     style={{ left: `${padLeft(placement.x)}%`, top: `${padTop(placement.y)}%` }}
                     onFocus={() => setActiveValue(entry.value)}
