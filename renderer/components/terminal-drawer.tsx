@@ -421,7 +421,7 @@ export function TerminalDrawer() {
         onPointerUp={endResize}
         onPointerCancel={endResize}
         onKeyDown={resizeWithKeyboard}
-        className="absolute inset-x-0 top-0 z-20 h-2 cursor-row-resize outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-separator hover:before:bg-accent focus-visible:before:h-0.5 focus-visible:before:bg-focus-ring"
+        className="absolute inset-x-0 top-0 z-20 h-2 cursor-row-resize outline-none before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-separator hover:before:bg-accent focus-visible:before:h-0.5 focus-visible:before:bg-accent"
       />
       <div className="flex h-full min-h-0 flex-col">
         <header className="drag-region flex h-11 shrink-0 items-center gap-2 border-b border-separator px-3">
@@ -438,7 +438,7 @@ export function TerminalDrawer() {
                       : "border-transparent text-secondary hover:border-field/70 hover:bg-list-hover hover:text-primary",
                   )}
                 >
-                  <button type="button" onClick={() => select(session.id)} aria-current={selected ? "page" : undefined} className="flex min-w-0 items-center gap-1.5 rounded-md outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-focus-ring">
+                  <button type="button" onClick={() => select(session.id)} aria-current={selected ? "page" : undefined} className="flex min-w-0 items-center gap-1.5 rounded-md outline-none transition-shadow focus-visible:bg-list-selection focus-visible:outline-none">
                     <TerminalSquare className="size-3.5 shrink-0" />
                     <span className="max-w-28 truncate">{`Terminal ${index + 1}`}</span>
                   </button>
@@ -448,7 +448,7 @@ export function TerminalDrawer() {
                       event.stopPropagation();
                       close(session.id);
                     }}
-                    className="rounded-md p-0.5 text-tertiary opacity-70 outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-control-active hover:text-primary active:bg-list-selection group-hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-focus-ring"
+                    className="rounded-md p-0.5 text-tertiary opacity-70 outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-control-active hover:text-primary active:bg-list-selection group-hover:opacity-100 focus-visible:opacity-100 focus-visible:bg-list-selection focus-visible:outline-none"
                     aria-label={`Close Terminal ${index + 1}`}
                   >
                     <X className="size-3" />
