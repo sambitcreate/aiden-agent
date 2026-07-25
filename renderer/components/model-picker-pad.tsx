@@ -222,7 +222,7 @@ export function ModelPickerPad({
         aria-describedby={helpId}
         aria-activedescendant={active ? modelOptionId(active.value) : undefined}
         data-dragging={dragging ? "true" : "false"}
-        className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="model-pad relative aspect-square w-full touch-none overflow-hidden rounded-card outline-none focus-visible:bg-list-selection focus-visible:outline-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
