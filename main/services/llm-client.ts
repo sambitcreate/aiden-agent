@@ -10,11 +10,12 @@
 
 import { Agent } from "@earendil-works/pi-agent-core";
 import { logger } from "../platform.js";
-import { buildAgentTools } from "./tools.js";
+import { buildAgentTools, skillToolKey } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
 import { chatStore } from "./chat-store.js";
+import { discoverSkills } from "./skills-discovery.js";
 import {
   buildAgentRuntimeOptions,
   resolveGenerationThinkingLevel,
@@ -31,7 +32,13 @@ import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
-import type { ApprovalDecision, ChatStartParams, WorkspacePermission } from "./types.js";
+import type {
+  ApprovalDecision,
+  ChatStartParams,
+  DiscoveredSkill,
+  Skill,
+  WorkspacePermission,
+} from "./types.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type {
   ComputerUseApprovalDescriptor,
@@ -141,15 +148,73 @@ function resetGenerationAgent(agent: Agent, streamId: string): void {
   }
 }
 
-function buildSystemPrompt(
+/** Escape text interpolated into the XML-ish skill listing (skill files are untrusted input). */
+function escapeSkillXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatAvailableSkills(
+  configured: Skill[],
+  discovered: DiscoveredSkill[],
+): string | undefined {
+  // Keyed by the same tool key buildAgentTools uses, so every listed skill
+  // maps to an actual tool and collisions resolve the same way.
+  const byTool = new Map<string, { name: string; description: string; tool: string; location: string }>();
+  for (const skill of discovered) {
+    byTool.set(skillToolKey(skill), {
+      name: skill.name,
+      description: skill.description,
+      tool: skillToolKey(skill),
+      location: skill.path,
+    });
+  }
+  // Configured (enabled) skills take precedence over discovered skills with the same tool key.
+  for (const skill of configured) {
+    if (!skill.enabled) continue;
+    byTool.set(skillToolKey(skill), {
+      name: skill.name,
+      description: skill.description,
+      tool: skillToolKey(skill),
+      location: "configured",
+    });
+  }
+
+  const list = [...byTool.values()].sort((a, b) => a.name.localeCompare(b.name));
+  if (list.length === 0) return undefined;
+
+  return [
+    "Skills provide specialized instructions and workflows for specific tasks.",
+    "When a request matches a skill's description, call its skill tool to load the instructions.",
+    "<available_skills>",
+    ...list.flatMap((skill) => [
+      "  <skill>",
+      `    <name>${escapeSkillXml(skill.name)}</name>`,
+      ...(skill.description ? [`    <description>${escapeSkillXml(skill.description)}</description>`] : []),
+      `    <tool>${skill.tool}</tool>`,
+      `    <location>${escapeSkillXml(skill.location)}</location>`,
+      "  </skill>",
+    ]),
+    "</available_skills>",
+  ].join("\n");
+}
+
+async function buildSystemPrompt(
   folderPath: string | undefined,
   branch: string | undefined,
   permission: GenerationPermission,
-): string {
+): Promise<string> {
   const base =
     "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
+  const skillsText = formatAvailableSkills(
+    await configStore.listSkills(),
+    await discoverSkills(folderPath),
+  );
+  const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
   if (!folderPath || permission === "none") {
-    return `${base} Call the available tools when they help answer the user's request.`;
+    return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}`;
   }
   const git = branch ? ` It is a git repository on branch \`${branch}\`.` : "";
   const capability =
@@ -169,7 +234,8 @@ function buildSystemPrompt(
       ? "The user must approve each file write and shell command before it runs."
       : permission === "full"
         ? "You may make changes and run commands directly."
-        : "")
+        : "") +
+    skillsSuffix
   );
 }
 
@@ -200,7 +266,7 @@ async function prepareGeneration(
         ? settings.codexThinkingByModel?.[params.model]
         : params.providerId === ANTHROPIC_PROVIDER_ID
           ? settings.anthropicThinkingByModel?.[params.model]
-        : undefined;
+          : undefined;
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
@@ -389,7 +455,7 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
-      const systemPrompt = buildSystemPrompt(folderPath, git.branch, permission);
+      const systemPrompt = await buildSystemPrompt(folderPath, git.branch, permission);
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
