@@ -780,7 +780,7 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
   return (
     <Button
       iconOnly
-      variant="glass"
+      variant="toolbar"
       size="large"
       onClick={() => (panel.open ? panel.close() : panel.show("overview"))}
       disabled={disabled}
