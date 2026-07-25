@@ -1,7 +1,8 @@
-import type {
-  AgentToolStep,
-  GenerationClaimCheck,
-  GenerationTimeline,
+import {
+  isToolStep,
+  type AgentToolStep,
+  type GenerationClaimCheck,
+  type GenerationTimeline,
 } from "./generation-timeline.js";
 
 type ConsequentialStepKind = "file" | "command" | "computer" | "schedule" | "connector";
@@ -138,6 +139,7 @@ export function detectUnverifiedSuccessClaim(
   const stepIds: string[] = [];
 
   for (const step of timeline.steps) {
+    if (!isToolStep(step)) continue;
     const kind = consequentialStepKind(step);
     if (!kind) continue;
     const latestRelevantClaim = claims.reduce(
