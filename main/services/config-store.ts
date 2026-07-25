@@ -66,6 +66,7 @@ const PRESETS: StoredProvider[] = [
     models: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini"],
     defaultModel: "gpt-4o",
     needsKey: true,
+    deployment: "hosted",
     isPreset: true,
   },
   {
@@ -76,6 +77,7 @@ const PRESETS: StoredProvider[] = [
     models: [...ANTHROPIC_DEFAULT_MODELS],
     defaultModel: ANTHROPIC_DEFAULT_MODEL,
     needsKey: true,
+    deployment: "hosted",
     isPreset: true,
   },
   canonicalGoogleProvider(),
@@ -87,6 +89,7 @@ const PRESETS: StoredProvider[] = [
     models: ["deepseek-chat", "deepseek-reasoner"],
     defaultModel: "deepseek-chat",
     needsKey: true,
+    deployment: "hosted",
     isPreset: true,
   },
   {
@@ -97,6 +100,7 @@ const PRESETS: StoredProvider[] = [
     models: ["kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k"],
     defaultModel: "kimi-k2-0711-preview",
     needsKey: true,
+    deployment: "hosted",
     isPreset: true,
   },
   {
@@ -106,6 +110,7 @@ const PRESETS: StoredProvider[] = [
     baseUrl: "http://localhost:1234/v1",
     models: [],
     needsKey: false,
+    deployment: "local",
     isPreset: true,
   },
   {
@@ -115,6 +120,7 @@ const PRESETS: StoredProvider[] = [
     baseUrl: "http://localhost:11434/v1",
     models: [],
     needsKey: false,
+    deployment: "local",
     isPreset: true,
   },
 ];
