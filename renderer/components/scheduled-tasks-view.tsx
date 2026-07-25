@@ -323,7 +323,7 @@ export function ScheduledTasksView() {
                       />
                       <button
                         type="button"
-                        className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+                        className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline-none"
                         onClick={() => setEditing(taskInput(task))}
                       >
                         <span className="flex items-center gap-2">
@@ -409,7 +409,7 @@ export function ScheduledTasksView() {
                       <button
                         type="button"
                         onClick={() => setEditing(newTask(settings.data, activeId, template))}
-                        className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
                       >
                         <span className="grid size-9 shrink-0 place-items-center rounded-control bg-control text-secondary">
                           <Icon className="size-4" />
