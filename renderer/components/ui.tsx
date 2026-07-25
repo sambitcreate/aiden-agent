@@ -27,7 +27,7 @@ export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
 export const TooltipProvider = TooltipPrimitive.Provider;
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "filled" | "muted" | "transparent" | "glass" | "glassAccent" | "accent" | "destructive";
+  variant?: "filled" | "muted" | "transparent" | "glass" | "toolbar" | "glassAccent" | "accent" | "destructive";
   size?: "small" | "medium" | "large";
   iconOnly?: boolean;
   radius?: "full" | "rounded";
@@ -54,6 +54,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         variant === "muted" && "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed",
         variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection",
         variant === "glass" && "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
+        variant === "toolbar" && "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
         variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
         variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
         variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed",
@@ -426,7 +427,7 @@ function SidebarToggle() {
     <Button
       iconOnly
       size={context.collapsed ? "large" : "small"}
-      variant={context.collapsed ? "glass" : "transparent"}
+      variant={context.collapsed ? "toolbar" : "transparent"}
       onClick={context.toggle}
       aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
       aria-pressed={!context.collapsed}
