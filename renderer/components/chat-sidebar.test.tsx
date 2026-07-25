@@ -79,3 +79,18 @@ test("sidebar list items use a fill focus state instead of a focus ring", () => 
   assert.match(item, /focus-visible:bg-list-selection/u);
   assert.doesNotMatch(item, /focus-visible:ring/u);
 });
+
+test("shared controls use theme fill or border focus instead of focus rings", () => {
+  const ui = source("./ui.tsx");
+  const button = between(ui, "export const Button =", "});");
+  const input = between(ui, "export const Input =", "});");
+  assert.match(button, /focus-visible:bg-list-selection/u);
+  assert.match(button, /focus-visible:bg-control-active/u);
+  assert.match(button, /focus-visible:bg-accent-hover/u);
+  assert.doesNotMatch(button, /focus-visible:ring/u);
+  assert.match(input, /focus:border-focus-ring/u);
+  assert.match(input, /focus:bg-input/u);
+  assert.doesNotMatch(input, /focus:ring-/u);
+  assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
+  assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
+});
