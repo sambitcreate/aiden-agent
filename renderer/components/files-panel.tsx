@@ -601,7 +601,7 @@ export function FilesPanel({
                   aria-current={selected ? "true" : undefined}
                   title={interactionBlockedReason ?? entry.path}
                   className={cn(
-                    "flex h-7 w-full items-center gap-1 rounded-lg pr-1.5 text-left text-small outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-45",
+                    "flex h-7 w-full items-center gap-1 rounded-lg pr-1.5 text-left text-small outline-none transition-colors duration-150 focus-visible:bg-list-selection focus-visible:outline-none disabled:opacity-45",
                     selected ? "bg-list-selection text-primary" : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection",
                   )}
                   style={{ paddingLeft: 4 + (normalizedQuery ? 0 : entry.depth * 12) }}
@@ -776,7 +776,7 @@ export function FilesPanel({
                     readOnly={saving || interactionBlocked}
                     wrap={wrap ? "soft" : "off"}
                     spellCheck={false}
-                    className="h-full min-h-0 w-full resize-none overflow-auto border-0 bg-transparent p-3 text-primary outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring select-text"
+                    className="h-full min-h-0 w-full resize-none overflow-auto border-0 bg-transparent p-3 text-primary outline-none select-text"
                   />
                 </div>
               ) : null}
