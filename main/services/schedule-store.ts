@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { DataStore } from "./data-store.js";
-import { migrateLegacyGoogleProviderId } from "../../renderer/shared/google-provider.js";
+import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { assertSafeScheduledPrompt } from "./schedule-guard.js";
 import type {
   ScheduledRun,
@@ -202,10 +202,10 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId: typeof task.workspaceId === "string" ? task.workspaceId : undefined,
-    providerId:
-      typeof task.providerId === "string"
-        ? migrateLegacyGoogleProviderId(task.providerId)
-        : undefined,
+    // Resolve aliases only after config has had a chance to protect an edited
+    // legacy preset (for example, a custom `gemini` endpoint). The default
+    // resolver below still upgrades untouched legacy IDs for standalone tests.
+    providerId: typeof task.providerId === "string" ? task.providerId : undefined,
     model: typeof task.model === "string" ? task.model : undefined,
     prompt: typeof task.prompt === "string" ? task.prompt : undefined,
     script: typeof task.script === "string" ? task.script : undefined,
@@ -256,14 +256,41 @@ export function createScheduleStore(
   tasks: Persistence<unknown[]>,
   runs: Persistence<unknown[]>,
   now: () => number = Date.now,
+  resolveProviderId: (providerId: string | undefined) => Promise<string | undefined> = async (
+    providerId,
+  ) => migrateLegacyPiProviderId(providerId),
 ) {
   const chatClaims = new Map<string, Promise<string>>();
 
   async function list(): Promise<ScheduledTask[]> {
-    return (await tasks.load())
+    const normalized = (await tasks.load())
       .map(normalizeStoredTask)
-      .filter((task): task is ScheduledTask => task !== null)
-      .sort((a, b) => b.createdAt - a.createdAt);
+      .filter((task): task is ScheduledTask => task !== null);
+    const resolved = await Promise.all(
+      normalized.map(async (task) => {
+        const providerId = await resolveProviderId(task.providerId);
+        return providerId === task.providerId ? task : { ...task, providerId };
+      }),
+    );
+    const migratedIds = new Map(
+      resolved
+        .filter((task, index) => task.providerId !== normalized[index]?.providerId)
+        .map((task) => [task.id, task.providerId]),
+    );
+    if (migratedIds.size > 0) {
+      // Persist the safe alias on first read so a later Pi provider can never
+      // inherit this schedule merely because it claims the historic ID.
+      await tasks.update((draft) => {
+        for (let index = 0; index < draft.length; index += 1) {
+          const value = draft[index];
+          if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+          const id = (value as Record<string, unknown>).id;
+          const providerId = typeof id === "string" ? migratedIds.get(id) : undefined;
+          if (providerId !== undefined) draft[index] = { ...value, providerId };
+        }
+      });
+    }
+    return resolved.sort((a, b) => b.createdAt - a.createdAt);
   }
 
   async function get(id: string): Promise<ScheduledTask | undefined> {
@@ -275,11 +302,16 @@ export function createScheduleStore(
     get,
 
     async save(input: ScheduledTaskInput): Promise<ScheduledTask> {
+      const providerId = await resolveProviderId(input.providerId);
+      const resolvedInput = providerId === input.providerId ? input : { ...input, providerId };
       return tasks.update((draft) => {
-        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === input.id);
+        const index = draft
+          .map(normalizeStoredTask)
+          .findIndex((task) => task?.id === resolvedInput.id);
         const existing = index >= 0 ? (normalizeStoredTask(draft[index]) ?? undefined) : undefined;
-        if (input.id && !existing) throw new Error(`Scheduled task ${input.id} not found.`);
-        const task = normalizeInput(input, existing, now());
+        if (resolvedInput.id && !existing)
+          throw new Error(`Scheduled task ${resolvedInput.id} not found.`);
+        const task = normalizeInput(resolvedInput, existing, now());
         if (index >= 0) draft[index] = task;
         else draft.push(task);
         return structuredClone(task);
@@ -404,5 +436,16 @@ export function createScheduleStore(
 const taskPersistence = new DataStore<unknown[]>("schedules.json", []);
 const runPersistence = new DataStore<unknown[]>("schedule-runs.json", []);
 
-export const scheduleStore = createScheduleStore(taskPersistence, runPersistence);
+// Imported lazily to keep the pure schedule-store factory free from config I/O in tests.
+const resolvePersistedProviderId = async (providerId: string | undefined) => {
+  const { configStore } = await import("./config-store.js");
+  return configStore.resolveProviderId(providerId);
+};
+
+export const scheduleStore = createScheduleStore(
+  taskPersistence,
+  runPersistence,
+  Date.now,
+  resolvePersistedProviderId,
+);
 export type ScheduleStore = ReturnType<typeof createScheduleStore>;

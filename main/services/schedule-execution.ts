@@ -5,6 +5,7 @@ import { APPROVAL_TOOL_NAMES } from "./coding-tools.js";
 import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
+import { providerRegistry } from "./provider-registry.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
 import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
@@ -177,7 +178,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const settings = await configStore.getSettings();
     const providerId = task.providerId ?? settings.lastProviderId;
     if (!providerId) throw new Error("Choose a provider before running this scheduled task.");
-    const provider = await configStore.getProvider(providerId);
+    const provider =
+      (await providerRegistry.selectionProvider(providerId)) ??
+      (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
     const model = task.model ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
     if (!model) throw new Error("Choose a model before running this scheduled task.");

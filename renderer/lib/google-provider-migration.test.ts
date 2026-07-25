@@ -58,3 +58,48 @@ test("malformed preferences do not block startup", () => {
   assert.equal(storage.value(PINNED_MODELS_KEY), "{");
   assert.equal(storage.value(MODEL_PAD_LAYOUT_KEY), "[]");
 });
+
+test("migrates legacy Moonshot selections into Pi's moonshotai provider", () => {
+  const storage = memoryStorage({
+    [SELECTED_PROVIDER_KEY]: "moonshot",
+    [PINNED_MODELS_KEY]: JSON.stringify([
+      "moonshot::moonshot-v1-128k",
+      "moonshotai::moonshot-v1-128k",
+    ]),
+    [MODEL_PAD_LAYOUT_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      placements: {
+        "moonshot::moonshot-v1-128k": { x: 0.2, y: 0.8, source: "user" },
+      },
+    }),
+  });
+
+  assert.equal(migrateGoogleProviderPreferences(storage), true);
+  assert.equal(storage.value(SELECTED_PROVIDER_KEY), "moonshotai");
+  assert.deepEqual(JSON.parse(storage.value(PINNED_MODELS_KEY) ?? "[]"), [
+    "moonshotai::moonshot-v1-128k",
+  ]);
+  assert.deepEqual(JSON.parse(storage.value(MODEL_PAD_LAYOUT_KEY) ?? "{}").placements, {
+    "moonshotai::moonshot-v1-128k": { x: 0.2, y: 0.8, source: "user" },
+  });
+});
+
+test("moves edited legacy-provider preferences into their reserved custom identity", () => {
+  const storage = memoryStorage({
+    [SELECTED_PROVIDER_KEY]: "openai",
+    [PINNED_MODELS_KEY]: JSON.stringify(["openai::work-model"]),
+    [MODEL_PAD_LAYOUT_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      placements: { "openai::work-model": { x: 0.4, y: 0.5, source: "user" } },
+    }),
+  });
+
+  assert.equal(migrateGoogleProviderPreferences(storage, { openai: "custom:openai-legacy" }), true);
+  assert.equal(storage.value(SELECTED_PROVIDER_KEY), "custom:openai-legacy");
+  assert.deepEqual(JSON.parse(storage.value(PINNED_MODELS_KEY) ?? "[]"), [
+    "custom:openai-legacy::work-model",
+  ]);
+  assert.deepEqual(JSON.parse(storage.value(MODEL_PAD_LAYOUT_KEY) ?? "{}").placements, {
+    "custom:openai-legacy::work-model": { x: 0.4, y: 0.5, source: "user" },
+  });
+});

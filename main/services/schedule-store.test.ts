@@ -21,6 +21,10 @@ class MemoryPersistence<T> {
     this.data = draft;
     return result;
   }
+
+  snapshot(): T {
+    return structuredClone(this.data);
+  }
 }
 
 function testStore(now = 1_800_000_000_000) {
@@ -182,6 +186,42 @@ test("loads legacy Gemini scheduled tasks through the native Google provider", a
   ]);
   const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
   assert.equal((await store.list())[0]?.providerId, "google");
+});
+
+test("persists protected custom aliases for historical and newly saved schedules", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "work-task",
+      name: "Work task",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      providerId: "openai",
+      model: "work-model",
+      prompt: "Summarize changes.",
+      permission: "read-only",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const alias = async (providerId: string | undefined) =>
+    providerId === "openai" ? "custom:openai-legacy" : providerId;
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]), Date.now, alias);
+
+  assert.equal((await store.list())[0]?.providerId, "custom:openai-legacy");
+  assert.equal((tasks.snapshot()[0] as { providerId?: string }).providerId, "custom:openai-legacy");
+
+  const created = await store.save({
+    name: "Another work task",
+    mode: "llm",
+    cron: "0 10 * * *",
+    timezone: "UTC",
+    providerId: "openai",
+    prompt: "Summarize only changes.",
+  });
+  assert.equal(created.providerId, "custom:openai-legacy");
+  assert.equal((tasks.snapshot()[1] as { providerId?: string }).providerId, "custom:openai-legacy");
 });
 
 test("script tasks require explicit Full permission", async () => {

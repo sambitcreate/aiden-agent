@@ -6,6 +6,7 @@ import {
   googleProviderModelMetadata,
   googleProviderModels,
 } from "./google-provider.js";
+import { isLmStudioProviderId, isOllamaProviderId } from "./custom-provider-id.js";
 
 interface GenericModelEntry {
   id?: string;
@@ -429,7 +430,7 @@ export async function discoverModels(
 ): Promise<DiscoveredModels> {
   if (provider.id === GOOGLE_PROVIDER_ID) return discoverGoogle(provider, apiKey);
   const headers = headersFor(provider, apiKey);
-  if (provider.id === "lmstudio") {
+  if (isLmStudioProviderId(provider.id)) {
     try {
       const native = parseLmStudioResponse(
         await fetchJson(providerEndpoint(provider, "/api/v1/models"), headers),
@@ -439,7 +440,7 @@ export async function discoverModels(
       if (!canFallBackFromNative(error)) throw error;
     }
   }
-  if (provider.id === "ollama") {
+  if (isOllamaProviderId(provider.id)) {
     try {
       const native = await discoverOllama(provider, headers);
       if (native) return native;

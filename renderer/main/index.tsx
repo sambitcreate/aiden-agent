@@ -10,6 +10,8 @@ import { installDevErrorLogging } from "../lib/dev-log";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
 import { subscribeCodexProviderState } from "../lib/queries";
 import { migrateGoogleProviderPreferences } from "../lib/google-provider-migration";
+import { providersApi } from "../lib/ipc";
+import { queryKeys } from "../lib/queries";
 
 declare const __APP_DISPLAY_NAME__: string | undefined;
 
@@ -29,18 +31,37 @@ if (!rootElement) {
   throw new Error("Root element not found");
 }
 
-// Create React root and render
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <RouterProvider router={router} />
-      </TooltipProvider>
-      <Toaster />
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+async function bootstrap(): Promise<void> {
+  // Resolve persisted custom aliases before any component reads provider/model
+  // preferences. A failed IPC read is non-fatal; the narrow Pi-ID migration
+  // above still protects older Gemini/Moonshot selections.
+  try {
+    const providers = await providersApi.list();
+    const aliases = Object.fromEntries(
+      providers.flatMap((provider) =>
+        (provider.legacyIds ?? []).map((legacyId) => [legacyId, provider.id]),
+      ),
+    );
+    migrateGoogleProviderPreferences(localStorage, aliases);
+    queryClient.setQueryData(queryKeys.providers, providers);
+  } catch {
+    // Provider Settings will surface an actionable main-process error after render.
+  }
+
+  const root = ReactDOM.createRoot(rootElement!);
+  root.render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <RouterProvider router={router} />
+        </TooltipProvider>
+        <Toaster />
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+}
+
+void bootstrap();
 
 // Hot Module Replacement (HMR) support
 if (import.meta.hot) {

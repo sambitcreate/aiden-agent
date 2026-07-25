@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
+import type { AuthEvent, AuthInteraction, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 
-import { OPENAI_CODEX_PROVIDER_ID, type CodexProviderSnapshot } from "./codex-provider.js";
+import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 
 const FLOW_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -36,7 +36,7 @@ export interface ProviderAuthSelectOptionDto {
 
 export interface ProviderAuthPromptDto {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
   promptId: string;
   type: ProviderAuthPromptType;
   message: string;
@@ -47,21 +47,21 @@ export interface ProviderAuthPromptDto {
 export type ProviderAuthEventDto =
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "info";
       message: string;
       links?: Array<{ url: string; label?: string }>;
     }
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "auth_url";
       url: string;
       instructions?: string;
     }
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "device_code";
       userCode: string;
       verificationUri: string;
@@ -70,14 +70,14 @@ export type ProviderAuthEventDto =
     }
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "progress";
       message: string;
     };
 
 export interface ProviderAuthDoneDto {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
   cancelled: boolean;
 }
 
@@ -90,14 +90,16 @@ export type ProviderAuthErrorCode =
 
 export interface ProviderAuthErrorDto {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
   code: ProviderAuthErrorCode;
   message: string;
 }
 
 export interface ProviderAuthStartRequest {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
+  /** Defaults to OAuth for the existing ChatGPT flow. */
+  authType?: AuthType;
 }
 
 export interface ProviderAuthResponseRequest extends ProviderAuthStartRequest {
@@ -114,7 +116,7 @@ export interface ProviderAuthOwner {
 }
 
 export interface ProviderAuthBackend {
-  snapshot(): Promise<CodexProviderSnapshot>;
+  snapshot(): Promise<unknown>;
   authenticate(interaction: AuthInteraction): Promise<unknown>;
   commitCredential(credential: unknown): Promise<void>;
   logout(): Promise<void>;
@@ -122,13 +124,13 @@ export interface ProviderAuthBackend {
 
 export interface ProviderAuthDiagnostic {
   operation: "login" | "open_external";
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
   errorName: string;
   errorCode?: string;
 }
 
 export interface ProviderAuthFlowDependencies {
-  backend: ProviderAuthBackend;
+  backendFor(providerId: string, authType: AuthType): ProviderAuthBackend;
   openExternal(url: string): Promise<void>;
   diagnostic?(event: ProviderAuthDiagnostic): void;
   flowTimeoutMs?: number;
@@ -147,7 +149,8 @@ interface PendingPrompt {
 
 interface AuthSession {
   readonly flowId: string;
-  readonly providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  readonly providerId: string;
+  readonly backend: ProviderAuthBackend;
   readonly owner: ProviderAuthOwner;
   readonly abortController: AbortController;
   removeOwnerInvalidation: () => void;
@@ -208,11 +211,17 @@ function assertExactKeys(value: Record<string, unknown>, allowed: readonly strin
   }
 }
 
-function parseProviderId(value: unknown): typeof OPENAI_CODEX_PROVIDER_ID {
-  if (value !== OPENAI_CODEX_PROVIDER_ID) {
-    throw new ProviderAuthRequestError("This provider does not support ChatGPT sign-in.");
+function parseProviderId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9._:-]{0,127}$/iu.test(value)) {
+    throw new ProviderAuthRequestError("Provider authentication provider ID is invalid.");
   }
   return value;
+}
+
+function parseAuthType(value: unknown): AuthType {
+  if (value === undefined || value === "oauth") return "oauth";
+  if (value === "api_key") return "api_key";
+  throw new ProviderAuthRequestError("Provider authentication method is invalid.");
 }
 
 function parseFlowId(value: unknown): string {
@@ -233,10 +242,11 @@ export function parseProviderAuthStartRequest(value: unknown): ProviderAuthStart
   if (!isRecord(value)) {
     throw new ProviderAuthRequestError("Provider authentication request is invalid.");
   }
-  assertExactKeys(value, ["flowId", "providerId"]);
+  assertExactKeys(value, ["flowId", "providerId", "authType"]);
   return {
     flowId: parseFlowId(value.flowId),
     providerId: parseProviderId(value.providerId),
+    authType: parseAuthType(value.authType),
   };
 }
 
@@ -256,7 +266,7 @@ export function parseProviderAuthResponseRequest(value: unknown): ProviderAuthRe
   };
 }
 
-export function parseProviderAuthProviderId(value: unknown): typeof OPENAI_CODEX_PROVIDER_ID {
+export function parseProviderAuthProviderId(value: unknown): string {
   return parseProviderId(value);
 }
 
@@ -296,11 +306,15 @@ function errorClassifierText(error: unknown): string {
 function classifyLoginError(
   error: unknown,
   timedOut: boolean,
+  providerId: string,
 ): Omit<ProviderAuthErrorDto, "flowId" | "providerId"> {
+  const codex = providerId === OPENAI_CODEX_PROVIDER_ID;
   if (timedOut) {
     return {
       code: "timed_out",
-      message: "ChatGPT sign-in timed out. Start a new sign-in attempt to try again.",
+      message: codex
+        ? "ChatGPT sign-in timed out. Start a new sign-in attempt to try again."
+        : "Provider setup timed out. Start a new setup attempt to try again.",
     };
   }
 
@@ -308,13 +322,17 @@ function classifyLoginError(
   if (text.includes("eaddrinuse") || (text.includes("1455") && text.includes("listen"))) {
     return {
       code: "port_busy",
-      message: "The local sign-in port is busy. Try again and choose Device code instead.",
+      message: codex
+        ? "The local sign-in port is busy. Try again and choose Device code instead."
+        : "The local setup port is busy. Try the provider's alternate setup method.",
     };
   }
   if (text.includes("429") || text.includes("rate limit") || text.includes("too many request")) {
     return {
       code: "rate_limited",
-      message: "OpenAI is temporarily limiting sign-in attempts. Wait a moment, then try again.",
+      message: codex
+        ? "OpenAI is temporarily limiting sign-in attempts. Wait a moment, then try again."
+        : "The provider is temporarily limiting setup attempts. Wait a moment, then try again.",
     };
   }
   if (
@@ -325,18 +343,24 @@ function classifyLoginError(
   ) {
     return {
       code: "timed_out",
-      message: "ChatGPT sign-in expired. Start a new sign-in attempt to try again.",
+      message: codex
+        ? "ChatGPT sign-in expired. Start a new sign-in attempt to try again."
+        : "Provider setup expired. Start a new setup attempt to try again.",
     };
   }
   if (text.includes("state mismatch") || text.includes("verification")) {
     return {
       code: "verification_failed",
-      message: "OpenAI could not verify this sign-in response. Start a new sign-in attempt.",
+      message: codex
+        ? "OpenAI could not verify this sign-in response. Start a new sign-in attempt."
+        : "The provider could not verify this setup response. Start a new attempt.",
     };
   }
   return {
     code: "sign_in_failed",
-    message: "ChatGPT sign-in did not complete. Try again or use Device code.",
+    message: codex
+      ? "ChatGPT sign-in did not complete. Try again or use Device code."
+      : "Provider setup did not complete. Check the requested information and try again.",
   };
 }
 
@@ -350,6 +374,11 @@ function promptCopy(type: ProviderAuthPromptType): { message: string; placeholde
   }
   if (type === "secret") return { message: "Enter the requested sign-in secret." };
   return { message: "Enter the requested sign-in information." };
+}
+
+function boundedCopy(value: string | undefined, fallback: string, maxLength = 2_048): string {
+  const text = value?.trim();
+  return text ? text.slice(0, maxLength) : fallback;
 }
 
 function selectOptionCopy(
@@ -372,7 +401,19 @@ function selectOptionCopy(
 }
 
 function preparePrompt(session: AuthSession, promptId: string, prompt: AuthPrompt): PreparedPrompt {
-  const copy = promptCopy(prompt.type);
+  // Preserve Pi's provider-authored copy for multi-field and OAuth flows. The
+  // ChatGPT flow intentionally retains its reviewed product wording.
+  const codexCopy = promptCopy(prompt.type);
+  const copy =
+    session.providerId === OPENAI_CODEX_PROVIDER_ID
+      ? codexCopy
+      : {
+          message: boundedCopy(prompt.message, codexCopy.message),
+          placeholder:
+            "placeholder" in prompt
+              ? boundedCopy(prompt.placeholder, codexCopy.placeholder ?? "") || undefined
+              : undefined,
+        };
   const base = {
     flowId: session.flowId,
     providerId: session.providerId,
@@ -396,7 +437,14 @@ function preparePrompt(session: AuthSession, promptId: string, prompt: AuthPromp
     const options = prompt.options.map((option, index) => {
       const id = `option-${index + 1}`;
       selectValues.set(id, option.id);
-      return { id, ...selectOptionCopy(option.id, index) };
+      if (session.providerId === OPENAI_CODEX_PROVIDER_ID) {
+        return { id, ...selectOptionCopy(option.id, index) };
+      }
+      return {
+        id,
+        label: boundedCopy(option.label, `Option ${index + 1}`, 256),
+        description: boundedCopy(option.description, "", 1_024) || undefined,
+      };
     });
     return {
       dto: { ...base, options },
@@ -429,26 +477,36 @@ export class ProviderAuthFlowCoordinator {
     this.createId = dependencies.createId ?? randomUUID;
   }
 
-  async status(providerId: unknown): Promise<CodexProviderSnapshot> {
-    parseProviderId(providerId);
+  async status(providerId: unknown): Promise<unknown> {
+    const validProviderId = parseProviderId(providerId);
     this.assertAvailable();
-    return this.dependencies.backend.snapshot();
+    return this.dependencies.backendFor(validProviderId, "oauth").snapshot();
   }
 
   start(owner: ProviderAuthOwner, request: ProviderAuthStartRequest): { started: true } {
     this.assertAvailable();
     this.assertUsableOwner(owner);
     parseFlowId(request.flowId);
-    parseProviderId(request.providerId);
+    const providerId = parseProviderId(request.providerId);
+    const authType = parseAuthType(request.authType);
+    const backend = this.dependencies.backendFor(providerId, authType);
 
     if (this.logoutInProgress) {
-      throw new ProviderAuthRequestError("ChatGPT sign-out is still in progress.");
+      throw new ProviderAuthRequestError(
+        providerId === OPENAI_CODEX_PROVIDER_ID
+          ? "ChatGPT sign-out is still in progress."
+          : "Provider sign-out is still in progress.",
+      );
     }
     if (this.activeSession) {
       if (this.activeSession.flowId === request.flowId) {
         throw new ProviderAuthRequestError("This provider authentication flow is already active.");
       }
-      throw new ProviderAuthRequestError("Another ChatGPT sign-in is already in progress.");
+      throw new ProviderAuthRequestError(
+        providerId === OPENAI_CODEX_PROVIDER_ID
+          ? "Another ChatGPT sign-in is already in progress."
+          : "Another provider sign-in is already in progress.",
+      );
     }
 
     const abortController = new AbortController();
@@ -471,7 +529,8 @@ export class ProviderAuthFlowCoordinator {
     };
     const session: AuthSession = {
       flowId: request.flowId,
-      providerId: request.providerId,
+      providerId,
+      backend,
       owner,
       abortController,
       removeOwnerInvalidation: () => undefined,
@@ -530,16 +589,16 @@ export class ProviderAuthFlowCoordinator {
     return { cancelled: true };
   }
 
-  async logout(providerId: unknown): Promise<CodexProviderSnapshot> {
-    parseProviderId(providerId);
+  async logout(providerId: unknown): Promise<unknown> {
+    const validProviderId = parseProviderId(providerId);
     this.assertAvailable();
     if (this.activeSession) {
       throw new ProviderAuthRequestError(
-        "Finish or cancel the active ChatGPT sign-in before signing out.",
+        "Finish or cancel the active provider sign-in before signing out.",
       );
     }
     if (this.logoutInProgress) {
-      throw new ProviderAuthRequestError("ChatGPT sign-out is already in progress.");
+      throw new ProviderAuthRequestError("Provider sign-out is already in progress.");
     }
     this.logoutInProgress = true;
     let resolveLogout = (): void => undefined;
@@ -548,8 +607,9 @@ export class ProviderAuthFlowCoordinator {
     });
     this.logoutCompletion = logoutCompletion;
     try {
-      await this.dependencies.backend.logout();
-      return await this.dependencies.backend.snapshot();
+      const backend = this.dependencies.backendFor(validProviderId, "oauth");
+      await backend.logout();
+      return await backend.snapshot();
     } finally {
       this.logoutInProgress = false;
       resolveLogout();
@@ -604,7 +664,7 @@ export class ProviderAuthFlowCoordinator {
         clearTimeout(session.timeout);
         session.timeout = undefined;
       }
-      await this.dependencies.backend.commitCredential(outcome.credential);
+      await session.backend.commitCredential(outcome.credential);
       this.sendDone(session, false);
     } catch (error) {
       if (session.abortController.signal.aborted && !session.timedOut) {
@@ -621,7 +681,7 @@ export class ProviderAuthFlowCoordinator {
   private authenticate(session: AuthSession): AuthenticationAttempt {
     const authentication = Promise.resolve()
       .then(() =>
-        this.dependencies.backend.authenticate({
+        session.backend.authenticate({
           signal: session.abortController.signal,
           prompt: (prompt) => this.requestPrompt(session, prompt),
           notify: (event) => this.notify(session, event),
@@ -727,7 +787,10 @@ export class ProviderAuthFlowCoordinator {
         providerId: session.providerId,
         type: "auth_url",
         url,
-        instructions: "Complete sign-in in your browser.",
+        instructions:
+          session.providerId === OPENAI_CODEX_PROVIDER_ID
+            ? "Complete sign-in in your browser."
+            : boundedCopy(event.instructions, "Complete setup in your browser."),
       };
       this.openExternal(session.providerId, url);
     } else if (event.type === "device_code") {
@@ -746,24 +809,46 @@ export class ProviderAuthFlowCoordinator {
       };
       this.openExternal(session.providerId, verificationUri);
     } else if (event.type === "info") {
+      // The established Codex flow deliberately redacts provider text. For
+      // generic Pi setup, preserve instructional links but never forward URL
+      // query/fragment data that could carry a credential or callback token.
+      const links =
+        session.providerId === OPENAI_CODEX_PROVIDER_ID
+          ? undefined
+          : event.links?.slice(0, 8).map((link) => {
+              const url = new URL(externalHttpsUrl(link.url));
+              url.search = "";
+              url.hash = "";
+              return {
+                url: url.toString(),
+                label: boundedCopy(link.label, "", 256) || undefined,
+              };
+            });
       dto = {
         flowId: session.flowId,
         providerId: session.providerId,
         type: "info",
-        message: "OpenAI provided an update during sign-in.",
+        message:
+          session.providerId === OPENAI_CODEX_PROVIDER_ID
+            ? "OpenAI provided an update during sign-in."
+            : boundedCopy(event.message, "Provider setup is in progress."),
+        ...(links?.length ? { links } : {}),
       };
     } else {
       dto = {
         flowId: session.flowId,
         providerId: session.providerId,
         type: "progress",
-        message: "Signing in to ChatGPT…",
+        message:
+          session.providerId === OPENAI_CODEX_PROVIDER_ID
+            ? "Signing in to ChatGPT…"
+            : boundedCopy(event.message, "Completing provider setup…"),
       };
     }
     if (!this.safeSend(session, "providers:auth:event", dto)) this.abortSession(session);
   }
 
-  private openExternal(providerId: typeof OPENAI_CODEX_PROVIDER_ID, url: string): void {
+  private openExternal(providerId: string, url: string): void {
     void this.dependencies.openExternal(url).catch((error: unknown) => {
       this.reportDiagnostic("open_external", providerId, error);
     });
@@ -830,7 +915,7 @@ export class ProviderAuthFlowCoordinator {
   }
 
   private sendError(session: AuthSession, error: unknown): void {
-    const classified = classifyLoginError(error, session.timedOut);
+    const classified = classifyLoginError(error, session.timedOut, session.providerId);
     this.safeSend(session, "providers:auth:error", {
       flowId: session.flowId,
       providerId: session.providerId,
@@ -873,7 +958,7 @@ export class ProviderAuthFlowCoordinator {
 
   private reportDiagnostic(
     operation: ProviderAuthDiagnostic["operation"],
-    providerId: typeof OPENAI_CODEX_PROVIDER_ID,
+    providerId: string,
     error: unknown,
   ): void {
     this.dependencies.diagnostic?.({

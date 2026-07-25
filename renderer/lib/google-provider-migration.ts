@@ -1,8 +1,4 @@
-import {
-  GOOGLE_PROVIDER_ID,
-  LEGACY_GEMINI_PROVIDER_ID,
-  migrateLegacyGoogleSelection,
-} from "../shared/google-provider";
+import { migrateLegacyPiProviderId } from "../shared/google-provider";
 import { MODEL_PAD_LAYOUT_KEY } from "./model-pad-layout";
 import { PINNED_MODELS_KEY } from "./model-picker-data";
 
@@ -13,21 +9,43 @@ interface StorageLike {
   setItem(key: string, value: string): void;
 }
 
-function migrateStringList(raw: string | null): string | null {
+function migrateProviderId(
+  providerId: string | undefined,
+  aliases: Readonly<Record<string, string>>,
+): string | undefined {
+  return providerId ? (aliases[providerId] ?? migrateLegacyPiProviderId(providerId)) : providerId;
+}
+
+function migrateSelection(value: string, aliases: Readonly<Record<string, string>>): string {
+  const separator = value.indexOf("::");
+  if (separator < 0) return migrateProviderId(value, aliases) ?? value;
+  const providerId = value.slice(0, separator);
+  const modelId = value.slice(separator + 2);
+  const migratedProviderId = migrateProviderId(providerId, aliases) ?? providerId;
+  return `${migratedProviderId}::${modelId}`;
+}
+
+function migrateStringList(
+  raw: string | null,
+  aliases: Readonly<Record<string, string>>,
+): string | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as unknown;
     if (!Array.isArray(value)) return null;
     const migrated = value
       .filter((entry): entry is string => typeof entry === "string")
-      .map(migrateLegacyGoogleSelection);
+      .map((entry) => migrateSelection(entry, aliases));
     return JSON.stringify([...new Set(migrated)]);
   } catch {
     return null;
   }
 }
 
-function migrateModelPad(raw: string | null): string | null {
+function migrateModelPad(
+  raw: string | null,
+  aliases: Readonly<Record<string, string>>,
+): string | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as unknown;
@@ -42,9 +60,9 @@ function migrateModelPad(raw: string | null): string | null {
     const placements = layout.placements as Record<string, unknown>;
     const migrated: Record<string, unknown> = {};
     for (const [selection, placement] of Object.entries(placements)) {
-      const next = migrateLegacyGoogleSelection(selection);
-      // An already-native preference wins over its legacy duplicate.
-      if (!(next in migrated) || selection.startsWith(`${GOOGLE_PROVIDER_ID}::`)) {
+      const next = migrateSelection(selection, aliases);
+      // An already-canonical preference wins over its legacy duplicate.
+      if (!(next in migrated) || selection === next) {
         migrated[next] = placement;
       }
     }
@@ -55,23 +73,28 @@ function migrateModelPad(raw: string | null): string | null {
 }
 
 /** Run before React reads local preferences. Safe to repeat on every launch. */
-export function migrateGoogleProviderPreferences(storage: StorageLike): boolean {
+export function migrateGoogleProviderPreferences(
+  storage: StorageLike,
+  aliases: Readonly<Record<string, string>> = {},
+): boolean {
   let changed = false;
   try {
-    if (storage.getItem(SELECTED_PROVIDER_KEY) === LEGACY_GEMINI_PROVIDER_ID) {
-      storage.setItem(SELECTED_PROVIDER_KEY, GOOGLE_PROVIDER_ID);
+    const selected = storage.getItem(SELECTED_PROVIDER_KEY);
+    const migratedSelected = migrateProviderId(selected ?? undefined, aliases);
+    if (migratedSelected && migratedSelected !== selected) {
+      storage.setItem(SELECTED_PROVIDER_KEY, migratedSelected);
       changed = true;
     }
 
     const pinned = storage.getItem(PINNED_MODELS_KEY);
-    const migratedPinned = migrateStringList(pinned);
+    const migratedPinned = migrateStringList(pinned, aliases);
     if (migratedPinned !== null && migratedPinned !== pinned) {
       storage.setItem(PINNED_MODELS_KEY, migratedPinned);
       changed = true;
     }
 
     const layout = storage.getItem(MODEL_PAD_LAYOUT_KEY);
-    const migratedLayout = migrateModelPad(layout);
+    const migratedLayout = migrateModelPad(layout, aliases);
     if (migratedLayout !== null && migratedLayout !== layout) {
       storage.setItem(MODEL_PAD_LAYOUT_KEY, migratedLayout);
       changed = true;

@@ -1,11 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  AnthropicMessagesCompat,
-  Api,
-  Model,
-  ProviderStreams,
-} from "@earendil-works/pi-ai";
+import type { AnthropicMessagesCompat, Api, Model, ProviderStreams } from "@earendil-works/pi-ai";
 
 import { resolveModelRuntimeWith, type ModelRuntimeDependencies } from "./model-runtime-core.js";
 import { CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
@@ -47,6 +42,8 @@ function dependencies(options?: {
   provider?: StoredProvider;
   key?: string | null;
   limits?: RuntimeModelLimits;
+  nativeProvider?: StoredProvider;
+  nativeModel?: Model<Api>;
 }): ModelRuntimeDependencies {
   return {
     getProvider: async () => options?.provider,
@@ -59,8 +56,13 @@ function dependencies(options?: {
       },
       streamSimple: codexStream,
     },
-    google: {
-      getModel: (modelId) => (modelId === googleModel.id ? googleModel : undefined),
+    native: {
+      getProvider: (providerId) =>
+        providerId === options?.nativeProvider?.id ? options.nativeProvider : undefined,
+      getModel: (providerId, modelId) =>
+        providerId === options?.nativeProvider?.id && modelId === options.nativeModel?.id
+          ? options.nativeModel
+          : undefined,
       streamSimple: googleStream,
     },
   };
@@ -149,14 +151,13 @@ test("preserves Anthropic adaptive-thinking metadata in the request model", asyn
   });
   assert.equal(
     runtime.model.api === "anthropic-messages"
-      ? (runtime.model.compat as AnthropicMessagesCompat | undefined)
-          ?.forceAdaptiveThinking
+      ? (runtime.model.compat as AnthropicMessagesCompat | undefined)?.forceAdaptiveThinking
       : undefined,
     true,
   );
 });
 
-test("routes Google through Pi's native model and transport", async () => {
+test("routes every Pi built-in through its native model and transport", async () => {
   const provider: StoredProvider = {
     id: "google",
     kind: "openai",
@@ -167,7 +168,12 @@ test("routes Google through Pi's native model and transport", async () => {
     isPreset: true,
   };
   let limitReads = 0;
-  const deps = dependencies({ provider, key: "saved-key" });
+  const deps = dependencies({
+    provider,
+    key: "saved-key",
+    nativeProvider: provider,
+    nativeModel: googleModel,
+  });
   deps.resolveRuntimeLimits = async () => {
     limitReads += 1;
     return CONSERVATIVE_RUNTIME_LIMITS;
@@ -179,7 +185,7 @@ test("routes Google through Pi's native model and transport", async () => {
   assert.strictEqual(runtime.provider, provider);
   assert.strictEqual(runtime.model, googleModel);
   assert.strictEqual(runtime.streams.streamSimple, googleStream);
-  assert.equal(runtime.apiKey, "saved-key");
+  assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.model.api, "google-generative-ai");
   assert.equal(runtime.model.provider, "google");
   assert.equal(runtime.model.baseUrl, "https://generativelanguage.googleapis.com/v1beta");
@@ -188,7 +194,50 @@ test("routes Google through Pi's native model and transport", async () => {
   assert.equal(runtime.model.reasoning, true);
 });
 
-test("rejects models absent from Pi's native Google catalog", async () => {
+test("routes non-special Pi providers without reading legacy endpoint configuration", async () => {
+  const provider: StoredProvider = {
+    id: "deepseek",
+    kind: "openai",
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com",
+    models: ["deepseek-chat"],
+    needsKey: true,
+    isBuiltin: true,
+  };
+  const model: Model<Api> = {
+    id: "deepseek-chat",
+    name: "DeepSeek-V3.2",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 163_840,
+    maxTokens: 8_192,
+  };
+  const deps = dependencies({ nativeProvider: provider, nativeModel: model });
+  let legacyReads = 0;
+  deps.getProvider = async () => {
+    legacyReads += 1;
+    return undefined;
+  };
+  deps.getApiKey = async () => {
+    legacyReads += 1;
+    return "legacy-key";
+  };
+
+  const runtime = await resolveModelRuntimeWith(deps, provider.id, model.id);
+
+  assert.equal(legacyReads, 0);
+  assert.strictEqual(runtime.provider, provider);
+  assert.strictEqual(runtime.model, model);
+  assert.strictEqual(runtime.streams.streamSimple, googleStream);
+  assert.equal(runtime.apiKey, undefined);
+  assert.equal(runtime.headers, undefined);
+});
+
+test("rejects models absent from Pi's native catalog", async () => {
   const provider: StoredProvider = {
     id: "google",
     kind: "openai",
@@ -200,11 +249,11 @@ test("rejects models absent from Pi's native Google catalog", async () => {
   };
   await assert.rejects(
     resolveModelRuntimeWith(
-      dependencies({ provider, key: "saved-key" }),
+      dependencies({ provider, key: "saved-key", nativeProvider: provider }),
       "google",
       "gemini-retired",
     ),
-    /not supported by Aiden's native Google connection/iu,
+    /not available through Pi's Google Gemini provider/iu,
   );
 });
 

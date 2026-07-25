@@ -4,7 +4,10 @@ import { createProviderModelInfo } from "./provider-model-info-core.js";
 import { providerRegistry } from "./provider-registry.js";
 
 async function legacyProvider(providerId: string) {
-  return (await configStore.getProvider(providerId)) ?? { id: providerId, baseUrl: "" };
+  return (
+    providerRegistry.builtinProvider(providerId) ??
+    (await configStore.getProvider(providerId)) ?? { id: providerId, baseUrl: "" }
+  );
 }
 
 /** Keep Pi's pinned Codex capabilities and enrich them from the local AA cache. */

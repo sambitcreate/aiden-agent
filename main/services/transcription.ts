@@ -1,9 +1,9 @@
 // Voice transcription via OpenAI (Whisper / gpt-4o-transcribe) or Google Gemini.
 // Reuses the API keys already configured for those providers.
 
-import { configStore } from "./config-store.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
-import { secrets } from "./secrets.js";
+import { configStore } from "./config-store.js";
+import { providerRegistry } from "./provider-registry.js";
 import {
   geminiTranscriptionTokens,
   isLocalModelProvider,
@@ -53,11 +53,17 @@ async function recordTranscription(input: {
 }
 
 async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
-  const key = await secrets.getKey("openai");
-  if (!key) throw new Error("Add an OpenAI API key (Settings → Providers) to use voice input.");
-  const provider = await configStore.getProvider("openai");
+  await configStore.listProviders();
+  await providerRegistry.migrateLegacyApiKeys();
+  const auth = await providerRegistry.getBuiltinRequestAuth("openai");
+  const key = auth?.auth.apiKey;
+  if (!key) throw new Error("Set up OpenAI in Settings → Providers to use voice input.");
+  const provider = await providerRegistry.selectionProvider("openai");
   if (!provider) throw new Error("OpenAI provider settings are unavailable.");
-  const baseUrl = (provider?.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
+  const baseUrl = (auth.auth.baseUrl ?? provider.baseUrl ?? "https://api.openai.com/v1").replace(
+    /\/$/,
+    "",
+  );
   const settings = await configStore.getSettings();
   const model = settings.voiceModel || "whisper-1";
 
@@ -106,12 +112,14 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
 }
 
 async function transcribeGemini(input: TranscribeInput): Promise<string> {
-  const key = await secrets.getKey(GOOGLE_PROVIDER_ID);
-  if (!key)
-    throw new Error("Add a Google Gemini API key (Settings → Providers) to use voice input.");
+  await configStore.listProviders();
+  await providerRegistry.migrateLegacyApiKeys();
+  const auth = await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID);
+  const key = auth?.auth.apiKey;
+  if (!key) throw new Error("Set up Google Gemini in Settings → Providers to use voice input.");
   const settings = await configStore.getSettings();
   const model = settings.voiceModel || "gemini-2.0-flash";
-  const provider = await configStore.getProvider(GOOGLE_PROVIDER_ID);
+  const provider = await providerRegistry.selectionProvider(GOOGLE_PROVIDER_ID);
   if (!provider) throw new Error("Google Gemini provider settings are unavailable.");
 
   let response: Response;

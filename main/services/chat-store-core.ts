@@ -13,12 +13,17 @@ import {
 } from "./chat-title-policy.js";
 import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
-import { migrateLegacyGoogleProviderId } from "../../renderer/shared/google-provider.js";
+import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
 
-export function createChatStore(resolveChatsDir: () => Promise<string>) {
+export function createChatStore(
+  resolveChatsDir: () => Promise<string>,
+  resolveProviderId: (providerId: string | undefined) => Promise<string | undefined> = async (
+    providerId,
+  ) => migrateLegacyPiProviderId(providerId),
+) {
   let operationTail: Promise<void> = Promise.resolve();
 
   function serialized<T>(operation: () => Promise<T>): Promise<T> {
@@ -43,27 +48,34 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
       const data = await fs.readFile(await indexPath(), "utf-8");
       const parsed: unknown = JSON.parse(data);
       if (!Array.isArray(parsed)) return [];
-      return parsed
-        .filter((value): value is ChatMeta => {
-          if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-          const meta = value as Record<string, unknown>;
-          return (
-            typeof meta.id === "string" &&
-            meta.id.length > 0 &&
-            typeof meta.title === "string" &&
-            typeof meta.createdAt === "number" &&
-            Number.isFinite(meta.createdAt) &&
-            typeof meta.updatedAt === "number" &&
-            Number.isFinite(meta.updatedAt) &&
-            (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
-            (meta.providerId === undefined || typeof meta.providerId === "string") &&
-            (meta.model === undefined || typeof meta.model === "string")
-          );
-        })
-        .map((meta) => {
-          const providerId = migrateLegacyGoogleProviderId(meta.providerId);
+      const valid = parsed.filter((value): value is ChatMeta => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+        const meta = value as Record<string, unknown>;
+        return (
+          typeof meta.id === "string" &&
+          meta.id.length > 0 &&
+          typeof meta.title === "string" &&
+          typeof meta.createdAt === "number" &&
+          Number.isFinite(meta.createdAt) &&
+          typeof meta.updatedAt === "number" &&
+          Number.isFinite(meta.updatedAt) &&
+          (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
+          (meta.providerId === undefined || typeof meta.providerId === "string") &&
+          (meta.model === undefined || typeof meta.model === "string")
+        );
+      });
+      const resolved = await Promise.all(
+        valid.map(async (meta) => {
+          const providerId = await resolveProviderId(meta.providerId);
           return providerId === meta.providerId ? meta : { ...meta, providerId };
-        });
+        }),
+      );
+      if (resolved.some((meta, index) => meta.providerId !== valid[index]?.providerId)) {
+        // Persist aliases on first read. This prevents a future Pi provider
+        // from ever inheriting an historical custom chat identity.
+        await writeIndex(resolved).catch(() => undefined);
+      }
+      return resolved;
     } catch {
       return [];
     }
@@ -78,8 +90,9 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
     try {
       const data = await fs.readFile(await chatPath(id), "utf-8");
       const chat = JSON.parse(data) as Chat;
-      const providerId = migrateLegacyGoogleProviderId(chat.providerId);
-      if (providerId !== chat.providerId) chat.providerId = providerId;
+      const providerId = await resolveProviderId(chat.providerId);
+      const migratedProvider = providerId !== chat.providerId;
+      if (migratedProvider) chat.providerId = providerId;
       chat.messages = chat.messages.map((message) => ({
         ...message,
         reasoning:
@@ -91,6 +104,7 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
         timeline:
           message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
       }));
+      if (migratedProvider) await writeChat(chat).catch(() => undefined);
       return chat;
     } catch {
       return null;
@@ -156,7 +170,7 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
           id: newId(),
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
-          providerId: input.providerId,
+          providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
           updatedAt: now,
@@ -287,11 +301,7 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
         chat.updatedAt = Date.now();
         if (meta?.providerId) chat.providerId = meta.providerId;
         if (meta?.model) chat.model = meta.model;
-        if (
-          meta?.autoTitle &&
-          isFirstUserMessage &&
-          isDefaultChatTitle(chat.title)
-        ) {
+        if (meta?.autoTitle && isFirstUserMessage && isDefaultChatTitle(chat.title)) {
           chat.title = deriveChatTitleSeed(full);
         }
         await writeChat(chat);

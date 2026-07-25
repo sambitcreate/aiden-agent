@@ -1,5 +1,5 @@
-// Dialog to configure one provider: base URL, API key, connection test, model
-// discovery, and default model. Used for both presets and custom providers.
+// Dialog to configure a custom provider: base URL, API key, connection test,
+// model discovery, and default model. Pi built-ins use a separate setup view.
 
 import * as React from "react";
 import {
@@ -20,7 +20,12 @@ import {
 import { providersApi } from "../../lib/ipc";
 import { useModelInfo } from "../../lib/queries";
 import { resolveModelDisplay } from "../../lib/model-display";
-import type { Provider, ProviderDeployment, ProviderKind, ProviderModelMetadata } from "../../lib/types";
+import type {
+  Provider,
+  ProviderDeployment,
+  ProviderKind,
+  ProviderModelMetadata,
+} from "../../lib/types";
 import { resolveProviderDeployment } from "../../shared/provider-deployment";
 
 /** Compact k-token label, e.g. 128000 → "128K". */
@@ -47,7 +52,6 @@ interface ProviderEditorProps {
 }
 
 export function ProviderEditor({ provider, open, onOpenChange, onSaved }: ProviderEditorProps) {
-  const nativeGoogle = provider.id === "google";
   const [label, setLabel] = React.useState(provider.label);
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
@@ -102,7 +106,8 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     defaultModel: defaultModel || undefined,
     needsKey,
     deployment,
-    isPreset: provider.isPreset,
+    isPreset: false,
+    isBuiltin: false,
   });
 
   const applyDiscoveredModels = (
@@ -180,7 +185,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       open={open}
       onOpenChange={onOpenChange}
       title={`Configure ${provider.label}`}
-      description="Set the connection details and models available through this provider."
+      description="Set the connection details and models for this custom endpoint."
       size="large"
       confirmLabel="Save"
       confirmDisabled={saving || testing}
@@ -188,22 +193,16 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     >
       <FieldSet>
         <Field label="Name">
-          <Input value={label} disabled={nativeGoogle} onChange={(e) => setLabel(e.target.value)} />
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} />
         </Field>
 
         <Field
           label="Base URL"
-          description={
-            nativeGoogle
-              ? "Pi's native Google transport uses the fixed Google Generative Language API."
-              : provider.isPreset
-                ? "Base address used for API requests."
-                : "Base address of an OpenAI- or Anthropic-compatible API."
-          }
+          description="Base address of an OpenAI- or Anthropic-compatible API."
         >
           <Input
             value={baseUrl}
-            disabled={testing || nativeGoogle}
+            disabled={testing}
             onChange={(e) => {
               setBaseUrl(e.target.value);
               markDiscoveryStale();
@@ -212,26 +211,24 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
           />
         </Field>
 
-        {!provider.isPreset ? (
-          <Field label="API format">
-            <Select
-              value={kind}
-              disabled={testing}
-              onValueChange={(v) => {
-                setKind(v as ProviderKind);
-                markDiscoveryStale();
-              }}
-            >
-              <SelectTrigger size="small">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">OpenAI-compatible</SelectItem>
-                <SelectItem value="anthropic">Anthropic-compatible</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-        ) : null}
+        <Field label="API format">
+          <Select
+            value={kind}
+            disabled={testing}
+            onValueChange={(v) => {
+              setKind(v as ProviderKind);
+              markDiscoveryStale();
+            }}
+          >
+            <SelectTrigger size="small">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="openai">OpenAI-compatible</SelectItem>
+              <SelectItem value="anthropic">Anthropic-compatible</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
 
         <Field
           label="Deployment"
@@ -243,7 +240,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
         >
           <Select
             value={deployment}
-            disabled={testing || nativeGoogle}
+            disabled={testing}
             onValueChange={(value) => {
               setDeployment(value as ProviderDeployment);
             }}
@@ -270,7 +267,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
         >
           <Select
             value={needsKey ? "api-key" : "none"}
-            disabled={testing || nativeGoogle}
+            disabled={testing}
             onValueChange={(value) => {
               setNeedsKey(value === "api-key");
               markDiscoveryStale();

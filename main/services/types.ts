@@ -50,13 +50,26 @@ export interface StoredProvider {
    * treat them as local even off localhost.
    */
   deployment?: ProviderDeployment;
-  /** True for the built-in seeded presets (base URL/label locked, still editable). */
+  /** Legacy marker retained only for persisted custom-connection migration. */
   isPreset?: boolean;
+  /**
+   * A provider supplied by Pi itself. Its endpoint, models, authentication,
+   * and stream transport are Pi-owned rather than renderer-configurable.
+   */
+  isBuiltin?: boolean;
 }
 
 /** Provider as exposed to the renderer — `hasKey` is derived, the key itself never leaves the backend. */
 export interface Provider extends StoredProvider {
   hasKey: boolean;
+  /** Former custom IDs remapped during a safe provider-identity migration. */
+  legacyIds?: string[];
+  /** Pi-owned setup options. No credentials or provider environment values cross IPC. */
+  authMethods?: Array<{
+    type: "api_key" | "oauth";
+    label: string;
+    canLogin: boolean;
+  }>;
 }
 
 /**
@@ -336,10 +349,7 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId =
-  | "automatic"
-  | "apple-foundation-models"
-  | "chat-model";
+export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"

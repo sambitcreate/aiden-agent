@@ -24,8 +24,10 @@ import {
 } from "../ui";
 import { ChevronDown, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { ProviderEditor } from "./provider-editor";
+import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
+import { splitPiBuiltinProviders } from "../../lib/pi-provider-display";
 import {
   queryKeys,
   useFoundationModelsConnection,
@@ -40,6 +42,9 @@ import {
 } from "../../lib/types";
 
 function statusBadge(p: Provider): React.ReactNode {
+  if (p.isBuiltin) {
+    return p.hasKey ? <Badge color="green">Ready</Badge> : <Badge color="secondary">Set up</Badge>;
+  }
   if (!p.needsKey) return <Badge color="blue">No auth</Badge>;
   if (p.hasKey) return <Badge color="green">Key set</Badge>;
   return <Badge color="secondary">No key</Badge>;
@@ -63,20 +68,56 @@ function foundationModelsBadge(status: FoundationModelsConnectionStatus): React.
   }
 }
 
+function BuiltinProviderRows({
+  providers,
+  onSetUp,
+}: {
+  providers: readonly Provider[];
+  onSetUp: (provider: Provider) => void;
+}) {
+  return providers.map((provider, index) => (
+    <React.Fragment key={provider.id}>
+      {index > 0 ? <Separator /> : null}
+      <div className="flex items-center gap-3 px-3.5 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <Text variant="strong" truncate>
+              {provider.label}
+            </Text>
+            {statusBadge(provider)}
+          </div>
+          <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
+            {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"}
+          </Text>
+        </div>
+        <Button variant="filled" size="small" onClick={() => onSetUp(provider)}>
+          {provider.hasKey ? "Manage" : "Set up"}
+        </Button>
+      </div>
+    </React.Fragment>
+  ));
+}
+
 export function ProvidersSettings() {
   const qc = useQueryClient();
   const providers = useProviders();
   const settings = useSettings();
   const foundationModels = useFoundationModelsConnection();
   const [editing, setEditing] = React.useState<Provider | null>(null);
+  const [settingUp, setSettingUp] = React.useState<Provider | null>(null);
   const [removing, setRemoving] = React.useState<Provider | null>(null);
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
   const [refreshingFoundationModels, setRefreshingFoundationModels] = React.useState(false);
+  const [refreshingProviders, setRefreshingProviders] = React.useState(false);
+  const [showMoreBuiltinProviders, setShowMoreBuiltinProviders] = React.useState(false);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.providers });
   const list = (providers.data ?? []).filter(
     (provider) => provider.id !== OPENAI_CODEX_PROVIDER_ID,
   );
+  const builtins = list.filter((provider) => provider.isBuiltin);
+  const customProviders = list.filter((provider) => !provider.isBuiltin);
+  const { featured: featuredBuiltins, more: moreBuiltins } = splitPiBuiltinProviders(builtins);
   const titleProviderId = settings.data?.chatTitleProviderId ?? "automatic";
 
   const setTitleProvider = async (value: ChatTitleProviderId) => {
@@ -107,16 +148,43 @@ export function ProvidersSettings() {
     }
   };
 
-  const addCustom = (template: "custom" | "tailnet") => {
-    const id = `custom-${Date.now().toString(36)}`;
+  const refreshProviders = async () => {
+    setRefreshingProviders(true);
+    try {
+      const refreshed = await providersApi.refresh();
+      qc.setQueryData(queryKeys.providers, refreshed);
+      toast.success("Pi provider models refreshed.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't refresh Pi provider models.");
+    } finally {
+      setRefreshingProviders(false);
+    }
+  };
+
+  const addCustom = (template: "lmstudio" | "ollama" | "custom" | "tailnet") => {
+    const id =
+      template === "lmstudio" || template === "ollama"
+        ? `custom:${template}`
+        : `custom:connection-${Date.now().toString(36)}`;
     setEditing({
       id,
       kind: "openai",
-      label: template === "tailnet" ? "Tailscale model server" : "Custom Provider",
+      label:
+        template === "lmstudio"
+          ? "LM Studio (local)"
+          : template === "ollama"
+            ? "Ollama (local)"
+            : template === "tailnet"
+              ? "Tailscale model server"
+              : "Custom Provider",
       baseUrl:
-        template === "tailnet"
-          ? "https://your-machine.your-tailnet.ts.net/v1"
-          : "http://localhost:8000/v1",
+        template === "lmstudio"
+          ? "http://localhost:1234/v1"
+          : template === "ollama"
+            ? "http://localhost:11434/v1"
+            : template === "tailnet"
+              ? "https://your-machine.your-tailnet.ts.net/v1"
+              : "http://localhost:8000/v1",
       models: [],
       // A user may opt into API-key auth in the editor. Tailscale controls
       // reachability, not whether an application-layer key is required.
@@ -127,11 +195,6 @@ export function ProvidersSettings() {
       isPreset: false,
       hasKey: false,
     });
-  };
-
-  const configurePreset = (id: string) => {
-    const preset = list.find((provider) => provider.id === id);
-    if (preset) setEditing(preset);
   };
 
   const confirmRemove = async () => {
@@ -147,60 +210,72 @@ export function ProvidersSettings() {
         <div className="min-w-0 flex-1">
           <Text variant="strong">Providers</Text>
           <Text variant="small" color="secondary" className="mt-0.5 block">
-            Use hosted APIs or local/private models. Messages and attachments go to the selected
-            provider; API keys, when you add one, stay encrypted on this Mac.
+            Pi-native providers need only their credentials; Pi owns their endpoints, models, and
+            request transport. Add a custom connection for local or private servers.
           </Text>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button className="shrink-0" variant="filled" size="small">
-              <Plus className="size-4" />
-              Add provider
-              <ChevronDown className="size-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuLabel>Local model servers</DropdownMenuLabel>
-            <DropdownMenuItem
-              disabled={!list.some((provider) => provider.id === "lmstudio")}
-              onSelect={() => configurePreset("lmstudio")}
-            >
-              <span className="flex min-w-0 flex-col">
-                <span>LM Studio</span>
-                <span className="text-small text-tertiary">
-                  Configure the built-in localhost connection
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="transparent"
+            size="small"
+            iconOnly
+            aria-label="Refresh Pi provider models"
+            disabled={refreshingProviders}
+            onClick={() => void refreshProviders()}
+          >
+            <RefreshCw className={`size-4 ${refreshingProviders ? "animate-spin" : ""}`} />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="filled" size="small">
+                <Plus className="size-4" />
+                Add provider
+                <ChevronDown className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>Local model servers</DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={customProviders.some((provider) => provider.id === "custom:lmstudio")}
+                onSelect={() => addCustom("lmstudio")}
+              >
+                <span className="flex min-w-0 flex-col">
+                  <span>LM Studio</span>
+                  <span className="text-small text-tertiary">OpenAI-compatible local server</span>
                 </span>
-              </span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!list.some((provider) => provider.id === "ollama")}
-              onSelect={() => configurePreset("ollama")}
-            >
-              <span className="flex min-w-0 flex-col">
-                <span>Ollama</span>
-                <span className="text-small text-tertiary">
-                  Configure the built-in localhost connection
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={customProviders.some((provider) => provider.id === "custom:ollama")}
+                onSelect={() => addCustom("ollama")}
+              >
+                <span className="flex min-w-0 flex-col">
+                  <span>Ollama</span>
+                  <span className="text-small text-tertiary">
+                    Local server with Ollama-aware model discovery
+                  </span>
                 </span>
-              </span>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Private or custom</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => addCustom("tailnet")}>
-              <span className="flex min-w-0 flex-col">
-                <span>Model server over Tailscale</span>
-                <span className="text-small text-tertiary">
-                  OpenAI-compatible, no authentication by default
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Private or custom</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => addCustom("tailnet")}>
+                <span className="flex min-w-0 flex-col">
+                  <span>Model server over Tailscale</span>
+                  <span className="text-small text-tertiary">
+                    OpenAI-compatible, no authentication by default
+                  </span>
                 </span>
-              </span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => addCustom("custom")}>
-              <span className="flex min-w-0 flex-col">
-                <span>Other custom endpoint</span>
-                <span className="text-small text-tertiary">Choose protocol and authentication</span>
-              </span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => addCustom("custom")}>
+                <span className="flex min-w-0 flex-col">
+                  <span>Other custom endpoint</span>
+                  <span className="text-small text-tertiary">
+                    Choose protocol and authentication
+                  </span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       <CodexProviderSettings />
@@ -274,39 +349,96 @@ export function ProvidersSettings() {
         </div>
       ) : null}
 
-      <div className="rounded-card border border-separator">
-        {list.map((p, i) => (
-          <React.Fragment key={p.id}>
-            {i > 0 ? <Separator /> : null}
-            <div className="flex items-center gap-3 px-3.5 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <Text variant="strong" truncate>
-                    {p.label}
-                  </Text>
-                  {statusBadge(p)}
-                </div>
-                <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                  {p.baseUrl}
-                </Text>
-              </div>
-              <Button variant="filled" size="small" onClick={() => setEditing(p)}>
-                Configure
-              </Button>
-              {!p.isPreset ? (
+      <div className="grid gap-2">
+        <div className="px-1">
+          <Text variant="small-strong">Built into Pi</Text>
+          <Text variant="small" color="tertiary" className="mt-0.5 block">
+            These providers update with Pi. Their connection details are intentionally not editable.
+          </Text>
+        </div>
+        <div className="rounded-card border border-separator">
+          <BuiltinProviderRows providers={featuredBuiltins} onSetUp={setSettingUp} />
+          {moreBuiltins.length > 0 ? (
+            <>
+              {featuredBuiltins.length > 0 ? <Separator /> : null}
+              <div className="px-3.5 py-2">
                 <Button
                   variant="transparent"
                   size="small"
-                  iconOnly
-                  aria-label="Remove provider"
-                  onClick={() => setRemoving(p)}
+                  aria-controls="more-pi-providers"
+                  aria-expanded={showMoreBuiltinProviders}
+                  onClick={() => setShowMoreBuiltinProviders((showMore) => !showMore)}
                 >
-                  <Trash2 className="size-4" />
+                  {showMoreBuiltinProviders
+                    ? "Show fewer providers"
+                    : `Show ${moreBuiltins.length} more provider${moreBuiltins.length === 1 ? "" : "s"}`}
+                  <ChevronDown
+                    className={`size-3.5 transition-transform duration-150 ${showMoreBuiltinProviders ? "rotate-180" : ""}`}
+                  />
                 </Button>
-              ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+        {showMoreBuiltinProviders && moreBuiltins.length > 0 ? (
+          <div id="more-pi-providers" className="rounded-card border border-separator">
+            <div className="px-3.5 py-3">
+              <Text variant="small-strong">More Pi providers</Text>
+              <Text variant="small" color="tertiary" className="mt-0.5 block">
+                These stay Pi-native and can be set up whenever you need them.
+              </Text>
             </div>
-          </React.Fragment>
-        ))}
+            <Separator />
+            <BuiltinProviderRows providers={moreBuiltins} onSetUp={setSettingUp} />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid gap-2">
+        <div className="px-1">
+          <Text variant="small-strong">Custom connections</Text>
+          <Text variant="small" color="tertiary" className="mt-0.5 block">
+            Configure local, private, and vendor-compatible endpoints here.
+          </Text>
+        </div>
+        <div className="rounded-card border border-separator">
+          {customProviders.length === 0 ? (
+            <Text variant="small" color="tertiary" className="block px-3.5 py-3">
+              No custom connections yet.
+            </Text>
+          ) : (
+            customProviders.map((p, i) => (
+              <React.Fragment key={p.id}>
+                {i > 0 ? <Separator /> : null}
+                <div className="flex items-center gap-3 px-3.5 py-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <Text variant="strong" truncate>
+                        {p.label}
+                      </Text>
+                      {statusBadge(p)}
+                    </div>
+                    <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
+                      {p.baseUrl}
+                    </Text>
+                  </div>
+                  <Button variant="filled" size="small" onClick={() => setEditing(p)}>
+                    Configure
+                  </Button>
+                  <Button
+                    variant="transparent"
+                    size="small"
+                    iconOnly
+                    aria-label="Remove provider"
+                    onClick={() => setRemoving(p)}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              </React.Fragment>
+            ))
+          )}
+        </div>
       </div>
 
       {editing ? (
@@ -314,6 +446,15 @@ export function ProvidersSettings() {
           provider={editing}
           open={editing !== null}
           onOpenChange={(open) => !open && setEditing(null)}
+          onSaved={invalidate}
+        />
+      ) : null}
+
+      {settingUp ? (
+        <BuiltinProviderEditor
+          provider={settingUp}
+          open={settingUp !== null}
+          onOpenChange={(open) => !open && setSettingUp(null)}
           onSaved={invalidate}
         />
       ) : null}

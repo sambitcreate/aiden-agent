@@ -1,6 +1,7 @@
 // Probe whether a local LLM is already resident in memory (Ollama / LM Studio).
 
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
+import { isLmStudioProviderId, isOllamaProviderId } from "./custom-provider-id.js";
 import type { StoredProvider } from "./types.js";
 
 export type LocalModelLoadState = "loaded" | "unloaded" | "unknown";
@@ -35,10 +36,7 @@ export function localModelIdsMatch(left: string, right: string): boolean {
   return a === b || a.startsWith(`${b}:`) || b.startsWith(`${a}:`);
 }
 
-async function fetchJson(
-  url: string,
-  signal?: AbortSignal,
-): Promise<unknown> {
+async function fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), LOCAL_RUNTIME_PROBE_TIMEOUT_MS);
   const onAbort = () => controller.abort();
@@ -59,10 +57,7 @@ async function fetchJson(
   }
 }
 
-export function parseOllamaPsLoaded(
-  value: unknown,
-  modelId: string,
-): LocalModelLoadState {
+export function parseOllamaPsLoaded(value: unknown, modelId: string): LocalModelLoadState {
   const body = object(value);
   if (!body || !Array.isArray(body.models)) return "unknown";
   for (const entry of body.models) {
@@ -77,10 +72,7 @@ export function parseOllamaPsLoaded(
   return "unloaded";
 }
 
-export function parseLmStudioModelsLoaded(
-  value: unknown,
-  modelId: string,
-): LocalModelLoadState {
+export function parseLmStudioModelsLoaded(value: unknown, modelId: string): LocalModelLoadState {
   const body = object(value);
   if (!body) return "unknown";
 
@@ -108,9 +100,7 @@ export function parseLmStudioModelsLoaded(
       const row = object(entry);
       if (!row) continue;
       const key =
-        (typeof row.key === "string" && row.key) ||
-        (typeof row.id === "string" && row.id) ||
-        "";
+        (typeof row.key === "string" && row.key) || (typeof row.id === "string" && row.id) || "";
       if (!key || !localModelIdsMatch(key, modelId)) continue;
       sawMatch = true;
       const instances = row.loaded_instances;
@@ -172,8 +162,8 @@ export async function probeLocalModelLoaded(
   if (!modelId.trim() || !isLocalProviderDeployment(provider)) return "unknown";
   if (signal?.aborted) return "unknown";
 
-  if (provider.id === "ollama") return probeOllama(provider, modelId, signal);
-  if (provider.id === "lmstudio") return probeLmStudio(provider, modelId, signal);
+  if (isOllamaProviderId(provider.id)) return probeOllama(provider, modelId, signal);
+  if (isLmStudioProviderId(provider.id)) return probeLmStudio(provider, modelId, signal);
 
   // Custom local: try Ollama then LM Studio shapes without inventing a status.
   const ollama = await probeOllama(provider, modelId, signal);
@@ -217,11 +207,7 @@ export function startLocalModelLoadMonitor(options: {
       stop();
       return;
     }
-    const state = await probeLocalModelLoaded(
-      options.provider,
-      options.modelId,
-      options.signal,
-    );
+    const state = await probeLocalModelLoaded(options.provider, options.modelId, options.signal);
     if (stopped || options.signal.aborted) {
       stop();
       return;

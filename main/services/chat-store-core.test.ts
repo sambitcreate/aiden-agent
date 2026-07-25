@@ -203,6 +203,42 @@ test("loads legacy Gemini chat identities through the native Google provider", a
   assert.equal((await store.get("legacy-chat"))?.providerId, "google");
 });
 
+test("persists a protected custom alias for historical chats", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-provider-alias-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const chat = {
+    id: "legacy-openai-chat",
+    title: "Work gateway",
+    workspaceId: "default",
+    providerId: "openai",
+    model: "work-model",
+    createdAt: 10,
+    updatedAt: 20,
+    messages: [],
+  };
+  await fs.writeFile(path.join(directory, "index.json"), JSON.stringify([chat]), "utf-8");
+  await fs.writeFile(
+    path.join(directory, "legacy-openai-chat.json"),
+    JSON.stringify(chat),
+    "utf-8",
+  );
+  const store = createChatStore(
+    async () => directory,
+    async (providerId) => (providerId === "openai" ? "custom:openai-legacy" : providerId),
+  );
+
+  assert.equal((await store.list())[0]?.providerId, "custom:openai-legacy");
+  assert.equal((await store.get(chat.id))?.providerId, "custom:openai-legacy");
+  const index = JSON.parse(
+    await fs.readFile(path.join(directory, "index.json"), "utf-8"),
+  ) as (typeof chat)[];
+  const stored = JSON.parse(
+    await fs.readFile(path.join(directory, "legacy-openai-chat.json"), "utf-8"),
+  ) as typeof chat;
+  assert.equal(index[0]?.providerId, "custom:openai-legacy");
+  assert.equal(stored.providerId, "custom:openai-legacy");
+});
+
 test("moves an empty chat between workspace lists", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({ workspaceId: "first" });

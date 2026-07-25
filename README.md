@@ -12,11 +12,33 @@
 
 ## Why Aiden
 
-- **Workspace aware.** Chat inside folder-backed projects with scoped file, search, edit, command, Git, review, and terminal tools.
-- **Bring your models.** Connect hosted providers or local Ollama and LM Studio endpoints, with a personal spatial Model Pad for the models you use.
-- **Permission first.** Choose Full, Ask, or No Access per workspace. Mutating Computer Use actions always require a separate approval.
-- **Mac native.** Use light and dark appearances, native menus and shortcuts, encrypted credential storage, local Parakeet transcription, and optional Apple Foundation Models chat titles.
-- **Extensible.** Add Agent Skills, MCP servers, attachments, Exa search, and local or cloud voice providers.
+I don't come from a coding background. I'd been bouncing between the coding agents that exist, and each one had a piece of what I wanted without any of them being the whole thing. I loved **Codex** for its restrained, calm desktop UX, **opencode** for letting me bring whatever model and provider I wanted, and **Cursor** for its nimbleness and UI, and I used **Claude Code** for the models. But the one I kept coming back to was **Pi**, by **Mario Zechner**, for the plugin system I could shape to my own workflow. What **Pi** lacked was a GUI, and I wanted the extensibility with a real interface on top of it. The first version was a native **SwiftUI** app, but within two weeks it was clear that building a coding agent inside **SwiftUI** was the wrong fight for someone who doesn't already write code, so the project pivoted to **Electron**. The first beta followed about eight days after the first commit. Along the way I started by testing the limits of **Glaze**, **Raycast**'s AI coding agent, ran out of credits inside an hour, and used **Codex** to pull out the work we'd done and carry it into this app. **Aiden** runs on the **Pi** agent runtime and gives it a Mac-native workspace.
+
+## Features
+
+### Workspaces
+
+A workspace is a folder you choose, an isolated git worktree, or a scratch space. Each one keeps its own chats, terminal sessions, and file and review panels. You pick one access level per workspace: Full, Ask, or No Access. The agent's file, search, edit, and command tools are scoped to that root and can't escape it through symlinks. Ask mode surfaces an approval card before any mutation, so a file edit or shell command waits for you to allow it once before it runs. **Computer Use** layers a second, one-use approval on top for every input action, with destructive key combinations blocked outright and typed text checked against shell-bootstrap and deletion payloads.
+
+The sidebar groups chats into recent, yesterday, month, and older buckets, with fuzzy search and ⌘1 through ⌘9 to jump to the top nine. Chats can be renamed by hand or auto-titled with **Apple Foundation Models**. The composer carries a workspace context bar showing the folder, the local execution indicator, and the git branch, plus attachments, a per-workspace permission dropdown, a per-chat **Computer Use** toggle, and a reasoning-effort selector for models that support it.
+
+### Models and the Model Pad
+
+**Pi** ships around three dozen hosted providers out of the box, including **OpenAI**, **Anthropic**, **Google**, **DeepSeek**, **Moonshot**, and **ChatGPT** sign-in for **Codex**. **Aiden** adds **Ollama**, **LM Studio**, and any **OpenAI**-compatible endpoint, with native model discovery for the local ones.
+
+The Model Pad is the part I'm proudest of. Instead of a dropdown, models live on a two-dimensional pad where you drag the ones you use onto a grid: more capable toward the top, faster toward the left, more deliberate toward the right. A snapping puck lets you pick a model by pointing, with full keyboard support and a crosshair over the active row and column. Personal placements always win. Optional **Artificial Analysis** benchmark data can suggest where unfamiliar models might sit, fetched on demand with your own key into an encrypted, device-local cache; the pad works fine without it.
+
+### Native Mac surface
+
+The native feel is real, not themed. There's a full macOS application menu, global shortcuts (⌘⌥Space to bring the app forward and focus the composer, ⌘⇧D for system-wide dictation, ⌘J for the terminal drawer, ⌘⇧E for the environment panel), and per-chat ⌘1 through ⌘9. Credentials live in the macOS **Keychain**. On-device transcription runs through **NVIDIA Parakeet** fully offline via sherpa-onnx, with cloud options from **OpenAI** and **Google Gemini** if you prefer, and a floating dictation pill that records, transcribes, and pastes into whatever app is focused. Chat titles come from **Apple Foundation Models** through a signed **Swift** helper. **Computer Use** runs through a pinned, hashed **Rust** broker that owns its own macOS permissions. Four theme presets (Aiden, Slate, Berry, Moss) cover light and dark, with custom JSON themes and reduced-motion support throughout.
+
+### Terminal, Git, and review
+
+A bottom terminal drawer (xterm.js, toggled with ⌘J) hosts workspace-attached sessions that can be split up to four panes. The environment panel on the right has three modes: an overview card showing working-tree status with line counts, a review tab with diff and branch-comparison modes, and a files tab with an in-app editor. The whole app blocks quitting or leaving the chat when a file is dirty or a save or git operation is in flight. A toolbar dropdown can open the workspace folder in **Cursor**, **VS Code**, **Zed**, **Nova**, **Android Studio**, or several others, discovered by macOS bundle id.
+
+### Extensibility
+
+Agent Skills load from `~/.agents`, `~/.claude`, and `~/.aiden`, and from the same folders inside a workspace; workspace skills override global ones on name clash, and each enabled skill becomes a tool the agent can call. **MCP** servers connect over stdio, HTTP, or SSE, with OAuth for the ones that need it and presets for common services. **Exa** powers web search when you want it. Scheduled tasks run agent turns on cron schedules with templates for daily briefs, weekly reviews, and follow-up monitors. Voice works with local or cloud providers, and attachments accept files and images, with images dropped automatically if a model isn't vision-capable.
 
 ## Privacy and trust
 
@@ -89,11 +111,4 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 
 Aiden Agent is a beta macOS release, starting at version 0.27.0. Public binary distribution is prepared but remains disabled until the signing, notarization, release-repository, and protected-environment setup in [the release guide](docs/releasing.md) is complete.
 
-This source repository does not currently include a public license. Add an explicit `LICENSE` before presenting the project as open source or accepting outside contributions.
-
-## Documentation
-
-- [Release and automatic-update guide](docs/releasing.md)
-- [Computer Use architecture and safety boundary](docs/computer-use-integration.md)
-- [Product and interface principles](PRODUCT.md)
-- [Provider integration plan](docs/plans/pi-provider-integration-plan.md)
+The project is MIT licensed (see [LICENSE](LICENSE)).

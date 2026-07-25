@@ -109,8 +109,9 @@ function makeCoordinator(options: {
 }) {
   const opened = options.opened ?? [];
   const diagnostics = options.diagnostics ?? [];
+  const providerBackend = backend(options.login);
   return new ProviderAuthFlowCoordinator({
-    backend: backend(options.login),
+    backendFor: () => providerBackend,
     openExternal: async (url) => {
       opened.push(url);
     },
@@ -204,6 +205,60 @@ test("browser flow forwards only prompts/events and opens the validated auth URL
     { flowId: FLOW_A, providerId: PROVIDER_ID, cancelled: false },
   ]);
   assert.equal(messages(owner, "providers:auth:error").length, 0);
+});
+
+test("Pi-native API-key setup preserves provider-owned multi-field prompts", async () => {
+  const owner = new FakeOwner(1);
+  const seen: string[] = [];
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: (providerId, authType) => {
+      assert.equal(providerId, "cloudflare");
+      assert.equal(authType, "api_key");
+      return backend(async (interaction) => {
+        seen.push(
+          await interaction.prompt({
+            type: "secret",
+            message: "Cloudflare API token",
+            placeholder: "Token with AI Gateway access",
+          }),
+        );
+        seen.push(
+          await interaction.prompt({
+            type: "text",
+            message: "Cloudflare account ID",
+            placeholder: "32-character account ID",
+          }),
+        );
+        return { type: "api_key", key: seen[0], env: { CLOUDFLARE_ACCOUNT_ID: seen[1] } };
+      });
+    },
+    openExternal: async () => undefined,
+    createId: ids(PROMPT_A, PROMPT_B),
+  });
+
+  coordinator.start(owner, { flowId: FLOW_A, providerId: "cloudflare", authType: "api_key" });
+  await waitForMessages(owner, "providers:auth:prompt");
+  const token = messages<ProviderAuthPromptDto>(owner, "providers:auth:prompt")[0];
+  assert.equal(token.message, "Cloudflare API token");
+  assert.equal(token.placeholder, "Token with AI Gateway access");
+  coordinator.respond(owner, {
+    flowId: FLOW_A,
+    providerId: "cloudflare",
+    promptId: token.promptId,
+    value: "token",
+  });
+
+  await waitForMessages(owner, "providers:auth:prompt", 2);
+  const account = messages<ProviderAuthPromptDto>(owner, "providers:auth:prompt")[1];
+  assert.equal(account.message, "Cloudflare account ID");
+  coordinator.respond(owner, {
+    flowId: FLOW_A,
+    providerId: "cloudflare",
+    promptId: account.promptId,
+    value: "account",
+  });
+  await waitForMessages(owner, "providers:auth:done");
+  assert.deepEqual(seen, ["token", "account"]);
 });
 
 test("device-code flow forwards the temporary code and opens its HTTPS verification page", async () => {
@@ -452,7 +507,7 @@ test("timeout is terminal but cleanup gets a bounded chance before the slot is r
     },
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
     flowTimeoutMs: 10,
     authCleanupTimeoutMs: 20,
@@ -492,7 +547,7 @@ test("cancelled authentication cannot commit a late credential", async () => {
     logout: async () => undefined,
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
     createId: ids(PROMPT_A, PROMPT_B),
   });
@@ -577,7 +632,7 @@ test("credential commit is a point of no return and cannot emit a false cancella
     },
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
     flowTimeoutMs: 10,
     createId: ids(PROMPT_A),
@@ -597,7 +652,10 @@ test("credential commit is a point of no return and cannot emit a false cancella
     { flowId: FLOW_A, providerId: PROVIDER_ID, cancelled: false },
   ]);
   assert.equal(messages(owner, "providers:auth:error").length, 0);
-  assert.equal((await coordinator.status(PROVIDER_ID)).configured, true);
+  assert.equal(
+    ((await coordinator.status(PROVIDER_ID)) as { configured: boolean }).configured,
+    true,
+  );
 });
 
 test("per-prompt abort clears the prompt without cancelling a successful flow", async () => {
@@ -644,13 +702,22 @@ test("only one Codex login flow may run at once", async () => {
 
 test("status and logout expose only the provider snapshot", async () => {
   const coordinator = makeCoordinator({ login: async () => ({}) });
-  assert.equal((await coordinator.status(PROVIDER_ID)).configured, false);
+  assert.equal(
+    ((await coordinator.status(PROVIDER_ID)) as { configured: boolean }).configured,
+    false,
+  );
 
   const owner = new FakeOwner(1);
   coordinator.start(owner, request());
   await waitForMessages(owner, "providers:auth:done");
-  assert.equal((await coordinator.status(PROVIDER_ID)).configured, true);
-  assert.equal((await coordinator.logout(PROVIDER_ID)).configured, false);
+  assert.equal(
+    ((await coordinator.status(PROVIDER_ID)) as { configured: boolean }).configured,
+    true,
+  );
+  assert.equal(
+    ((await coordinator.logout(PROVIDER_ID)) as { configured: boolean }).configured,
+    false,
+  );
 });
 
 test("raw provider errors and token-like text never cross IPC or diagnostics", async () => {
@@ -786,7 +853,7 @@ test("login cannot start while logout is mutating credentials", async () => {
     logout: async () => finishLogout.promise,
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
   });
   const logout = coordinator.logout(PROVIDER_ID);
@@ -813,7 +880,7 @@ test("shutdown waits for an in-flight credential commit before resolving", async
     logout: async () => undefined,
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
   });
   const owner = new FakeOwner(1);
@@ -850,7 +917,7 @@ test("shutdown waits for an aborted authentication backend to finish cleanup", a
     logout: async () => undefined,
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
     authCleanupTimeoutMs: 1_000,
   });
@@ -885,7 +952,7 @@ test("shutdown waits for an in-flight logout before resolving", async () => {
     },
   };
   const coordinator = new ProviderAuthFlowCoordinator({
-    backend: customBackend,
+    backendFor: () => customBackend,
     openExternal: async () => undefined,
   });
   const logout = coordinator.logout(PROVIDER_ID);

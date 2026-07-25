@@ -91,7 +91,7 @@ function snapshot(models: ArtificialAnalysisCatalog["models"]): ArtificialAnalys
   };
 }
 
-test("LM Studio discovery uses its native metadata and excludes embeddings", async (t) => {
+test("LM Studio custom connections use native metadata and exclude embeddings", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -128,7 +128,7 @@ test("LM Studio discovery uses its native metadata and excludes embeddings", asy
     );
   }) as typeof fetch;
 
-  const result = await testConnection(lmStudioProvider, null);
+  const result = await testConnection({ ...lmStudioProvider, id: "custom:lmstudio" }, null);
   assert.deepEqual(result.models, ["google/gemma-4-e2b"]);
   assert.equal(result.modelCount, 1);
   assert.deepEqual(result.modelMetadata["google/gemma-4-e2b"], {
@@ -169,7 +169,7 @@ test("LM Studio falls back to the OpenAI-compatible list only when its native ro
   assert.equal(result.modelMetadata["a-model"]?.source, "provider");
 });
 
-test("Ollama discovery enriches chat models with show metadata and filters embeddings", async (t) => {
+test("Ollama custom connections enrich chat models with show metadata and filter embeddings", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
     globalThis.fetch = originalFetch;
@@ -206,7 +206,7 @@ test("Ollama discovery enriches chat models with show metadata and filters embed
   const result = await testConnection(
     {
       ...lmStudioProvider,
-      id: "ollama",
+      id: "custom:ollama",
       label: "Ollama (local)",
       baseUrl: "http://127.0.0.1:11434/v1",
     },

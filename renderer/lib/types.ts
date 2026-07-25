@@ -40,7 +40,17 @@ export interface Provider {
   /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
   deployment?: ProviderDeployment;
   isPreset?: boolean;
+  /** Pi owns this provider's endpoint, models, auth, and transport. */
+  isBuiltin?: boolean;
   hasKey: boolean;
+  /** Former custom IDs remapped during a safe provider-identity migration. */
+  legacyIds?: string[];
+  /** Pi-owned setup options. Credential payloads never leave Electron main. */
+  authMethods?: Array<{
+    type: "api_key" | "oauth";
+    label: string;
+    canLogin: boolean;
+  }>;
 }
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex" as const;
@@ -78,7 +88,7 @@ export interface ProviderAuthSelectOption {
 
 export interface ProviderAuthPrompt {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
   promptId: string;
   type: "text" | "secret" | "select" | "manual_code";
   message: string;
@@ -89,21 +99,21 @@ export interface ProviderAuthPrompt {
 export type ProviderAuthEvent =
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "info";
       message: string;
       links?: Array<{ url: string; label?: string }>;
     }
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "auth_url";
       url: string;
       instructions?: string;
     }
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "device_code";
       userCode: string;
       verificationUri: string;
@@ -112,26 +122,21 @@ export type ProviderAuthEvent =
     }
   | {
       flowId: string;
-      providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+      providerId: string;
       type: "progress";
       message: string;
     };
 
 export interface ProviderAuthDone {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
+  providerId: string;
   cancelled: boolean;
 }
 
 export interface ProviderAuthError {
   flowId: string;
-  providerId: typeof OPENAI_CODEX_PROVIDER_ID;
-  code:
-    | "port_busy"
-    | "rate_limited"
-    | "timed_out"
-    | "verification_failed"
-    | "sign_in_failed";
+  providerId: string;
+  code: "port_busy" | "rate_limited" | "timed_out" | "verification_failed" | "sign_in_failed";
   message: string;
 }
 
@@ -604,10 +609,7 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId =
-  | "automatic"
-  | "apple-foundation-models"
-  | "chat-model";
+export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"

@@ -5,7 +5,6 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_LABEL,
 } from "./codex-provider.js";
-import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import {
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
@@ -76,8 +75,9 @@ export interface ModelRuntimeDependencies {
     prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
   };
-  google: {
-    getModel(modelId: string): Model<Api> | undefined;
+  native: {
+    getProvider(providerId: string): StoredProvider | undefined;
+    getModel(providerId: string, modelId: string): Model<Api> | undefined;
     streamSimple: ProviderStreams["streamSimple"];
   };
 }
@@ -100,6 +100,26 @@ export async function resolveModelRuntimeWith(
     };
   }
 
+  // Pi owns the model record, auth resolution, and stream dispatcher for
+  // every built-in provider. Never reconstruct one through /compat or read a
+  // legacy Aiden key for this path.
+  const nativeProvider = dependencies.native.getProvider(providerId);
+  if (nativeProvider) {
+    const model = dependencies.native.getModel(providerId, modelId);
+    if (!model) {
+      throw new Error(
+        `Model "${modelId}" is not available through Pi's ${nativeProvider.label} provider. Choose another model and try again.`,
+      );
+    }
+    return {
+      provider: nativeProvider,
+      model,
+      apiKey: undefined,
+      headers: undefined,
+      streams: { streamSimple: dependencies.native.streamSimple },
+    };
+  }
+
   const provider = await dependencies.getProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" not found.`);
   if (!provider.models.includes(modelId)) {
@@ -112,22 +132,6 @@ export async function resolveModelRuntimeWith(
   const apiKey = resolveRuntimeApiKey(provider, storedApiKey);
   if (provider.needsKey && !apiKey) {
     throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
-  }
-
-  if (providerId === GOOGLE_PROVIDER_ID) {
-    const model = dependencies.google.getModel(modelId);
-    if (!model) {
-      throw new Error(
-        `Model "${modelId}" is not supported by Aiden's native Google connection. Choose another model and try again.`,
-      );
-    }
-    return {
-      provider,
-      model,
-      apiKey,
-      headers: undefined,
-      streams: { streamSimple: dependencies.google.streamSimple },
-    };
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
