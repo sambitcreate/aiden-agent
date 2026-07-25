@@ -226,6 +226,15 @@ body {
   transition-duration: 0.001ms !important;
 }
 
+/* Composer focus is the only shell-wide fill: ~2% darker popover, not a translucent wash. */
+.composer-shell {
+  transition: background-color 150ms ease-out;
+}
+
+.composer-shell:focus-within {
+  background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
+}
+
 .diff-line-marker {
   display: inline-block;
   width: 1.2ch;
@@ -612,25 +621,25 @@ textarea {
   }
 }
 
-@keyframes aiden-agent-step-label-in {
+/* One new row appends at the bottom, so shifting the whole stack up by exactly
+   one row height carries the older lines with it. */
+@keyframes aiden-activity-stack-shift {
   from {
-    opacity: 0;
-    transform: translateY(2px);
+    transform: translateY(1.5rem);
   }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }
 
-@keyframes aiden-agent-step-label-out {
+@keyframes aiden-activity-row-in {
   from {
-    opacity: 1;
-    transform: translateY(0);
+    opacity: 0;
+    filter: blur(2px);
   }
   to {
-    opacity: 0;
-    transform: translateY(-2px);
+    opacity: 1;
+    filter: blur(0);
   }
 }
 
@@ -722,52 +731,44 @@ textarea {
 }
 
 .agent-event-presence[data-presence="visible"],
-.agent-steps[data-presence="visible"],
-.agent-event-in,
-.agent-steps[data-animate="true"] .agent-step-row {
+.activity-feed[data-presence="visible"],
+.agent-event-in {
   opacity: 1;
 }
 
-.agent-activity-transition,
-.agent-step-label-grid {
+.agent-activity-transition {
   display: grid;
 }
 
-.agent-activity-layer,
-.agent-step-label-grid > * {
+.agent-activity-layer {
   grid-area: 1 / 1;
 }
 
-.agent-step-icon[data-status="pending"] svg,
-.agent-step-icon[data-status="running"] svg,
-.agent-step-icon[data-status="awaiting_approval"] svg {
-  animation: spin 1.15s linear infinite;
+/* Older lines dissolve into the top edge instead of ending at a hard border. */
+.activity-feed-window[data-masked="true"] {
+  mask-image: linear-gradient(to bottom, transparent 0%, black 45%, black 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 45%, black 100%);
 }
 
 :root[data-reduce-motion="false"] .agent-event-presence[data-presence="visible"],
-:root[data-reduce-motion="false"] .agent-steps[data-animate="true"][data-presence="visible"],
-:root[data-reduce-motion="false"] .agent-event-in,
-:root[data-reduce-motion="false"] .agent-steps[data-animate="true"] .agent-step-row {
+:root[data-reduce-motion="false"] .activity-feed[data-animate="true"][data-presence="visible"],
+:root[data-reduce-motion="false"] .agent-event-in {
   animation: aiden-agent-event-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 :root[data-reduce-motion="false"] .agent-event-presence[data-presence="exiting"],
-:root[data-reduce-motion="false"] .agent-steps[data-presence="exiting"],
+:root[data-reduce-motion="false"] .activity-feed[data-presence="exiting"],
 :root[data-reduce-motion="false"] .agent-event-out {
   animation: aiden-agent-event-out 180ms ease-in both;
   pointer-events: none;
 }
 
-:root[data-reduce-motion="false"] .agent-step-label-in {
-  animation: aiden-agent-step-label-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+:root[data-reduce-motion="false"] .activity-feed-stack {
+  animation: aiden-activity-stack-shift 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-:root[data-reduce-motion="false"] .agent-step-label-out {
-  animation: aiden-agent-step-label-out 140ms ease-in both;
-}
-
-:root[data-reduce-motion="true"] .agent-step-icon svg {
-  animation: none;
+:root[data-reduce-motion="false"] .activity-feed-stack > .activity-feed-row:last-child {
+  animation: aiden-activity-row-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 :root[data-reduce-motion="true"] .agent-activity-chevron {
@@ -888,7 +889,8 @@ textarea {
 }
 
 .appearance-mode-option:focus-visible .appearance-mode-preview {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  border-color: var(--accent);
+  background: var(--surface-list-selection);
 }
 
 .appearance-mode-option[aria-checked="true"] {
@@ -1200,7 +1202,7 @@ textarea {
 
 .appearance-color-control:focus-within {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring) 34%, transparent);
+  background: var(--surface-input);
 }
 
 .appearance-color-swatch {
@@ -1289,7 +1291,8 @@ textarea {
 }
 
 .appearance-range-control input[type="range"]:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  background: var(--accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.28);
 }
 
 .appearance-range-control output {
@@ -1345,7 +1348,13 @@ textarea {
 }
 
 .appearance-segmented button:focus-visible {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  background: var(--surface-list-selection);
+  color: var(--text-primary);
+}
+
+.appearance-segmented button[aria-checked="true"]:focus-visible {
+  background: var(--surface-popover);
+  box-shadow: var(--elevation-control);
 }
 
 .appearance-number-control {
@@ -1370,7 +1379,7 @@ textarea {
 
 .appearance-number-control input:focus-visible {
   border-color: var(--focus-ring);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring) 34%, transparent);
+  background: var(--surface-input);
 }
 
 .appearance-dock-options {
@@ -1399,7 +1408,15 @@ textarea {
 }
 
 .appearance-dock-options button:focus-visible {
-  box-shadow: 0 0 0 2px var(--focus-ring);
+  border-color: var(--accent);
+  background: var(--surface-list-selection);
+}
+
+.appearance-dock-options button[aria-checked="true"]:focus-visible {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    var(--elevation-control-hover);
 }
 
 .appearance-dock-options img {
