@@ -121,6 +121,9 @@ export function ProvidersSettings() {
       // A user may opt into API-key auth in the editor. Tailscale controls
       // reachability, not whether an application-layer key is required.
       needsKey: false,
+      // Tailscale private servers are local inference; loopback custom defaults
+      // to local via URL inference, but set it explicitly for the editor.
+      deployment: "local",
       isPreset: false,
       hasKey: false,
     });
