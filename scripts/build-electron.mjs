@@ -30,4 +30,11 @@ await Promise.all([
     format: "cjs",
     external: ["electron"],
   }),
+  build({
+    ...common,
+    entryPoints: ["renderer/preload-assistant.ts"],
+    outfile: "build/preload/preload-assistant.cjs",
+    format: "cjs",
+    external: ["electron"],
+  }),
 ]);
