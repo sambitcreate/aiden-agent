@@ -471,7 +471,7 @@ function EnvironmentPanelSurface({
         tabIndex={fullOpen ? 0 : -1}
         onPointerDown={beginResize}
         onKeyDown={resizeWithKeyboard}
-        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-focus-ring"
+        className="absolute inset-y-0 left-0 z-40 -ml-1 w-2 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-1 before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent"
       />
 
       <header className="drag-region flex h-13 shrink-0 items-center gap-2 border-b border-separator px-3">
@@ -526,10 +526,10 @@ function EnvironmentPanelSurface({
                   panel.setTab(nextTab);
                 }}
                 className={cn(
-                  "flex h-7 items-center gap-1.5 rounded-[9px] px-2 text-small-strong outline-none transition-[background-color,box-shadow,color] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-focus-ring",
+                  "flex h-7 items-center gap-1.5 rounded-[9px] px-2 text-small-strong outline-none transition-[background-color,box-shadow,color] duration-150 ease-out focus-visible:outline-none",
                   selected
-                    ? "bg-popover text-primary shadow-control"
-                    : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection",
+                    ? "bg-popover text-primary shadow-control focus-visible:bg-popover"
+                    : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection",
                 )}
               >
                 <Icon className="size-3.5" />
