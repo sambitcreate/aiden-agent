@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: aiden-agent-macos-release
@@ -21,7 +21,6 @@ jobs:
     environment: release
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      RELEASE_REPOSITORY: sambitcreate/aiden-agent-releases
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -88,21 +87,21 @@ jobs:
       - name: Publish verified release assets
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_REPOSITORY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           test -n "$GH_TOKEN"
-          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists; refusing to replace published update assets." >&2
             exit 1
           fi
           cd release/distribution
           shasum -a 256 -- *.dmg *.zip latest-mac.yml > SHA256SUMS
           gh release create "$RELEASE_TAG" \
-            --repo "$RELEASE_REPOSITORY" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Aiden Agent $RELEASE_VERSION" \
-            --notes "Automated verified macOS release from Aiden's private source pipeline." \
+            --notes "Automated verified Aiden Agent beta release." \
             --latest \
             -- *.dmg *.zip latest-mac.yml SHA256SUMS
