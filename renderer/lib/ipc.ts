@@ -471,6 +471,11 @@ interface ChatReasoningDelta {
   streamId: string;
   delta: string;
 }
+export type ChatStatusPhase = "model_loading" | "model_ready";
+interface ChatStatus {
+  streamId: string;
+  phase: ChatStatusPhase;
+}
 interface ChatDone {
   streamId: string;
   content: string;
@@ -528,6 +533,7 @@ export interface StreamCallbacks {
   onTimeline?: (timeline: GenerationTimeline) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
+  onStatus?: (phase: ChatStatusPhase) => void;
 }
 
 function makeStreamId(): string {
@@ -558,6 +564,11 @@ export function startGeneration(
   unsubs.push(
     onNotification<ChatReasoningDelta>("chat:reasoning-delta", (p) => {
       if (p.streamId === streamId) callbacks.onReasoningDelta?.(p.delta);
+    }),
+  );
+  unsubs.push(
+    onNotification<ChatStatus>("chat:status", (p) => {
+      if (p.streamId === streamId) callbacks.onStatus?.(p.phase);
     }),
   );
   unsubs.push(
