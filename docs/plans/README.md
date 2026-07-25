@@ -6,7 +6,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 | Plan | Status | Current state |
 | --- | --- | --- |
-| [Aiden Assistant](aiden-assistant-plan.md) | Planned | Draft only; no code yet. |
+| [Aiden Assistant](aiden-assistant-plan.md) | Planned | Task-level implementation plan written and verified against the codebase; no code yet. |
 | [Compaction](compaction-plan.md) | Partial | Core context transformation has landed; the broader design remains open. |
 | [Designer Mode](designer-mode-plan.md) | Planned | Phase 0 validation has not started in the runtime. |
 | [Dynamic Model Catalog](dynamic-model-catalog-plan.md) | In progress | Local implementation work exists; the remote-overlay plan is not complete. |
