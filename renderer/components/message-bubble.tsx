@@ -38,7 +38,7 @@ export function MessageBubble({
                     key={a.id}
                     src={`data:${a.mimeType};base64,${a.data}`}
                     alt={a.name}
-                    className="max-h-40 rounded-xl border border-separator object-cover"
+                    className="max-h-40 max-w-full rounded-xl border border-separator object-contain"
                   />
                 ) : (
                   <div

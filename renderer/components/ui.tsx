@@ -145,7 +145,7 @@ export function Callout({ color, className, ...props }: React.HTMLAttributes<HTM
   return (
     <div
       className={cn(
-        "flex flex-col gap-1 rounded-card bg-well p-3",
+        "flex min-w-0 flex-col gap-1 break-words rounded-card bg-well p-3",
         color === "red" && "border-red/25 bg-red/5",
         className,
       )}
@@ -907,10 +907,23 @@ export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGrou
 
 export const Command = React.forwardRef<React.ElementRef<typeof CommandPrimitive>, React.ComponentPropsWithoutRef<typeof CommandPrimitive>>(function Command({ className, ...props }, ref) { return <CommandPrimitive ref={ref} className={cn("flex w-full flex-col overflow-hidden bg-transparent text-primary", className)} {...props} />; });
 export const CommandInput = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Input>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>>(function CommandInput({ className, ...props }, ref) { return <div className="flex h-9 items-center gap-2 border-b border-separator px-3"><Search className="size-4 shrink-0 text-tertiary" /><CommandPrimitive.Input ref={ref} className={cn("h-full min-w-0 flex-1 bg-transparent text-regular outline-none placeholder:text-secondary", className)} {...props} /></div>; });
-export const CommandList = React.forwardRef<React.ElementRef<typeof CommandPrimitive.List>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>>(function CommandList({ className, ...props }, ref) { return <CommandPrimitive.List ref={ref} className={cn("h-[300px] max-h-[300px] overflow-y-auto p-1 outline-none", className)} {...props} />; });
+export const CommandList = React.forwardRef<React.ElementRef<typeof CommandPrimitive.List>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>>(function CommandList({ className, ...props }, ref) { return <CommandPrimitive.List ref={ref} className={cn("h-[min(300px,calc(100vh-9rem))] max-h-[min(300px,calc(100vh-9rem))] overflow-y-auto p-1 outline-none", className)} {...props} />; });
 export const CommandEmpty = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>) => <CommandPrimitive.Empty className={cn("px-3 py-6 text-center text-small text-tertiary", className)} {...props} />;
 export const CommandItem = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Item>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>>(function CommandItem({ className, ...props }, ref) { return <CommandPrimitive.Item ref={ref} className={cn("relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-150 data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45", className)} {...props} />; });
 export const CommandSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>) => <CommandPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
+
+// Isolates a render failure to one subtree, so a single bad node no longer
+// escalates to the router boundary and replaces the whole screen. A changed
+// resetKey means fresh content to try, so the boundary retries instead of
+// staying stuck on the fallback.
+type ErrorBoundaryProps = { fallback: React.ReactNode; resetKey?: unknown; children: React.ReactNode };
+type ErrorBoundaryState = { failed: boolean; resetKey: unknown };
+export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { failed: false, resetKey: this.props.resetKey };
+  static getDerivedStateFromError(): Partial<ErrorBoundaryState> { return { failed: true }; }
+  static getDerivedStateFromProps(props: ErrorBoundaryProps, state: ErrorBoundaryState): Partial<ErrorBoundaryState> | null { return Object.is(props.resetKey, state.resetKey) ? null : { failed: false, resetKey: props.resetKey }; }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
+}
 
 export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: () => void }) {
   return <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center"><Text variant="heading1">Something went wrong</Text><Text color="secondary">{error instanceof Error ? error.message : "Aiden Agent could not render this screen."}</Text>{reset ? <Button onClick={reset}>Try again</Button> : null}</div>;

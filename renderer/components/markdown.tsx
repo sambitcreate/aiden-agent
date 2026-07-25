@@ -18,6 +18,10 @@ interface MarkdownProps {
 
 export const MARKDOWN_CLASSNAME = cn(
   "select-text text-regular text-primary leading-relaxed",
+  // Model output routinely contains unbroken runs (URLs, base64, hashes). Wrap
+  // them instead of letting one token widen the transcript column. KaTeX lays
+  // out its own boxes and scrolls horizontally, so it opts back out.
+  "break-words [&_.katex]:break-normal",
   "[&_p]:my-2 first:[&_p]:mt-0 last:[&_p]:mb-0",
   "[&_h1]:text-large-strong [&_h2]:text-strong [&_h3]:text-strong [&_h1]:mt-4 [&_h2]:mt-4 [&_h3]:mt-3 [&_h1]:mb-2 [&_h2]:mb-2 [&_h3]:mb-1",
   "[&_ul]:my-2 [&_ul]:pl-5 [&_ul]:list-disc [&_ol]:my-2 [&_ol]:pl-5 [&_ol]:list-decimal [&_li]:my-0.5",

@@ -595,7 +595,7 @@ export function ModelPicker({
                 aria-label="Filter chat models"
                 placeholder="Filter models…"
               />
-              <CommandList className="h-[min(300px,calc(100vh-9rem))] max-h-[min(300px,calc(100vh-9rem))]">
+              <CommandList>
                 <CommandEmpty>No models found.</CommandEmpty>
                 {orderedEntries.map((entry) => {
                   const isActive = entry.value === selectedValue;

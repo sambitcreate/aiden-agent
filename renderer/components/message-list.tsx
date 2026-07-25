@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { ThinkingOrb, type OrbTheme } from "thinking-orbs";
-import { Callout, Text } from "./ui";
+import { Callout, ErrorBoundary, Text } from "./ui";
 import { AgentSteps } from "./agent-steps";
 import { EventPresence } from "./event-presence";
 import { MessageBubble } from "./message-bubble";
@@ -72,7 +72,12 @@ export function MessageList({
             <AgentSteps timeline={m.timeline} animate={false} />
           ) : null}
           {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
-          <MessageBubble role={m.role} content={m.content} attachments={m.attachments} />
+          <ErrorBoundary
+            fallback={<UnrenderableMessage content={m.content} />}
+            resetKey={m.content}
+          >
+            <MessageBubble role={m.role} content={m.content} attachments={m.attachments} />
+          </ErrorBoundary>
         </div>
       ))}
 
@@ -87,13 +92,18 @@ export function MessageList({
             />
           ) : null}
           {streamingText ? (
-            <MessageBubble
-              role="assistant"
-              content={streamingText}
-              streaming
-              streamComplete={streamComplete}
-              onStreamHandoffComplete={onStreamHandoffComplete}
-            />
+            <ErrorBoundary
+              fallback={<UnrenderableMessage content={streamingText} />}
+              resetKey={streamingText}
+            >
+              <MessageBubble
+                role="assistant"
+                content={streamingText}
+                streaming
+                streamComplete={streamComplete}
+                onStreamHandoffComplete={onStreamHandoffComplete}
+              />
+            </ErrorBoundary>
           ) : null}
         </div>
       ) : null}
@@ -113,6 +123,21 @@ export function MessageList({
         ) : null}
       </EventPresence>
     </div>
+  );
+}
+
+// Markdown, KaTeX, and highlighting all run over untrusted model output. If one
+// message throws, keep the rest of the transcript alive and show its raw text.
+function UnrenderableMessage({ content }: { content: string }) {
+  return (
+    <Callout color="red">
+      <Text variant="small-strong" color="red">
+        This message could not be formatted
+      </Text>
+      <Text variant="small" color="secondary" className="mt-0.5 block whitespace-pre-wrap">
+        {content}
+      </Text>
+    </Callout>
   );
 }
 
