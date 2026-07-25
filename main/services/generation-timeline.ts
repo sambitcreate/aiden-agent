@@ -1,7 +1,10 @@
 import {
   GENERATION_TIMELINE_VERSION,
   isTerminalAgentStep,
+  isToolStep,
+  type AgentStep,
   type AgentStepStatus,
+  type AgentThinkingStep,
   type AgentToolStep,
   type GenerationTimeline,
   type GenerationTimelineStatus,
@@ -9,11 +12,13 @@ import {
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
+const MAX_DETAIL_LENGTH = 120;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 
 interface SafeToolDescriptor {
   label: string;
   target?: string;
+  detail?: string;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -50,6 +55,26 @@ function safeRelativeTarget(value: unknown): string | undefined {
   return segments.join("/").slice(0, MAX_TARGET_LENGTH) || undefined;
 }
 
+/**
+ * Collapse a model-authored value to one printable feed line. Callers decide
+ * per tool which arguments are eligible; raw shell commands and file contents
+ * never are.
+ */
+function safeDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = Array.from(value)
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 32 || code === 127 ? " " : character;
+    })
+    .join("")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, MAX_DETAIL_LENGTH)
+    .trim();
+  return cleaned || undefined;
+}
+
 function titleCaseToolName(toolName: string): string {
   return safeToolName(toolName)
     .split(/[_:.-]+/u)
@@ -58,6 +83,12 @@ function titleCaseToolName(toolName: string): string {
     .join(" ");
 }
 
+/**
+ * Project a tool call onto the renderer-safe fields the activity feed reads.
+ * `detail` is opt-in per tool: patterns and queries the model authored for
+ * display are eligible, shell commands and file contents never are. A command
+ * shows the model's own `description` argument instead of the command itself.
+ */
 export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDescriptor {
   const values = record(args);
   const path = safeRelativeTarget(values.path ?? values.filePath ?? values.directory);
@@ -67,17 +98,21 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
     case "list_dir":
       return { label: "List directory", target: path };
     case "glob":
-      return { label: "Find files", target: path };
+      return { label: "Find files", detail: safeDetail(values.pattern) };
     case "grep":
-      return { label: "Search files", target: path };
+      return { label: "Search files", target: path, detail: safeDetail(values.pattern) };
     case "write_file":
       return { label: "Write file", target: path };
     case "edit_file":
       return { label: "Edit file", target: path };
     case "run_command":
-      return { label: "Run command" };
+      return { label: "Run command", detail: safeDetail(values.description) };
+    case "web_search":
+      return { label: "Web search", detail: safeDetail(values.query) };
+    case "schedule_task":
+      return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
-      return { label: "Use Mac" };
+      return { label: "Use Mac", detail: safeDetail(values.action) };
     default:
       return { label: titleCaseToolName(toolName) || "Use tool" };
   }
@@ -86,6 +121,9 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
 export class GenerationTimelineProjector {
   private readonly timeline: GenerationTimeline;
   private readonly stepIndex = new Map<string, number>();
+  private toolSequence = 0;
+  private thinkingSequence = 0;
+  private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
     generationId: string,
@@ -105,27 +143,63 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || this.stepIndex.has(toolCallId)) return;
     const timestamp = this.now();
     const descriptor = safeToolDescriptor(toolName, args);
-    const sequence = this.timeline.steps.length + 1;
+    this.toolSequence += 1;
     const step: AgentToolStep = {
-      id: `tool-${sequence}`,
+      id: `tool-${this.toolSequence}`,
       order: this.timeline.steps.length,
       kind: "tool",
-      toolCallId: `call-${sequence}`,
+      toolCallId: `call-${this.toolSequence}`,
       toolName: safeToolName(toolName),
       label: descriptor.label,
       status: "pending",
       startedAt: timestamp,
       updatedAt: timestamp,
       ...(descriptor.target ? { target: descriptor.target } : {}),
+      ...(descriptor.detail ? { detail: descriptor.detail } : {}),
     };
     this.stepIndex.set(toolCallId, this.timeline.steps.length);
     this.timeline.steps.push(step);
     this.emit();
   }
 
+  /**
+   * Pi reports no reasoning duration, so consecutive reasoning blocks are
+   * merged into the single stretch of thinking the user actually perceives and
+   * timed against the host clock.
+   */
+  thinkingStarted(): void {
+    if (this.timeline.status !== "running" || this.openThinking) return;
+    const timestamp = this.now();
+    const last = this.timeline.steps[this.timeline.steps.length - 1];
+    if (last && !isToolStep(last)) {
+      this.openThinking = { index: this.timeline.steps.length - 1, startedAt: timestamp };
+      return;
+    }
+    this.thinkingSequence += 1;
+    const step: AgentThinkingStep = {
+      id: `think-${this.thinkingSequence}`,
+      order: this.timeline.steps.length,
+      kind: "thinking",
+      startedAt: timestamp,
+      updatedAt: timestamp,
+      durationMs: 0,
+    };
+    this.openThinking = { index: this.timeline.steps.length, startedAt: timestamp };
+    this.timeline.steps.push(step);
+    this.emit();
+  }
+
+  thinkingEnded(): void {
+    if (this.timeline.status !== "running" || !this.openThinking) return;
+    this.settleThinking(this.now());
+    this.emit();
+  }
+
   publicToolCallId(toolCallId: string): string | undefined {
     const index = this.stepIndex.get(toolCallId);
-    return index === undefined ? undefined : this.timeline.steps[index]?.toolCallId;
+    if (index === undefined) return undefined;
+    const step = this.timeline.steps[index];
+    return step && isToolStep(step) ? step.toolCallId : undefined;
   }
 
   toolAwaitingApproval(toolCallId: string): void {
@@ -146,13 +220,15 @@ export class GenerationTimelineProjector {
   finish(status: Exclude<GenerationTimelineStatus, "running">): GenerationTimeline {
     if (this.timeline.status === "running") {
       const timestamp = this.now();
+      this.settleThinking(timestamp);
       this.timeline.status = status;
       this.timeline.finishedAt = timestamp;
       for (const step of this.timeline.steps) {
         if (
-          step.status === "pending" ||
-          step.status === "awaiting_approval" ||
-          step.status === "running"
+          isToolStep(step) &&
+          (step.status === "pending" ||
+            step.status === "awaiting_approval" ||
+            step.status === "running")
         ) {
           step.status = status === "cancelled" ? "cancelled" : "failed";
           step.updatedAt = timestamp;
@@ -167,8 +243,19 @@ export class GenerationTimelineProjector {
   snapshot(): GenerationTimeline {
     return {
       ...this.timeline,
-      steps: this.timeline.steps.map((step) => ({ ...step })),
+      steps: this.timeline.steps.map((step) => ({ ...step }) as AgentStep),
     };
+  }
+
+  private settleThinking(timestamp: number): void {
+    const open = this.openThinking;
+    if (!open) return;
+    this.openThinking = null;
+    const step = this.timeline.steps[open.index];
+    if (!step || isToolStep(step)) return;
+    step.durationMs = (step.durationMs ?? 0) + Math.max(0, timestamp - open.startedAt);
+    step.updatedAt = timestamp;
+    step.finishedAt = timestamp;
   }
 
   private updateTool(toolCallId: string, status: AgentStepStatus, terminal = false): void {
@@ -176,7 +263,7 @@ export class GenerationTimelineProjector {
     const index = this.stepIndex.get(toolCallId);
     if (index === undefined) return;
     const step = this.timeline.steps[index];
-    if (!step || isTerminalAgentStep(step.status)) return;
+    if (!step || !isToolStep(step) || isTerminalAgentStep(step.status)) return;
     const timestamp = this.now();
     step.status = status;
     step.updatedAt = timestamp;
