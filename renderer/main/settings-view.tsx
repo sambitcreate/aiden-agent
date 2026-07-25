@@ -152,8 +152,8 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
 
   return (
     <SplitView
-      storageKey="aiden-agent-settings"
-      sidebarSize={{ default: 288, min: 252, max: 340 }}
+      storageKey="aiden-agent"
+      sidebarSize={{ default: 272, min: 236, max: 340 }}
       sidebar={
         <Sidebar actions={<SplitView.SidebarToggle />}>
           <div className="flex min-h-full flex-col px-3 pb-4">
