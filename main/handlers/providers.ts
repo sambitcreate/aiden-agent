@@ -35,6 +35,7 @@ import {
   mergeCodexProvider,
 } from "../services/provider-list-core.js";
 import type {
+  ProviderDeployment,
   ProviderKind,
   ProviderModelMetadata,
   ProviderModelType,
@@ -128,6 +129,8 @@ function parseProvider(value: unknown): StoredProvider {
     typeof p.defaultModel === "string" && models.includes(p.defaultModel)
       ? p.defaultModel
       : undefined;
+  const deployment: ProviderDeployment | undefined =
+    p.deployment === "local" || p.deployment === "hosted" ? p.deployment : undefined;
   const provider: StoredProvider = {
     id: asString(p.id, "id"),
     kind,
@@ -137,6 +140,7 @@ function parseProvider(value: unknown): StoredProvider {
     modelMetadata,
     defaultModel,
     needsKey: typeof p.needsKey === "boolean" ? p.needsKey : true,
+    deployment,
     isPreset: typeof p.isPreset === "boolean" ? p.isPreset : false,
   };
   return provider.id === GOOGLE_PROVIDER_ID
