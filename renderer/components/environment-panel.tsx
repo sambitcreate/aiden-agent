@@ -26,6 +26,14 @@ import {
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
 import { ReviewPanel } from "./review-panel";
+import {
+  DEFAULT_PANEL_WIDTH,
+  MAX_PANEL_WIDTH,
+  MIN_PANEL_WIDTH,
+  PANEL_EDGE_GUTTER,
+  clampEnvironmentPanelWidth,
+  resolveEnvironmentPanelLayout,
+} from "../lib/environment-panel-layout";
 
 export type EnvironmentPanelTab = "overview" | "review" | "files";
 export type EnvironmentReviewMode = "changes" | "compare";
@@ -64,10 +72,6 @@ const EnvironmentPanelContext = React.createContext<EnvironmentPanelContextValue
 const OPEN_STORAGE_KEY = "aiden-agent.environment.open";
 const TAB_STORAGE_KEY = "aiden-agent.environment.tab";
 const WIDTH_STORAGE_KEY = "aiden-agent.environment.width";
-const DEFAULT_PANEL_WIDTH = 560;
-const MIN_PANEL_WIDTH = 480;
-const MAX_PANEL_WIDTH = 720;
-const MIN_CONVERSATION_WIDTH = 560;
 const SUMMARY_CARD_EXIT_MS = 120;
 const EMPTY_EDITOR_STATE: FilesEditorState = {
   workspaceId: undefined,
@@ -308,13 +312,6 @@ export function useEnvironmentPanel(): EnvironmentPanelContextValue {
   return context;
 }
 
-function clampPanelWidth(value: number, containerWidth: number): number {
-  const available = Math.max(0, containerWidth - 44);
-  const maximum = Math.min(MAX_PANEL_WIDTH, available || MAX_PANEL_WIDTH);
-  const minimum = Math.min(MIN_PANEL_WIDTH, maximum);
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
 function EnvironmentPanelSurface({
   width,
   containerWidth,
@@ -393,7 +390,7 @@ function EnvironmentPanelSurface({
 
   const commitWidth = React.useCallback(
     (nextWidth: number) => {
-      const clamped = clampPanelWidth(nextWidth, containerWidth);
+      const clamped = clampEnvironmentPanelWidth(nextWidth, containerWidth);
       setWidth(clamped);
       localStorage.setItem(WIDTH_STORAGE_KEY, String(Math.round(clamped)));
     },
@@ -409,7 +406,7 @@ function EnvironmentPanelSurface({
       const startWidth = widthRef.current;
       setResizing(true);
       const move = (moveEvent: PointerEvent) => {
-        setWidth(clampPanelWidth(startWidth + startX - moveEvent.clientX, containerWidth));
+        setWidth(clampEnvironmentPanelWidth(startWidth + startX - moveEvent.clientX, containerWidth));
       };
       const finish = (endEvent: PointerEvent) => {
         commitWidth(
@@ -468,8 +465,8 @@ function EnvironmentPanelSurface({
         role="separator"
         aria-label="Resize environment panel"
         aria-orientation="vertical"
-        aria-valuemin={Math.min(MIN_PANEL_WIDTH, Math.max(0, containerWidth - 44))}
-        aria-valuemax={Math.min(MAX_PANEL_WIDTH, Math.max(0, containerWidth - 44))}
+        aria-valuemin={Math.min(MIN_PANEL_WIDTH, Math.max(0, containerWidth - PANEL_EDGE_GUTTER))}
+        aria-valuemax={Math.min(MAX_PANEL_WIDTH, Math.max(0, containerWidth - PANEL_EDGE_GUTTER))}
         aria-valuenow={Math.round(width)}
         tabIndex={fullOpen ? 0 : -1}
         onPointerDown={beginResize}
@@ -691,8 +688,10 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
   const [resizing, setResizing] = React.useState(false);
   const [preferredWidth, setPreferredWidth] = React.useState(storedPanelWidth);
   const fullOpen = panel.open && panel.tab !== "overview";
-  const renderedWidth = clampPanelWidth(preferredWidth, containerWidth);
-  const inline = containerWidth - renderedWidth >= MIN_CONVERSATION_WIDTH;
+  const { width: renderedWidth, inline } = resolveEnvironmentPanelLayout(
+    preferredWidth,
+    containerWidth,
+  );
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
