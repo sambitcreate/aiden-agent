@@ -29,6 +29,30 @@ test("maps each active generation phase to a purposeful orb", () => {
   });
 });
 
+test("shows model loading ahead of empty-stream thinking", () => {
+  assert.deepEqual(
+    resolveAgentActivity({
+      ...idle,
+      isModelLoading: true,
+      streamingText: "",
+    }),
+    {
+      phase: "loading",
+      label: "Model loading…",
+      orbState: "shaping",
+    },
+  );
+  assert.equal(
+    resolveAgentActivity({
+      ...idle,
+      isStarting: true,
+      isModelLoading: true,
+      streamingText: "",
+    })?.phase,
+    "preparing",
+  );
+});
+
 test("distinguishes discovery tools from other agent work", () => {
   const reading: ToolActivity = {
     state: "running",
