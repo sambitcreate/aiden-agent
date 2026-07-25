@@ -476,7 +476,7 @@ export function Composer({
             ) : null}
           </div>
 
-          <div className="relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80 transition-[outline-color,box-shadow] duration-150 ease-out focus-within:outline-focus-ring">
+          <div className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80">
             {attachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
                 {attachments.map((a) => (
@@ -500,7 +500,7 @@ export function Composer({
                       type="button"
                       onClick={() => removeAttachment(a.id)}
                       aria-label={`Remove ${a.name}`}
-                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring"
+                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
                     >
                       <X className="size-3.5" />
                     </button>
@@ -519,7 +519,7 @@ export function Composer({
                 hasMessages,
                 chatId,
               })}
-              className="max-h-48 border-0 bg-transparent px-1.5 focus-visible:ring-0"
+              className="max-h-48 border-0 bg-transparent px-1.5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
               rows={1}
             />
             {!ready && readinessMessage && text.trim().length > 0 ? (
