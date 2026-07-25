@@ -3,7 +3,7 @@
 Status: implementation plan only  
 Date: 2026-07-24  
 Source audited: local `/Users/sambitbiswas/projects/pi` (`packages/coding-agent` remote catalog + `packages/ai` Models/ModelsStore)  
-Related: `docs/pi-provider-integration-plan.md` (Phases 1–2 already call for `ModelsStore` + refresh; this plan owns the **remote overlay** that plan deferred)
+Related: `docs/plans/pi-provider-integration-plan.md` (Phases 1–2 already call for `ModelsStore` + refresh; this plan owns the **remote overlay** that plan deferred)
 
 ## Outcome
 
@@ -178,7 +178,7 @@ Tasks:
 
 ### Phase 4 — Wire selectable lists to Pi inventory
 
-Depends on progress of `docs/pi-provider-integration-plan.md` Phases 2–5.
+Depends on progress of `docs/plans/pi-provider-integration-plan.md` Phases 2–5.
 
 Tasks:
 

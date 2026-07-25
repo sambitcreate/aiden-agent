@@ -2,7 +2,7 @@
 
 Status: Phases 0, 1, and 3 implemented on 2026-07-23–24; deferred tracks remain planned
 Date: 2026-07-22
-Depends on: `docs/pi-provider-integration-plan.md` (broader registry migration)
+Depends on: `docs/plans/pi-provider-integration-plan.md` (broader registry migration)
 Pi packages pinned: `@earendil-works/pi-ai` / `@earendil-works/pi-agent-core` `0.80.10`
 
 ## Scope
@@ -16,7 +16,7 @@ This plan covers a staged Gemini upgrade in three funded phases plus one explici
 
 Native **Google Search Grounding** and **cloud code execution** are *not* part of this plan. They are product/cost decisions that interact with the existing Exa tool and local `coding-tools.ts`, and they require a separate design.
 
-This plan deliberately **narrows** `docs/pi-provider-integration-plan.md` to the single `google` provider so Gemini can move to its native transport without first migrating all seven presets. The full multi-provider registry migration remains the long-term target; Phase 1 here is written so its work is a strict subset of that plan's Phase 4 runtime routing.
+This plan deliberately **narrows** `docs/plans/pi-provider-integration-plan.md` to the single `google` provider so Gemini can move to its native transport without first migrating all seven presets. The full multi-provider registry migration remains the long-term target; Phase 1 here is written so its work is a strict subset of that plan's Phase 4 runtime routing.
 
 ## Why
 

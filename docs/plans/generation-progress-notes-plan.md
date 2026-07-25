@@ -2,7 +2,7 @@
 
 Status: implementation plan only
 Date: 2026-07-25
-Related: `docs/pi-provider-integration-plan.md`, Apple Foundation Models title integration, ChatGPT/Codex Pi-native OAuth
+Related: `docs/plans/pi-provider-integration-plan.md`, Apple Foundation Models title integration, ChatGPT/Codex Pi-native OAuth
 
 ## Outcome
 

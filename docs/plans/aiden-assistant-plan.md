@@ -27,7 +27,7 @@ fail-closed unattended runs, and no recursive self-scheduling.
 ## Relationship to existing plans
 
 Scheduled Tasks is implemented through Phase 4; its original plan remains
-frozen in `docs/scheduled-tasks-plan.md`. The shipped implementation establishes
+frozen in `docs/plans/completed/scheduled-tasks-plan.md`. The shipped implementation establishes
 the `croner` dependency, main-owned lifecycle and shutdown barriers, macOS
 `Notification` delivery, dedicated task chats, usage attribution, and the
 `schedule:` IPC surface. Aiden should **reuse those proven boundaries without

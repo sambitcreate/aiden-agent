@@ -96,4 +96,4 @@ This source repository does not currently include a public license. Add an expli
 - [Release and automatic-update guide](docs/releasing.md)
 - [Computer Use architecture and safety boundary](docs/computer-use-integration.md)
 - [Product and interface principles](PRODUCT.md)
-- [Provider integration plan](docs/pi-provider-integration-plan.md)
+- [Provider integration plan](docs/plans/pi-provider-integration-plan.md)

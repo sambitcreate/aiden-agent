@@ -42,9 +42,9 @@ It should **not** become a personal multi-messenger AI OS, a Windows computer-us
 
 Related plans (do not duplicate):
 
-- `docs/pi-provider-integration-plan.md` — full Pi provider registry
-- `docs/gemini-native-upgrade-plan.md` — Phase 0 catalog-driven runtime limits (overlaps context work)
-- `docs/designer-mode-plan.md` — visual edit loop (orthogonal)
+- `docs/plans/pi-provider-integration-plan.md` — full Pi provider registry
+- `docs/plans/completed/gemini-native-upgrade-plan.md` — Phase 0 catalog-driven runtime limits (overlaps context work)
+- `docs/plans/designer-mode-plan.md` — visual edit loop (orthogonal)
 
 ## Non-goals
 
@@ -148,7 +148,7 @@ Principles:
 
 **Core implemented 2026-07-23.** Runtime limits now resolve from provider-owned Pi metadata, connection overrides, and the bundled offline catalog before conservative fallback. Every generation receives a model-aware `transformContext` from `main/services/generation-context.ts`: it accounts for the static system/tool budget and response reserve, preserves Pi's provider-measured prefix, keeps the newest user turns and recent completed tool evidence, truncates or replaces older tool payloads, and removes only complete assistant/tool-result batches. Persisted chat state is not mutated. An active turn that still cannot fit becomes a bounded non-tool recovery notice, while an impossible static prompt/tool set fails before provider I/O. Compaction is currently written to the development log; a visible Activity row remains a small follow-up.
 
-**Depends on / aligns with:** `docs/gemini-native-upgrade-plan.md` Phase 0 for wiring catalog limits into runtime `Model`.
+**Depends on / aligns with:** `docs/plans/completed/gemini-native-upgrade-plan.md` Phase 0 for wiring catalog limits into runtime `Model`.
 
 **Compression rules:**
 
