@@ -58,7 +58,7 @@ export function ReasoningBlock({
         aria-expanded={expanded}
         aria-controls={contentId}
         onClick={() => setExpanded((value) => !value)}
-        className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+        className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:outline-none"
       >
         <BrainCircuit aria-hidden="true" className="size-3.5 shrink-0" />
         <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>
@@ -76,7 +76,7 @@ export function ReasoningBlock({
         <div
           id={contentId}
           ref={viewportRef}
-          className="scroll-edge-mask max-h-36 overflow-y-auto px-3.5 pb-3 text-small leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          className="scroll-edge-mask max-h-36 overflow-y-auto px-3.5 pb-3 text-small leading-relaxed outline-none"
           data-scroll-top={atTop}
           data-scroll-bottom={atBottom}
           role="region"
