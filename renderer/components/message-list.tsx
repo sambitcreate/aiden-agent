@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ThinkingOrb, type OrbTheme } from "thinking-orbs";
 import { Callout, ErrorBoundary, Text } from "./ui";
-import { AgentSteps } from "./agent-steps";
+import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { MessageBubble } from "./message-bubble";
 import { ReasoningBlock } from "./reasoning-block";
@@ -69,7 +69,7 @@ export function MessageList({
       {messages.map((m) => (
         <div key={m.id} className="flex min-w-0 flex-col gap-3">
           {m.role === "assistant" && m.timeline?.steps.length ? (
-            <AgentSteps timeline={m.timeline} animate={false} />
+            <ActivityFeed timeline={m.timeline} animate={false} />
           ) : null}
           {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
           <ErrorBoundary
@@ -83,7 +83,7 @@ export function MessageList({
 
       {timeline || streamingReasoning || streamingText ? (
         <div className="flex min-w-0 flex-col gap-3">
-          <AgentSteps timeline={timeline} />
+          <ActivityFeed timeline={timeline} />
           {streamingReasoning ? (
             <ReasoningBlock
               content={streamingReasoning}
@@ -209,7 +209,7 @@ function AgentActivityTransition({
         variant="small"
         color="secondary"
         className={
-          value.phase === "thinking"
+          value.phase === "thinking" || value.phase === "loading"
             ? "agent-thinking-shimmer min-w-0 break-words"
             : "min-w-0 break-words"
         }
