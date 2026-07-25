@@ -1,116 +1,175 @@
-import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
+import {
+  isToolStep,
+  type AgentStep,
+  type AgentToolStep,
+  type GenerationTimeline,
+} from "../shared/generation-timeline";
 
-const DISCOVERY_TOOLS = new Set(["read_file", "list_dir", "glob", "grep"]);
-
-export type AgentStepGroup =
-  | { id: string; kind: "context"; steps: AgentToolStep[] }
-  | { id: string; kind: "tool"; steps: [AgentToolStep] };
-
-export function groupAgentSteps(steps: AgentToolStep[]): AgentStepGroup[] {
-  const groups: AgentStepGroup[] = [];
-  let context: AgentToolStep[] = [];
-  const flushContext = () => {
-    if (!context.length) return;
-    groups.push({ id: `context:${context[0]!.id}`, kind: "context", steps: context });
-    context = [];
-  };
-
-  for (const step of [...steps].sort((left, right) => left.order - right.order)) {
-    if (DISCOVERY_TOOLS.has(step.toolName)) {
-      context.push(step);
-      continue;
-    }
-    flushContext();
-    groups.push({ id: step.id, kind: "tool", steps: [step] });
-  }
-  flushContext();
-  return groups;
+/**
+ * One feed row, split so the verb can stay legible while the object it acted on
+ * recedes. `object` is model-authored text and is always rendered as plain text.
+ */
+export interface ActivityLine {
+  verb: string;
+  object?: string;
+  tone: "normal" | "warning" | "error";
 }
 
-export function isActiveStep(step: AgentToolStep): boolean {
+interface VerbPair {
+  active: string;
+  complete: string;
+}
+
+const VERBS: Record<string, VerbPair> = {
+  read_file: { active: "Reading", complete: "Read" },
+  list_dir: { active: "Listing", complete: "Listed" },
+  glob: { active: "Searching files", complete: "Searched files" },
+  grep: { active: "Grepping", complete: "Grepped" },
+  write_file: { active: "Writing", complete: "Wrote" },
+  edit_file: { active: "Editing", complete: "Edited" },
+  run_command: { active: "Running", complete: "Ran" },
+  web_search: { active: "Searching the web", complete: "Searched the web" },
+  schedule_task: { active: "Scheduling", complete: "Scheduled" },
+  computer_use: { active: "Using Mac", complete: "Used Mac" },
+};
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+export function isActiveStep(step: AgentStep): boolean {
+  if (!isToolStep(step)) return step.finishedAt === undefined;
   return (
     step.status === "pending" || step.status === "awaiting_approval" || step.status === "running"
   );
 }
 
-export function activityTrailSummary(timeline: GenerationTimeline): string {
-  if (timeline.claimCheck) return "Check needed";
-  const failed = timeline.steps.filter(
-    (step) => step.status === "failed" || step.status === "blocked" || step.status === "cancelled",
-  ).length;
-  if (failed) return `${failed} ${failed === 1 ? "issue" : "issues"}`;
-  if (timeline.status === "running") {
-    const complete = timeline.steps.filter((step) => step.status === "completed").length;
-    return complete ? `${complete} of ${timeline.steps.length} complete` : "Working";
+export function formatThinkingDuration(durationMs: number | undefined): string {
+  if (durationMs === undefined || durationMs < 2_000) return "briefly";
+  const seconds = Math.round(durationMs / 1_000);
+  if (seconds < 60) return `for ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `for ${minutes}m ${remainder}s` : `for ${minutes}m`;
+}
+
+/** The object a tool acted on: a pattern, a query, or a workspace-relative path. */
+function stepObject(step: AgentToolStep): string | undefined {
+  if (step.toolName === "grep" && step.detail && step.target) {
+    return `${step.detail} in ${step.target}`;
   }
-  return `${timeline.steps.length} ${timeline.steps.length === 1 ? "step" : "steps"}`;
+  return step.detail ?? step.target;
+}
+
+export function activityLine(step: AgentStep): ActivityLine {
+  if (!isToolStep(step)) {
+    return isActiveStep(step)
+      ? { verb: "Thinking", tone: "normal" }
+      : { verb: "Thought", object: formatThinkingDuration(step.durationMs), tone: "normal" };
+  }
+
+  const object = stepObject(step);
+  const verbs = VERBS[step.toolName];
+  switch (step.status) {
+    case "pending":
+    case "running":
+      return { verb: verbs?.active ?? step.label, object, tone: "normal" };
+    case "completed":
+      return { verb: verbs?.complete ?? step.label, object, tone: "normal" };
+    case "awaiting_approval":
+      return { verb: `${step.label} needs approval`, object, tone: "warning" };
+    case "failed":
+      return { verb: `${step.label} failed`, object, tone: "error" };
+    case "blocked":
+      return { verb: `${step.label} denied`, object, tone: "warning" };
+    case "cancelled":
+      return { verb: `${step.label} cancelled`, object, tone: "warning" };
+  }
+}
+
+/** The flattened row text, for accessible names and tests. */
+export function activityLineText(step: AgentStep): string {
+  const line = activityLine(step);
+  return line.object ? `${line.verb} ${line.object}` : line.verb;
+}
+
+export function activityIssueCount(timeline: GenerationTimeline): number {
+  return timeline.steps.filter(
+    (step) =>
+      isToolStep(step) &&
+      (step.status === "failed" || step.status === "blocked" || step.status === "cancelled"),
+  ).length;
 }
 
 export function activityTrailNeedsAttention(timeline: GenerationTimeline): boolean {
   return (
     timeline.status === "running" ||
     Boolean(timeline.claimCheck) ||
-    timeline.steps.some(
-      (step) =>
-        step.status === "failed" || step.status === "blocked" || step.status === "cancelled",
-    )
+    activityIssueCount(timeline) > 0
   );
 }
 
-function actionWords(step: AgentToolStep): { active: string; complete: string } {
-  switch (step.toolName) {
-    case "read_file":
-      return { active: "Reading file", complete: "Read file" };
-    case "list_dir":
-      return { active: "Listing directory", complete: "Listed directory" };
-    case "glob":
-      return { active: "Finding files", complete: "Found files" };
-    case "grep":
-      return { active: "Searching files", complete: "Searched files" };
-    case "write_file":
-      return { active: "Writing file", complete: "Wrote file" };
-    case "edit_file":
-      return { active: "Editing file", complete: "Edited file" };
-    case "run_command":
-      return { active: "Running command", complete: "Ran command" };
-    case "computer_use":
-      return { active: "Using Mac", complete: "Used Mac" };
-    default:
-      return { active: `${step.label} in progress`, complete: `${step.label} completed` };
-  }
+function countTools(steps: AgentStep[], names: string[]): number {
+  return steps.filter((step) => isToolStep(step) && names.includes(step.toolName)).length;
 }
 
-export function agentStepLabel(step: AgentToolStep): string {
-  const words = actionWords(step);
-  const target = step.target ? ` · ${step.target}` : "";
-  switch (step.status) {
-    case "pending":
-    case "running":
-      return `${words.active}${target}`;
-    case "awaiting_approval":
-      return `${step.label} needs approval${target}`;
-    case "completed":
-      return `${words.complete}${target}`;
-    case "failed":
-      return `${step.label} failed${target}`;
-    case "blocked":
-      return `${step.label} denied${target}`;
-    case "cancelled":
-      return `${step.label} cancelled${target}`;
-  }
-}
+const TALLIED_TOOLS = [
+  "read_file",
+  "grep",
+  "glob",
+  "list_dir",
+  "run_command",
+  "write_file",
+  "edit_file",
+  "web_search",
+  "computer_use",
+];
 
-export function contextGroupLabel(steps: AgentToolStep[]): string {
-  const active = steps.some(isActiveStep);
-  const read = steps.filter((step) => step.toolName === "read_file").length;
-  const search = steps.filter(
-    (step) => step.toolName === "grep" || step.toolName === "glob",
-  ).length;
-  const list = steps.filter((step) => step.toolName === "list_dir").length;
-  const counts = [
-    read ? `${read} ${read === 1 ? "file" : "files"}` : "",
-    search ? `${search} ${search === 1 ? "search" : "searches"}` : "",
-    list ? `${list} ${list === 1 ? "directory" : "directories"}` : "",
+/**
+ * A deterministic account of the turn, derived only from recorded steps — no
+ * model summary. Reads as one sentence: "Explored 8 files, 4 searches, ran 1
+ * command".
+ */
+export function summarizeActivity(timeline: GenerationTimeline): string {
+  const { steps } = timeline;
+  const running = timeline.status === "running";
+  const toolSteps = steps.filter(isToolStep);
+
+  if (!toolSteps.length) {
+    const thinking = steps.reduce(
+      (total, step) => (isToolStep(step) ? total : total + (step.durationMs ?? 0)),
+      0,
+    );
+    if (!steps.length) return running ? "Working" : "No activity";
+    return running ? "Thinking" : `Thought ${formatThinkingDuration(thinking)}`;
+  }
+
+  const files = countTools(steps, ["read_file"]);
+  const searches = countTools(steps, ["grep", "glob"]);
+  const directories = countTools(steps, ["list_dir"]);
+  const commands = countTools(steps, ["run_command"]);
+  const changes = countTools(steps, ["write_file", "edit_file"]);
+  const web = countTools(steps, ["web_search"]);
+  const mac = countTools(steps, ["computer_use"]);
+  const other = toolSteps.filter((step) => !TALLIED_TOOLS.includes(step.toolName)).length;
+
+  const explored = [
+    files ? plural(files, "file") : "",
+    searches ? plural(searches, "search", "searches") : "",
+    directories ? plural(directories, "directory", "directories") : "",
   ].filter(Boolean);
-  return `${active ? "Gathering" : "Gathered"} context${counts.length ? ` · ${counts.join(", ")}` : ""}`;
+  const clauses = [
+    changes ? `${running ? "editing" : "edited"} ${plural(changes, "file")}` : "",
+    commands ? `${running ? "running" : "ran"} ${plural(commands, "command")}` : "",
+    web ? plural(web, "web search", "web searches") : "",
+    mac ? plural(mac, "Mac action") : "",
+    other ? plural(other, "tool call") : "",
+  ].filter(Boolean);
+
+  if (explored.length) {
+    const lead = `${running ? "Exploring" : "Explored"} ${explored.join(", ")}`;
+    return [lead, ...clauses].join(", ");
+  }
+  const [first = "", ...rest] = clauses;
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(", ");
 }
