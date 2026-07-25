@@ -7,7 +7,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, Text, toast } from "../components/ui";
-import { ShieldQuestion, SquarePen, TerminalSquare } from "lucide-react";
+import { ShieldQuestion, TerminalSquare } from "lucide-react";
 import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
@@ -251,12 +251,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
     terminal.open,
     terminal.toggle,
   ]);
-
-  const newChat = React.useCallback(async () => {
-    const created = await chatsApi.create({ workspaceId: activeId });
-    await qc.invalidateQueries({ queryKey: queryKeys.chats });
-    void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
-  }, [qc, navigate, activeId]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
   const [streamingReasoning, setStreamingReasoning] = React.useState<
@@ -1014,22 +1008,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <ScrollArea
       className="h-full min-h-0"
-      title={chat.data?.title ?? "New chat"}
+      title={chat.data?.title ?? "New agent"}
       actions={
         <>
           <OpenInEditorPicker
             workspaceId={effectiveWorkspace?.id}
             folderPath={effectiveWorkspace?.folderPath}
           />
-          <Button
-            iconOnly
-            variant="toolbar"
-            size="large"
-            onClick={newChat}
-            aria-label="New chat"
-          >
-            <SquarePen />
-          </Button>
           <EnvironmentPanelToggle disabled={!effectiveWorkspace} />
           <Button
             iconOnly
