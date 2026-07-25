@@ -171,7 +171,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
               <span className="text-[16px] font-medium">All settings</span>
             </div>
 
-            <label className="mb-6 flex h-10 items-center gap-2 rounded-control border border-field bg-background px-3 shadow-control transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:ring-2 focus-within:ring-focus-ring">
+            <label className="mb-6 flex h-10 items-center gap-2 rounded-control border border-field bg-background px-3 shadow-control transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:border-primary/30 focus-within:border-focus-ring focus-within:bg-input">
               <Search className="size-5 shrink-0 text-tertiary" />
               <input
                 type="search"
@@ -214,7 +214,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
                                 replace: true,
                               })
                             }
-                            className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring ${
+                            className={`flex min-h-10 w-full items-center gap-3 rounded-[13px] px-3 py-2 text-left text-[15px] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none ${
                               selected
                                 ? "bg-list-selection text-primary hover:bg-list-selection"
                                 : "text-primary"
