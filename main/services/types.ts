@@ -9,6 +9,8 @@ import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.
 
 export type ProviderKind = "openai" | "anthropic";
 
+export type ProviderDeployment = "local" | "hosted";
+
 export type ProviderModelType = "llm" | "embedding";
 
 /** Metadata reported by the configured provider during explicit model discovery. */
@@ -42,6 +44,12 @@ export interface StoredProvider {
   defaultModel?: string;
   /** Whether this provider requires an API key (local backends often don't). */
   needsKey: boolean;
+  /**
+   * Where inference runs. When unset, Aiden infers from the base URL (loopback =
+   * local). Custom / Tailscale servers can override so loading UX and usage
+   * treat them as local even off localhost.
+   */
+  deployment?: ProviderDeployment;
   /** True for the built-in seeded presets (base URL/label locked, still editable). */
   isPreset?: boolean;
 }
