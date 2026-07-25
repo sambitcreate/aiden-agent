@@ -1,6 +1,7 @@
 import type { ModelInfo, ModelRanking, Provider } from "./types";
 import { resolveModelDisplay } from "./model-display";
 import type { ModelPadPlacement } from "./model-pad-layout";
+import { isLocalProviderDeployment } from "../shared/provider-deployment";
 
 export type { ModelRanking } from "./types";
 
@@ -69,12 +70,7 @@ export function isUsable(provider: Provider): boolean {
 }
 
 export function providerIsLocal(provider: Provider): boolean {
-  try {
-    const hostname = new URL(provider.baseUrl).hostname.toLowerCase();
-    return hostname === "localhost" || hostname === "::1" || /^127\./.test(hostname);
-  } catch {
-    return false;
-  }
+  return isLocalProviderDeployment(provider);
 }
 
 /** Split a model id into a display label and an optional quant/format tag. */
