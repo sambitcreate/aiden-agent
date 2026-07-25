@@ -162,7 +162,7 @@ export function EnvironmentOverview({
             onClick={() => onOpenReview("changes")}
             aria-label={changesLabel}
             aria-busy={review.isFetching}
-            className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring"
+            className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
           >
             <GitCompareArrows className="size-4.5 text-secondary" aria-hidden="true" />
             <span className="min-w-0 truncate text-regular text-primary">Changes</span>
@@ -230,7 +230,7 @@ export function EnvironmentOverview({
                   disabled={Boolean(mutationBlockedReason)}
                   aria-label={`Commit or push${review.data?.summary.fileCount ? `, ${review.data.summary.fileCount} changed ${review.data.summary.fileCount === 1 ? "file" : "files"}` : ""}${push.data?.ahead ? `, ${push.data.ahead} commits ahead of the last-fetched upstream` : ""}`}
                   title={mutationBlockedReason ?? "Commit local changes or push the current branch"}
-                  className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45"
+                  className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
                 >
                   <GitCommitHorizontal className="size-4.5 text-secondary" aria-hidden="true" />
                   <span className="min-w-0 truncate text-regular text-primary">Commit or push</span>
@@ -300,7 +300,7 @@ export function EnvironmentOverview({
               type="button"
               onClick={() => onOpenReview("compare")}
               aria-label="Compare branch using local and last-fetched references"
-              className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring"
+              className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
             >
               <GitCompareArrows className="size-4.5 text-secondary" aria-hidden="true" />
               <span className="min-w-0 truncate text-regular text-primary">Compare branch</span>
