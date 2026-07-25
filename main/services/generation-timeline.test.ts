@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { GenerationTimelineProjector, safeToolDescriptor } from "./generation-timeline.js";
 import {
+  isToolStep,
   parseGenerationTimeline,
+  type AgentToolStep,
   type GenerationTimeline,
 } from "../../renderer/shared/generation-timeline.js";
+
+function toolSteps(timeline: GenerationTimeline): AgentToolStep[] {
+  return timeline.steps.filter(isToolStep);
+}
 
 test("keeps tool order stable when parallel calls finish out of order", () => {
   let now = 100;
@@ -24,7 +30,7 @@ test("keeps tool order stable when parallel calls finish out of order", () => {
 
   const final = projector.finish("completed");
   assert.deepEqual(
-    final.steps.map((step) => [step.toolCallId, step.order, step.status]),
+    toolSteps(final).map((step) => [step.toolCallId, step.order, step.status]),
     [
       ["call-1", 0, "completed"],
       ["call-2", 1, "completed"],
@@ -89,7 +95,7 @@ test("terminal cancellation settles active steps", () => {
 
   const final = projector.finish("cancelled");
   assert.equal(final.status, "cancelled");
-  assert.equal(final.steps[0]?.status, "cancelled");
+  assert.equal(toolSteps(final)[0]?.status, "cancelled");
   assert.equal(typeof final.finishedAt, "number");
   assert.equal(typeof final.steps[0]?.finishedAt, "number");
 });
@@ -101,7 +107,7 @@ test("explicit tool cancellation remains cancelled at generation settlement", ()
   projector.toolFinished("provider-call-id", "cancelled");
 
   const final = projector.finish("cancelled");
-  assert.equal(final.steps[0]?.status, "cancelled");
+  assert.equal(toolSteps(final)[0]?.status, "cancelled");
 });
 
 test("terminal steps and timelines ignore replayed lifecycle events", () => {
@@ -116,7 +122,7 @@ test("terminal steps and timelines ignore replayed lifecycle events", () => {
 
   const final = projector.snapshot();
   assert.equal(final.steps.length, 1);
-  assert.equal(final.steps[0]?.status, "completed");
+  assert.equal(toolSteps(final)[0]?.status, "completed");
 });
 
 test("provider call ids never cross the safe timeline boundary", () => {
@@ -136,11 +142,124 @@ test("safe tool descriptors retain only relative targets", () => {
   });
   assert.deepEqual(safeToolDescriptor("run_command", { command: "npm test" }), {
     label: "Run command",
+    detail: undefined,
   });
   assert.deepEqual(safeToolDescriptor("read_file", { path: "/tmp/private.txt" }), {
     label: "Read file",
     target: undefined,
   });
+});
+
+test("a command's detail is the model's description, never the command", () => {
+  assert.deepEqual(
+    safeToolDescriptor("run_command", {
+      command: "curl -H 'Authorization: SUPER_SECRET' https://example.com",
+      description: "Fetch the release manifest",
+    }),
+    { label: "Run command", detail: "Fetch the release manifest" },
+  );
+});
+
+test("displayable details survive while unsafe ones are collapsed or dropped", () => {
+  assert.equal(
+    safeToolDescriptor("grep", { path: "services", pattern: "export (const|class)" }).detail,
+    "export (const|class)",
+  );
+  assert.equal(safeToolDescriptor("glob", { pattern: "  src/**/*.ts\n\n" }).detail, "src/**/*.ts");
+  assert.equal(
+    safeToolDescriptor("web_search", { query: "line one\nline two" }).detail,
+    "line one line two",
+  );
+  assert.equal(safeToolDescriptor("glob", { pattern: "   " }).detail, undefined);
+  assert.equal(safeToolDescriptor("glob", { pattern: 42 }).detail, undefined);
+  assert.equal(safeToolDescriptor("glob", { pattern: "x".repeat(400) }).detail?.length, 120);
+});
+
+test("consecutive reasoning blocks merge into one timed stretch", () => {
+  let now = 1_000;
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    () => {},
+    () => (now += 500),
+  );
+
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  projector.toolStarted("call-a", "read_file", { path: "README.md" });
+  projector.toolFinished("call-a", "completed");
+  projector.thinkingStarted();
+
+  const final = projector.finish("completed");
+  assert.deepEqual(
+    final.steps.map((step) => [step.id, step.kind]),
+    [
+      ["think-1", "thinking"],
+      ["tool-1", "tool"],
+      ["think-2", "thinking"],
+    ],
+  );
+  const [merged, , trailing] = final.steps;
+  assert.equal(merged?.kind === "thinking" && merged.durationMs, 1_000);
+  // finish() settles reasoning that was still open when the turn ended.
+  assert.equal(trailing?.kind === "thinking" && trailing.durationMs, 500);
+  assert.equal(typeof trailing?.finishedAt, "number");
+});
+
+test("reasoning steps replay only from the current version", () => {
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    () => {},
+    () => 100,
+  );
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  projector.toolStarted("call-a", "grep", { path: "src", pattern: "export" });
+  projector.toolFinished("call-a", "completed");
+  const final = projector.finish("completed");
+  const stored = JSON.parse(JSON.stringify(final)) as Record<string, unknown>;
+
+  assert.deepEqual(parseGenerationTimeline(stored), final);
+  // Version 1 predates reasoning steps, so one appearing there is untrusted data.
+  assert.equal(parseGenerationTimeline({ ...stored, version: 1 }), undefined);
+  assert.equal(
+    parseGenerationTimeline({
+      ...final,
+      steps: [{ ...final.steps[1], order: 0, detail: "multi\nline" }],
+    }),
+    undefined,
+  );
+});
+
+test("version 1 timelines still replay as the current version", () => {
+  const legacy = {
+    version: 1,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 100,
+    finishedAt: 200,
+    steps: [
+      {
+        id: "tool-1",
+        order: 0,
+        kind: "tool",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        label: "Read file",
+        status: "completed",
+        startedAt: 100,
+        updatedAt: 150,
+        finishedAt: 150,
+        target: "README.md",
+      },
+    ],
+  };
+
+  const parsed = parseGenerationTimeline(legacy);
+  assert.equal(parsed?.version, 2);
+  assert.equal(parsed?.steps.length, 1);
+  assert.equal(toolSteps(parsed as GenerationTimeline)[0]?.target, "README.md");
 });
 
 test("validates persisted timelines and rejects unsafe replay data", () => {
