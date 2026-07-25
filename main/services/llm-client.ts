@@ -72,6 +72,11 @@ import {
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
+import {
+  startLocalModelLoadMonitor,
+  type LocalModelLoadMonitor,
+} from "./local-runtime-status.js";
+import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 
 type GenerationPermission = WorkspacePermission | "read-only";
 
@@ -88,6 +93,11 @@ export interface GenerationExecutionOptions {
   allowMcpTools?: boolean;
 }
 
+interface LoadMonitorState {
+  monitor: LocalModelLoadMonitor;
+  readyEmitted: boolean;
+}
+
 interface ActiveGeneration {
   agent: Agent;
   chatId: string;
@@ -97,6 +107,7 @@ interface ActiveGeneration {
   cancelRequested: boolean;
   computerUse?: ComputerUseController;
   completion: Promise<void> | null;
+  loadMonitor?: LoadMonitorState;
 }
 
 const active = new Map<string, ActiveGeneration>();
@@ -110,6 +121,7 @@ const initializing = new Map<
     cancelRequested: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
+    loadMonitor?: LoadMonitorState;
   }
 >();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
@@ -130,6 +142,25 @@ function sendGeneration(streamId: string, channel: NotificationChannel, payload:
     return true;
   } catch {
     return false;
+  }
+}
+
+function endLoadMonitor(
+  entry: { loadMonitor?: LoadMonitorState } | undefined,
+  streamId: string,
+  emitReadyIfLoading: boolean,
+): void {
+  const state = entry?.loadMonitor;
+  if (!state) return;
+  const wasLoading = state.monitor.announcedLoading;
+  state.monitor.stop();
+  entry.loadMonitor = undefined;
+  if (emitReadyIfLoading && wasLoading && !state.readyEmitted) {
+    state.readyEmitted = true;
+    sendGeneration(streamId, "chat:status", {
+      streamId,
+      phase: "model_ready",
+    });
   }
 }
 
@@ -363,6 +394,7 @@ export const llmClient = {
       cancelRequested: false,
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
+      loadMonitor: undefined as LoadMonitorState | undefined,
     };
     const computerUseGateSnapshot = computerUseGenerationGate.snapshot();
     initializing.set(streamId, initialization);
@@ -409,6 +441,32 @@ export const llmClient = {
     const { model } = runtime;
     const exposeReasoning = shouldExposeReasoning(params.providerId);
 
+    if (isLocalProviderDeployment(runtime.provider)) {
+      const loadMonitorState: LoadMonitorState = {
+        readyEmitted: false,
+        monitor: startLocalModelLoadMonitor({
+          provider: runtime.provider,
+          modelId: params.model,
+          signal: initialization.controller.signal,
+          onLoading: () => {
+            sendGeneration(streamId, "chat:status", {
+              streamId,
+              phase: "model_loading",
+            });
+          },
+          onReady: () => {
+            if (loadMonitorState.readyEmitted) return;
+            loadMonitorState.readyEmitted = true;
+            sendGeneration(streamId, "chat:status", {
+              streamId,
+              phase: "model_ready",
+            });
+          },
+        }),
+      };
+      initialization.loadMonitor = loadMonitorState;
+    }
+
     const deniedToolCalls = new Set<string>();
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
       sendGeneration(streamId, "chat:timeline", {
@@ -416,6 +474,8 @@ export const llmClient = {
         timeline: snapshot,
       });
     });
+    let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
+    const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
       initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
     const persistAssistant = async (
@@ -599,9 +659,18 @@ export const llmClient = {
             break;
           case "message_update": {
             const e = event.assistantMessageEvent;
+            // Reasoning time is timed against the host clock: pi reports the
+            // block boundaries but never a duration. Recorded even when the
+            // provider's reasoning text stays hidden, since only the elapsed
+            // time is shown.
+            if (e.type === "thinking_start") {
+              timeline.thinkingStarted();
+              noteModelBecameReady();
+            } else if (e.type === "thinking_end") timeline.thinkingEnded();
             if (e.type === "text_delta") {
               full += e.delta;
               currentAssistantTurnHadTextDelta = true;
+              noteModelBecameReady();
               sendGeneration(streamId, "chat:delta", {
                 streamId,
                 delta: e.delta,
@@ -612,6 +681,7 @@ export const llmClient = {
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
               currentAssistantTurnHadReasoningDelta = true;
+              noteModelBecameReady();
               sendGeneration(streamId, "chat:reasoning-delta", {
                 streamId,
                 delta,
@@ -689,6 +759,7 @@ export const llmClient = {
       });
     } catch (error) {
       if (candidate) resetGenerationAgent(candidate, streamId);
+      endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
@@ -702,6 +773,7 @@ export const llmClient = {
     }
     const agent = candidate;
     if (!agent) {
+      endLoadMonitor(initialization, streamId, false);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       throw new Error("Could not initialize the generation agent.");
@@ -716,13 +788,17 @@ export const llmClient = {
       cancelRequested: false,
       computerUse,
       completion: null,
+      loadMonitor: initialization.loadMonitor,
     };
+    initialization.loadMonitor = undefined;
+    loadHost = activeGeneration;
     // Publish the active owner before removing initialization so cancellation
     // cannot fall into a map-transition gap and leave a privileged run alive.
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
       resetGenerationAgent(agent, streamId);
+      endLoadMonitor(activeGeneration, streamId, false);
       await computerUse?.close().catch(() => {});
       sendGeneration(streamId, "chat:done", { streamId, content: "" });
       active.delete(streamId);
@@ -807,6 +883,7 @@ export const llmClient = {
         });
       } finally {
         try {
+          endLoadMonitor(activeGeneration, streamId, false);
           resetGenerationAgent(agent, streamId);
           await computerUse?.close().catch(() => {});
         } finally {
@@ -835,11 +912,13 @@ export const llmClient = {
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.controller.abort(new Error("Chat initialization cancelled."));
+      endLoadMonitor(initialization, streamId, false);
       void initialization.computerUse?.close();
     }
     if (generation) {
       generation.cancelRequested = true;
       generation.agent.abort();
+      endLoadMonitor(generation, streamId, false);
       void generation.computerUse?.close();
     }
     approvals.cancelStream(streamId);
@@ -871,17 +950,19 @@ export const llmClient = {
 
   /** Stop generations whose tool set was snapshotted from this workspace. */
   cancelWorkspace(workspaceId: string): void {
-    for (const initialization of initializing.values()) {
+    for (const [streamId, initialization] of initializing.entries()) {
       if (initialization.workspaceId === workspaceId) {
         initialization.cancelRequested = true;
         initialization.controller.abort(new Error("Workspace generation cancelled."));
+        endLoadMonitor(initialization, streamId, false);
         void initialization.computerUse?.close();
       }
     }
-    for (const entry of active.values()) {
+    for (const [streamId, entry] of active.entries()) {
       if (entry.workspaceId === workspaceId) {
         entry.cancelRequested = true;
         entry.agent.abort();
+        endLoadMonitor(entry, streamId, false);
         void entry.computerUse?.close();
       }
     }
