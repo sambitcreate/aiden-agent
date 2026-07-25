@@ -46,9 +46,12 @@ const indexRoute = createRoute({
 const chatRoute = createRoute({
   getParentRoute: () => chatLayoutRoute,
   path: "/chat/$chatId",
+  // No `key={chatId}`: ChatPane resets its own per-chat state (see the chatId
+  // layout effects there), so remounting only throws away the measured chrome
+  // and scroll position, which reads as a blank-then-snap on every switch.
   component: function ChatRoute() {
     const { chatId } = chatRoute.useParams();
-    return <ChatPane key={chatId} chatId={chatId} />;
+    return <ChatPane chatId={chatId} />;
   },
   staticData: { title: "Chat" },
 });
