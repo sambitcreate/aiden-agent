@@ -1,9 +1,8 @@
 # macOS releases and automatic updates
 
-Aiden keeps its source in the private `sambitcreate/aiden-agent` repository. Signed release
-binaries and updater metadata are published separately from
-`sambitcreate/aiden-agent-releases`, which must be public so installed apps can update without
-shipping a GitHub credential.
+Aiden publishes its source, signed release binaries, and updater metadata from
+`sambitcreate/aiden-agent`. The repository must be public before the first release so website
+visitors and installed apps can download GitHub Release assets without a GitHub credential.
 
 ## Release behavior
 
@@ -22,7 +21,8 @@ shipping a GitHub credential.
 - `npm run dist` refreshes only the approved release-time model snapshot, builds the app and
   native helpers, signs with Developer ID, notarizes, staples, and verifies the app, DMG, and ZIP.
 - Automatic-update builds also generate `latest-mac.yml`. The workflow publishes that file and
-  the exact verified DMG/ZIP pair together, plus `SHA256SUMS`, in one public GitHub release.
+  the exact verified DMG/ZIP pair together, plus `SHA256SUMS`, in one public GitHub release in
+  this repository. The DMG is the website download; the ZIP and YAML are the updater payload.
 - Aiden checks shortly after launch and every six hours. It downloads a newer signed update in
   the background, notifies the user when ready, and installs only after Aiden exits normally.
   It never interrupts an open workspace or bypasses the existing quit barriers.
@@ -60,16 +60,14 @@ and [secure-use guidance](https://docs.github.com/en/actions/reference/security/
 
 ## One-time GitHub setup
 
-Creating the public repository makes the signed application binaries publicly downloadable.
-It does not expose the private source repository or its history.
+Making this repository public makes both its source and signed application binaries publicly
+downloadable. Complete the separate [public-readiness checklist](public-readiness.md), including
+its history scan, before changing visibility.
 
-1. Create `sambitcreate/aiden-agent-releases` as a public repository with a minimal README.
-2. Create a `release` environment in the private source repository. Optional required reviewers
-   can be added while the pipeline is being proven.
-3. Create a fine-grained GitHub token that can write repository contents only for
-   `sambitcreate/aiden-agent-releases`.
-4. Add the following environment secrets to the private source repository's `release`
-   environment:
+1. Make `sambitcreate/aiden-agent` public only after the public-readiness checklist is complete.
+2. Create a `release` environment in that repository. Require review for the first beta, restrict
+   deployment to `main`, and keep the signing/notarization material scoped to this environment.
+3. Add the following environment secrets:
 
    | Secret | Value |
    | --- | --- |
@@ -78,16 +76,20 @@ It does not expose the private source repository or its history.
    | `APPLE_API_KEY_P8` | Complete private `.p8` key contents |
    | `MACOS_CERTIFICATE_P12` | Base64-encoded Developer ID Application certificate and private key |
    | `MACOS_CERTIFICATE_PASSWORD` | Password used when exporting that `.p12` |
-   | `RELEASE_REPOSITORY_TOKEN` | Fine-grained token for the public binary repository |
 
-5. Keep `RELEASES_ENABLED` unset while validating secrets. Set it to `true` only when public
-   binary publication is approved.
-6. Trigger `Release macOS` manually for the first release or push a reviewed commit to `main`.
-7. Install the published DMG, then publish one higher version and verify the installed app
+4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
+   repository variable to `true` only when the first public beta is approved. The workflow uses
+   its scoped `GITHUB_TOKEN` with `contents: write`; no separate release-repository token exists.
+5. Trigger `Release macOS` manually for the first release or push a reviewed commit to `main`.
+6. Install the published DMG, then publish one higher version and verify the installed app
    downloads it, reports it ready, and installs it after a normal quit.
 
-Never place a GitHub token, Apple private key, certificate password, or notarization credential
-in `package.json`, workflow logs, an application resource, or the public release repository.
+Each Aiden beta is a normal published GitHub Release, rather than GitHub's `pre-release` state.
+The updater intentionally uses GitHub's `releases/latest/download` endpoint and the app rejects
+pre-release updates. The release notes visibly identify the Beta channel.
+
+Never place an Apple private key, certificate password, or notarization credential in
+`package.json`, workflow logs, or an application resource.
 
 ## Version-line changes
 
