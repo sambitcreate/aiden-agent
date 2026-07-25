@@ -26,6 +26,10 @@ import {
   parseGoogleThinkingSelection,
 } from "../services/google-provider.js";
 import {
+  enrichAnthropicProviders,
+  parseAnthropicThinkingSelection,
+} from "../services/anthropic-provider.js";
+import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
   mergeCodexProvider,
@@ -186,7 +190,9 @@ async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
 }
 
 async function listProviders() {
-  const providers = await configStore.listProviders();
+  const providers = enrichAnthropicProviders(
+    await configStore.listProviders(),
+  );
   try {
     return mergeCodexProvider(
       providers,
@@ -313,6 +319,19 @@ export function registerProviderHandlers(): void {
         levelValue,
       );
       return configStore.setCodexThinkingLevel(
+        selection.modelId,
+        selection.level,
+      );
+    },
+  );
+  ipcMain.handle(
+    "settings:setAnthropicThinking",
+    async (_event, modelIdValue: unknown, levelValue: unknown) => {
+      const selection = parseAnthropicThinkingSelection(
+        modelIdValue,
+        levelValue,
+      );
+      return configStore.setAnthropicThinkingLevel(
         selection.modelId,
         selection.level,
       );

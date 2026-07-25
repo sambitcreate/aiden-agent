@@ -3,6 +3,7 @@ import {
   findArtificialAnalysisModel,
   type ArtificialAnalysisCatalog,
 } from "./artificial-analysis-catalog-core.js";
+import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { ModelInfo, ProviderModelMetadata, StoredProvider } from "./types.js";
 
 interface RawModel {
@@ -37,6 +38,8 @@ export interface RuntimeModelMetadata {
   maxTokens?: number;
   reasoning?: boolean;
   input?: readonly string[];
+  thinkingLevelMap?: ThinkingLevelMap;
+  forceAdaptiveThinking?: boolean;
 }
 
 export interface RuntimeModelLimits {
@@ -44,6 +47,8 @@ export interface RuntimeModelLimits {
   maxTokens: number;
   reasoning: boolean;
   input: Array<"text" | "image">;
+  thinkingLevelMap?: ThinkingLevelMap;
+  forceAdaptiveThinking?: boolean;
 }
 
 export const CONSERVATIVE_RUNTIME_LIMITS: RuntimeModelLimits = {
@@ -309,7 +314,7 @@ export function resolveRuntimeLimits(
   const exactVision = supportsImage(exact?.input);
   const vision = exactVision ?? bundledVision ?? false;
 
-  return {
+  const limits: RuntimeModelLimits = {
     contextWindow:
       positiveInteger(exact?.contextWindow) ??
       positiveInteger(bundled?.limit?.context) ??
@@ -325,6 +330,13 @@ export function resolveRuntimeLimits(
         : CONSERVATIVE_RUNTIME_LIMITS.reasoning),
     input: vision ? ["text", "image"] : ["text"],
   };
+  if (exact?.thinkingLevelMap !== undefined) {
+    limits.thinkingLevelMap = exact.thinkingLevelMap;
+  }
+  if (exact?.forceAdaptiveThinking !== undefined) {
+    limits.forceAdaptiveThinking = exact.forceAdaptiveThinking;
+  }
+  return limits;
 }
 
 function discoveredRuntimeMetadata(
@@ -352,6 +364,9 @@ function mergeRuntimeMetadata(
     maxTokens: primary.maxTokens ?? fallback.maxTokens,
     reasoning: primary.reasoning ?? fallback.reasoning,
     input: primary.input ?? fallback.input,
+    thinkingLevelMap: primary.thinkingLevelMap ?? fallback.thinkingLevelMap,
+    forceAdaptiveThinking:
+      primary.forceAdaptiveThinking ?? fallback.forceAdaptiveThinking,
   };
 }
 

@@ -92,6 +92,30 @@ test("native model thinking stays a small fail-closed runtime contract", () => {
   );
   assert.equal(
     resolveGenerationThinkingLevel(
+      "anthropic",
+      { reasoning: true, thinkingLevelMap: { xhigh: "xhigh", max: "max" } },
+      undefined,
+    ),
+    "high",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "anthropic",
+      { reasoning: true, thinkingLevelMap: { max: "max" } },
+      "xhigh",
+    ),
+    "high",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "anthropic",
+      { reasoning: true, thinkingLevelMap: { max: "max" } },
+      "max",
+    ),
+    "max",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
       "google",
       {
         reasoning: true,
@@ -104,6 +128,7 @@ test("native model thinking stays a small fail-closed runtime contract", () => {
   assert.equal(shouldExposeReasoning("google"), true);
   assert.equal(shouldExposeReasoning("ollama"), true);
   assert.equal(shouldExposeReasoning("openai"), false);
+  assert.equal(shouldExposeReasoning("anthropic"), false);
 });
 
 test("clears transient agent state before bounded helper teardown", async () => {
@@ -403,6 +428,100 @@ test("uses Anthropic's single version path without sending keyless auth headers"
   assert.deepEqual(result.content, [{ type: "text", text: "ok" }]);
   assert.equal(authorization, undefined);
   assert.equal(apiKey, undefined);
+});
+
+test("sends adaptive Claude thinking with the selected native effort", async (t) => {
+  let requestBody = "";
+  const server = createServer((request, response) => {
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      requestBody += chunk;
+    });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        [
+          {
+            event: "message_start",
+            data: {
+              type: "message_start",
+              message: { id: "msg_effort", usage: { input_tokens: 1 } },
+            },
+          },
+          {
+            event: "content_block_start",
+            data: {
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            },
+          },
+          {
+            event: "content_block_delta",
+            data: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "ok" },
+            },
+          },
+          {
+            event: "message_delta",
+            data: {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 1 },
+            },
+          },
+          { event: "message_stop", data: { type: "message_stop" } },
+        ]
+          .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+          .join(""),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(
+    () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  );
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Test server did not expose a TCP port.");
+  }
+  const model: Model<"anthropic-messages"> = {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    reasoning: true,
+    thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 128_000,
+    compat: { forceAdaptiveThinking: true },
+  };
+
+  await anthropicMessagesApi()
+    .streamSimple(
+      model,
+      {
+        systemPrompt: "Reply briefly.",
+        messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+      },
+      { apiKey: "test-key", reasoning: "xhigh" },
+    )
+    .result();
+
+  const payload = JSON.parse(requestBody) as Record<string, unknown>;
+  assert.deepEqual(payload.thinking, {
+    type: "adaptive",
+    display: "summarized",
+  });
+  assert.deepEqual(payload.output_config, { effort: "xhigh" });
 });
 
 test("preserves normal API-key requirements for authenticated providers", () => {

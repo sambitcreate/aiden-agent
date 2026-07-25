@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-24 — Expose model-aware Anthropic/Claude thinking levels
+
+- Reused the composer's Thinking control for exact Anthropic models in Pi's pinned catalog, with Off, Low, Medium, and High on reasoning models; XHigh and Max appear only where the model declares them.
+- Omitted Pi's internal `minimal` tier because Claude's current public effort contract maps it to Low, and defaulted unsaved selections to Anthropic's native High default.
+- Preserved exact `thinkingLevelMap` and `forceAdaptiveThinking` metadata through Aiden's compatibility runtime so Claude 4.6+ models send adaptive thinking plus native effort rather than legacy budget-token thinking.
+- Added atomic exact-model persistence and validation across shared policy, IPC, renderer metadata, and request-time resolution. Anthropic thought content remains outside the renderer boundary.
+- Narrowly migrated only Aiden's untouched legacy Anthropic preset to Sonnet 5, Opus 4.8, and Haiku 4.5 so existing installs receive current supported defaults without replacing customized or discovered model lists.
+
 ### 2026-07-24 — Expose model-aware ChatGPT/Codex thinking levels
 
 - Reused the composer's accessible Gemini Thinking control for signed-in ChatGPT/Codex models, with exact per-model choices from Pi metadata: Low, Medium, High, and XHigh for the current Codex catalog, plus Max only for GPT-5.6 models.

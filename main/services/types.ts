@@ -1,6 +1,7 @@
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
+import type { AnthropicThinkingLevel } from "../../renderer/shared/anthropic-thinking.js";
 import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js";
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
@@ -374,6 +375,8 @@ export interface AppSettings {
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   /** Last explicit ChatGPT/Codex reasoning effort, keyed by exact model id. */
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
+  /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
+  anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */

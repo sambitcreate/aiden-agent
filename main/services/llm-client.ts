@@ -27,6 +27,7 @@ import {
   terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
 } from "./generation-runtime.js";
+import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
@@ -197,6 +198,8 @@ async function prepareGeneration(
       ? settings.googleThinkingByModel?.[params.model]
       : params.providerId === OPENAI_CODEX_PROVIDER_ID
         ? settings.codexThinkingByModel?.[params.model]
+        : params.providerId === ANTHROPIC_PROVIDER_ID
+          ? settings.anthropicThinkingByModel?.[params.model]
         : undefined;
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,

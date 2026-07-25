@@ -65,6 +65,13 @@ import {
   normalizeGoogleThinkingLevel,
   type GoogleThinkingLevel,
 } from "../shared/google-thinking";
+import {
+  ANTHROPIC_THINKING_LEVELS,
+  normalizeAnthropicThinkingLevel,
+  type AnthropicThinkingLevel,
+} from "../shared/anthropic-thinking";
+
+const ANTHROPIC_PROVIDER_ID = "anthropic";
 
 const TOOL_LABELS: Record<string, string> = {
   edit_file: "Edit file",
@@ -205,6 +212,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const codexThinkingLevel = normalizeCodexThinkingLevel(
     codexThinkingLevels,
     storedCodexThinkingLevel,
+  );
+  const anthropicThinkingLevels =
+    React.useMemo<AnthropicThinkingLevel[]>(() => {
+      const declared = thinkingMetadata?.thinkingLevels;
+      if (!declared?.length) return [];
+      return ANTHROPIC_THINKING_LEVELS.filter((level) =>
+        declared.includes(level),
+      );
+    }, [thinkingMetadata?.thinkingLevels]);
+  const anthropicThinkingSupported =
+    providerId === ANTHROPIC_PROVIDER_ID &&
+    Boolean(model) &&
+    modelInfo.data?.[model]?.reasoning === true &&
+    anthropicThinkingLevels.length > 0;
+  const storedAnthropicThinkingLevel = model
+    ? settings.data?.anthropicThinkingByModel?.[model]
+    : undefined;
+  const anthropicThinkingLevel = normalizeAnthropicThinkingLevel(
+    anthropicThinkingLevels,
+    storedAnthropicThinkingLevel,
   );
 
   React.useEffect(() => {
@@ -397,6 +424,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             ? googleThinkingLevel
             : codexThinkingSupported
               ? codexThinkingLevel
+              : anthropicThinkingSupported
+                ? anthropicThinkingLevel
               : undefined,
           messages: history.map((m) => ({
             role: m.role,
@@ -784,6 +813,41 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ],
   );
 
+  const changeAnthropicThinking = React.useCallback(
+    async (level: AnthropicThinkingLevel) => {
+      if (
+        !model ||
+        !anthropicThinkingSupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      ) {
+        return;
+      }
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.setAnthropicThinking(model, level);
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save the Claude thinking level.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      anthropicThinkingSupported,
+      isGenerating,
+      isStartingGeneration,
+      model,
+      qc,
+      thinkingSaving,
+    ],
+  );
+
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
@@ -1132,6 +1196,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     thinkingSaving || isStartingGeneration || isGenerating
                   }
                   onChange={(level) => void changeCodexThinking(level)}
+                />
+              ) : anthropicThinkingSupported ? (
+                <ThinkingControl
+                  providerLabel="Claude"
+                  level={anthropicThinkingLevel}
+                  levels={anthropicThinkingLevels}
+                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
+                  disabled={
+                    thinkingSaving || isStartingGeneration || isGenerating
+                  }
+                  onChange={(level) => void changeAnthropicThinking(level)}
                 />
               ) : undefined
             }

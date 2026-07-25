@@ -3,6 +3,11 @@
 
 import { DataStore } from "./data-store.js";
 import {
+  ANTHROPIC_DEFAULT_MODEL,
+  ANTHROPIC_DEFAULT_MODELS,
+  migrateLegacyAnthropicPreset,
+} from "./anthropic-provider.js";
+import {
   canonicalGoogleProvider,
   migrateGoogleProviderConfig,
   migrateGoogleProviderKeyMap,
@@ -15,6 +20,10 @@ import {
   mergeCodexThinkingPreference,
   type CodexThinkingLevel,
 } from "../../renderer/shared/codex-thinking.js";
+import {
+  mergeAnthropicThinkingPreference,
+  type AnthropicThinkingLevel,
+} from "../../renderer/shared/anthropic-thinking.js";
 import { secrets } from "./secrets.js";
 import type {
   AppSettings,
@@ -64,12 +73,8 @@ const PRESETS: StoredProvider[] = [
     kind: "anthropic",
     label: "Anthropic (Claude)",
     baseUrl: "https://api.anthropic.com/v1",
-    models: [
-      "claude-sonnet-4-20250514",
-      "claude-3-7-sonnet-latest",
-      "claude-3-5-haiku-latest",
-    ],
-    defaultModel: "claude-sonnet-4-20250514",
+    models: [...ANTHROPIC_DEFAULT_MODELS],
+    defaultModel: ANTHROPIC_DEFAULT_MODEL,
     needsKey: true,
     isPreset: true,
   },
@@ -143,6 +148,7 @@ async function ensureSeeded(): Promise<ConfigShape> {
           config.workspaces = [defaultWorkspace()];
         }
         migrateGoogleProviderConfig(config);
+        migrateLegacyAnthropicPreset(config);
       })
       .then(() => secrets.migrateKeys(migrateGoogleProviderKeyMap))
       .catch((error: unknown) => {
@@ -256,6 +262,22 @@ export const configStore = {
         modelId,
         level,
       );
+      return structuredClone(config.settings);
+    });
+  },
+
+  /** Atomically merge one validated Anthropic preference into current settings. */
+  async setAnthropicThinkingLevel(
+    modelId: string,
+    level: AnthropicThinkingLevel,
+  ): Promise<AppSettings> {
+    return mutateConfig((config) => {
+      config.settings.anthropicThinkingByModel =
+        mergeAnthropicThinkingPreference(
+          config.settings.anthropicThinkingByModel,
+          modelId,
+          level,
+        );
       return structuredClone(config.settings);
     });
   },

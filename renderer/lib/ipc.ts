@@ -56,6 +56,7 @@ import type {
   WorkspaceFileWriteResult,
   WorkspacePermission,
 } from "./types";
+import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type {
@@ -154,6 +155,10 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
   setCodexThinking: (modelId: string, level: CodexThinkingLevel) =>
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
+  setAnthropicThinking: (
+    modelId: string,
+    level: AnthropicThinkingLevel,
+  ) => invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
 };
 
 export const artificialAnalysisApi = {

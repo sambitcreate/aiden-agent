@@ -18,6 +18,12 @@ import {
   normalizeCodexThinkingLevel,
 } from "../../renderer/shared/codex-thinking.js";
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import {
+  anthropicThinkingLevelsForModel,
+  isAnthropicThinkingLevel,
+  normalizeAnthropicThinkingLevel,
+} from "../../renderer/shared/anthropic-thinking.js";
+import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 
@@ -58,6 +64,13 @@ export function resolveGenerationThinkingLevel(
     return isCodexThinkingLevel(requested) && levels.includes(requested)
       ? requested
       : normalizeCodexThinkingLevel(levels, undefined);
+  }
+  if (providerId === ANTHROPIC_PROVIDER_ID) {
+    const levels = anthropicThinkingLevelsForModel(model);
+    if (levels.length === 0) return "off";
+    return isAnthropicThinkingLevel(requested) && levels.includes(requested)
+      ? requested
+      : normalizeAnthropicThinkingLevel(levels, undefined);
   }
   return "off";
 }

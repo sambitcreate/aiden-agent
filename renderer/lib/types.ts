@@ -2,6 +2,7 @@
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
@@ -639,6 +640,7 @@ export interface AppSettings {
   appearance?: AppearanceConfig;
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
+  anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
   computerUseEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;

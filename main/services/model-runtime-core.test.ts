@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Api, Model, ProviderStreams } from "@earendil-works/pi-ai";
+import type {
+  AnthropicMessagesCompat,
+  Api,
+  Model,
+  ProviderStreams,
+} from "@earendil-works/pi-ai";
 
 import { resolveModelRuntimeWith, type ModelRuntimeDependencies } from "./model-runtime-core.js";
 import { CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
@@ -110,6 +115,45 @@ test("keeps the legacy API-key runtime contract unchanged", async () => {
   assert.equal(runtime.model.baseUrl, provider.baseUrl);
   assert.equal(runtime.apiKey, "saved-key");
   assert.equal(runtime.headers, undefined);
+});
+
+test("preserves Anthropic adaptive-thinking metadata in the request model", async () => {
+  const provider: StoredProvider = {
+    id: "anthropic",
+    kind: "anthropic",
+    label: "Anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    models: ["claude-opus-4-8"],
+    needsKey: true,
+  };
+  const runtime = await resolveModelRuntimeWith(
+    dependencies({
+      provider,
+      key: "saved-key",
+      limits: {
+        contextWindow: 200_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        input: ["text", "image"],
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        forceAdaptiveThinking: true,
+      },
+    }),
+    provider.id,
+    "claude-opus-4-8",
+  );
+
+  assert.deepEqual(runtime.model.thinkingLevelMap, {
+    xhigh: "xhigh",
+    max: "max",
+  });
+  assert.equal(
+    runtime.model.api === "anthropic-messages"
+      ? (runtime.model.compat as AnthropicMessagesCompat | undefined)
+          ?.forceAdaptiveThinking
+      : undefined,
+    true,
+  );
 });
 
 test("routes Google through Pi's native model and transport", async () => {

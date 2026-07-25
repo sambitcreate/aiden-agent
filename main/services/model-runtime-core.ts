@@ -52,6 +52,11 @@ function buildModel(
     cost: ZERO_COST,
     contextWindow: limits.contextWindow,
     maxTokens: limits.maxTokens,
+    thinkingLevelMap: limits.thinkingLevelMap,
+    compat:
+      provider.kind === "anthropic" && limits.forceAdaptiveThinking
+        ? { forceAdaptiveThinking: true }
+        : undefined,
   };
 }
 
