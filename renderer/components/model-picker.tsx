@@ -642,7 +642,7 @@ export function ModelPicker({
                           togglePin(entry.value);
                         }}
                         className={cn(
-                          "shrink-0 rounded-md p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring",
+                          "shrink-0 rounded-md p-0.5 text-tertiary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-secondary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
                           isPinned
                             ? "opacity-100"
                             : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
