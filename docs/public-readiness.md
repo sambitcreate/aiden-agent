@@ -1,6 +1,6 @@
 # Public repository readiness
 
-This checklist tracks the remaining owner decisions and GitHub settings required before making Aiden Agent's source repository public. It does not replace the separate [binary release checklist](releasing.md).
+This checklist tracks the remaining owner decisions and GitHub settings required before making Aiden Agent's source repository public. It does not replace the [GitHub Release checklist](releasing.md).
 
 ## Current GitHub state
 
@@ -17,7 +17,7 @@ As audited on 2026-07-22, the source repository is private and has no GitHub top
 ## Owner decisions before changing visibility
 
 - **Choose and add a source license.** No public license is currently granted. Do not label the project open source or accept outside contributions until the intended terms are explicit.
-- **Choose the source model.** Decide whether the source repository will remain private with public signed binaries, or become public. If it becomes public, update the private-source wording in `AGENTS.md` and `docs/releasing.md` as part of the same reviewed change.
+- **Confirm the public source model.** Aiden will publish its signed beta assets directly in this repository's GitHub Releases. Its DMG download and auto-update feed are therefore public only after repository visibility changes.
 - **Define contribution expectations.** Add `CONTRIBUTING.md`, `SECURITY.md`, and a code of conduct only if outside issues or contributions will be accepted. Avoid empty policy templates.
 - **Review repository history.** Run a full-history secret scan before changing visibility; checking only the current tree cannot rule out credentials in older commits.
 - **Configure GitHub protections.** Require CI on `main`, restrict release-environment deployment to trusted branches, protect release tags, and keep signing/notarization secrets scoped to the protected `release` environment.
