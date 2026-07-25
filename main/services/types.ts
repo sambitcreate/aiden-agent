@@ -314,7 +314,7 @@ export interface Skill {
   enabled: boolean;
 }
 
-/** An Agent Skill discovered on disk from a `.agents` folder (read-only). */
+/** An Agent Skill discovered on disk from a skill folder (read-only). */
 export interface DiscoveredSkill {
   id: string;
   name: string;
