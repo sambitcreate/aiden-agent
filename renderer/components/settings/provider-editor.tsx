@@ -20,7 +20,8 @@ import {
 import { providersApi } from "../../lib/ipc";
 import { useModelInfo } from "../../lib/queries";
 import { resolveModelDisplay } from "../../lib/model-display";
-import type { Provider, ProviderKind, ProviderModelMetadata } from "../../lib/types";
+import type { Provider, ProviderDeployment, ProviderKind, ProviderModelMetadata } from "../../lib/types";
+import { resolveProviderDeployment } from "../../shared/provider-deployment";
 
 /** Compact k-token label, e.g. 128000 → "128K". */
 function formatContext(n: number | undefined): string | null {
@@ -51,6 +52,9 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
   const [needsKey, setNeedsKey] = React.useState(provider.needsKey);
+  const [deployment, setDeployment] = React.useState<ProviderDeployment>(
+    resolveProviderDeployment(provider),
+  );
   const [keyDraft, setKeyDraft] = React.useState("");
   const [models, setModels] = React.useState<string[]>(provider.models);
   const [modelMetadata, setModelMetadata] = React.useState<Record<string, ProviderModelMetadata>>(
@@ -78,6 +82,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       setBaseUrl(provider.baseUrl);
       setKind(provider.kind);
       setNeedsKey(provider.needsKey);
+      setDeployment(resolveProviderDeployment(provider));
       setKeyDraft("");
       setModels(provider.models);
       setModelMetadata(provider.modelMetadata ?? {});
@@ -96,6 +101,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     modelMetadata,
     defaultModel: defaultModel || undefined,
     needsKey,
+    deployment,
     isPreset: provider.isPreset,
   });
 
@@ -226,6 +232,31 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
             </Select>
           </Field>
         ) : null}
+
+        <Field
+          label="Deployment"
+          description={
+            deployment === "local"
+              ? "Aiden shows model-loading status and treats usage as on-device when this Mac (or a marked private host) serves the model."
+              : "Hosted cloud APIs skip local model-loading status and may track usage cost when available."
+          }
+        >
+          <Select
+            value={deployment}
+            disabled={testing || nativeGoogle}
+            onValueChange={(value) => {
+              setDeployment(value as ProviderDeployment);
+            }}
+          >
+            <SelectTrigger size="small">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="local">Local</SelectItem>
+              <SelectItem value="hosted">Hosted</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
 
         <Field
           label="Authentication"
