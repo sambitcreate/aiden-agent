@@ -2,6 +2,8 @@
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { CodexThinkingLevel } from "../shared/codex-thinking";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 
@@ -16,7 +18,7 @@ export interface ProviderModelMetadata {
   vision?: boolean;
   toolCall?: boolean;
   reasoning?: boolean;
-  thinkingLevels?: GoogleThinkingLevel[];
+  thinkingLevels?: GenerationThinkingLevel[];
   thinkingCanDisable?: boolean;
   contextLength?: number;
   parameterCount?: string;
@@ -46,6 +48,7 @@ export interface CodexModelSummary {
   vision: boolean;
   contextWindow: number;
   maxTokens: number;
+  thinkingLevels: CodexThinkingLevel[];
 }
 
 export interface CodexProviderSnapshot {
@@ -379,7 +382,11 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
+  | "local"
+  | "provider"
+  | "artificial-analysis"
+  | "models-dev"
+  | "fallback";
 
 export interface ModelInfo {
   id: string;
@@ -593,7 +600,9 @@ export interface DiscoveredSkill {
 export type VoiceProvider = "openai" | "gemini" | "local";
 
 export type ChatTitleProviderId =
-  "automatic" | "apple-foundation-models" | "chat-model";
+  | "automatic"
+  | "apple-foundation-models"
+  | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -629,6 +638,7 @@ export interface AppSettings {
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
+  codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   computerUseEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
@@ -759,7 +769,7 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
-  thinkingLevel?: GoogleThinkingLevel;
+  thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{
     role: ChatRole;
     content: string;

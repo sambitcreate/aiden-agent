@@ -57,6 +57,7 @@ import type {
   WorkspacePermission,
 } from "./types";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
+import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type {
   ChatTimelineNotification,
   GenerationTimeline,
@@ -151,6 +152,8 @@ export const settingsApi = {
     invoke<AppSettings>("settings:set", patch),
   setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
+  setCodexThinking: (modelId: string, level: CodexThinkingLevel) =>
+    invoke<AppSettings>("settings:setCodexThinking", modelId, level),
 };
 
 export const artificialAnalysisApi = {

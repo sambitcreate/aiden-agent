@@ -55,6 +55,7 @@ import {
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
+import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import {
@@ -191,10 +192,16 @@ async function prepareGeneration(
   const model = runtime.model;
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
+  const savedThinkingLevel =
+    params.providerId === GOOGLE_PROVIDER_ID
+      ? settings.googleThinkingByModel?.[params.model]
+      : params.providerId === OPENAI_CODEX_PROVIDER_ID
+        ? settings.codexThinkingByModel?.[params.model]
+        : undefined;
   const thinkingLevel = resolveGenerationThinkingLevel(
     params.providerId,
     model,
-    params.thinkingLevel ?? settings.googleThinkingByModel?.[params.model],
+    params.thinkingLevel ?? savedThinkingLevel,
   );
   const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
   let computerUse: ComputerUseController | undefined;
@@ -335,7 +342,10 @@ export const llmClient = {
 
     const deniedToolCalls = new Set<string>();
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
-      sendGeneration(streamId, "chat:timeline", { streamId, timeline: snapshot });
+      sendGeneration(streamId, "chat:timeline", {
+        streamId,
+        timeline: snapshot,
+      });
     });
     const generationCancelRequested = () =>
       initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
@@ -432,7 +442,10 @@ export const llmClient = {
             if (!computerUse) {
               deniedToolCalls.add(context.toolCall.id);
               timeline.toolFinished(context.toolCall.id, "blocked");
-              return { block: true, reason: "Computer Use is not enabled for this response." };
+              return {
+                block: true,
+                reason: "Computer Use is not enabled for this response.",
+              };
             }
             try {
               const descriptor = await computerUse.approvalFor(
@@ -473,7 +486,12 @@ export const llmClient = {
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
               if (!toolCallId) throw new Error("The tool approval step was not initialized.");
-              return { streamId, toolCallId, toolName: context.toolCall.name, summary };
+              return {
+                streamId,
+                toolCallId,
+                toolName: context.toolCall.name,
+                summary,
+              };
             })(),
             signal,
             owner.documentId,
@@ -515,14 +533,20 @@ export const llmClient = {
             if (e.type === "text_delta") {
               full += e.delta;
               currentAssistantTurnHadTextDelta = true;
-              sendGeneration(streamId, "chat:delta", { streamId, delta: e.delta });
+              sendGeneration(streamId, "chat:delta", {
+                streamId,
+                delta: e.delta,
+              });
             } else if (e.type === "thinking_delta" && exposeReasoning) {
               const separator =
                 !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
               currentAssistantTurnHadReasoningDelta = true;
-              sendGeneration(streamId, "chat:reasoning-delta", { streamId, delta });
+              sendGeneration(streamId, "chat:reasoning-delta", {
+                streamId,
+                delta,
+              });
             } else if (e.type === "error" && e.reason === "error") {
               errored = e.error.errorMessage ?? "Generation failed.";
             }

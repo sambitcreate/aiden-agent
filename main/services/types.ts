@@ -1,6 +1,8 @@
 // Shared backend/renderer data types for the AI chat client.
 
 import type { AppearanceConfig } from "../../renderer/shared/appearance.js";
+import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js";
+import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 
@@ -16,8 +18,8 @@ export interface ProviderModelMetadata {
   vision?: boolean;
   toolCall?: boolean;
   reasoning?: boolean;
-  /** Distinct Aiden thinking choices supported by this native Google model. */
-  thinkingLevels?: GoogleThinkingLevel[];
+  /** Distinct Aiden thinking choices supported by this native model. */
+  thinkingLevels?: GenerationThinkingLevel[];
   /** False when Google's minimum thinking can only be hidden, not disabled. */
   thinkingCanDisable?: boolean;
   contextLength?: number;
@@ -169,7 +171,11 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
+  | "local"
+  | "provider"
+  | "artificial-analysis"
+  | "models-dev"
+  | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
@@ -322,7 +328,9 @@ export interface DiscoveredSkill {
 export type VoiceProvider = "openai" | "gemini" | "local";
 
 export type ChatTitleProviderId =
-  "automatic" | "apple-foundation-models" | "chat-model";
+  | "automatic"
+  | "apple-foundation-models"
+  | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -364,6 +372,8 @@ export interface AppSettings {
   appearance?: AppearanceConfig;
   /** Last explicit native-Google thinking level, keyed by exact model id. */
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
+  /** Last explicit ChatGPT/Codex reasoning effort, keyed by exact model id. */
+  codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
@@ -472,8 +482,8 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
-  /** Small main-validated enum; ignored outside reasoning-capable native Google models. */
-  thinkingLevel?: GoogleThinkingLevel;
+  /** Small main-validated enum; provider/model support is enforced at runtime. */
+  thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{
     role: ChatRole;
     content: string;

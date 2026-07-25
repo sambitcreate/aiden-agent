@@ -37,6 +37,7 @@ function snapshot(configured: boolean): CodexProviderSnapshot {
         vision: true,
         contextWindow: 272_000,
         maxTokens: 128_000,
+        thinkingLevels: ["low", "medium", "high", "xhigh"],
       },
       {
         id: "gpt-5.6-sol",
@@ -46,6 +47,7 @@ function snapshot(configured: boolean): CodexProviderSnapshot {
         vision: true,
         contextWindow: 372_000,
         maxTokens: 128_000,
+        thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
       },
     ],
   };
@@ -65,6 +67,28 @@ test("exposes the virtual Codex provider only for configured OAuth", () => {
     label: "ChatGPT / Codex",
     baseUrl: "https://chatgpt.com/backend-api",
     models: ["gpt-5.4", "gpt-5.6-sol"],
+    modelMetadata: {
+      "gpt-5.4": {
+        source: "provider",
+        name: "GPT-5.4",
+        type: "llm",
+        vision: true,
+        toolCall: true,
+        reasoning: true,
+        thinkingLevels: ["low", "medium", "high", "xhigh"],
+        contextLength: 272_000,
+      },
+      "gpt-5.6-sol": {
+        source: "provider",
+        name: "GPT-5.6 Sol",
+        type: "llm",
+        vision: true,
+        toolCall: true,
+        reasoning: true,
+        thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
+        contextLength: 372_000,
+      },
+    },
     defaultModel: "gpt-5.4",
     needsKey: true,
     isPreset: true,
@@ -73,7 +97,11 @@ test("exposes the virtual Codex provider only for configured OAuth", () => {
 });
 
 test("filters reserved stored collisions and rejects generic credential management", () => {
-  const collision = { ...legacy, id: "openai-codex", label: "Unsafe custom collision" };
+  const collision = {
+    ...legacy,
+    id: "openai-codex",
+    label: "Unsafe custom collision",
+  };
   assert.deepEqual(mergeCodexProvider([collision, legacy], null), [legacy]);
   assert.throws(() => assertMutableProviderId("openai-codex"), /built-in sign-in/u);
   assert.doesNotThrow(() => assertMutableProviderId("custom-provider"));

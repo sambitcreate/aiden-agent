@@ -1,33 +1,34 @@
 import { cn } from "../lib/ui-utils";
-import {
-  GOOGLE_THINKING_LEVELS,
-  type GoogleThinkingLevel,
-} from "../shared/google-thinking";
+import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 
-const LABELS: Record<GoogleThinkingLevel, string> = {
+const LABELS: Record<GenerationThinkingLevel, string> = {
   off: "Off",
   low: "Low",
   medium: "Med",
   high: "High",
+  xhigh: "XHigh",
+  max: "Max",
 };
 
-export function ThinkingControl({
+export function ThinkingControl<TLevel extends GenerationThinkingLevel>({
   level,
-  levels = GOOGLE_THINKING_LEVELS,
+  levels,
   canDisable = true,
   disabled = false,
+  providerLabel = "Gemini",
   onChange,
 }: {
-  level: GoogleThinkingLevel;
-  levels?: readonly GoogleThinkingLevel[];
+  level: TLevel;
+  levels: readonly TLevel[];
   canDisable?: boolean;
   disabled?: boolean;
-  onChange: (level: GoogleThinkingLevel) => void;
+  providerLabel?: string;
+  onChange: (level: TLevel) => void;
 }) {
   return (
     <div
       role="radiogroup"
-      aria-label="Gemini thinking level"
+      aria-label={`${providerLabel} thinking level`}
       aria-disabled={disabled || undefined}
       className="flex h-7 shrink-0 items-center rounded-pill bg-control/50 p-0.5"
     >
@@ -51,7 +52,7 @@ export function ThinkingControl({
             title={
               hidesMinimumThinking
                 ? "Hide model thoughts (this model still uses its minimum thinking level)"
-                : `Gemini thinking: ${value === "off" ? "off" : value}`
+                : `${providerLabel} thinking: ${value === "off" ? "off" : value}`
             }
             onClick={() => {
               if (!selected) onChange(value);

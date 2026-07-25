@@ -17,7 +17,9 @@ export interface CodexProviderStatusChangedEvent {
 
 /** Electron-free bridge contract: every service notification becomes one global renderer event. */
 export function forwardCodexProviderStatusChanges(
-  source: { onStatusChange(listener: (needsAttention: boolean) => void): () => void },
+  source: {
+    onStatusChange(listener: (needsAttention: boolean) => void): () => void;
+  },
   broadcast: (channel: NotificationChannel, event: CodexProviderStatusChangedEvent) => void,
 ): () => void {
   return source.onStatusChange((needsAttention) => {
@@ -58,6 +60,21 @@ export function mergeCodexProvider(
       label: OPENAI_CODEX_PROVIDER_LABEL,
       baseUrl: OPENAI_CODEX_BASE_URL,
       models: modelIds,
+      modelMetadata: Object.fromEntries(
+        snapshot.models.map((model) => [
+          model.id,
+          {
+            source: "provider",
+            name: model.name,
+            type: "llm",
+            vision: model.vision,
+            toolCall: true,
+            reasoning: model.reasoning,
+            thinkingLevels: model.thinkingLevels,
+            contextLength: model.contextWindow,
+          },
+        ]),
+      ),
       defaultModel,
       needsKey: true,
       isPreset: true,

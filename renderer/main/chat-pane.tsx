@@ -56,6 +56,11 @@ import {
 } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
+  CODEX_THINKING_LEVELS,
+  normalizeCodexThinkingLevel,
+  type CodexThinkingLevel,
+} from "../shared/codex-thinking";
+import {
   GOOGLE_THINKING_LEVELS,
   normalizeGoogleThinkingLevel,
   type GoogleThinkingLevel,
@@ -166,23 +171,40 @@ export function ChatPane({ chatId }: { chatId: string }) {
     providerId === GOOGLE_PROVIDER_ID &&
     Boolean(model) &&
     modelInfo.data?.[model]?.reasoning === true;
-  const googleThinkingMetadata = model
+  const thinkingMetadata = model
     ? selectedProvider?.modelMetadata?.[model]
     : undefined;
   const googleThinkingLevels = React.useMemo<GoogleThinkingLevel[]>(() => {
-    const declared = googleThinkingMetadata?.thinkingLevels;
+    const declared = thinkingMetadata?.thinkingLevels;
     if (!declared?.length) return [...GOOGLE_THINKING_LEVELS];
     const supported = GOOGLE_THINKING_LEVELS.filter((level) =>
       declared.includes(level),
     );
     return supported.includes("off") ? supported : ["off", ...supported];
-  }, [googleThinkingMetadata?.thinkingLevels]);
+  }, [thinkingMetadata?.thinkingLevels]);
   const storedGoogleThinkingLevel = model
     ? settings.data?.googleThinkingByModel?.[model]
     : undefined;
   const googleThinkingLevel = normalizeGoogleThinkingLevel(
     googleThinkingLevels,
     storedGoogleThinkingLevel,
+  );
+  const codexThinkingLevels = React.useMemo<CodexThinkingLevel[]>(() => {
+    const declared = thinkingMetadata?.thinkingLevels;
+    if (!declared?.length) return [];
+    return CODEX_THINKING_LEVELS.filter((level) => declared.includes(level));
+  }, [thinkingMetadata?.thinkingLevels]);
+  const codexThinkingSupported =
+    providerId === OPENAI_CODEX_PROVIDER_ID &&
+    Boolean(model) &&
+    modelInfo.data?.[model]?.reasoning === true &&
+    codexThinkingLevels.length > 0;
+  const storedCodexThinkingLevel = model
+    ? settings.data?.codexThinkingByModel?.[model]
+    : undefined;
+  const codexThinkingLevel = normalizeCodexThinkingLevel(
+    codexThinkingLevels,
+    storedCodexThinkingLevel,
   );
 
   React.useEffect(() => {
@@ -373,7 +395,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           model,
           thinkingLevel: googleThinkingSupported
             ? googleThinkingLevel
-            : undefined,
+            : codexThinkingSupported
+              ? codexThinkingLevel
+              : undefined,
           messages: history.map((m) => ({
             role: m.role,
             content: m.content,
@@ -530,6 +554,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       chatId,
+      codexThinkingLevel,
+      codexThinkingSupported,
       effectiveWorkspaceId,
       googleThinkingLevel,
       googleThinkingSupported,
@@ -715,6 +741,41 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       googleThinkingSupported,
+      isGenerating,
+      isStartingGeneration,
+      model,
+      qc,
+      thinkingSaving,
+    ],
+  );
+
+  const changeCodexThinking = React.useCallback(
+    async (level: CodexThinkingLevel) => {
+      if (
+        !model ||
+        !codexThinkingSupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      ) {
+        return;
+      }
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.setCodexThinking(model, level);
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save the Codex thinking level.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      codexThinkingSupported,
       isGenerating,
       isStartingGeneration,
       model,
@@ -1056,13 +1117,21 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 <ThinkingControl
                   level={googleThinkingLevel}
                   levels={googleThinkingLevels}
-                  canDisable={
-                    googleThinkingMetadata?.thinkingCanDisable !== false
-                  }
+                  canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                   disabled={
                     thinkingSaving || isStartingGeneration || isGenerating
                   }
                   onChange={(level) => void changeGoogleThinking(level)}
+                />
+              ) : codexThinkingSupported ? (
+                <ThinkingControl
+                  providerLabel="Codex"
+                  level={codexThinkingLevel}
+                  levels={codexThinkingLevels}
+                  disabled={
+                    thinkingSaving || isStartingGeneration || isGenerating
+                  }
+                  onChange={(level) => void changeCodexThinking(level)}
                 />
               ) : undefined
             }

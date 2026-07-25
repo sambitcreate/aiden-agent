@@ -92,7 +92,7 @@ interface ComposerProps {
   visionSupported?: boolean;
   /** The model picker element, rendered in the input row. */
   modelPicker?: React.ReactNode;
-  /** Native Google reasoning effort control, rendered only for supported models. */
+  /** Native model reasoning effort control, rendered only for supported models. */
   thinkingControl?: React.ReactNode;
   /** Global-beta readiness plus this chat's local Computer Use opt-in. */
   computerUse?: {

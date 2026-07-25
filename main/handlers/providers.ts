@@ -305,6 +305,19 @@ export function registerProviderHandlers(): void {
       );
     },
   );
+  ipcMain.handle(
+    "settings:setCodexThinking",
+    async (_event, modelIdValue: unknown, levelValue: unknown) => {
+      const selection = providerRegistry.codex.parseThinkingSelection(
+        modelIdValue,
+        levelValue,
+      );
+      return configStore.setCodexThinkingLevel(
+        selection.modelId,
+        selection.level,
+      );
+    },
+  );
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null)
       throw new Error("Invalid settings patch.");

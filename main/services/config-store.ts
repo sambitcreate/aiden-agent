@@ -11,6 +11,10 @@ import {
   mergeGoogleThinkingPreference,
   type GoogleThinkingLevel,
 } from "../../renderer/shared/google-thinking.js";
+import {
+  mergeCodexThinkingPreference,
+  type CodexThinkingLevel,
+} from "../../renderer/shared/codex-thinking.js";
 import { secrets } from "./secrets.js";
 import type {
   AppSettings,
@@ -234,6 +238,21 @@ export const configStore = {
     return mutateConfig((config) => {
       config.settings.googleThinkingByModel = mergeGoogleThinkingPreference(
         config.settings.googleThinkingByModel,
+        modelId,
+        level,
+      );
+      return structuredClone(config.settings);
+    });
+  },
+
+  /** Atomically merge one validated ChatGPT/Codex preference into current settings. */
+  async setCodexThinkingLevel(
+    modelId: string,
+    level: CodexThinkingLevel,
+  ): Promise<AppSettings> {
+    return mutateConfig((config) => {
+      config.settings.codexThinkingByModel = mergeCodexThinkingPreference(
+        config.settings.codexThinkingByModel,
         modelId,
         level,
       );

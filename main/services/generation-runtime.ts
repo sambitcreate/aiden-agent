@@ -11,8 +11,14 @@ import type {
 import {
   googleThinkingLevelsForModel,
   isGoogleThinkingLevel,
-  type GoogleThinkingLevel,
 } from "../../renderer/shared/google-thinking.js";
+import {
+  codexThinkingLevelsForModel,
+  isCodexThinkingLevel,
+  normalizeCodexThinkingLevel,
+} from "../../renderer/shared/codex-thinking.js";
+import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
+import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 
 /**
@@ -34,17 +40,26 @@ export function shouldExposeReasoning(providerId: string): boolean {
   return EXPOSED_REASONING_PROVIDER_IDS.has(providerId);
 }
 
-/** Fail closed outside Pi's native, reasoning-capable Google runtime. */
+/** Fail closed outside Aiden's native, reasoning-capable provider contracts. */
 export function resolveGenerationThinkingLevel(
   providerId: string,
   model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
-  requested: GoogleThinkingLevel | undefined,
-): GoogleThinkingLevel {
-  return providerId === GOOGLE_PROVIDER_ID &&
-    isGoogleThinkingLevel(requested) &&
-    googleThinkingLevelsForModel(model).includes(requested)
-    ? requested
-    : "off";
+  requested: GenerationThinkingLevel | undefined,
+): GenerationThinkingLevel {
+  if (providerId === GOOGLE_PROVIDER_ID) {
+    return isGoogleThinkingLevel(requested) &&
+      googleThinkingLevelsForModel(model).includes(requested)
+      ? requested
+      : "off";
+  }
+  if (providerId === OPENAI_CODEX_PROVIDER_ID) {
+    const levels = codexThinkingLevelsForModel(model);
+    if (levels.length === 0) return "off";
+    return isCodexThinkingLevel(requested) && levels.includes(requested)
+      ? requested
+      : normalizeCodexThinkingLevel(levels, undefined);
+  }
+  return "off";
 }
 
 /** The connection-bound runtime model is the sole request-time image authority. */

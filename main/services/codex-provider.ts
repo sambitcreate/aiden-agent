@@ -11,6 +11,11 @@ import type {
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import { cleanupSessionResources, lazyStream } from "@earendil-works/pi-ai";
+import {
+  codexThinkingLevelsForModel,
+  isCodexThinkingLevel,
+  type CodexThinkingLevel,
+} from "../../renderer/shared/codex-thinking.js";
 import type { ModelInfo } from "./types.js";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
@@ -44,6 +49,7 @@ export interface CodexModelSummary {
   vision: boolean;
   contextWindow: number;
   maxTokens: number;
+  thinkingLevels: CodexThinkingLevel[];
 }
 
 export interface CodexProviderSnapshot {
@@ -229,6 +235,7 @@ function summarizeModel(model: Model<Api>): CodexModelSummary {
     vision: model.input.includes("image"),
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
+    thinkingLevels: codexThinkingLevelsForModel(model),
   };
 }
 
@@ -458,13 +465,11 @@ export class CodexProviderService {
       const completion = Promise.resolve()
         .then(() => oauth.refresh(credential, controller.signal))
         .then(async (refreshed) => {
-          const post = await this.credentials.modify(
-            OPENAI_CODEX_PROVIDER_ID,
-            async (current) =>
-              this.credentialGeneration === operationGeneration &&
-              credentialRevision(credentialIdentity(current)) === revision
-                ? refreshed
-                : undefined,
+          const post = await this.credentials.modify(OPENAI_CODEX_PROVIDER_ID, async (current) =>
+            this.credentialGeneration === operationGeneration &&
+            credentialRevision(credentialIdentity(current)) === revision
+              ? refreshed
+              : undefined,
           );
           // An explicit login/logout or another successful rotation may win
           // while this conditional write is queued. Its generation owns the
@@ -495,11 +500,10 @@ export class CodexProviderService {
       // Bound the complete refresh-and-persist pipeline. The completion above
       // remains guarded and observed after timeout so a late one-time rotation
       // is not discarded, while this shared slot is released for recovery.
-      const promise = waitForAbort(completion, [controller.signal])
-        .finally(() => {
-          if (operationTimeout) clearTimeout(operationTimeout);
-          if (this.refreshOperation?.controller === controller) this.refreshOperation = null;
-        });
+      const promise = waitForAbort(completion, [controller.signal]).finally(() => {
+        if (operationTimeout) clearTimeout(operationTimeout);
+        if (this.refreshOperation?.controller === controller) this.refreshOperation = null;
+      });
       // Pi 0.80.10 does not forward the signal into Codex's refresh fetch. The
       // service still needs a terminal lifecycle so one dead dependency call
       // cannot pin every later retry to the same promise forever. This longer
@@ -571,10 +575,10 @@ export class CodexProviderService {
       if (!credential) return undefined;
     }
 
-    const auth = await waitForAbort(Promise.resolve().then(() => oauth.toAuth(credential)), [
-      requestSignal,
-      attempt.generationSignal,
-    ]);
+    const auth = await waitForAbort(
+      Promise.resolve().then(() => oauth.toAuth(credential)),
+      [requestSignal, attempt.generationSignal],
+    );
     this.assertAttemptCurrent(attempt);
     return {
       auth: {
@@ -641,6 +645,22 @@ export class CodexProviderService {
     return this.models.getModel(OPENAI_CODEX_PROVIDER_ID, modelId);
   }
 
+  parseThinkingSelection(
+    modelIdValue: unknown,
+    levelValue: unknown,
+  ): { modelId: string; level: CodexThinkingLevel } {
+    if (typeof modelIdValue !== "string") throw new Error("Invalid Codex model.");
+    const model = this.getModel(modelIdValue);
+    if (!model?.reasoning) throw new Error("This Codex model does not support thinking.");
+    if (
+      !isCodexThinkingLevel(levelValue) ||
+      !codexThinkingLevelsForModel(model).includes(levelValue)
+    ) {
+      throw new Error("This thinking level is not supported by the selected Codex model.");
+    }
+    return { modelId: modelIdValue, level: levelValue };
+  }
+
   getModelInfo(modelId: string): ModelInfo | undefined {
     const model = this.getModel(modelId);
     return model ? modelInfo(model) : undefined;
@@ -676,9 +696,7 @@ export class CodexProviderService {
           let headers = mergeProviderHeaders(auth.auth.headers, options?.headers);
           if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
           const env =
-            auth.env || options?.env
-              ? { ...(auth.env ?? {}), ...(options?.env ?? {}) }
-              : undefined;
+            auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined;
           const requestModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
           const { transformHeaders: _transformHeaders, ...providerOptions } = options ?? {};
 

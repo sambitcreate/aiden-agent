@@ -102,7 +102,9 @@ function oauthCredential(
 
 function codexAccessToken(accountId: string): string {
   const payload = Buffer.from(
-    JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+    JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+    }),
   ).toString("base64url");
   return `e30.${payload}.signature`;
 }
@@ -158,6 +160,19 @@ test("reports stored OAuth as configured without claiming live connectivity", as
   assert.equal(snapshot.needsAttention, false);
   assert.equal("signedIn" in snapshot, false);
   assert.ok(snapshot.models.length > 0);
+  assert.deepEqual(snapshot.models.find((model) => model.id === "gpt-5.4")?.thinkingLevels, [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ]);
+  assert.deepEqual(snapshot.models.find((model) => model.id === "gpt-5.6-sol")?.thinkingLevels, [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+  ]);
 });
 
 test("uses an injected Models collection instead of constructing a private registry", () => {
@@ -165,6 +180,25 @@ test("uses an injected Models collection instead of constructing a private regis
   const models = builtinModels({ credentials });
   const service = new CodexProviderService(models, credentials);
   assert.equal(service.getModel("gpt-5.4"), models.getModel("openai-codex", "gpt-5.4"));
+});
+
+test("validates Codex thinking choices against the exact selected model", () => {
+  const credentials = new InMemoryCredentialStore();
+  const service = new CodexProviderService(builtinModels({ credentials }), credentials);
+  assert.deepEqual(service.parseThinkingSelection("gpt-5.4", "xhigh"), {
+    modelId: "gpt-5.4",
+    level: "xhigh",
+  });
+  assert.deepEqual(service.parseThinkingSelection("gpt-5.6-sol", "max"), {
+    modelId: "gpt-5.6-sol",
+    level: "max",
+  });
+  assert.throws(() => service.parseThinkingSelection("gpt-5.4", "max"), /not supported/u);
+  assert.throws(() => service.parseThinkingSelection("gpt-5.4", "minimal"), /not supported/u);
+  assert.throws(
+    () => service.parseThinkingSelection("unknown", "high"),
+    /does not support thinking/u,
+  );
 });
 
 test("stages OAuth credentials until the owning flow explicitly commits", async () => {
@@ -488,8 +522,7 @@ test("the operation deadline releases a stalled credential write for a new refre
   const firstWriteCommitted = deferred<void>();
   const credentials: CredentialStore = {
     read: async () => current,
-    list: async () =>
-      current ? [{ providerId: "openai-codex", type: "oauth" as const }] : [],
+    list: async () => (current ? [{ providerId: "openai-codex", type: "oauth" as const }] : []),
     modify: async (_providerId, modifier) => {
       const operation = modifyQueue.then(async () => {
         modifyCalls += 1;
@@ -675,16 +708,20 @@ test("account switch during async request setup dispatches only the replacement 
   assert.ok(model);
 
   const result = service
-    .streamSimple(model, { messages: [] }, {
-      transformHeaders: async (headers) => {
-        transformCalls += 1;
-        if (transformCalls === 1) {
-          firstTransformStarted.resolve();
-          await releaseFirstTransform.promise;
-        }
-        return headers;
+    .streamSimple(
+      model,
+      { messages: [] },
+      {
+        transformHeaders: async (headers) => {
+          transformCalls += 1;
+          if (transformCalls === 1) {
+            firstTransformStarted.resolve();
+            await releaseFirstTransform.promise;
+          }
+          return headers;
+        },
       },
-    })
+    )
     .result();
   await firstTransformStarted.promise;
   await service.commitCredential(oauthCredential("replacement-access"));
@@ -725,14 +762,18 @@ test("account switch during Pi lazy setup cannot construct a stale WebSocket han
   });
 
   const result = service
-    .streamSimple(model, { messages: [] }, {
-      transport: "websocket",
-      onPayload: async (payload) => {
-        payloadStarted.resolve();
-        await releasePayload.promise;
-        return payload;
+    .streamSimple(
+      model,
+      { messages: [] },
+      {
+        transport: "websocket",
+        onPayload: async (payload) => {
+          payloadStarted.resolve();
+          await releasePayload.promise;
+          return payload;
+        },
       },
-    })
+    )
     .result();
   await payloadStarted.promise;
   await service.commitCredential(oauthCredential(codexAccessToken("replacement-account")));
@@ -822,7 +863,9 @@ test("auth refresh has a safe deadline and credential cleanup failures stay non-
   const builtin = builtinModels({ credentials });
   const pendingRefresh = deferred<OAuthCredential>();
   const models = {
-    getProvider: codexProviderWith(builtin, { refresh: async () => pendingRefresh.promise }),
+    getProvider: codexProviderWith(builtin, {
+      refresh: async () => pendingRefresh.promise,
+    }),
     getModels: builtin.getModels.bind(builtin),
     getModel: builtin.getModel.bind(builtin),
     checkAuth: builtin.checkAuth.bind(builtin),
@@ -909,8 +952,14 @@ test("observes WebSocket auth rejection and recovery without an HTTP response ca
   const credentials = new InMemoryCredentialStore();
   await credentials.modify("openai-codex", async () => oauthCredential("locally-valid"));
   const builtin = builtinModels({ credentials });
-  const results: Array<{ stopReason: AssistantMessage["stopReason"]; errorMessage?: string }> = [
-    { stopReason: "error", errorMessage: "Failed to extract accountId from token" },
+  const results: Array<{
+    stopReason: AssistantMessage["stopReason"];
+    errorMessage?: string;
+  }> = [
+    {
+      stopReason: "error",
+      errorMessage: "Failed to extract accountId from token",
+    },
     { stopReason: "stop" },
   ];
   const streamSimple: ProviderStreams["streamSimple"] = (model) => {
@@ -980,7 +1029,10 @@ test("applies resolved Codex auth and caller transforms once to the native provi
       {
         headers: { authorization: null, "X-Caller": "caller" },
         env: { REGION: "two" },
-        transformHeaders: async (headers) => ({ ...headers, "X-Transformed": "yes" }),
+        transformHeaders: async (headers) => ({
+          ...headers,
+          "X-Transformed": "yes",
+        }),
       },
     )
     .result();
@@ -1171,7 +1223,9 @@ test("a failed credential commit does not discard an in-flight auth failure", as
     delete: async () => undefined,
   };
   const models = {
-    getProvider: codexProviderWith(builtin, { toAuth: async () => pendingAuth.promise }),
+    getProvider: codexProviderWith(builtin, {
+      toAuth: async () => pendingAuth.promise,
+    }),
     getModels: builtin.getModels.bind(builtin),
     getModel: builtin.getModel.bind(builtin),
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),
@@ -1203,7 +1257,9 @@ test("a failed logout does not discard an in-flight auth failure", async () => {
   const pendingAuth = deferred<{ apiKey: string }>();
   const pendingLogout = deferred<never>();
   const models = {
-    getProvider: codexProviderWith(builtin, { toAuth: async () => pendingAuth.promise }),
+    getProvider: codexProviderWith(builtin, {
+      toAuth: async () => pendingAuth.promise,
+    }),
     getModels: builtin.getModels.bind(builtin),
     getModel: builtin.getModel.bind(builtin),
     checkAuth: async () => ({ type: "oauth" as const, source: "OAuth" }),

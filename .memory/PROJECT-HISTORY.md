@@ -1,5 +1,13 @@
 # Project History
 
+### 2026-07-24 — Expose model-aware ChatGPT/Codex thinking levels
+
+- Reused the composer's accessible Gemini Thinking control for signed-in ChatGPT/Codex models, with exact per-model choices from Pi metadata: Low, Medium, High, and XHigh for the current Codex catalog, plus Max only for GPT-5.6 models.
+- Omitted Pi's `minimal` alias because the pinned Codex catalog maps it to the same native `low` effort, and defaulted unsaved Codex selections to Medium rather than presenting a misleading Off state.
+- Added atomic main-process persistence keyed by exact Codex model id, strict IPC/model validation, renderer-safe model capability metadata, and runtime gating before the selected effort enters Pi Agent state and the native Codex Responses request.
+- Kept Codex thought content outside the renderer boundary; the control changes provider effort without exposing encrypted or provider-hidden reasoning.
+- Focused contracts passed 70 tests; the complete suite passed all 661 TypeScript/JavaScript tests and all 41 Rust tests, along with type-check, lint, the production renderer/main/preload build, diff validation, and a live development restart.
+
 ### 2026-07-24 — Add honest per-turn Activity trails
 
 - Recast the persisted renderer-safe generation timeline as a per-response inline Activity trail. Active, failed, and warning states default open, successful historical turns collapse, native details/summary preserves keyboard access, and reduced-motion settings remove the chevron transition.

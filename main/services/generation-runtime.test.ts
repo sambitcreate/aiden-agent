@@ -30,7 +30,7 @@ test("uses only the connection-bound runtime model as the image gate", () => {
   assert.equal(runtimeSupportsImages({ input: ["text", "image"] }), true);
 });
 
-test("native Google thinking stays a small fail-closed runtime contract", () => {
+test("native model thinking stays a small fail-closed runtime contract", () => {
   assert.equal(
     resolveGenerationThinkingLevel("google", { reasoning: true }, "high"),
     "high",
@@ -45,6 +45,49 @@ test("native Google thinking stays a small fail-closed runtime contract", () => 
   );
   assert.equal(
     resolveGenerationThinkingLevel("openai", { reasoning: true }, "high"),
+    "off",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "openai-codex",
+      { reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } },
+      "xhigh",
+    ),
+    "xhigh",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "openai-codex",
+      { reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } },
+      undefined,
+    ),
+    "medium",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "openai-codex",
+      { reasoning: true, thinkingLevelMap: { xhigh: "xhigh" } },
+      "max",
+    ),
+    "medium",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "openai-codex",
+      {
+        reasoning: true,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      },
+      "max",
+    ),
+    "max",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "openai-codex",
+      { reasoning: false },
+      "high",
+    ),
     "off",
   );
   assert.equal(
