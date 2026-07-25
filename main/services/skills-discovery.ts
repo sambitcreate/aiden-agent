@@ -14,6 +14,7 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
@@ -120,9 +121,9 @@ const AIDEN_PATTERNS = ["skill/**/SKILL.md", "skills/**/SKILL.md"];
  */
 async function scanAllSkills(
   workspaceRoot: string | undefined,
-  homeDir: string,
+  home: string,
+  aidenDir: string,
 ): Promise<DiscoveredSkill[]> {
-  const home = homeDir;
   const roots: ScanConfig[] = [
     {
       root: path.join(home, ".agents"),
@@ -130,7 +131,7 @@ async function scanAllSkills(
       source: "global",
     },
     { root: path.join(home, ".claude"), patterns: CLAUDE_PATTERNS, source: "global" },
-    { root: path.join(home, ".aiden"), patterns: AIDEN_PATTERNS, source: "global" },
+    { root: aidenDir, patterns: AIDEN_PATTERNS, source: "global" },
   ];
 
   if (workspaceRoot) {
@@ -141,7 +142,11 @@ async function scanAllSkills(
         source: "workspace",
       },
       { root: path.join(workspaceRoot, ".claude"), patterns: CLAUDE_PATTERNS, source: "workspace" },
-      { root: path.join(workspaceRoot, ".aiden"), patterns: AIDEN_PATTERNS, source: "workspace" },
+      {
+        root: path.join(workspaceRoot, AIDEN_DIR_NAME),
+        patterns: AIDEN_PATTERNS,
+        source: "workspace",
+      },
     );
   }
 
@@ -172,12 +177,17 @@ const discoveryCache = new Map<string, { expires: number; result: Promise<Discov
  */
 export function discoverSkills(
   workspaceRoot?: string,
-  homeDir = os.homedir(),
+  homeDir?: string,
 ): Promise<DiscoveredSkill[]> {
-  const key = `${homeDir}\n${workspaceRoot ?? ""}`;
+  const home = homeDir ?? os.homedir();
+  // An explicitly injected home wins over AIDEN_CONFIG_DIR so tests stay
+  // hermetic; the default path honours the override so redirecting the config
+  // directory moves global skill discovery along with it.
+  const aidenDir = homeDir === undefined ? aidenConfigDir() : path.join(home, AIDEN_DIR_NAME);
+  const key = `${home}\n${aidenDir}\n${workspaceRoot ?? ""}`;
   const hit = discoveryCache.get(key);
   if (hit && hit.expires > Date.now()) return hit.result;
-  const result = scanAllSkills(workspaceRoot, homeDir);
+  const result = scanAllSkills(workspaceRoot, home, aidenDir);
   if (discoveryCache.size >= DISCOVERY_CACHE_LIMIT) discoveryCache.clear();
   discoveryCache.set(key, { expires: Date.now() + DISCOVERY_CACHE_TTL_MS, result });
   return result;
