@@ -7,6 +7,7 @@ import * as path from "path";
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_CHAT_TITLE,
+  isDefaultChatTitle,
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
@@ -289,7 +290,7 @@ export function createChatStore(resolveChatsDir: () => Promise<string>) {
         if (
           meta?.autoTitle &&
           isFirstUserMessage &&
-          chat.title.trim().toLowerCase() === DEFAULT_CHAT_TITLE.toLowerCase()
+          isDefaultChatTitle(chat.title)
         ) {
           chat.title = deriveChatTitleSeed(full);
         }
