@@ -55,7 +55,7 @@ test("streaming and persisted messages reserve the same action and timeline shel
     "{timeline || streamingReasoning || streamingText ? (",
     "<AgentActivityTransition",
   );
-  assert.match(transientShell, /<AgentSteps timeline=\{timeline\} \/>/u);
+  assert.match(transientShell, /<ActivityFeed timeline=\{timeline\} \/>/u);
 });
 
 test("a persistence error retains the only rendered partial response", () => {
