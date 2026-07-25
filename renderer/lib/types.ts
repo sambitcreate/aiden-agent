@@ -10,6 +10,8 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 
 export type ProviderKind = "openai" | "anthropic";
 
+export type ProviderDeployment = "local" | "hosted";
+
 export type ProviderModelType = "llm" | "embedding";
 
 export interface ProviderModelMetadata {
@@ -35,6 +37,8 @@ export interface Provider {
   modelMetadata?: Record<string, ProviderModelMetadata>;
   defaultModel?: string;
   needsKey: boolean;
+  /** Explicit local vs hosted; when unset, inferred from loopback base URL. */
+  deployment?: ProviderDeployment;
   isPreset?: boolean;
   hasKey: boolean;
 }
