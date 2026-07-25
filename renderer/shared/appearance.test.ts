@@ -27,6 +27,36 @@ test("the built-in theme pairs remain readable and avoid black dark canvases", (
   assert.equal(THEME_PRESETS[0].dark.canvas, "#181B21");
 });
 
+test("built-in themes keep light neutrals softer and dark neutrals calmer", () => {
+  const foregrounds = {
+    aiden: { light: "#3D3F41", dark: "#D1D4DA" },
+    slate: { light: "#3A434E", dark: "#D1D6DE" },
+    berry: { light: "#443F4A", dark: "#D5CFD6" },
+    moss: { light: "#3F4943", dark: "#D1D6D3" },
+  } as const;
+  const darkAccents = {
+    aiden: "#3E97F6",
+    slate: "#21A9BE",
+    berry: "#22B69B",
+    moss: "#42B596",
+  } as const;
+
+  for (const preset of THEME_PRESETS) {
+    const expected = foregrounds[preset.id];
+    assert.equal(preset.light.foreground, expected.light, `${preset.label} light foreground`);
+    assert.equal(preset.dark.foreground, expected.dark, `${preset.label} dark foreground`);
+    assert.equal(preset.dark.accent, darkAccents[preset.id], `${preset.label} dark accent`);
+  }
+
+  const light = resolveThemeTokens(getPresetVariant("aiden", "light"), "light");
+  const dark = resolveThemeTokens(getPresetVariant("aiden", "dark"), "dark");
+  assert.equal(light["--text-primary"], "#3D3F41");
+  assert.equal(light["--surface-control"], "rgb(61 63 65 / 0.084)");
+  assert.equal(dark["--text-primary"], "#D1D4DA");
+  assert.equal(dark["--surface-control"], "rgb(209 212 218 / 0.094)");
+  assert.equal(dark["--accent"], "#3E97F6");
+});
+
 test("appearance normalization refreshes named presets without overwriting custom themes", () => {
   const stale = createDefaultAppearanceConfig();
   stale.light = {
@@ -64,7 +94,7 @@ test("appearance normalization safely clamps user-controlled values", () => {
   assert.equal(normalized.mode, "dark");
   assert.equal(normalized.light.contrast, 0);
   assert.equal(normalized.dark.contrast, 100);
-  assert.equal(normalized.dark.accent, "#409CFF");
+  assert.equal(normalized.dark.accent, "#3E97F6");
   assert.equal(normalized.uiFontSize, 18);
   assert.equal(normalized.codeFontSize, 10);
   assert.equal(normalized.reduceMotion, "system");
@@ -127,7 +157,7 @@ test("resolved dark tokens use the selected graphite canvas and accent", () => {
   assert.equal(tokens["--accent"], "#7C5CFC");
   assert.ok(colorContrastRatio(tokens["--accent"], tokens["--accent-foreground"]) >= 4.5);
   assert.match(tokens["--surface-background"], /^rgb\(32 36 44/);
-  assert.equal(tokens["--surface-context-bar"], "rgb(42 46 54 / 0.800)");
+  assert.equal(tokens["--surface-context-bar"], "rgb(41 45 53 / 0.800)");
   assert.notEqual(tokens["--surface-popover"], "#000000");
 });
 
