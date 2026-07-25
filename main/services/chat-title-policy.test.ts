@@ -39,12 +39,13 @@ test("uses attachment names when the first prompt has no text", () => {
     deriveChatTitleSeed({ content: "", attachments: [attachment("text", "trace.txt")] }),
     "File: trace.txt",
   );
-  assert.equal(deriveChatTitleSeed({ content: "" }), "New chat");
+  assert.equal(deriveChatTitleSeed({ content: "" }), "New agent");
 });
 
 test("only considers the default or original seed replaceable", () => {
+  assert.equal(canReplaceGeneratedChatTitle("New agent", "Investigate reconnects"), true);
+  assert.equal(canReplaceGeneratedChatTitle("New Agent", "Investigate reconnects"), true);
   assert.equal(canReplaceGeneratedChatTitle("New chat", "Investigate reconnects"), true);
-  assert.equal(canReplaceGeneratedChatTitle("New Chat", "Investigate reconnects"), true);
   assert.equal(canReplaceGeneratedChatTitle("Investigate reconnects", "Investigate reconnects"), true);
   assert.equal(canReplaceGeneratedChatTitle("Keep my title", "Investigate reconnects"), false);
 });
