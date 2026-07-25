@@ -1,14 +1,19 @@
-// Discovers Agent Skills from the filesystem. Each skill is a subfolder of a
-// `.agents` directory containing a SKILL.md file with YAML frontmatter (name,
-// description) and a Markdown body used as the skill's instructions.
+// Discovers Agent Skills from the filesystem. Each skill is a folder containing
+// a SKILL.md file with YAML frontmatter (name, description) and a Markdown body
+// used as the skill's instructions.
 //
-// Two roots are scanned: the workspace folder's `.agents` and the user's global
-// `~/.agents`. Workspace skills win over global skills of the same name.
+// Scanned roots and layouts:
+//   - Global: ~/.agents, ~/.claude, ~/.aiden
+//   - Workspace: <workspaceRoot>/.agents, <workspaceRoot>/.claude, <workspaceRoot>/.aiden
+// Supported layouts per root:
+//   - Legacy: <root>/<skill>/SKILL.md
+//   - Nested: <root>/skills/<skill>/SKILL.md
+//   - Aiden native: <root>/{skill,skills}/<skill>/SKILL.md
+// Workspace skills win over global skills of the same name.
 
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
-import { logger } from "../platform.js";
 import type { DiscoveredSkill } from "./types.js";
 
 interface Frontmatter {
@@ -33,7 +38,10 @@ function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string }
     const key = line.slice(0, idx).trim().toLowerCase();
     let value = line.slice(idx + 1).trim();
     // Strip surrounding quotes if present.
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
       value = value.slice(1, -1);
     }
     if (key === "name") frontmatter.name = value;
@@ -42,58 +50,135 @@ function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string }
   return { frontmatter, body: body.trim() };
 }
 
-/** Scan one `.agents` directory for SKILL.md-based skills. */
-async function scanRoot(agentsDir: string, source: DiscoveredSkill["source"]): Promise<DiscoveredSkill[]> {
-  let entries;
+interface ScanConfig {
+  root: string;
+  patterns: string[];
+  source: DiscoveredSkill["source"];
+}
+
+async function dirExists(dirPath: string): Promise<boolean> {
   try {
-    entries = await fs.readdir(agentsDir, { withFileTypes: true });
+    const stat = await fs.stat(dirPath);
+    return stat.isDirectory();
   } catch {
-    return []; // No `.agents` folder here — that's normal.
+    return false;
+  }
+}
+
+async function scanPatterns(config: ScanConfig): Promise<DiscoveredSkill[]> {
+  if (!(await dirExists(config.root))) return [];
+
+  const seenPaths = new Set<string>();
+  const skills: DiscoveredSkill[] = [];
+
+  for (const pattern of config.patterns) {
+    const matches = fs.glob(pattern, { cwd: config.root });
+    for await (const relative of matches) {
+      const skillMd = path.resolve(config.root, relative);
+      if (seenPaths.has(skillMd)) continue;
+      seenPaths.add(skillMd);
+
+      let raw: string;
+      try {
+        raw = await fs.readFile(skillMd, "utf-8");
+      } catch {
+        continue;
+      }
+
+      const { frontmatter, body } = parseSkillMd(raw);
+      const entryName = path.basename(path.dirname(skillMd));
+      const name = (frontmatter.name || entryName).trim();
+      const instructions = body || frontmatter.description || "";
+      if (!name || !instructions) continue;
+
+      skills.push({
+        // The resolved path keeps ids unique across roots that share a source
+        // and entry name (e.g. ~/.agents/notes and ~/.claude/skills/notes).
+        id: `${config.source}:${skillMd}`,
+        name,
+        description: (frontmatter.description || "").trim(),
+        instructions,
+        source: config.source,
+        path: skillMd,
+      });
+    }
   }
 
-  const skills: DiscoveredSkill[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const skillMd = path.join(agentsDir, entry.name, "SKILL.md");
-    let raw: string;
-    try {
-      raw = await fs.readFile(skillMd, "utf-8");
-    } catch {
-      continue; // Subfolder without a SKILL.md — skip.
-    }
-    const { frontmatter, body } = parseSkillMd(raw);
-    const name = (frontmatter.name || entry.name).trim();
-    const instructions = body || frontmatter.description || "";
-    if (!name || !instructions) continue;
-    skills.push({
-      id: `${source}:${entry.name}`,
-      name,
-      description: (frontmatter.description || "").trim(),
-      instructions,
-      source,
-      path: skillMd,
-    });
-  }
   return skills;
 }
 
+const LEGACY_AGENTS_PATTERNS = ["*/SKILL.md"];
+const NESTED_AGENTS_PATTERNS = ["skills/**/SKILL.md"];
+const CLAUDE_PATTERNS = ["skills/**/SKILL.md"];
+const AIDEN_PATTERNS = ["skill/**/SKILL.md", "skills/**/SKILL.md"];
+
 /**
- * Discover skills from the workspace `.agents` folder and the global
- * `~/.agents` folder. On a name clash, the workspace skill wins.
+ * Discover skills from global and workspace skill directories.
+ * On a name clash the later root wins, so workspace skills override global
+ * ones (and, within a source, `.aiden` overrides `.claude`, which overrides
+ * `.agents`).
  */
-export async function discoverSkills(workspaceRoot?: string): Promise<DiscoveredSkill[]> {
-  const roots: Array<Promise<DiscoveredSkill[]>> = [scanRoot(path.join(os.homedir(), ".agents"), "global")];
-  if (workspaceRoot) roots.push(scanRoot(path.join(workspaceRoot, ".agents"), "workspace"));
+async function scanAllSkills(
+  workspaceRoot: string | undefined,
+  homeDir: string,
+): Promise<DiscoveredSkill[]> {
+  const home = homeDir;
+  const roots: ScanConfig[] = [
+    {
+      root: path.join(home, ".agents"),
+      patterns: [...LEGACY_AGENTS_PATTERNS, ...NESTED_AGENTS_PATTERNS],
+      source: "global",
+    },
+    { root: path.join(home, ".claude"), patterns: CLAUDE_PATTERNS, source: "global" },
+    { root: path.join(home, ".aiden"), patterns: AIDEN_PATTERNS, source: "global" },
+  ];
+
+  if (workspaceRoot) {
+    roots.push(
+      {
+        root: path.join(workspaceRoot, ".agents"),
+        patterns: [...LEGACY_AGENTS_PATTERNS, ...NESTED_AGENTS_PATTERNS],
+        source: "workspace",
+      },
+      { root: path.join(workspaceRoot, ".claude"), patterns: CLAUDE_PATTERNS, source: "workspace" },
+      { root: path.join(workspaceRoot, ".aiden"), patterns: AIDEN_PATTERNS, source: "workspace" },
+    );
+  }
 
   try {
-    const [global, workspace = []] = await Promise.all(roots);
-    // Workspace overrides global by (case-insensitive) name.
+    const results = await Promise.all(roots.map((config) => scanPatterns(config)));
     const byName = new Map<string, DiscoveredSkill>();
-    for (const skill of global) byName.set(skill.name.toLowerCase(), skill);
-    for (const skill of workspace) byName.set(skill.name.toLowerCase(), skill);
+    for (const skills of results) {
+      for (const skill of skills) {
+        byName.set(skill.name.toLowerCase(), skill);
+      }
+    }
     return [...byName.values()];
   } catch (error) {
-    logger.warn("skills", `Skill discovery failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn("Skill discovery failed:", error instanceof Error ? error.message : String(error));
     return [];
   }
+}
+
+const DISCOVERY_CACHE_TTL_MS = 5_000;
+const DISCOVERY_CACHE_LIMIT = 50;
+const discoveryCache = new Map<string, { expires: number; result: Promise<DiscoveredSkill[]> }>();
+
+/**
+ * Discover skills from global and workspace skill directories.
+ * Both the system prompt and the tool set discover once per generation, so
+ * results are cached for a few seconds to collapse those into one filesystem
+ * scan without going meaningfully stale.
+ */
+export function discoverSkills(
+  workspaceRoot?: string,
+  homeDir = os.homedir(),
+): Promise<DiscoveredSkill[]> {
+  const key = `${homeDir}\n${workspaceRoot ?? ""}`;
+  const hit = discoveryCache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.result;
+  const result = scanAllSkills(workspaceRoot, homeDir);
+  if (discoveryCache.size >= DISCOVERY_CACHE_LIMIT) discoveryCache.clear();
+  discoveryCache.set(key, { expires: Date.now() + DISCOVERY_CACHE_TTL_MS, result });
+  return result;
 }
