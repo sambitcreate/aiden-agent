@@ -3,11 +3,20 @@
 
 import type { Attachment, ChatMessage } from "./types.js";
 
-export const DEFAULT_CHAT_TITLE = "New chat";
+export const DEFAULT_CHAT_TITLE = "New agent";
+/** Prior default kept replaceable so existing untitled chats still auto-rename. */
+const LEGACY_DEFAULT_CHAT_TITLES = new Set(["new chat"]);
 export const MAX_CHAT_TITLE_LENGTH = 50;
 const CHAT_RENAME_ORIGINAL_BUDGET = 3_500;
 const CHAT_RENAME_RECENT_BUDGET = 8_500;
 const CHAT_RENAME_RECENT_MESSAGES = 8;
+
+export function isDefaultChatTitle(title: string): boolean {
+  const normalized = title.trim().toLowerCase();
+  return (
+    normalized === DEFAULT_CHAT_TITLE.toLowerCase() || LEGACY_DEFAULT_CHAT_TITLES.has(normalized)
+  );
+}
 
 function compact(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -61,7 +70,7 @@ export function deriveChatTitleSeed(input: {
 
 export function canReplaceGeneratedChatTitle(currentTitle: string, titleSeed: string): boolean {
   const current = currentTitle.trim();
-  return current.toLowerCase() === DEFAULT_CHAT_TITLE.toLowerCase() || current === titleSeed.trim();
+  return isDefaultChatTitle(current) || current === titleSeed.trim();
 }
 
 function titleFromJson(value: string): string | null {
