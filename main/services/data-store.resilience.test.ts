@@ -49,6 +49,124 @@ test("DataStore.load caches: a second load does not re-read disk", async (t) => 
   assert.equal(second.count, 7);
 });
 
+// The companion to the pin above: load() never re-reads, so reload() is the only
+// way an external edit becomes visible. Both halves must change together.
+test("DataStore.reload re-reads disk and reports whether the contents changed", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-reload-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 7 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+  assert.equal((await store.load()).count, 7);
+
+  await fs.writeFile(file, JSON.stringify({ count: 999 }), "utf-8");
+  assert.equal(await store.reload(), true);
+  assert.equal((await store.load()).count, 999);
+  assert.equal(await store.reload(), false, "a second reload has nothing new to report");
+});
+
+// PINS content comparison over an mtime/size stat gate. Two different hand-edits
+// can share a byte length, and coarse mtime resolution (network shares, older
+// filesystems) can place both inside one tick. A stat gate drops the second edit
+// silently — exactly the case reload() exists to catch.
+test("DataStore.reload sees an edit that shares the previous size and mtime", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-same-size-");
+  const file = path.join(dir, "config.json");
+  const store = new DataStore<{ id: string }>("config.json", { id: "" }, () => dir);
+
+  await fs.writeFile(file, JSON.stringify({ id: "aaa" }), "utf-8");
+  assert.equal((await store.load()).id, "aaa");
+  const { mtime, atime, size } = await fs.stat(file);
+
+  // Same length, different content, and the timestamp forced back to what the
+  // store already observed.
+  await fs.writeFile(file, JSON.stringify({ id: "bbb" }), "utf-8");
+  await fs.utimes(file, atime, mtime);
+  assert.equal((await fs.stat(file)).size, size, "the two edits really are the same size");
+
+  assert.equal(await store.reload(), true);
+  assert.equal((await store.load()).id, "bbb");
+});
+
+test("DataStore preserves an unparseable file before overwriting it when asked", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-corrupt-keep-");
+  const file = path.join(dir, "config.json");
+  const broken = '{ "count": oops }';
+  await fs.writeFile(file, broken, "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    preserveCorruptFile: true,
+  });
+
+  assert.deepEqual(await store.load(), { count: 0 }, "still falls back to defaults");
+  await store.save({ count: 5 });
+
+  const rescued = (await fs.readdir(dir)).filter((name) => name.includes(".invalid-"));
+  assert.equal(rescued.length, 1);
+  assert.equal(await fs.readFile(path.join(dir, rescued[0]), "utf-8"), broken);
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { count: 5 });
+});
+
+test("DataStore leaves no rescue copy for a regenerable cache", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-corrupt-drop-");
+  await fs.writeFile(path.join(dir, "config.json"), "{ nope", "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+
+  await store.save({ count: 5 });
+
+  assert.deepEqual(await fs.readdir(dir), ["config.json"], "opt-in only; no litter by default");
+});
+
+test("DataStore only rescues the corrupt file once, not on every later write", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-corrupt-once-");
+  await fs.writeFile(path.join(dir, "config.json"), "{ nope", "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    preserveCorruptFile: true,
+  });
+
+  await store.save({ count: 1 });
+  await store.save({ count: 2 });
+  await store.update((draft) => void (draft.count += 1));
+
+  const rescued = (await fs.readdir(dir)).filter((name) => name.includes(".invalid-"));
+  assert.equal(rescued.length, 1);
+});
+
+test("DataStore.reload on a missing file yields the default value", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-reload-gone-");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+  await store.save({ count: 5 });
+
+  await fs.rm(path.join(dir, "config.json"));
+  assert.equal(await store.reload(), true);
+  assert.equal((await store.load()).count, 0);
+});
+
+// PINS the atomic-write contract. An in-place write can leave a truncated file if
+// the process dies mid-write, which is unacceptable for a config the user edits
+// by hand rather than a cache the app can regenerate.
+test("DataStore.save replaces the file by rename and leaves no staging file", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-atomic-");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+  await store.save({ count: 1 });
+  await store.save({ count: 2 });
+
+  assert.deepEqual(await fs.readdir(dir), ["config.json"]);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, "config.json"), "utf-8")), {
+    count: 2,
+  });
+});
+
+test("DataStore.save leaves no staging file behind when the write is rejected", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-atomic-fail-");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+  await store.save({ count: 1 });
+
+  await assert.rejects(() => store.save({ count: 2 }, () => false));
+  assert.deepEqual(await fs.readdir(dir), ["config.json"]);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, "config.json"), "utf-8")), {
+    count: 1,
+  });
+});
+
 test("DataStore.update throws when isCurrent() reports the document is stale", async (t) => {
   const dir = await tmpDir(t, "aiden-ds-stale-");
   const store = new DataStore<{ n: number }>("state.json", { n: 0 }, () => dir);
