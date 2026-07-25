@@ -44,20 +44,20 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       ref={ref}
       type={asChild ? undefined : type}
       className={cn(
-        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border border-transparent text-strong outline-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45 [&_svg:not([class*='size-'])]:size-4",
+        "dimmable inline-flex shrink-0 cursor-default items-center justify-center whitespace-nowrap border border-transparent text-strong outline-none transition-[background-color,border-color,color,box-shadow,opacity] duration-150 ease-out focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45 [&_svg:not([class*='size-'])]:size-4",
         radius === "full" ? "rounded-pill" : "rounded-control",
         size === "small" && "h-7 gap-1.5 px-2",
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
         size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",
         iconOnly && "aspect-square px-0",
-        variant === "filled" && "bg-control text-primary shadow-control hover:bg-control-hover hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
-        variant === "muted" && "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed",
-        variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection",
-        variant === "glass" && "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
-        variant === "toolbar" && "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed",
-        variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
-        variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed",
-        variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed",
+        variant === "filled" && "bg-control text-primary shadow-control hover:bg-control-hover hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        variant === "muted" && "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed focus-visible:bg-control",
+        variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+        variant === "glass" && "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        variant === "toolbar" && "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
+        variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
+        variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed focus-visible:bg-red/90",
         className,
       )}
       {...props}
@@ -73,7 +73,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
     <input
       ref={ref}
       className={cn(
-        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red aria-invalid:ring-red/40",
+        "h-8 w-full rounded-control border border-field bg-transparent px-3 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
         className,
       )}
       {...props}
@@ -87,7 +87,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
       <textarea
         ref={ref}
         className={cn(
-          "field-sizing-content min-h-16 w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red aria-invalid:ring-red/40",
+          "field-sizing-content min-h-16 w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
           className,
         )}
         {...props}
@@ -373,7 +373,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
             aria-label="Close sidebar"
             onClick={toggle}
             tabIndex={-1}
-            className="absolute inset-0 z-20 cursor-default bg-black/10 outline-none backdrop-blur-[1px] transition-opacity focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring"
+            className="absolute inset-0 z-20 cursor-default bg-black/10 outline-none backdrop-blur-[1px] transition-opacity"
           />
         ) : null}
         <aside
@@ -403,7 +403,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
           onPointerDown={beginResize}
           onKeyDown={resizeWithKeyboard}
           className={cn(
-            "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-focus-ring",
+            "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent",
             (collapsed || compact) && "pointer-events-none opacity-0",
           )}
         />
@@ -489,7 +489,7 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
       {searchable ? (
         <div className="px-3 pb-3">
-          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:border-focus-ring focus-within:bg-control focus-within:ring-2 focus-within:ring-focus-ring">
+          <label className="flex h-8 items-center gap-2 rounded-pill border border-transparent bg-input px-2.5 transition-[background-color,border-color,box-shadow] duration-150 ease-out hover:bg-control/70 focus-within:border-focus-ring focus-within:bg-control">
             <Search className="size-4 shrink-0 text-tertiary" />
             <input
               type="search"
@@ -603,6 +603,9 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
       if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");
       else updateScrollEdges(element);
     };
+    // Settle synchronously first so the viewport never paints at scrollTop 0 and
+    // then jumps; the frame after still catches late layout (fonts, images).
+    update();
     const frame = requestAnimationFrame(update);
     const resizeObserver = new ResizeObserver(update);
     resizeObserver.observe(element);
@@ -897,13 +900,13 @@ export const ContextMenuItem = React.forwardRef<React.ElementRef<typeof ContextM
 
 export const Select = SelectPrimitive.Root;
 export const SelectValue = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Value>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>>(function SelectValue({ className, ...props }, ref) { return <SelectPrimitive.Value ref={ref} className={cn("min-w-0 flex-1 truncate text-left", className)} {...props} />; });
-export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:ring-2 focus:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-45", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon className="shrink-0"><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
+export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon className="shrink-0"><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
 export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} data-slot="popover-content" position={position} className={cn(menuContentClass, "max-h-72 origin-[var(--radix-select-content-transform-origin)]", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
 export const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>>(function SelectItem({ className, children, ...props }, ref) { return <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}><span className="absolute left-2"><SelectPrimitive.ItemIndicator><Check className="size-3.5" /></SelectPrimitive.ItemIndicator></span><SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText></SelectPrimitive.Item>; });
 
-export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:ring-2 focus-visible:ring-focus-ring data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-transform duration-150 ease-out data-[state=checked]:translate-x-[18px]" /></SwitchPrimitive.Root>; });
+export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-transform duration-150 ease-out data-[state=checked]:translate-x-[18px]" /></SwitchPrimitive.Root>; });
 export const RadioGroup = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Root>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & { orientation?: "horizontal" | "vertical" }>(function RadioGroup({ className, orientation, ...props }, ref) { return <RadioGroupPrimitive.Root ref={ref} className={cn("flex gap-3", orientation === "vertical" && "flex-col", className)} {...props} />; });
-export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:ring-2 focus-visible:ring-focus-ring data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
+export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
 
 export const Command = React.forwardRef<React.ElementRef<typeof CommandPrimitive>, React.ComponentPropsWithoutRef<typeof CommandPrimitive>>(function Command({ className, ...props }, ref) { return <CommandPrimitive ref={ref} className={cn("flex w-full flex-col overflow-hidden bg-transparent text-primary", className)} {...props} />; });
 export const CommandInput = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Input>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>>(function CommandInput({ className, ...props }, ref) { return <div className="flex h-9 items-center gap-2 border-b border-separator px-3"><Search className="size-4 shrink-0 text-tertiary" /><CommandPrimitive.Input ref={ref} className={cn("h-full min-w-0 flex-1 bg-transparent text-regular outline-none placeholder:text-secondary", className)} {...props} /></div>; });
