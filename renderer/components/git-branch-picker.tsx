@@ -195,7 +195,7 @@ export function GitBranchPicker({
             disabled={disabled}
             aria-label={`Branch ${current}${currentSummary ? `, ${currentSummary}` : ""}`}
             title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
-            className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:ring-2 focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45"
+            className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
           >
             <GitBranch className="size-4.5 text-secondary" aria-hidden="true" />
             <span className="min-w-0 truncate text-regular text-primary">{current}</span>
@@ -294,7 +294,7 @@ export function GitBranchPicker({
                 <button
                   type="button"
                   onClick={() => void branches.refetch()}
-                  className="shrink-0 rounded-control px-1.5 py-0.5 text-small-strong outline-none hover:bg-support-red/10 focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  className="shrink-0 rounded-control px-1.5 py-0.5 text-small-strong outline-none hover:bg-support-red/10 focus-visible:bg-list-selection focus-visible:outline-none"
                 >
                   Try again
                 </button>
@@ -356,7 +356,7 @@ export function GitBranchPicker({
               type="button"
               disabled={unavailable || unborn}
               onClick={() => setCreateMode("branch")}
-              className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45"
+              className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
             >
               <Plus className="size-4 shrink-0" />
               <span className="min-w-0 truncate text-left text-small-strong">Create and checkout new branch…</span>
@@ -366,7 +366,7 @@ export function GitBranchPicker({
                 type="button"
                 disabled={unavailable || unborn}
                 onClick={() => setCreateMode("worktree")}
-                className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus-ring disabled:pointer-events-none disabled:opacity-45"
+                className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
               >
                 <FolderGit2 className="size-4 shrink-0" />
                 <span className="min-w-0 truncate text-left text-small-strong">New isolated worktree…</span>
