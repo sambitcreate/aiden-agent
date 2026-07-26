@@ -2,7 +2,7 @@
 //  • focus     (default ⌘⌥Space) — brings the app forward and focuses the composer
 //  • dictate   (default ⌘⇧D)     — toggles global dictation into the focused app
 //    (floating pill + auto-paste, clipboard fallback)
-//  • assistant (default ⌘⌥A)     — opens the Aiden assistant window
+//  • assistant (default ⌘⌥A)     — opens the Aiden panel docked in the main window
 
 import { globalShortcut, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
@@ -36,23 +36,34 @@ export function initAssistantShortcut(trigger: () => void): void {
 async function register(accelerator: string, handler: () => void): Promise<boolean> {
   try {
     const ok = await globalShortcut.register(accelerator, handler);
-    if (!ok) logger.warn("shortcut", `Could not register "${accelerator}" (in use by another app?).`);
+    if (!ok)
+      logger.warn("shortcut", `Could not register "${accelerator}" (in use by another app?).`);
     return ok;
   } catch (error) {
-    logger.warn("shortcut", `Failed to register "${accelerator}": ${error instanceof Error ? error.message : String(error)}`);
+    logger.warn(
+      "shortcut",
+      `Failed to register "${accelerator}": ${error instanceof Error ? error.message : String(error)}`,
+    );
     return false;
   }
 }
 
-/** (Re)register both shortcuts from current settings. */
+/** (Re)register all three shortcuts from current settings. */
 export async function applyShortcutFromSettings(): Promise<void> {
   const settings = await configStore.getSettings();
 
-  // ── Focus shortcut ──────────────────────────────────────────────────
-  if (registered) {
-    globalShortcut.unregister(registered);
-    registered = null;
+  // Release every accelerator before claiming any. Unregistering lazily, one
+  // section at a time, means a shortcut later in this function still holds the
+  // accelerator an earlier one is trying to claim, so rebinding focus onto the
+  // assistant's key silently fails and the assistant keeps it.
+  for (const accelerator of [registered, registeredDictation, registeredAssistant]) {
+    if (accelerator) globalShortcut.unregister(accelerator);
   }
+  registered = null;
+  registeredDictation = null;
+  registeredAssistant = null;
+
+  // ── Focus shortcut ──────────────────────────────────────────────────
   const focusEnabled = settings.shortcutEnabled ?? true;
   const focusAccel = settings.shortcutAccelerator || DEFAULT_ACCELERATOR;
   if (focusEnabled && onTrigger) {
@@ -60,10 +71,6 @@ export async function applyShortcutFromSettings(): Promise<void> {
   }
 
   // ── Dictation shortcut ──────────────────────────────────────────────
-  if (registeredDictation) {
-    globalShortcut.unregister(registeredDictation);
-    registeredDictation = null;
-  }
   const dictationEnabled = settings.dictationEnabled ?? false;
   const dictationAccel = settings.dictationAccelerator || DEFAULT_DICTATION_ACCELERATOR;
   // Skip if it collides with the (already-registered) focus shortcut.
@@ -72,10 +79,6 @@ export async function applyShortcutFromSettings(): Promise<void> {
   }
 
   // ── Assistant shortcut ──────────────────────────────────────────────
-  if (registeredAssistant) {
-    globalShortcut.unregister(registeredAssistant);
-    registeredAssistant = null;
-  }
   const assistantEnabled = settings.assistant?.hotkeyEnabled !== false;
   const assistantAccel = settings.assistant?.hotkeyAccelerator || DEFAULT_ASSISTANT_ACCELERATOR;
   // Skip collisions with the (already-registered) focus and dictation shortcuts.
