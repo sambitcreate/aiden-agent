@@ -16,17 +16,17 @@ and declaring them early is what made it deliberately red the first time through
 > (recommended) or `superpowers:executing-plans` to implement the task list below
 > task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship "Aiden", a standalone compact assistant window that chats about the app,
-reads and changes app settings through approval-gated tools, and proactively nudges the
-user about uncommitted work, untouched projects, and configuration drift.
+**Goal:** Ship "Aiden" as an in-window assistant dock that chats about the app, then extend
+it with approval-gated settings tools and opt-in proactive nudges about uncommitted work,
+untouched projects, and configuration drift.
 
-**Architecture:** A fourth Electron surface (after main window, pill, and the headless
-scheduler) built on the proven `pill-window.ts` singleton pattern with its own preload
-allowlist. Interactive chat reuses `llmClient.start` bound to the assistant window's
-renderer document; unattended proactive runs reuse the *background owner* pattern that
-Scheduled Tasks already established, so no renderer is required. The proactive engine is
-split hard into pure decision cores (unit-tested, no Electron) and thin Electron shells,
-following `schedule-service-core.ts` / `schedule-service.ts`.
+**Current architecture:** Phase 1 mounts `AssistantDock` in the main renderer's `RootView`
+and reuses the existing chat IPC surface with a reserved assistant workspace. The global
+hotkey focuses the main window and opens the dock; there is no assistant `BrowserWindow` or
+assistant-specific preload. Future unattended proactive runs reuse the *background owner*
+pattern that Scheduled Tasks established, so no renderer is required. The proactive engine
+remains split into pure decision cores and thin Electron shells, following
+`schedule-service-core.ts` / `schedule-service.ts`.
 
 **Tech Stack:** Electron, TypeScript (ESM in `main/`, `.js` import specifiers), React 19 +
 Vite for renderers, `croner` for the ticker, `node:test` via `tsx --test` for tests,
@@ -54,9 +54,8 @@ Tailwind + semantic tokens in `renderer/styles.css`.
 
 ## Vision
 
-"Aiden" is a standalone, compact assistant chat window (inspired by the ChatGPT desktop
-compact window) that lives alongside the main app. It is an assistant *about the app and
-the user's work*, not a general coding chat:
+"Aiden" is a compact assistant dock inside the main window. It is an assistant *about the
+app and the user's work*, not a general coding chat:
 
 - Chat with the user about the app — answer questions, explain settings.
 - Read and change app settings/config via tools (with approval for mutations).
@@ -76,7 +75,7 @@ recursive self-scheduling.
 These were the plan's four open questions. They are settled; the task list assumes them.
 
 1. **Model policy — an explicit pin is required for proactivity.** Interactive chat in the
-   Aiden window follows `lastProviderId` / `lastModel` like every other chat. The ticker
+   Aiden dock follows the app-wide provider/model selection like every other chat. The ticker
    refuses to run at all until `assistant.providerId` *and* `assistant.model` are set, and
    surfaces "needs a model" in the settings health row. A background loop must never
    silently inherit whichever expensive model the user just switched to.
@@ -87,9 +86,9 @@ These were the plan's four open questions. They are settled; the task list assum
    infrastructure, not reuse. Entry points in v1 are the ⌘⌥A global hotkey and clicking a
    nudge notification.
 4. **Nudges do not appear in the main window.** No sidebar affordance and no main-window
-   badge. Delivery is the macOS notification plus the assistant window's own thread. The
+   badge. Delivery is the macOS notification plus the assistant dock's own thread. The
    `assistant:nudge` broadcast still goes into the shared notification allowlist (Electron
-   broadcasts reach every window), but only the assistant renderer subscribes.
+   broadcasts reach every window), but only the dock subscribes.
 
 ## Corrections to the original draft
 
@@ -99,7 +98,7 @@ points; the task list reflects the corrected reality.
 1. **`chat:start` has no "active application document" gate.** `chatGenerationOwner`
    (`main/services/chat-generation-owner.ts:6`) only requires that the sender be a live,
    non-detached, top-level main frame (`renderer-document-owner.ts:38`). The assistant
-   window qualifies unchanged. Nothing to extend.
+   main renderer already qualifies unchanged. Nothing to extend.
 2. **Unattended runs use a synthetic owner, not a renderer stream.**
    `createBackgroundOwner` in `main/services/schedule-execution.ts:17` builds a
    `ChatGenerationOwner` with `id: 0`, a synthetic `documentId`, and a terminal promise
@@ -334,7 +333,9 @@ Computer Use are withheld explicitly.
 - `get_settings` — redacted `configStore.getSettings()`; never returns secrets.
 - `set_setting` — patch through `configStore.setSettings`, restricted by a shared pure
   field whitelist, routed through `ToolApprovalCoordinator` so `"ask"` mode prompts.
-- `list_projects` — workspaces with `updatedAt` plus a `gitInfo` summary.
+- `list_projects` — workspaces with `updatedAt` plus a `gitInfo` summary. Project names are
+  never injected into the base system prompt; they are disclosed only when the user asks
+  for project context and this tool is available.
 - `get_project_status` — deeper `gitInfo` for one workspace.
 
 Out of scope for v1: provider keys, MCP servers, skills, arbitrary shell, Computer Use, and
@@ -355,7 +356,12 @@ by the settings UI rather than model tools, so a proactive run cannot silence it
 
 # Implementation plan
 
-## Phase 1 — Window and chat
+## Phase 1 — Dock and chat (implemented)
+
+> The task-by-task material below preserves the original separate-window implementation
+> plan for history. Phase 1 ultimately shipped through the dock revision documented above;
+> its unchecked boxes and assistant-window file lists are not the current implementation
+> inventory. Phases 2 and 3 remain the active future work.
 
 ### Task 1: Generic trusted-sender check
 
