@@ -3,8 +3,6 @@
 // attended ones do not — is unit-testable.
 
 export interface AssistantPromptInput {
-  /** Names of the user's workspaces, for grounding "my projects" questions. */
-  workspaceNames: readonly string[];
   /** Settings section ids the assistant may talk about. */
   settingsSections: readonly string[];
   /** Whether the assistant may mutate settings, and whether it must ask first. */
@@ -40,31 +38,6 @@ function permissionText(value: AssistantPromptInput["settingsPermission"]): stri
   return value === "full" || value === "none" ? PERMISSION_TEXT[value] : PERMISSION_TEXT.ask;
 }
 
-const MAX_WORKSPACE_NAMES = 40;
-const MAX_WORKSPACE_NAME_CHARS = 60;
-
-/**
- * Flatten a workspace name to a single harmless line.
- *
- * Workspace names are user-controlled and are not validated beyond a trim, and
- * a folder-derived name can contain newlines. Interpolated raw, a name can add
- * its own lines to the prompt — forging a permission posture, or a [SILENT]
- * contract — immediately before the real ones, which is indistinguishable from
- * the genuine article.
- */
-function safeWorkspaceName(name: string): string {
-  return (
-    name
-      .replace(/[\p{Cc}\p{Cf}]/gu, " ")
-      // [SILENT] is a control token for unattended runs, so it must never
-      // arrive inside untrusted text that gets interpolated into the prompt.
-      .replace(/\[\s*silent\s*\]/giu, "(silent)")
-      .replace(/\s+/gu, " ")
-      .trim()
-      .slice(0, MAX_WORKSPACE_NAME_CHARS)
-  );
-}
-
 const SILENT_CONTRACT = [
   "You are running unattended, on a timer, with no one watching.",
   "If nothing here is worth interrupting the user for, reply with exactly [SILENT]",
@@ -73,14 +46,6 @@ const SILENT_CONTRACT = [
 ].join(" ");
 
 export function buildAssistantSystemPrompt(input: AssistantPromptInput): string {
-  const names = input.workspaceNames
-    .slice(0, MAX_WORKSPACE_NAMES)
-    .map(safeWorkspaceName)
-    .filter(Boolean);
-  const projects =
-    names.length > 0
-      ? `The user's projects are: ${names.join(", ")}.`
-      : "The user has no projects set up yet.";
   const sections = `Settings are organised into these sections: ${input.settingsSections.join(", ")}.`;
   const canReadSettings = input.availableTools.includes("get_settings");
   const canReadProjects = input.availableTools.includes("list_projects");
@@ -112,7 +77,6 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
     "commands. When the user wants code written or changed, tell them to use a project",
     "chat in the main window.",
     "",
-    projects,
     sections,
     ...(canReadSettings ? [permissionText(input.settingsPermission)] : []),
     "",
