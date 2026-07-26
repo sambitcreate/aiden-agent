@@ -22,11 +22,18 @@ export function assistantPreviewText(content: string): string | null {
     .replace(/^\s{0,3}#{1,6}\s+/gmu, "")
     .replace(/\*\*([^*]+)\*\*/gu, "$1")
     .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$)/gu, "$1$2")
+    // Model output is untrusted text rendered in app chrome. Bidi overrides and
+    // other invisible formatting characters let it display something other than
+    // what it says — a reversed line in a bubble styled like the app's own.
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   if (!flat) return null;
-  if (flat.length <= PREVIEW_MAX_CHARS) return flat;
-  const clipped = flat.slice(0, PREVIEW_MAX_CHARS);
+  // Count by code point: a UTF-16 slice can cut a surrogate pair in half and
+  // leave a replacement character at the end of the preview.
+  const points = [...flat];
+  if (points.length <= PREVIEW_MAX_CHARS) return flat;
+  const clipped = points.slice(0, PREVIEW_MAX_CHARS).join("");
   const lastSpace = clipped.lastIndexOf(" ");
   return `${(lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped).trimEnd()}…`;
 }
