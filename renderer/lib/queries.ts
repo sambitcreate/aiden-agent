@@ -179,6 +179,11 @@ export function useChats(workspaceId?: string) {
   return useQuery({
     queryKey: queryKeys.chatsIn(workspaceId),
     queryFn: () => chatsApi.list(workspaceId),
+    // An unscoped list returns every chat in every workspace, including the
+    // reserved assistant workspace whose threads belong to the Aiden dock. The
+    // sidebar renders whatever this resolves to, and `workspaceId` is briefly
+    // undefined while workspaces load, so wait for a concrete id instead.
+    enabled: Boolean(workspaceId),
   });
 }
 
