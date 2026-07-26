@@ -81,6 +81,7 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
+  assistantDockReady: () => invoke<boolean>("app:assistant-dock-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
