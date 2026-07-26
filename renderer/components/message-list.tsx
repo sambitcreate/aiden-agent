@@ -65,7 +65,7 @@ export function MessageList({
   const orbAppearance = useOrbAppearance();
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-3 py-6 sm:px-5">
+    <div className="aiden-dock-inset mx-auto flex w-full max-w-3xl flex-col gap-5 py-6">
       {messages.map((m) => (
         <div key={m.id} className="flex min-w-0 flex-col gap-3">
           {m.role === "assistant" && m.timeline?.steps.length ? (

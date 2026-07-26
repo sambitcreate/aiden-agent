@@ -24,7 +24,7 @@ export function AssistantBubble({
 }): React.ReactElement {
   const badge = unreadBadgeLabel(unread);
   return (
-    <div className="pointer-events-none flex items-end justify-end gap-2">
+    <div className="assistant-dock-bubble pointer-events-none flex items-end justify-end gap-2">
       {preview ? (
         <button
           type="button"

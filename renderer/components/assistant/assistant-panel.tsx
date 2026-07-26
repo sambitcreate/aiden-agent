@@ -27,8 +27,10 @@ export function AssistantPanel({
     setDraft("");
   };
 
+  // Interactivity is owned by the dock wrapper, which withdraws it while the
+  // panel animates out.
   return (
-    <div className="pointer-events-auto flex h-[min(34rem,calc(100vh-8rem))] w-[min(23rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl bg-popover shadow-composer outline outline-1 outline-field/80">
+    <div className="flex h-[min(34rem,calc(100vh-8rem))] w-[min(23rem,calc(100vw-3rem))] flex-col overflow-hidden rounded-2xl bg-popover shadow-composer outline outline-1 outline-field/80">
       <header className="flex h-11 shrink-0 items-center justify-between border-b border-separator pl-3 pr-2">
         <span className="flex items-center gap-2">
           <span className="block size-5 overflow-hidden rounded-full">

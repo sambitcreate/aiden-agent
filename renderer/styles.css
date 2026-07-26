@@ -665,6 +665,41 @@ textarea {
   }
 }
 
+/* The Aiden dock is anchored to the bottom of the window, so it rises into
+   place and settles back down — the mirror of the top-anchored summary card. */
+@keyframes aiden-assistant-dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aiden-assistant-dock-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@keyframes aiden-assistant-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .chat-title-reveal-previous {
   display: none;
 }
@@ -699,6 +734,15 @@ textarea {
 }
 :root[data-reduce-motion="false"] .environment-summary-card[data-state="closed"] {
   animation: aiden-environment-summary-out 120ms ease-in both;
+}
+:root[data-reduce-motion="false"] .assistant-dock-panel[data-state="open"] {
+  animation: aiden-assistant-dock-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
+}
+:root[data-reduce-motion="false"] .assistant-dock-panel[data-state="closed"] {
+  animation: aiden-assistant-dock-out 120ms ease-in both;
+}
+:root[data-reduce-motion="false"] .assistant-dock-bubble {
+  animation: aiden-assistant-bubble-in 180ms cubic-bezier(0, 0, 0.2, 1) both;
 }
 :root[data-reduce-motion="false"] .agent-thinking-shimmer {
   color: transparent;
@@ -1516,6 +1560,20 @@ textarea {
 }
 .hljs-deletion {
   color: var(--support-red);
+}
+
+/* ── Aiden dock inset ──────────────────────────────────────────────────── */
+/* Aiden's collapsed mark sits in the bottom-right of the window, right where
+   the composer's send controls are. The chat column reserves that width on
+   BOTH sides so the composer and the messages above it stay optically centered
+   rather than sliding left to dodge the mark. The gutter clears the 48px mark
+   plus its 16px offset plus a little breathing room. */
+:root {
+  --aiden-dock-gutter: 4.5rem;
+}
+
+.aiden-dock-inset {
+  padding-inline: var(--aiden-dock-gutter);
 }
 
 /* ── Dictation pill window (renderer/pill) ─────────────────────────────── */

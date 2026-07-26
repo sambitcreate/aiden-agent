@@ -11,10 +11,13 @@ import { useAssistantChat } from "./use-assistant-chat";
 
 /** How long a reply preview stays beside the collapsed mark. */
 const PREVIEW_VISIBLE_MS = 8_000;
+/** Must match aiden-assistant-dock-out in styles.css. */
+const PANEL_EXIT_MS = 120;
 
 export function AssistantDock(): React.ReactElement {
   const chat = useAssistantChat();
   const [open, setOpen] = React.useState(false);
+  const [present, setPresent] = React.useState(false);
   const [unread, setUnread] = React.useState(0);
   const [preview, setPreview] = React.useState<string | null>(null);
   // Replies that land while the panel is open are already visible; only count
@@ -22,6 +25,22 @@ export function AssistantDock(): React.ReactElement {
   const openRef = React.useRef(open);
   openRef.current = open;
   const lastSeenReplyRef = React.useRef<number | null>(null);
+
+  // Keep the panel mounted through its exit animation, exactly as the
+  // environment summary card does, so minimizing settles instead of vanishing.
+  React.useLayoutEffect(() => {
+    if (open) {
+      setPresent(true);
+      return;
+    }
+    if (!present) return;
+    if (document.documentElement.dataset.reduceMotion === "true") {
+      setPresent(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setPresent(false), PANEL_EXIT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open, present]);
 
   React.useEffect(
     () =>
@@ -56,9 +75,19 @@ export function AssistantDock(): React.ReactElement {
 
   return (
     <div className="pointer-events-none absolute bottom-4 right-4 z-40 flex flex-col items-end">
-      {open ? (
-        <AssistantPanel chat={chat} onMinimize={() => setOpen(false)} />
+      {present ? (
+        <div
+          className="assistant-dock-panel"
+          data-state={open ? "open" : "closed"}
+          inert={!open ? true : undefined}
+          aria-hidden={!open ? true : undefined}
+          style={{ pointerEvents: open ? "auto" : "none" }}
+        >
+          <AssistantPanel chat={chat} onMinimize={() => setOpen(false)} />
+        </div>
       ) : (
+        // Held back until the panel has finished leaving, so the two surfaces
+        // hand over in the same corner rather than overlapping mid-animation.
         <AssistantBubble
           unread={unread}
           preview={preview}
