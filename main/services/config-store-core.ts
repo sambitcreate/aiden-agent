@@ -35,6 +35,7 @@ import {
   type AnthropicThinkingLevel,
 } from "../../renderer/shared/anthropic-thinking.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type {
   AppSettings,
   McpServer,
@@ -413,6 +414,13 @@ export function createConfigStore(configStores: PortableConfigStores, secrets: S
 
     /** Insert or update a workspace (upsert by id). */
     async saveWorkspace(workspace: Workspace): Promise<Workspace> {
+      // The Aiden assistant's threads live under this reserved id and it must
+      // never resolve to a real folder: a workspace claiming it would hand the
+      // assistant that folder's path and permission, and would cross-link its
+      // threads into the main sidebar.
+      if (workspace.id === ASSISTANT_WORKSPACE_ID) {
+        throw new Error(`"${ASSISTANT_WORKSPACE_ID}" is reserved and cannot be a workspace id.`);
+      }
       const next = normalizeWorkspace({ ...workspace, updatedAt: Date.now() });
       await ensureSeeded();
       return localStore.update((config) => {
