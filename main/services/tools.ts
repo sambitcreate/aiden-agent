@@ -149,6 +149,13 @@ export interface ToolContext {
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
   allowMcpTools?: boolean;
+  /**
+   * "assistant" is the Aiden dock, which has no tool UI and no approval
+   * affordance. Its tool set is an explicit allowlist rather than the workspace
+   * set minus exclusions, so a tool added elsewhere cannot appear there by
+   * default.
+   */
+  mode?: "assistant";
 }
 
 export function buildSchedulingTools(
@@ -160,6 +167,15 @@ export function buildSchedulingTools(
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   const tools: AgentTool[] = [];
   const settings = await configStore.getSettings();
+
+  // Aiden's surface renders text only — no tool rows, no approval prompt — so
+  // anything reaching it runs invisibly. The workspace set is wrong for it in
+  // both directions: Exa is an outbound channel a prompt injection could use to
+  // exfiltrate the conversation, and a skill tool returns file contents and an
+  // absolute base directory to a persona that tells the user it cannot read
+  // files. Aiden's own read-only tools land here in a later phase; until then it
+  // has none, and its system prompt says so.
+  if (ctx.mode === "assistant") return tools;
 
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
   tools.push(...buildSchedulingTools(ctx));
