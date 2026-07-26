@@ -77,3 +77,53 @@ test("the dock keeps the panel mounted while it animates out", () => {
   // Reduce Motion must skip the wait entirely rather than hold a static panel.
   assert.match(dock, /dataset\.reduceMotion === "true"/u);
 });
+
+test("the dock owns the draft so minimizing cannot discard it", () => {
+  const dock = source("../components/assistant/assistant-dock.tsx");
+  const panel = source("../components/assistant/assistant-panel.tsx");
+  assert.match(dock, /const \[draft, setDraft\] = React\.useState\(""\)/u);
+  assert.match(dock, /draft=\{draft\}/u);
+  assert.match(dock, /onDraftChange=\{setDraft\}/u);
+  assert.doesNotMatch(panel, /const \[draft, setDraft\] = React\.useState/u);
+});
+
+test("opening the dock moves focus to its composer and minimizing restores focus", () => {
+  const dock = source("../components/assistant/assistant-dock.tsx");
+  const panel = source("../components/assistant/assistant-panel.tsx");
+  assert.match(dock, /inputRef\.current\?\.focus\(\)/u);
+  assert.match(dock, /if \(priorFocus\?\.isConnected\) priorFocus\.focus\(\)/u);
+  assert.match(dock, /else bubbleRef\.current\?\.focus\(\)/u);
+  assert.match(panel, /ref=\{inputRef\}/u);
+});
+
+test("hovering a reply preview cannot remove its click target", () => {
+  const bubble = source("../components/assistant/assistant-bubble.tsx");
+  assert.doesNotMatch(bubble, /onMouseEnter/u);
+  assert.match(bubble, /onClick=\{onOpen\}/u);
+});
+
+test("an empty conversation still surfaces its error", () => {
+  const panel = source("../components/assistant/assistant-panel.tsx");
+  assert.match(panel, /chat\.error/u);
+  assert.match(panel, /role="alert"/u);
+});
+
+test("the hotkey waits until the dock has installed its open listener", () => {
+  const dock = source("../components/assistant/assistant-dock.tsx");
+  const main = source("../../main/index.ts");
+  const subscription = dock.indexOf('onNotification("assistant:open-panel", openPanel)');
+  const readySignal = dock.indexOf("appApi.assistantDockReady()");
+  const readinessWait = main.indexOf("await assistantDockReadyPromise");
+  const openBroadcast = main.indexOf('ipcMain.broadcast("assistant:open-panel", {})');
+  assert.ok(subscription >= 0 && readySignal > subscription);
+  assert.ok(readinessWait >= 0 && openBroadcast > readinessWait);
+});
+
+test("stopping during first-turn persistence keeps the composer blocked until adoption", () => {
+  const chat = source("../components/assistant/use-assistant-chat.ts");
+  const panel = source("../components/assistant/assistant-panel.tsx");
+  assert.match(chat, /stoppedPersistingTurnRef\.current === turnRef\.current/u);
+  assert.match(chat, /setTurnSaving\(true\)/u);
+  assert.match(chat, /const ready = modelReady && !conversationLoading && !turnSaving/u);
+  assert.match(panel, /"turn-saving": "Saving conversation…"/u);
+});
