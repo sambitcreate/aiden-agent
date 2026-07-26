@@ -538,9 +538,6 @@ export const llmClient = {
       const systemPrompt =
         params.mode === "assistant" || params.mode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
-              workspaceNames: (await configStore.listWorkspaces()).map(
-                (workspace) => workspace.name,
-              ),
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
               availableTools: tools.map((tool) => tool.name),
