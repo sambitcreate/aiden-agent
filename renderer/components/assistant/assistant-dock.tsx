@@ -3,7 +3,7 @@
 // the chat pane, so it survives route changes and follows the window's size.
 
 import * as React from "react";
-import { onNotification } from "../../lib/ipc";
+import { appApi, onNotification } from "../../lib/ipc";
 import { assistantPreviewText } from "../../lib/assistant-dock";
 import { AssistantBubble } from "./assistant-bubble";
 import { AssistantPanel } from "./assistant-panel";
@@ -20,11 +20,34 @@ export function AssistantDock(): React.ReactElement {
   const [present, setPresent] = React.useState(false);
   const [unread, setUnread] = React.useState(0);
   const [preview, setPreview] = React.useState<string | null>(null);
+  const [draft, setDraft] = React.useState("");
+  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const bubbleRef = React.useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = React.useRef<HTMLElement | null>(null);
+  const restoreFocusPendingRef = React.useRef(false);
   // Replies that land while the panel is open are already visible; only count
   // the ones the user could have missed.
   const openRef = React.useRef(open);
   openRef.current = open;
   const lastSeenReplyRef = React.useRef<number | null>(null);
+
+  const openPanel = React.useCallback(() => {
+    if (!openRef.current) {
+      const activeElement = document.activeElement;
+      restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null;
+      restoreFocusPendingRef.current = false;
+    } else {
+      inputRef.current?.focus();
+    }
+    setOpen(true);
+    setUnread(0);
+    setPreview(null);
+  }, []);
+
+  const minimizePanel = React.useCallback(() => {
+    restoreFocusPendingRef.current = true;
+    setOpen(false);
+  }, []);
 
   // Keep the panel mounted through its exit animation, exactly as the
   // environment summary card does, so minimizing settles instead of vanishing.
@@ -42,15 +65,24 @@ export function AssistantDock(): React.ReactElement {
     return () => window.clearTimeout(timeout);
   }, [open, present]);
 
-  React.useEffect(
-    () =>
-      onNotification("assistant:open-panel", () => {
-        setOpen(true);
-        setUnread(0);
-        setPreview(null);
-      }),
-    [],
-  );
+  React.useLayoutEffect(() => {
+    if (open && present) {
+      inputRef.current?.focus();
+      return;
+    }
+    if (!open && !present && restoreFocusPendingRef.current) {
+      restoreFocusPendingRef.current = false;
+      const priorFocus = restoreFocusRef.current;
+      if (priorFocus?.isConnected) priorFocus.focus();
+      else bubbleRef.current?.focus();
+    }
+  }, [open, present]);
+
+  React.useEffect(() => {
+    const unsubscribe = onNotification("assistant:open-panel", openPanel);
+    void appApi.assistantDockReady().catch(() => undefined);
+    return unsubscribe;
+  }, [openPanel]);
 
   // Replies AND failures both badge. An error raised while minimized is
   // otherwise invisible — the panel that renders it is unmounted — so the user
@@ -70,12 +102,6 @@ export function AssistantDock(): React.ReactElement {
     return () => clearTimeout(timer);
   }, [preview]);
 
-  const openPanel = React.useCallback(() => {
-    setOpen(true);
-    setUnread(0);
-    setPreview(null);
-  }, []);
-
   return (
     <div className="pointer-events-none absolute bottom-4 right-4 z-40 flex flex-col items-end">
       {present ? (
@@ -86,17 +112,18 @@ export function AssistantDock(): React.ReactElement {
           aria-hidden={!open ? true : undefined}
           style={{ pointerEvents: open ? "auto" : "none" }}
         >
-          <AssistantPanel chat={chat} onMinimize={() => setOpen(false)} />
+          <AssistantPanel
+            chat={chat}
+            draft={draft}
+            inputRef={inputRef}
+            onDraftChange={setDraft}
+            onMinimize={minimizePanel}
+          />
         </div>
       ) : (
         // Held back until the panel has finished leaving, so the two surfaces
         // hand over in the same corner rather than overlapping mid-animation.
-        <AssistantBubble
-          unread={unread}
-          preview={preview}
-          onOpen={openPanel}
-          onDismissPreview={() => setPreview(null)}
-        />
+        <AssistantBubble ref={bubbleRef} unread={unread} preview={preview} onOpen={openPanel} />
       )}
     </div>
   );
