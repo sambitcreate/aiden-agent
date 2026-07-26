@@ -281,9 +281,16 @@ async function prepareGeneration(
   options: GenerationExecutionOptions,
 ) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
-  const workspace = params.workspaceId
-    ? await configStore.getWorkspace(params.workspaceId)
-    : undefined;
+  const assistantMode = params.mode === "assistant" || params.mode === "assistant-unattended";
+  // Assistant mode is never folder-scoped. Resolving a caller-supplied
+  // workspaceId here would bind the Aiden persona — "you cannot run commands" —
+  // to that folder's coding tools at that folder's permission, and a "full"
+  // workspace skips approval entirely. The reserved assistant workspace exists
+  // to hold threads, not to grant access.
+  const workspace =
+    params.workspaceId && !assistantMode
+      ? await configStore.getWorkspace(params.workspaceId)
+      : undefined;
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
@@ -327,14 +334,20 @@ async function prepareGeneration(
     }
   }
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
+  // The Aiden assistant surface has no approval affordance, so it must not be
+  // handed any tool that can pause for one. Scheduling is the live example:
+  // schedule_task blocks on ToolApprovalCoordinator, which never times out, so
+  // an unapprovable call would hang the panel with no error. Connector tools go
+  // for the same reason — their mutation semantics cannot be enforced here.
   const tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       permission: toolPermission,
       computerUse,
-      allowScheduling: !options.excludeToolNames?.has("schedule_task"),
-      allowMcpTools: options.allowMcpTools,
+      allowScheduling: !assistantMode && !options.excludeToolNames?.has("schedule_task"),
+      allowMcpTools: assistantMode ? false : options.allowMcpTools,
+      mode: assistantMode ? "assistant" : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   let googleWorkspaceSnapshot: string | undefined;
@@ -530,6 +543,7 @@ export const llmClient = {
               ),
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
+              availableTools: tools.map((tool) => tool.name),
               unattended: params.mode === "assistant-unattended",
             })
           : await buildSystemPrompt(folderPath, git.branch, permission);
