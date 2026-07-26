@@ -601,9 +601,18 @@ if (!ownsSingleInstanceLock) {
       });
       initAssistantShortcut(() => {
         // Aiden lives inside the main window, so the hotkey brings that window
-        // forward and asks its renderer to open the docked panel.
-        showMainWindow();
-        ipcMain.broadcast("assistant:open-panel", {});
+        // forward and asks its renderer to open the docked panel. The window
+        // must exist before the broadcast: with no window, a fire-and-forget
+        // create leaves nothing listening and the panel never opens. This
+        // mirrors registerAppPathOpener above.
+        void (async () => {
+          await createMainWindow();
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+          ipcMain.broadcast("assistant:open-panel", {});
+        })();
       });
       void applyShortcutFromSettings();
       void foundationModelsConnection.status();
