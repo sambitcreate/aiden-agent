@@ -4,14 +4,10 @@
 // tool set.
 
 import * as React from "react";
-import {
-  chatsApi,
-  onNotification,
-  settingsApi,
-  startGeneration,
-  type GenerationHandle,
-} from "../../lib/ipc";
+import { chatsApi, onNotification, startGeneration, type GenerationHandle } from "../../lib/ipc";
 import type { Chat, ChatMeta } from "../../lib/types";
+import { useProviders } from "../../lib/queries";
+import { useModelSelection } from "../../lib/use-model-selection";
 import { ASSISTANT_WORKSPACE_ID } from "../../shared/assistant";
 
 export interface AssistantMessage {
@@ -28,11 +24,6 @@ export function canSendAssistantMessage(
   state: { streaming: boolean; ready: boolean },
 ): boolean {
   return draft.trim().length > 0 && !state.streaming && state.ready;
-}
-
-interface AssistantModel {
-  providerId: string;
-  model: string;
 }
 
 /** The most recently completed reply, for the minimized bubble's preview. */
@@ -60,7 +51,13 @@ export function useAssistantChat(): AssistantChat {
   const [messages, setMessages] = React.useState<AssistantMessage[]>([]);
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [selection, setSelection] = React.useState<AssistantModel | null>(null);
+  // Aiden follows the app-wide model selection, the same localStorage-backed
+  // choice the main composer shows. `settings.lastProviderId` looks like the
+  // right source but no UI ever writes it, so reading it left Aiden permanently
+  // "not ready" while the composer displayed a perfectly good model.
+  const providers = useProviders();
+  const { providerId, model } = useModelSelection(providers.data);
+  const ready = Boolean(providerId && model);
   const [threads, setThreads] = React.useState<ChatMeta[]>([]);
   const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
   const [lastReply, setLastReply] = React.useState<AssistantReply | null>(null);
@@ -73,17 +70,7 @@ export function useAssistantChat(): AssistantChat {
       .catch(() => undefined);
   }, []);
 
-  // The window follows the user's current model rather than pinning its own;
-  // the pin in settings exists for unattended proactivity, not for this chat.
   React.useEffect(() => {
-    void settingsApi
-      .get()
-      .then((settings) => {
-        if (settings.lastProviderId && settings.lastModel) {
-          setSelection({ providerId: settings.lastProviderId, model: settings.lastModel });
-        }
-      })
-      .catch(() => undefined);
     refreshThreads();
   }, [refreshThreads]);
 
@@ -118,9 +105,8 @@ export function useAssistantChat(): AssistantChat {
 
   const send = React.useCallback(
     (text: string) => {
-      if (!canSendAssistantMessage(text, { streaming, ready: selection !== null })) return;
+      if (!canSendAssistantMessage(text, { streaming, ready })) return;
       const content = text.trim();
-      const model = selection as AssistantModel;
       setError(null);
       setStreaming(true);
       setMessages((current) => [
@@ -147,8 +133,8 @@ export function useAssistantChat(): AssistantChat {
           {
             chatId,
             workspaceId: ASSISTANT_WORKSPACE_ID,
-            providerId: model.providerId,
-            model: model.model,
+            providerId,
+            model,
             mode: "assistant",
             messages: [...history, { role: "user", content }],
           },
@@ -178,8 +164,8 @@ export function useAssistantChat(): AssistantChat {
         .create({
           title: "Aiden",
           workspaceId: ASSISTANT_WORKSPACE_ID,
-          providerId: model.providerId,
-          model: model.model,
+          providerId,
+          model,
         })
         .then((chat) => {
           setActiveChatId(chat.id);
@@ -190,7 +176,7 @@ export function useAssistantChat(): AssistantChat {
           setError(cause instanceof Error ? cause.message : String(cause));
         });
     },
-    [activeChatId, messages, refreshThreads, selection, streaming],
+    [activeChatId, messages, model, providerId, ready, refreshThreads, streaming],
   );
 
   const stop = React.useCallback(() => {
@@ -203,7 +189,7 @@ export function useAssistantChat(): AssistantChat {
     messages,
     streaming,
     error,
-    ready: selection !== null,
+    ready,
     threads,
     activeChatId,
     lastReply,
