@@ -7,7 +7,11 @@ import * as React from "react";
 import { chatsApi, onNotification, startGeneration, type GenerationHandle } from "../../lib/ipc";
 import type { Chat, ChatMeta } from "../../lib/types";
 import { useProviders } from "../../lib/queries";
-import { readModelSelection } from "../../lib/use-model-selection";
+import {
+  isModelSelectionAvailable,
+  readModelSelection,
+  subscribeModelSelection,
+} from "../../lib/use-model-selection";
 import { ASSISTANT_WORKSPACE_ID } from "../../shared/assistant";
 
 export interface AssistantMessage {
@@ -26,6 +30,33 @@ export function canSendAssistantMessage(
   return draft.trim().length > 0 && !state.streaming && state.ready;
 }
 
+/** Reconcile a terminal response even when the transport emitted no deltas. */
+export function settleAssistantMessages(
+  messages: AssistantMessage[],
+  fullContent: string,
+): AssistantMessage[] {
+  if (!fullContent.trim()) return messages;
+  const last = messages[messages.length - 1];
+  if (last?.role !== "assistant") {
+    return [...messages, { role: "assistant", content: fullContent }];
+  }
+  if (last.content === fullContent) return messages;
+  return [...messages.slice(0, -1), { role: "assistant", content: fullContent }];
+}
+
+/** Remove a user turn that never reached durable chat history and its placeholder. */
+export function rollbackOptimisticAssistantTurn(
+  messages: AssistantMessage[],
+  userContent: string,
+): AssistantMessage[] {
+  let end = messages.length;
+  const last = messages[end - 1];
+  if (last?.role === "assistant" && last.content === "") end -= 1;
+  const user = messages[end - 1];
+  if (user?.role === "user" && user.content === userContent) end -= 1;
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
 /** Something the collapsed mark should surface: a finished reply or a failure. */
 export interface AssistantNotice {
   kind: "reply" | "error";
@@ -35,7 +66,13 @@ export interface AssistantNotice {
 }
 
 /** Why the composer is unavailable, so the panel can say something true. */
-export type AssistantReadiness = "ready" | "loading" | "unavailable" | "unset";
+export type AssistantReadiness =
+  | "ready"
+  | "loading"
+  | "conversation-loading"
+  | "turn-saving"
+  | "unavailable"
+  | "unset";
 
 export interface AssistantChat {
   messages: AssistantMessage[];
@@ -72,14 +109,22 @@ export function useAssistantChat(): AssistantChat {
   // models. Read storage at the point of use instead.
   const providers = useProviders();
   const [selection, setSelection] = React.useState(readModelSelection);
-  const ready = Boolean(selection.providerId && selection.model);
-  const readiness: AssistantReadiness = ready
-    ? "ready"
-    : providers.isLoading
-      ? "loading"
-      : providers.isError
-        ? "unavailable"
-        : "unset";
+  const [conversationLoading, setConversationLoading] = React.useState(false);
+  const conversationLoadingRef = React.useRef(false);
+  const [turnSaving, setTurnSaving] = React.useState(false);
+  const modelReady = isModelSelectionAvailable(selection, providers.data);
+  const ready = modelReady && !conversationLoading && !turnSaving;
+  const readiness: AssistantReadiness = conversationLoading
+    ? "conversation-loading"
+    : turnSaving
+      ? "turn-saving"
+      : modelReady
+        ? "ready"
+        : providers.isLoading
+          ? "loading"
+          : providers.isError
+            ? "unavailable"
+            : "unset";
   const [threads, setThreads] = React.useState<ChatMeta[]>([]);
   const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
   const handleRef = React.useRef<GenerationHandle | null>(null);
@@ -91,6 +136,10 @@ export function useAssistantChat(): AssistantChat {
   // Guards a slow chats:get landing after a newer one, which would otherwise
   // leave thread A's transcript sitting under thread B's id.
   const loadTokenRef = React.useRef(0);
+  // Stop can arrive while the first turn is still being written. Remember that
+  // boundary so the durable chat is adopted without starting generation.
+  const persistingTurnRef = React.useRef<number | null>(null);
+  const stoppedPersistingTurnRef = React.useRef<number | null>(null);
 
   const fail = React.useCallback((message: string) => {
     setError(message);
@@ -113,11 +162,7 @@ export function useAssistantChat(): AssistantChat {
   React.useEffect(() => onNotification("chats:metadata-updated", refreshThreads), [refreshThreads]);
 
   // The composer can change the model while the dock sits idle.
-  React.useEffect(() => {
-    const sync = () => setSelection(readModelSelection());
-    window.addEventListener("focus", sync);
-    return () => window.removeEventListener("focus", sync);
-  }, []);
+  React.useEffect(() => subscribeModelSelection(setSelection), []);
 
   /** Abandon any running generation and invalidate its pending callbacks. */
   const abandonTurn = React.useCallback((origin: "lifecycle" | "user_stop") => {
@@ -134,9 +179,15 @@ export function useAssistantChat(): AssistantChat {
       // thread's deltas onto the new transcript while main persisted them to
       // the old chat — what you saw would not be what was on disk.
       abandonTurn("lifecycle");
+      stoppedPersistingTurnRef.current = null;
+      setTurnSaving(false);
       setStreaming(false);
       const token = ++loadTokenRef.current;
+      conversationLoadingRef.current = true;
+      setConversationLoading(true);
       setError(null);
+      setActiveChatId(null);
+      setMessages([]);
       void chatsApi
         .get(chatId)
         .then((chat: Chat | null) => {
@@ -146,14 +197,20 @@ export function useAssistantChat(): AssistantChat {
           // the next send append to a conversation we could not read, so refuse
           // the thread rather than silently opening it empty.
           if (!chat) {
+            conversationLoadingRef.current = false;
+            setConversationLoading(false);
             fail("Aiden could not open that conversation.");
             return;
           }
           setActiveChatId(chatId);
           setMessages(visibleMessages(chat));
+          conversationLoadingRef.current = false;
+          setConversationLoading(false);
         })
         .catch((cause: unknown) => {
           if (token !== loadTokenRef.current) return;
+          conversationLoadingRef.current = false;
+          setConversationLoading(false);
           fail(cause instanceof Error ? cause.message : String(cause));
         });
     },
@@ -162,7 +219,11 @@ export function useAssistantChat(): AssistantChat {
 
   const newThread = React.useCallback(() => {
     abandonTurn("lifecycle");
+    stoppedPersistingTurnRef.current = null;
+    setTurnSaving(false);
     loadTokenRef.current += 1;
+    conversationLoadingRef.current = false;
+    setConversationLoading(false);
     setStreaming(false);
     setMessages([]);
     setError(null);
@@ -175,9 +236,11 @@ export function useAssistantChat(): AssistantChat {
       // the last focus sync.
       const current = readModelSelection();
       if (
+        conversationLoadingRef.current ||
+        stoppedPersistingTurnRef.current === turnRef.current ||
         !canSendAssistantMessage(text, {
           streaming,
-          ready: Boolean(current.providerId && current.model),
+          ready: isModelSelectionAvailable(current, providers.data),
         })
       ) {
         return;
@@ -211,7 +274,10 @@ export function useAssistantChat(): AssistantChat {
           const next = [...existing];
           const last = next[next.length - 1];
           if (last?.role === "assistant")
-            next[next.length - 1] = { role: "assistant", content: last.content + delta };
+            next[next.length - 1] = {
+              role: "assistant",
+              content: last.content + delta,
+            };
           return next;
         });
       };
@@ -235,7 +301,12 @@ export function useAssistantChat(): AssistantChat {
               handleRef.current = null;
               // A cancelled generation still reports done, with no content.
               if (fullContent.trim()) {
-                setLastNotice({ kind: "reply", text: fullContent, at: Date.now() });
+                setMessages((existing) => settleAssistantMessages(existing, fullContent));
+                setLastNotice({
+                  kind: "reply",
+                  text: fullContent,
+                  at: Date.now(),
+                });
               } else {
                 dropEmptyPlaceholder();
               }
@@ -287,26 +358,46 @@ export function useAssistantChat(): AssistantChat {
         );
       };
 
+      persistingTurnRef.current = turn;
       void persist()
         .then((chat) => {
-          if (!isCurrent()) return;
+          const stoppedDuringPersistence = stoppedPersistingTurnRef.current === turn;
+          if (persistingTurnRef.current === turn) persistingTurnRef.current = null;
+          if (stoppedPersistingTurnRef.current === turn) stoppedPersistingTurnRef.current = null;
+          if (!isCurrent()) {
+            refreshThreads();
+            return;
+          }
+          setTurnSaving(false);
           setActiveChatId(chat.id);
+          if (stoppedDuringPersistence) {
+            refreshThreads();
+            return;
+          }
           // History is everything already persisted minus the turn just added,
           // which `run` appends itself.
           run(chat.id, visibleMessages(chat).slice(0, -1));
         })
         .catch((cause: unknown) => {
+          if (persistingTurnRef.current === turn) persistingTurnRef.current = null;
+          if (stoppedPersistingTurnRef.current === turn) stoppedPersistingTurnRef.current = null;
           if (!isCurrent()) return;
+          setTurnSaving(false);
           setStreaming(false);
-          dropEmptyPlaceholder();
+          setMessages((existing) => rollbackOptimisticAssistantTurn(existing, content));
           fail(cause instanceof Error ? cause.message : String(cause));
         });
     },
-    [activeChatId, fail, refreshThreads, streaming],
+    [activeChatId, fail, providers.data, refreshThreads, streaming],
   );
 
   const stop = React.useCallback(() => {
-    abandonTurn("user_stop");
+    if (persistingTurnRef.current === turnRef.current) {
+      stoppedPersistingTurnRef.current = turnRef.current;
+      setTurnSaving(true);
+    } else {
+      abandonTurn("user_stop");
+    }
     setStreaming(false);
     setMessages((existing) => {
       const last = existing[existing.length - 1];
