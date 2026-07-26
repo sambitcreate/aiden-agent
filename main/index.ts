@@ -49,6 +49,9 @@ app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
+let mainWindowLoadPromise: Promise<void> | null = null;
+let assistantDockReadyPromise: Promise<void> | null = null;
+let resolveAssistantDockReady: (() => void) | null = null;
 let closeGuard = {
   dirty: false,
   gitBusy: false,
@@ -60,6 +63,12 @@ let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
+
+function resetAssistantDockReadiness(): void {
+  assistantDockReadyPromise = new Promise((resolve) => {
+    resolveAssistantDockReady = resolve;
+  });
+}
 
 function hasCloseGuard(): boolean {
   return closeGuard.dirty || closeGuard.gitBusy || closeGuard.saving;
@@ -315,6 +324,14 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
   return true;
 });
 
+ipcMain.handle("app:assistant-dock-ready", (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
+    return false;
+  resolveAssistantDockReady?.();
+  resolveAssistantDockReady = null;
+  return true;
+});
+
 async function applyDockIconPreference(preference: DockIconPreference): Promise<boolean> {
   if (process.platform !== "darwin" || !app.dock) return false;
   const iconPath =
@@ -366,8 +383,11 @@ function openExternalUrl(value: string): void {
 
 async function createMainWindow(): Promise<void> {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    mainWindow.focus();
+    const existingWindow = mainWindow;
+    await mainWindowLoadPromise;
+    if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
+    existingWindow.show();
+    existingWindow.focus();
     return;
   }
 
@@ -392,9 +412,11 @@ async function createMainWindow(): Promise<void> {
       sandbox: true,
     },
   });
+  resetAssistantDockReadiness();
 
   const createdWindow = mainWindow;
   const createdWebContentsId = createdWindow.webContents.id;
+  createdWindow.webContents.on("did-start-loading", resetAssistantDockReadiness);
   createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("close", (event) => {
     if (protectedAction === "close" || protectedAction === "quit") return;
@@ -403,7 +425,13 @@ async function createMainWindow(): Promise<void> {
   });
   createdWindow.on("closed", () => {
     terminalService.closeForWebContents(createdWebContentsId);
-    mainWindow = null;
+    if (mainWindow === createdWindow) {
+      mainWindow = null;
+      mainWindowLoadPromise = null;
+      resolveAssistantDockReady?.();
+      assistantDockReadyPromise = null;
+      resolveAssistantDockReady = null;
+    }
     closeGuard = { dirty: false, gitBusy: false, path: undefined, saving: false };
     protectedAction = null;
   });
@@ -427,27 +455,33 @@ async function createMainWindow(): Promise<void> {
     protectedAction = null;
   });
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  createdWindow.webContents.setWindowOpenHandler(({ url }) => {
     openExternalUrl(url);
     return { action: "deny" };
   });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    const current = mainWindow?.webContents.getURL();
+  createdWindow.webContents.on("will-navigate", (event, url) => {
+    const current = createdWindow.webContents.getURL();
     if (url === current) return;
     event.preventDefault();
     openExternalUrl(url);
   });
-  mainWindow.webContents.on("will-redirect", (event, url) => {
+  createdWindow.webContents.on("will-redirect", (event, url) => {
     event.preventDefault();
     openExternalUrl(url);
   });
 
   const url = getWindowUrl("main-window.html");
   logger.info("main", "Loading renderer", { url });
-  await mainWindow.loadURL(url);
+  const loadPromise = createdWindow.loadURL(url);
+  mainWindowLoadPromise = loadPromise;
+  try {
+    await loadPromise;
+  } finally {
+    if (mainWindowLoadPromise === loadPromise) mainWindowLoadPromise = null;
+  }
 
   if (process.env.AIDEN_OPEN_DEVTOOLS === "1")
-    mainWindow.webContents.openDevTools({ mode: "detach" });
+    createdWindow.webContents.openDevTools({ mode: "detach" });
 }
 
 function showMainWindow(): void {
@@ -607,12 +641,15 @@ if (!ownsSingleInstanceLock) {
         // mirrors registerAppPathOpener above.
         void (async () => {
           await createMainWindow();
+          await assistantDockReadyPromise;
           if (!mainWindow || mainWindow.isDestroyed()) return;
           if (mainWindow.isMinimized()) mainWindow.restore();
           mainWindow.show();
           mainWindow.focus();
           ipcMain.broadcast("assistant:open-panel", {});
-        })();
+        })().catch((error: unknown) => {
+          logger.warn("assistant", "Could not open Aiden from the global shortcut", error);
+        });
       });
       void applyShortcutFromSettings();
       void foundationModelsConnection.status();
