@@ -7,7 +7,7 @@ import * as React from "react";
 import { chatsApi, onNotification, startGeneration, type GenerationHandle } from "../../lib/ipc";
 import type { Chat, ChatMeta } from "../../lib/types";
 import { useProviders } from "../../lib/queries";
-import { useModelSelection } from "../../lib/use-model-selection";
+import { readModelSelection } from "../../lib/use-model-selection";
 import { ASSISTANT_WORKSPACE_ID } from "../../shared/assistant";
 
 export interface AssistantMessage {
@@ -26,47 +26,83 @@ export function canSendAssistantMessage(
   return draft.trim().length > 0 && !state.streaming && state.ready;
 }
 
-/** The most recently completed reply, for the minimized bubble's preview. */
-export interface AssistantReply {
-  content: string;
-  /** Monotonic marker so consumers can tell a new reply from a re-render. */
+/** Something the collapsed mark should surface: a finished reply or a failure. */
+export interface AssistantNotice {
+  kind: "reply" | "error";
+  text: string;
+  /** Monotonic marker so consumers can tell a new notice from a re-render. */
   at: number;
 }
+
+/** Why the composer is unavailable, so the panel can say something true. */
+export type AssistantReadiness = "ready" | "loading" | "unavailable" | "unset";
 
 export interface AssistantChat {
   messages: AssistantMessage[];
   streaming: boolean;
   error: string | null;
   ready: boolean;
+  readiness: AssistantReadiness;
   threads: ChatMeta[];
   activeChatId: string | null;
-  lastReply: AssistantReply | null;
+  lastNotice: AssistantNotice | null;
   send: (text: string) => void;
   stop: () => void;
   openThread: (chatId: string) => void;
   newThread: () => void;
 }
 
+function visibleMessages(chat: Chat | null): AssistantMessage[] {
+  return (chat?.messages ?? [])
+    .filter(
+      (message): message is typeof message & { role: "user" | "assistant" } =>
+        message.role === "user" || message.role === "assistant",
+    )
+    .map((message) => ({ role: message.role, content: message.content }));
+}
+
 export function useAssistantChat(): AssistantChat {
   const [messages, setMessages] = React.useState<AssistantMessage[]>([]);
   const [streaming, setStreaming] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  // Aiden follows the app-wide model selection, the same localStorage-backed
-  // choice the main composer shows. `settings.lastProviderId` looks like the
-  // right source but no UI ever writes it, so reading it left Aiden permanently
-  // "not ready" while the composer displayed a perfectly good model.
+  const [lastNotice, setLastNotice] = React.useState<AssistantNotice | null>(null);
+  // Aiden follows the app-wide model selection rather than owning one. Mounting
+  // useModelSelection here would fork it: that hook keeps per-instance state
+  // seeded once at mount, so the dock would never see the composer switch
+  // models. Read storage at the point of use instead.
   const providers = useProviders();
-  const { providerId, model } = useModelSelection(providers.data);
-  const ready = Boolean(providerId && model);
+  const [selection, setSelection] = React.useState(readModelSelection);
+  const ready = Boolean(selection.providerId && selection.model);
+  const readiness: AssistantReadiness = ready
+    ? "ready"
+    : providers.isLoading
+      ? "loading"
+      : providers.isError
+        ? "unavailable"
+        : "unset";
   const [threads, setThreads] = React.useState<ChatMeta[]>([]);
   const [activeChatId, setActiveChatId] = React.useState<string | null>(null);
-  const [lastReply, setLastReply] = React.useState<AssistantReply | null>(null);
   const handleRef = React.useRef<GenerationHandle | null>(null);
+  // Every async continuation below checks this before touching state. Without
+  // it, a cancelled turn's late chat:done clears `streaming` for the turn that
+  // replaced it, and a create() that resolves after New/Stop starts a
+  // generation nothing can reach.
+  const turnRef = React.useRef(0);
+  // Guards a slow chats:get landing after a newer one, which would otherwise
+  // leave thread A's transcript sitting under thread B's id.
+  const loadTokenRef = React.useRef(0);
+
+  const fail = React.useCallback((message: string) => {
+    setError(message);
+    setLastNotice({ kind: "error", text: message, at: Date.now() });
+  }, []);
 
   const refreshThreads = React.useCallback(() => {
     void chatsApi
       .list(ASSISTANT_WORKSPACE_ID)
       .then(setThreads)
+      // Best effort: a background refresh must not interrupt the user. A stale
+      // list is the cost, and the next metadata update retries.
       .catch(() => undefined);
   }, []);
 
@@ -76,59 +112,112 @@ export function useAssistantChat(): AssistantChat {
 
   React.useEffect(() => onNotification("chats:metadata-updated", refreshThreads), [refreshThreads]);
 
-  const loadThread = React.useCallback((chatId: string) => {
-    setActiveChatId(chatId);
-    setError(null);
-    void chatsApi
-      .get(chatId)
-      .then((chat: Chat | null) => {
-        setMessages(
-          (chat?.messages ?? [])
-            .filter(
-              (message): message is typeof message & { role: "user" | "assistant" } =>
-                message.role === "user" || message.role === "assistant",
-            )
-            .map((message) => ({ role: message.role, content: message.content })),
-        );
-      })
-      .catch(() => setMessages([]));
+  // The composer can change the model while the dock sits idle.
+  React.useEffect(() => {
+    const sync = () => setSelection(readModelSelection());
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
   }, []);
 
-  const newThread = React.useCallback(() => {
-    handleRef.current?.cancel("lifecycle");
+  /** Abandon any running generation and invalidate its pending callbacks. */
+  const abandonTurn = React.useCallback((origin: "lifecycle" | "user_stop") => {
+    turnRef.current += 1;
+    handleRef.current?.cancel(origin);
     handleRef.current = null;
+  }, []);
+
+  React.useEffect(() => () => abandonTurn("lifecycle"), [abandonTurn]);
+
+  const loadThread = React.useCallback(
+    (chatId: string) => {
+      // Switching threads mid-stream would otherwise keep appending the old
+      // thread's deltas onto the new transcript while main persisted them to
+      // the old chat — what you saw would not be what was on disk.
+      abandonTurn("lifecycle");
+      setStreaming(false);
+      const token = ++loadTokenRef.current;
+      setError(null);
+      void chatsApi
+        .get(chatId)
+        .then((chat: Chat | null) => {
+          if (token !== loadTokenRef.current) return;
+          // chats:get answers null for "unreadable" as well as "missing", and a
+          // thread we just listed is not missing. Adopting the id here would let
+          // the next send append to a conversation we could not read, so refuse
+          // the thread rather than silently opening it empty.
+          if (!chat) {
+            fail("Aiden could not open that conversation.");
+            return;
+          }
+          setActiveChatId(chatId);
+          setMessages(visibleMessages(chat));
+        })
+        .catch((cause: unknown) => {
+          if (token !== loadTokenRef.current) return;
+          fail(cause instanceof Error ? cause.message : String(cause));
+        });
+    },
+    [abandonTurn, fail],
+  );
+
+  const newThread = React.useCallback(() => {
+    abandonTurn("lifecycle");
+    loadTokenRef.current += 1;
     setStreaming(false);
     setMessages([]);
     setError(null);
     setActiveChatId(null);
-  }, []);
+  }, [abandonTurn]);
 
   const send = React.useCallback(
     (text: string) => {
-      if (!canSendAssistantMessage(text, { streaming, ready })) return;
+      // Read the selection fresh: the composer may have switched models since
+      // the last focus sync.
+      const current = readModelSelection();
+      if (
+        !canSendAssistantMessage(text, {
+          streaming,
+          ready: Boolean(current.providerId && current.model),
+        })
+      ) {
+        return;
+      }
+      setSelection(current);
+      const { providerId, model } = current;
       const content = text.trim();
+      const turn = ++turnRef.current;
+      const isCurrent = () => turn === turnRef.current;
       setError(null);
       setStreaming(true);
-      setMessages((current) => [
-        ...current,
+      setMessages((existing) => [
+        ...existing,
         { role: "user", content },
         { role: "assistant", content: "" },
       ]);
 
+      /** Drop the optimistic placeholder so a failed turn cannot poison history. */
+      const dropEmptyPlaceholder = () => {
+        setMessages((existing) => {
+          const last = existing[existing.length - 1];
+          return last?.role === "assistant" && last.content === ""
+            ? existing.slice(0, -1)
+            : existing;
+        });
+      };
+
       const appendDelta = (delta: string) => {
-        setMessages((current) => {
-          const next = [...current];
+        if (!isCurrent()) return;
+        setMessages((existing) => {
+          const next = [...existing];
           const last = next[next.length - 1];
           if (last?.role === "assistant")
-            next[next.length - 1] = {
-              role: "assistant",
-              content: last.content + delta,
-            };
+            next[next.length - 1] = { role: "assistant", content: last.content + delta };
           return next;
         });
       };
 
       const run = (chatId: string, history: AssistantMessage[]) => {
+        if (!isCurrent()) return;
         handleRef.current = startGeneration(
           {
             chatId,
@@ -141,58 +230,99 @@ export function useAssistantChat(): AssistantChat {
           {
             onDelta: appendDelta,
             onDone: (fullContent) => {
+              if (!isCurrent()) return;
               setStreaming(false);
               handleRef.current = null;
-              setLastReply({ content: fullContent, at: Date.now() });
+              // A cancelled generation still reports done, with no content.
+              if (fullContent.trim()) {
+                setLastNotice({ kind: "reply", text: fullContent, at: Date.now() });
+              } else {
+                dropEmptyPlaceholder();
+              }
               refreshThreads();
             },
             onError: (message) => {
+              if (!isCurrent()) return;
               setStreaming(false);
               handleRef.current = null;
-              setError(message);
+              dropEmptyPlaceholder();
+              fail(message);
+            },
+            // Aiden's tool set is built without anything that can pause for
+            // approval (see llm-client's assistantMode gate). If one ever slips
+            // through, deny it: an unanswered approval never times out, and the
+            // panel would sit on an ellipsis forever with no way to explain it.
+            onApproval: (prompt) => {
+              void chatsApi.approve(prompt.approvalId, "deny");
+              if (isCurrent()) fail(`Aiden cannot approve ${prompt.toolName} here; it was denied.`);
             },
           },
         );
       };
 
-      const history = messages;
-      if (activeChatId) {
-        run(activeChatId, history);
-        return;
-      }
-      void chatsApi
-        .create({
-          title: "Aiden",
+      // Persist the user's turn first, exactly as the main window's composer
+      // does. Main only ever appends the assistant side, so skipping this wrote
+      // reply-only transcripts to disk and every reopened thread came back with
+      // its questions missing.
+      const persist = async (): Promise<Chat> => {
+        if (activeChatId) {
+          return chatsApi.appendMessage(
+            activeChatId,
+            { role: "user", content },
+            { providerId, model, autoTitle: true },
+          );
+        }
+        // No title: the chat store's default is what lets background
+        // auto-titling replace it later. A literal "Aiden" would stick, and
+        // every Recent row would read the same.
+        const created = await chatsApi.create({
           workspaceId: ASSISTANT_WORKSPACE_ID,
           providerId,
           model,
-        })
+        });
+        return chatsApi.appendMessage(
+          created.id,
+          { role: "user", content },
+          { providerId, model, autoTitle: true },
+        );
+      };
+
+      void persist()
         .then((chat) => {
+          if (!isCurrent()) return;
           setActiveChatId(chat.id);
-          run(chat.id, history);
+          // History is everything already persisted minus the turn just added,
+          // which `run` appends itself.
+          run(chat.id, visibleMessages(chat).slice(0, -1));
         })
         .catch((cause: unknown) => {
+          if (!isCurrent()) return;
           setStreaming(false);
-          setError(cause instanceof Error ? cause.message : String(cause));
+          dropEmptyPlaceholder();
+          fail(cause instanceof Error ? cause.message : String(cause));
         });
     },
-    [activeChatId, messages, model, providerId, ready, refreshThreads, streaming],
+    [activeChatId, fail, refreshThreads, streaming],
   );
 
   const stop = React.useCallback(() => {
-    handleRef.current?.cancel("user_stop");
-    handleRef.current = null;
+    abandonTurn("user_stop");
     setStreaming(false);
-  }, []);
+    setMessages((existing) => {
+      const last = existing[existing.length - 1];
+      return last?.role === "assistant" && last.content === "" ? existing.slice(0, -1) : existing;
+    });
+  }, [abandonTurn]);
 
   return {
     messages,
     streaming,
     error,
     ready,
+    readiness,
     threads,
     activeChatId,
-    lastReply,
+    lastNotice,
     send,
     stop,
     openThread: loadThread,

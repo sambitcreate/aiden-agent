@@ -52,14 +52,17 @@ export function AssistantDock(): React.ReactElement {
     [],
   );
 
+  // Replies AND failures both badge. An error raised while minimized is
+  // otherwise invisible — the panel that renders it is unmounted — so the user
+  // sits watching nothing, believing Aiden is still thinking.
   React.useEffect(() => {
-    const reply = chat.lastReply;
-    if (!reply || reply.at === lastSeenReplyRef.current) return;
-    lastSeenReplyRef.current = reply.at;
+    const notice = chat.lastNotice;
+    if (!notice || notice.at === lastSeenReplyRef.current) return;
+    lastSeenReplyRef.current = notice.at;
     if (openRef.current) return;
     setUnread((count) => count + 1);
-    setPreview(assistantPreviewText(reply.content));
-  }, [chat.lastReply]);
+    setPreview(assistantPreviewText(notice.text));
+  }, [chat.lastNotice]);
 
   React.useEffect(() => {
     if (!preview) return;

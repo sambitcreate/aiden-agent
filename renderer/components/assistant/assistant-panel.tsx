@@ -3,9 +3,22 @@ import { ArrowUp, Minus, Plus, Square } from "lucide-react";
 import { ASSISTANT_SUGGESTED_PROMPTS } from "../../shared/assistant";
 import { AssistantRecent } from "./assistant-recent";
 import { AssistantThread } from "./assistant-thread";
-import { canSendAssistantMessage, type AssistantChat } from "./use-assistant-chat";
+import {
+  canSendAssistantMessage,
+  type AssistantChat,
+  type AssistantReadiness,
+} from "./use-assistant-chat";
 
 const AIDEN_MARK_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
+
+// "Choose a provider" is the wrong thing to say when the provider list simply
+// failed to load — the user has providers, and sending them to Settings to fix
+// a problem that isn't there wastes their time.
+const READINESS_TEXT: Record<Exclude<AssistantReadiness, "ready">, string> = {
+  loading: "Loading your providers…",
+  unavailable: "Aiden could not load your providers. Try again in a moment.",
+  unset: "Choose a provider and model in the main composer before chatting here.",
+};
 
 /** The expanded Aiden surface, docked inside the main window. */
 export function AssistantPanel({
@@ -81,11 +94,9 @@ export function AssistantPanel({
       )}
 
       <div className="shrink-0 p-2.5">
-        {!chat.ready ? (
-          <p className="px-1 pb-2 text-xs text-tertiary">
-            Choose a provider and model before chatting here.
-          </p>
-        ) : null}
+        {chat.readiness === "ready" ? null : (
+          <p className="px-1 pb-2 text-xs text-tertiary">{READINESS_TEXT[chat.readiness]}</p>
+        )}
         <div className="flex items-end gap-1.5 rounded-2xl bg-background p-2 outline outline-1 outline-field/80">
           <textarea
             rows={1}
