@@ -9,6 +9,21 @@ import type { Provider } from "./types";
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
 
+/**
+ * The current selection straight from storage.
+ *
+ * `useModelSelection` holds per-instance React state seeded once at mount, so
+ * two mounted instances drift apart the moment one of them selects. Surfaces
+ * that merely follow the user's choice — rather than owning it — should read
+ * this at the point of use instead of mounting a second copy of the hook.
+ */
+export function readModelSelection(): { providerId: string; model: string } {
+  return {
+    providerId: localStorage.getItem(PROVIDER_KEY) ?? "",
+    model: localStorage.getItem(MODEL_KEY) ?? "",
+  };
+}
+
 export function useModelSelection(providers: Provider[] | undefined) {
   const [providerId, setProviderId] = React.useState(
     () => localStorage.getItem(PROVIDER_KEY) ?? "",
