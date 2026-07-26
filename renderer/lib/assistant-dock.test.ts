@@ -2,6 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { assistantPreviewText, unreadBadgeLabel } from "./assistant-dock.js";
 
+// Invisible characters are built from code points rather than written literally:
+// raw control bytes in the source make git classify this file as binary and
+// throw away its diffs.
+const RIGHT_TO_LEFT_OVERRIDE = String.fromCodePoint(0x202e);
+const INVISIBLES = [0x00, 0x07, 0x1b, 0x200b, 0x2069].map((point) =>
+  String.fromCodePoint(point),
+);
+const REPLACEMENT_CHARACTER = String.fromCodePoint(0xfffd);
+const GRINNING_FACE = String.fromCodePoint(0x1f600);
+
 test("no badge until there is something unread", () => {
   assert.equal(unreadBadgeLabel(0), null);
   assert.equal(unreadBadgeLabel(-3), null);
@@ -41,6 +51,26 @@ test("a short preview is returned untouched", () => {
 test("empty or whitespace-only content yields no preview", () => {
   assert.equal(assistantPreviewText(""), null);
   assert.equal(assistantPreviewText("   \n\t "), null);
+});
+
+test("bidi overrides and control characters cannot spoof the bubble", () => {
+  // U+202E reverses everything after it, so the bubble would display text other
+  // than what it contains — inside chrome styled like the app's own.
+  const preview = assistantPreviewText(`All clean.${RIGHT_TO_LEFT_OVERRIDE} gnihtemos suoicilam`);
+  assert.ok(preview);
+  assert.doesNotMatch(preview, /[\p{Cc}\p{Cf}]/u);
+  for (const control of INVISIBLES) {
+    assert.doesNotMatch(assistantPreviewText(`hi${control}there`) ?? "", /[\p{Cc}\p{Cf}]/u);
+  }
+});
+
+test("truncation never splits an astral character", () => {
+  const preview = assistantPreviewText(`${"x".repeat(79)}${GRINNING_FACE} tail`) ?? "";
+  assert.ok(!preview.includes(REPLACEMENT_CHARACTER), preview);
+  // No lone surrogate survives.
+  for (const unit of preview) {
+    assert.ok(unit.codePointAt(0)! < 0xd800 || unit.length === 2, unit);
+  }
 });
 
 test("markdown emphasis and code fences are stripped so the bubble reads as prose", () => {
