@@ -16,6 +16,8 @@ const AIDEN_MARK_URL = new URL("../../../resources/app-icon.png", import.meta.ur
 // a problem that isn't there wastes their time.
 const READINESS_TEXT: Record<Exclude<AssistantReadiness, "ready">, string> = {
   loading: "Loading your providers…",
+  "conversation-loading": "Opening conversation…",
+  "turn-saving": "Saving conversation…",
   unavailable: "Aiden could not load your providers. Try again in a moment.",
   unset: "Choose a provider and model in the main composer before chatting here.",
 };
@@ -23,12 +25,17 @@ const READINESS_TEXT: Record<Exclude<AssistantReadiness, "ready">, string> = {
 /** The expanded Aiden surface, docked inside the main window. */
 export function AssistantPanel({
   chat,
+  draft,
+  inputRef,
+  onDraftChange,
   onMinimize,
 }: {
   chat: AssistantChat;
+  draft: string;
+  inputRef: React.Ref<HTMLTextAreaElement>;
+  onDraftChange: (draft: string) => void;
   onMinimize: () => void;
 }): React.ReactElement {
-  const [draft, setDraft] = React.useState("");
   const canSend = canSendAssistantMessage(draft, {
     streaming: chat.streaming,
     ready: chat.ready,
@@ -37,7 +44,7 @@ export function AssistantPanel({
   const submit = () => {
     if (!canSend) return;
     chat.send(draft);
-    setDraft("");
+    onDraftChange("");
   };
 
   // Interactivity is owned by the dock wrapper, which withdraws it while the
@@ -56,7 +63,10 @@ export function AssistantPanel({
             type="button"
             aria-label="New conversation"
             className="rounded-md p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary"
-            onClick={chat.newThread}
+            onClick={() => {
+              chat.newThread();
+              onDraftChange("");
+            }}
           >
             <Plus className="size-4" />
           </button>
@@ -88,6 +98,11 @@ export function AssistantPanel({
             ))}
           </div>
           <AssistantRecent threads={chat.threads} onOpen={chat.openThread} />
+          {chat.error ? (
+            <p role="alert" className="px-1 text-xs text-support-red">
+              {chat.error}
+            </p>
+          ) : null}
         </div>
       ) : (
         <AssistantThread messages={chat.messages} streaming={chat.streaming} error={chat.error} />
@@ -99,13 +114,14 @@ export function AssistantPanel({
         )}
         <div className="flex items-end gap-1.5 rounded-2xl bg-background p-2 outline outline-1 outline-field/80">
           <textarea
+            ref={inputRef}
             rows={1}
             value={draft}
             disabled={!chat.ready}
             placeholder="Ask about Aiden"
             aria-label="Message Aiden"
             className="max-h-32 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-primary outline-none placeholder:text-tertiary"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
