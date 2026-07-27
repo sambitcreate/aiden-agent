@@ -15,6 +15,7 @@ import {
   type UsageScoreMetric,
 } from "../../lib/usage-profile-data";
 import type { UsageModelSummary } from "../../lib/types";
+import { ProviderIcon } from "../provider-icon";
 
 function compactNumber(value: number): string {
   return Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(
@@ -91,33 +92,41 @@ export function ModelScoreboard({ models }: { models: UsageModelSummary[] }) {
                 >
                   {index + 1}
                 </Text>
-                <div className="min-w-0">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Text as="div" truncate className="font-medium">
-                        {model.modelLabel}
-                      </Text>
-                      <Text as="div" variant="small" color="tertiary" truncate>
-                        {model.providerLabel}
-                        {model.local ? " · Local" : ""}
+                <div className="flex min-w-0 items-start gap-2">
+                  <ProviderIcon
+                    providerId={model.providerId}
+                    providerLabel={model.providerLabel}
+                    modelId={model.modelId}
+                    className="mt-0.5 size-4 text-tertiary"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <Text as="div" truncate className="font-medium">
+                          {model.modelLabel}
+                        </Text>
+                        <Text as="div" variant="small" color="tertiary" truncate>
+                          {model.providerLabel}
+                          {model.local ? " · Local" : " · Hosted"}
+                        </Text>
+                      </div>
+                      <Text
+                        variant="small"
+                        color="secondary"
+                        className="shrink-0 pt-0.5 tabular-nums"
+                      >
+                        {modelScoreLabel(model, metric)}
                       </Text>
                     </div>
-                    <Text
-                      variant="small"
-                      color="secondary"
-                      className="shrink-0 pt-0.5 tabular-nums"
-                    >
-                      {modelScoreLabel(model, metric)}
-                    </Text>
-                  </div>
-                  <div
-                    aria-hidden="true"
-                    className="mt-2 h-1 overflow-hidden rounded-pill bg-control/55"
-                  >
                     <div
-                      className="h-full rounded-pill bg-accent/70"
-                      style={{ width: `${width}%` }}
-                    />
+                      aria-hidden="true"
+                      className="mt-2 h-1 overflow-hidden rounded-pill bg-control/55"
+                    >
+                      <div
+                        className="h-full rounded-pill bg-accent/70"
+                        style={{ width: `${width}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
               </li>
