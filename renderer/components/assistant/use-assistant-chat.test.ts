@@ -3,8 +3,12 @@ import test from "node:test";
 import { isModelSelectionAvailable } from "../../lib/use-model-selection.js";
 import type { Provider } from "../../lib/types.js";
 import {
+  assistantGenerationIsActive,
+  assistantGenerationPhaseAfterStop,
+  canChangeAssistantThread,
   canSendAssistantMessage,
   rollbackOptimisticAssistantTurn,
+  settleFailedAssistantMessages,
   settleAssistantMessages,
   type AssistantMessage,
 } from "./use-assistant-chat.js";
@@ -26,6 +30,55 @@ test("allows a real message when idle and ready", () => {
   assert.equal(canSendAssistantMessage("hi", { streaming: false, ready: true }), true);
 });
 
+test("user stop remains active until the canceled generation settles", () => {
+  const stopping = assistantGenerationPhaseAfterStop("streaming", true);
+  assert.equal(stopping, "stopping");
+  assert.equal(assistantGenerationIsActive(stopping), true);
+  assert.equal(
+    canSendAssistantMessage("follow-up", {
+      streaming: assistantGenerationIsActive(stopping),
+      ready: false,
+    }),
+    false,
+  );
+
+  assert.equal(assistantGenerationIsActive("idle"), false);
+  assert.equal(
+    canSendAssistantMessage("follow-up", {
+      streaming: assistantGenerationIsActive("idle"),
+      ready: true,
+    }),
+    true,
+  );
+});
+
+test("thread changes stay blocked until generation persistence settles", () => {
+  assert.equal(
+    canChangeAssistantThread({
+      conversationLoading: false,
+      streaming: true,
+      turnSaving: false,
+    }),
+    false,
+  );
+  assert.equal(
+    canChangeAssistantThread({
+      conversationLoading: false,
+      streaming: false,
+      turnSaving: true,
+    }),
+    false,
+  );
+  assert.equal(
+    canChangeAssistantThread({
+      conversationLoading: false,
+      streaming: false,
+      turnSaving: false,
+    }),
+    true,
+  );
+});
+
 test("a terminal-only response fills the optimistic assistant row", () => {
   const messages: AssistantMessage[] = [
     { role: "user", content: "What changed?" },
@@ -45,6 +98,34 @@ test("the terminal response is authoritative over streamed deltas", () => {
   assert.deepEqual(settleAssistantMessages(messages, "Partial response."), [
     { role: "user", content: "Summarize this." },
     { role: "assistant", content: "Partial response." },
+  ]);
+});
+
+test("an error keeps its authoritative or not-yet-flushed partial reply", () => {
+  const messages: AssistantMessage[] = [
+    { role: "user", content: "Summarize this." },
+    { role: "assistant", content: "Persisted " },
+  ];
+  assert.deepEqual(
+    settleFailedAssistantMessages(messages, "Persisted partial response", "unflushed"),
+    [
+      { role: "user", content: "Summarize this." },
+      { role: "assistant", content: "Persisted partial response" },
+    ],
+  );
+  assert.deepEqual(settleFailedAssistantMessages(messages, undefined, "tail"), [
+    { role: "user", content: "Summarize this." },
+    { role: "assistant", content: "Persisted tail" },
+  ]);
+});
+
+test("an error removes only an empty assistant placeholder when no partial exists", () => {
+  const messages: AssistantMessage[] = [
+    { role: "user", content: "Summarize this." },
+    { role: "assistant", content: "" },
+  ];
+  assert.deepEqual(settleFailedAssistantMessages(messages, undefined, ""), [
+    { role: "user", content: "Summarize this." },
   ]);
 });
 
