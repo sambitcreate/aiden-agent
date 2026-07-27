@@ -34,6 +34,11 @@ import {
   clampEnvironmentPanelWidth,
   resolveEnvironmentPanelLayout,
 } from "../lib/environment-panel-layout";
+import {
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 
 export type EnvironmentPanelTab = "overview" | "review" | "files";
 export type EnvironmentReviewMode = "changes" | "compare";
@@ -230,30 +235,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           ? "Save or discard the open file's edits before changing Git state."
           : null;
 
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.metaKey &&
-        event.shiftKey &&
-        !event.altKey &&
-        !event.ctrlKey &&
-        event.key.toLowerCase() === "e"
-      ) {
-        if (
-          gitOperationBusy ||
-          document.querySelector('[data-slot="dialog-content"][data-state="open"]')
-        ) {
-          return;
-        }
-        event.preventDefault();
-        if (open) close();
-        else show("overview");
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [close, gitOperationBusy, open, show]);
-
   const value = React.useMemo(
     () => ({
       open,
@@ -328,6 +309,8 @@ function EnvironmentPanelSurface({
   setWidth: (value: number) => void;
 }) {
   const panel = useEnvironmentPanel();
+  const toggleShortcut = useShortcutLabel("environment.toggle");
+  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const { active } = useActiveWorkspace();
   const fullOpen = panel.open && panel.tab !== "overview";
   const compactModal = fullOpen && !inline;
@@ -544,7 +527,8 @@ function EnvironmentPanelSurface({
           iconOnly
           onClick={panel.close}
           aria-label="Close environment panel"
-          title="Close environment panel (⌘⇧E)"
+          aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
+          title={`Close environment panel (${toggleShortcut})`}
           className="no-drag"
         >
           <X />
@@ -776,6 +760,8 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
 
 export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolean }) {
   const panel = useEnvironmentPanel();
+  const toggleShortcut = useShortcutLabel("environment.toggle");
+  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   return (
     <Button
       iconOnly
@@ -784,11 +770,12 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
       onClick={() => (panel.open ? panel.close() : panel.show("overview"))}
       disabled={disabled}
       aria-label={panel.open ? "Hide environment" : "Show environment"}
+      aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
       aria-pressed={panel.open}
       aria-controls={
         panel.open && panel.tab !== "overview" ? "environment-panel" : "environment-summary-card"
       }
-      title="Toggle environment (⌘⇧E)"
+      title={`Toggle environment (${toggleShortcut})`}
       data-environment-toggle
     >
       {panel.open ? <PanelRightClose /> : <PanelRightOpen />}
