@@ -14,7 +14,7 @@ import {
   SETTINGS_FILENAME,
   createPortableConfigStores,
 } from "./portable-config-core.js";
-import type { StoredProvider, Workspace } from "./types.js";
+import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
 
 function fakeSecrets(initial: Record<string, string> = {}) {
   const keys = { ...initial };
@@ -75,6 +75,23 @@ const provider: StoredProvider = {
   modelMetadata: { "qwen3-8b": { source: "lmstudio" } },
   needsKey: false,
   deployment: "local",
+};
+
+const assistantConfig: AssistantConfig = {
+  enabled: false,
+  hotkeyEnabled: true,
+  hotkeyAccelerator: "Command+Shift+J",
+  watchUncommitted: true,
+  watchUntouchedProjects: true,
+  watchConfigChanges: true,
+  pollIntervalMinutes: 30,
+  untouchedThresholdDays: 14,
+  quietHoursEnabled: false,
+  quietHoursStart: "22:00",
+  quietHoursEnd: "08:00",
+  maxNudgesPerDay: 5,
+  urgencyThreshold: 7,
+  settingsPermission: "ask",
 };
 
 // ── Provider routing ─────────────────────────────────────────────────────────
@@ -200,7 +217,7 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
 test("reads and writes survive a restart of the whole store", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
-  await h.store.setSettings({ exaEnabled: true });
+  await h.store.setSettings({ exaEnabled: true, assistant: assistantConfig });
 
   // A second bundle over the same directories stands in for the next launch.
   const next = createConfigStore(
@@ -218,7 +235,10 @@ test("reads and writes survive a restart of the whole store", async (t) => {
     isPreset: false,
     isBuiltin: false,
   });
-  assert.deepEqual(await next.getSettings(), { exaEnabled: true });
+  assert.deepEqual(await next.getSettings(), {
+    exaEnabled: true,
+    assistant: assistantConfig,
+  });
 });
 
 test("every install ends up with at least one workspace", async (t) => {
