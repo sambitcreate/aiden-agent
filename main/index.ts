@@ -20,6 +20,7 @@ import {
   initAssistantShortcut,
   applyShortcutFromSettings,
   disposeShortcut,
+  initShortcutBindingsChanged,
 } from "./services/shortcut.js";
 import { mcpManager } from "./services/mcp.js";
 import {
@@ -44,14 +45,25 @@ import { appUpdateService } from "./services/app-updater.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
+import {
+  effectiveBindings,
+  migrateLegacyKeybindings,
+} from "../renderer/shared/keybindings.js";
+import type { NotificationChannel } from "../renderer/preload-channels.js";
+import type { AppSettings } from "./services/types.js";
+import { createRendererReadinessGate } from "./services/renderer-readiness-core.js";
+import { createSupersedingTaskGate } from "./services/superseding-task-core.js";
 
 app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
-let mainWindowLoadPromise: Promise<void> | null = null;
-let assistantDockReadyPromise: Promise<void> | null = null;
-let resolveAssistantDockReady: (() => void) | null = null;
+const mainWindowLoads = createSupersedingTaskGate();
+const rendererReadiness = createRendererReadinessGate();
+let resolveShortcutInitialization: (() => void) | null = null;
+const shortcutInitializationPromise = new Promise<void>((resolve) => {
+  resolveShortcutInitialization = resolve;
+});
 let closeGuard = {
   dirty: false,
   gitBusy: false,
@@ -64,10 +76,8 @@ let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
 
-function resetAssistantDockReadiness(): void {
-  assistantDockReadyPromise = new Promise((resolve) => {
-    resolveAssistantDockReady = resolve;
-  });
+function resetRendererReadiness(): void {
+  rendererReadiness.reset();
 }
 
 function hasCloseGuard(): boolean {
@@ -324,11 +334,10 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
   return true;
 });
 
-ipcMain.handle("app:assistant-dock-ready", (event) => {
+ipcMain.handle("app:renderer-ready", (event) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
-  resolveAssistantDockReady?.();
-  resolveAssistantDockReady = null;
+  rendererReadiness.markReady();
   return true;
 });
 
@@ -382,9 +391,13 @@ function openExternalUrl(value: string): void {
 }
 
 async function createMainWindow(): Promise<void> {
+  // macOS activate, a second-instance event, or a newly registered global
+  // shortcut can all arrive while whenReady is still initializing. Never let
+  // those alternate paths expose a renderer to a partial shortcut snapshot.
+  await shortcutInitializationPromise;
   if (mainWindow && !mainWindow.isDestroyed()) {
     const existingWindow = mainWindow;
-    await mainWindowLoadPromise;
+    await mainWindowLoads.wait();
     if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
     existingWindow.show();
     existingWindow.focus();
@@ -412,11 +425,31 @@ async function createMainWindow(): Promise<void> {
       sandbox: true,
     },
   });
-  resetAssistantDockReadiness();
+  resetRendererReadiness();
 
   const createdWindow = mainWindow;
   const createdWebContentsId = createdWindow.webContents.id;
-  createdWindow.webContents.on("did-start-loading", resetAssistantDockReadiness);
+  const mainWindowUrl = getWindowUrl("main-window.html");
+  createdWindow.webContents.on("did-start-loading", () => {
+    resetRendererReadiness();
+  });
+  createdWindow.webContents.on("render-process-gone", () => {
+    rendererReadiness.reset();
+    if (
+      cleanupStarted ||
+      shutdownStarted ||
+      createdWindow.isDestroyed() ||
+      mainWindow !== createdWindow
+    )
+      return;
+    const recovery = mainWindowLoads.replace(createdWindow.loadURL(mainWindowUrl));
+    void recovery.promise
+      .catch((error: unknown) => {
+        if (!mainWindowLoads.isCurrent(recovery)) return;
+        logger.error("main", "Could not recover the main renderer after it exited.", error);
+        if (!createdWindow.isDestroyed()) createdWindow.destroy();
+      });
+  });
   createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("close", (event) => {
     if (protectedAction === "close" || protectedAction === "quit") return;
@@ -427,10 +460,8 @@ async function createMainWindow(): Promise<void> {
     terminalService.closeForWebContents(createdWebContentsId);
     if (mainWindow === createdWindow) {
       mainWindow = null;
-      mainWindowLoadPromise = null;
-      resolveAssistantDockReady?.();
-      assistantDockReadyPromise = null;
-      resolveAssistantDockReady = null;
+      mainWindowLoads.clear();
+      rendererReadiness.dispose();
     }
     closeGuard = { dirty: false, gitBusy: false, path: undefined, saving: false };
     protectedAction = null;
@@ -470,40 +501,72 @@ async function createMainWindow(): Promise<void> {
     openExternalUrl(url);
   });
 
-  const url = getWindowUrl("main-window.html");
-  logger.info("main", "Loading renderer", { url });
-  const loadPromise = createdWindow.loadURL(url);
-  mainWindowLoadPromise = loadPromise;
-  try {
-    await loadPromise;
-  } finally {
-    if (mainWindowLoadPromise === loadPromise) mainWindowLoadPromise = null;
-  }
+  logger.info("main", "Loading renderer", { url: mainWindowUrl });
+  mainWindowLoads.replace(createdWindow.loadURL(mainWindowUrl));
+  await mainWindowLoads.wait();
+  if (createdWindow.isDestroyed() || mainWindow !== createdWindow) return;
 
   if (process.env.AIDEN_OPEN_DEVTOOLS === "1")
     createdWindow.webContents.openDevTools({ mode: "detach" });
 }
 
-function showMainWindow(): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.show();
-    mainWindow.focus();
-  } else {
-    void createMainWindow();
+async function deliverMainWindowNotification(
+  channel: NotificationChannel,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  await createMainWindow();
+  await rendererReadiness.wait();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  switch (channel) {
+    case "app:command":
+      ipcMain.broadcast("app:command", payload);
+      break;
+    case "app:navigate":
+      ipcMain.broadcast("app:navigate", payload);
+      break;
+    default:
+      // Keep delivery intentionally closed over the two main-window channels
+      // above. A new call site must add a literal branch so the IPC inventory
+      // contract detects it and requires the preload allowlist in the same diff.
+      throw new Error(`Unsupported queued renderer channel: ${channel}`);
   }
 }
 
+function deliverMainWindowNotificationSafely(
+  channel: NotificationChannel,
+  payload: Record<string, unknown>,
+): void {
+  void deliverMainWindowNotification(channel, payload).catch((error: unknown) => {
+    logger.warn("main", `Could not deliver renderer command "${channel}".`, error);
+  });
+}
+
+function showMainWindow(): void {
+  void createMainWindow().catch((error: unknown) => {
+    logger.warn("main", "Could not show the main window.", error);
+  });
+}
+
 registerAppPathOpener(async (path) => {
-  await createMainWindow();
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    ipcMain.broadcast("app:navigate", { path });
-  }
+  await deliverMainWindowNotification("app:navigate", { path });
 });
 
-function setupApplicationMenu(): void {
+function setupApplicationMenu(
+  settings: AppSettings,
+  acceleratorsEnabled = true,
+): void {
+  if (!acceleratorsEnabled) {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  const bindings = effectiveBindings(
+    migrateLegacyKeybindings(settings.keybindings, settings),
+  );
+  const command = (commandId: keyof typeof bindings) =>
+    bindings[commandId] ?? undefined;
   const menu = Menu.buildFromTemplate([
     {
       label: "Aiden Agent",
@@ -515,9 +578,20 @@ function setupApplicationMenu(): void {
         },
         { type: "separator" },
         {
+          label: "Command Palette…",
+          accelerator: command("commandPalette.toggle"),
+          click: () =>
+            deliverMainWindowNotificationSafely("app:command", {
+              commandId: "commandPalette.toggle",
+            }),
+        },
+        {
           label: "Settings…",
-          accelerator: "Command+,",
-          click: () => ipcMain.broadcast("app:navigate", { path: "/settings" }),
+          accelerator: command("settings.open"),
+          click: () =>
+            deliverMainWindowNotificationSafely("app:command", {
+              commandId: "settings.open",
+            }),
         },
         { type: "separator" },
         { role: "services" },
@@ -533,9 +607,20 @@ function setupApplicationMenu(): void {
       label: "File",
       submenu: [
         {
+          label: "New Chat",
+          accelerator: command("chat.new"),
+          click: () =>
+            deliverMainWindowNotificationSafely("app:command", {
+              commandId: "chat.new",
+            }),
+        },
+        {
           label: "Open Workspace in Preferred Editor",
-          accelerator: "Command+O",
-          click: () => ipcMain.broadcast("app:open-workspace-preferred-editor", {}),
+          accelerator: command("workspace.openPreferredEditor"),
+          click: () =>
+            deliverMainWindowNotificationSafely("app:command", {
+              commandId: "workspace.openPreferredEditor",
+            }),
         },
         { type: "separator" },
         { role: "close" },
@@ -624,35 +709,38 @@ if (!ownsSingleInstanceLock) {
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
       await restoreDockIconPreference(appearance.dockIcon);
-      setupApplicationMenu();
+      setupApplicationMenu(settings);
+      initShortcutBindingsChanged(setupApplicationMenu);
 
       initShortcut(() => {
-        showMainWindow();
-        ipcMain.broadcast("app:focus-composer", {});
+        void deliverMainWindowNotification("app:command", {
+          commandId: "composer.focus",
+        }).catch((error: unknown) => {
+          logger.warn("shortcut", "Could not focus the composer from the global shortcut", error);
+        });
       });
       initDictationShortcut(() => {
         toggleDictation();
       });
       initAssistantShortcut(() => {
-        // Aiden lives inside the main window, so the hotkey brings that window
-        // forward and asks its renderer to open the docked panel. The window
-        // must exist before the broadcast: with no window, a fire-and-forget
-        // create leaves nothing listening and the panel never opens. This
-        // mirrors registerAppPathOpener above.
-        void (async () => {
-          await createMainWindow();
-          await assistantDockReadyPromise;
-          if (!mainWindow || mainWindow.isDestroyed()) return;
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          mainWindow.show();
-          mainWindow.focus();
-          ipcMain.broadcast("assistant:open-panel", {});
-        })().catch((error: unknown) => {
+        void deliverMainWindowNotification("app:command", {
+          commandId: "assistant.open",
+        }).catch((error: unknown) => {
           logger.warn("assistant", "Could not open Aiden from the global shortcut", error);
         });
       });
-      void applyShortcutFromSettings();
+      try {
+        await applyShortcutFromSettings();
+      } catch (error) {
+        logger.warn(
+          "shortcut",
+          "One or more saved global shortcuts could not be registered.",
+          error,
+        );
+      }
       void foundationModelsConnection.status();
+      resolveShortcutInitialization?.();
+      resolveShortcutInitialization = null;
 
       // ~/.aiden/config.json is the user's to edit, so pick hand-edits up
       // without a restart. Registered after whenReady because powerMonitor is
