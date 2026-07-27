@@ -6,6 +6,7 @@ import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
+import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -402,6 +403,12 @@ export interface AssistantConfig {
   settingsPermission: AssistantSettingsPermission;
 }
 
+/** Authoritative Assistant settings plus the current global-hotkey runtime state. */
+export interface AssistantConfigSnapshot {
+  config: AssistantConfig;
+  hotkeyActive: boolean;
+}
+
 /** Persisted lightweight app settings. */
 export interface AppSettings {
   lastProviderId?: string;
@@ -416,6 +423,8 @@ export interface AppSettings {
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  /** Versioned command overrides. Legacy global fields remain migration fallbacks. */
+  keybindings?: KeybindingOverridesV1;
   /** Background chat-title generation policy. Defaults to automatic. */
   chatTitleProviderId?: ChatTitleProviderId;
   /** Paired light/dark palettes and global appearance preferences. */
