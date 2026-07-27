@@ -2,6 +2,8 @@
 
 import type {
   AppSettings,
+  AssistantConfig,
+  AssistantConfigSnapshot,
   ArtificialAnalysisActionResult,
   ArtificialAnalysisStatus,
   ApprovalDecision,
@@ -60,6 +62,10 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import type {
+  KeybindingMutation,
+  KeybindingSnapshot,
+} from "../shared/keybindings";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -81,7 +87,7 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
-  assistantDockReady: () => invoke<boolean>("app:assistant-dock-ready"),
+  rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
@@ -140,6 +146,12 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
+};
+
+export const assistantApi = {
+  config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
+  setConfig: (patch: Partial<AssistantConfig>) =>
+    invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
 };
 
 export const artificialAnalysisApi = {
@@ -253,7 +265,13 @@ export interface ModelDownloadProgress {
 }
 
 export const shortcutApi = {
-  apply: () => invoke<void>("shortcut:apply"),
+  get: () => invoke<KeybindingSnapshot>("shortcut:get"),
+  setRecording: (recording: boolean) =>
+    invoke<KeybindingSnapshot>("shortcut:set-recording", recording),
+  set: (mutation: KeybindingMutation) =>
+    invoke<KeybindingSnapshot>("shortcut:set", mutation),
+  onChanged: (handler: (snapshot: KeybindingSnapshot) => void) =>
+    onNotification("shortcut:changed", handler),
 };
 
 // ── Global dictation (pill + auto-paste) ──────────────────────────────
