@@ -104,19 +104,23 @@ test("hovering a reply preview cannot remove its click target", () => {
 
 test("an empty conversation still surfaces its error", () => {
   const panel = source("../components/assistant/assistant-panel.tsx");
+  const thread = source("../components/assistant/assistant-thread.tsx");
   assert.match(panel, /chat\.error/u);
   assert.match(panel, /role="alert"/u);
+  assert.match(thread, /role="alert"/u);
 });
 
-test("the hotkey waits until the dock has installed its open listener", () => {
+test("the hotkey waits for the central command listener and uses the dock command", () => {
   const dock = source("../components/assistant/assistant-dock.tsx");
+  const commands = source("./command-system.tsx");
   const main = source("../../main/index.ts");
-  const subscription = dock.indexOf('onNotification("assistant:open-panel", openPanel)');
-  const readySignal = dock.indexOf("appApi.assistantDockReady()");
-  const readinessWait = main.indexOf("await assistantDockReadyPromise");
-  const openBroadcast = main.indexOf('ipcMain.broadcast("assistant:open-panel", {})');
-  assert.ok(subscription >= 0 && readySignal > subscription);
-  assert.ok(readinessWait >= 0 && openBroadcast > readinessWait);
+  const listener = commands.indexOf('onNotification<{ commandId?: unknown }>("app:command"');
+  const readySignal = commands.indexOf("appApi.rendererReady()");
+  const readinessWait = main.indexOf("await rendererReadiness.wait()");
+  const assistantCommand = main.indexOf('commandId: "assistant.open"');
+  assert.match(dock, /useCommandHandler\("assistant\.open", openPanel\)/u);
+  assert.ok(listener >= 0 && readySignal > listener);
+  assert.ok(readinessWait >= 0 && assistantCommand > readinessWait);
 });
 
 test("stopping during first-turn persistence keeps the composer blocked until adoption", () => {
@@ -124,6 +128,53 @@ test("stopping during first-turn persistence keeps the composer blocked until ad
   const panel = source("../components/assistant/assistant-panel.tsx");
   assert.match(chat, /stoppedPersistingTurnRef\.current === turnRef\.current/u);
   assert.match(chat, /setTurnSaving\(true\)/u);
-  assert.match(chat, /const ready = modelReady && !conversationLoading && !turnSaving/u);
+  assert.match(
+    chat,
+    /const ready =\s*modelReady &&\s*!conversationLoading &&\s*!turnSaving/u,
+  );
   assert.match(panel, /"turn-saving": "Saving conversation…"/u);
+});
+
+test("stopping an active generation waits for its terminal persistence event", () => {
+  const chat = source("../components/assistant/use-assistant-chat.ts");
+  const stop = between(chat, "const stop = React.useCallback", "return {");
+  assert.match(stop, /setGenerationPhase\(nextPhase\)/u);
+  assert.match(stop, /handle\.cancel\("user_stop"\)/u);
+  assert.doesNotMatch(stop, /abandonTurn\("user_stop"\)/u);
+  assert.ok(
+    (chat.match(/setGenerationPhase\("idle"\)/gu)?.length ?? 0) >= 4,
+    "done, error, persistence failure, and lifecycle resets settle the phase",
+  );
+  assert.match(chat, /if \(\s*!canChangeThread/u);
+  assert.match(chat, /persistingTurnRef\.current !== null/u);
+  assert.match(chat, /handleRef\.current/u);
+  assert.doesNotMatch(
+    between(chat, "onError: (message", "onApproval:"),
+    /else fail\(message\)/u,
+  );
+});
+
+test("assistant notices use a collision-free monotonic marker", () => {
+  const chat = source("../components/assistant/use-assistant-chat.ts");
+  assert.match(chat, /noticeSequenceRef/u);
+  assert.match(chat, /at: \+\+noticeSequenceRef\.current/u);
+  assert.doesNotMatch(chat, /at: Date\.now\(\)/u);
+});
+
+test("the Assistant composer does not send an in-progress IME composition", () => {
+  const panel = source("../components/assistant/assistant-panel.tsx");
+  assert.match(panel, /!event\.nativeEvent\.isComposing/u);
+});
+
+test("streamed Assistant replies are announced after the response settles", () => {
+  const thread = source("../components/assistant/assistant-thread.tsx");
+  assert.match(thread, /role="log"/u);
+  assert.match(thread, /aria-live="polite"/u);
+  assert.match(thread, /aria-busy=\{streaming\}/u);
+});
+
+test("every Assistant turn exposes its speaker without relying on bubble styling", () => {
+  const thread = source("../components/assistant/assistant-thread.tsx");
+  assert.match(thread, /message\.role === "user" \? "You" : "Aiden"/u);
+  assert.match(thread, /<span className="sr-only">\{speaker\}: <\/span>/u);
 });
