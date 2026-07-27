@@ -12,11 +12,16 @@ import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
+import {
+  useCommandHandler,
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 import { ThinkingControl } from "../components/thinking-control";
 import {
   chatsApi,
   settingsApi,
-  onNotification,
   startGeneration,
   gitApi,
   workspacesApi,
@@ -277,6 +282,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const terminalShortcut = useShortcutLabel("terminal.toggle");
+  const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
   const pendingDeltaRef = React.useRef("");
@@ -288,13 +296,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
 
   chatIdRef.current = chatId;
-
-  // Global shortcut / menu focuses the composer.
-  React.useEffect(() => {
-    return onNotification("app:focus-composer", () =>
-      composerRef.current?.focus(),
-    );
-  }, []);
 
   // Cancel any in-flight generation when leaving the chat.
   React.useEffect(() => {
@@ -1044,8 +1045,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onClick={terminal.toggle}
             disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
             aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+            aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
             aria-pressed={terminal.open}
-            title="Toggle terminal (⌘J)"
+            title={`Toggle terminal (${terminalShortcut})`}
             data-terminal-toggle
           >
             <TerminalSquare />
