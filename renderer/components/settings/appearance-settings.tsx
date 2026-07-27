@@ -17,7 +17,21 @@ import {
   toast,
 } from "../ui";
 import { appApi, settingsApi } from "../../lib/ipc";
-import { applyAppearanceConfig, readCachedAppearance } from "../../lib/appearance-runtime";
+import {
+  APPEARANCE_CHANGE_EVENT,
+  APPEARANCE_INTENT_FAILED_EVENT,
+  announceAppearanceIntentFailure,
+  applyAppearanceConfig,
+  beginAppearanceIntent,
+  createNativeAppearanceRevisionTracker,
+  readCachedAppearance,
+  readAppearanceIntentRevision,
+  reconcileNativeThemeChange,
+  reconcileRuntimeAppearanceEvent,
+  rebaseAppearanceIntentAfterFailure,
+  runAppearanceIntent,
+  type AppliedAppearance,
+} from "../../lib/appearance-runtime";
 import {
   CODE_FONT_OPTIONS,
   THEME_PRESETS,
@@ -498,43 +512,50 @@ export function AppearanceSettings() {
   const configRef = React.useRef(config);
   const nativeInfoRef = React.useRef<NativeThemeInfo | null>(null);
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const writeChainRef = React.useRef<Promise<void>>(Promise.resolve());
-  const pendingSaveRef = React.useRef<AppearanceConfig | null>(null);
+  const pendingSaveRef = React.useRef<{
+    config: AppearanceConfig;
+    revision: number;
+  } | null>(null);
   const dirtyRef = React.useRef(false);
   const mountedRef = React.useRef(true);
   const safetyIssues = React.useMemo(() => appearanceSafetyIssues(config), [config]);
   const hasSafetyIssues = safetyIssues.length > 0;
   configRef.current = config;
 
-  const queueSave = React.useCallback((next: AppearanceConfig) => {
-    writeChainRef.current = writeChainRef.current
-      .catch(() => undefined)
-      .then(async () => {
-        try {
-          await settingsApi.set({ appearance: next });
-          if (pendingSaveRef.current === next) {
-            pendingSaveRef.current = null;
-            dirtyRef.current = false;
-            if (mountedRef.current) setSaveError(null);
-          }
-        } catch (error) {
-          if (pendingSaveRef.current === next) {
-            dirtyRef.current = true;
-            if (mountedRef.current) {
-              setSaveError(errorMessage(error, "Aiden could not save appearance settings."));
-            }
+  const queueSave = React.useCallback((next: AppearanceConfig, revision: number) => {
+    void runAppearanceIntent(revision, async (isCurrent) => {
+      if (!isCurrent()) return;
+      try {
+        await settingsApi.set({ appearance: next });
+        if (
+          isCurrent() &&
+          pendingSaveRef.current?.revision === revision
+        ) {
+          pendingSaveRef.current = null;
+          dirtyRef.current = false;
+          if (mountedRef.current) setSaveError(null);
+        }
+      } catch (error) {
+        if (
+          isCurrent() &&
+          pendingSaveRef.current?.revision === revision
+        ) {
+          dirtyRef.current = true;
+          if (mountedRef.current) {
+            setSaveError(errorMessage(error, "Aiden could not save appearance settings."));
           }
         }
-      });
+      }
+    });
   }, []);
 
-  const scheduleSave = React.useCallback((next: AppearanceConfig) => {
-    pendingSaveRef.current = next;
+  const scheduleSave = React.useCallback((next: AppearanceConfig, revision: number) => {
+    pendingSaveRef.current = { config: next, revision };
     dirtyRef.current = true;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       saveTimerRef.current = null;
-      queueSave(next);
+      queueSave(next, revision);
     }, 220);
   }, [queueSave]);
 
@@ -547,13 +568,16 @@ export function AppearanceSettings() {
     );
   }, []);
 
-  const update = React.useCallback((updater: (current: AppearanceConfig) => AppearanceConfig) => {
+  const update = React.useCallback((
+    updater: (current: AppearanceConfig) => AppearanceConfig,
+    revision = beginAppearanceIntent(),
+  ) => {
     const next = normalizeAppearanceConfig(updater(configRef.current));
     configRef.current = next;
     setConfig(next);
     apply(next);
     if (appearanceSafetyIssues(next).length === 0) {
-      scheduleSave(next);
+      scheduleSave(next, revision);
     } else if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -563,9 +587,19 @@ export function AppearanceSettings() {
   React.useEffect(() => {
     mountedRef.current = true;
     let cancelled = false;
-    void Promise.all([settingsApi.get(), window.aidenAPI.nativeTheme.getInfo()]).then(([settings, nativeInfo]) => {
+    const nativeRevision = createNativeAppearanceRevisionTracker();
+    const hydrationRevision = readAppearanceIntentRevision();
+    void (async () => {
+      const settings = await settingsApi.get();
+      const nativeInfo = await nativeRevision.readStable(
+        () => window.aidenAPI.nativeTheme.getInfo(),
+      );
       if (cancelled) return;
       nativeInfoRef.current = nativeInfo;
+      if (hydrationRevision !== readAppearanceIntentRevision()) {
+        setHydrated(true);
+        return;
+      }
       const next = settings.appearance
         ? normalizeAppearanceConfig(settings.appearance)
         : { ...(readCachedAppearance() ?? createDefaultAppearanceConfig()), mode: nativeInfo.themeSource };
@@ -575,66 +609,131 @@ export function AppearanceSettings() {
       dirtyRef.current = false;
       applyAppearanceConfig(next, nativeInfo.shouldUseDarkColors, nativeInfo.shouldUseHighContrastColors === true);
       setHydrated(true);
-    }).catch((error: unknown) => {
+    })().catch((error: unknown) => {
       if (!cancelled) {
         setHydrated(true);
         toast.error(errorMessage(error, "Aiden could not load appearance settings."));
       }
     });
     const unsubscribe = window.aidenAPI.nativeTheme.onChanged((nativeInfo) => {
+      nativeRevision.markChanged();
+      const reconciled = reconcileNativeThemeChange(configRef.current, nativeInfo);
+      if (!reconciled) return;
       nativeInfoRef.current = nativeInfo;
-      const next = { ...configRef.current, mode: nativeInfo.themeSource };
-      configRef.current = next;
-      setConfig(next);
-      applyAppearanceConfig(next, nativeInfo.shouldUseDarkColors, nativeInfo.shouldUseHighContrastColors === true);
+      configRef.current = reconciled.config;
+      applyAppearanceConfig(
+        reconciled.config,
+        reconciled.nativeUsesDarkColors,
+        reconciled.systemHighContrast,
+      );
     });
+    const handleRuntimeChange = (event: Event) => {
+      const detail = (event as CustomEvent<AppliedAppearance>).detail;
+      if (!detail?.config) return;
+      const reconciled = reconcileRuntimeAppearanceEvent(
+        detail.config,
+        pendingSaveRef.current?.revision ?? null,
+        readAppearanceIntentRevision(),
+      );
+      if (reconciled.supersedesPending) {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        pendingSaveRef.current = null;
+        dirtyRef.current = false;
+        setSaveError(null);
+      }
+      configRef.current = reconciled.config;
+      setConfig(reconciled.config);
+      nativeInfoRef.current = {
+        ...nativeInfoRef.current,
+        themeSource: reconciled.config.mode,
+        shouldUseDarkColors: detail.scheme === "dark",
+        shouldUseHighContrastColors: detail.systemHighContrast,
+      };
+    };
+    const handleIntentFailure = (event: Event) => {
+      const failedRevision = (
+        event as CustomEvent<{ revision?: unknown }>
+      ).detail?.revision;
+      if (typeof failedRevision !== "number") return;
+      const pending = pendingSaveRef.current;
+      const rebasedRevision = rebaseAppearanceIntentAfterFailure(
+        pending?.revision ?? null,
+        failedRevision,
+        readAppearanceIntentRevision(),
+      );
+      if (!pending || rebasedRevision === null) return;
+      scheduleSave(pending.config, rebasedRevision);
+    };
+    window.addEventListener(APPEARANCE_CHANGE_EVENT, handleRuntimeChange);
+    window.addEventListener(APPEARANCE_INTENT_FAILED_EVENT, handleIntentFailure);
     return () => {
       cancelled = true;
       mountedRef.current = false;
       unsubscribe();
+      window.removeEventListener(APPEARANCE_CHANGE_EVENT, handleRuntimeChange);
+      window.removeEventListener(APPEARANCE_INTENT_FAILED_EVENT, handleIntentFailure);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       const pending = pendingSaveRef.current;
-      if (dirtyRef.current && pending) queueSave(pending);
+      if (dirtyRef.current && pending) queueSave(pending.config, pending.revision);
     };
-  }, [queueSave]);
+  }, [queueSave, scheduleSave]);
 
   const changeMode = (mode: AppearanceMode) => {
     if (modePending || mode === configRef.current.mode || appearanceSafetyIssues(configRef.current).length > 0) return;
+    const revision = beginAppearanceIntent();
     setModePending(true);
-    void (async () => {
+    void runAppearanceIntent(revision, async (isCurrent) => {
       try {
         await window.aidenAPI.nativeTheme.setThemeSource(mode);
+        if (!isCurrent()) {
+          await window.aidenAPI.nativeTheme.setThemeSource(configRef.current.mode);
+          return;
+        }
       } catch (error) {
-        toast.error(errorMessage(error, "Aiden could not change the theme mode."));
-        if (mountedRef.current) setModePending(false);
+        if (isCurrent()) {
+          toast.error(errorMessage(error, "Aiden could not change the theme mode."));
+          announceAppearanceIntentFailure(revision);
+        }
         return;
       }
-      update((current) => ({ ...current, mode }));
+      update((current) => ({ ...current, mode }), revision);
       try {
         nativeInfoRef.current = await window.aidenAPI.nativeTheme.getInfo();
+        if (!isCurrent()) return;
         apply(configRef.current);
       } catch (error) {
-        toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the macOS appearance state."));
-      } finally {
-        if (mountedRef.current) setModePending(false);
+        if (isCurrent()) {
+          toast.error(errorMessage(error, "The theme changed, but Aiden could not refresh the macOS appearance state."));
+        }
       }
-    })();
+    }).finally(() => {
+      if (mountedRef.current) setModePending(false);
+    });
   };
 
   const changeDock = (dockIcon: DockIconPreference) => {
     if (dockPending || dockIcon === configRef.current.dockIcon || appearanceSafetyIssues(configRef.current).length > 0) return;
+    const revision = beginAppearanceIntent();
     setDockPending(true);
-    void (async () => {
+    void runAppearanceIntent(revision, async (isCurrent) => {
       try {
         const applied = await appApi.setDockIcon(dockIcon);
         if (!applied) throw new Error("Dock icons are unavailable on this platform.");
-        update((current) => ({ ...current, dockIcon }));
+        if (!isCurrent()) {
+          await appApi.setDockIcon(configRef.current.dockIcon);
+          return;
+        }
+        update((current) => ({ ...current, dockIcon }), revision);
       } catch (error) {
-        toast.error(errorMessage(error, "Aiden could not change the Dock preference."));
-      } finally {
-        if (mountedRef.current) setDockPending(false);
+        if (isCurrent()) {
+          toast.error(errorMessage(error, "Aiden could not change the Dock preference."));
+          announceAppearanceIntentFailure(revision);
+        }
       }
-    })();
+    }).finally(() => {
+      if (mountedRef.current) setDockPending(false);
+    });
   };
 
   return (
@@ -664,7 +763,7 @@ export function AppearanceSettings() {
               const pending = pendingSaveRef.current;
               if (!pending) return;
               setSaveError(null);
-              queueSave(pending);
+              queueSave(pending.config, pending.revision);
             }}
           >
             Retry
