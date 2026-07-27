@@ -7,6 +7,7 @@
 export const INVOKE_PREFIXES = [
   "app:",
   "artificialAnalysis:",
+  "assistant:",
   "attachments:",
   "chat:",
   "chats:",
@@ -44,10 +45,8 @@ export const NATIVE_INVOKE_CHANNELS = {
 
 export const NOTIFICATION_CHANNEL_VALUES = [
   "app:config-externally-changed",
-  "app:focus-composer",
+  "app:command",
   "app:navigate",
-  "app:open-workspace-preferred-editor",
-  "assistant:open-panel",
   "chat:approval",
   "chat:delta",
   "chat:done",
@@ -65,6 +64,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "providers:auth:prompt",
   "providers:auth:status-changed",
   "schedule:updated",
+  "shortcut:changed",
   "terminal:data",
   "terminal:exit",
   "aiden:theme:changed",
