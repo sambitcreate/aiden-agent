@@ -1,5 +1,4 @@
-// Phase-2 IPC handlers: Skills, MCP servers, Exa web search, voice transcription,
-// and the global shortcut. Thin — logic lives in services.
+// Phase-2 IPC handlers: Skills, MCP servers, Exa web search, and voice transcription.
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
@@ -15,7 +14,6 @@ import {
 } from "../services/mcp-presets.js";
 import { discoverSkills } from "../services/skills-discovery.js";
 import { transcribe } from "../services/transcription.js";
-import { applyShortcutFromSettings } from "../services/shortcut.js";
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 
@@ -136,8 +134,4 @@ export function registerPhase2Handlers(): void {
     });
   });
 
-  // ── Global shortcut ──────────────────────────────────────────────────
-  ipcMain.handle("shortcut:apply", async () => {
-    await applyShortcutFromSettings();
-  });
 }
