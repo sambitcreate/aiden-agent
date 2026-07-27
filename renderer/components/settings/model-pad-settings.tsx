@@ -1,6 +1,7 @@
 import * as React from "react";
-import { Check, Cloud, Cpu, Loader2, Plus, Save, Search, Sparkles, Undo2, X } from "lucide-react";
+import { Check, Loader2, Plus, Save, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Badge, Button, Field, FieldSet, Input, Text, toast } from "../ui";
+import { ProviderIcon } from "../provider-icon";
 import { createModelEntries, encodeSelection, type ModelEntry } from "../../lib/model-picker-data";
 import {
   emptyModelPadLayout,
@@ -224,7 +225,8 @@ export function ModelPadSettings() {
                       placement.source === "user"
                         ? "bg-accent text-accent-foreground focus-visible:bg-accent-hover"
                         : "bg-popover text-primary ring-1 ring-accent/45 focus-visible:bg-list-selection",
-                      selected && "bg-list-selection ring-1 ring-accent focus-visible:bg-list-selection",
+                      selected &&
+                        "bg-list-selection ring-1 ring-accent focus-visible:bg-list-selection",
                     )}
                     style={{ left: `${padLeft(placement.x)}%`, top: `${padTop(placement.y)}%` }}
                     onFocus={() => setActiveValue(entry.value)}
@@ -315,19 +317,19 @@ export function ModelPadSettings() {
                       key={entry.value}
                       className="flex min-h-11 items-center gap-2 rounded-control px-2 py-1.5 hover:bg-list-hover"
                     >
-                      <span aria-hidden="true" className="shrink-0 text-tertiary">
-                        {entry.isLocal ? (
-                          <Cpu className="size-3.5" />
-                        ) : (
-                          <Cloud className="size-3.5" />
-                        )}
-                      </span>
+                      <ProviderIcon
+                        providerId={entry.providerId}
+                        providerLabel={entry.providerLabel}
+                        modelId={entry.model}
+                        className="size-3.5 text-tertiary"
+                      />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-small-strong text-primary">
                           {entry.label}
                         </span>
                         <span className="block truncate text-[11px] text-tertiary">
                           {entry.providerLabel}
+                          {entry.isLocal ? " · Local" : " · Hosted"}
                         </span>
                       </span>
                       <Button
