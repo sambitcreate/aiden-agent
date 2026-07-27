@@ -6,9 +6,11 @@ const RECENT_LIMIT = 5;
 /** Recent Aiden threads. chats:list already returns newest first. */
 export function AssistantRecent({
   threads,
+  disabled = false,
   onOpen,
 }: {
   threads: ChatMeta[];
+  disabled?: boolean;
   onOpen: (chatId: string) => void;
 }): React.ReactElement | null {
   if (threads.length === 0) return null;
@@ -19,7 +21,8 @@ export function AssistantRecent({
         <button
           key={thread.id}
           type="button"
-          className="truncate rounded-lg px-2 py-1.5 text-left text-sm text-secondary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary"
+          disabled={disabled}
+          className="truncate rounded-lg px-2 py-1.5 text-left text-sm text-secondary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-40"
           onClick={() => onOpen(thread.id)}
         >
           {thread.title}
