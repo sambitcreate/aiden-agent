@@ -4,6 +4,7 @@ import { ExternalLink, LoaderCircle, LogIn, MessageSquareCode, RefreshCw } from 
 
 import { AlertDialog, Badge, Button, Input, Separator, Text, toast } from "../ui";
 import { CopyButton } from "../copy-button";
+import { ProviderIcon } from "../provider-icon";
 import { providersApi } from "../../lib/ipc";
 import {
   createCodexAuthSession,
@@ -340,14 +341,13 @@ export function CodexProviderSettings() {
       <div className="flex flex-col gap-3 px-3.5 py-3 sm:flex-row sm:items-start">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
-            <MessageSquareCode className="size-4" aria-hidden />
+            <ProviderIcon
+              providerId="openai-codex"
+              providerLabel="ChatGPT / Codex"
+              className="size-4"
+            />
           </div>
-          <div
-            className="min-w-0 flex-1"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
+          <div className="min-w-0 flex-1" role="status" aria-live="polite" aria-atomic="true">
             <div className="flex flex-wrap items-center gap-2">
               <Text id={cardTitleId} variant="strong">
                 ChatGPT / Codex
