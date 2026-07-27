@@ -51,13 +51,17 @@ import {
 } from "../lib/chat-title-reveal";
 import {
   COMMAND_CHAT_SHORTCUT_REVEAL_MS,
-  commandChatShortcutNumber,
+  chatShortcutRevealModifierSets,
   createSidebarChatShortcutAssignments,
+  sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { queryKeys, useChats, useFoundationModelsConnection } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
+import { useCommandSystem } from "../lib/command-system";
+import type { CommandId } from "../shared/keybindings";
+import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
@@ -178,8 +182,21 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     () => createSidebarChatShortcutAssignments(orderedGroups),
     [orderedGroups],
   );
-  const shortcutAssignmentsRef = React.useRef(shortcutAssignments);
-  shortcutAssignmentsRef.current = shortcutAssignments;
+  const orderedChats = React.useMemo(
+    () => orderedGroups.flatMap((group) => group.chats),
+    [orderedGroups],
+  );
+  const chatNavigationTargets = React.useMemo(
+    () => sidebarChatNavigationTargets(orderedChats, activeChatId),
+    [activeChatId, orderedChats],
+  );
+  const { binding: commandBinding, register: registerCommand } = useCommandSystem();
+  const chatJumpBindings = Array.from({ length: 9 }, (_, index) =>
+    commandBinding(`chat.jump.${index + 1}` as CommandId),
+  );
+  const revealModifierSignature = chatShortcutRevealModifierSets(chatJumpBindings)
+    .map((modifiers) => modifiers.join("+"))
+    .join("|");
   const shortcutNumberByChatId = React.useMemo(
     () => new Map(shortcutAssignments.map(({ chat, number }) => [chat.id, number])),
     [shortcutAssignments],
@@ -197,6 +214,17 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
+  const openChat = React.useCallback(
+    (chatId: string | undefined) => {
+      if (!chatId) return;
+      if (settingsBlockedReason) {
+        toast.info(settingsBlockedReason);
+        return;
+      }
+      void navigate({ to: "/chat/$chatId", params: { chatId } });
+    },
+    [navigate, settingsBlockedReason],
+  );
 
   React.useEffect(() => {
     const clearRevealTimer = () => {
@@ -209,42 +237,49 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       clearRevealTimer();
       setChatShortcutsVisible(false);
     };
-    const isCommandKey = (event: KeyboardEvent) =>
-      event.key === "Meta" || event.code === "MetaLeft" || event.code === "MetaRight";
+    const revealModifierSets = revealModifierSignature
+      .split("|")
+      .filter(Boolean)
+      .map((signature) => signature.split("+"));
+    const revealModifiers = new Set(revealModifierSets.flat());
+    const hasCompleteModifierSet = () =>
+      revealModifierSets.some((required) =>
+        required.every((modifier) => heldCommandKeysRef.current.has(modifier)),
+      );
+    const eventModifier = (event: KeyboardEvent) =>
+      ["Meta", "Control", "Alt", "Shift"].includes(event.key)
+        ? event.key
+        : null;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isCommandKey(event)) {
-        const commandKey = event.code || "Meta";
-        const wasAlreadyHeld = heldCommandKeysRef.current.has(commandKey);
-        heldCommandKeysRef.current.add(commandKey);
-        if (!wasAlreadyHeld && shortcutRevealTimerRef.current === null) {
+      const modifier = eventModifier(event);
+      if (modifier && revealModifiers.has(modifier)) {
+        const wasAlreadyHeld = heldCommandKeysRef.current.has(modifier);
+        heldCommandKeysRef.current.add(modifier);
+        if (
+          !wasAlreadyHeld &&
+          hasCompleteModifierSet() &&
+          shortcutRevealTimerRef.current === null
+        ) {
           shortcutRevealTimerRef.current = window.setTimeout(() => {
             shortcutRevealTimerRef.current = null;
-            if (heldCommandKeysRef.current.size > 0) setChatShortcutsVisible(true);
+            if (hasCompleteModifierSet()) setChatShortcutsVisible(true);
           }, COMMAND_CHAT_SHORTCUT_REVEAL_MS);
         }
         return;
       }
 
-      if (
-        event.defaultPrevented ||
-        document.querySelector('[data-slot="dialog-content"][data-state="open"]')
-      ) {
-        return;
-      }
-
-      const shortcutNumber = commandChatShortcutNumber(event);
-      if (shortcutNumber === null) return;
-      const assignment = shortcutAssignmentsRef.current[shortcutNumber - 1];
-      if (!assignment) return;
-
-      event.preventDefault();
-      void navigate({ to: "/chat/$chatId", params: { chatId: assignment.chat.id } });
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (!isCommandKey(event)) return;
-      heldCommandKeysRef.current.delete(event.code || "Meta");
-      if (heldCommandKeysRef.current.size === 0) hideShortcuts();
+      const modifier = eventModifier(event);
+      if (!modifier || !revealModifiers.has(modifier)) return;
+      heldCommandKeysRef.current.delete(modifier);
+      if (heldCommandKeysRef.current.size === 0) {
+        hideShortcuts();
+      } else if (!hasCompleteModifierSet()) {
+        clearRevealTimer();
+        setChatShortcutsVisible(false);
+      }
     };
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible") hideShortcuts();
@@ -262,7 +297,30 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       heldCommandKeysRef.current.clear();
       clearRevealTimer();
     };
-  }, [navigate]);
+  }, [revealModifierSignature]);
+
+  React.useEffect(() => {
+    const unregister = shortcutAssignments.map(({ chat, number }) =>
+      registerCommand(`chat.jump.${number}` as CommandId, () => {
+        openChat(chat.id);
+      }),
+    );
+    if (chatNavigationTargets.previous) {
+      unregister.push(
+        registerCommand("chat.previous", () => {
+          openChat(chatNavigationTargets.previous?.id);
+        }),
+      );
+    }
+    if (chatNavigationTargets.next) {
+      unregister.push(
+        registerCommand("chat.next", () => {
+          openChat(chatNavigationTargets.next?.id);
+        }),
+      );
+    }
+    return () => unregister.forEach((dispose) => dispose());
+  }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
 
   // Move to a workspace and land on one of its chats (creating one if empty).
   const enterWorkspace = React.useCallback(
@@ -569,6 +627,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
               <SidebarListGroup key={group.label} title={group.label}>
                 {group.chats.map((chat) => {
                   const shortcutNumber = shortcutNumberByChatId.get(chat.id);
+                  const shortcutBinding = shortcutNumber
+                    ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
+                    : null;
                   return <ContextMenu key={chat.id}>
                     <ContextMenuTrigger asChild>
                       <SidebarListItem
@@ -590,22 +651,20 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                           )
                         }
                         trailing={
-                          chatShortcutsVisible && shortcutNumber ? (
+                          chatShortcutsVisible && shortcutBinding ? (
                             <kbd
                               aria-hidden="true"
                               className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
                             >
-                              ⌘{shortcutNumber}
+                              {prettyAccelerator(shortcutBinding)}
                             </kbd>
                           ) : undefined
                         }
-                        aria-keyshortcuts={shortcutNumber ? `Meta+${shortcutNumber}` : undefined}
+                        aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
                         selected={chat.id === activeChatId}
                         onPointerEnter={() => prefetchChat(chat.id)}
                         onFocus={() => prefetchChat(chat.id)}
-                        onClick={() =>
-                          navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })
-                        }
+                        onClick={() => openChat(chat.id)}
                       />
                     </ContextMenuTrigger>
                     <ContextMenuContent>
