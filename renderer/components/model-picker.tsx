@@ -31,7 +31,8 @@ import {
 import { useProvidersModelInfo } from "../lib/queries";
 import { useModelPadLayout } from "../lib/model-pad-layout";
 import type { ModelInfo, Provider } from "../lib/types";
-import { Check, ChevronsUpDown, Cloud, Cpu, Pin, SlidersHorizontal } from "lucide-react";
+import { Check, ChevronsUpDown, Pin, SlidersHorizontal } from "lucide-react";
+import { ProviderIcon } from "./provider-icon";
 
 interface ModelPickerProps {
   providers: Provider[];
@@ -86,6 +87,7 @@ function formatCapabilities(info: ModelInfo | undefined): string {
 function describeModel(entry: ModelEntry): string {
   const details = [
     `Provider ${entry.providerLabel}`,
+    entry.isLocal ? "Deployment local" : "Deployment hosted",
     `Inputs ${formatInputs(entry.info)}`,
     `Capabilities ${formatCapabilities(entry.info)}`,
   ];
@@ -238,7 +240,12 @@ function ModelHoverDetails({
     <aside className="pointer-events-none absolute left-[calc(100%+0.5rem)] top-0 w-56 rounded-popover bg-popover p-3 text-primary shadow-popover">
       <div className="flex min-w-0 items-start gap-2">
         <span className="mt-0.5 shrink-0 text-tertiary">
-          {model.isLocal ? <Cpu className="size-4" /> : <Cloud className="size-4" />}
+          <ProviderIcon
+            providerId={model.providerId}
+            providerLabel={model.providerLabel}
+            modelId={model.model}
+            className="size-4"
+          />
         </span>
         <div className="min-w-0 flex-1">
           <Text variant="small-strong" as="h3" truncate>
@@ -246,6 +253,7 @@ function ModelHoverDetails({
           </Text>
           <Text variant="small" color="tertiary" as="p" truncate>
             {model.providerLabel}
+            {model.isLocal ? " · Local" : " · Hosted"}
             {model.format ? ` · ${model.format}` : ""}
           </Text>
         </div>
@@ -448,7 +456,7 @@ export function ModelPicker({
             hasUnavailableSelection
               ? "Selected model is unavailable. Choose a model."
               : selected
-                ? `Selected model: ${selected.label} from ${selected.providerLabel}. Choose a model.`
+                ? `Selected model: ${selected.label} from ${selected.providerLabel}, ${selected.isLocal ? "local" : "hosted"}. Choose a model.`
                 : hasModels
                   ? "Choose a model"
                   : unavailableMessage
@@ -462,15 +470,16 @@ export function ModelPicker({
           }
         >
           {selected ? (
-            selected.isLocal ? (
-              <Cpu className="size-4 shrink-0 text-tertiary" />
-            ) : (
-              <Cloud className="size-4 shrink-0 text-tertiary" />
-            )
+            <ProviderIcon
+              providerId={selected.providerId}
+              providerLabel={selected.providerLabel}
+              modelId={selected.model}
+              className="size-4 text-tertiary"
+            />
           ) : null}
           <span className="min-w-0 truncate">
             {selected
-              ? `${selected.label} · ${selected.providerLabel}`
+              ? `${selected.label} · ${selected.providerLabel} · ${selected.isLocal ? "Local" : "Hosted"}`
               : hasUnavailableSelection
                 ? "Model unavailable"
                 : hasModels
@@ -611,15 +620,17 @@ export function ModelPicker({
                       onMouseEnter={() => setPreviewValue(entry.value)}
                       className="group gap-2"
                     >
-                      {entry.isLocal ? (
-                        <Cpu className="size-4 shrink-0 text-tertiary" />
-                      ) : (
-                        <Cloud className="size-4 shrink-0 text-tertiary" />
-                      )}
+                      <ProviderIcon
+                        providerId={entry.providerId}
+                        providerLabel={entry.providerLabel}
+                        modelId={entry.model}
+                        className="size-4 text-tertiary"
+                      />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-small-strong">{entry.label}</span>
                         <span className="block truncate text-small text-tertiary">
                           {entry.providerLabel}
+                          {entry.isLocal ? " · Local" : " · Hosted"}
                         </span>
                       </span>
                       {entry.format ? (
