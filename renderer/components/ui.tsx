@@ -19,6 +19,12 @@ import { createPortal } from "react-dom";
 import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { cn } from "../lib/ui-utils";
+import {
+  useCommandHandler,
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -256,6 +262,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     localStorage.setItem(collapseKey, value ? "0" : "1");
     return !value;
   }), [collapseKey]);
+  useCommandHandler("sidebar.toggle", toggle);
 
   React.useEffect(() => {
     let wasCompact = window.innerWidth < 700;
@@ -270,17 +277,6 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey && event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        toggle();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [toggle]);
 
   const beginResize = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (collapsed) return;
@@ -422,6 +418,8 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
 
 function SidebarToggle() {
   const context = React.useContext(SplitContext);
+  const shortcut = useShortcutLabel("sidebar.toggle");
+  const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
   const button = (
     <Button
@@ -430,8 +428,9 @@ function SidebarToggle() {
       variant={context.collapsed ? "toolbar" : "transparent"}
       onClick={context.toggle}
       aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
+      aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
       aria-pressed={!context.collapsed}
-      title="Toggle Sidebar (⌃⌘S)"
+      title={`Toggle sidebar (${shortcut})`}
       className="no-drag transition-[width,height,background-color] duration-300"
     >
       <PanelLeft />
