@@ -1,10 +1,10 @@
-import { Outlet, useNavigate } from "@tanstack/react-router";
+import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { appApi, onNotification } from "../lib/ipc";
+import { appApi, chatsApi, onNotification } from "../lib/ipc";
 import { useTheme } from "../lib/use-theme";
-import { WorkspaceProvider } from "../lib/workspace-context";
-import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
+import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
+import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelProvider, useEnvironmentPanel } from "../components/environment-panel";
 import { toast } from "../components/ui";
 import { AssistantDock } from "../components/assistant/assistant-dock";
@@ -13,6 +13,9 @@ import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
 } from "../lib/lifecycle-guard";
+import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
+import { AppCommandPalette } from "../components/command-palette";
+import { workspaceCommandVisibility } from "../lib/command-system-core";
 
 export function RootView() {
   useTheme();
@@ -20,7 +23,9 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <RootContent />
+          <CommandSystemProvider>
+            <RootContent />
+          </CommandSystemProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
@@ -31,6 +36,10 @@ function RootContent() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
+  const terminal = useWorkspaceTerminal();
+  const { activeId } = useActiveWorkspace();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish before leaving the chat."
     : environmentPanel.editorState.saving
@@ -38,6 +47,44 @@ function RootContent() {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits before leaving the chat."
         : null;
+
+  useCommandHandler(
+    "terminal.toggle",
+    terminal.toggle,
+    workspaceCommands.terminal && (terminal.canOpen || terminal.open),
+  );
+  useCommandHandler(
+    "environment.toggle",
+    () => {
+      if (environmentPanel.gitOperationBusy) {
+        toast.info("Wait for the current Git operation to finish before changing panels.");
+        return;
+      }
+      environmentPanel.toggle("overview");
+    },
+    workspaceCommands.environment,
+  );
+  useCommandHandler("settings.open", () => {
+    if (navigationBlockedReason) {
+      toast.info(navigationBlockedReason);
+      return;
+    }
+    void navigate({ to: "/settings" });
+  });
+  useCommandHandler(
+    "chat.new",
+    async () => {
+      if (!activeId) return;
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      const chat = await chatsApi.create({ workspaceId: activeId });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+      await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
+    },
+    Boolean(activeId),
+  );
   React.useEffect(() => {
     void appApi.setCloseGuard({
       dirty: environmentPanel.editorState.dirty,
@@ -120,6 +167,7 @@ function RootContent() {
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
       <AssistantDock />
+      <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
   );
 }
