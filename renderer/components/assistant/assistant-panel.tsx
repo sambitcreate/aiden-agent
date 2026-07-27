@@ -17,6 +17,7 @@ const AIDEN_MARK_URL = new URL("../../../resources/app-icon.png", import.meta.ur
 const READINESS_TEXT: Record<Exclude<AssistantReadiness, "ready">, string> = {
   loading: "Loading your providers…",
   "conversation-loading": "Opening conversation…",
+  stopping: "Stopping response…",
   "turn-saving": "Saving conversation…",
   unavailable: "Aiden could not load your providers. Try again in a moment.",
   unset: "Choose a provider and model in the main composer before chatting here.",
@@ -62,7 +63,8 @@ export function AssistantPanel({
           <button
             type="button"
             aria-label="New conversation"
-            className="rounded-md p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary"
+            disabled={!chat.canChangeThread}
+            className="rounded-md p-1 text-tertiary transition-colors duration-150 ease-out hover:bg-list-hover hover:text-primary disabled:opacity-40"
             onClick={() => {
               chat.newThread();
               onDraftChange("");
@@ -97,7 +99,11 @@ export function AssistantPanel({
               </button>
             ))}
           </div>
-          <AssistantRecent threads={chat.threads} onOpen={chat.openThread} />
+          <AssistantRecent
+            threads={chat.threads}
+            disabled={!chat.canChangeThread}
+            onOpen={chat.openThread}
+          />
           {chat.error ? (
             <p role="alert" className="px-1 text-xs text-support-red">
               {chat.error}
@@ -123,7 +129,11 @@ export function AssistantPanel({
             className="max-h-32 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-primary outline-none placeholder:text-tertiary"
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing
+              ) {
                 event.preventDefault();
                 submit();
               }
@@ -132,7 +142,8 @@ export function AssistantPanel({
           {chat.streaming ? (
             <button
               type="button"
-              aria-label="Stop"
+              aria-label={chat.readiness === "stopping" ? "Stopping" : "Stop"}
+              disabled={chat.readiness === "stopping"}
               className="rounded-full bg-control p-1.5 text-primary transition-colors duration-150 ease-out hover:bg-control-hover"
               onClick={chat.stop}
             >
