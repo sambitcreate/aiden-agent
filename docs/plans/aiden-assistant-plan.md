@@ -1,7 +1,11 @@
 # Aiden — Proactive In-App Assistant Plan
 
-Status: Phase 1 implemented, then redesigned as an in-window dock (see "Assistant dock").
-Spec date 2026-07-23; implementation plan 2026-07-25; dock revision 2026-07-25.
+Status: Phase 1 and the enforceable Settings foundation are implemented; settings tools
+and proactivity remain planned. Phase 1 was redesigned as an in-window dock (see
+"Assistant dock"). The Settings foundation was reconciled with the canonical command
+system on 2026-07-26.
+Spec date 2026-07-23; implementation plan 2026-07-25; dock revision 2026-07-25;
+Settings/shortcut revision 2026-07-26.
 
 **Phases 2 and 3 below still describe the separate-window design in places.** Their
 substance — settings tools, the Aiden settings section, and the whole proactive engine —
@@ -156,8 +160,8 @@ to live with the work rather than float beside it, so it was rebuilt as a docked
 - Mounted in `RootView`, so it is present on every route and survives navigation.
 - Empty state offers three suggested prompts; a "Recent" list surfaces earlier threads.
 - No attachments, no Computer Use, no model picker in v1.
-- Entry points: the ⌘⌥A global hotkey (focuses the main window, then broadcasts
-  `assistant:open-panel`) and, from Phase 3, clicking a nudge notification.
+- Entry points: the ⌘⌥A global hotkey (focuses the main window, then dispatches
+  `app:command` with `assistant.open`) and, from Phase 3, clicking a nudge notification.
 
 **What this removed**, relative to the original separate-window design: `assistant.html`,
 `renderer/preload-assistant.ts`, `renderer/preload-assistant-channels.ts`,
@@ -168,14 +172,20 @@ IPC surface at all beyond the one broadcast.
 
 ### Settings section
 
-New "Aiden" section in Settings, group "Agent", following the established 4-touch-point
-pattern plus the renderer type mirror:
+The shipped "Aiden" section in Settings, group "Agent", intentionally exposes only
+enforceable behavior:
 
-1. id `assistant` in `SETTINGS_SECTIONS` (`renderer/lib/settings-section.ts`),
-2. `NAV` + `CONTENT` entries in `renderer/main/settings-view.tsx`,
-3. new `renderer/components/settings/assistant-settings.tsx`,
-4. `assistant?: AssistantConfig` on `AppSettings` in `main/services/types.ts`,
-5. the same field on the renderer mirror in `renderer/lib/types.ts`.
+- global `assistant.open` status and a deep link to the canonical Keyboard Shortcuts
+  editor;
+- the fact that interactive Aiden follows the composer's current model;
+- device-local conversation history and the current chat-only access boundary;
+- an explicit "Not active" status for background suggestions.
+
+It does not expose the future proactivity fields below. Those contracts are parsed and
+preserved, but no background ticker, project watcher, settings tools, or notification
+delivery exists yet. Rendering switches for them would create false controls. Task 8's
+original full-proactivity panel is therefore superseded until Tasks 9–19 implement the
+runtime it was meant to control.
 
 ## Architecture
 
@@ -1536,6 +1546,13 @@ thread list, and no folder tools. Stop here for review.
 ---
 
 ## Phase 2 — Settings section and tools
+
+**Implementation checkpoint (2026-07-26):** Task 7's validated, full-config IPC is
+implemented and reports whether macOS actually registered the requested shortcut. The
+Settings sidebar now includes Aiden with the live shortcut controls plus truthful
+model/access/background status. The proactivity controls originally listed in Task 8 stay
+unexposed until the Task 12–19 engine exists; showing toggles that cannot affect runtime
+would make Settings lie. Task 9 onward remains planned.
 
 ### Task 7: `AssistantConfig` parsing and IPC
 
