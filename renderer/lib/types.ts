@@ -2,6 +2,7 @@
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
@@ -657,6 +658,11 @@ export interface AssistantConfig {
   settingsPermission: AssistantSettingsPermission;
 }
 
+export interface AssistantConfigSnapshot {
+  config: AssistantConfig;
+  hotkeyActive: boolean;
+}
+
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
@@ -668,6 +674,7 @@ export interface AppSettings {
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  keybindings?: KeybindingOverridesV1;
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
