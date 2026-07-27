@@ -9,6 +9,7 @@ import type { Provider } from "./types";
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
 const MODEL_SELECTION_CHANGED_EVENT = "aiden:model-selection-changed";
+let modelSelectionRevision = 0;
 
 export interface ModelSelection {
   providerId: string;
@@ -18,16 +19,20 @@ export interface ModelSelection {
 /**
  * The current selection straight from storage.
  *
- * `useModelSelection` holds per-instance React state seeded once at mount, so
- * two mounted instances drift apart the moment one of them selects. Surfaces
- * that merely follow the user's choice — rather than owning it — should read
- * this at the point of use instead of mounting a second copy of the hook.
+ * The hook and follower surfaces subscribe to the same event-backed storage
+ * source, so selecting in the command palette immediately updates the active
+ * composer and Aiden dock.
  */
 export function readModelSelection(): ModelSelection {
   return {
     providerId: localStorage.getItem(PROVIDER_KEY) ?? "",
     model: localStorage.getItem(MODEL_KEY) ?? "",
   };
+}
+
+/** Monotonic same-process revision used to reject stale async model choices. */
+export function readModelSelectionRevision(): number {
+  return modelSelectionRevision;
 }
 
 /** True only when the stored pair still names a usable model in the live provider list. */
@@ -43,7 +48,10 @@ export function isModelSelectionAvailable(
 export function subscribeModelSelection(listener: (selection: ModelSelection) => void): () => void {
   const sync = () => listener(readModelSelection());
   const syncStorage = (event: StorageEvent) => {
-    if (event.key === PROVIDER_KEY || event.key === MODEL_KEY || event.key === null) sync();
+    if (event.key === PROVIDER_KEY || event.key === MODEL_KEY || event.key === null) {
+      modelSelectionRevision += 1;
+      sync();
+    }
   };
   window.addEventListener(MODEL_SELECTION_CHANGED_EVENT, sync);
   window.addEventListener("storage", syncStorage);
@@ -55,9 +63,10 @@ export function subscribeModelSelection(listener: (selection: ModelSelection) =>
   };
 }
 
-function persistModelSelection(providerId: string, model: string): void {
+export function persistModelSelection(providerId: string, model: string): void {
   localStorage.setItem(PROVIDER_KEY, providerId);
   localStorage.setItem(MODEL_KEY, model);
+  modelSelectionRevision += 1;
   window.dispatchEvent(new Event(MODEL_SELECTION_CHANGED_EVENT));
 }
 
@@ -66,6 +75,15 @@ export function useModelSelection(providers: Provider[] | undefined) {
     () => localStorage.getItem(PROVIDER_KEY) ?? "",
   );
   const [model, setModel] = React.useState(() => localStorage.getItem(MODEL_KEY) ?? "");
+
+  React.useEffect(
+    () =>
+      subscribeModelSelection((selection) => {
+        setProviderId(selection.providerId);
+        setModel(selection.model);
+      }),
+    [],
+  );
 
   // Once providers load, choose an initial usable provider only when there is no
   // saved selection. A removed or unavailable provider must remain explicit so a
