@@ -4,16 +4,14 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge, Button, Callout, Field, FieldSet, Input, Switch, Text, toast } from "../ui";
+import { useNavigate } from "@tanstack/react-router";
+import { Badge, Button, Callout, Field, FieldSet, Text, toast } from "../ui";
 import { Settings2 } from "lucide-react";
-import { settingsApi, shortcutApi } from "../../lib/ipc";
-import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
-import { prettyAccelerator, toAccelerator } from "../../lib/accelerator";
-import type { AppSettings } from "../../lib/types";
+import { settingsApi } from "../../lib/ipc";
+import { queryKeys, useEngineStatus, useLocalModels, useSettings, useShortcuts } from "../../lib/queries";
+import { prettyAccelerator } from "../../shared/keybindings";
 import { ModelManagerView } from "./model-manager-view";
 import { installAccessibilityRefresh } from "../../lib/accessibility-refresh";
-
-const DEFAULT_DICTATION_ACCELERATOR = "Command+Shift+D";
 
 function EngineStatus() {
   const status = useEngineStatus();
@@ -114,65 +112,71 @@ function AccessibilityAccess() {
 }
 
 function DictationHotkey() {
-  const qc = useQueryClient();
-  const settings = useSettings();
-  const [recording, setRecording] = React.useState(false);
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const navigate = useNavigate();
+  const shortcuts = useShortcuts();
 
-  const enabled = settings.data?.dictationEnabled ?? false;
-  const accelerator = settings.data?.dictationAccelerator || DEFAULT_DICTATION_ACCELERATOR;
-
-  const apply = async (patch: Partial<AppSettings>) => {
-    await settingsApi.set(patch);
-    await shortcutApi.apply();
-    await qc.invalidateQueries({ queryKey: queryKeys.settings });
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (!recording) return;
-    e.preventDefault();
-    const accel = toAccelerator(e);
-    if (accel) {
-      setRecording(false);
-      void apply({ dictationAccelerator: accel }).then(() =>
-        toast.success(`Dictation hotkey set to ${prettyAccelerator(accel)}`),
-      );
-    }
-  };
-
-  return (
-    <>
+  if (shortcuts.isError) {
+    return (
       <Field
         label="Dictation hotkey"
-        description="Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
+        description="The saved shortcut could not be read."
       >
-        <Switch checked={enabled} onCheckedChange={(v) => void apply({ dictationEnabled: v })} />
-      </Field>
-      <Field label="Shortcut" description={recording ? "Press your key combination…" : "Click Record, then press a modifier + key."}>
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            readOnly
-            value={recording ? "Recording…" : prettyAccelerator(accelerator)}
-            onKeyDown={onKeyDown}
-            onBlur={() => setRecording(false)}
-            className="w-40 text-center"
-            aria-label="Current dictation hotkey"
-          />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Badge color="red">Unavailable</Badge>
+          <Button size="small" onClick={() => void shortcuts.refetch()}>
+            Retry
+          </Button>
           <Button
-            size="medium"
-            variant={recording ? "accent" : "filled"}
+            size="small"
+            variant="filled"
             onClick={() =>
-              recording
-                ? setRecording(false)
-                : (setRecording(true), requestAnimationFrame(() => inputRef.current?.focus()))
+              void navigate({ to: "/settings", search: { section: "shortcut" } })
             }
           >
-            {recording ? "Cancel" : "Record"}
+            Manage shortcuts
           </Button>
         </div>
       </Field>
-    </>
+    );
+  }
+
+  if (shortcuts.isLoading || !shortcuts.data) {
+    return (
+      <Field
+        label="Dictation hotkey"
+        description="Checking the saved global shortcut."
+      >
+        <Badge>Checking…</Badge>
+      </Field>
+    );
+  }
+
+  const binding = shortcuts.data?.effective["dictation.toggle"] ?? null;
+  const runtime = shortcuts.data?.global.find((item) => item.commandId === "dictation.toggle");
+
+  return (
+    <Field
+      label="Dictation hotkey"
+      description="Press it from anywhere to dictate into the focused text field. When nothing editable is focused, the transcript is copied to the clipboard."
+    >
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Badge color={runtime?.state === "active" ? "green" : runtime?.state === "unavailable" ? "red" : undefined}>
+          {runtime?.state === "active"
+            ? "Active"
+            : runtime?.state === "unavailable"
+              ? "Unavailable"
+              : "Off"}
+        </Badge>
+        <Text variant="small-strong">{prettyAccelerator(binding)}</Text>
+        <Button
+          size="small"
+          variant="filled"
+          onClick={() => void navigate({ to: "/settings", search: { section: "shortcut" } })}
+        >
+          Manage shortcuts
+        </Button>
+        </div>
+    </Field>
   );
 }
 
