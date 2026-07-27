@@ -8,6 +8,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import {
+  assistantApi,
   chatsApi,
   artificialAnalysisApi,
   computerUseApi,
@@ -20,6 +21,7 @@ import {
   providersApi,
   scheduleApi,
   settingsApi,
+  shortcutApi,
   skillsApi,
   titleProvidersApi,
   usageApi,
@@ -40,6 +42,8 @@ export const queryKeys = {
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
+  shortcuts: ["shortcuts"] as const,
+  assistantConfig: ["assistantConfig"] as const,
   scheduledTasks: ["scheduledTasks"] as const,
   scheduledRuns: (taskId: string | undefined) => ["scheduledRuns", taskId ?? "none"] as const,
   scheduledSettings: ["scheduledSettings"] as const,
@@ -316,6 +320,18 @@ export function useChat(id: string | undefined) {
 
 export function useSettings() {
   return useQuery({ queryKey: queryKeys.settings, queryFn: settingsApi.get });
+}
+
+export function useShortcuts() {
+  return useQuery({ queryKey: queryKeys.shortcuts, queryFn: shortcutApi.get });
+}
+
+export function useAssistantConfig() {
+  return useQuery({
+    queryKey: queryKeys.assistantConfig,
+    queryFn: assistantApi.config,
+    retry: false,
+  });
 }
 
 export function useScheduledTasks() {
