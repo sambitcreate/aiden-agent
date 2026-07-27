@@ -3,11 +3,11 @@
 // the chat pane, so it survives route changes and follows the window's size.
 
 import * as React from "react";
-import { appApi, onNotification } from "../../lib/ipc";
 import { assistantPreviewText } from "../../lib/assistant-dock";
 import { AssistantBubble } from "./assistant-bubble";
 import { AssistantPanel } from "./assistant-panel";
 import { useAssistantChat } from "./use-assistant-chat";
+import { useCommandHandler } from "../../lib/command-system";
 
 /** How long a reply preview stays beside the collapsed mark. */
 const PREVIEW_VISIBLE_MS = 8_000;
@@ -48,6 +48,7 @@ export function AssistantDock(): React.ReactElement {
     restoreFocusPendingRef.current = true;
     setOpen(false);
   }, []);
+  useCommandHandler("assistant.open", openPanel);
 
   // Keep the panel mounted through its exit animation, exactly as the
   // environment summary card does, so minimizing settles instead of vanishing.
@@ -77,12 +78,6 @@ export function AssistantDock(): React.ReactElement {
       else bubbleRef.current?.focus();
     }
   }, [open, present]);
-
-  React.useEffect(() => {
-    const unsubscribe = onNotification("assistant:open-panel", openPanel);
-    void appApi.assistantDockReady().catch(() => undefined);
-    return unsubscribe;
-  }, [openPanel]);
 
   // Replies AND failures both badge. An error raised while minimized is
   // otherwise invisible — the panel that renders it is unmounted — so the user
