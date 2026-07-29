@@ -66,6 +66,11 @@ import type { ChatTimelineNotification, GenerationTimeline } from "../shared/gen
 import { parseSubagentRunSnapshotV1, type SubagentRunSnapshotV1 } from "../shared/subagent-runs";
 import type { KeybindingMutation, KeybindingSnapshot } from "../shared/keybindings";
 import {
+  parseAppUpdateSnapshot,
+  type AppUpdateRestartResult,
+  type AppUpdateSnapshot,
+} from "../shared/app-update";
+import {
   fallbackDetachedLifecycleStream,
   parseChatReadResponse,
   rememberChatReadReconciliation,
@@ -103,6 +108,16 @@ export const appApi = {
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+};
+
+export const appUpdatesApi = {
+  state: async (): Promise<AppUpdateSnapshot> =>
+    parseAppUpdateSnapshot(await invoke<unknown>("app:getUpdateState")),
+  restart: () => invoke<AppUpdateRestartResult>("app:restartToUpdate"),
+  onStateChanged: (handler: (snapshot: AppUpdateSnapshot) => void) =>
+    onNotification<unknown>("app:update-state", (payload) =>
+      handler(parseAppUpdateSnapshot(payload)),
+    ),
 };
 
 // ── Providers & settings ──────────────────────────────────────────────
