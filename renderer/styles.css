@@ -271,48 +271,10 @@ textarea {
   font: inherit;
 }
 
-/* Match utility-class specificity so the semantic ring survives local outline resets. */
-:root :where(
-  a[href],
-  button,
-  input:not([type="hidden"]),
-  textarea,
-  select,
-  summary,
-  [role="button"],
-  [role="checkbox"],
-  [role="menuitem"],
-  [role="menuitemcheckbox"],
-  [role="menuitemradio"],
-  [role="radio"],
-  [role="switch"],
-  [role="tab"],
-  [tabindex]:not([tabindex="-1"])
-):focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-/* Text entry uses its caret plus the field or containing-shell focus state. */
-:root :where(
-  input:not([type]),
-  input:is(
-    [type="date"],
-    [type="datetime-local"],
-    [type="email"],
-    [type="month"],
-    [type="number"],
-    [type="password"],
-    [type="search"],
-    [type="tel"],
-    [type="text"],
-    [type="time"],
-    [type="url"],
-    [type="week"]
-  ),
-  textarea
-):focus-visible {
-  outline: none;
+/* Aiden uses fill, border, caret, and native state changes instead of focus outlines. */
+:root :where(*):focus,
+:root :where(*):focus-visible {
+  outline: none !important;
 }
 
 .drag-region {
