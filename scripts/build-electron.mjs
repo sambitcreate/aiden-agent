@@ -11,7 +11,7 @@ const common = {
 await Promise.all([
   build({
     ...common,
-    entryPoints: ["main/index.ts"],
+    entryPoints: ["main/bootstrap.ts"],
     outfile: "build/main/index.js",
     format: "esm",
     packages: "external",

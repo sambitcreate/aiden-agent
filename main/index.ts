@@ -41,6 +41,7 @@ import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
 import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
+import { currentRuntimeProfile } from "./runtime-profile.js";
 import { appUpdateService } from "./services/app-updater.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
@@ -75,7 +76,6 @@ import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-wor
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
 import { ensureUserDataDir } from "./services/data-store.js";
 
-app.setName("Aiden Agent");
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow: BrowserWindow | null = null;
@@ -550,7 +550,7 @@ async function createMainWindow(): Promise<void> {
     height: 700,
     minWidth: 390,
     minHeight: 456,
-    title: "Aiden Agent",
+    title: app.getName(),
     titleBarStyle: "hiddenInset",
     // Center the 12px macOS window controls in the renderer's 52px top bar.
     trafficLightPosition: { x: 14, y: 20 },
@@ -810,7 +810,7 @@ function setupApplicationMenu(settings: AppSettings, acceleratorsEnabled = true)
   const command = (commandId: keyof typeof bindings) => bindings[commandId] ?? undefined;
   const menu = Menu.buildFromTemplate([
     {
-      label: "Aiden Agent",
+      label: app.getName(),
       submenu: [
         { role: "about" },
         {
@@ -942,6 +942,10 @@ if (!ownsSingleInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      const runtimeProfile = currentRuntimeProfile();
+      if (runtimeProfile.id === "development" && process.platform === "darwin") {
+        app.dock?.setBadge("DEV");
+      }
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
@@ -949,7 +953,7 @@ if (!ownsSingleInstanceLock) {
         throw new Error("Packaged subagent soak requires the internal subagent opt-in.");
       }
       if (!isPackagedRuntime()) {
-        initDevLog(path.join(app.getPath("userData"), "logs", "aiden-dev.log"));
+        initDevLog(path.join(runtimeProfile.logsPath, "aiden-dev.log"));
         logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
       }
       // Reconcile every persisted active child at the actual restart boundary,
@@ -1051,9 +1055,9 @@ if (!ownsSingleInstanceLock) {
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 
-      // ~/.aiden/config.json is the user's to edit, so pick hand-edits up
-      // without a restart. Registered after whenReady because powerMonitor is
-      // only usable once the app is ready.
+      // The active profile's portable config is user-editable, so pick
+      // hand-edits up without a restart. Registered after whenReady because
+      // powerMonitor is only usable once the app is ready.
       app.on("browser-window-focus", () => void portableConfigWatcher.refresh());
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 

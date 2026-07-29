@@ -4,6 +4,7 @@ import electronUpdater from "electron-updater";
 
 import { app, dialog, logger } from "../platform.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
+import { currentRuntimeProfile } from "../runtime-profile.js";
 import { shouldEnableAppUpdates } from "./app-updater-core.js";
 
 const INITIAL_CHECK_DELAY_MS = 15_000;
@@ -14,6 +15,7 @@ function updaterEnabled(): boolean {
   return shouldEnableAppUpdates({
     isPackaged: isPackagedRuntime(),
     platform: process.platform,
+    runtimeProfile: currentRuntimeProfile().id,
     updateConfigExists: existsSync(path.join(process.resourcesPath, "app-update.yml")),
   });
 }

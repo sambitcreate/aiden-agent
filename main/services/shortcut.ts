@@ -3,6 +3,7 @@
 
 import { globalShortcut, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
+import { currentRuntimeProfile } from "../runtime-profile.js";
 import type { AppSettings } from "./types.js";
 import {
   COMMANDS,
@@ -78,9 +79,10 @@ function globalStatuses(
   settings: AppSettings,
   bindings = effectiveBindings(settings.keybindings, settings),
 ): GlobalShortcutStatus[] {
+  const globalShortcutsEnabled = currentRuntimeProfile().globalShortcutsEnabled;
   return COMMANDS.filter((definition) => definition.global).map((definition) => {
     const binding = bindings[definition.id];
-    if (!binding) {
+    if (!binding || !globalShortcutsEnabled) {
       return { commandId: definition.id, binding, state: "disabled" };
     }
     const active = registered.get(definition.id)?.accelerator === binding;
@@ -118,7 +120,9 @@ async function applyNow(settings: AppSettings): Promise<KeybindingSnapshot> {
   const desired = COMMANDS.filter((definition) => definition.global).map((definition) => ({
     commandId: definition.id,
     accelerator:
-      !recordingSuspended && handlers.has(definition.id)
+      currentRuntimeProfile().globalShortcutsEnabled &&
+      !recordingSuspended &&
+      handlers.has(definition.id)
         ? bindings[definition.id]
         : null,
     handler: handlers.get(definition.id) ?? (() => undefined),
