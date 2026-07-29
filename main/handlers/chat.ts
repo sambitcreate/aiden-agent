@@ -7,6 +7,7 @@ import { isExplicitUserStop } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
+import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { parseParams } from "./chat-params.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
@@ -19,23 +20,39 @@ function newStreamId(): string {
 export function registerChatGenerationHandlers(): void {
   // The renderer supplies a streamId so it can subscribe to owner-bound deltas
   // before generation begins (no dropped opening tokens).
-  ipcMain.handle("chat:start", async (event, streamId: unknown, params: unknown) => {
-    const owner = chatGenerationOwner(event);
-    const id = typeof streamId === "string" && streamId ? streamId : newStreamId();
-    const parsed = parseParams(params);
-    await startGenerationAndMaybeTitle(
-      {
-        start: (streamId, params) => llmClient.start(streamId, params, owner),
-        startTitle: (input) => chatTitleService.startForFirstTurn(input),
-      },
-      id,
-      parsed,
-    );
-    return { streamId: id };
-  });
+  ipcMain.handle(
+    "chat:start",
+    async (event, streamId: unknown, params: unknown, messageTurnId: unknown) => {
+      const owner = chatGenerationOwner(event);
+      const id = streamId === undefined ? newStreamId() : streamId;
+      if (!isSafeSubagentIdentifier(id)) {
+        throw new Error("Invalid chat stream identifier.");
+      }
+      if (!isSafeSubagentIdentifier(messageTurnId)) {
+        throw new Error("Invalid chat message turn identifier.");
+      }
+      const parsed = parseParams(params);
+      await startGenerationAndMaybeTitle(
+        {
+          start: (streamId, params) =>
+            llmClient.start(streamId, params, owner, {
+              allowSubagents: true,
+              usageSource: "chat",
+              turnId: messageTurnId,
+            }),
+          startTitle: (input) => chatTitleService.startForFirstTurn(input),
+        },
+        id,
+        parsed,
+      );
+      return { streamId: id };
+    },
+  );
 
   ipcMain.handle("chat:cancel", async (event, streamId: unknown, origin: unknown) => {
-    if (typeof streamId !== "string") return;
+    if (!isSafeSubagentIdentifier(streamId)) {
+      throw new Error("Invalid chat stream identifier.");
+    }
     const owner = chatGenerationOwner(event);
     if (llmClient.cancel(streamId, owner.documentId) && isExplicitUserStop(origin)) {
       // This structured lifecycle event is intentionally content-free. Besides

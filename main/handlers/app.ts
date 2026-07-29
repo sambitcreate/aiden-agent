@@ -17,6 +17,7 @@
  */
 
 import { app, logger } from "../platform.js";
+import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 
 // App handlers - these are the methods your app provides to the frontend
 export const appHandlers = {
@@ -27,6 +28,9 @@ export const appHandlers = {
       name: app.getName(),
       version: app.getVersion(),
       environment: process.env.NODE_ENV || "production",
+      capabilities: {
+        subagents: subagentsEnabled(),
+      },
     };
   },
 

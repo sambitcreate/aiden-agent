@@ -5,7 +5,12 @@ import type {
   UsageTokenBreakdown,
 } from "./types.js";
 
-export type UsageRequestSource = "chat" | "chat-title" | "voice-transcription" | "scheduled";
+export type UsageRequestSource =
+  | "chat"
+  | "chat-title"
+  | "voice-transcription"
+  | "scheduled"
+  | "subagent";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
 
@@ -69,6 +74,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "chat-title",
   "voice-transcription",
   "scheduled",
+  "subagent",
 ]);
 
 export function emptyUsageTokens(): UsageTokenBreakdown {

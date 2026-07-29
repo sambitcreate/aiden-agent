@@ -22,6 +22,7 @@ import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
+import { registerSubagentHandlers } from "./subagents.js";
 
 import { ipcMain, logger } from "../platform.js";
 import { writeDevLog } from "../services/dev-log.js";
@@ -61,6 +62,7 @@ export function registerHandlers(): void {
   registerScheduledTaskHandlers();
   registerAssistantHandlers();
   registerShortcutHandlers();
+  registerSubagentHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

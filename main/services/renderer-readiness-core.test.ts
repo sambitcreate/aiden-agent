@@ -32,7 +32,7 @@ test("main invalidates readiness and reloads after the renderer process exits", 
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
   assert.match(
     main,
-    /webContents\.on\("render-process-gone", \(\) => \{\s*rendererReadiness\.reset\(\)/u,
+    /webContents\.on\(\s*"render-process-gone",\s*\(\) => \{\s*rendererReadiness\.reset\(\)/u,
   );
   assert.match(
     main,
