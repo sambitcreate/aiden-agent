@@ -3,6 +3,11 @@ import path from "node:path";
 import electronUpdater from "electron-updater";
 
 import { app, dialog, logger } from "../platform.js";
+import {
+  IDLE_APP_UPDATE_SNAPSHOT,
+  normalizeAppUpdateVersion,
+  type AppUpdateSnapshot,
+} from "../../renderer/shared/app-update.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import { shouldEnableAppUpdates } from "./app-updater-core.js";
@@ -33,7 +38,44 @@ export class AppUpdateService {
   private initialTimer: NodeJS.Timeout | null = null;
   private intervalTimer: NodeJS.Timeout | null = null;
   private checkPromise: Promise<void> | null = null;
+  private downloadedVersion: string | null = null;
+  private readonly stateListeners = new Set<(snapshot: AppUpdateSnapshot) => void>();
   private started = false;
+
+  snapshot(): AppUpdateSnapshot {
+    return this.downloadedVersion
+      ? {
+          status: "ready",
+          version: this.downloadedVersion,
+        }
+      : IDLE_APP_UPDATE_SNAPSHOT;
+  }
+
+  subscribe(listener: (snapshot: AppUpdateSnapshot) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  announceSnapshot(): void {
+    const snapshot = this.snapshot();
+    for (const listener of this.stateListeners) listener(snapshot);
+  }
+
+  canInstallDownloadedUpdate(): boolean {
+    return this.downloadedVersion !== null;
+  }
+
+  installDownloadedUpdateAndRestart(): boolean {
+    if (!this.canInstallDownloadedUpdate()) return false;
+    try {
+      autoUpdater.autoRunAppAfterInstall = true;
+      autoUpdater.quitAndInstall(false, true);
+      return true;
+    } catch (error) {
+      logger.error("updater", "Could not launch the downloaded update installer", error);
+      return false;
+    }
+  }
 
   start(): void {
     if (this.started || !updaterEnabled()) return;
@@ -45,7 +87,16 @@ export class AppUpdateService {
     autoUpdater.allowPrerelease = false;
     autoUpdater.fullChangelog = false;
     autoUpdater.on("update-downloaded", ({ version }) => {
-      logger.info("updater", "Update downloaded and will install after Aiden exits", { version });
+      const normalizedVersion = normalizeAppUpdateVersion(version);
+      if (!normalizedVersion) {
+        logger.warn("updater", "Downloaded update did not report a safe version string.");
+        return;
+      }
+      this.downloadedVersion = normalizedVersion;
+      logger.info("updater", "Update downloaded and will install after Aiden exits", {
+        version: normalizedVersion,
+      });
+      this.announceSnapshot();
     });
 
     this.initialTimer = setTimeout(() => void this.checkNow(false), INITIAL_CHECK_DELAY_MS);
@@ -68,6 +119,7 @@ export class AppUpdateService {
       }
       return;
     }
+    if (!this.started) this.start();
     if (this.checkPromise) return this.checkPromise;
 
     this.checkPromise = (async () => {
@@ -82,7 +134,8 @@ export class AppUpdateService {
             type: "info",
             title: "Downloading update",
             message: `Aiden Agent ${result.updateInfo.version} is downloading in the background.`,
-            detail: "Aiden will install it after you quit normally. Your open work will not be interrupted.",
+            detail:
+              "Aiden will install it after you quit normally. Your open work will not be interrupted.",
             buttons: ["OK"],
             defaultId: 0,
             noLink: true,
