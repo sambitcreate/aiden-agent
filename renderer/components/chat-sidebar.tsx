@@ -42,7 +42,7 @@ import {
   SquarePen,
   UserRound,
 } from "lucide-react";
-import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
+import { appUpdatesApi, chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import { truncatePathMiddle } from "../lib/truncate-path";
 import {
   CHAT_TITLE_FADE_OUT_MS,
@@ -63,10 +63,150 @@ import { useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
+import {
+  IDLE_APP_UPDATE_SNAPSHOT,
+  type AppUpdateRestartResult,
+  type AppUpdateSnapshot,
+} from "../shared/app-update";
+
+const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
+/** Must match aiden-app-update-banner-out in styles.css. */
+const APP_UPDATE_BANNER_EXIT_MS = 120;
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
   titleReveal?: ChatTitleRevealEvent | null;
+}
+
+function updateRestartError(result: AppUpdateRestartResult): string | null {
+  if (result.accepted) return null;
+  switch (result.reason) {
+    case "busy":
+      return "Aiden is already preparing another window action.";
+    case "not-ready":
+      return "That update is no longer ready. Check for updates again.";
+    case "unavailable":
+      return "Aiden could not restart into the update.";
+  }
+}
+
+function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
+  const [snapshot, setSnapshot] = React.useState<AppUpdateSnapshot>(IDLE_APP_UPDATE_SNAPSHOT);
+  const [dismissedVersion, setDismissedVersion] = React.useState<string | null>(null);
+  const [restarting, setRestarting] = React.useState(false);
+  const [present, setPresent] = React.useState(false);
+  const [displayedVersion, setDisplayedVersion] = React.useState<string | null>(null);
+  const titleId = React.useId();
+  const readyVersion = snapshot.status === "ready" ? snapshot.version : null;
+  const open = readyVersion !== null && dismissedVersion !== readyVersion;
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const applySnapshot = (next: AppUpdateSnapshot) => {
+      if (cancelled) return;
+      setSnapshot(next);
+      setRestarting(false);
+    };
+    const unsubscribe = appUpdatesApi.onStateChanged(applySnapshot);
+    void appUpdatesApi
+      .state()
+      .then(applySnapshot)
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  // Keep the banner mounted through its exit animation, matching Aiden's
+  // environment summary and assistant dock presence primitives.
+  React.useLayoutEffect(() => {
+    if (open && readyVersion) {
+      setDisplayedVersion(readyVersion);
+      setPresent(true);
+      return;
+    }
+    if (!present) return;
+    if (document.documentElement.dataset.reduceMotion === "true") {
+      setPresent(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setPresent(false), APP_UPDATE_BANNER_EXIT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open, present, readyVersion]);
+
+  const restart = async () => {
+    if (!open) return;
+    if (blockedReason) {
+      toast.info(blockedReason);
+      return;
+    }
+    setRestarting(true);
+    try {
+      const result = await appUpdatesApi.restart();
+      const message = updateRestartError(result);
+      if (message) {
+        setRestarting(false);
+        toast.error(message);
+      }
+    } catch (error) {
+      setRestarting(false);
+      toast.error(error instanceof Error ? error.message : "Aiden could not restart.");
+    }
+  };
+
+  if (!present || !displayedVersion) return null;
+
+  return (
+    <section
+      aria-labelledby={titleId}
+      aria-hidden={!open ? true : undefined}
+      className="app-update-banner mb-2 origin-bottom rounded-card bg-control/70 px-3 py-3 text-primary"
+      data-state={open ? "open" : "closed"}
+      inert={!open ? true : undefined}
+    >
+      <div className="flex items-start gap-2.5">
+        <img src={AIDEN_MARK_URL} alt="" className="size-8 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-small-strong">
+            Update ready
+          </h2>
+          <p className="mt-0.5 truncate text-small text-secondary">
+            Aiden Agent {displayedVersion}
+          </p>
+        </div>
+      </div>
+      <p className="mt-2 text-small text-secondary">
+        {blockedReason ?? "Restart to finish installing."}
+      </p>
+      <div className="mt-2 flex items-center justify-end gap-1">
+        <Button
+          size="small"
+          variant="transparent"
+          disabled={!open || restarting}
+          onClick={() => setDismissedVersion(displayedVersion)}
+        >
+          Later
+        </Button>
+        <Button
+          size="small"
+          variant="accent"
+          disabled={!open || restarting || Boolean(blockedReason)}
+          title={blockedReason}
+          onClick={() => void restart()}
+        >
+          {restarting ? (
+            <>
+              <Loader2 className="animate-spin" aria-hidden="true" />
+              Restarting…
+            </>
+          ) : (
+            "Restart now"
+          )}
+        </Button>
+      </div>
+    </section>
+  );
 }
 
 function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string; title: string }) {
@@ -216,6 +356,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
+  const updateRestartBlockedReason = environmentPanel.gitOperationBusy
+    ? "Wait for the current Git operation to finish before restarting."
+    : environmentPanel.editorState.saving
+      ? "Wait for the open file to finish saving before restarting."
+      : undefined;
   const openChat = React.useCallback(
     (chatId: string | undefined) => {
       if (!chatId) return;
@@ -518,6 +663,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         actions={<SplitView.SidebarToggle />}
         footer={
           <SidebarFooter>
+            <UpdateReadyBanner blockedReason={updateRestartBlockedReason} />
             <div className="flex flex-col gap-0.5" title={settingsBlockedReason}>
               <SidebarListItem
                 icon={<UserRound />}
