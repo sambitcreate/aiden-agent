@@ -22,11 +22,14 @@ export function createSubagentTool(supervisor: SubagentSupervisor): AgentTool {
         tasks: Type.Array(
           Type.Object(
             {
-              role: Type.Union([
-                Type.Literal("scout"),
-                Type.Literal("planner"),
-                Type.Literal("reviewer"),
-              ]),
+              // A flat enum is more reliably followed by OpenAI-compatible
+              // providers than TypeBox's equivalent `anyOf` + `const` union.
+              // `parseSubagentToolRequest` still independently enforces the
+              // exact role allowlist before any child can launch.
+              role: Type.String({
+                enum: ["scout", "planner", "reviewer"],
+                description: "Exactly one of: scout, planner, reviewer.",
+              }),
               label: Type.String({
                 minLength: 1,
                 maxLength: MAX_SUBAGENT_LABEL_CHARS,
