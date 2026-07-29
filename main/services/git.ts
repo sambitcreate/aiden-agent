@@ -9,6 +9,13 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import type { GitBranches, GitInfo, GitWorktree } from "./types.js";
+import {
+  finalizeManagedWorktreeRemovalManifest,
+  managedWorktreeRemovalManifestPresent,
+  ManagedWorktreeRemoverError,
+  removeManagedWorktreeDirectory,
+  type ManagedWorktreeDirectoryIdentity,
+} from "./managed-worktree-remover.js";
 
 const DEFAULT_READ_TIMEOUT_MS = 4_000;
 const DEFAULT_MUTATION_TIMEOUT_MS = 20_000;
@@ -19,6 +26,9 @@ const DEFAULT_CACHE_TTL_MS = 1_000;
 const DEFAULT_CACHE_ENTRIES = 64;
 const SNAPSHOT_CACHE_ENTRIES = 4_096;
 const KILL_GRACE_MS = 750;
+const WORKTREE_OWNER_MARKER = "aiden-owner";
+const WORKTREE_OWNER_TOKEN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const GIT_ROUTING_ENV = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_CEILING_DIRECTORIES",
@@ -51,6 +61,16 @@ export class GitServiceError extends Error {
   ) {
     super(message);
     this.name = "GitServiceError";
+  }
+}
+
+export class GitManagedWorktreeDeleteError extends GitServiceError {
+  constructor(
+    error: GitServiceError,
+    readonly destructiveMutationAttempted: boolean,
+  ) {
+    super(error.code, error.message, error);
+    this.name = "GitManagedWorktreeDeleteError";
   }
 }
 
@@ -116,6 +136,9 @@ export interface GitServiceOptions {
   pushTimeoutMs?: number;
   readTimeoutMs?: number;
   snapshotMaxBytes?: number;
+  worktreeDirectoryRemover?: (identity: ManagedWorktreeDirectoryIdentity) => Promise<void>;
+  worktreeRemovalManifestFinalizer?: (targetPath: string, expectedDigest: string) => Promise<void>;
+  worktreeRemovalManifestInspector?: (targetPath: string) => Promise<boolean>;
 }
 
 interface ParsedStatus {
@@ -123,6 +146,7 @@ interface ParsedStatus {
   detached: boolean;
   unborn: boolean;
   uncommitted: number;
+  ignored: number;
   upstream?: string;
   ahead: number;
   behind: number;
@@ -159,13 +183,57 @@ interface GitHeadGuard {
   refLockPath: string;
 }
 
+interface GitWorktreeAdminIdentity {
+  device: number;
+  gitdirContents: string;
+  inode: number;
+}
+
+interface GitWorktreeRemovalJournal {
+  version: 3;
+  phase:
+    | "prepared"
+    | "quarantined"
+    | "checkout_cleanup_started"
+    | "checkout_complete"
+    | "admin_cleanup_started"
+    | "needs_review"
+    | "filesystem_complete";
+  adminDevice: number;
+  adminGitdirContents: string;
+  adminInode: number;
+  adminManifestDigest: string | null;
+  branch: string;
+  checkoutDevice: number;
+  checkoutInode: number;
+  checkoutManifestDigest: string | null;
+  checkoutPath: string;
+  checkoutAuthorization: string;
+  checkoutQuarantine: string;
+  createdFromHead: string;
+  gitDir: string;
+  gitDirAuthorization: string;
+  gitDirQuarantine: string;
+  ownershipToken: string;
+  repositoryPath: string;
+}
+
 export interface GitCreatedWorktree extends GitWorktree {
   branch: string;
   /** The path Aiden should authorize; preserves a nested source-workspace scope. */
   workspacePath: string;
   repositoryPath: string;
+  worktreeGitDir: string;
+  ownershipToken: string;
+  worktreeDevice: number;
+  worktreeInode: number;
   createdFromHead: string;
 }
+
+type GitWorktreeRollbackIdentity = Pick<
+  GitCreatedWorktree,
+  "worktreeGitDir" | "ownershipToken" | "worktreeDevice" | "worktreeInode"
+>;
 
 export interface GitDeleteWorktreeResult {
   branchDeleted: boolean;
@@ -353,13 +421,19 @@ function gitCommandConfigEnvironment(options: GitRunOptions): NodeJS.ProcessEnv 
       [`url.${options.frozenRemote.endpoint}.pushInsteadOf`, placeholder],
     );
     if (options.frozenRemote.receivePack !== undefined) {
-      entries.push([`remote.${options.frozenRemoteAlias}.receivepack`, options.frozenRemote.receivePack]);
+      entries.push([
+        `remote.${options.frozenRemoteAlias}.receivepack`,
+        options.frozenRemote.receivePack,
+      ]);
     }
     if (options.frozenRemote.proxy !== undefined) {
       entries.push([`remote.${options.frozenRemoteAlias}.proxy`, options.frozenRemote.proxy]);
     }
     if (options.frozenRemote.proxyAuthMethod !== undefined) {
-      entries.push([`remote.${options.frozenRemoteAlias}.proxyAuthMethod`, options.frozenRemote.proxyAuthMethod]);
+      entries.push([
+        `remote.${options.frozenRemoteAlias}.proxyAuthMethod`,
+        options.frozenRemote.proxyAuthMethod,
+      ]);
     }
   }
   if (options.prePushProxy) entries.push(["core.hooksPath", options.prePushProxy.hooksPath]);
@@ -382,6 +456,7 @@ export function parseGitStatus(raw: string): ParsedStatus {
   let ahead = 0;
   let behind = 0;
   let uncommitted = 0;
+  let ignored = 0;
 
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
@@ -414,6 +489,10 @@ export function parseGitStatus(raw: string): ParsedStatus {
       uncommitted += 1;
       continue;
     }
+    if (record.startsWith("! ")) {
+      ignored += 1;
+      continue;
+    }
     if (record.startsWith("2 ")) {
       // Rename/copy records carry their original path as the next NUL record.
       uncommitted += 1;
@@ -421,7 +500,7 @@ export function parseGitStatus(raw: string): ParsedStatus {
     }
   }
 
-  return { branch, detached, unborn, uncommitted, upstream, ahead, behind };
+  return { branch, detached, unborn, uncommitted, ignored, upstream, ahead, behind };
 }
 
 function parseRefList(raw: string): string[] {
@@ -483,7 +562,9 @@ export function parseGitReviewStatus(raw: string): GitReviewFile[] {
       unstaged: xy[1] !== ".",
     });
   }
-  return files.sort((left, right) => left.path.localeCompare(right.path, undefined, { numeric: true }));
+  return files.sort((left, right) =>
+    left.path.localeCompare(right.path, undefined, { numeric: true }),
+  );
 }
 
 interface GitNumstat {
@@ -542,17 +623,18 @@ export function parseGitNameStatus(raw: string): GitReviewFile[] {
       filePath = records[index + 1] || firstPath;
       index += 1;
     }
-    const status: GitReviewFileStatus = kind === "A"
-      ? "added"
-      : kind === "D"
-        ? "deleted"
-        : kind === "R"
-          ? "renamed"
-          : kind === "C"
-            ? "copied"
-            : kind === "U"
-              ? "conflicted"
-              : "modified";
+    const status: GitReviewFileStatus =
+      kind === "A"
+        ? "added"
+        : kind === "D"
+          ? "deleted"
+          : kind === "R"
+            ? "renamed"
+            : kind === "C"
+              ? "copied"
+              : kind === "U"
+                ? "conflicted"
+                : "modified";
     files.push({
       path: filePath,
       ...(previousPath ? { previousPath } : {}),
@@ -561,7 +643,9 @@ export function parseGitNameStatus(raw: string): GitReviewFile[] {
       unstaged: false,
     });
   }
-  return files.sort((left, right) => left.path.localeCompare(right.path, undefined, { numeric: true }));
+  return files.sort((left, right) =>
+    left.path.localeCompare(right.path, undefined, { numeric: true }),
+  );
 }
 
 function lexicalWorkspacePath(root: string, relativePath: string): string {
@@ -586,21 +670,21 @@ function gitDiffHeaderPath(prefix: "a" | "b", value: string): string {
   const fullPath = `${prefix}/${value}`;
   const needsQuotes = [...fullPath].some((character) => {
     const code = character.codePointAt(0) ?? 0;
-    return /\s/u.test(character) || character === "\"" || character === "\\" || code < 32 || code === 127;
+    return (
+      /\s/u.test(character) || character === '"' || character === "\\" || code < 32 || code === 127
+    );
   });
   if (!needsQuotes) return fullPath;
   let escaped = "";
   for (const character of fullPath) {
     if (character === "\\") escaped += "\\\\";
-    else if (character === "\"") escaped += "\\\"";
+    else if (character === '"') escaped += '\\"';
     else if (character === "\n") escaped += "\\n";
     else if (character === "\r") escaped += "\\r";
     else if (character === "\t") escaped += "\\t";
     else {
       const code = character.codePointAt(0) ?? 0;
-      escaped += code < 32 || code === 127
-        ? `\\${code.toString(8).padStart(3, "0")}`
-        : character;
+      escaped += code < 32 || code === 127 ? `\\${code.toString(8).padStart(3, "0")}` : character;
     }
   }
   return `"${escaped}"`;
@@ -696,6 +780,14 @@ export class GitService {
   private readonly pushTimeoutMs: number;
   private readonly cacheTtlMs: number;
   private readonly cacheEntries: number;
+  private readonly worktreeDirectoryRemover: (
+    identity: ManagedWorktreeDirectoryIdentity,
+  ) => Promise<void>;
+  private readonly worktreeRemovalManifestFinalizer: (
+    targetPath: string,
+    expectedDigest: string,
+  ) => Promise<void>;
+  private readonly worktreeRemovalManifestInspector: (targetPath: string) => Promise<boolean>;
   private readonly infoCache = new Map<string, CacheEntry<GitInfo>>();
   private readonly branchCache = new Map<string, CacheEntry<GitBranches>>();
   private readonly mutations = new Map<string, Promise<void>>();
@@ -711,13 +803,20 @@ export class GitService {
     this.pushTimeoutMs = options.pushTimeoutMs ?? DEFAULT_PUSH_TIMEOUT_MS;
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
     this.cacheEntries = options.cacheEntries ?? DEFAULT_CACHE_ENTRIES;
+    this.worktreeDirectoryRemover =
+      options.worktreeDirectoryRemover ?? removeManagedWorktreeDirectory;
+    this.worktreeRemovalManifestFinalizer =
+      options.worktreeRemovalManifestFinalizer ?? finalizeManagedWorktreeRemovalManifest;
+    this.worktreeRemovalManifestInspector =
+      options.worktreeRemovalManifestInspector ?? managedWorktreeRemovalManifestPresent;
   }
 
   private run(cwd: string, args: string[], options: GitRunOptions = {}): Promise<GitCommandResult> {
     if (options.signal?.aborted) {
       return Promise.reject(new GitServiceError("aborted", "Git operation was cancelled."));
     }
-    const timeoutMs = options.timeoutMs ?? (options.mutation ? this.mutationTimeoutMs : this.readTimeoutMs);
+    const timeoutMs =
+      options.timeoutMs ?? (options.mutation ? this.mutationTimeoutMs : this.readTimeoutMs);
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
       try {
@@ -812,15 +911,30 @@ export class GitService {
           return;
         }
         if (termination === "timeout") {
-          reject(new GitServiceError("timeout", `Git did not finish within ${Math.ceil(timeoutMs / 1_000)} seconds.`));
+          reject(
+            new GitServiceError(
+              "timeout",
+              `Git did not finish within ${Math.ceil(timeoutMs / 1_000)} seconds.`,
+            ),
+          );
           return;
         }
         if (termination === "output_limit") {
           if (options.allowTruncatedOutput) {
-            resolve({ stdout: stdoutText, stderr: stderrText, exitCode: 0, truncated: true });
+            resolve({
+              stdout: stdoutText,
+              stderr: stderrText,
+              exitCode: 0,
+              truncated: true,
+            });
             return;
           }
-          reject(new GitServiceError("output_limit", "Git produced more output than Aiden can safely process."));
+          reject(
+            new GitServiceError(
+              "output_limit",
+              "Git produced more output than Aiden can safely process.",
+            ),
+          );
           return;
         }
         const exitCode = code ?? 1;
@@ -828,28 +942,42 @@ export class GitService {
           resolve({ stdout: stdoutText, stderr: stderrText, exitCode });
           return;
         }
-        const detail = stderrText || stdoutText || `Git exited with code ${exitCode}${signal ? ` (${signal})` : ""}.`;
+        const detail =
+          stderrText ||
+          stdoutText ||
+          `Git exited with code ${exitCode}${signal ? ` (${signal})` : ""}.`;
         reject(new GitServiceError("command_failed", publicGitMessage(detail, cwd)));
       });
     });
   }
 
-  private async repository(cwd: string): Promise<GitRepository | null> {
+  private async repository(cwd: string, signal?: AbortSignal): Promise<GitRepository | null> {
+    if (signal?.aborted) {
+      throw new GitServiceError("aborted", "Git operation was cancelled.");
+    }
     let canonicalCwd: string;
     try {
       canonicalCwd = await fs.realpath(cwd);
     } catch {
       return null;
     }
-    const inside = await this.run(canonicalCwd, ["rev-parse", "--is-inside-work-tree"], { allowExitCodes: [128] });
+    const inside = await this.run(canonicalCwd, ["rev-parse", "--is-inside-work-tree"], {
+      allowExitCodes: [128],
+      signal,
+    });
     if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") return null;
     const [topLevelResult, commonDirResult] = await Promise.all([
-      this.run(canonicalCwd, ["rev-parse", "--show-toplevel"]),
-      this.run(canonicalCwd, ["rev-parse", "--git-common-dir"]),
+      this.run(canonicalCwd, ["rev-parse", "--show-toplevel"], { signal }),
+      this.run(canonicalCwd, ["rev-parse", "--git-common-dir"], { signal }),
     ]);
+    if (signal?.aborted) {
+      throw new GitServiceError("aborted", "Git operation was cancelled.");
+    }
     const topLevel = await fs.realpath(topLevelResult.stdout.trimEnd());
     const commonPath = commonDirResult.stdout.trimEnd();
-    const commonDir = await fs.realpath(path.isAbsolute(commonPath) ? commonPath : path.resolve(canonicalCwd, commonPath));
+    const commonDir = await fs.realpath(
+      path.isAbsolute(commonPath) ? commonPath : path.resolve(canonicalCwd, commonPath),
+    );
     return { cwd: canonicalCwd, topLevel, commonDir };
   }
 
@@ -870,8 +998,17 @@ export class GitService {
     return entry.value;
   }
 
-  private setCached<T>(cache: Map<string, CacheEntry<T>>, key: string, commonDir: string, value: T): void {
-    cache.set(key, { commonDir, expiresAt: Date.now() + this.cacheTtlMs, value });
+  private setCached<T>(
+    cache: Map<string, CacheEntry<T>>,
+    key: string,
+    commonDir: string,
+    value: T,
+  ): void {
+    cache.set(key, {
+      commonDir,
+      expiresAt: Date.now() + this.cacheTtlMs,
+      value,
+    });
     while (cache.size > this.cacheEntries) {
       const oldest = cache.keys().next().value as string | undefined;
       if (!oldest) break;
@@ -880,8 +1017,10 @@ export class GitService {
   }
 
   private invalidate(commonDir: string): void {
-    for (const [key, entry] of this.infoCache) if (entry.commonDir === commonDir) this.infoCache.delete(key);
-    for (const [key, entry] of this.branchCache) if (entry.commonDir === commonDir) this.branchCache.delete(key);
+    for (const [key, entry] of this.infoCache)
+      if (entry.commonDir === commonDir) this.infoCache.delete(key);
+    for (const [key, entry] of this.branchCache)
+      if (entry.commonDir === commonDir) this.branchCache.delete(key);
   }
 
   private bumpEpoch(commonDir: string): void {
@@ -913,13 +1052,26 @@ export class GitService {
     return result;
   }
 
-  private async stableRead<T>(repo: GitRepository, operation: () => Promise<T>): Promise<T> {
+  private async stableRead<T>(
+    repo: GitRepository,
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
     for (;;) {
+      if (signal?.aborted) {
+        throw new GitServiceError("aborted", "Git operation was cancelled.");
+      }
       const active = this.mutations.get(repo.commonDir);
       if (active) await active;
       const epoch = this.mutationEpochs.get(repo.commonDir) ?? 0;
       const value = await operation();
-      if (epoch === (this.mutationEpochs.get(repo.commonDir) ?? 0) && !this.mutations.has(repo.commonDir)) {
+      if (signal?.aborted) {
+        throw new GitServiceError("aborted", "Git operation was cancelled.");
+      }
+      if (
+        epoch === (this.mutationEpochs.get(repo.commonDir) ?? 0) &&
+        !this.mutations.has(repo.commonDir)
+      ) {
         return value;
       }
       // A read can finish after the mutation's final invalidation and populate
@@ -930,18 +1082,26 @@ export class GitService {
   }
 
   private async readRemoteRefs(repo: GitRepository, signal?: AbortSignal): Promise<RemoteRefs> {
-    const result = await this.run(repo.cwd, [
-      "for-each-ref",
-      "--sort=-committerdate",
-      "--format=%(refname)%00%(symref)%00",
-      "refs/remotes",
-    ], { signal });
+    const result = await this.run(
+      repo.cwd,
+      [
+        "for-each-ref",
+        "--sort=-committerdate",
+        "--format=%(refname)%00%(symref)%00",
+        "refs/remotes",
+      ],
+      { signal },
+    );
     return parseRemoteRefs(result.stdout);
   }
 
   private async status(repo: GitRepository, signal?: AbortSignal): Promise<GitInfo> {
     const [raw, remotesResult, remoteRefs] = await Promise.all([
-      this.run(repo.cwd, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"], { signal }),
+      this.run(
+        repo.cwd,
+        ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"],
+        { signal },
+      ),
       this.run(repo.cwd, ["remote"], { signal }),
       this.readRemoteRefs(repo, signal),
     ]);
@@ -961,41 +1121,59 @@ export class GitService {
     };
   }
 
-  async info(cwd: string): Promise<GitInfo> {
-    const repo = await this.repository(cwd);
+  async info(cwd: string, signal?: AbortSignal): Promise<GitInfo> {
+    const repo = await this.repository(cwd, signal);
     if (!repo) return { isRepo: false };
-    return this.stableRead(repo, async () => {
-      const cached = this.getCached(this.infoCache, repo.cwd);
-      if (cached) return cached;
-      const value = await this.status(repo);
-      this.setCached(this.infoCache, repo.cwd, repo.commonDir, value);
-      return value;
-    });
+    return this.stableRead(
+      repo,
+      async () => {
+        const cached = this.getCached(this.infoCache, repo.cwd);
+        if (cached) return cached;
+        const value = await this.status(repo, signal);
+        this.setCached(this.infoCache, repo.cwd, repo.commonDir, value);
+        return value;
+      },
+      signal,
+    );
   }
 
-  async branches(cwd: string): Promise<GitBranches> {
-    const repo = await this.repository(cwd);
-    if (!repo) return { isRepo: false, branches: [], remoteBranches: [], uncommitted: 0 };
-    return this.stableRead(repo, async () => {
-      const cached = this.getCached(this.branchCache, repo.cwd);
-      if (cached) return cached;
-      const [info, localResult, remoteRefs] = await Promise.all([
-        this.status(repo),
-        this.run(repo.cwd, ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)%00", "refs/heads"]),
-        this.readRemoteRefs(repo),
-      ]);
-      const local = parseRefList(localResult.stdout);
-      if (info.unborn && info.branch && !local.includes(info.branch)) local.unshift(info.branch);
-      const value: GitBranches = {
-        ...info,
-        current: info.branch,
-        branches: local,
-        remoteBranches: remoteRefs.branches,
-        uncommitted: info.uncommitted ?? 0,
+  async branches(cwd: string, signal?: AbortSignal): Promise<GitBranches> {
+    const repo = await this.repository(cwd, signal);
+    if (!repo)
+      return {
+        isRepo: false,
+        branches: [],
+        remoteBranches: [],
+        uncommitted: 0,
       };
-      this.setCached(this.branchCache, repo.cwd, repo.commonDir, value);
-      return value;
-    });
+    return this.stableRead(
+      repo,
+      async () => {
+        const cached = this.getCached(this.branchCache, repo.cwd);
+        if (cached) return cached;
+        const [info, localResult, remoteRefs] = await Promise.all([
+          this.status(repo, signal),
+          this.run(
+            repo.cwd,
+            ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)%00", "refs/heads"],
+            { signal },
+          ),
+          this.readRemoteRefs(repo, signal),
+        ]);
+        const local = parseRefList(localResult.stdout);
+        if (info.unborn && info.branch && !local.includes(info.branch)) local.unshift(info.branch);
+        const value: GitBranches = {
+          ...info,
+          current: info.branch,
+          branches: local,
+          remoteBranches: remoteRefs.branches,
+          uncommitted: info.uncommitted ?? 0,
+        };
+        this.setCached(this.branchCache, repo.cwd, repo.commonDir, value);
+        return value;
+      },
+      signal,
+    );
   }
 
   private async reviewSnapshot(
@@ -1030,13 +1208,24 @@ export class GitService {
         if (totalBytes + stats.size > this.snapshotMaxBytes) return { complete: false };
         totalBytes += stats.size;
         const cacheKey = `${repo.cwd}\u0000${file.path}`;
-        const signature = [stats.dev, stats.ino, stats.mode, stats.size, stats.mtimeMs, stats.ctimeMs].join(":");
-        let digest = this.snapshotFileCache.get(cacheKey)?.signature === signature
-          ? this.snapshotFileCache.get(cacheKey)?.digest
-          : undefined;
+        const signature = [
+          stats.dev,
+          stats.ino,
+          stats.mode,
+          stats.size,
+          stats.mtimeMs,
+          stats.ctimeMs,
+        ].join(":");
+        let digest =
+          this.snapshotFileCache.get(cacheKey)?.signature === signature
+            ? this.snapshotFileCache.get(cacheKey)?.digest
+            : undefined;
         if (!digest) {
           const contents = await fs.readFile(lexicalPath);
-          if (contents.byteLength !== stats.size || totalBytes - stats.size + contents.byteLength > this.snapshotMaxBytes) {
+          if (
+            contents.byteLength !== stats.size ||
+            totalBytes - stats.size + contents.byteLength > this.snapshotMaxBytes
+          ) {
             return { complete: false };
           }
           digest = createHash("sha256").update(contents).digest("hex");
@@ -1059,11 +1248,10 @@ export class GitService {
   }
 
   private async coreFileMode(repo: GitRepository, signal?: AbortSignal): Promise<boolean> {
-    const result = await this.run(
-      repo.cwd,
-      ["config", "--bool", "--get", "core.fileMode"],
-      { allowExitCodes: [1], signal },
-    );
+    const result = await this.run(repo.cwd, ["config", "--bool", "--get", "core.fileMode"], {
+      allowExitCodes: [1],
+      signal,
+    });
     return result.exitCode !== 0 || result.stdout.trim() !== "false";
   }
 
@@ -1105,7 +1293,17 @@ export class GitService {
     const numstat = hasHead
       ? await this.run(
           repo.cwd,
-          ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "--relative", "HEAD", "--", "."],
+          [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            "-z",
+            "--relative",
+            "HEAD",
+            "--",
+            ".",
+          ],
           { signal },
         )
       : null;
@@ -1138,7 +1336,12 @@ export class GitService {
           }
           const canonicalPath = await fs.realpath(lexicalPath);
           const relative = path.relative(repo.cwd, canonicalPath);
-          if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return;
+          if (
+            relative === ".." ||
+            relative.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relative)
+          )
+            return;
           const fileStats = await fs.stat(canonicalPath);
           if (!fileStats.isFile() || fileStats.size > this.maxBufferBytes) return;
           const buffer = await fs.readFile(canonicalPath);
@@ -1175,7 +1378,8 @@ export class GitService {
     } else if (summary.fileCount === 0) {
       reason = "The working tree is clean.";
     } else if (!snapshot.complete || !snapshot.value) {
-      reason = "These changes are too large or contain an unsupported path for a safe Aiden commit.";
+      reason =
+        "These changes are too large or contain an unsupported path for a safe Aiden commit.";
     } else if (!parsedStatus.branch) {
       reason = "Aiden could not determine the current branch.";
     } else {
@@ -1249,10 +1453,14 @@ export class GitService {
       const canonicalPath = await fs.realpath(lexicalPath);
       const relative = path.relative(repo.cwd, canonicalPath);
       if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-        throw new GitServiceError("command_failed", "The changed file resolves outside the workspace.");
+        throw new GitServiceError(
+          "command_failed",
+          "The changed file resolves outside the workspace.",
+        );
       }
       const stats = await fs.stat(canonicalPath);
-      if (!stats.isFile()) throw new GitServiceError("command_failed", "The changed path is not a file.");
+      if (!stats.isFile())
+        throw new GitServiceError("command_failed", "The changed path is not a file.");
       buffer = await fs.readFile(canonicalPath);
     }
     if (signal?.aborted) throw new GitServiceError("aborted", "Git operation was cancelled.");
@@ -1305,7 +1513,8 @@ export class GitService {
       );
     }
     const file = review.files.find((candidate) => candidate.path === relativePath);
-    if (!file) throw new GitServiceError("stale_snapshot", "That file is no longer part of this review.");
+    if (!file)
+      throw new GitServiceError("stale_snapshot", "That file is no longer part of this review.");
     const head = await this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
       allowExitCodes: [128],
       signal,
@@ -1314,9 +1523,7 @@ export class GitService {
     if (file.status === "untracked" || head.exitCode !== 0) {
       diff = await this.currentFilePatch(repo, relativePath, signal);
     } else {
-      const pathspecs = file.previousPath
-        ? [file.previousPath, file.path]
-        : [file.path];
+      const pathspecs = file.previousPath ? [file.previousPath, file.path] : [file.path];
       pathspecs.forEach((pathspec) => lexicalWorkspacePath(repo.cwd, pathspec));
       const result = await this.run(
         repo.cwd,
@@ -1335,7 +1542,12 @@ export class GitService {
         { signal, allowTruncatedOutput: true },
       );
       const binary = /^(?:Binary files .* differ|GIT binary patch)$/mu.test(result.stdout);
-      diff = { path: relativePath, patch: result.stdout, binary, truncated: result.truncated === true };
+      diff = {
+        path: relativePath,
+        patch: result.stdout,
+        binary,
+        truncated: result.truncated === true,
+      };
     }
     const verifiedReview = await this.inspectReview(repo, signal);
     if (verifiedReview.commit.snapshot !== input.expectedSnapshot) {
@@ -1352,7 +1564,9 @@ export class GitService {
     name: string,
     signal?: AbortSignal,
   ): Promise<string> {
-    const result = await this.run(repo.cwd, ["rev-parse", "--git-path", name], { signal });
+    const result = await this.run(repo.cwd, ["rev-parse", "--git-path", name], {
+      signal,
+    });
     const value = result.stdout.trimEnd();
     if (!value) throw new GitServiceError("command_failed", `Git did not return its ${name} path.`);
     return path.isAbsolute(value) ? value : path.resolve(repo.cwd, value);
@@ -1405,7 +1619,11 @@ export class GitService {
           error,
         );
       }
-      throw new GitServiceError("command_failed", "Aiden could not lock Git's index safely.", error);
+      throw new GitServiceError(
+        "command_failed",
+        "Aiden could not lock Git's index safely.",
+        error,
+      );
     }
     try {
       tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-git-index-"));
@@ -1420,7 +1638,14 @@ export class GitService {
           mutation: true,
         });
       }
-      return { indexPath, lockHandle, lockPath, messagePath, tempDir, tempIndexPath };
+      return {
+        indexPath,
+        lockHandle,
+        lockPath,
+        messagePath,
+        tempDir,
+        tempIndexPath,
+      };
     } catch (error) {
       try {
         await lockHandle.close();
@@ -1430,7 +1655,11 @@ export class GitService {
       await fs.unlink(lockPath).catch(() => undefined);
       if (tempDir) await fs.rm(tempDir, { force: true, recursive: true }).catch(() => undefined);
       if (error instanceof GitServiceError) throw error;
-      throw new GitServiceError("command_failed", "Aiden could not create an isolated Git index.", error);
+      throw new GitServiceError(
+        "command_failed",
+        "Aiden could not create an isolated Git index.",
+        error,
+      );
     }
   }
 
@@ -1524,12 +1753,16 @@ export class GitService {
     gitIndexFile?: string,
     signal?: AbortSignal,
   ): Promise<GitCommandResult> {
-    return this.run(repo.cwd, ["hook", "run", "--ignore-missing", name, ...(args.length ? ["--", ...args] : [])], {
-      gitIndexFile,
-      mutation: true,
-      nonInteractiveCommit: true,
-      signal,
-    });
+    return this.run(
+      repo.cwd,
+      ["hook", "run", "--ignore-missing", name, ...(args.length ? ["--", ...args] : [])],
+      {
+        gitIndexFile,
+        mutation: true,
+        nonInteractiveCommit: true,
+        signal,
+      },
+    );
   }
 
   private async reconcileCommitRef(
@@ -1545,10 +1778,14 @@ export class GitService {
       if (result.exitCode !== 0) return "absent";
       const current = result.stdout.trim();
       if (current === candidateCommit) return "exact";
-      const ancestor = await this.run(repo.cwd, ["merge-base", "--is-ancestor", candidateCommit, current], {
-        allowExitCodes: [1],
-        timeoutMs: this.readTimeoutMs,
-      });
+      const ancestor = await this.run(
+        repo.cwd,
+        ["merge-base", "--is-ancestor", candidateCommit, current],
+        {
+          allowExitCodes: [1],
+          timeoutMs: this.readTimeoutMs,
+        },
+      );
       if (ancestor.exitCode === 0) return "advanced";
       const reflog = await this.run(repo.cwd, ["reflog", "show", "--format=%H", branchRef], {
         allowExitCodes: [1],
@@ -1576,7 +1813,10 @@ export class GitService {
   async commit(cwd: string, input: GitCommitInput, signal?: AbortSignal): Promise<GitCommitResult> {
     const message = input.message.trim();
     if (!message || message.includes("\u0000") || message.length > 10_000) {
-      throw new GitServiceError("invalid_input", "Enter a commit message between 1 and 10,000 characters.");
+      throw new GitServiceError(
+        "invalid_input",
+        "Enter a commit message between 1 and 10,000 characters.",
+      );
     }
     if (input.mode !== "staged" && input.mode !== "all") {
       throw new GitServiceError("invalid_input", "Choose which changes to include in the commit.");
@@ -1607,7 +1847,10 @@ export class GitService {
             : review.summary.conflictedFiles > 0
               ? "conflicted"
               : "command_failed";
-          throw new GitServiceError(code, review.commit.reason ?? "These changes cannot be committed from Aiden.");
+          throw new GitServiceError(
+            code,
+            review.commit.reason ?? "These changes cannot be committed from Aiden.",
+          );
         }
         if (input.mode === "staged" && review.summary.stagedFiles === 0) {
           throw new GitServiceError("invalid_input", "There are no staged changes to commit.");
@@ -1624,7 +1867,10 @@ export class GitService {
           }),
         ]);
         if (symbolicHead.exitCode !== 0 || !symbolicHead.stdout.trim().startsWith("refs/heads/")) {
-          throw new GitServiceError("command_failed", "Switch to a local branch before committing from Aiden.");
+          throw new GitServiceError(
+            "command_failed",
+            "Switch to a local branch before committing from Aiden.",
+          );
         }
         const expectedHead = head.exitCode === 0 ? head.stdout.trim() : undefined;
         branchRef = symbolicHead.stdout.trim();
@@ -1652,7 +1898,10 @@ export class GitService {
           );
         }
 
-        await fs.writeFile(transaction.messagePath, `${message}\n`, { encoding: "utf8", mode: 0o600 });
+        await fs.writeFile(transaction.messagePath, `${message}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
         await this.runHook(repo, "pre-commit", [], transaction.tempIndexPath, signal);
         await this.runHook(
           repo,
@@ -1663,15 +1912,33 @@ export class GitService {
         );
         let finalMessage = (await fs.readFile(transaction.messagePath, "utf8")).trim();
         if (!finalMessage || finalMessage.includes("\u0000") || finalMessage.length > 10_000) {
-          throw new GitServiceError("invalid_input", "The prepared commit message must be between 1 and 10,000 characters.");
+          throw new GitServiceError(
+            "invalid_input",
+            "The prepared commit message must be between 1 and 10,000 characters.",
+          );
         }
-        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, { encoding: "utf8", mode: 0o600 });
-        await this.runHook(repo, "commit-msg", [transaction.messagePath], transaction.tempIndexPath, signal);
+        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+        await this.runHook(
+          repo,
+          "commit-msg",
+          [transaction.messagePath],
+          transaction.tempIndexPath,
+          signal,
+        );
         finalMessage = (await fs.readFile(transaction.messagePath, "utf8")).trim();
         if (!finalMessage || finalMessage.includes("\u0000") || finalMessage.length > 10_000) {
-          throw new GitServiceError("invalid_input", "The commit-message hook produced an invalid commit message.");
+          throw new GitServiceError(
+            "invalid_input",
+            "The commit-message hook produced an invalid commit message.",
+          );
         }
-        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, { encoding: "utf8", mode: 0o600 });
+        await fs.writeFile(transaction.messagePath, `${finalMessage}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
         subject = finalMessage.split(/\r?\n/, 1)[0];
 
         const hookTree = (
@@ -1721,7 +1988,14 @@ export class GitService {
           refUpdateAttempted = true;
           await this.run(
             repo.cwd,
-            ["update-ref", "-m", `commit: ${subject.slice(0, 240)}`, branchRef, candidateCommit, expectedHead ?? ""],
+            [
+              "update-ref",
+              "-m",
+              `commit: ${subject.slice(0, 240)}`,
+              branchRef,
+              candidateCommit,
+              expectedHead ?? "",
+            ],
             { mutation: true, signal },
           );
           refUpdateConfirmed = true;
@@ -1735,15 +2009,28 @@ export class GitService {
               error,
             );
           }
-          warnings.push("The commit completed, but Git stopped responding before Aiden received confirmation.");
+          warnings.push(
+            "The commit completed, but Git stopped responding before Aiden received confirmation.",
+          );
         }
         reconciliation ??= await this.reconcileCommitRef(repo, branchRef, candidateCommit);
         let finalization: IndexFinalization | undefined;
         if (reconciliation === "exact") {
-          finalization = await this.finalizeIndexForHead(repo, branchRef, candidateCommit, transaction);
+          finalization = await this.finalizeIndexForHead(
+            repo,
+            branchRef,
+            candidateCommit,
+            transaction,
+          );
         }
-        if (reconciliation === "absent" || reconciliation === "advanced" || finalization === "branch_moved") {
-          warnings.push("The commit was created, but the checked-out branch moved again. Aiden left the real index unchanged; refresh Review before continuing.");
+        if (
+          reconciliation === "absent" ||
+          reconciliation === "advanced" ||
+          finalization === "branch_moved"
+        ) {
+          warnings.push(
+            "The commit was created, but the checked-out branch moved again. Aiden left the real index unchanged; refresh Review before continuing.",
+          );
         } else if (reconciliation === "unknown") {
           warnings.push(
             refUpdateConfirmed
@@ -1751,11 +2038,17 @@ export class GitService {
               : "The commit outcome could not be verified. Aiden left the real index unchanged; refresh Review before continuing.",
           );
         } else if (finalization === "head_locked") {
-          warnings.push("The commit was created, but another Git process locked HEAD. Aiden left the real index unchanged; refresh Review before continuing.");
+          warnings.push(
+            "The commit was created, but another Git process locked HEAD. Aiden left the real index unchanged; refresh Review before continuing.",
+          );
         } else if (finalization === "failed") {
-          warnings.push("The commit was created, but Aiden could not refresh Git's index. Refresh Review and restage if needed.");
+          warnings.push(
+            "The commit was created, but Aiden could not refresh Git's index. Refresh Review and restage if needed.",
+          );
         } else if (finalization === "head_moved") {
-          warnings.push("The commit was created, but HEAD changed while Aiden finalized Git's index. Refresh Review and restage before continuing.");
+          warnings.push(
+            "The commit was created, but HEAD changed while Aiden finalized Git's index. Refresh Review and restage before continuing.",
+          );
         }
 
         const indexFinalized = finalization === "finalized";
@@ -1764,17 +2057,23 @@ export class GitService {
             await this.runHook(repo, "post-commit", []);
           } catch (error) {
             const detail = error instanceof Error ? error.message : "The post-commit hook failed.";
-            warnings.push(`The commit was created, but its post-commit hook did not finish cleanly: ${detail}`);
+            warnings.push(
+              `The commit was created, but its post-commit hook did not finish cleanly: ${detail}`,
+            );
           }
         } else {
-          warnings.push("Aiden did not run the post-commit hook because the branch and index could not be finalized together.");
+          warnings.push(
+            "Aiden did not run the post-commit hook because the branch and index could not be finalized together.",
+          );
         }
 
         let remainingChanges: number | undefined;
         try {
           remainingChanges = (await this.status(repo)).uncommitted ?? 0;
         } catch {
-          warnings.push("Aiden could not refresh the remaining-change count. Refresh Review to reconcile it.");
+          warnings.push(
+            "Aiden could not refresh the remaining-change count. Refresh Review to reconcile it.",
+          );
         }
         return {
           commit: candidateCommit,
@@ -1784,24 +2083,29 @@ export class GitService {
           ...(warnings.length ? { warning: warnings.join(" ") } : {}),
         };
       } catch (error) {
-        const reconciled = candidateCommit && branchRef && refUpdateAttempted
-          ? await this.reconcileCommitRef(repo, branchRef, candidateCommit)
-          : "absent";
+        const reconciled =
+          candidateCommit && branchRef && refUpdateAttempted
+            ? await this.reconcileCommitRef(repo, branchRef, candidateCommit)
+            : "absent";
         if (candidateCommit && branchRef && (reconciled === "exact" || reconciled === "advanced")) {
-          let warning = "The commit was created, but Aiden could not finish reconciling its result. Refresh Review before continuing.";
-          const finalization = reconciled === "exact"
-            ? await this.finalizeIndexForHead(repo, branchRef, candidateCommit, transaction)
-            : "branch_moved";
+          let warning =
+            "The commit was created, but Aiden could not finish reconciling its result. Refresh Review before continuing.";
+          const finalization =
+            reconciled === "exact"
+              ? await this.finalizeIndexForHead(repo, branchRef, candidateCommit, transaction)
+              : "branch_moved";
           if (finalization === "failed" || finalization === "head_moved") {
             warning += " Git's index may need to be restaged.";
           } else if (finalization !== "finalized") {
-            warning += " Aiden left the real index unchanged because HEAD could not be locked to the committed branch.";
+            warning +=
+              " Aiden left the real index unchanged because HEAD could not be locked to the committed branch.";
           }
           if (finalization === "finalized") {
             try {
               await this.runHook(repo, "post-commit", []);
             } catch (hookError) {
-              const hookDetail = hookError instanceof Error ? hookError.message : "The post-commit hook failed.";
+              const hookDetail =
+                hookError instanceof Error ? hookError.message : "The post-commit hook failed.";
               warning += ` The post-commit hook did not finish cleanly: ${hookDetail}`;
             }
           } else {
@@ -1814,9 +2118,10 @@ export class GitService {
             warning,
           };
         }
-        const detail = error instanceof GitServiceError
-          ? error
-          : new GitServiceError("command_failed", "Aiden could not create the commit.", error);
+        const detail =
+          error instanceof GitServiceError
+            ? error
+            : new GitServiceError("command_failed", "Aiden could not create the commit.", error);
         if (reconciled === "unknown") {
           throw new GitServiceError(
             detail.code,
@@ -1835,7 +2140,10 @@ export class GitService {
     });
   }
 
-  private async pushStateBlocker(repo: GitRepository, signal?: AbortSignal): Promise<string | undefined> {
+  private async pushStateBlocker(
+    repo: GitRepository,
+    signal?: AbortSignal,
+  ): Promise<string | undefined> {
     const inProgress = [
       ["MERGE_HEAD", "Finish or abort the merge before pushing from Aiden."],
       ["CHERRY_PICK_HEAD", "Finish or abort the cherry-pick before pushing from Aiden."],
@@ -1860,7 +2168,12 @@ export class GitService {
   private async cohesivePushHead(
     repo: GitRepository,
     signal?: AbortSignal,
-  ): Promise<{ branch?: string; branchRef?: string; expectedHead?: string; status: GitInfo }> {
+  ): Promise<{
+    branch?: string;
+    branchRef?: string;
+    expectedHead?: string;
+    status: GitInfo;
+  }> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const symbolicBefore = await this.run(repo.cwd, ["symbolic-ref", "--quiet", "HEAD"], {
         allowExitCodes: [1],
@@ -1877,29 +2190,41 @@ export class GitService {
       const [status, branchHead] = await Promise.all([
         this.status(repo, signal),
         branchRef
-          ? this.run(repo.cwd, ["rev-parse", "--verify", branchRef], { allowExitCodes: [128], signal })
+          ? this.run(repo.cwd, ["rev-parse", "--verify", branchRef], {
+              allowExitCodes: [128],
+              signal,
+            })
           : Promise.resolve(null),
       ]);
       const [symbolicAfter, headAfter] = await Promise.all([
-        this.run(repo.cwd, ["symbolic-ref", "--quiet", "HEAD"], { allowExitCodes: [1], signal }),
-        this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], { allowExitCodes: [128], signal }),
+        this.run(repo.cwd, ["symbolic-ref", "--quiet", "HEAD"], {
+          allowExitCodes: [1],
+          signal,
+        }),
+        this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
+          allowExitCodes: [128],
+          signal,
+        }),
       ]);
-      const symbolicStable = symbolicBefore.exitCode === symbolicAfter.exitCode
-        && symbolicBefore.stdout.trim() === symbolicAfter.stdout.trim();
-      const headStable = headBefore.exitCode === headAfter.exitCode
-        && headBefore.stdout.trim() === headAfter.stdout.trim();
+      const symbolicStable =
+        symbolicBefore.exitCode === symbolicAfter.exitCode &&
+        symbolicBefore.stdout.trim() === symbolicAfter.stdout.trim();
+      const headStable =
+        headBefore.exitCode === headAfter.exitCode &&
+        headBefore.stdout.trim() === headAfter.stdout.trim();
       const expectedHead = headBefore.exitCode === 0 ? headBefore.stdout.trim() : undefined;
       const branchMatchesHead = branchRef
-        ? branchHead?.exitCode === headBefore.exitCode
-          && branchHead?.stdout.trim() === headBefore.stdout.trim()
-          && status.branch === branch
-          && !status.detached
+        ? branchHead?.exitCode === headBefore.exitCode &&
+          branchHead?.stdout.trim() === headBefore.stdout.trim() &&
+          status.branch === branch &&
+          !status.detached
         : status.detached && !status.unborn;
-      const unbornBranch = branchRef
-        && headBefore.exitCode !== 0
-        && branchHead?.exitCode !== 0
-        && status.unborn
-        && status.branch === branch;
+      const unbornBranch =
+        branchRef &&
+        headBefore.exitCode !== 0 &&
+        branchHead?.exitCode !== 0 &&
+        status.unborn &&
+        status.branch === branch;
       if (symbolicStable && headStable && (branchMatchesHead || unbornBranch)) {
         return { branch, branchRef, expectedHead, status };
       }
@@ -1916,18 +2241,14 @@ export class GitService {
     signal?: AbortSignal,
   ): Promise<string | undefined> {
     try {
-      const result = await this.run(
-        repo.cwd,
-        ["remote", "get-url", "--push", "--all", remote],
-        { signal },
-      );
+      const result = await this.run(repo.cwd, ["remote", "get-url", "--push", "--all", remote], {
+        signal,
+      });
       const endpoints = result.stdout
         .split("\n")
-        .map((value) => value.endsWith("\r") ? value.slice(0, -1) : value)
+        .map((value) => (value.endsWith("\r") ? value.slice(0, -1) : value))
         .filter((value) => value.length > 0);
-      return endpoints.length === 1 && !endpoints[0].includes("\u0000")
-        ? endpoints[0]
-        : undefined;
+      return endpoints.length === 1 && !endpoints[0].includes("\u0000") ? endpoints[0] : undefined;
     } catch (error) {
       if (error instanceof GitServiceError && error.code === "aborted") throw error;
       return undefined;
@@ -1940,11 +2261,10 @@ export class GitService {
     key: "proxy" | "proxyAuthMethod" | "receivepack",
     signal?: AbortSignal,
   ): Promise<string | undefined> {
-    const result = await this.run(
-      repo.cwd,
-      ["config", "--get", `remote.${remote}.${key}`],
-      { allowExitCodes: [1], signal },
-    );
+    const result = await this.run(repo.cwd, ["config", "--get", `remote.${remote}.${key}`], {
+      allowExitCodes: [1],
+      signal,
+    });
     if (result.exitCode !== 0) return undefined;
     const value = result.stdout.replace(/\r?\n$/, "");
     return value.includes("\u0000") ? undefined : value;
@@ -1973,21 +2293,30 @@ export class GitService {
   private pushTransportIdentity(transport: GitPushTransport): string {
     return createHash("sha256")
       .update("aiden-reviewed-push-transport-v2\u0000")
-      .update(JSON.stringify([
-        transport.endpoint,
-        transport.proxy ?? null,
-        transport.proxyAuthMethod ?? null,
-        transport.receivePack ?? null,
-      ]))
+      .update(
+        JSON.stringify([
+          transport.endpoint,
+          transport.proxy ?? null,
+          transport.proxyAuthMethod ?? null,
+          transport.receivePack ?? null,
+        ]),
+      )
       .digest("hex");
   }
 
-  private async inspectPushCapability(repo: GitRepository, signal?: AbortSignal): Promise<GitPushCapability> {
-    const [{ branch, branchRef, expectedHead, status }, remotesResult, pushDefault] = await Promise.all([
-      this.cohesivePushHead(repo, signal),
-      this.run(repo.cwd, ["remote"], { signal }),
-      this.run(repo.cwd, ["config", "--get", "remote.pushDefault"], { allowExitCodes: [1], signal }),
-    ]);
+  private async inspectPushCapability(
+    repo: GitRepository,
+    signal?: AbortSignal,
+  ): Promise<GitPushCapability> {
+    const [{ branch, branchRef, expectedHead, status }, remotesResult, pushDefault] =
+      await Promise.all([
+        this.cohesivePushHead(repo, signal),
+        this.run(repo.cwd, ["remote"], { signal }),
+        this.run(repo.cwd, ["config", "--get", "remote.pushDefault"], {
+          allowExitCodes: [1],
+          signal,
+        }),
+      ]);
     const upstream = branchRef
       ? await this.run(
           repo.cwd,
@@ -2001,7 +2330,9 @@ export class GitService {
       .map((value) => value.trim())
       .filter(Boolean);
     const transportEntries = await Promise.all(
-      configuredRemotes.map(async (remote) => [remote, await this.pushTransport(repo, remote, signal)] as const),
+      configuredRemotes.map(
+        async (remote) => [remote, await this.pushTransport(repo, remote, signal)] as const,
+      ),
     );
     const remoteIdentities = Object.fromEntries(
       transportEntries
@@ -2009,20 +2340,32 @@ export class GitService {
         .map(([remote, transport]) => [remote, this.pushTransportIdentity(transport)]),
     );
     const remotes = configuredRemotes.filter((remote) => remote in remoteIdentities);
-    const configuredPushDefault = pushDefault.exitCode === 0 ? pushDefault.stdout.trim() : undefined;
-    const suggestedRemote = [upstreamRemote, configuredPushDefault, "origin", remotes.length === 1 ? remotes[0] : undefined, remotes[0]]
-      .find((candidate): candidate is string =>
-        typeof candidate === "string" && candidate.length > 0 && remotes.includes(candidate));
+    const configuredPushDefault =
+      pushDefault.exitCode === 0 ? pushDefault.stdout.trim() : undefined;
+    const suggestedRemote = [
+      upstreamRemote,
+      configuredPushDefault,
+      "origin",
+      remotes.length === 1 ? remotes[0] : undefined,
+      remotes[0],
+    ].find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && candidate.length > 0 && remotes.includes(candidate),
+    );
     const destinationBranch = upstreamRef?.startsWith("refs/heads/")
       ? upstreamRef.slice("refs/heads/".length)
       : branch;
     const repositoryRoot = path.resolve(repo.cwd) === path.resolve(repo.topLevel);
     let reason: string | undefined;
-    if (!repositoryRoot) reason = "Push from Aiden is available only when the workspace is the repository root.";
-    else if (!expectedHead || status.unborn) reason = "Create the repository's first commit before pushing.";
-    else if (!branch || status.detached) reason = "Switch to a local branch before pushing from Aiden.";
+    if (!repositoryRoot)
+      reason = "Push from Aiden is available only when the workspace is the repository root.";
+    else if (!expectedHead || status.unborn)
+      reason = "Create the repository's first commit before pushing.";
+    else if (!branch || status.detached)
+      reason = "Switch to a local branch before pushing from Aiden.";
     else if (configuredRemotes.length === 0) reason = "Add a Git remote before pushing from Aiden.";
-    else if (remotes.length === 0) reason = "Configure exactly one push URL for a remote before pushing from Aiden.";
+    else if (remotes.length === 0)
+      reason = "Configure exactly one push URL for a remote before pushing from Aiden.";
     else reason = await this.pushStateBlocker(repo, signal);
     return {
       allowed: !reason,
@@ -2183,18 +2526,18 @@ export class GitService {
           "remote=$AIDEN_PRE_PUSH_REMOTE",
           "config_count=${AIDEN_GIT_CONFIG_COUNT:-}",
           "case $config_count in ''|*[!0-9]*) exit 1 ;; esac",
-          "if [ -z \"$completed_path\" ] || [ -z \"$frozen_url\" ] || [ -z \"$remote\" ]; then exit 1; fi",
+          'if [ -z "$completed_path" ] || [ -z "$frozen_url" ] || [ -z "$remote" ]; then exit 1; fi',
           "unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS",
           "config_index=0",
-          "while [ \"$config_index\" -lt \"$config_count\" ]; do",
-          "  unset \"GIT_CONFIG_KEY_$config_index\" \"GIT_CONFIG_VALUE_$config_index\"",
+          'while [ "$config_index" -lt "$config_count" ]; do',
+          '  unset "GIT_CONFIG_KEY_$config_index" "GIT_CONFIG_VALUE_$config_index"',
           "  config_index=$((config_index + 1))",
           "done",
           "unset AIDEN_GIT_CONFIG_COUNT AIDEN_PRE_PUSH_COMPLETED_PATH AIDEN_PRE_PUSH_FROZEN_URL AIDEN_PRE_PUSH_HOOK_PATH AIDEN_PRE_PUSH_REMOTE",
-          "if [ -n \"$hook_path\" ]; then",
-          "  \"$hook_path\" \"$remote\" \"$frozen_url\"",
+          'if [ -n "$hook_path" ]; then',
+          '  "$hook_path" "$remote" "$frozen_url"',
           "  hook_status=$?",
-          "  if [ \"$hook_status\" -ne 0 ]; then exit \"$hook_status\"; fi",
+          '  if [ "$hook_status" -ne 0 ]; then exit "$hook_status"; fi',
           "fi",
           "umask 077",
           "printf 'complete\\n' > \"$completed_path\" || exit 1",
@@ -2226,7 +2569,11 @@ export class GitService {
     if (!input.remote || input.remote !== input.remote.trim() || input.remote.includes("\u0000")) {
       throw new GitServiceError("invalid_input", "Choose a configured Git remote.");
     }
-    if (!input.expectedBranch || input.expectedBranch !== input.expectedBranch.trim() || input.expectedBranch.includes("\u0000")) {
+    if (
+      !input.expectedBranch ||
+      input.expectedBranch !== input.expectedBranch.trim() ||
+      input.expectedBranch.includes("\u0000")
+    ) {
       throw new GitServiceError("invalid_input", "Refresh the branch state before pushing.");
     }
     if (!input.destinationBranch || input.destinationBranch !== input.destinationBranch.trim()) {
@@ -2239,16 +2586,28 @@ export class GitService {
     return this.enqueueMutation(repo.commonDir, async () => {
       const capability = await this.inspectPushCapability(repo, signal);
       if (!capability.allowed || !capability.branch || !capability.expectedHead) {
-        throw new GitServiceError("command_failed", capability.reason ?? "This branch cannot be pushed from Aiden.");
+        throw new GitServiceError(
+          "command_failed",
+          capability.reason ?? "This branch cannot be pushed from Aiden.",
+        );
       }
       if (capability.branch !== input.expectedBranch) {
-        throw new GitServiceError("stale_snapshot", "The current branch changed after this push was reviewed. Refresh before pushing.");
+        throw new GitServiceError(
+          "stale_snapshot",
+          "The current branch changed after this push was reviewed. Refresh before pushing.",
+        );
       }
       if (capability.expectedHead !== input.expectedHead) {
-        throw new GitServiceError("stale_snapshot", "The branch moved after this push was reviewed. Refresh before pushing.");
+        throw new GitServiceError(
+          "stale_snapshot",
+          "The branch moved after this push was reviewed. Refresh before pushing.",
+        );
       }
       if (!capability.remotes.includes(input.remote)) {
-        throw new GitServiceError("invalid_input", `Remote “${input.remote}” is no longer configured.`);
+        throw new GitServiceError(
+          "invalid_input",
+          `Remote “${input.remote}” is no longer configured.`,
+        );
       }
       if (capability.remoteIdentities[input.remote] !== input.expectedRemoteIdentity) {
         throw new GitServiceError(
@@ -2284,7 +2643,12 @@ export class GitService {
 
       let warning: string | undefined;
       const frozenRemoteAlias = `aiden-reviewed-${randomUUID()}`;
-      const prePushProxy = await this.prepareReviewedPrePushProxy(repo, input, frozenRemote.endpoint, signal);
+      const prePushProxy = await this.prepareReviewedPrePushProxy(
+        repo,
+        input,
+        frozenRemote.endpoint,
+        signal,
+      );
       try {
         try {
           await this.run(
@@ -2343,9 +2707,10 @@ export class GitService {
               error,
             );
           }
-          warning = error.code === "output_limit"
-            ? "The push completed, but Git produced more output than Aiden could retain."
-            : "The push completed, but Git stopped responding before Aiden received confirmation.";
+          warning =
+            error.code === "output_limit"
+              ? "The push completed, but Git produced more output than Aiden could retain."
+              : "The push completed, but Git stopped responding before Aiden received confirmation.";
         }
       } finally {
         await fs.rm(prePushProxy.tempDir, { recursive: true, force: true }).catch(() => undefined);
@@ -2374,26 +2739,41 @@ export class GitService {
           remoteStillMatches
             ? "The push completed, but Aiden could not safely update its local tracking ref."
             : "The push completed, but the remote configuration changed before Aiden could update its local tracking ref.",
-        ].filter(Boolean).join(" ");
+        ]
+          .filter(Boolean)
+          .join(" ");
       }
 
       let upstreamSet = capability.upstream === `${input.remote}/${input.destinationBranch}`;
       if (input.setUpstream && !upstreamSet) {
         if (signal?.aborted) {
-          warning = [warning, "The push completed, but the cancelled request did not change the local upstream setting."]
+          warning = [
+            warning,
+            "The push completed, but the cancelled request did not change the local upstream setting.",
+          ]
             .filter(Boolean)
             .join(" ");
         } else {
           const [headAfter, symbolicAfter] = await Promise.all([
-            this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], { allowExitCodes: [128] }),
-            this.run(repo.cwd, ["symbolic-ref", "--quiet", "HEAD"], { allowExitCodes: [1] }),
+            this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
+              allowExitCodes: [128],
+            }),
+            this.run(repo.cwd, ["symbolic-ref", "--quiet", "HEAD"], {
+              allowExitCodes: [1],
+            }),
           ]);
           if (signal?.aborted) {
-            warning = [warning, "The push completed, but the cancelled request did not change the local upstream setting."]
+            warning = [
+              warning,
+              "The push completed, but the cancelled request did not change the local upstream setting.",
+            ]
               .filter(Boolean)
               .join(" ");
           } else if (!remoteStillMatches) {
-            warning = [warning, "The push completed, but the remote configuration changed before Aiden could remember its upstream."]
+            warning = [
+              warning,
+              "The push completed, but the remote configuration changed before Aiden could remember its upstream.",
+            ]
               .filter(Boolean)
               .join(" ");
           } else if (
@@ -2408,30 +2788,49 @@ export class GitService {
                 signal?.aborted
                   ? "The push completed, but the cancelled request did not change the local upstream setting."
                   : "The push completed, but Aiden could not safely update its local tracking ref or upstream setting.",
-              ].filter(Boolean).join(" ");
+              ]
+                .filter(Boolean)
+                .join(" ");
             } else {
               try {
                 await this.run(
                   repo.cwd,
-                  ["branch", `--set-upstream-to=${input.remote}/${input.destinationBranch}`, "--", input.expectedBranch],
+                  [
+                    "branch",
+                    `--set-upstream-to=${input.remote}/${input.destinationBranch}`,
+                    "--",
+                    input.expectedBranch,
+                  ],
                   { mutation: true, signal },
                 );
                 upstreamSet = true;
               } catch (error) {
                 if (signal?.aborted) {
-                  warning = [warning, "The push completed, but the cancelled request did not change the local upstream setting."]
+                  warning = [
+                    warning,
+                    "The push completed, but the cancelled request did not change the local upstream setting.",
+                  ]
                     .filter(Boolean)
                     .join(" ");
                 } else {
-                  const detail = error instanceof Error ? error.message : "Git could not set the upstream branch.";
-                  warning = [warning, `The push completed, but Aiden could not remember its upstream: ${detail}`]
+                  const detail =
+                    error instanceof Error
+                      ? error.message
+                      : "Git could not set the upstream branch.";
+                  warning = [
+                    warning,
+                    `The push completed, but Aiden could not remember its upstream: ${detail}`,
+                  ]
                     .filter(Boolean)
                     .join(" ");
                 }
               }
             }
           } else {
-            warning = [warning, "The push completed, but the local branch moved before Aiden could remember its upstream."]
+            warning = [
+              warning,
+              "The push completed, but the local branch moved before Aiden could remember its upstream.",
+            ]
               .filter(Boolean)
               .join(" ");
           }
@@ -2448,16 +2847,26 @@ export class GitService {
     });
   }
 
-  private async validateComparisonTarget(repo: GitRepository, targetRef: string, signal?: AbortSignal): Promise<void> {
+  private async validateComparisonTarget(
+    repo: GitRepository,
+    targetRef: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (
       targetRef.includes("\u0000") ||
       (!targetRef.startsWith("refs/heads/") && !targetRef.startsWith("refs/remotes/"))
     ) {
       throw new GitServiceError("invalid_ref", "Choose a local or last-fetched branch to compare.");
     }
-    const valid = await this.run(repo.cwd, ["check-ref-format", targetRef], { allowExitCodes: [1], signal });
+    const valid = await this.run(repo.cwd, ["check-ref-format", targetRef], {
+      allowExitCodes: [1],
+      signal,
+    });
     if (valid.exitCode !== 0) {
-      throw new GitServiceError("invalid_ref", "Choose a valid local or last-fetched branch to compare.");
+      throw new GitServiceError(
+        "invalid_ref",
+        "Choose a valid local or last-fetched branch to compare.",
+      );
     }
   }
 
@@ -2467,12 +2876,23 @@ export class GitService {
     signal?: AbortSignal,
   ): Promise<{ head: string; target: string; branch?: string }> {
     const [head, target, symbolicHead] = await Promise.all([
-      this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], { allowExitCodes: [128], signal }),
-      this.run(repo.cwd, ["show-ref", "--verify", "--hash", targetRef], { allowExitCodes: [1], signal }),
-      this.run(repo.cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], { allowExitCodes: [1], signal }),
+      this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
+        allowExitCodes: [128],
+        signal,
+      }),
+      this.run(repo.cwd, ["show-ref", "--verify", "--hash", targetRef], {
+        allowExitCodes: [1],
+        signal,
+      }),
+      this.run(repo.cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"], {
+        allowExitCodes: [1],
+        signal,
+      }),
     ]);
-    if (head.exitCode !== 0) throw new GitServiceError("unborn", "Create the first commit before comparing branches.");
-    if (target.exitCode !== 0) throw new GitServiceError("invalid_ref", "That comparison branch no longer exists locally.");
+    if (head.exitCode !== 0)
+      throw new GitServiceError("unborn", "Create the first commit before comparing branches.");
+    if (target.exitCode !== 0)
+      throw new GitServiceError("invalid_ref", "That comparison branch no longer exists locally.");
     return {
       head: head.stdout.trim(),
       target: target.stdout.trim(),
@@ -2497,15 +2917,41 @@ export class GitService {
       }
       const mergeBase = mergeBaseResult.stdout.trim();
       const [counts, names, numstat] = await Promise.all([
-        this.run(repo.cwd, ["rev-list", "--left-right", "--count", `${before.target}...${before.head}`], { signal }),
         this.run(
           repo.cwd,
-          ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", "--relative", `${mergeBase}..${before.head}`, "--", "."],
+          ["rev-list", "--left-right", "--count", `${before.target}...${before.head}`],
           { signal },
         ),
         this.run(
           repo.cwd,
-          ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "--find-renames", "--relative", `${mergeBase}..${before.head}`, "--", "."],
+          [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--relative",
+            `${mergeBase}..${before.head}`,
+            "--",
+            ".",
+          ],
+          { signal },
+        ),
+        this.run(
+          repo.cwd,
+          [
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--numstat",
+            "-z",
+            "--find-renames",
+            "--relative",
+            `${mergeBase}..${before.head}`,
+            "--",
+            ".",
+          ],
           { signal },
         ),
       ]);
@@ -2527,16 +2973,18 @@ export class GitService {
         fileCount: files.length,
         additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
         deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
-        unavailableStats: files.filter((file) => file.additions === undefined || file.deletions === undefined).length,
+        unavailableStats: files.filter(
+          (file) => file.additions === undefined || file.deletions === undefined,
+        ).length,
         stagedFiles: 0,
         unstagedFiles: 0,
         conflictedFiles: 0,
       };
-      const targetLabel = targetRef
-        .replace(/^refs\/heads\//, "")
-        .replace(/^refs\/remotes\//, "");
+      const targetLabel = targetRef.replace(/^refs\/heads\//, "").replace(/^refs\/remotes\//, "");
       const snapshot = createHash("sha256")
-        .update([before.head, before.target, targetRef, mergeBase, JSON.stringify(files)].join("\u0000"))
+        .update(
+          [before.head, before.target, targetRef, mergeBase, JSON.stringify(files)].join("\u0000"),
+        )
         .digest("hex");
       return {
         currentBranch: before.branch,
@@ -2553,7 +3001,10 @@ export class GitService {
         remoteState: "local-ref",
       };
     }
-    throw new GitServiceError("stale_snapshot", "The branch moved while Aiden prepared this comparison. Refresh and try again.");
+    throw new GitServiceError(
+      "stale_snapshot",
+      "The branch moved while Aiden prepared this comparison. Refresh and try again.",
+    );
   }
 
   async compare(cwd: string, targetRef: string, signal?: AbortSignal): Promise<GitComparison> {
@@ -2568,21 +3019,33 @@ export class GitService {
   ): Promise<GitFileDiff> {
     for (const value of [input.expectedHead, input.expectedTarget, input.mergeBase]) {
       if (!/^[0-9a-f]{40,64}$/.test(value)) {
-        throw new GitServiceError("invalid_input", "Refresh the branch comparison before opening this diff.");
+        throw new GitServiceError(
+          "invalid_input",
+          "Refresh the branch comparison before opening this diff.",
+        );
       }
     }
     const repo = this.requireRepository(await this.repository(cwd));
     lexicalWorkspacePath(repo.cwd, input.path);
-    const comparison = await this.stableRead(repo, () => this.inspectComparison(repo, input.targetRef, signal));
+    const comparison = await this.stableRead(repo, () =>
+      this.inspectComparison(repo, input.targetRef, signal),
+    );
     if (
       comparison.expectedHead !== input.expectedHead ||
       comparison.expectedTarget !== input.expectedTarget ||
       comparison.mergeBase !== input.mergeBase
     ) {
-      throw new GitServiceError("stale_snapshot", "The comparison changed. Refresh before opening this diff.");
+      throw new GitServiceError(
+        "stale_snapshot",
+        "The comparison changed. Refresh before opening this diff.",
+      );
     }
     const file = comparison.files.find((candidate) => candidate.path === input.path);
-    if (!file) throw new GitServiceError("stale_snapshot", "That file is no longer part of this comparison.");
+    if (!file)
+      throw new GitServiceError(
+        "stale_snapshot",
+        "That file is no longer part of this comparison.",
+      );
     const pathspecs = file.previousPath ? [file.previousPath, file.path] : [file.path];
     pathspecs.forEach((pathspec) => lexicalWorkspacePath(repo.cwd, pathspec));
     const result = await this.run(
@@ -2602,18 +3065,31 @@ export class GitService {
       { signal, allowTruncatedOutput: true },
     );
     const binary = /^(?:Binary files .* differ|GIT binary patch)$/mu.test(result.stdout);
-    return { path: input.path, patch: result.stdout, binary, truncated: result.truncated === true };
+    return {
+      path: input.path,
+      patch: result.stdout,
+      binary,
+      truncated: result.truncated === true,
+    };
   }
 
   private async validateBranchName(repo: GitRepository, name: string): Promise<void> {
-    const result = await this.run(repo.cwd, ["check-ref-format", "--branch", name], { allowExitCodes: [1, 128] });
-    if (result.exitCode !== 0) throw new GitServiceError("invalid_ref", "Enter a valid Git branch name.");
+    const result = await this.run(repo.cwd, ["check-ref-format", "--branch", name], {
+      allowExitCodes: [1, 128],
+    });
+    if (result.exitCode !== 0)
+      throw new GitServiceError("invalid_ref", "Enter a valid Git branch name.");
   }
 
   private async requireHead(repo: GitRepository): Promise<string> {
-    const head = await this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], { allowExitCodes: [128] });
+    const head = await this.run(repo.cwd, ["rev-parse", "--verify", "HEAD"], {
+      allowExitCodes: [128],
+    });
     if (head.exitCode !== 0) {
-      throw new GitServiceError("unborn", "Create the repository's first commit before creating another branch or worktree.");
+      throw new GitServiceError(
+        "unborn",
+        "Create the repository's first commit before creating another branch or worktree.",
+      );
     }
     return head.stdout.trim();
   }
@@ -2622,11 +3098,19 @@ export class GitService {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, name);
     await this.enqueueMutation(repo.commonDir, async () => {
-      const exists = await this.run(repo.cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${name}`], {
-        allowExitCodes: [1],
+      const exists = await this.run(
+        repo.cwd,
+        ["show-ref", "--verify", "--quiet", `refs/heads/${name}`],
+        {
+          allowExitCodes: [1],
+        },
+      );
+      if (exists.exitCode !== 0)
+        throw new GitServiceError("invalid_ref", `Local branch “${name}” no longer exists.`);
+      await this.run(repo.cwd, ["switch", "--no-guess", "--", name], {
+        mutation: true,
+        signal,
       });
-      if (exists.exitCode !== 0) throw new GitServiceError("invalid_ref", `Local branch “${name}” no longer exists.`);
-      await this.run(repo.cwd, ["switch", "--no-guess", "--", name], { mutation: true, signal });
     });
   }
 
@@ -2635,18 +3119,1309 @@ export class GitService {
     await this.validateBranchName(repo, name);
     await this.enqueueMutation(repo.commonDir, async () => {
       await this.requireHead(repo);
-      await this.run(repo.cwd, ["switch", "-c", name, "--"], { mutation: true, signal });
+      await this.run(repo.cwd, ["switch", "-c", name, "--"], {
+        mutation: true,
+        signal,
+      });
     });
   }
 
-  private async inspectWorktrees(repo: GitRepository, currentPath: string): Promise<GitWorktree[]> {
-    const result = await this.run(repo.cwd, ["worktree", "list", "--porcelain", "-z"]);
+  private async inspectWorktrees(
+    repo: GitRepository,
+    currentPath: string,
+    signal?: AbortSignal,
+  ): Promise<GitWorktree[]> {
+    const result = await this.run(repo.cwd, ["worktree", "list", "--porcelain", "-z"], {
+      signal,
+    });
     return parseGitWorktrees(result.stdout, currentPath);
   }
 
-  async worktrees(cwd: string): Promise<GitWorktree[]> {
+  async worktrees(cwd: string, signal?: AbortSignal): Promise<GitWorktree[]> {
+    const repo = this.requireRepository(await this.repository(cwd, signal));
+    return this.stableRead(repo, () => this.inspectWorktrees(repo, repo.topLevel, signal), signal);
+  }
+
+  private validatedWorktreeGitDir(repo: GitRepository, value: string): string {
+    const candidate = path.resolve(value);
+    const registrationsRoot = path.resolve(repo.commonDir, "worktrees");
+    if (path.dirname(candidate) !== registrationsRoot || path.basename(candidate).length === 0) {
+      throw new GitServiceError("command_failed", "The managed worktree identity is invalid.");
+    }
+    return candidate;
+  }
+
+  private validatedWorktreeOwnershipToken(value: string): string {
+    if (!WORKTREE_OWNER_TOKEN.test(value)) {
+      throw new GitServiceError("command_failed", "The managed worktree ownership is invalid.");
+    }
+    return value;
+  }
+
+  private async persistWorktreeOwnership(
+    worktreeGitDir: string,
+    ownershipToken: string,
+  ): Promise<void> {
+    const token = this.validatedWorktreeOwnershipToken(ownershipToken);
+    const markerPath = path.join(worktreeGitDir, WORKTREE_OWNER_MARKER);
+    const handle = await fs.open(markerPath, "wx", 0o600);
+    try {
+      await handle.writeFile(`${token}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    const directory = await fs.open(worktreeGitDir, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  }
+
+  private async managedWorktreeRegistration(
+    repo: GitRepository,
+    worktrees: readonly GitWorktree[],
+    worktreePath: string,
+    branch: string,
+    worktreeGitDir?: string,
+    ownershipToken?: string,
+  ): Promise<GitWorktree | undefined> {
+    // New records carry a marker inside Git's administrative directory. The
+    // directory survives a legitimate move, while Git removes the marker when
+    // the original registration is removed—even if it later reuses the same
+    // administrative path for a replacement checkout.
+    if (worktreeGitDir || ownershipToken) {
+      if (!worktreeGitDir || !ownershipToken) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree ownership could not be verified.",
+        );
+      }
+      const candidate = this.validatedWorktreeGitDir(repo, worktreeGitDir);
+      const expectedToken = this.validatedWorktreeOwnershipToken(ownershipToken);
+      try {
+        const ownerPath = path.join(candidate, WORKTREE_OWNER_MARKER);
+        const [directory, gitMarker, ownerMarker] = await Promise.all([
+          fs.lstat(candidate),
+          fs.lstat(path.join(candidate, "gitdir")),
+          fs.lstat(ownerPath),
+        ]);
+        if (
+          !directory.isDirectory() ||
+          directory.isSymbolicLink() ||
+          !gitMarker.isFile() ||
+          gitMarker.isSymbolicLink() ||
+          gitMarker.size <= 0 ||
+          gitMarker.size > 4_096 ||
+          !ownerMarker.isFile() ||
+          ownerMarker.isSymbolicLink() ||
+          ownerMarker.size <= 0 ||
+          ownerMarker.size > 128
+        ) {
+          throw new GitServiceError(
+            "command_failed",
+            "The managed worktree identity could not be verified.",
+          );
+        }
+        const [gitFileContents, actualToken] = await Promise.all([
+          fs.readFile(path.join(candidate, "gitdir"), "utf8"),
+          fs.readFile(ownerPath, "utf8"),
+        ]);
+        if (actualToken.trim() !== expectedToken) {
+          throw new GitServiceError(
+            "command_failed",
+            "The managed worktree ownership could not be verified.",
+          );
+        }
+        const gitFile = gitFileContents.trim();
+        if (path.basename(gitFile) !== ".git") {
+          throw new GitServiceError(
+            "command_failed",
+            "The managed worktree identity could not be verified.",
+          );
+        }
+        const absoluteGitFile = path.isAbsolute(gitFile)
+          ? path.resolve(gitFile)
+          : path.resolve(candidate, gitFile);
+        const registeredPath = path.dirname(absoluteGitFile);
+        return worktrees.find(
+          (worktree) => path.resolve(worktree.path) === path.resolve(registeredPath),
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    }
+
+    const staleIdentityMatch = worktrees.find(
+      (worktree) =>
+        path.resolve(worktree.path) === path.resolve(worktreePath) || worktree.branch === branch,
+    );
+    if (staleIdentityMatch) return staleIdentityMatch;
+
+    // Legacy records predate the stable Git administrative identity. When any
+    // linked checkout remains after both stale hints changed, preserve ownership
+    // rather than guessing that an irreversible deletion completed.
+    return worktrees.find(
+      (worktree) => !worktree.bare && path.resolve(worktree.path) !== path.resolve(repo.topLevel),
+    );
+  }
+
+  private async worktreeAdministrativeRegistrationExists(
+    repo: GitRepository,
+    worktrees: readonly GitWorktree[],
+    worktreeGitDir: string,
+  ): Promise<boolean> {
+    const candidate = this.validatedWorktreeGitDir(repo, worktreeGitDir);
+    try {
+      const directory = await fs.lstat(candidate);
+      const gitMarkerPath = path.join(candidate, "gitdir");
+      const gitMarker = await fs.lstat(gitMarkerPath);
+      if (
+        !directory.isDirectory() ||
+        directory.isSymbolicLink() ||
+        !gitMarker.isFile() ||
+        gitMarker.isSymbolicLink() ||
+        gitMarker.size <= 0 ||
+        gitMarker.size > 4_096
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree administrative identity could not be verified.",
+        );
+      }
+      const gitFile = (await fs.readFile(gitMarkerPath, "utf8")).trim();
+      if (path.basename(gitFile) !== ".git") {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree administrative identity could not be verified.",
+        );
+      }
+      const absoluteGitFile = path.isAbsolute(gitFile)
+        ? path.resolve(gitFile)
+        : path.resolve(candidate, gitFile);
+      const registeredPath = path.dirname(absoluteGitFile);
+      return worktrees.some(
+        (worktree) => path.resolve(worktree.path) === path.resolve(registeredPath),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  async managedWorktreeRegistered(
+    cwd: string,
+    worktreePath: string,
+    branch: string,
+    worktreeGitDir?: string,
+    ownershipToken?: string,
+  ): Promise<boolean> {
     const repo = this.requireRepository(await this.repository(cwd));
-    return this.stableRead(repo, () => this.inspectWorktrees(repo, repo.topLevel));
+    return this.stableRead(repo, async () => {
+      const worktrees = await this.inspectWorktrees(repo, repo.cwd);
+      const registered = await this.managedWorktreeRegistration(
+        repo,
+        worktrees,
+        worktreePath,
+        branch,
+        worktreeGitDir,
+        ownershipToken,
+      );
+      if (registered) return true;
+      if (
+        worktreeGitDir &&
+        ownershipToken &&
+        ((await this.worktreeAdministrativeRegistrationExists(repo, worktrees, worktreeGitDir)) ||
+          worktrees.some(
+            (worktree) =>
+              path.resolve(worktree.path) === path.resolve(worktreePath) ||
+              worktree.branch === branch,
+          ))
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree remains registered, but Aiden ownership could not be verified.",
+        );
+      }
+      return false;
+    });
+  }
+
+  async managedWorktreeUsable(
+    cwd: string,
+    worktreePath: string,
+    branch: string,
+    worktreeGitDir?: string,
+    ownershipToken?: string,
+    worktreeDevice?: number,
+    worktreeInode?: number,
+  ): Promise<boolean> {
+    // Capability admission is deliberately stricter than deletion recovery:
+    // no legacy inference, moved checkout, or branch drift may inherit a
+    // persisted workspace's file, terminal, or generation authority.
+    if (
+      !worktreeGitDir ||
+      !ownershipToken ||
+      !Number.isSafeInteger(worktreeDevice) ||
+      !Number.isSafeInteger(worktreeInode)
+    ) {
+      return false;
+    }
+    const repo = this.requireRepository(await this.repository(cwd));
+    return this.stableRead(repo, async () => {
+      const registered = await this.managedWorktreeRegistration(
+        repo,
+        await this.inspectWorktrees(repo, repo.cwd),
+        worktreePath,
+        branch,
+        worktreeGitDir,
+        ownershipToken,
+      );
+      if (
+        registered === undefined ||
+        path.resolve(registered.path) !== path.resolve(worktreePath) ||
+        registered.branch !== branch
+      ) {
+        return false;
+      }
+      return this.managedWorktreeCheckoutMatches(
+        worktreePath,
+        worktreeGitDir,
+        worktreeDevice!,
+        worktreeInode!,
+      );
+    });
+  }
+
+  private async managedWorktreeCheckoutMatches(
+    worktreePath: string,
+    worktreeGitDir: string,
+    worktreeDevice: number,
+    worktreeInode: number,
+  ): Promise<boolean> {
+    try {
+      const checkoutGitDir = await this.managedWorktreeCheckoutGitDir(
+        worktreePath,
+        worktreeDevice,
+        worktreeInode,
+      );
+      if (!checkoutGitDir || checkoutGitDir !== path.resolve(worktreeGitDir)) return false;
+      const [canonicalCheckoutGitDir, canonicalRecordedGitDir] = await Promise.all([
+        fs.realpath(checkoutGitDir),
+        fs.realpath(worktreeGitDir),
+      ]);
+      return canonicalCheckoutGitDir === canonicalRecordedGitDir;
+    } catch {
+      return false;
+    }
+  }
+
+  private async managedWorktreeCheckoutGitDir(
+    worktreePath: string,
+    worktreeDevice: number,
+    worktreeInode: number,
+  ): Promise<string | undefined> {
+    try {
+      const checkout = await fs.lstat(worktreePath);
+      const checkoutGitFile = path.join(worktreePath, ".git");
+      const gitFileStat = await fs.lstat(checkoutGitFile);
+      if (
+        !checkout.isDirectory() ||
+        checkout.isSymbolicLink() ||
+        checkout.dev !== worktreeDevice ||
+        checkout.ino !== worktreeInode ||
+        !gitFileStat.isFile() ||
+        gitFileStat.isSymbolicLink() ||
+        gitFileStat.size <= 0 ||
+        gitFileStat.size > 4_096
+      ) {
+        return undefined;
+      }
+      const contents = (await fs.readFile(checkoutGitFile, "utf8")).trim();
+      const match = /^gitdir:\s*(.+)$/u.exec(contents);
+      if (!match) return undefined;
+      return path.isAbsolute(match[1]!)
+        ? path.resolve(match[1]!)
+        : path.resolve(worktreePath, match[1]!);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async managedWorktreeCheckoutRootMatches(
+    worktreePath: string,
+    worktreeDevice: number,
+    worktreeInode: number,
+  ): Promise<boolean> {
+    try {
+      const checkout = await fs.lstat(worktreePath);
+      return (
+        checkout.isDirectory() &&
+        !checkout.isSymbolicLink() &&
+        checkout.dev === worktreeDevice &&
+        checkout.ino === worktreeInode
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private managedWorktreeRemovalPaths(
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+  ): {
+    checkout: string;
+    checkoutAuthorization: string;
+    gitDir: string;
+    gitDirAuthorization: string;
+    journal: string;
+  } {
+    const token = this.validatedWorktreeOwnershipToken(ownershipToken);
+    return {
+      checkout: path.join(path.dirname(worktreePath), `.aiden-removing-${token}`),
+      checkoutAuthorization: path.join(path.dirname(worktreePath), `.aiden-authorizing-${token}`),
+      gitDir: path.join(path.dirname(worktreeGitDir), `.aiden-removing-${token}`),
+      gitDirAuthorization: path.join(path.dirname(worktreeGitDir), `.aiden-authorizing-${token}`),
+      journal: path.join(path.dirname(worktreePath), `.aiden-removing-${token}.json`),
+    };
+  }
+
+  private async syncDirectory(directoryPath: string): Promise<void> {
+    const directory = await fs.open(directoryPath, "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  }
+
+  private parsedWorktreeRemovalJournal(value: unknown): GitWorktreeRemovalJournal {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal could not be verified.",
+      );
+    }
+    const journal = value as Partial<GitWorktreeRemovalJournal>;
+    const keys = Object.keys(journal).sort();
+    const expectedKeys = [
+      "adminDevice",
+      "adminGitdirContents",
+      "adminInode",
+      "adminManifestDigest",
+      "branch",
+      "checkoutDevice",
+      "checkoutInode",
+      "checkoutManifestDigest",
+      "checkoutPath",
+      "checkoutAuthorization",
+      "checkoutQuarantine",
+      "createdFromHead",
+      "gitDir",
+      "gitDirAuthorization",
+      "gitDirQuarantine",
+      "ownershipToken",
+      "phase",
+      "repositoryPath",
+      "version",
+    ].sort();
+    if (
+      JSON.stringify(keys) !== JSON.stringify(expectedKeys) ||
+      journal.version !== 3 ||
+      (journal.phase !== "prepared" &&
+        journal.phase !== "quarantined" &&
+        journal.phase !== "checkout_cleanup_started" &&
+        journal.phase !== "checkout_complete" &&
+        journal.phase !== "admin_cleanup_started" &&
+        journal.phase !== "needs_review" &&
+        journal.phase !== "filesystem_complete") ||
+      !Number.isSafeInteger(journal.adminDevice) ||
+      !Number.isSafeInteger(journal.adminInode) ||
+      !Number.isSafeInteger(journal.checkoutDevice) ||
+      !Number.isSafeInteger(journal.checkoutInode) ||
+      journal.adminDevice! < 0 ||
+      journal.adminInode! < 0 ||
+      journal.checkoutDevice! < 0 ||
+      journal.checkoutInode! < 0 ||
+      typeof journal.adminGitdirContents !== "string" ||
+      (journal.adminManifestDigest !== null &&
+        (typeof journal.adminManifestDigest !== "string" ||
+          !/^[0-9a-f]{64}$/u.test(journal.adminManifestDigest))) ||
+      typeof journal.branch !== "string" ||
+      (journal.checkoutManifestDigest !== null &&
+        (typeof journal.checkoutManifestDigest !== "string" ||
+          !/^[0-9a-f]{64}$/u.test(journal.checkoutManifestDigest))) ||
+      typeof journal.checkoutPath !== "string" ||
+      typeof journal.checkoutAuthorization !== "string" ||
+      typeof journal.checkoutQuarantine !== "string" ||
+      typeof journal.createdFromHead !== "string" ||
+      typeof journal.gitDir !== "string" ||
+      typeof journal.gitDirAuthorization !== "string" ||
+      typeof journal.gitDirQuarantine !== "string" ||
+      typeof journal.ownershipToken !== "string" ||
+      typeof journal.repositoryPath !== "string" ||
+      !path.isAbsolute(journal.checkoutPath) ||
+      !path.isAbsolute(journal.checkoutAuthorization) ||
+      !path.isAbsolute(journal.checkoutQuarantine) ||
+      !path.isAbsolute(journal.gitDir) ||
+      !path.isAbsolute(journal.gitDirAuthorization) ||
+      !path.isAbsolute(journal.gitDirQuarantine) ||
+      !path.isAbsolute(journal.repositoryPath)
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal could not be verified.",
+      );
+    }
+    this.validatedWorktreeOwnershipToken(journal.ownershipToken);
+    return journal as GitWorktreeRemovalJournal;
+  }
+
+  private async readWorktreeRemovalJournal(
+    journalPath: string,
+    expected?: GitWorktreeRemovalJournal,
+  ): Promise<GitWorktreeRemovalJournal | undefined> {
+    try {
+      const stat = await fs.lstat(journalPath);
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.size <= 0 ||
+        stat.size > 64 * 1024 ||
+        (stat.mode & 0o077) !== 0
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree deletion journal could not be verified.",
+        );
+      }
+      const journal = this.parsedWorktreeRemovalJournal(
+        JSON.parse(await fs.readFile(journalPath, "utf8")),
+      );
+      if (expected && JSON.stringify(journal) !== JSON.stringify(expected)) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree deletion journal could not be verified.",
+        );
+      }
+      return journal;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if (error instanceof GitServiceError) throw error;
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal could not be verified.",
+        error,
+      );
+    }
+  }
+
+  private async persistWorktreeRemovalJournal(
+    journalPath: string,
+    journal: GitWorktreeRemovalJournal,
+  ): Promise<void> {
+    let handle: fs.FileHandle;
+    try {
+      handle = await fs.open(journalPath, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        await this.readWorktreeRemovalJournal(journalPath, journal);
+        await this.syncDirectory(path.dirname(journalPath));
+        return;
+      }
+      throw error;
+    }
+    try {
+      await handle.writeFile(`${JSON.stringify(journal)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await this.syncDirectory(path.dirname(journalPath));
+  }
+
+  private async replaceWorktreeRemovalJournal(
+    journalPath: string,
+    expected: GitWorktreeRemovalJournal,
+    phase: GitWorktreeRemovalJournal["phase"],
+    updates: Partial<
+      Pick<GitWorktreeRemovalJournal, "adminManifestDigest" | "checkoutManifestDigest">
+    > = {},
+  ): Promise<GitWorktreeRemovalJournal> {
+    await this.readWorktreeRemovalJournal(journalPath, expected);
+    const next = { ...expected, ...updates, phase };
+    const temporaryPath = `${journalPath}.tmp-${randomUUID()}`;
+    let handle: fs.FileHandle | undefined;
+    try {
+      handle = await fs.open(temporaryPath, "wx", 0o600);
+      await handle.writeFile(`${JSON.stringify(next)}\n`, "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await fs.rename(temporaryPath, journalPath);
+      await this.syncDirectory(path.dirname(journalPath));
+      return next;
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      await fs.unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async clearWorktreeRemovalJournal(
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+    journal: GitWorktreeRemovalJournal,
+  ): Promise<void> {
+    const journalPath = this.managedWorktreeRemovalPaths(
+      worktreePath,
+      worktreeGitDir,
+      ownershipToken,
+    ).journal;
+    const persisted = await this.readWorktreeRemovalJournal(journalPath, journal);
+    if (persisted) await fs.unlink(journalPath);
+    await this.syncDirectory(path.dirname(journalPath));
+  }
+
+  private async worktreeAdminIdentity(
+    candidate: string,
+    originalGitDir: string,
+    worktreePath: string,
+    ownershipToken: string,
+    expected?: GitWorktreeAdminIdentity,
+  ): Promise<GitWorktreeAdminIdentity> {
+    const expectedToken = this.validatedWorktreeOwnershipToken(ownershipToken);
+    const ownerPath = path.join(candidate, WORKTREE_OWNER_MARKER);
+    const gitdirPath = path.join(candidate, "gitdir");
+    const [directory, gitMarker, ownerMarker] = await Promise.all([
+      fs.lstat(candidate),
+      fs.lstat(gitdirPath),
+      fs.lstat(ownerPath),
+    ]);
+    if (
+      !directory.isDirectory() ||
+      directory.isSymbolicLink() ||
+      !gitMarker.isFile() ||
+      gitMarker.isSymbolicLink() ||
+      gitMarker.size <= 0 ||
+      gitMarker.size > 4_096 ||
+      !ownerMarker.isFile() ||
+      ownerMarker.isSymbolicLink() ||
+      ownerMarker.size <= 0 ||
+      ownerMarker.size > 128
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree administrative identity could not be verified.",
+      );
+    }
+    const [gitdirContents, actualToken] = await Promise.all([
+      fs.readFile(gitdirPath, "utf8"),
+      fs.readFile(ownerPath, "utf8"),
+    ]);
+    if (actualToken.trim() !== expectedToken) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree ownership could not be verified.",
+      );
+    }
+    const gitFile = gitdirContents.trim();
+    if (path.basename(gitFile) !== ".git") {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree administrative identity could not be verified.",
+      );
+    }
+    const registeredGitFile = path.isAbsolute(gitFile)
+      ? path.resolve(gitFile)
+      : path.resolve(originalGitDir, gitFile);
+    if (registeredGitFile !== path.resolve(worktreePath, ".git")) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree administrative identity could not be verified.",
+      );
+    }
+    const identity = {
+      device: directory.dev,
+      gitdirContents,
+      inode: directory.ino,
+    };
+    if (
+      expected &&
+      (identity.device !== expected.device ||
+        identity.inode !== expected.inode ||
+        identity.gitdirContents !== expected.gitdirContents)
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree administrative identity changed during deletion.",
+      );
+    }
+    return identity;
+  }
+
+  private async pathExists(candidate: string): Promise<boolean> {
+    try {
+      await fs.lstat(candidate);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  private async finalizeMissingWorktreeRemovalRoot(
+    targetPath: string,
+    manifestDigest: string | null,
+    journalPath: string,
+    journal: GitWorktreeRemovalJournal,
+  ): Promise<GitWorktreeRemovalJournal> {
+    try {
+      if (manifestDigest === null) {
+        if (await this.worktreeRemovalManifestInspector(targetPath)) {
+          await this.replaceWorktreeRemovalJournal(journalPath, journal, "needs_review");
+          throw new GitServiceError(
+            "command_failed",
+            "An unjournaled managed worktree removal manifest was preserved for review.",
+          );
+        }
+      } else {
+        await this.worktreeRemovalManifestFinalizer(targetPath, manifestDigest);
+      }
+      return journal;
+    } catch (error) {
+      if (error instanceof GitServiceError) throw error;
+      if (
+        error instanceof ManagedWorktreeRemoverError &&
+        (error.failure === "identity_changed" || error.failure === "mutation_detected")
+      ) {
+        await this.replaceWorktreeRemovalJournal(journalPath, journal, "needs_review");
+      }
+      if (error instanceof ManagedWorktreeRemoverError) {
+        throw new GitServiceError("command_failed", error.message, error);
+      }
+      throw error;
+    }
+  }
+
+  private async restoreQuarantinedPath(quarantine: string, original: string): Promise<boolean> {
+    try {
+      if (await this.pathExists(original)) return false;
+      await fs.rename(quarantine, original);
+      await this.syncDirectory(path.dirname(original));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Capture the exact owned checkout before removing it. A path-bearing
+   * `git worktree remove` command leaves a check-to-exec window in which an
+   * unrelated replacement can be moved into the registered pathname and
+   * deleted by Git. Renaming first is atomic; the post-rename inode/admin
+   * checks make the captured directory, rather than its former name, the
+   * deletion authority.
+   */
+  private async quarantineAndRemoveManagedWorktree(
+    repo: GitRepository,
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+    worktreeDevice: number,
+    worktreeInode: number,
+    branch: string,
+    createdFromHead: string,
+    signal: AbortSignal | undefined,
+    onDestructiveMutation: () => void,
+  ): Promise<GitWorktreeRemovalJournal> {
+    const originalGitDir = this.validatedWorktreeGitDir(repo, worktreeGitDir);
+    const removal = this.managedWorktreeRemovalPaths(worktreePath, originalGitDir, ownershipToken);
+    let checkoutMovedThisCall = false;
+    let adminMovedThisCall = false;
+    const [checkoutQuarantineExists, checkoutAuthorizationExists] = await Promise.all([
+      this.pathExists(removal.checkout),
+      this.pathExists(removal.checkoutAuthorization),
+    ]);
+    const [adminQuarantineExists, adminAuthorizationExists] = await Promise.all([
+      this.pathExists(removal.gitDir),
+      this.pathExists(removal.gitDirAuthorization),
+    ]);
+    if (
+      (checkoutQuarantineExists && checkoutAuthorizationExists) ||
+      (adminQuarantineExists && adminAuthorizationExists)
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "Conflicting managed worktree recovery paths were preserved for review.",
+      );
+    }
+    let checkoutRemovalPath = checkoutAuthorizationExists
+      ? removal.checkoutAuthorization
+      : checkoutQuarantineExists
+        ? removal.checkout
+        : undefined;
+    let adminRemovalPath = adminAuthorizationExists
+      ? removal.gitDirAuthorization
+      : adminQuarantineExists
+        ? removal.gitDir
+        : undefined;
+    let checkoutQuarantined = checkoutRemovalPath !== undefined;
+    let adminQuarantined = adminRemovalPath !== undefined;
+    if (signal?.aborted) {
+      throw new GitServiceError("aborted", "Git operation was cancelled.");
+    }
+    let journal = await this.readWorktreeRemovalJournal(removal.journal);
+    const recoveringFromJournal = journal !== undefined;
+    if (journal) {
+      const matchesRecord =
+        journal.repositoryPath === repo.topLevel &&
+        journal.checkoutPath === worktreePath &&
+        journal.checkoutAuthorization === removal.checkoutAuthorization &&
+        journal.checkoutQuarantine === removal.checkout &&
+        journal.gitDir === originalGitDir &&
+        journal.gitDirAuthorization === removal.gitDirAuthorization &&
+        journal.gitDirQuarantine === removal.gitDir &&
+        journal.ownershipToken === ownershipToken &&
+        journal.checkoutDevice === worktreeDevice &&
+        journal.checkoutInode === worktreeInode &&
+        journal.branch === branch &&
+        journal.createdFromHead === createdFromHead;
+      if (!matchesRecord) {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree deletion journal does not match this workspace.",
+        );
+      }
+      if (journal.phase === "needs_review") {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree changed during deletion and was preserved for review.",
+        );
+      }
+      if (journal.phase === "filesystem_complete") {
+        if (checkoutQuarantined || adminQuarantined) {
+          journal = await this.replaceWorktreeRemovalJournal(
+            removal.journal,
+            journal,
+            "needs_review",
+          );
+          throw new GitServiceError(
+            "command_failed",
+            "A completed managed worktree deletion still has recovery paths and was preserved for review.",
+          );
+        }
+        return journal;
+      }
+      if (journal.phase === "quarantined" && (!checkoutQuarantined || !adminQuarantined)) {
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "needs_review",
+        );
+        throw new GitServiceError(
+          "command_failed",
+          "A managed worktree recovery phase did not match its filesystem paths and was preserved for review.",
+        );
+      }
+      if (journal.phase === "checkout_cleanup_started" && !checkoutQuarantined) {
+        journal = await this.finalizeMissingWorktreeRemovalRoot(
+          removal.checkout,
+          journal.checkoutManifestDigest,
+          removal.journal,
+          journal,
+        );
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "checkout_complete",
+        );
+      }
+      if (journal.phase === "checkout_complete" && checkoutQuarantined) {
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "needs_review",
+        );
+        throw new GitServiceError(
+          "command_failed",
+          "A completed checkout cleanup still has a recovery path and was preserved for review.",
+        );
+      }
+      if (journal.phase === "checkout_complete" && !checkoutQuarantined && !adminQuarantined) {
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "needs_review",
+        );
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree administrative recovery path disappeared before cleanup was authorized.",
+        );
+      }
+      if (journal.phase === "admin_cleanup_started") {
+        if (checkoutQuarantined) {
+          journal = await this.replaceWorktreeRemovalJournal(
+            removal.journal,
+            journal,
+            "needs_review",
+          );
+          throw new GitServiceError(
+            "command_failed",
+            "Administrative cleanup started while a checkout recovery path remained.",
+          );
+        }
+        if (!adminQuarantined) {
+          journal = await this.finalizeMissingWorktreeRemovalRoot(
+            removal.gitDir,
+            journal.adminManifestDigest,
+            removal.journal,
+            journal,
+          );
+          return this.replaceWorktreeRemovalJournal(
+            removal.journal,
+            journal,
+            "filesystem_complete",
+          );
+        }
+      }
+    } else {
+      if (checkoutQuarantined || adminQuarantined) {
+        throw new GitServiceError(
+          "command_failed",
+          "An unjournaled managed worktree recovery path was preserved.",
+        );
+      }
+      if (
+        !(await this.managedWorktreeCheckoutMatches(
+          worktreePath,
+          originalGitDir,
+          worktreeDevice,
+          worktreeInode,
+        ))
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "This managed worktree moved or changed identity outside Aiden. Restore its original path and branch before deleting it from Aiden.",
+        );
+      }
+      const initialAdminIdentity = await this.worktreeAdminIdentity(
+        originalGitDir,
+        originalGitDir,
+        worktreePath,
+        ownershipToken,
+      );
+      journal = {
+        version: 3,
+        phase: "prepared",
+        adminDevice: initialAdminIdentity.device,
+        adminGitdirContents: initialAdminIdentity.gitdirContents,
+        adminInode: initialAdminIdentity.inode,
+        adminManifestDigest: null,
+        branch,
+        checkoutDevice: worktreeDevice,
+        checkoutInode: worktreeInode,
+        checkoutManifestDigest: null,
+        checkoutPath: worktreePath,
+        checkoutAuthorization: removal.checkoutAuthorization,
+        checkoutQuarantine: removal.checkout,
+        createdFromHead,
+        gitDir: originalGitDir,
+        gitDirAuthorization: removal.gitDirAuthorization,
+        gitDirQuarantine: removal.gitDir,
+        ownershipToken,
+        repositoryPath: repo.topLevel,
+      };
+      await this.persistWorktreeRemovalJournal(removal.journal, journal);
+    }
+    const journalAdminIdentity: GitWorktreeAdminIdentity = {
+      device: journal.adminDevice,
+      gitdirContents: journal.adminGitdirContents,
+      inode: journal.adminInode,
+    };
+
+    if (checkoutQuarantined) {
+      if (
+        !(await this.managedWorktreeCheckoutRootMatches(
+          checkoutRemovalPath!,
+          worktreeDevice,
+          worktreeInode,
+        ))
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "A managed worktree recovery path contains an unrelated checkout and was preserved.",
+        );
+      }
+      onDestructiveMutation();
+    } else if (adminQuarantined) {
+      if (
+        await this.managedWorktreeCheckoutRootMatches(worktreePath, worktreeDevice, worktreeInode)
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "A managed worktree recovery path conflicts with the live checkout. Both were preserved.",
+        );
+      }
+      // The exact checkout was already removed before an earlier attempt
+      // stopped. The ownership marker in the quarantined administrative
+      // directory is the durable authority for finishing that attempt.
+      onDestructiveMutation();
+    } else {
+      if (
+        !(await this.managedWorktreeCheckoutMatches(
+          worktreePath,
+          originalGitDir,
+          worktreeDevice,
+          worktreeInode,
+        ))
+      ) {
+        throw new GitServiceError(
+          "command_failed",
+          "This managed worktree moved or changed identity outside Aiden. Restore its original path and branch before deleting it from Aiden.",
+        );
+      }
+      await this.worktreeAdminIdentity(
+        originalGitDir,
+        originalGitDir,
+        worktreePath,
+        ownershipToken,
+        journalAdminIdentity,
+      );
+      await fs.rename(worktreePath, removal.checkout);
+      checkoutMovedThisCall = true;
+      checkoutQuarantined = true;
+      checkoutRemovalPath = removal.checkout;
+      onDestructiveMutation();
+      await this.syncDirectory(path.dirname(worktreePath));
+      const checkoutGitDir = await this.managedWorktreeCheckoutGitDir(
+        checkoutRemovalPath,
+        worktreeDevice,
+        worktreeInode,
+      );
+      if (checkoutGitDir !== originalGitDir) {
+        await this.restoreQuarantinedPath(removal.checkout, worktreePath);
+        throw new GitServiceError(
+          "command_failed",
+          "This managed worktree changed identity at the deletion boundary and was preserved.",
+        );
+      }
+    }
+
+    if (
+      (await this.managedWorktreeCheckoutMatches(
+        worktreePath,
+        originalGitDir,
+        worktreeDevice,
+        worktreeInode,
+      )) &&
+      checkoutQuarantined
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "A managed worktree recovery path conflicts with the live checkout. Both were preserved.",
+      );
+    }
+
+    let adminIdentity: GitWorktreeAdminIdentity;
+    let activeGitDir: string;
+    if (adminQuarantined) {
+      if (await this.pathExists(originalGitDir)) {
+        throw new GitServiceError(
+          "command_failed",
+          "A managed worktree recovery path conflicts with its Git registration. Both were preserved.",
+        );
+      }
+      if (
+        journal.phase === "admin_cleanup_started" &&
+        adminRemovalPath === removal.gitDirAuthorization
+      ) {
+        if (
+          !(await this.managedWorktreeCheckoutRootMatches(
+            adminRemovalPath,
+            journalAdminIdentity.device,
+            journalAdminIdentity.inode,
+          ))
+        ) {
+          throw new GitServiceError(
+            "command_failed",
+            "The isolated managed worktree administrative identity changed during recovery.",
+          );
+        }
+        adminIdentity = journalAdminIdentity;
+      } else {
+        adminIdentity = await this.worktreeAdminIdentity(
+          adminRemovalPath!,
+          originalGitDir,
+          worktreePath,
+          ownershipToken,
+          journalAdminIdentity,
+        );
+      }
+      activeGitDir = adminRemovalPath!;
+      onDestructiveMutation();
+    } else {
+      adminIdentity = await this.worktreeAdminIdentity(
+        originalGitDir,
+        originalGitDir,
+        worktreePath,
+        ownershipToken,
+        journalAdminIdentity,
+      );
+      activeGitDir = originalGitDir;
+    }
+
+    // Re-run the clean-tree guard against the captured inode. This preserves a
+    // file that appeared after the first status read but before the atomic
+    // rename, while the old registered pathname is no longer a deletion target.
+    const checkoutCleanupHasDurableManifest =
+      recoveringFromJournal &&
+      journal.phase === "checkout_cleanup_started" &&
+      journal.checkoutManifestDigest !== null;
+    if (checkoutQuarantined && !checkoutCleanupHasDurableManifest) {
+      const status = parseGitStatus(
+        (
+          await this.run(repo.cwd, [
+            `--git-dir=${activeGitDir}`,
+            `--work-tree=${checkoutRemovalPath!}`,
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+          ])
+        ).stdout,
+      );
+      if (status.uncommitted > 0 || status.ignored > 0) {
+        if (!adminQuarantined && checkoutMovedThisCall) {
+          await this.restoreQuarantinedPath(removal.checkout, worktreePath);
+        }
+        if (recoveringFromJournal && journal.phase === "checkout_cleanup_started") {
+          journal = await this.replaceWorktreeRemovalJournal(
+            removal.journal,
+            journal,
+            "needs_review",
+          );
+        }
+        throw new GitServiceError(
+          "dirty_worktree",
+          "The managed worktree contains uncommitted, untracked, or ignored files and was preserved.",
+        );
+      }
+    }
+    if (
+      checkoutQuarantined &&
+      !(await this.managedWorktreeCheckoutRootMatches(
+        checkoutRemovalPath!,
+        worktreeDevice,
+        worktreeInode,
+      ))
+    ) {
+      if (!adminQuarantined && checkoutMovedThisCall) {
+        await this.restoreQuarantinedPath(removal.checkout, worktreePath);
+      }
+      if (recoveringFromJournal && journal.phase === "checkout_cleanup_started") {
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "needs_review",
+        );
+      }
+      throw new GitServiceError(
+        "command_failed",
+        "This managed worktree changed identity at the deletion boundary and was preserved.",
+      );
+    }
+
+    if (!adminQuarantined) {
+      await fs.rename(originalGitDir, removal.gitDir);
+      adminMovedThisCall = true;
+      adminQuarantined = true;
+      adminRemovalPath = removal.gitDir;
+      onDestructiveMutation();
+      await this.syncDirectory(path.dirname(originalGitDir));
+      try {
+        await this.worktreeAdminIdentity(
+          removal.gitDir,
+          originalGitDir,
+          worktreePath,
+          ownershipToken,
+          adminIdentity,
+        );
+      } catch (error) {
+        if (adminMovedThisCall) {
+          await this.restoreQuarantinedPath(removal.gitDir, originalGitDir);
+        }
+        if (checkoutMovedThisCall) {
+          await this.restoreQuarantinedPath(removal.checkout, worktreePath);
+        }
+        throw error;
+      }
+    }
+
+    if (
+      !(
+        journal.phase === "admin_cleanup_started" &&
+        adminRemovalPath === removal.gitDirAuthorization
+      )
+    ) {
+      await this.worktreeAdminIdentity(
+        adminRemovalPath!,
+        originalGitDir,
+        worktreePath,
+        ownershipToken,
+        adminIdentity,
+      );
+    }
+    if (journal.phase === "prepared") {
+      journal = await this.replaceWorktreeRemovalJournal(removal.journal, journal, "quarantined");
+    }
+    try {
+      if (checkoutQuarantined) {
+        if (journal.phase === "quarantined") {
+          journal = await this.replaceWorktreeRemovalJournal(
+            removal.journal,
+            journal,
+            "checkout_cleanup_started",
+          );
+        }
+        if (journal.phase !== "checkout_cleanup_started") {
+          throw new GitServiceError(
+            "command_failed",
+            "The managed checkout cleanup phase could not be verified.",
+          );
+        }
+        if (
+          !(await this.managedWorktreeCheckoutRootMatches(
+            checkoutRemovalPath!,
+            worktreeDevice,
+            worktreeInode,
+          ))
+        ) {
+          throw new ManagedWorktreeRemoverError("identity_changed");
+        }
+        await this.worktreeDirectoryRemover({
+          path: checkoutRemovalPath!,
+          device: worktreeDevice,
+          inode: worktreeInode,
+          authorizedManifestDigest: journal.checkoutManifestDigest ?? undefined,
+          authorize: async (scannedPath, manifestDigest) => {
+            const status = parseGitStatus(
+              (
+                await this.run(repo.cwd, [
+                  `--git-dir=${adminRemovalPath!}`,
+                  `--work-tree=${scannedPath}`,
+                  "status",
+                  "--porcelain=v2",
+                  "--branch",
+                  "-z",
+                  "--untracked-files=all",
+                  "--ignored=matching",
+                ])
+              ).stdout,
+            );
+            if (status.uncommitted > 0 || status.ignored > 0) {
+              throw new GitServiceError(
+                "dirty_worktree",
+                "The managed worktree changed after its deletion scan and was preserved for review.",
+              );
+            }
+            journal = await this.replaceWorktreeRemovalJournal(
+              removal.journal,
+              journal!,
+              journal!.phase,
+              { checkoutManifestDigest: manifestDigest },
+            );
+          },
+        });
+        checkoutQuarantined = false;
+        checkoutRemovalPath = undefined;
+      }
+      if (journal.phase === "checkout_cleanup_started") {
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "checkout_complete",
+        );
+      }
+      if (journal.phase === "checkout_complete") {
+        journal = await this.replaceWorktreeRemovalJournal(
+          removal.journal,
+          journal,
+          "admin_cleanup_started",
+        );
+      }
+      if (journal.phase !== "admin_cleanup_started") {
+        throw new GitServiceError(
+          "command_failed",
+          "The managed worktree administrative cleanup phase could not be verified.",
+        );
+      }
+      if (adminQuarantined) {
+        if (adminRemovalPath === removal.gitDir) {
+          await this.worktreeAdminIdentity(
+            adminRemovalPath,
+            originalGitDir,
+            worktreePath,
+            ownershipToken,
+            adminIdentity,
+          );
+        } else if (
+          !(await this.managedWorktreeCheckoutRootMatches(
+            adminRemovalPath!,
+            adminIdentity.device,
+            adminIdentity.inode,
+          ))
+        ) {
+          throw new ManagedWorktreeRemoverError("identity_changed");
+        }
+        await this.worktreeDirectoryRemover({
+          path: adminRemovalPath!,
+          device: adminIdentity.device,
+          inode: adminIdentity.inode,
+          authorizedManifestDigest: journal.adminManifestDigest ?? undefined,
+          authorize: async (scannedPath, manifestDigest) => {
+            await this.worktreeAdminIdentity(
+              scannedPath,
+              originalGitDir,
+              worktreePath,
+              ownershipToken,
+              adminIdentity,
+            );
+            journal = await this.replaceWorktreeRemovalJournal(
+              removal.journal,
+              journal!,
+              journal!.phase,
+              { adminManifestDigest: manifestDigest },
+            );
+          },
+        });
+        adminQuarantined = false;
+        adminRemovalPath = undefined;
+      }
+    } catch (error) {
+      const requiresReview =
+        (error instanceof ManagedWorktreeRemoverError &&
+          (error.failure === "identity_changed" || error.failure === "mutation_detected")) ||
+        (error instanceof GitServiceError &&
+          (error.code === "dirty_worktree" ||
+            /changed|conflict|identity|preserved|could not be verified/u.test(error.message)));
+      if (requiresReview) {
+        await this.replaceWorktreeRemovalJournal(removal.journal, journal, "needs_review").catch(
+          () => undefined,
+        );
+      }
+      if (error instanceof ManagedWorktreeRemoverError) {
+        throw new GitServiceError("command_failed", error.message, error);
+      }
+      throw error;
+    }
+    return this.replaceWorktreeRemovalJournal(removal.journal, journal, "filesystem_complete");
   }
 
   private async rollbackCreatedWorktree(
@@ -2655,71 +4430,268 @@ export class GitService {
     branch: string,
     createdFromHead: string,
     createdByCommand: boolean,
+    identity?: GitWorktreeRollbackIdentity,
   ): Promise<unknown | undefined> {
     let rollbackError: unknown;
-    let ownedRegistration = false;
+    let removalJournal: GitWorktreeRemovalJournal | undefined;
+    let worktrees: GitWorktree[];
     try {
-      ownedRegistration = createdByCommand || (await this.inspectWorktrees(repo, repo.cwd)).some(
-        (worktree) =>
-          worktree.branch === branch && path.resolve(worktree.path) === path.resolve(worktreePath),
+      worktrees = await this.inspectWorktrees(repo, repo.cwd);
+    } catch (error) {
+      return error;
+    }
+    const registrationHint = worktrees.find(
+      (worktree) =>
+        worktree.branch === branch && path.resolve(worktree.path) === path.resolve(worktreePath),
+    );
+
+    if (!registrationHint) {
+      // A failed command may leave an unrelated directory at the randomized
+      // target. With no exact Git registration, Aiden has no filesystem
+      // deletion authority. A command that definitely returned success still
+      // owns its unchanged branch ref, which can be removed atomically.
+      if (createdByCommand) {
+        try {
+          await this.deleteBranchRefIfMatches(repo, branch, createdFromHead);
+        } catch (error) {
+          return error;
+        }
+      }
+      return undefined;
+    }
+    if (!identity) {
+      return new GitServiceError(
+        "command_failed",
+        "The partially created worktree has no stable ownership identity and was preserved.",
+      );
+    }
+
+    let registration: GitWorktree | undefined;
+    try {
+      registration = await this.managedWorktreeRegistration(
+        repo,
+        worktrees,
+        worktreePath,
+        branch,
+        identity.worktreeGitDir,
+        identity.ownershipToken,
       );
     } catch (error) {
-      rollbackError = error;
+      return error;
     }
+    if (
+      !registration ||
+      registration.branch !== branch ||
+      path.resolve(registration.path) !== path.resolve(worktreePath)
+    ) {
+      return new GitServiceError(
+        "command_failed",
+        "The partially created worktree changed ownership before rollback.",
+      );
+    }
+    if (registration.head !== createdFromHead) {
+      return new GitServiceError(
+        "command_failed",
+        "The partially created worktree changed identity before rollback.",
+      );
+    }
+
+    if (
+      !(await this.managedWorktreeCheckoutMatches(
+        worktreePath,
+        identity.worktreeGitDir,
+        identity.worktreeDevice,
+        identity.worktreeInode,
+      ))
+    ) {
+      return new GitServiceError(
+        "command_failed",
+        "The partially created worktree checkout identity could not be verified.",
+      );
+    }
+
     try {
-      await this.run(repo.cwd, ["worktree", "remove", "--force", "--", worktreePath], {
-        allowExitCodes: [128],
-        mutation: true,
-      });
-      await this.run(repo.cwd, ["worktree", "prune"], { mutation: true });
+      const status = parseGitStatus(
+        (
+          await this.run(worktreePath, [
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+          ])
+        ).stdout,
+      );
+      if (status.uncommitted > 0 || status.ignored > 0) {
+        return new GitServiceError(
+          "dirty_worktree",
+          "The partially created worktree contains uncommitted, untracked, or ignored files and was preserved for inspection.",
+        );
+      }
+      if (
+        !(await this.managedWorktreeCheckoutMatches(
+          worktreePath,
+          identity.worktreeGitDir,
+          identity.worktreeDevice,
+          identity.worktreeInode,
+        ))
+      ) {
+        return new GitServiceError(
+          "command_failed",
+          "The partially created worktree changed identity at the rollback boundary.",
+        );
+      }
+      removalJournal = await this.quarantineAndRemoveManagedWorktree(
+        repo,
+        worktreePath,
+        identity.worktreeGitDir,
+        identity.ownershipToken,
+        identity.worktreeDevice,
+        identity.worktreeInode,
+        branch,
+        createdFromHead,
+        undefined,
+        () => undefined,
+      );
     } catch (error) {
       rollbackError ??= error;
     }
     try {
       const remaining = await this.inspectWorktrees(repo, repo.cwd);
+      const registrationRemains = remaining.some(
+        (worktree) =>
+          worktree.branch === branch && path.resolve(worktree.path) === path.resolve(worktreePath),
+      );
       const branchInUse = remaining.some((worktree) => worktree.branch === branch);
-      const ref = await this.run(repo.cwd, ["show-ref", "--verify", "--hash", `refs/heads/${branch}`], {
-        allowExitCodes: [1],
-      });
-      if (ownedRegistration && !branchInUse && ref.exitCode === 0 && ref.stdout.trim() === createdFromHead) {
-        await this.run(repo.cwd, ["branch", "-D", "--", branch], { mutation: true });
+      if (!rollbackError && !registrationRemains && !branchInUse) {
+        await this.deleteBranchRefIfMatches(repo, branch, createdFromHead);
+      } else if (!rollbackError) {
+        rollbackError = new GitServiceError(
+          "command_failed",
+          "The partially created worktree remained registered after rollback.",
+        );
       }
     } catch (error) {
       rollbackError ??= error;
     }
-    await fs.rm(worktreePath, { force: true, recursive: true }).catch((error) => {
-      rollbackError ??= error;
-    });
+    if (!rollbackError && removalJournal) {
+      try {
+        await this.clearWorktreeRemovalJournal(
+          worktreePath,
+          identity!.worktreeGitDir,
+          identity!.ownershipToken,
+          removalJournal,
+        );
+      } catch (error) {
+        rollbackError = error;
+      }
+    }
     return rollbackError;
   }
 
-  async createWorktree(cwd: string, root: string, branch: string, signal?: AbortSignal): Promise<GitCreatedWorktree> {
+  private async deleteBranchRefIfMatches(
+    repo: GitRepository,
+    branch: string,
+    expectedHead: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const refName = `refs/heads/${branch}`;
+    try {
+      // The expected old object makes deletion one compare-and-swap operation.
+      // A preceding show-ref cannot provide this authority because an external
+      // Git process may advance or recreate the branch before deletion.
+      await this.run(repo.cwd, ["update-ref", "-d", refName, expectedHead], {
+        mutation: true,
+        signal,
+      });
+      return true;
+    } catch (error) {
+      if (
+        error instanceof GitServiceError &&
+        (error.code === "aborted" || error.code === "output_limit" || error.code === "timeout")
+      ) {
+        throw error;
+      }
+      const current = await this.run(repo.cwd, ["show-ref", "--verify", "--hash", refName], {
+        allowExitCodes: [1],
+        signal,
+      });
+      if (current.exitCode !== 0 || current.stdout.trim() !== expectedHead) return false;
+      throw error;
+    }
+  }
+
+  async createWorktree(
+    cwd: string,
+    root: string,
+    branch: string,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree> {
     const repo = this.requireRepository(await this.repository(cwd));
     await this.validateBranchName(repo, branch);
     return this.enqueueMutation(repo.commonDir, async () => {
       const createdFromHead = await this.requireHead(repo);
-      const exists = await this.run(repo.cwd, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
-        allowExitCodes: [1],
-      });
-      if (exists.exitCode === 0) throw new GitServiceError("invalid_ref", `Branch “${branch}” already exists.`);
+      const exists = await this.run(
+        repo.cwd,
+        ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+        {
+          allowExitCodes: [1],
+        },
+      );
+      if (exists.exitCode === 0)
+        throw new GitServiceError("invalid_ref", `Branch “${branch}” already exists.`);
 
       const repositoryId = createHash("sha256").update(repo.commonDir).digest("hex").slice(0, 12);
-      const repositoryName = path.basename(repo.topLevel).replace(/[^a-zA-Z0-9._-]+/g, "-") || "repository";
-      const branchSlug = branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
+      const repositoryName =
+        path.basename(repo.topLevel).replace(/[^a-zA-Z0-9._-]+/g, "-") || "repository";
+      const branchSlug =
+        branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
       await fs.mkdir(root, { recursive: true, mode: 0o700 });
       const managedRoot = await fs.realpath(root);
       const repositoryRoot = path.join(managedRoot, `${repositoryName}-${repositoryId}`);
       await fs.mkdir(repositoryRoot, { recursive: true, mode: 0o700 });
       const worktreePath = path.join(repositoryRoot, `${branchSlug}-${randomUUID().slice(0, 8)}`);
       let createdByCommand = false;
+      let rollbackIdentity: GitWorktreeRollbackIdentity | undefined;
       try {
         await this.run(repo.cwd, ["worktree", "add", "-b", branch, "--", worktreePath, "HEAD"], {
           mutation: true,
           signal,
         });
         createdByCommand = true;
-        const created = (await this.inspectWorktrees(repo, worktreePath)).find((worktree) => worktree.branch === branch);
-        if (!created) throw new GitServiceError("command_failed", "Git created the worktree but Aiden could not inspect it.");
+        const created = (await this.inspectWorktrees(repo, worktreePath)).find(
+          (worktree) => worktree.branch === branch,
+        );
+        if (!created)
+          throw new GitServiceError(
+            "command_failed",
+            "Git created the worktree but Aiden could not inspect it.",
+          );
+        const gitDirResult = await this.run(created.path, [
+          "rev-parse",
+          "--path-format=absolute",
+          "--git-dir",
+        ]);
+        const worktreeGitDir = this.validatedWorktreeGitDir(
+          repo,
+          await fs.realpath(gitDirResult.stdout.trim()),
+        );
+        const ownershipToken = randomUUID();
+        await this.persistWorktreeOwnership(worktreeGitDir, ownershipToken);
+        const checkoutIdentity = await fs.lstat(created.path);
+        if (!checkoutIdentity.isDirectory() || checkoutIdentity.isSymbolicLink()) {
+          throw new GitServiceError(
+            "command_failed",
+            "The managed worktree checkout identity could not be verified.",
+          );
+        }
+        rollbackIdentity = {
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice: checkoutIdentity.dev,
+          worktreeInode: checkoutIdentity.ino,
+        };
         const relativeWorkspacePath = path.relative(repo.topLevel, repo.cwd);
         const workspacePath = path.join(created.path, relativeWorkspacePath);
         if (!(await fs.stat(workspacePath)).isDirectory()) {
@@ -2733,6 +4705,10 @@ export class GitService {
           branch,
           workspacePath,
           repositoryPath: repo.topLevel,
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice: checkoutIdentity.dev,
+          worktreeInode: checkoutIdentity.ino,
           createdFromHead,
         };
       } catch (error) {
@@ -2742,6 +4718,7 @@ export class GitService {
           branch,
           createdFromHead,
           createdByCommand,
+          rollbackIdentity,
         );
         if (rollbackError) {
           throw new GitServiceError(
@@ -2764,9 +4741,19 @@ export class GitService {
         created.branch,
         created.createdFromHead,
         true,
+        {
+          worktreeGitDir: created.worktreeGitDir,
+          ownershipToken: created.ownershipToken,
+          worktreeDevice: created.worktreeDevice,
+          worktreeInode: created.worktreeInode,
+        },
       );
       if (rollbackError) {
-        throw new GitServiceError("command_failed", "Aiden could not fully roll back the managed worktree.", rollbackError);
+        throw new GitServiceError(
+          "command_failed",
+          "Aiden could not fully roll back the managed worktree.",
+          rollbackError,
+        );
       }
     });
   }
@@ -2777,35 +4764,333 @@ export class GitService {
     branch: string,
     createdFromHead: string,
     signal?: AbortSignal,
+    worktreeGitDir?: string,
+    ownershipToken?: string,
+    worktreeDevice?: number,
+    worktreeInode?: number,
+    retainRemovalJournal = false,
   ): Promise<GitDeleteWorktreeResult> {
-    const repo = this.requireRepository(await this.repository(cwd));
-    return this.enqueueMutation(repo.commonDir, async () => {
-      const registered = (await this.inspectWorktrees(repo, repo.cwd)).find(
-        (worktree) => path.resolve(worktree.path) === path.resolve(worktreePath) && worktree.branch === branch,
-      );
-      if (!registered) throw new GitServiceError("command_failed", "This managed worktree is no longer registered.");
-      const status = parseGitStatus(
-        (await this.run(worktreePath, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"]))
-          .stdout,
-      );
-      if (status.uncommitted > 0) {
-        throw new GitServiceError("dirty_worktree", "Commit, stash, or discard this worktree's changes before deleting it.");
-      }
-      await this.run(repo.cwd, ["worktree", "remove", "--", worktreePath], { mutation: true, signal });
-      const ref = await this.run(repo.cwd, ["show-ref", "--verify", "--hash", `refs/heads/${branch}`], {
-        allowExitCodes: [1],
+    let destructiveMutationAttempted = false;
+    try {
+      const repo = this.requireRepository(await this.repository(cwd));
+      return await this.enqueueMutation(repo.commonDir, async () => {
+        if (!worktreeGitDir || !ownershipToken) {
+          throw new GitServiceError(
+            "command_failed",
+            "This legacy managed worktree has no verifiable Aiden ownership marker and cannot be deleted automatically.",
+          );
+        }
+        if (
+          !Number.isSafeInteger(worktreeDevice) ||
+          !Number.isSafeInteger(worktreeInode) ||
+          worktreeDevice! < 0 ||
+          worktreeInode! < 0
+        ) {
+          throw new GitServiceError(
+            "command_failed",
+            "This legacy managed worktree has no verifiable checkout identity and cannot be deleted automatically.",
+          );
+        }
+        const removal = this.managedWorktreeRemovalPaths(
+          worktreePath,
+          this.validatedWorktreeGitDir(repo, worktreeGitDir),
+          ownershipToken,
+        );
+        const journalPending = await this.pathExists(removal.journal);
+        const recoveryPending =
+          (await this.pathExists(removal.checkout)) ||
+          (await this.pathExists(removal.checkoutAuthorization)) ||
+          (await this.pathExists(removal.gitDir)) ||
+          (await this.pathExists(removal.gitDirAuthorization)) ||
+          journalPending;
+        if (journalPending) destructiveMutationAttempted = true;
+        if (!recoveryPending) {
+          const worktrees = await this.inspectWorktrees(repo, repo.cwd);
+          const registered = await this.managedWorktreeRegistration(
+            repo,
+            worktrees,
+            worktreePath,
+            branch,
+            worktreeGitDir,
+            ownershipToken,
+          );
+          if (!registered) {
+            throw new GitServiceError(
+              "command_failed",
+              "This managed worktree is no longer registered.",
+            );
+          }
+          if (path.resolve(registered.path) !== path.resolve(worktreePath)) {
+            throw new GitServiceError(
+              "command_failed",
+              "This managed worktree moved or changed identity outside Aiden. Restore its original path and branch before deleting it from Aiden.",
+            );
+          }
+          if (registered.branch !== branch) {
+            throw new GitServiceError(
+              "command_failed",
+              "This managed worktree changed branches or became detached. Restore its original branch before deleting it from Aiden.",
+            );
+          }
+          const status = parseGitStatus(
+            (
+              await this.run(worktreePath, [
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "-z",
+                "--untracked-files=all",
+                "--ignored=matching",
+              ])
+            ).stdout,
+          );
+          if (status.uncommitted > 0 || status.ignored > 0) {
+            throw new GitServiceError(
+              "dirty_worktree",
+              "Remove, commit, stash, or discard every uncommitted, untracked, and ignored file before deleting this worktree.",
+            );
+          }
+          // Re-check the checkout itself at the destructive boundary. Git's
+          // registration and Aiden's administrative marker can both remain valid
+          // after the original directory is renamed and an unrelated replacement
+          // copies its checkout-side .git pointer into the stale path.
+          if (
+            !(await this.managedWorktreeCheckoutMatches(
+              worktreePath,
+              worktreeGitDir,
+              worktreeDevice!,
+              worktreeInode!,
+            ))
+          ) {
+            throw new GitServiceError(
+              "command_failed",
+              "This managed worktree moved or changed identity outside Aiden. Restore its original path and branch before deleting it from Aiden.",
+            );
+          }
+        }
+        const removalJournal = await this.quarantineAndRemoveManagedWorktree(
+          repo,
+          worktreePath,
+          worktreeGitDir,
+          ownershipToken,
+          worktreeDevice!,
+          worktreeInode!,
+          branch,
+          createdFromHead,
+          signal,
+          () => {
+            destructiveMutationAttempted = true;
+          },
+        );
+        const branchDeleted = await this.deleteBranchRefIfMatches(
+          repo,
+          branch,
+          createdFromHead,
+          signal,
+        );
+        if (!retainRemovalJournal) {
+          await this.clearWorktreeRemovalJournal(
+            worktreePath,
+            worktreeGitDir,
+            ownershipToken,
+            removalJournal,
+          );
+        }
+        return { branchDeleted };
       });
-      const branchDeleted = ref.exitCode === 0 && ref.stdout.trim() === createdFromHead;
-      if (branchDeleted) await this.run(repo.cwd, ["branch", "-D", "--", branch], { mutation: true, signal });
-      return { branchDeleted };
-    });
+    } catch (error) {
+      if (error instanceof GitManagedWorktreeDeleteError) throw error;
+      if (error instanceof GitServiceError) {
+        throw new GitManagedWorktreeDeleteError(error, destructiveMutationAttempted);
+      }
+      throw new GitManagedWorktreeDeleteError(
+        new GitServiceError(
+          "command_failed",
+          "Aiden could not delete the managed worktree.",
+          error,
+        ),
+        destructiveMutationAttempted,
+      );
+    }
+  }
+
+  async finalizeManagedWorktreeDeletion(
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+  ): Promise<void> {
+    const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
+    const journal = await this.readWorktreeRemovalJournal(removal.journal);
+    if (!journal) return;
+    if (
+      journal.checkoutPath !== worktreePath ||
+      journal.checkoutAuthorization !== removal.checkoutAuthorization ||
+      journal.checkoutQuarantine !== removal.checkout ||
+      journal.gitDir !== worktreeGitDir ||
+      journal.gitDirAuthorization !== removal.gitDirAuthorization ||
+      journal.gitDirQuarantine !== removal.gitDir ||
+      journal.ownershipToken !== ownershipToken
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal does not match this workspace.",
+      );
+    }
+    if (journal.phase !== "filesystem_complete") {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion has not completed its filesystem transaction.",
+      );
+    }
+    if (
+      (await this.pathExists(removal.checkout)) ||
+      (await this.pathExists(removal.checkoutAuthorization)) ||
+      (await this.pathExists(removal.gitDir)) ||
+      (await this.pathExists(removal.gitDirAuthorization))
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion is not ready to finalize.",
+      );
+    }
+    await this.clearWorktreeRemovalJournal(worktreePath, worktreeGitDir, ownershipToken, journal);
+  }
+
+  async finalizeOrphanedManagedWorktreeDeletionJournals(
+    worktreeRoot: string,
+    referencedOwnershipTokens: ReadonlySet<string> = new Set(),
+    onError: (error: unknown) => void = () => undefined,
+  ): Promise<number> {
+    const canonicalRoot = await fs.realpath(worktreeRoot);
+    const rootStat = await fs.lstat(canonicalRoot);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+      throw new GitServiceError(
+        "command_failed",
+        "Aiden's managed worktree root could not be verified.",
+      );
+    }
+
+    const repositoryEntries = await fs.readdir(canonicalRoot, { withFileTypes: true });
+    if (repositoryEntries.length > 4_096) {
+      throw new GitServiceError(
+        "command_failed",
+        "Aiden's managed worktree root contains too many entries to reconcile safely.",
+      );
+    }
+
+    let finalized = 0;
+    for (const repositoryEntry of repositoryEntries) {
+      if (!repositoryEntry.isDirectory() || repositoryEntry.isSymbolicLink()) continue;
+      const repositoryRoot = path.join(canonicalRoot, repositoryEntry.name);
+      try {
+        const [repositoryStat, canonicalRepositoryRoot] = await Promise.all([
+          fs.lstat(repositoryRoot),
+          fs.realpath(repositoryRoot),
+        ]);
+        if (
+          !repositoryStat.isDirectory() ||
+          repositoryStat.isSymbolicLink() ||
+          canonicalRepositoryRoot !== repositoryRoot
+        ) {
+          continue;
+        }
+        const entries = await fs.readdir(repositoryRoot, { withFileTypes: true });
+        if (entries.length > 4_096) {
+          throw new GitServiceError(
+            "command_failed",
+            "A managed worktree repository contains too many entries to reconcile safely.",
+          );
+        }
+        for (const entry of entries) {
+          const match =
+            entry.isFile() &&
+            !entry.isSymbolicLink() &&
+            /^\.aiden-removing-([0-9a-f-]+)\.json$/u.exec(entry.name);
+          if (!match) continue;
+          const journalPath = path.join(repositoryRoot, entry.name);
+          try {
+            const ownershipToken = this.validatedWorktreeOwnershipToken(match[1]!);
+            if (referencedOwnershipTokens.has(ownershipToken)) continue;
+            const journal = await this.readWorktreeRemovalJournal(journalPath);
+            if (!journal) continue;
+            const removal = this.managedWorktreeRemovalPaths(
+              journal.checkoutPath,
+              journal.gitDir,
+              ownershipToken,
+            );
+            if (
+              journalPath !== removal.journal ||
+              journal.ownershipToken !== ownershipToken ||
+              journal.checkoutAuthorization !== removal.checkoutAuthorization ||
+              journal.checkoutQuarantine !== removal.checkout ||
+              journal.gitDirAuthorization !== removal.gitDirAuthorization ||
+              journal.gitDirQuarantine !== removal.gitDir
+            ) {
+              throw new GitServiceError(
+                "command_failed",
+                "The orphaned managed worktree deletion journal could not be verified.",
+              );
+            }
+            if (journal.phase !== "filesystem_complete") continue;
+            const remainingPath = await Promise.all([
+              this.pathExists(journal.checkoutPath),
+              this.pathExists(journal.checkoutAuthorization),
+              this.pathExists(journal.checkoutQuarantine),
+              this.pathExists(journal.gitDir),
+              this.pathExists(journal.gitDirAuthorization),
+              this.pathExists(journal.gitDirQuarantine),
+            ]);
+            if (remainingPath.some(Boolean)) continue;
+            await this.clearWorktreeRemovalJournal(
+              journal.checkoutPath,
+              journal.gitDir,
+              ownershipToken,
+              journal,
+            );
+            finalized += 1;
+          } catch (error) {
+            onError(error);
+          }
+        }
+      } catch (error) {
+        onError(error);
+      }
+    }
+    return finalized;
+  }
+
+  async managedWorktreeDeletionPending(
+    worktreePath: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+  ): Promise<boolean> {
+    const removal = this.managedWorktreeRemovalPaths(worktreePath, worktreeGitDir, ownershipToken);
+    const journal = await this.readWorktreeRemovalJournal(removal.journal);
+    if (!journal) return false;
+    if (
+      journal.checkoutPath !== worktreePath ||
+      journal.checkoutAuthorization !== removal.checkoutAuthorization ||
+      journal.checkoutQuarantine !== removal.checkout ||
+      journal.gitDir !== worktreeGitDir ||
+      journal.gitDirAuthorization !== removal.gitDirAuthorization ||
+      journal.gitDirQuarantine !== removal.gitDir ||
+      journal.ownershipToken !== ownershipToken
+    ) {
+      throw new GitServiceError(
+        "command_failed",
+        "The managed worktree deletion journal does not match this workspace.",
+      );
+    }
+    return true;
   }
 }
 
 const gitService = new GitService();
 
-export const gitInfo = (folderPath: string) => gitService.info(folderPath);
-export const gitBranches = (folderPath: string) => gitService.branches(folderPath);
+export const gitInfo = (folderPath: string, signal?: AbortSignal) =>
+  gitService.info(folderPath, signal);
+export const gitBranches = (folderPath: string, signal?: AbortSignal) =>
+  gitService.branches(folderPath, signal);
 export const gitReview = (folderPath: string, signal?: AbortSignal) =>
   gitService.review(folderPath, signal);
 export const gitDiff = (folderPath: string, input: GitDiffInput, signal?: AbortSignal) =>
@@ -2827,9 +5112,66 @@ export const gitCheckout = (folderPath: string, name: string, signal?: AbortSign
   gitService.checkout(folderPath, name, signal);
 export const gitCreateBranch = (folderPath: string, name: string, signal?: AbortSignal) =>
   gitService.createBranch(folderPath, name, signal);
-export const gitWorktrees = (folderPath: string) => gitService.worktrees(folderPath);
-export const gitCreateWorktree = (folderPath: string, root: string, branch: string, signal?: AbortSignal) =>
-  gitService.createWorktree(folderPath, root, branch, signal);
+export const gitWorktrees = (folderPath: string, signal?: AbortSignal) =>
+  gitService.worktrees(folderPath, signal);
+export const gitManagedWorktreeRegistered = (
+  folderPath: string,
+  worktreePath: string,
+  branch: string,
+  worktreeGitDir?: string,
+  ownershipToken?: string,
+) =>
+  gitService.managedWorktreeRegistered(
+    folderPath,
+    worktreePath,
+    branch,
+    worktreeGitDir,
+    ownershipToken,
+  );
+export const gitManagedWorktreeUsable = (
+  folderPath: string,
+  worktreePath: string,
+  branch: string,
+  worktreeGitDir?: string,
+  ownershipToken?: string,
+  worktreeDevice?: number,
+  worktreeInode?: number,
+) =>
+  gitService.managedWorktreeUsable(
+    folderPath,
+    worktreePath,
+    branch,
+    worktreeGitDir,
+    ownershipToken,
+    worktreeDevice,
+    worktreeInode,
+  );
+export const gitFinalizeManagedWorktreeDeletion = (
+  worktreePath: string,
+  worktreeGitDir: string,
+  ownershipToken: string,
+) => gitService.finalizeManagedWorktreeDeletion(worktreePath, worktreeGitDir, ownershipToken);
+export const gitFinalizeOrphanedManagedWorktreeDeletionJournals = (
+  worktreeRoot: string,
+  referencedOwnershipTokens?: ReadonlySet<string>,
+  onError?: (error: unknown) => void,
+) =>
+  gitService.finalizeOrphanedManagedWorktreeDeletionJournals(
+    worktreeRoot,
+    referencedOwnershipTokens,
+    onError,
+  );
+export const gitManagedWorktreeDeletionPending = (
+  worktreePath: string,
+  worktreeGitDir: string,
+  ownershipToken: string,
+) => gitService.managedWorktreeDeletionPending(worktreePath, worktreeGitDir, ownershipToken);
+export const gitCreateWorktree = (
+  folderPath: string,
+  root: string,
+  branch: string,
+  signal?: AbortSignal,
+) => gitService.createWorktree(folderPath, root, branch, signal);
 export const gitRollbackWorktree = (folderPath: string, created: GitCreatedWorktree) =>
   gitService.rollbackWorktree(folderPath, created);
 export const gitDeleteManagedWorktree = (
@@ -2838,4 +5180,20 @@ export const gitDeleteManagedWorktree = (
   branch: string,
   createdFromHead: string,
   signal?: AbortSignal,
-) => gitService.deleteManagedWorktree(folderPath, worktreePath, branch, createdFromHead, signal);
+  worktreeGitDir?: string,
+  ownershipToken?: string,
+  worktreeDevice?: number,
+  worktreeInode?: number,
+) =>
+  gitService.deleteManagedWorktree(
+    folderPath,
+    worktreePath,
+    branch,
+    createdFromHead,
+    signal,
+    worktreeGitDir,
+    ownershipToken,
+    worktreeDevice,
+    worktreeInode,
+    true,
+  );

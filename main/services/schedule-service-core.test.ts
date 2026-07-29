@@ -168,6 +168,37 @@ test("workspace revocation cancels and settles matching scheduled runs only", as
   assert.equal((await resumedFirstRun).result, "blocked");
 });
 
+test("resumeWorkspace clears admission after cancelWorkspace enumeration fails", async () => {
+  const testbed = harness();
+  const task = await testbed.store.save({
+    name: "Recoverable",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    workspaceId: "workspace-a",
+    prompt: "Summarize changes.",
+  });
+  await testbed.service.start();
+  const originalList = testbed.store.list;
+  Object.defineProperty(testbed.store, "list", {
+    configurable: true,
+    value: async () => {
+      throw new Error("simulated list failure");
+    },
+  });
+  await assert.rejects(testbed.service.cancelWorkspace("workspace-a"), /simulated list failure/u);
+  Object.defineProperty(testbed.store, "list", {
+    configurable: true,
+    value: originalList,
+  });
+  await testbed.service.resumeWorkspace("workspace-a");
+
+  const run = testbed.service.runNow(task.id);
+  while (!testbed.hasPending(task.id)) await new Promise((resolve) => setImmediate(resolve));
+  testbed.service.stop();
+  assert.equal((await run).result, "blocked");
+});
+
 test("concurrent lifecycle mutations serialize per task", async () => {
   const testbed = harness();
   const task = await addTask(testbed.store);

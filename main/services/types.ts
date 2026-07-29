@@ -7,6 +7,7 @@ import type { GenerationThinkingLevel } from "../../renderer/shared/generation-t
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
+import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -87,6 +88,13 @@ export interface ManagedWorktree {
   /** Canonical checkout root; the workspace may point at a nested path inside it. */
   worktreePath: string;
   branch: string;
+  /** Stable Git administrative identity; survives worktree moves and branch changes. */
+  worktreeGitDir?: string;
+  /** Aiden marker persisted inside the original Git administrative directory. */
+  ownershipToken?: string;
+  /** Filesystem identity of the original checkout root, used to reject path replacements. */
+  worktreeDevice?: number;
+  worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
 }
@@ -181,6 +189,8 @@ export interface ChatMessage {
   attachments?: Attachment[];
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
+  /** Bounded references to separately persisted renderer-safe child run records. */
+  subagents?: SubagentMessageReferenceV1;
 }
 
 export interface ModelRanking {

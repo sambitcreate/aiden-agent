@@ -253,7 +253,14 @@ test("chat store: list() drops malformed index entries while preserving valid ch
     createdAt: 1,
     updatedAt: 2,
     workspaceId: "default",
+    providerId: undefined,
+    model: undefined,
   };
+  await fs.writeFile(
+    path.join(dir, `${valid.id}.json`),
+    JSON.stringify({ ...valid, messages: [] }),
+    "utf-8",
+  );
   await fs.writeFile(
     path.join(dir, "index.json"),
     JSON.stringify([valid, null, {}, { ...valid, id: "" }, { ...valid, updatedAt: "later" }]),

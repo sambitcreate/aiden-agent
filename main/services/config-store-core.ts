@@ -77,7 +77,28 @@ function normalizeWorkspace(w: Workspace): Workspace {
       typeof w.managedWorktree.worktreePath === "string" &&
       typeof w.managedWorktree.branch === "string" &&
       typeof w.managedWorktree.createdFromHead === "string"
-        ? { ...w.managedWorktree }
+        ? {
+            repositoryPath: w.managedWorktree.repositoryPath,
+            worktreePath: w.managedWorktree.worktreePath,
+            branch: w.managedWorktree.branch,
+            ...(typeof w.managedWorktree.worktreeGitDir === "string"
+              ? { worktreeGitDir: w.managedWorktree.worktreeGitDir }
+              : {}),
+            ...(typeof w.managedWorktree.ownershipToken === "string"
+              ? { ownershipToken: w.managedWorktree.ownershipToken }
+              : {}),
+            ...(typeof w.managedWorktree.worktreeDevice === "number" &&
+            Number.isSafeInteger(w.managedWorktree.worktreeDevice) &&
+            w.managedWorktree.worktreeDevice >= 0
+              ? { worktreeDevice: w.managedWorktree.worktreeDevice }
+              : {}),
+            ...(typeof w.managedWorktree.worktreeInode === "number" &&
+            Number.isSafeInteger(w.managedWorktree.worktreeInode) &&
+            w.managedWorktree.worktreeInode >= 0
+              ? { worktreeInode: w.managedWorktree.worktreeInode }
+              : {}),
+            createdFromHead: w.managedWorktree.createdFromHead,
+          }
         : undefined,
   };
 }

@@ -6,6 +6,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import {
+  GitManagedWorktreeDeleteError,
   GitService,
   GitServiceError,
   parseGitNameStatus,
@@ -14,6 +15,14 @@ import {
   parseGitStatus,
   parseRemoteRefs,
 } from "./git.js";
+import { removeManagedWorkspace } from "./managed-worktree-removal-core.js";
+import {
+  ManagedWorktreeRemoverError,
+  removeManagedWorktreeDirectory,
+} from "./managed-worktree-remover.js";
+import { reconcilePendingManagedWorktreeDeletions } from "./managed-worktree-deletion-recovery.js";
+import type { Workspace } from "./types.js";
+import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,6 +41,19 @@ async function temporaryDirectory(t: test.TestContext): Promise<string> {
   return directory;
 }
 
+async function waitForFile(filePath: string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${path.basename(filePath)}.`);
+}
+
 async function createRepository(t: test.TestContext): Promise<string> {
   const root = await temporaryDirectory(t);
   const repository = path.join(root, "repository");
@@ -45,6 +67,358 @@ async function createRepository(t: test.TestContext): Promise<string> {
   return repository;
 }
 
+async function persistRemovalJournal(
+  created: Awaited<ReturnType<GitService["createWorktree"]>>,
+  phase:
+    | "prepared"
+    | "quarantined"
+    | "checkout_cleanup_started"
+    | "checkout_complete"
+    | "admin_cleanup_started"
+    | "needs_review"
+    | "filesystem_complete" = "prepared",
+  manifestDigests: {
+    admin?: string;
+    checkout?: string;
+  } = {},
+): Promise<string> {
+  const checkoutQuarantine = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const gitDirQuarantine = path.join(
+    path.dirname(created.worktreeGitDir),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const checkoutAuthorization = path.join(
+    path.dirname(created.path),
+    `.aiden-authorizing-${created.ownershipToken}`,
+  );
+  const gitDirAuthorization = path.join(
+    path.dirname(created.worktreeGitDir),
+    `.aiden-authorizing-${created.ownershipToken}`,
+  );
+  const journalPath = `${checkoutQuarantine}.json`;
+  const admin = await fs.lstat(created.worktreeGitDir);
+  const adminGitdirContents = await fs.readFile(
+    path.join(created.worktreeGitDir, "gitdir"),
+    "utf8",
+  );
+  await fs.writeFile(
+    journalPath,
+    `${JSON.stringify({
+      version: 3,
+      phase,
+      adminDevice: admin.dev,
+      adminGitdirContents,
+      adminInode: admin.ino,
+      adminManifestDigest: manifestDigests.admin ?? null,
+      branch: created.branch,
+      checkoutDevice: created.worktreeDevice,
+      checkoutInode: created.worktreeInode,
+      checkoutManifestDigest: manifestDigests.checkout ?? null,
+      checkoutPath: created.path,
+      checkoutAuthorization,
+      checkoutQuarantine,
+      createdFromHead: created.createdFromHead,
+      gitDir: created.worktreeGitDir,
+      gitDirAuthorization,
+      gitDirQuarantine,
+      ownershipToken: created.ownershipToken,
+      repositoryPath: created.repositoryPath,
+    })}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  return journalPath;
+}
+
+async function prepareMissingRemovalRoot(
+  t: test.TestContext,
+  target: "admin" | "checkout",
+  manifestDigest: string | null,
+  branchSuffix: string,
+): Promise<{
+  created: Awaited<ReturnType<GitService["createWorktree"]>>;
+  journalPath: string;
+  manifestPath: string;
+  repository: string;
+  targetPath: string;
+}> {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const created = await creator.createWorktree(repository, root, `codex/${target}-${branchSuffix}`);
+  const checkoutQuarantine = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const adminQuarantine = path.join(
+    path.dirname(created.worktreeGitDir),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const journalPath = await persistRemovalJournal(
+    created,
+    target === "checkout" ? "checkout_cleanup_started" : "admin_cleanup_started",
+    {
+      ...(target === "checkout" && manifestDigest !== null ? { checkout: manifestDigest } : {}),
+      ...(target === "admin" && manifestDigest !== null ? { admin: manifestDigest } : {}),
+    },
+  );
+  await fs.rename(created.path, checkoutQuarantine);
+  await fs.rename(created.worktreeGitDir, adminQuarantine);
+  await fs.rm(checkoutQuarantine, { recursive: true });
+  if (target === "admin") {
+    await fs.rm(adminQuarantine, { recursive: true });
+  }
+  const targetPath = target === "checkout" ? checkoutQuarantine : adminQuarantine;
+  return {
+    created,
+    journalPath,
+    manifestPath: path.join(
+      path.dirname(targetPath),
+      `.aiden-removal-manifest-${created.ownershipToken}`,
+    ),
+    repository,
+    targetPath,
+  };
+}
+
+async function commitWithParent(
+  repository: string,
+  parent: string,
+  message: string,
+): Promise<string> {
+  const tree = await git(repository, ["rev-parse", `${parent}^{tree}`]);
+  return git(repository, ["commit-tree", tree, "-p", parent, "-m", message]);
+}
+
+async function writeRefAdvanceWrapper(
+  directory: string,
+  input: {
+    advancedHead: string;
+    expectedHead: string;
+    refName: string;
+    stallWorktreeAdd?: boolean;
+  },
+): Promise<string> {
+  const wrapper = path.join(directory, `git-ref-race-${Date.now().toString(36)}.mjs`);
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+
+const realGit = "/usr/bin/git";
+const args = process.argv.slice(2);
+const run = (nextArgs) => spawnSync(realGit, nextArgs, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+const forward = (result) => {
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.error) {
+    process.stderr.write(String(result.error));
+    process.exit(1);
+  }
+};
+
+if (
+  args[0] === "update-ref" &&
+  args[1] === "-d" &&
+  args[2] === ${JSON.stringify(input.refName)} &&
+  args[3] === ${JSON.stringify(input.expectedHead)}
+) {
+  const advanced = run([
+    "update-ref",
+    ${JSON.stringify(input.refName)},
+    ${JSON.stringify(input.advancedHead)},
+    ${JSON.stringify(input.expectedHead)},
+  ]);
+  forward(advanced);
+  if (advanced.status !== 0) process.exit(advanced.status ?? 1);
+}
+
+const result = run(args);
+forward(result);
+if (
+  ${JSON.stringify(input.stallWorktreeAdd === true)} &&
+  args[0] === "worktree" &&
+  args[1] === "add" &&
+  result.status === 0
+) {
+  await new Promise((resolve) => setTimeout(resolve, 30_000));
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
+async function writeUnregisteredTargetWrapper(
+  directory: string,
+  targetRecord: string,
+): Promise<string> {
+  const wrapper = path.join(directory, `git-unregistered-target-${Date.now().toString(36)}.mjs`);
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+if (args[0] === "worktree" && args[1] === "add") {
+  const separator = args.indexOf("--");
+  const target = separator >= 0 ? args[separator + 1] : undefined;
+  if (!target) process.exit(2);
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, "external-sentinel.txt"), "external directory must survive\\n");
+  writeFileSync(${JSON.stringify(targetRecord)}, target);
+  process.stderr.write("simulated failure before Git registration\\n");
+  process.exit(128);
+}
+
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
+async function writeLateRollbackFileWrapper(
+  directory: string,
+  targetRecord: string,
+): Promise<string> {
+  const wrapper = path.join(directory, `git-late-rollback-file-${Date.now().toString(36)}.mjs`);
+  const state = path.join(directory, "fail-worktree-git-dir");
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+if (
+  existsSync(${JSON.stringify(state)}) &&
+  args[0] === "rev-parse" &&
+  args.includes("--git-dir")
+) {
+  unlinkSync(${JSON.stringify(state)});
+  process.stderr.write("simulated post-add setup failure\\n");
+  process.exit(1);
+}
+const capturedWorktree = args.find((arg) => arg.startsWith("--work-tree="));
+if (args.includes("status") && capturedWorktree && existsSync(${JSON.stringify(targetRecord)})) {
+  const target = capturedWorktree.slice("--work-tree=".length);
+  writeFileSync(join(target, "late-sentinel.txt"), "late data must survive\\n");
+}
+
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+if (args[0] === "worktree" && args[1] === "add" && result.status === 0) {
+  const separator = args.indexOf("--");
+  const target = separator >= 0 ? args[separator + 1] : undefined;
+  if (!target) process.exit(2);
+  writeFileSync(${JSON.stringify(targetRecord)}, target);
+  writeFileSync(${JSON.stringify(state)}, "fail next worktree rev-parse\\n");
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
+async function writeCapturedCheckoutReplacementWrapper(
+  directory: string,
+  movedRecord: string,
+): Promise<string> {
+  const wrapper = path.join(directory, `git-captured-replacement-${Date.now().toString(36)}.mjs`);
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+
+const capturedWorktree = args.find((arg) => arg.startsWith("--work-tree="));
+if (result.status === 0 && args.includes("status") && capturedWorktree) {
+  const target = capturedWorktree.slice("--work-tree=".length);
+  const moved = target + "-moved";
+  renameSync(target, moved);
+  mkdirSync(target);
+  copyFileSync(join(moved, ".git"), join(target, ".git"));
+  copyFileSync(join(moved, ".gitignore"), join(target, ".gitignore"));
+  copyFileSync(join(moved, "README.md"), join(target, "README.md"));
+  writeFileSync(join(target, "replacement-sentinel"), "replacement must survive\\n");
+  writeFileSync(${JSON.stringify(movedRecord)}, moved);
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
+async function writeWorktreeRemoveObserver(
+  directory: string,
+  invocationRecord: string,
+): Promise<string> {
+  const wrapper = path.join(directory, `git-remove-observer-${Date.now().toString(36)}.mjs`);
+  const source = `#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
+const args = process.argv.slice(2);
+if (args[0] === "worktree" && args[1] === "remove") {
+  writeFileSync(${JSON.stringify(invocationRecord)}, JSON.stringify(args));
+}
+const result = spawnSync("/usr/bin/git", args, {
+  cwd: process.cwd(),
+  encoding: "utf8",
+  env: process.env,
+});
+if (result.stdout) process.stdout.write(result.stdout);
+if (result.stderr) process.stderr.write(result.stderr);
+if (result.error) {
+  process.stderr.write(String(result.error));
+  process.exit(1);
+}
+process.exit(result.status ?? 1);
+`;
+  await fs.writeFile(wrapper, source, { encoding: "utf8", mode: 0o700 });
+  return wrapper;
+}
+
 test("parseGitStatus handles NUL-delimited paths and rename pairs", () => {
   const raw = [
     "# branch.oid 1234567890abcdef",
@@ -55,6 +429,7 @@ test("parseGitStatus handles NUL-delimited paths and rename pairs", () => {
     "2 R. N... 100644 100644 100644 a b R100 new\nname.txt",
     "old\nname.txt",
     "? untracked\nfile.txt",
+    "! ignored\nfile.txt",
     "",
   ].join("\u0000");
 
@@ -63,6 +438,7 @@ test("parseGitStatus handles NUL-delimited paths and rename pairs", () => {
     detached: false,
     unborn: false,
     uncommitted: 3,
+    ignored: 1,
     upstream: "origin/main",
     ahead: 2,
     behind: 3,
@@ -116,18 +492,23 @@ test("review parsers preserve unusual paths, staged state, and rename statistics
     },
   ]);
 
+  assert.deepEqual(parseGitNumstat("2\t1\tplain.txt\u00003\t0\t\u0000old.txt\u0000new.txt\u0000"), [
+    { path: "plain.txt", additions: 2, deletions: 1, binary: false },
+    { path: "new.txt", additions: 3, deletions: 0, binary: false },
+  ]);
   assert.deepEqual(
-    parseGitNumstat("2\t1\tplain.txt\u00003\t0\t\u0000old.txt\u0000new.txt\u0000"),
-    [
-      { path: "plain.txt", additions: 2, deletions: 1, binary: false },
-      { path: "new.txt", additions: 3, deletions: 0, binary: false },
-    ],
-  );
-  assert.deepEqual(
-    parseGitNameStatus("M\u0000plain.txt\u0000R100\u0000old name.txt\u0000new name.txt\u0000D\u0000gone.txt\u0000"),
+    parseGitNameStatus(
+      "M\u0000plain.txt\u0000R100\u0000old name.txt\u0000new name.txt\u0000D\u0000gone.txt\u0000",
+    ),
     [
       { path: "gone.txt", status: "deleted", staged: false, unstaged: false },
-      { path: "new name.txt", previousPath: "old name.txt", status: "renamed", staged: false, unstaged: false },
+      {
+        path: "new name.txt",
+        previousPath: "old name.txt",
+        status: "renamed",
+        staged: false,
+        unstaged: false,
+      },
       { path: "plain.txt", status: "modified", staged: false, unstaged: false },
     ],
   );
@@ -157,11 +538,68 @@ test("GitService reads NUL-safe status and executes unusual branch names without
     service.checkout(repository, "remote-only"),
     (error) => error instanceof GitServiceError && error.code === "invalid_ref",
   );
-  assert.equal(await git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/remote-only"]).catch(() => "missing"), "missing");
+  assert.equal(
+    await git(repository, ["show-ref", "--verify", "--quiet", "refs/heads/remote-only"]).catch(
+      () => "missing",
+    ),
+    "missing",
+  );
 
   await assert.rejects(
     service.createBranch(repository, "-invalid"),
     (error) => error instanceof GitServiceError && error.code === "invalid_ref",
+  );
+});
+
+test("GitService aborts an admitted repository read when its renderer owner is invalidated", async (t) => {
+  const repository = await createRepository(t);
+  const root = path.dirname(repository);
+  const marker = path.join(root, "git-read-started");
+  const wrapper = path.join(root, "git-read-abort.mjs");
+  await fs.writeFile(
+    wrapper,
+    [
+      "#!/usr/bin/env node",
+      "import { writeFileSync } from 'node:fs';",
+      "import { spawnSync } from 'node:child_process';",
+      `const marker = ${JSON.stringify(marker)};`,
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') {",
+      "  writeFileSync(marker, 'started\\n');",
+      "  setInterval(() => undefined, 1000);",
+      "} else {",
+      "  const result = spawnSync('/usr/bin/git', args, { env: process.env, stdio: 'inherit' });",
+      "  if (result.error) throw result.error;",
+      "  process.exit(result.status ?? 1);",
+      "}",
+      "",
+    ].join("\n"),
+    { mode: 0o700 },
+  );
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    readTimeoutMs: 5_000,
+  });
+  const controller = new AbortController();
+  const operation = service.info(repository, controller.signal);
+
+  let started = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await fs.access(marker);
+      started = true;
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  assert.equal(started, true);
+  controller.abort();
+
+  await assert.rejects(
+    operation,
+    (error) => error instanceof GitServiceError && error.code === "aborted",
   );
 });
 
@@ -267,7 +705,10 @@ test("GitService pushes an immutable reviewed head to an explicit remote branch 
     capability.expectedHead,
   );
   const commands = await fs.readFile(logPath, "utf8");
-  assert.match(commands, /push --porcelain --no-force --no-mirror --no-prune --no-follow-tags --no-recurse-submodules -- aiden-reviewed-[0-9a-f-]+ [0-9a-f]+:refs\/heads\/review\/main/);
+  assert.match(
+    commands,
+    /push --porcelain --no-force --no-mirror --no-prune --no-follow-tags --no-recurse-submodules -- aiden-reviewed-[0-9a-f-]+ [0-9a-f]+:refs\/heads\/review\/main/,
+  );
   assert.doesNotMatch(commands, /(^|\s)fetch(\s|$)/m);
   assert.doesNotMatch(commands, /\+[0-9a-f]+:refs\/heads\/review\/main/);
 });
@@ -283,12 +724,13 @@ test("GitService runs pre-push once with the reviewed remote name, URL, and ref 
   const service = new GitService({ cacheTtlMs: 0 });
   const capability = await service.pushCapability(repository);
   const destinationRef = "refs/heads/review/hook";
-  const expectedStdin = [
-    capability.expectedHead,
-    capability.expectedHead,
-    destinationRef,
-    "0".repeat(capability.expectedHead!.length),
-  ].join(" ") + "\n";
+  const expectedStdin =
+    [
+      capability.expectedHead,
+      capability.expectedHead,
+      destinationRef,
+      "0".repeat(capability.expectedHead!.length),
+    ].join(" ") + "\n";
   const expectedRecord = {
     args: ["origin", remote],
     stdin: expectedStdin,
@@ -504,7 +946,11 @@ test("GitService freezes the reviewed push endpoint through timeout reconciliati
     ].join("\n"),
     { mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, pushTimeoutMs: 1_500 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    pushTimeoutMs: 1_500,
+  });
   const capability = await service.pushCapability(repository);
   const result = await service.push(repository, {
     destinationBranch: "main",
@@ -516,7 +962,10 @@ test("GitService freezes the reviewed push endpoint through timeout reconciliati
   });
 
   assert.match(result.warning ?? "", /stopped responding/);
-  assert.equal(await git(reviewedRemote, ["rev-parse", "refs/heads/main"]), capability.expectedHead);
+  assert.equal(
+    await git(reviewedRemote, ["rev-parse", "refs/heads/main"]),
+    capability.expectedHead,
+  );
   await assert.rejects(git(replacementRemote, ["rev-parse", "refs/heads/main"]));
   assert.equal(await git(repository, ["remote", "get-url", "origin"]), replacementRemote);
 });
@@ -545,7 +994,10 @@ test("GitService neutralizes chained URL rewrites after resolving the reviewed p
     setUpstream: false,
   });
 
-  assert.equal(await git(reviewedRemote, ["rev-parse", "refs/heads/main"]), capability.expectedHead);
+  assert.equal(
+    await git(reviewedRemote, ["rev-parse", "refs/heads/main"]),
+    capability.expectedHead,
+  );
   await assert.rejects(git(reroutedRemote, ["rev-parse", "refs/heads/main"]));
 });
 
@@ -573,7 +1025,10 @@ test("GitService neutralizes pushInsteadOf before a second endpoint rewrite", as
     setUpstream: false,
   });
 
-  assert.equal(await git(reviewedRemote, ["rev-parse", "refs/heads/main"]), capability.expectedHead);
+  assert.equal(
+    await git(reviewedRemote, ["rev-parse", "refs/heads/main"]),
+    capability.expectedHead,
+  );
   await assert.rejects(git(reroutedRemote, ["rev-parse", "refs/heads/main"]));
 });
 
@@ -789,9 +1244,13 @@ test("GitService preserves remote-scoped receive-pack policy on its frozen alias
   await fs.mkdir(remote);
   await git(remote, ["init", "--bare", "--initial-branch=main"]);
   await git(repository, ["remote", "add", "origin", remote]);
-  await fs.writeFile(receivePack, "#!/bin/sh\necho 'receive-pack policy refused push' >&2\nexit 42\n", {
-    mode: 0o700,
-  });
+  await fs.writeFile(
+    receivePack,
+    "#!/bin/sh\necho 'receive-pack policy refused push' >&2\nexit 42\n",
+    {
+      mode: 0o700,
+    },
+  );
   await git(repository, ["config", "remote.origin.receivepack", receivePack]);
   const service = new GitService({ cacheTtlMs: 0 });
   const capability = await service.pushCapability(repository);
@@ -805,7 +1264,10 @@ test("GitService preserves remote-scoped receive-pack policy on its frozen alias
       remote: "origin",
       setUpstream: false,
     }),
-    (error) => error instanceof GitServiceError && error.code === "command_failed" && /receive-pack policy/.test(error.message),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /receive-pack policy/.test(error.message),
   );
   await assert.rejects(git(remote, ["rev-parse", "refs/heads/main"]));
 });
@@ -934,7 +1396,11 @@ test("GitService reconciles a push timeout against the exact remote ref", async 
     ].join("\n"),
     { mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, pushTimeoutMs: 500 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    pushTimeoutMs: 500,
+  });
   const capability = await service.pushCapability(repository);
   const result = await service.push(repository, {
     destinationBranch: "main",
@@ -973,17 +1439,25 @@ test("GitService does not mutate upstream configuration after a cancelled push r
     ].join("\n"),
     { mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, pushTimeoutMs: 5_000 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    pushTimeoutMs: 5_000,
+  });
   const capability = await service.pushCapability(repository);
   const controller = new AbortController();
-  const operation = service.push(repository, {
-    destinationBranch: "main",
-    expectedBranch: capability.branch!,
-    expectedHead: capability.expectedHead!,
-    expectedRemoteIdentity: capability.remoteIdentities.origin!,
-    remote: "origin",
-    setUpstream: true,
-  }, controller.signal);
+  const operation = service.push(
+    repository,
+    {
+      destinationBranch: "main",
+      expectedBranch: capability.branch!,
+      expectedHead: capability.expectedHead!,
+      expectedRemoteIdentity: capability.remoteIdentities.origin!,
+      remote: "origin",
+      setUpstream: true,
+    },
+    controller.signal,
+  );
 
   let pushed = false;
   for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -1037,17 +1511,25 @@ test("GitService rechecks cancellation after post-push branch reads before setti
     ].join("\n"),
     { mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, pushTimeoutMs: 5_000 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    pushTimeoutMs: 5_000,
+  });
   const capability = await service.pushCapability(repository);
   const controller = new AbortController();
-  const operation = service.push(repository, {
-    destinationBranch: "main",
-    expectedBranch: capability.branch!,
-    expectedHead: capability.expectedHead!,
-    expectedRemoteIdentity: capability.remoteIdentities.origin!,
-    remote: "origin",
-    setUpstream: true,
-  }, controller.signal);
+  const operation = service.push(
+    repository,
+    {
+      destinationBranch: "main",
+      expectedBranch: capability.branch!,
+      expectedHead: capability.expectedHead!,
+      expectedRemoteIdentity: capability.remoteIdentities.origin!,
+      remote: "origin",
+      setUpstream: true,
+    },
+    controller.signal,
+  );
 
   let reading = false;
   for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -1096,7 +1578,11 @@ test("GitService preserves an unknown push outcome when remote verification fail
     ].join("\n"),
     { mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, pushTimeoutMs: 500 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    pushTimeoutMs: 500,
+  });
   const capability = await service.pushCapability(repository);
   await assert.rejects(
     service.push(repository, {
@@ -1109,7 +1595,10 @@ test("GitService preserves an unknown push outcome when remote verification fail
     }),
     (error) => {
       assert.equal(error instanceof GitServiceError, true);
-      assert.match((error as Error).message, /could not determine whether the remote branch was updated/i);
+      assert.match(
+        (error as Error).message,
+        /could not determine whether the remote branch was updated/i,
+      );
       return true;
     },
   );
@@ -1133,7 +1622,10 @@ test("GitService compares the current branch from the merge base and freezes per
   assert.equal(comparison.ahead, 1);
   assert.equal(comparison.behind, 1);
   assert.equal(comparison.mergeBase, initialHead);
-  assert.deepEqual(comparison.files.map((file) => file.path), ["main.txt"]);
+  assert.deepEqual(
+    comparison.files.map((file) => file.path),
+    ["main.txt"],
+  );
   const diff = await service.comparisonDiff(repository, {
     expectedHead: comparison.expectedHead,
     expectedTarget: comparison.expectedTarget,
@@ -1175,7 +1667,10 @@ test("GitService branch comparison stays inside a nested workspace and rejects u
   await git(repository, ["commit", "-m", "Scoped changes"]);
   const service = new GitService({ cacheTtlMs: 0 });
   const comparison = await service.compare(nested, "refs/heads/base");
-  assert.deepEqual(comparison.files.map((file) => file.path), ["inside.txt", "packages/app/deep.txt"]);
+  assert.deepEqual(
+    comparison.files.map((file) => file.path),
+    ["inside.txt", "packages/app/deep.txt"],
+  );
   const nestedDiff = await service.comparisonDiff(nested, {
     expectedHead: comparison.expectedHead,
     expectedTarget: comparison.expectedTarget,
@@ -1330,7 +1825,11 @@ test("GitService review preserves a nested workspace boundary", async (t) => {
   await git(repository, ["commit", "-m", "Add nested workspace"]);
   await fs.writeFile(path.join(nested, "index.ts"), "export const value = 2;\n", "utf8");
   await fs.mkdir(path.join(nested, "packages", "app"), { recursive: true });
-  await fs.writeFile(path.join(nested, "packages", "app", "deep.ts"), "export const deep = true;\n", "utf8");
+  await fs.writeFile(
+    path.join(nested, "packages", "app", "deep.ts"),
+    "export const deep = true;\n",
+    "utf8",
+  );
   await fs.writeFile(path.join(repository, "outside.txt"), "outside\n", "utf8");
 
   const service = new GitService({ cacheTtlMs: 0 });
@@ -1338,7 +1837,10 @@ test("GitService review preserves a nested workspace boundary", async (t) => {
   assert.equal(review.commit.allowed, false);
   assert.equal(review.commit.repositoryRoot, false);
   assert.match(review.commit.reason ?? "", /repository root/);
-  assert.deepEqual(review.files.map((file) => file.path), ["index.ts", "packages/app/deep.ts"]);
+  assert.deepEqual(
+    review.files.map((file) => file.path),
+    ["index.ts", "packages/app/deep.ts"],
+  );
   const diff = await service.diff(nested, {
     expectedSnapshot: review.commit.snapshot!,
     path: "index.ts",
@@ -1424,7 +1926,10 @@ test("GitService detects a working-tree write that races isolated staging", asyn
   );
   assert.equal(await git(repository, ["log", "-1", "--format=%s"]), "Initial commit");
   assert.equal(await git(repository, ["diff", "--cached", "--name-only"]), "");
-  assert.equal(await fs.readFile(path.join(repository, "README.md"), "utf8"), "changed during staging\n");
+  assert.equal(
+    await fs.readFile(path.join(repository, "README.md"), "utf8"),
+    "changed during staging\n",
+  );
 });
 
 test("GitService staged-only commit preserves unstaged portions", async (t) => {
@@ -1468,8 +1973,15 @@ test("GitService first commit works from an unborn repository", async (t) => {
 
 test("GitService disables commit when a complete content snapshot exceeds its bound", async (t) => {
   const repository = await createRepository(t);
-  await fs.writeFile(path.join(repository, "README.md"), "content exceeds the test snapshot bound\n", "utf8");
-  const review = await new GitService({ cacheTtlMs: 0, snapshotMaxBytes: 8 }).review(repository);
+  await fs.writeFile(
+    path.join(repository, "README.md"),
+    "content exceeds the test snapshot bound\n",
+    "utf8",
+  );
+  const review = await new GitService({
+    cacheTtlMs: 0,
+    snapshotMaxBytes: 8,
+  }).review(repository);
   assert.equal(review.commit.allowed, false);
   assert.equal(review.commit.snapshotComplete, false);
   assert.equal(review.commit.snapshot, undefined);
@@ -1480,7 +1992,9 @@ test("GitService leaves the real index untouched when a commit hook refuses chan
   const repository = await createRepository(t);
   await fs.writeFile(path.join(repository, "README.md"), "blocked\n", "utf8");
   const hook = path.join(repository, ".git", "hooks", "pre-commit");
-  await fs.writeFile(hook, "#!/bin/sh\necho blocked-by-test >&2\nexit 1\n", { mode: 0o700 });
+  await fs.writeFile(hook, "#!/bin/sh\necho blocked-by-test >&2\nexit 1\n", {
+    mode: 0o700,
+  });
   const service = new GitService({ cacheTtlMs: 0 });
   const review = await service.review(repository);
 
@@ -1504,7 +2018,9 @@ test("GitService rejects a hook-mutated isolated index without touching the real
   const repository = await createRepository(t);
   await fs.writeFile(path.join(repository, "README.md"), "selected\n", "utf8");
   const hook = path.join(repository, ".git", "hooks", "pre-commit");
-  await fs.writeFile(hook, "#!/bin/sh\ngit reset -q HEAD -- README.md\n", { mode: 0o700 });
+  await fs.writeFile(hook, "#!/bin/sh\ngit reset -q HEAD -- README.md\n", {
+    mode: 0o700,
+  });
   const service = new GitService({ cacheTtlMs: 0 });
   const review = await service.review(repository);
 
@@ -1576,7 +2092,11 @@ test("GitService reconciles a timeout after the exact branch ref was updated", a
     { mode: 0o700 },
   );
   await fs.writeFile(path.join(repository, "README.md"), "timeout reconciled\n", "utf8");
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, mutationTimeoutMs: 500 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 500,
+  });
   const review = await service.review(repository);
 
   const result = await service.commit(repository, {
@@ -1660,14 +2180,22 @@ test("GitService reconciles an abort after the exact branch ref was updated", as
     { mode: 0o700 },
   );
   await fs.writeFile(path.join(repository, "README.md"), "abort reconciled\n", "utf8");
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, mutationTimeoutMs: 5_000 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 5_000,
+  });
   const review = await service.review(repository);
   const controller = new AbortController();
-  const operation = service.commit(repository, {
-    expectedSnapshot: review.commit.snapshot!,
-    message: "Reconciled abort",
-    mode: "all",
-  }, controller.signal);
+  const operation = service.commit(
+    repository,
+    {
+      expectedSnapshot: review.commit.snapshot!,
+      message: "Reconciled abort",
+      mode: "all",
+    },
+    controller.signal,
+  );
 
   let refUpdated = false;
   for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -1713,7 +2241,11 @@ test("GitService recognizes a candidate in branch ancestry after the ref advance
     { mode: 0o700 },
   );
   await fs.writeFile(path.join(repository, "README.md"), "candidate contents\n", "utf8");
-  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper, mutationTimeoutMs: 500 });
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 500,
+  });
   const review = await service.review(repository);
 
   const result = await service.commit(repository, {
@@ -1722,7 +2254,10 @@ test("GitService recognizes a candidate in branch ancestry after the ref advance
     mode: "all",
   });
   assert.match(result.warning ?? "", /branch moved again/);
-  assert.equal(await git(repository, ["merge-base", "--is-ancestor", result.commit, "HEAD"]).then(() => true), true);
+  assert.equal(
+    await git(repository, ["merge-base", "--is-ancestor", result.commit, "HEAD"]).then(() => true),
+    true,
+  );
   assert.equal(await git(repository, ["log", "-1", "--format=%s"]), "Advanced after candidate");
   assert.equal(await git(repository, ["diff", "--cached", "--name-only"]), "README.md");
 });
@@ -1810,7 +2345,10 @@ test("GitService holds the checked-out branch ref lock through index finalizatio
   });
   assert.equal(await fs.readFile(marker, "utf8").then((value) => Number(value) !== 0), true);
   assert.equal(result.warning, undefined);
-  assert.equal(await git(repository, ["log", "-1", "--format=%s"]), "Guard branch ref finalization");
+  assert.equal(
+    await git(repository, ["log", "-1", "--format=%s"]),
+    "Guard branch ref finalization",
+  );
   assert.equal(await git(repository, ["status", "--porcelain"]), "");
   await assert.rejects(fs.access(refLock));
 });
@@ -1900,8 +2438,8 @@ test("GitService compare-and-swaps HEAD instead of overwriting an external ref u
       "#!/bin/sh",
       "parent=$(git rev-parse HEAD)",
       "tree=$(git rev-parse 'HEAD^{tree}')",
-      "external=$(git commit-tree \"$tree\" -p \"$parent\" -m 'External commit')",
-      "git update-ref refs/heads/main \"$external\" \"$parent\"",
+      'external=$(git commit-tree "$tree" -p "$parent" -m \'External commit\')',
+      'git update-ref refs/heads/main "$external" "$parent"',
       "",
     ].join("\n"),
     { mode: 0o700 },
@@ -1924,11 +2462,18 @@ test("GitService compare-and-swaps HEAD instead of overwriting an external ref u
 test("GitService review expands untracked folders into editable files", async (t) => {
   const repository = await createRepository(t);
   await fs.mkdir(path.join(repository, "src"));
-  await fs.writeFile(path.join(repository, "src", "new.ts"), "export const added = true;\n", "utf8");
+  await fs.writeFile(
+    path.join(repository, "src", "new.ts"),
+    "export const added = true;\n",
+    "utf8",
+  );
 
   const service = new GitService({ cacheTtlMs: 0 });
   const review = await service.review(repository);
-  assert.deepEqual(review.files.map((file) => file.path), ["src/new.ts"]);
+  assert.deepEqual(
+    review.files.map((file) => file.path),
+    ["src/new.ts"],
+  );
   const diff = await service.diff(repository, {
     expectedSnapshot: review.commit.snapshot!,
     path: "src/new.ts",
@@ -1950,7 +2495,10 @@ test("GitService reviews an untracked symlink as the link Git will commit", asyn
     path: "linked.txt",
   });
   assert.match(diff.patch, /new file mode 120000/);
-  assert.match(diff.patch, new RegExp(`^\\+${outside.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+  assert.match(
+    diff.patch,
+    new RegExp(`^\\+${outside.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
+  );
   assert.doesNotMatch(diff.patch, /outside file contents/);
 
   await service.commit(repository, {
@@ -1982,7 +2530,10 @@ test("GitService reviews untracked regular-file modes, newlines, and literal pat
     expectedSnapshot: review.commit.snapshot!,
     path: backslashName,
   });
-  assert.match(literalPathDiff.patch, /^diff --git "a\/back\\\\slash\.txt" "b\/back\\\\slash\.txt"$/m);
+  assert.match(
+    literalPathDiff.patch,
+    /^diff --git "a\/back\\\\slash\.txt" "b\/back\\\\slash\.txt"$/m,
+  );
   assert.doesNotMatch(literalPathDiff.patch, /a\/back\/slash\.txt/);
 
   await git(repository, ["config", "core.fileMode", "false"]);
@@ -2045,9 +2596,9 @@ test("GitService serializes mutations by common directory", async (t) => {
     service.createBranch(repository, "feature/second"),
   ]);
 
-  const refs = (await git(repository, ["for-each-ref", "--format=%(refname:short)", "refs/heads/feature"])).split(
-    "\n",
-  );
+  const refs = (
+    await git(repository, ["for-each-ref", "--format=%(refname:short)", "refs/heads/feature"])
+  ).split("\n");
   assert.deepEqual(refs.sort(), ["feature/first", "feature/second"]);
 
   await assert.rejects(service.createBranch(repository, "feature/first"));
@@ -2065,11 +2616,30 @@ test("GitService creates, lists, and removes managed worktrees", async (t) => {
   assert.equal(created.current, true);
   assert.equal(path.relative(await fs.realpath(root), created.path).startsWith(".."), false);
   assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(
+    (await fs.readFile(path.join(created.worktreeGitDir, "aiden-owner"), "utf8")).trim(),
+    created.ownershipToken,
+  );
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
   assert.equal(await git(repository, ["branch", "--show-current"]), "main");
 
   const worktrees = await service.worktrees(repository);
   assert.equal(worktrees.length, 2);
-  assert.equal(worktrees.some((worktree) => worktree.branch === "codex/isolated"), true);
+  assert.equal(
+    worktrees.some((worktree) => worktree.branch === "codex/isolated"),
+    true,
+  );
   await assert.rejects(
     service.createWorktree(repository, root, "codex/isolated"),
     (error) => error instanceof GitServiceError && error.code === "invalid_ref",
@@ -2077,20 +2647,1562 @@ test("GitService creates, lists, and removes managed worktrees", async (t) => {
 
   await fs.writeFile(path.join(created.path, "dirty.txt"), "dirty\n", "utf8");
   await assert.rejects(
-    service.deleteManagedWorktree(repository, created.path, created.branch, created.createdFromHead),
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
     (error) => error instanceof GitServiceError && error.code === "dirty_worktree",
   );
   await fs.rm(path.join(created.path, "dirty.txt"));
+
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\nlocal-aiden.db\n");
+  const ignoredData = path.join(created.path, "local-aiden.db");
+  await fs.writeFile(ignoredData, "private local state\n", "utf8");
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "dirty_worktree" &&
+      /ignored file/u.test(error.message),
+  );
+  assert.equal(await fs.readFile(ignoredData, "utf8"), "private local state\n");
+  await fs.rm(ignoredData);
+
+  await git(created.path, ["switch", "--detach"]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    false,
+  );
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      /changed branches or became detached/u.test(error.message),
+  );
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(
+    (await service.worktrees(repository)).some(
+      (worktree) => path.resolve(worktree.path) === path.resolve(created.path),
+    ),
+    true,
+  );
+  await git(created.path, ["switch", created.branch]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    true,
+  );
 
   const deleted = await service.deleteManagedWorktree(
     repository,
     created.path,
     created.branch,
     created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
   );
   assert.equal(deleted.branchDeleted, true);
   await assert.rejects(fs.access(created.path));
   assert.equal((await service.worktrees(repository)).length, 1);
+});
+
+test("GitService rollback preserves a replacement checkout at the original managed path", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/rollback-replacement");
+  await fs.appendFile(
+    path.join(repository, ".git", "info", "exclude"),
+    "\nreplacement-sentinel\n",
+    "utf8",
+  );
+
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["worktree", "add", "--", created.path, created.branch]);
+  const replacementIdentity = await fs.lstat(created.path);
+  assert.notEqual(replacementIdentity.ino, created.worktreeInode);
+  const sentinel = path.join(created.path, "replacement-sentinel");
+  await fs.writeFile(sentinel, "replacement data must survive\n", "utf8");
+  assert.equal(await git(created.path, ["status", "--porcelain", "--untracked-files=all"]), "");
+
+  await assert.rejects(
+    service.rollbackWorktree(repository, created),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /could not fully roll back/u.test(error.message),
+  );
+
+  assert.equal(await fs.readFile(sentinel, "utf8"), "replacement data must survive\n");
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(
+    await git(repository, ["rev-parse", "--verify", `refs/heads/${created.branch}`]),
+    created.createdFromHead,
+  );
+  assert.equal(
+    (await service.worktrees(repository)).some(
+      (worktree) => path.resolve(worktree.path) === path.resolve(created.path),
+    ),
+    true,
+  );
+
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["update-ref", "-d", `refs/heads/${created.branch}`]);
+});
+
+test("GitService preserves a managed branch advanced at the deletion boundary", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const created = await creator.createWorktree(repository, root, "codex/delete-ref-race");
+  const advancedHead = await commitWithParent(
+    repository,
+    created.createdFromHead,
+    "External branch advance",
+  );
+  const wrapper = await writeRefAdvanceWrapper(root, {
+    advancedHead,
+    expectedHead: created.createdFromHead,
+    refName: `refs/heads/${created.branch}`,
+  });
+  const racingService = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+
+  const deleted = await racingService.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+
+  assert.equal(deleted.branchDeleted, false);
+  assert.equal(
+    await git(repository, ["rev-parse", "--verify", `refs/heads/${created.branch}`]),
+    advancedHead,
+  );
+  await assert.rejects(fs.access(created.path));
+  assert.equal((await racingService.worktrees(repository)).length, 1);
+});
+
+test("GitService preserves a managed worktree that moved away from its persisted path", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  await git(repository, ["config", "worktree.useRelativePaths", "true"]);
+  const created = await service.createWorktree(repository, root, "codex/moved");
+  const movedPath = path.join(root, "moved-by-git");
+  assert.equal(path.basename(path.dirname(created.worktreeGitDir)), "worktrees");
+
+  await git(repository, ["worktree", "move", created.path, movedPath]);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    false,
+  );
+  await git(movedPath, ["switch", "--detach"]);
+  await git(repository, ["worktree", "add", "--", created.path, created.branch]);
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      /moved or changed identity outside Aiden/u.test(error.message),
+  );
+  assert.equal((await fs.stat(movedPath)).isDirectory(), true);
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(
+    await service.managedWorktreeRegistered(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    true,
+  );
+  const registered = await git(repository, ["worktree", "list", "--porcelain"]);
+  assert.match(registered, /^detached$/mu);
+  assert.equal(registered.match(/^worktree /gmu)?.length, 3);
+
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["worktree", "remove", "--force", "--", movedPath]);
+  assert.equal(
+    await service.managedWorktreeRegistered(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    false,
+  );
+});
+
+test("GitService refuses a replacement worktree when Git reuses the administrative path", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/replaced");
+
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["worktree", "add", "--force", "--", created.path, created.branch]);
+  const replacementGitDir = await fs.realpath(
+    (await git(created.path, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim(),
+  );
+  assert.equal(replacementGitDir, created.worktreeGitDir);
+  await assert.rejects(fs.access(path.join(replacementGitDir, "aiden-owner")));
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    false,
+  );
+  await assert.rejects(
+    service.managedWorktreeRegistered(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    /remains registered, but Aiden ownership could not be verified/u,
+  );
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      /no longer registered|ownership could not be verified/u.test(error.message),
+  );
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(await git(created.path, ["branch", "--show-current"]), created.branch);
+});
+
+test("missing ownership markers preserve live worktree metadata and schedule admission", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/missing-owner");
+  await fs.rm(path.join(created.worktreeGitDir, "aiden-owner"));
+
+  await assert.rejects(
+    service.managedWorktreeRegistered(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    /remains registered, but Aiden ownership could not be verified/u,
+  );
+
+  let workspaceRecordExists = true;
+  let destructiveBoundaryCrossed = false;
+  let schedulesResumed = 0;
+  await assert.rejects(
+    withWorkspaceScheduleRestoration(
+      {
+        restoreOnExit: true,
+        resume: async () => {
+          schedulesResumed += 1;
+        },
+        onResumeError: () => undefined,
+      },
+      async ({ keepPaused }) =>
+        removeManagedWorkspace({
+          deleteWorktree: () =>
+            service.deleteManagedWorktree(
+              repository,
+              created.path,
+              created.branch,
+              created.createdFromHead,
+              undefined,
+              created.worktreeGitDir,
+              created.ownershipToken,
+              created.worktreeDevice,
+              created.worktreeInode,
+            ),
+          destructiveMutationAttempted: (error) =>
+            error instanceof GitManagedWorktreeDeleteError
+              ? error.destructiveMutationAttempted
+              : undefined,
+          workspacePathExists: async () => true,
+          worktreeRegistered: () =>
+            service.managedWorktreeRegistered(
+              repository,
+              created.path,
+              created.branch,
+              created.worktreeGitDir,
+              created.ownershipToken,
+            ),
+          onDestructiveBoundary: () => {
+            destructiveBoundaryCrossed = true;
+            keepPaused();
+          },
+          removeWorkspaceRecord: async () => {
+            workspaceRecordExists = false;
+          },
+        }),
+    ),
+    /managed worktree is no longer registered/u,
+  );
+
+  assert.equal(workspaceRecordExists, true);
+  assert.equal(destructiveBoundaryCrossed, false);
+  assert.equal(schedulesResumed, 1);
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  await git(repository, ["show-ref", "--verify", `refs/heads/${created.branch}`]);
+  await fs.writeFile(path.join(created.worktreeGitDir, "aiden-owner"), "corrupt-owner\n", "utf8");
+  await assert.rejects(
+    service.managedWorktreeRegistered(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+    ),
+    /ownership could not be verified/u,
+  );
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === false,
+  );
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["update-ref", "-d", `refs/heads/${created.branch}`]);
+});
+
+test("GitService rejects an unrelated checkout replacement at a stale registered path", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/stale-path");
+  const moved = `${created.path}-moved`;
+
+  // Simulate an out-of-band filesystem move: Git still records the original
+  // path and the administrative marker/backlink still exist. Even copying the
+  // checkout-side .git pointer and clean tracked files into a replacement
+  // directory must not transfer Aiden's capability.
+  await fs.rename(created.path, moved);
+  await fs.mkdir(created.path);
+  await fs.copyFile(path.join(moved, ".git"), path.join(created.path, ".git"));
+  await fs.copyFile(path.join(moved, "README.md"), path.join(created.path, "README.md"));
+
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository,
+      created.path,
+      created.branch,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    false,
+  );
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      /moved or changed identity outside Aiden/u.test(error.message),
+  );
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal(await fs.readFile(path.join(created.path, "README.md"), "utf8"), "initial\n");
+  assert.equal((await fs.stat(moved)).isDirectory(), true);
+  assert.equal((await fs.stat(path.join(moved, ".git"))).isFile(), true);
+});
+
+test("GitService preserves a replacement swapped in after the captured checkout status", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  await fs.writeFile(path.join(repository, ".gitignore"), "replacement-sentinel\n", "utf8");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "Ignore replacement sentinel"]);
+  const created = await creator.createWorktree(repository, root, "codex/captured-replacement");
+  const movedRecord = path.join(root, "captured-checkout-moved.txt");
+  const wrapper = await writeCapturedCheckoutReplacementWrapper(root, movedRecord);
+  const racingService = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+
+  await assert.rejects(
+    racingService.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /changed identity at the deletion boundary/u.test(error.message),
+  );
+
+  const moved = await fs.readFile(movedRecord, "utf8");
+  assert.equal(
+    await fs.readFile(path.join(created.path, "replacement-sentinel"), "utf8"),
+    "replacement must survive\n",
+  );
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
+  assert.equal((await fs.stat(moved)).isDirectory(), true);
+  assert.equal((await fs.stat(path.join(moved, ".git"))).isFile(), true);
+  await git(repository, ["show-ref", "--verify", `refs/heads/${created.branch}`]);
+
+  await fs.rm(created.path, { recursive: true });
+  await fs.rename(moved, created.path);
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["update-ref", "-d", `refs/heads/${created.branch}`]);
+});
+
+test("descriptor-bound cleanup preserves a quarantine replacement and requires review", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  let movedCheckout: string | undefined;
+  let removalCalls = 0;
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async (identity) => {
+      removalCalls += 1;
+      movedCheckout = `${identity.path}-moved`;
+      await fs.rename(identity.path, movedCheckout);
+      await fs.mkdir(identity.path);
+      await fs.writeFile(path.join(identity.path, "replacement-sentinel"), "must survive\n");
+      throw new ManagedWorktreeRemoverError("identity_changed");
+    },
+  });
+  const created = await service.createWorktree(repository, root, "codex/remover-swap");
+  const journal = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /preserved for review/u.test(error.message),
+  );
+
+  assert.ok(movedCheckout);
+  assert.equal((await fs.stat(movedCheckout)).isDirectory(), true);
+  assert.equal(
+    await fs.readFile(
+      path.join(
+        path.dirname(created.path),
+        `.aiden-removing-${created.ownershipToken}`,
+        "replacement-sentinel",
+      ),
+      "utf8",
+    ),
+    "must survive\n",
+  );
+  assert.equal(JSON.parse(await fs.readFile(journal, "utf8")).phase, "needs_review");
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /preserved for review/u.test(error.message),
+  );
+  assert.equal(removalCalls, 1);
+});
+
+test("native scan authorization preserves an ignored file created before deletion continues", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  await fs.mkdir(path.join(repository, "cache"));
+  await fs.writeFile(path.join(repository, "cache", ".keep"), "tracked\n", "utf8");
+  await git(repository, ["add", "cache/.keep"]);
+  await git(repository, ["commit", "-m", "Add tracked cache directory"]);
+  let authorizationCalls = 0;
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async (identity) => {
+      authorizationCalls += 1;
+      assert.ok(identity.authorize);
+      await fs.writeFile(
+        path.join(identity.path, "cache", "late-local.db"),
+        "must survive\n",
+        "utf8",
+      );
+      await identity.authorize(identity.path, "a".repeat(64));
+    },
+  });
+  const created = await service.createWorktree(repository, root, "codex/scan-authorization");
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\ncache/late-local.db\n");
+  const quarantine = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const journal = `${quarantine}.json`;
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /changed after its deletion scan/u.test(error.message),
+  );
+
+  assert.equal(authorizationCalls, 1);
+  assert.equal(
+    await fs.readFile(path.join(quarantine, "cache", "late-local.db"), "utf8"),
+    "must survive\n",
+  );
+  assert.equal(JSON.parse(await fs.readFile(journal, "utf8")).phase, "needs_review");
+});
+
+test("isolated native authorization checks the captured root instead of a clean pathname replacement", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  let scannedPath: string | undefined;
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async (identity) => {
+      if (!identity.authorize) {
+        await removeManagedWorktreeDirectory(identity);
+        return;
+      }
+      await fs.writeFile(path.join(identity.path, "late-local.db"), "must survive\n", "utf8");
+      await removeManagedWorktreeDirectory({
+        ...identity,
+        authorize: async (capturedPath) => {
+          scannedPath = capturedPath;
+          await fs.mkdir(identity.path);
+          await fs.writeFile(
+            path.join(identity.path, "replacement-sentinel"),
+            "decoy must survive\n",
+            "utf8",
+          );
+          await identity.authorize!(capturedPath, "a".repeat(64));
+        },
+      });
+    },
+  });
+  const created = await service.createWorktree(repository, root, "codex/root-bound-authorization");
+  await fs.appendFile(path.join(repository, ".git", "info", "exclude"), "\nlate-local.db\n");
+  const quarantine = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const authorization = path.join(
+    path.dirname(created.path),
+    `.aiden-authorizing-${created.ownershipToken}`,
+  );
+  const journal = `${quarantine}.json`;
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /changed after its deletion scan/u.test(error.message),
+  );
+
+  assert.equal(scannedPath, authorization);
+  assert.equal(
+    await fs.readFile(path.join(authorization, "late-local.db"), "utf8"),
+    "must survive\n",
+  );
+  assert.equal(
+    await fs.readFile(path.join(quarantine, "replacement-sentinel"), "utf8"),
+    "decoy must survive\n",
+  );
+  assert.equal(JSON.parse(await fs.readFile(journal, "utf8")).phase, "needs_review");
+});
+
+test("a helper cleanup failure keeps workspace metadata and schedules blocked", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async () => {
+      throw new ManagedWorktreeRemoverError("io_failed");
+    },
+  });
+  const created = await service.createWorktree(repository, root, "codex/remover-failure");
+  let boundary = false;
+  let metadataRemoved = false;
+
+  await assert.rejects(
+    removeManagedWorkspace({
+      deleteWorktree: () =>
+        service.deleteManagedWorktree(
+          repository,
+          created.path,
+          created.branch,
+          created.createdFromHead,
+          undefined,
+          created.worktreeGitDir,
+          created.ownershipToken,
+          created.worktreeDevice,
+          created.worktreeInode,
+        ),
+      destructiveMutationAttempted: (error) =>
+        error instanceof GitManagedWorktreeDeleteError
+          ? error.destructiveMutationAttempted
+          : undefined,
+      workspacePathExists: async () => false,
+      worktreeRegistered: async () => false,
+      onDestructiveBoundary: () => {
+        boundary = true;
+      },
+      removeWorkspaceRecord: async () => {
+        metadataRemoved = true;
+      },
+    }),
+    /safely remove/u,
+  );
+  assert.equal(boundary, true);
+  assert.equal(metadataRemoved, false);
+  const journal = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+  const pendingJournal = JSON.parse(await fs.readFile(journal, "utf8")) as {
+    checkoutManifestDigest: string | null;
+    phase: string;
+  };
+  assert.equal(pendingJournal.phase, "checkout_cleanup_started");
+  assert.equal(pendingJournal.checkoutManifestDigest, null);
+});
+
+test("GitService never passes the verified checkout pathname to git worktree remove", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const created = await creator.createWorktree(repository, root, "codex/no-path-delete");
+  const invocationRecord = path.join(root, "worktree-remove-invocation.json");
+  const wrapper = await writeWorktreeRemoveObserver(root, invocationRecord);
+  const service = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+
+  assert.equal(deleted.branchDeleted, true);
+  await assert.rejects(fs.access(invocationRecord));
+  await assert.rejects(fs.access(created.path));
+  assert.equal((await service.worktrees(repository)).length, 1);
+});
+
+test("GitService resumes managed deletion from each quarantined midpoint", async (t) => {
+  for (const stage of [
+    "journal",
+    "checkout",
+    "admin",
+    "checkout-cleanup-started",
+    "checkout-authorizing",
+    "checkout-removed",
+    "admin-cleanup-started",
+    "admin-authorizing",
+    "admin-removed",
+  ] as const) {
+    const repository = await createRepository(t);
+    const root = await temporaryDirectory(t);
+    const service = new GitService({ cacheTtlMs: 0 });
+    const created = await service.createWorktree(repository, root, `codex/recover-${stage}`);
+    const checkoutQuarantine = path.join(
+      path.dirname(created.path),
+      `.aiden-removing-${created.ownershipToken}`,
+    );
+    const adminQuarantine = path.join(
+      path.dirname(created.worktreeGitDir),
+      `.aiden-removing-${created.ownershipToken}`,
+    );
+    const checkoutAuthorization = path.join(
+      path.dirname(created.path),
+      `.aiden-authorizing-${created.ownershipToken}`,
+    );
+    const adminAuthorization = path.join(
+      path.dirname(created.worktreeGitDir),
+      `.aiden-authorizing-${created.ownershipToken}`,
+    );
+    const journal = await persistRemovalJournal(
+      created,
+      stage === "checkout-cleanup-started" ||
+        stage === "checkout-authorizing" ||
+        stage === "checkout-removed"
+        ? "checkout_cleanup_started"
+        : stage === "admin-cleanup-started" ||
+            stage === "admin-authorizing" ||
+            stage === "admin-removed"
+          ? "admin_cleanup_started"
+          : "prepared",
+    );
+    if (stage !== "journal") {
+      await fs.rename(created.path, checkoutQuarantine);
+    }
+    if (
+      stage === "admin" ||
+      stage === "checkout-cleanup-started" ||
+      stage === "checkout-authorizing" ||
+      stage === "checkout-removed" ||
+      stage === "admin-cleanup-started" ||
+      stage === "admin-authorizing" ||
+      stage === "admin-removed"
+    ) {
+      await fs.rename(created.worktreeGitDir, adminQuarantine);
+    }
+    if (
+      stage === "checkout-removed" ||
+      stage === "admin-cleanup-started" ||
+      stage === "admin-authorizing" ||
+      stage === "admin-removed"
+    ) {
+      await fs.rm(checkoutQuarantine, { recursive: true });
+    }
+    if (stage === "admin-removed") {
+      await fs.rm(adminQuarantine, { recursive: true });
+    }
+    if (stage === "checkout-authorizing") {
+      await fs.rename(checkoutQuarantine, checkoutAuthorization);
+    }
+    if (stage === "admin-authorizing") {
+      await fs.rename(adminQuarantine, adminAuthorization);
+    }
+
+    const deleted = await service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    );
+
+    assert.equal(deleted.branchDeleted, true, stage);
+    await assert.rejects(fs.access(created.path));
+    await assert.rejects(fs.access(checkoutQuarantine));
+    await assert.rejects(fs.access(checkoutAuthorization));
+    await assert.rejects(fs.access(adminQuarantine));
+    await assert.rejects(fs.access(adminAuthorization));
+    await assert.rejects(fs.access(journal));
+    assert.equal((await service.worktrees(repository)).length, 1, stage);
+  }
+});
+
+test("startup reconciliation resumes a real helper killed after its first tracked unlink", async (t) => {
+  if (process.platform !== "darwin") return;
+  await execFileAsync(process.execPath, ["scripts/build-worktree-remover.mjs", "--test"], {
+    cwd: process.cwd(),
+    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+  });
+  const repository = await createRepository(t);
+  await fs.writeFile(path.join(repository, "a-crash-recovery.txt"), "first\n", "utf8");
+  await fs.writeFile(path.join(repository, "z-crash-recovery.txt"), "second\n", "utf8");
+  await git(repository, ["add", "a-crash-recovery.txt", "z-crash-recovery.txt"]);
+  await git(repository, ["commit", "-m", "Add crash recovery fixtures"]);
+  const root = await temporaryDirectory(t);
+  const marker = path.join(root, "helper-paused-after-first-tracked-unlink");
+  const testBinary = path.join(process.cwd(), "build", "native", "aiden-worktree-remover-test");
+  const interruptedService = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: (identity) => {
+      void removeManagedWorktreeDirectory(identity, testBinary, {
+        pauseAfterUnlinkName: "a-crash-recovery.txt",
+        pauseAfterUnlinkPath: marker,
+      }).catch(() => undefined);
+      return new Promise<void>(() => undefined);
+    },
+  });
+  const created = await interruptedService.createWorktree(
+    repository,
+    root,
+    "codex/partial-native-cleanup-recovery",
+  );
+  const journalPath = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+  const checkoutAuthorization = path.join(
+    path.dirname(created.path),
+    `.aiden-authorizing-${created.ownershipToken}`,
+  );
+  let schedulesBlocked = true;
+  void interruptedService
+    .deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      true,
+    )
+    .catch(() => undefined);
+
+  await waitForFile(marker);
+  const helperPid = Number.parseInt(await fs.readFile(marker, "utf8"), 10);
+  assert.ok(Number.isSafeInteger(helperPid) && helperPid > 0);
+  process.kill(helperPid, "SIGKILL");
+  await assert.rejects(fs.access(path.join(checkoutAuthorization, "a-crash-recovery.txt")));
+  assert.equal(
+    await fs.readFile(path.join(checkoutAuthorization, "z-crash-recovery.txt"), "utf8"),
+    "second\n",
+  );
+  const interruptedJournal = JSON.parse(await fs.readFile(journalPath, "utf8")) as {
+    phase: string;
+    checkoutManifestDigest: string | null;
+  };
+  assert.equal(interruptedJournal.phase, "checkout_cleanup_started");
+  assert.match(interruptedJournal.checkoutManifestDigest!, /^[0-9a-f]{64}$/u);
+
+  const recoveryService = new GitService({ cacheTtlMs: 0 });
+  let records: Workspace[] = [
+    {
+      id: "partial-cleanup",
+      name: "Partial cleanup",
+      folderPath: created.path,
+      permission: "full",
+      createdAt: 1,
+      updatedAt: 1,
+      managedWorktree: {
+        repositoryPath: created.repositoryPath,
+        worktreePath: created.path,
+        branch: created.branch,
+        createdFromHead: created.createdFromHead,
+        worktreeGitDir: created.worktreeGitDir,
+        ownershipToken: created.ownershipToken,
+        worktreeDevice: created.worktreeDevice,
+        worktreeInode: created.worktreeInode,
+      },
+    },
+  ];
+  const recoveryOrder: string[] = [];
+  await reconcilePendingManagedWorktreeDeletions({
+    listWorkspaces: async () => structuredClone(records),
+    deletionPending: async () =>
+      recoveryService.managedWorktreeDeletionPending(
+        created.path,
+        created.worktreeGitDir,
+        created.ownershipToken,
+      ),
+    blockWorkspace: async () => {
+      schedulesBlocked = true;
+      recoveryOrder.push("blocked");
+    },
+    deleteWorktree: async () => {
+      assert.equal(schedulesBlocked, true);
+      recoveryOrder.push("filesystem");
+      await recoveryService.deleteManagedWorktree(
+        repository,
+        created.path,
+        created.branch,
+        created.createdFromHead,
+        undefined,
+        created.worktreeGitDir,
+        created.ownershipToken,
+        created.worktreeDevice,
+        created.worktreeInode,
+        true,
+      );
+    },
+    removeWorkspaceRecord: async () => {
+      assert.equal(schedulesBlocked, true);
+      recoveryOrder.push("metadata");
+      records = [];
+    },
+    finalizeDeletion: async () => {
+      assert.equal(schedulesBlocked, true);
+      recoveryOrder.push("journal");
+      await recoveryService.finalizeManagedWorktreeDeletion(
+        created.path,
+        created.worktreeGitDir,
+        created.ownershipToken,
+      );
+    },
+    finalizeOrphanedDeletions: async (referencedOwnershipTokens) => {
+      await recoveryService.finalizeOrphanedManagedWorktreeDeletionJournals(
+        root,
+        referencedOwnershipTokens,
+      );
+    },
+    onError: (_workspaceId, error) => {
+      throw error;
+    },
+  });
+
+  assert.deepEqual(recoveryOrder, ["blocked", "filesystem", "metadata", "journal"]);
+  assert.equal(schedulesBlocked, true);
+  assert.deepEqual(records, []);
+  await assert.rejects(fs.access(created.path));
+  await assert.rejects(fs.access(checkoutAuthorization));
+  await assert.rejects(fs.access(journalPath));
+  assert.equal((await recoveryService.worktrees(repository)).length, 1);
+});
+
+test("an operational helper failure before manifest cleanup remains retryable", async (t) => {
+  if (process.platform !== "darwin") return;
+  await execFileAsync(process.execPath, ["scripts/build-worktree-remover.mjs", "--test"], {
+    cwd: process.cwd(),
+    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+  });
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const testBinary = path.join(process.cwd(), "build", "native", "aiden-worktree-remover-test");
+  const interruptedService = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: (identity) =>
+      removeManagedWorktreeDirectory(identity, testBinary, {
+        failBeforeManifestUnlink: true,
+      }),
+  });
+  const created = await interruptedService.createWorktree(
+    repository,
+    root,
+    "codex/manifest-finalization-retry",
+  );
+  const journalPath = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+  const manifestPath = path.join(
+    path.dirname(created.path),
+    `.aiden-removal-manifest-${created.ownershipToken}`,
+  );
+
+  await assert.rejects(
+    interruptedService.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      true,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /safely remove/u.test(error.message),
+  );
+  const pendingJournal = JSON.parse(await fs.readFile(journalPath, "utf8")) as {
+    checkoutManifestDigest: string | null;
+    phase: string;
+  };
+  assert.equal(pendingJournal.phase, "checkout_cleanup_started");
+  assert.match(pendingJournal.checkoutManifestDigest!, /^[0-9a-f]{64}$/u);
+  assert.equal((await fs.lstat(manifestPath)).isFile(), true);
+
+  const recoveryService = new GitService({ cacheTtlMs: 0 });
+  const deleted = await recoveryService.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    true,
+  );
+  assert.equal(deleted.branchDeleted, true);
+  await assert.rejects(fs.access(manifestPath));
+  assert.equal(JSON.parse(await fs.readFile(journalPath, "utf8")).phase, "filesystem_complete");
+  await recoveryService.finalizeManagedWorktreeDeletion(
+    created.path,
+    created.worktreeGitDir,
+    created.ownershipToken,
+  );
+  await assert.rejects(fs.access(journalPath));
+});
+
+test("bound recovery manifest mutations require review for missing checkout and admin roots", async (t) => {
+  for (const target of ["checkout", "admin"] as const) {
+    const expectedDigest = "a".repeat(64);
+    const value = await prepareMissingRemovalRoot(t, target, expectedDigest, "manifest-mutation");
+    await fs.writeFile(value.manifestPath, "different manifest bytes\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    const service = new GitService({ cacheTtlMs: 0 });
+
+    await assert.rejects(
+      service.deleteManagedWorktree(
+        value.repository,
+        value.created.path,
+        value.created.branch,
+        value.created.createdFromHead,
+        undefined,
+        value.created.worktreeGitDir,
+        value.created.ownershipToken,
+        value.created.worktreeDevice,
+        value.created.worktreeInode,
+        true,
+      ),
+      (error) =>
+        error instanceof GitManagedWorktreeDeleteError &&
+        /changed during deletion/u.test(error.message),
+      target,
+    );
+
+    const journal = JSON.parse(await fs.readFile(value.journalPath, "utf8")) as {
+      phase: string;
+    };
+    assert.equal(journal.phase, "needs_review", target);
+    assert.equal(await fs.readFile(value.manifestPath, "utf8"), "different manifest bytes\n");
+  }
+});
+
+test("bound recovery manifest IO failures retain resumable checkout and admin phases", async (t) => {
+  for (const target of ["checkout", "admin"] as const) {
+    const expectedDigest = "b".repeat(64);
+    const value = await prepareMissingRemovalRoot(t, target, expectedDigest, "manifest-io");
+    const finalized: string[] = [];
+    const service = new GitService({
+      cacheTtlMs: 0,
+      worktreeRemovalManifestFinalizer: async (targetPath, digest) => {
+        finalized.push(`${targetPath}:${digest}`);
+        throw new ManagedWorktreeRemoverError("io_failed");
+      },
+    });
+
+    await assert.rejects(
+      service.deleteManagedWorktree(
+        value.repository,
+        value.created.path,
+        value.created.branch,
+        value.created.createdFromHead,
+        undefined,
+        value.created.worktreeGitDir,
+        value.created.ownershipToken,
+        value.created.worktreeDevice,
+        value.created.worktreeInode,
+        true,
+      ),
+      (error) =>
+        error instanceof GitManagedWorktreeDeleteError && /safely remove/u.test(error.message),
+      target,
+    );
+
+    assert.deepEqual(finalized, [`${value.targetPath}:${expectedDigest}`], target);
+    const journal = JSON.parse(await fs.readFile(value.journalPath, "utf8")) as {
+      adminManifestDigest: string | null;
+      checkoutManifestDigest: string | null;
+      phase: string;
+    };
+    assert.equal(
+      journal.phase,
+      target === "checkout" ? "checkout_cleanup_started" : "admin_cleanup_started",
+      target,
+    );
+    assert.equal(
+      target === "checkout" ? journal.checkoutManifestDigest : journal.adminManifestDigest,
+      expectedDigest,
+      target,
+    );
+  }
+});
+
+test("unjournaled recovery sidecars are preserved for review after checkout and admin roots vanish", async (t) => {
+  for (const target of ["checkout", "admin"] as const) {
+    const value = await prepareMissingRemovalRoot(t, target, null, "stale-sidecar");
+    const staleContents = `unbound ${target} manifest\n`;
+    await fs.writeFile(value.manifestPath, staleContents, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    const service = new GitService({ cacheTtlMs: 0 });
+
+    await assert.rejects(
+      service.deleteManagedWorktree(
+        value.repository,
+        value.created.path,
+        value.created.branch,
+        value.created.createdFromHead,
+        undefined,
+        value.created.worktreeGitDir,
+        value.created.ownershipToken,
+        value.created.worktreeDevice,
+        value.created.worktreeInode,
+        true,
+      ),
+      (error) =>
+        error instanceof GitManagedWorktreeDeleteError &&
+        /unjournaled managed worktree removal manifest/u.test(error.message),
+      target,
+    );
+
+    const journal = JSON.parse(await fs.readFile(value.journalPath, "utf8")) as {
+      adminManifestDigest: string | null;
+      checkoutManifestDigest: string | null;
+      phase: string;
+    };
+    assert.equal(journal.phase, "needs_review", target);
+    assert.equal(journal.adminManifestDigest, null, target);
+    assert.equal(journal.checkoutManifestDigest, null, target);
+    assert.equal(await fs.readFile(value.manifestPath, "utf8"), staleContents, target);
+  }
+});
+
+test("recovery never rebinds an unjournaled helper manifest after preflight", async (t) => {
+  if (process.platform !== "darwin") return;
+  await execFileAsync(process.execPath, ["scripts/build-worktree-remover.mjs", "--test"], {
+    cwd: process.cwd(),
+    env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C", LC_ALL: "C" },
+  });
+  const repository = await createRepository(t);
+  await fs.writeFile(path.join(repository, ".gitignore"), "late-local.db\n", "utf8");
+  await git(repository, ["add", ".gitignore"]);
+  await git(repository, ["commit", "-m", "Ignore local recovery fixture"]);
+  const root = await temporaryDirectory(t);
+  const marker = path.join(root, "helper-paused-before-manifest-authorization");
+  const testBinary = path.join(process.cwd(), "build", "native", "aiden-worktree-remover-test");
+  const interruptedService = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: (identity) => {
+      void removeManagedWorktreeDirectory(identity, testBinary, {
+        pauseAfterScanPath: marker,
+      }).catch(() => undefined);
+      return new Promise<void>(() => undefined);
+    },
+  });
+  const created = await interruptedService.createWorktree(
+    repository,
+    root,
+    "codex/unbound-manifest-recovery",
+  );
+  const journalPath = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+  const authorizationPath = path.join(
+    path.dirname(created.path),
+    `.aiden-authorizing-${created.ownershipToken}`,
+  );
+  const quarantinePath = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const manifestPath = path.join(
+    path.dirname(created.path),
+    `.aiden-removal-manifest-${created.ownershipToken}`,
+  );
+  void interruptedService
+    .deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      true,
+    )
+    .catch(() => undefined);
+
+  await waitForFile(marker);
+  const helperPid = Number.parseInt(await fs.readFile(marker, "utf8"), 10);
+  assert.ok(Number.isSafeInteger(helperPid) && helperPid > 0);
+  process.kill(helperPid, "SIGKILL");
+  const preAuthorizationJournal = JSON.parse(await fs.readFile(journalPath, "utf8")) as {
+    checkoutManifestDigest: string | null;
+    phase: string;
+  };
+  assert.equal(preAuthorizationJournal.phase, "checkout_cleanup_started");
+  assert.equal(preAuthorizationJournal.checkoutManifestDigest, null);
+  assert.equal((await fs.lstat(manifestPath)).isFile(), true);
+
+  let injected = false;
+  const recoveryService = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async (identity) => {
+      if (!identity.authorize) {
+        await removeManagedWorktreeDirectory(identity, testBinary);
+        return;
+      }
+      assert.equal(identity.authorizedManifestDigest, undefined);
+      injected = true;
+      await fs.writeFile(manifestPath, "attacker-controlled stale manifest\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await fs.writeFile(path.join(identity.path, "late-local.db"), "must survive\n", "utf8");
+      await removeManagedWorktreeDirectory(identity, testBinary);
+    },
+  });
+
+  await assert.rejects(
+    recoveryService.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+      true,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /changed after its deletion scan/u.test(error.message),
+  );
+
+  assert.equal(injected, true);
+  const preservedRoot = (await fs.stat(quarantinePath).catch(() => undefined))
+    ? quarantinePath
+    : authorizationPath;
+  assert.equal(
+    await fs.readFile(path.join(preservedRoot, "late-local.db"), "utf8"),
+    "must survive\n",
+  );
+  const failedJournal = JSON.parse(await fs.readFile(journalPath, "utf8")) as {
+    checkoutManifestDigest: string | null;
+    phase: string;
+  };
+  assert.equal(failedJournal.phase, "needs_review");
+  assert.equal(failedJournal.checkoutManifestDigest, null);
+});
+
+test("startup-style retry never absorbs a late file after cleanup started", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  let removalCalls = 0;
+  const service = new GitService({
+    cacheTtlMs: 0,
+    worktreeDirectoryRemover: async () => {
+      removalCalls += 1;
+    },
+  });
+  const created = await service.createWorktree(repository, root, "codex/started-review");
+  const checkoutQuarantine = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const adminQuarantine = path.join(
+    path.dirname(created.worktreeGitDir),
+    `.aiden-removing-${created.ownershipToken}`,
+  );
+  const journal = await persistRemovalJournal(created, "checkout_cleanup_started");
+  await fs.rename(created.path, checkoutQuarantine);
+  await fs.rename(created.worktreeGitDir, adminQuarantine);
+  const late = path.join(checkoutQuarantine, "late-user-file");
+  await fs.writeFile(late, "must survive\n");
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+      undefined,
+      created.worktreeGitDir,
+      created.ownershipToken,
+      created.worktreeDevice,
+      created.worktreeInode,
+    ),
+    (error) =>
+      error instanceof GitManagedWorktreeDeleteError &&
+      error.destructiveMutationAttempted === true &&
+      /preserved/u.test(error.message),
+  );
+
+  assert.equal(removalCalls, 0);
+  assert.equal(await fs.readFile(late, "utf8"), "must survive\n");
+  assert.equal(JSON.parse(await fs.readFile(journal, "utf8")).phase, "needs_review");
+});
+
+test("GitService quarantines and deletes worktrees with relative administrative links", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  await git(repository, ["config", "worktree.useRelativePaths", "true"]);
+  const created = await service.createWorktree(repository, root, "codex/relative-delete");
+
+  const deleted = await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+  );
+
+  assert.equal(deleted.branchDeleted, true);
+  await assert.rejects(fs.access(created.path));
+  assert.equal((await service.worktrees(repository)).length, 1);
+});
+
+test("GitService retains the deletion journal until workspace metadata cleanup finalizes", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/journal-barrier");
+  const journal = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+
+  await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    true,
+  );
+
+  const stat = await fs.stat(journal);
+  assert.equal(stat.isFile(), true);
+  assert.equal(stat.mode & 0o077, 0);
+  await service.finalizeManagedWorktreeDeletion(
+    created.path,
+    created.worktreeGitDir,
+    created.ownershipToken,
+  );
+  await assert.rejects(fs.access(journal));
+});
+
+test("GitService discovers and finalizes a deletion journal orphaned after metadata removal", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/orphaned-journal");
+  const journal = path.join(
+    path.dirname(created.path),
+    `.aiden-removing-${created.ownershipToken}.json`,
+  );
+
+  await service.deleteManagedWorktree(
+    repository,
+    created.path,
+    created.branch,
+    created.createdFromHead,
+    undefined,
+    created.worktreeGitDir,
+    created.ownershipToken,
+    created.worktreeDevice,
+    created.worktreeInode,
+    true,
+  );
+
+  assert.equal(
+    await service.finalizeOrphanedManagedWorktreeDeletionJournals(
+      root,
+      new Set([created.ownershipToken]),
+    ),
+    0,
+  );
+  assert.equal((await fs.stat(journal)).isFile(), true);
+  assert.equal(await service.finalizeOrphanedManagedWorktreeDeletionJournals(root), 1);
+  await assert.rejects(fs.access(journal));
+});
+
+test("GitService preserves an orphan journal while any owned deletion path remains", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/incomplete-orphan");
+  const journal = await persistRemovalJournal(created);
+
+  assert.equal(await service.finalizeOrphanedManagedWorktreeDeletionJournals(root), 0);
+  assert.equal((await fs.stat(journal)).isFile(), true);
+
+  await fs.rm(journal);
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["update-ref", "-d", `refs/heads/${created.branch}`]);
+});
+
+test("GitService fails closed for legacy managed worktrees without an ownership marker", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "codex/legacy");
+  assert.equal(
+    await service.managedWorktreeUsable(repository, created.path, created.branch),
+    false,
+  );
+
+  await assert.rejects(
+    service.deleteManagedWorktree(
+      repository,
+      created.path,
+      created.branch,
+      created.createdFromHead,
+    ),
+    (error) =>
+      error instanceof GitServiceError &&
+      /no verifiable Aiden ownership marker/u.test(error.message),
+  );
+  assert.equal((await fs.stat(created.path)).isDirectory(), true);
 });
 
 test("GitService bounds subprocess time and output", async (t) => {
@@ -2101,22 +4213,32 @@ test("GitService bounds subprocess time and output", async (t) => {
     encoding: "utf8",
     mode: 0o700,
   });
-  const slowService = new GitService({ gitBinary: slowGit, readTimeoutMs: 250 });
+  const slowService = new GitService({
+    gitBinary: slowGit,
+    readTimeoutMs: 250,
+  });
   await assert.rejects(
     slowService.info(root),
     (error) => error instanceof GitServiceError && error.code === "timeout",
   );
-  const childPid = Number((await fs.readFile(childPidFile, "utf8")).trim());
-  let childAlive = true;
-  for (let attempt = 0; attempt < 10 && childAlive; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    try {
-      process.kill(childPid, 0);
-    } catch {
-      childAlive = false;
-    }
+  let childPid: number | undefined;
+  try {
+    childPid = Number((await fs.readFile(childPidFile, "utf8")).trim());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  assert.equal(childAlive, false, "timeout should terminate descendants in Git's process group");
+  if (childPid !== undefined) {
+    let childAlive = true;
+    for (let attempt = 0; attempt < 10 && childAlive; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      try {
+        process.kill(childPid, 0);
+      } catch {
+        childAlive = false;
+      }
+    }
+    assert.equal(childAlive, false, "timeout should terminate descendants in Git's process group");
+  }
 
   const repository = await createRepository(t);
   for (let index = 0; index < 20; index += 1) {
@@ -2155,7 +4277,11 @@ test("GitService serializes mutations across linked worktree paths", async (t) =
     service.createBranch(repository, "feature/from-main"),
     service.createBranch(created.path, "feature/from-linked"),
   ]);
-  const refs = await git(repository, ["for-each-ref", "--format=%(refname:short)", "refs/heads/feature"]);
+  const refs = await git(repository, [
+    "for-each-ref",
+    "--format=%(refname:short)",
+    "refs/heads/feature",
+  ]);
   assert.deepEqual(refs.split("\n").sort(), ["feature/from-linked", "feature/from-main"]);
 });
 
@@ -2170,7 +4296,11 @@ test("GitService retries a read that crosses a mutation epoch", async (t) => {
     `#!/bin/sh\nif [ "$1" = "status" ] && [ ! -f '${started}' ]; then\n  /usr/bin/git "$@" > '${snapshot}' || exit $?\n  touch '${started}'\n  sleep 1\n  cat '${snapshot}'\n  exit 0\nfi\nexec /usr/bin/git "$@"\n`,
     { encoding: "utf8", mode: 0o700 },
   );
-  const service = new GitService({ cacheTtlMs: 5_000, gitBinary: wrapper, readTimeoutMs: 10_000 });
+  const service = new GitService({
+    cacheTtlMs: 5_000,
+    gitBinary: wrapper,
+    readTimeoutMs: 10_000,
+  });
   const pendingInfo = service.info(repository);
   let statusStarted = false;
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -2188,7 +4318,7 @@ test("GitService retries a read that crosses a mutation epoch", async (t) => {
   assert.equal((await service.info(repository)).branch, "feature/during-read");
 });
 
-test("GitService rolls back a worktree when add times out after Git created it", async (t) => {
+test("GitService preserves a timed-out worktree until stable ownership is established", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
   const wrapper = path.join(root, "git-wrapper");
@@ -2204,10 +4334,153 @@ test("GitService rolls back a worktree when add times out after Git created it",
   });
   await assert.rejects(
     service.createWorktree(repository, root, "codex/timeout"),
-    (error) => error instanceof GitServiceError && error.code === "timeout",
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /could not fully roll it back/u.test(error.message),
+  );
+  const worktrees = await service.worktrees(repository);
+  const preserved = worktrees.find((worktree) => worktree.branch === "codex/timeout");
+  assert.ok(preserved);
+  assert.equal((await fs.stat(preserved.path)).isDirectory(), true);
+  await git(repository, ["show-ref", "--verify", "refs/heads/codex/timeout"]);
+
+  await git(repository, ["worktree", "remove", "--force", "--", preserved.path]);
+  await git(repository, ["update-ref", "-d", "refs/heads/codex/timeout"]);
+});
+
+test("GitService preserves an unregistered target directory when worktree creation fails", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const targetRecord = path.join(root, "unregistered-target.txt");
+  const wrapper = await writeUnregisteredTargetWrapper(root, targetRecord);
+  const service = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 10_000,
+    readTimeoutMs: 10_000,
+  });
+
+  await assert.rejects(
+    service.createWorktree(repository, root, "codex/unregistered-target"),
+    (error) => error instanceof GitServiceError && error.code === "command_failed",
+  );
+
+  const target = await fs.readFile(targetRecord, "utf8");
+  assert.equal(
+    await fs.readFile(path.join(target, "external-sentinel.txt"), "utf8"),
+    "external directory must survive\n",
   );
   assert.equal((await service.worktrees(repository)).length, 1);
-  await assert.rejects(git(repository, ["show-ref", "--verify", "refs/heads/codex/timeout"]));
+  await assert.rejects(
+    git(repository, ["show-ref", "--verify", "refs/heads/codex/unregistered-target"]),
+  );
+});
+
+test("GitService rollback preserves files created by a post-checkout hook", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const nested = path.join(repository, "nested-not-in-head");
+  const hooks = path.join(root, "hooks");
+  const targetRecord = path.join(root, "hook-target.txt");
+  await fs.mkdir(nested);
+  await fs.mkdir(hooks);
+  await fs.writeFile(
+    path.join(hooks, "post-checkout"),
+    `#!/bin/sh
+checkout=$(/usr/bin/git rev-parse --show-toplevel) || exit $?
+printf '%s' "$checkout" > '${targetRecord}'
+printf 'hook data must survive\\n' > "$checkout/hook-sentinel.txt"
+`,
+    { encoding: "utf8", mode: 0o700 },
+  );
+  await git(repository, ["config", "core.hooksPath", hooks]);
+  const service = new GitService({ cacheTtlMs: 0 });
+
+  await assert.rejects(
+    service.createWorktree(nested, root, "codex/hook-sentinel"),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /could not fully roll it back/u.test(error.message),
+  );
+
+  const target = await fs.readFile(targetRecord, "utf8");
+  assert.equal(
+    await fs.readFile(path.join(target, "hook-sentinel.txt"), "utf8"),
+    "hook data must survive\n",
+  );
+  assert.equal((await service.worktrees(repository)).length, 2);
+  await git(repository, ["show-ref", "--verify", "refs/heads/codex/hook-sentinel"]);
+  await git(repository, ["worktree", "remove", "--force", "--", target]);
+  await git(repository, ["update-ref", "-d", "refs/heads/codex/hook-sentinel"]);
+});
+
+test("GitService rollback preserves a file that appears at the removal boundary", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const targetRecord = path.join(root, "late-target.txt");
+  const wrapper = await writeLateRollbackFileWrapper(root, targetRecord);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const created = await creator.createWorktree(repository, root, "codex/late-sentinel");
+  await fs.writeFile(targetRecord, created.path, "utf8");
+  const racingService = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 10_000,
+    readTimeoutMs: 10_000,
+  });
+
+  await assert.rejects(
+    racingService.rollbackWorktree(repository, created),
+    (error) =>
+      error instanceof GitServiceError &&
+      error.code === "command_failed" &&
+      /could not fully roll back/u.test(error.message),
+  );
+
+  assert.equal(
+    await fs.readFile(path.join(created.path, "late-sentinel.txt"), "utf8"),
+    "late data must survive\n",
+  );
+  assert.equal((await racingService.worktrees(repository)).length, 2);
+  await git(repository, ["show-ref", "--verify", "refs/heads/codex/late-sentinel"]);
+  await git(repository, ["worktree", "remove", "--force", "--", created.path]);
+  await git(repository, ["update-ref", "-d", "refs/heads/codex/late-sentinel"]);
+});
+
+test("GitService rollback preserves a branch advanced at its deletion boundary", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const creator = new GitService({ cacheTtlMs: 0 });
+  const branch = "codex/rollback-ref-race";
+  const created = await creator.createWorktree(repository, root, branch);
+  const expectedHead = created.createdFromHead;
+  const advancedHead = await commitWithParent(
+    repository,
+    expectedHead,
+    "External rollback branch advance",
+  );
+  const wrapper = await writeRefAdvanceWrapper(root, {
+    advancedHead,
+    expectedHead,
+    refName: `refs/heads/${branch}`,
+  });
+  const racingService = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 5_000,
+    readTimeoutMs: 10_000,
+  });
+
+  await racingService.rollbackWorktree(repository, created);
+
+  assert.equal(
+    await git(repository, ["rev-parse", "--verify", `refs/heads/${branch}`]),
+    advancedHead,
+  );
+  assert.equal((await racingService.worktrees(repository)).length, 1);
+  await git(repository, ["update-ref", "-d", `refs/heads/${branch}`]);
 });
 
 test("GitService rejects branch/worktree creation in an unborn repository", async (t) => {
