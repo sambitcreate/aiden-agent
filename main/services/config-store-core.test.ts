@@ -13,6 +13,7 @@ import {
   PROVIDER_MODEL_CACHE_FILENAME,
   SETTINGS_FILENAME,
   createPortableConfigStores,
+  splitStoredProvider,
 } from "./portable-config-core.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
 
@@ -352,12 +353,41 @@ test("seeding runs once even under concurrent first reads", async (t) => {
   assert.equal(typeof local.aidenDirMigratedAt, "number");
 });
 
-test("a first-ever launch clears providers and records that it seeded", async (t) => {
+test("a first-ever launch has no providers and records that it seeded", async (t) => {
   const h = await harness(t);
   assert.deepEqual(await h.store.listProviders(), []);
 
   const local = await readJson<{ seeded: boolean }>(h.localFile);
   assert.equal(local.seeded, true);
+});
+
+test("a copied portable provider survives first launch on a fresh local root", async (t) => {
+  const h = await harness(t);
+  const copiedProvider = splitStoredProvider(provider).intent;
+  await fs.mkdir(path.dirname(h.portableFile), { recursive: true });
+  await fs.writeFile(
+    h.portableFile,
+    JSON.stringify(
+      {
+        providers: [copiedProvider],
+        providerIdAliases: {},
+        mcpServers: [],
+        skills: [],
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+
+  const [listed] = await h.store.listProviders();
+  assert.equal(listed.id, provider.id);
+  assert.deepEqual(listed.models, [], "the copied intent has no local model cache yet");
+  assert.equal(listed.hasKey, false, "the copied intent has no local secret yet");
+
+  const portable = await readJson<{ providers: Array<{ id: string }> }>(h.portableFile);
+  assert.deepEqual(portable.providers.map((copied) => copied.id), [provider.id]);
+  assert.equal((await readJson<{ seeded: boolean }>(h.localFile)).seeded, true);
 });
 
 test("setSettings remaps a legacy lastProviderId through the portable aliases", async (t) => {

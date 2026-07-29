@@ -2810,7 +2810,15 @@ test("GitService preserves a managed branch advanced at the deletion boundary", 
     expectedHead: created.createdFromHead,
     refName: `refs/heads/${created.branch}`,
   });
-  const racingService = new GitService({ cacheTtlMs: 0, gitBinary: wrapper });
+  const racingService = new GitService({
+    cacheTtlMs: 0,
+    gitBinary: wrapper,
+    mutationTimeoutMs: 5_000,
+    // The injected Node wrapper adds a process hop for every Git invocation.
+    // Give this deterministic race fixture the same read budget as its rollback
+    // counterpart rather than coupling it to the production default.
+    readTimeoutMs: 10_000,
+  });
 
   const deleted = await racingService.deleteManagedWorktree(
     repository,

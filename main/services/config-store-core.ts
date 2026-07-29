@@ -144,10 +144,10 @@ export function createConfigStore(configStores: PortableConfigStores, secrets: S
         const before = await portable.load();
         const config = structuredClone(before);
 
-        // A first-ever launch clears the provider list. Only ever true when the
-        // list is already empty, so the ~/.aiden migration cannot lose anything
-        // by having run before this.
-        if (!seeded) config.providers = [];
+        // A fresh install already starts with no providers. Never use this
+        // machine's local seed marker to clear portable provider intent: a
+        // valid ~/.aiden/config.json may have been copied here from another
+        // machine before this local root exists.
         if (!Array.isArray(config.mcpServers)) config.mcpServers = [];
         if (!Array.isArray(config.skills)) config.skills = [];
         if (!config.providerIdAliases || typeof config.providerIdAliases !== "object") {

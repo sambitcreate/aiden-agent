@@ -1382,7 +1382,11 @@ test("traversal caps preserve prefix matches and report incomplete empty searche
     assert.match(text(globMatch), /^target\.ts\n… \[truncated after 10000 entries\]$/);
     assert.equal(text(globEmpty), "[no matches]\n… [truncated after 10000 entries]");
     assert.equal(text(globOverflowDirectory), "[no matches]\n… [truncated after 10000 entries]");
-    assert.equal(text(grepEmpty), "[no matches]\n… [truncated after 10000 entries]");
+    assert.match(
+      text(grepEmpty),
+      /^\[no matches\]\n… \[truncated after (?:10000 entries|5000 ms)\]$/,
+      "grep may correctly reach either its entry or wall-clock budget first",
+    );
 
     for (const toolName of ["glob", "grep"] as const) {
       const controller = new AbortController();
