@@ -281,7 +281,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     let output = "";
     let turns = 0;
     let toolCalls = 0;
-    let events = 0;
+    let lifecycleEvents = 0;
     let currentTurnHadTextDelta = false;
     let terminalError: string | null = null;
     let terminalAborted = false;
@@ -292,10 +292,13 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       child.cancel(new Error(warning));
     };
     unsubscribe = child.agent.subscribe(async (event) => {
-      events += 1;
-      if (events > policy.maxEvents) {
-        stopForLimit("The child reached its event limit.");
-        return;
+      const isStreamUpdate = event.type === "message_update";
+      if (!isStreamUpdate) {
+        lifecycleEvents += 1;
+        if (lifecycleEvents > policy.maxEvents) {
+          stopForLimit("The child reached its event limit.");
+          return;
+        }
       }
       if (event.type === "message_start" && event.message.role === "assistant") {
         currentTurnHadTextDelta = false;
