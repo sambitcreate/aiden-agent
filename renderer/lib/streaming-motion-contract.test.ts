@@ -52,10 +52,26 @@ test("streaming and persisted messages reserve the same action and timeline shel
 
   const transientShell = between(
     list,
-    "{timeline || streamingReasoning || streamingText ? (",
+    "{timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (",
     "<AgentActivityTransition",
   );
   assert.match(transientShell, /<ActivityFeed timeline=\{timeline\} \/>/u);
+  assert.match(
+    transientShell,
+    /<SubagentChips runs=\{liveSubagents\} onOpen=\{onOpenSubagent\} \/>/u,
+  );
+});
+
+test("main and subagent activity share Aiden's orb wrapper", () => {
+  const orb = source("../components/aiden-orb.tsx");
+  const list = source("../components/message-list.tsx");
+  const subagents = source("../components/subagent-chips.tsx");
+
+  assert.match(orb, /import \{\s*ThinkingOrb,/u);
+  assert.match(orb, /paused=\{appearance\.paused \|\| !active\}/u);
+  assert.match(list, /import \{ AidenOrb \} from "\.\/aiden-orb"/u);
+  assert.match(subagents, /import \{ AidenOrb \} from "\.\/aiden-orb"/u);
+  assert.doesNotMatch(list, /from "thinking-orbs"/u);
 });
 
 test("a persistence error retains the only rendered partial response", () => {

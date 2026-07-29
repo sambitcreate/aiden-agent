@@ -8,7 +8,10 @@ import {
   prettyAccelerator,
   type CommandId,
 } from "../shared/keybindings";
-import { resolveCommandForKeyEvent } from "./command-system-core";
+import {
+  commandExecutionAllowed,
+  resolveCommandForKeyEvent,
+} from "./command-system-core";
 import { toast } from "../components/ui";
 
 export type CommandPaletteMode = "root" | "chats" | "models" | "providers" | "settings";
@@ -51,7 +54,13 @@ function openDialogState(): { any: boolean; foreign: boolean } {
   };
 }
 
-export function CommandSystemProvider({ children }: { children: React.ReactNode }) {
+export function CommandSystemProvider({
+  children,
+  applicationModal = false,
+}: {
+  children: React.ReactNode;
+  applicationModal?: boolean;
+}) {
   const queryClient = useQueryClient();
   const shortcuts = useShortcuts();
   const handlers = React.useRef(new Map<CommandId, CommandHandler[]>());
@@ -87,14 +96,15 @@ export function CommandSystemProvider({ children }: { children: React.ReactNode 
     (commandId: CommandId) => {
       const dialog = openDialogState();
       if (
-        dialog.any &&
-        !(
-          commandId === "commandPalette.toggle" &&
-          paletteOpen &&
-          !dialog.foreign
-        )
-      )
+        !commandExecutionAllowed(commandId, {
+          applicationModal,
+          dialogOpen: dialog.any,
+          foreignDialog: dialog.foreign,
+          paletteOpen,
+        })
+      ) {
         return false;
+      }
       if (commandId === "commandPalette.toggle") {
         setPaletteMode("root");
         setPaletteOpen((open) => !open);
@@ -119,18 +129,24 @@ export function CommandSystemProvider({ children }: { children: React.ReactNode 
       }
       return true;
     },
-    [paletteOpen],
+    [applicationModal, paletteOpen],
   );
   const canExecute = React.useCallback(
     (commandId: CommandId) =>
-      commandId === "commandPalette.toggle" || handlers.current.has(commandId),
-    [],
+      !applicationModal &&
+      (commandId === "commandPalette.toggle" || handlers.current.has(commandId)),
+    [applicationModal],
   );
 
   const openMode = React.useCallback((mode: CommandPaletteMode = "root") => {
+    if (applicationModal) return;
     setPaletteMode(mode);
     setPaletteOpen(true);
-  }, []);
+  }, [applicationModal]);
+
+  React.useLayoutEffect(() => {
+    if (applicationModal && paletteOpen) setPaletteOpen(false);
+  }, [applicationModal, paletteOpen]);
 
   React.useEffect(() => {
     const unsubscribe = shortcutApi.onChanged((snapshot) => {
@@ -159,9 +175,9 @@ export function CommandSystemProvider({ children }: { children: React.ReactNode 
         editable: isEditable(target),
         fileEditor: Boolean(target?.closest("[data-command-scope='fileEditor']")),
         terminal: Boolean(target?.closest("[data-command-scope='terminal'], .xterm")),
-        modal: Boolean(
-          document.querySelector('[data-slot="dialog-content"][data-state="open"]'),
-        ),
+        modal:
+          applicationModal ||
+          Boolean(document.querySelector('[data-slot="dialog-content"][data-state="open"]')),
         paletteOpen,
         composing: event.isComposing || event.key === "Dead",
         repeat: event.repeat,
@@ -177,7 +193,7 @@ export function CommandSystemProvider({ children }: { children: React.ReactNode 
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [bindings, execute, paletteOpen]);
+  }, [applicationModal, bindings, execute, paletteOpen]);
 
   const value = React.useMemo<CommandSystemValue>(
     () => ({

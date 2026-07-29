@@ -5,6 +5,7 @@ import {
   effectiveBindings,
 } from "../shared/keybindings";
 import {
+  commandExecutionAllowed,
   resolveCommandForKeyEvent,
   workspaceCommandVisibility,
   type CommandDispatchContext,
@@ -29,6 +30,24 @@ const event = (key: string, code: string, shiftKey = false) => ({
   ctrlKey: false,
   altKey: false,
   shiftKey,
+});
+
+test("application-modal state blocks native global commands until it is cleared", () => {
+  const modal = {
+    applicationModal: true,
+    dialogOpen: false,
+    foreignDialog: false,
+    paletteOpen: false,
+  };
+  assert.equal(commandExecutionAllowed("assistant.open", modal), false);
+  assert.equal(commandExecutionAllowed("commandPalette.toggle", modal), false);
+  assert.equal(
+    commandExecutionAllowed("assistant.open", {
+      ...modal,
+      applicationModal: false,
+    }),
+    true,
+  );
 });
 
 test("workspace-only commands are unavailable when their surfaces are unmounted", () => {

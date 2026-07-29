@@ -24,6 +24,11 @@ import {
   useShortcutBinding,
   useShortcutLabel,
 } from "../lib/command-system";
+import {
+  compactSidebarAutoFocusIntent,
+  type CompactSidebarAutoFocusIntent,
+  type CompactSidebarFocusState,
+} from "../lib/compact-sidebar-focus";
 import { ariaKeyShortcut } from "../shared/keybindings";
 
 export { toast };
@@ -243,9 +248,16 @@ type SplitViewProps = React.PropsWithChildren<{
   sidebar: React.ReactNode;
   storageKey: string;
   sidebarSize?: { default: number; min: number; max: number };
+  contentModalOpen?: boolean;
 }>;
 
-function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitViewProps) {
+function SplitViewRoot({
+  sidebar,
+  storageKey,
+  sidebarSize,
+  contentModalOpen = false,
+  children,
+}: SplitViewProps) {
   const collapseKey = `${storageKey}.sidebar-collapsed`;
   const widthKey = `${storageKey}.sidebar-width`;
   const limits = sidebarSize ?? { default: 260, min: 220, max: 340 };
@@ -258,11 +270,34 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
   });
   const [leadingAnchor, setLeadingAnchor] = React.useState<HTMLDivElement | null>(null);
   const sidebarRef = React.useRef<HTMLElement>(null);
+  const contentModalOpenRef = React.useRef(contentModalOpen);
+  const previousCompactSidebarFocusStateRef = React.useRef<CompactSidebarFocusState>({
+    compact,
+    expanded: !collapsed,
+    contentModalOpen,
+  });
+  const compactSidebarFocusIntentRef =
+    React.useRef<CompactSidebarAutoFocusIntent | null>(null);
+  React.useLayoutEffect(() => {
+    contentModalOpenRef.current = contentModalOpen;
+  }, [contentModalOpen]);
+  React.useLayoutEffect(() => {
+    const next: CompactSidebarFocusState = {
+      compact,
+      expanded: !collapsed,
+      contentModalOpen,
+    };
+    compactSidebarFocusIntentRef.current = compactSidebarAutoFocusIntent(
+      previousCompactSidebarFocusStateRef.current,
+      next,
+    );
+    previousCompactSidebarFocusStateRef.current = next;
+  }, [collapsed, compact, contentModalOpen]);
   const toggle = React.useCallback(() => setCollapsed((value) => {
     localStorage.setItem(collapseKey, value ? "0" : "1");
     return !value;
   }), [collapseKey]);
-  useCommandHandler("sidebar.toggle", toggle);
+  useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
     let wasCompact = window.innerWidth < 700;
@@ -316,7 +351,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     localStorage.setItem(widthKey, String(Math.round(next)));
   }, [limits.max, limits.min, width, widthKey]);
 
-  const compactOpen = compact && !collapsed;
+  const compactOpen = compact && !collapsed && !contentModalOpen;
 
   React.useEffect(() => {
     if (!compactOpen) return;
@@ -326,9 +361,12 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
       ...Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
       ...Array.from(leadingAnchor?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
     ].filter((element) => element.offsetParent !== null);
-    const frame = requestAnimationFrame(() => {
-      if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
-    });
+    const frame =
+      compactSidebarFocusIntentRef.current === "first-control"
+        ? requestAnimationFrame(() => {
+            if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
+          })
+        : null;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
@@ -354,9 +392,10 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      cancelAnimationFrame(frame);
+      if (frame !== null) cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
-      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+      if (!contentModalOpenRef.current && previousFocus?.isConnected)
+        requestAnimationFrame(() => previousFocus.focus());
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
@@ -374,8 +413,8 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
         ) : null}
         <aside
           ref={sidebarRef}
-          inert={collapsed ? true : undefined}
-          aria-hidden={collapsed ? true : undefined}
+          inert={collapsed || contentModalOpen ? true : undefined}
+          aria-hidden={collapsed || contentModalOpen ? true : undefined}
           className={cn(
             "h-full shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out",
             compact && !collapsed && "absolute inset-y-0 left-0 z-30 shadow-dialog",
@@ -383,7 +422,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
           style={{
             width: collapsed ? 0 : compact ? Math.min(width, viewportWidth - 56) : width,
             opacity: collapsed ? 0 : 1,
-            pointerEvents: collapsed ? "none" : "auto",
+            pointerEvents: collapsed || contentModalOpen ? "none" : "auto",
           }}
         >
           <div style={{ width: compact ? Math.min(width, viewportWidth - 56) : width }} className="h-full">{sidebar}</div>
@@ -395,12 +434,12 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
           aria-valuemin={limits.min}
           aria-valuemax={limits.max}
           aria-valuenow={Math.round(width)}
-          tabIndex={collapsed || compact ? -1 : 0}
+          tabIndex={collapsed || compact || contentModalOpen ? -1 : 0}
           onPointerDown={beginResize}
           onKeyDown={resizeWithKeyboard}
           className={cn(
             "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent",
-            (collapsed || compact) && "pointer-events-none opacity-0",
+            (collapsed || compact || contentModalOpen) && "pointer-events-none opacity-0",
           )}
         />
         <main
@@ -410,7 +449,15 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
         >
           {children}
         </main>
-        <div ref={setLeadingAnchor} className="absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center" />
+        <div
+          ref={setLeadingAnchor}
+          inert={contentModalOpen ? true : undefined}
+          aria-hidden={contentModalOpen ? true : undefined}
+          className={cn(
+            "absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center",
+            contentModalOpen && "pointer-events-none",
+          )}
+        />
       </div>
     </SplitContext.Provider>
   );

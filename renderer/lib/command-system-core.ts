@@ -17,6 +17,26 @@ export interface CommandDispatchContext {
   recording: boolean;
 }
 
+export interface CommandExecutionContext {
+  applicationModal: boolean;
+  dialogOpen: boolean;
+  foreignDialog: boolean;
+  paletteOpen: boolean;
+}
+
+export function commandExecutionAllowed(
+  commandId: CommandId,
+  context: CommandExecutionContext,
+): boolean {
+  if (context.applicationModal) return false;
+  if (!context.dialogOpen) return true;
+  return (
+    commandId === "commandPalette.toggle" &&
+    context.paletteOpen &&
+    !context.foreignDialog
+  );
+}
+
 export function workspaceCommandVisibility(pathname: string): {
   environment: boolean;
   terminal: boolean;

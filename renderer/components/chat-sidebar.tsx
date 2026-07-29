@@ -62,6 +62,7 @@ import type { ChatMeta, Workspace } from "../lib/types";
 import { useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
+import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
@@ -204,8 +205,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const appleRenameReady = foundationModels.data?.state === "ready";
   const appleRenameDetail = foundationModels.isLoading
     ? "Checking Apple Foundation Models availability."
-    : foundationModels.data?.detail ?? "Apple Foundation Models are unavailable.";
-  const workspaceActionBlocked = environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
+    : (foundationModels.data?.detail ?? "Apple Foundation Models are unavailable.");
+  const workspaceActionBlocked =
+    environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
   const workspaceSwitchBlocked = workspaceActionBlocked || environmentPanel.editorState.dirty;
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
@@ -247,9 +249,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         required.every((modifier) => heldCommandKeysRef.current.has(modifier)),
       );
     const eventModifier = (event: KeyboardEvent) =>
-      ["Meta", "Control", "Alt", "Shift"].includes(event.key)
-        ? event.key
-        : null;
+      ["Meta", "Control", "Alt", "Shift"].includes(event.key) ? event.key : null;
 
     const onKeyDown = (event: KeyboardEvent) => {
       const modifier = eventModifier(event);
@@ -268,7 +268,6 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         }
         return;
       }
-
     };
     const onKeyUp = (event: KeyboardEvent) => {
       const modifier = eventModifier(event);
@@ -351,7 +350,17 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       }
       return true;
     },
-    [activeId, environmentPanel.agentBusy, environmentPanel.cancelAgent, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, navigate, qc, select],
+    [
+      activeId,
+      environmentPanel.agentBusy,
+      environmentPanel.cancelAgent,
+      environmentPanel.editorState.dirty,
+      environmentPanel.editorState.saving,
+      environmentPanel.gitOperationBusy,
+      navigate,
+      qc,
+      select,
+    ],
   );
 
   const switchWorkspace = React.useCallback(
@@ -474,6 +483,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       environmentPanel.cancelAgent?.();
     }
     await chatsApi.remove(deleting.id);
+    await removeDeletedChatFromCache(qc, deleting.id);
     await qc.invalidateQueries({ queryKey: queryKeys.chats });
     if (deleting.id === activeChatId) void navigate({ to: "/" });
     setDeleting(null);
@@ -568,9 +578,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   key={w.id}
                   checked={w.id === activeId}
                   disabled={workspaceSwitchBlocked}
-                  sublabel={
-                    w.folderPath ? truncatePathMiddle(w.folderPath) : undefined
-                  }
+                  sublabel={w.folderPath ? truncatePathMiddle(w.folderPath) : undefined}
                   title={w.folderPath ?? undefined}
                   onCheckedChange={() => switchWorkspace(w.id)}
                 >
@@ -597,14 +605,16 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                       Delete worktree…
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem
-                    disabled={workspaceActionBlocked}
-                    icon="trash"
-                    color="red"
-                    onSelect={() => setRemovingWorkspace(active)}
-                  >
-                    Remove “{active.name}”
-                  </DropdownMenuItem>
+                  {!active.managedWorktree ? (
+                    <DropdownMenuItem
+                      disabled={workspaceActionBlocked}
+                      icon="trash"
+                      color="red"
+                      onSelect={() => setRemovingWorkspace(active)}
+                    >
+                      Remove “{active.name}”
+                    </DropdownMenuItem>
+                  ) : null}
                 </>
               ) : null}
             </DropdownMenuContent>
@@ -630,87 +640,91 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   const shortcutBinding = shortcutNumber
                     ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
                     : null;
-                  return <ContextMenu key={chat.id}>
-                    <ContextMenuTrigger asChild>
-                      <SidebarListItem
-                        icon={
-                          renamingWithAppleId === chat.id
-                            ? <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                            : undefined
-                        }
-                        aria-busy={renamingWithAppleId === chat.id}
-                        title={
-                          titleReveal?.chatId === chat.id ? (
-                            <GeneratedTitleReveal
-                              key={`${chat.id}-${titleReveal.version}`}
-                              previousTitle={titleReveal.previousTitle}
-                              title={chat.title}
-                            />
-                          ) : (
-                            chat.title
-                          )
-                        }
-                        trailing={
-                          chatShortcutsVisible && shortcutBinding ? (
-                            <kbd
-                              aria-hidden="true"
-                              className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                            >
-                              {prettyAccelerator(shortcutBinding)}
-                            </kbd>
-                          ) : undefined
-                        }
-                        aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-                        selected={chat.id === activeChatId}
-                        onPointerEnter={() => prefetchChat(chat.id)}
-                        onFocus={() => prefetchChat(chat.id)}
-                        onClick={() => openChat(chat.id)}
-                      />
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuItem
-                        icon="pencil"
-                        disabled={renamingWithAppleId === chat.id}
-                        onSelect={() => {
-                          setRenameValue(chat.title);
-                          setRenaming(chat);
-                        }}
-                      >
-                        Rename
-                      </ContextMenuItem>
-                      {foundationModels.data !== null ? (
-                        <ContextMenuItem
-                          disabled={!appleRenameReady || renamingWithAppleId !== null}
-                          aria-label={
-                            renamingWithAppleId === chat.id
-                              ? "Renaming with Apple"
-                              : appleRenameReady
-                                ? "Rename with Apple"
-                                : `Rename with Apple. ${appleRenameDetail}`
+                  return (
+                    <ContextMenu key={chat.id}>
+                      <ContextMenuTrigger asChild>
+                        <SidebarListItem
+                          icon={
+                            renamingWithAppleId === chat.id ? (
+                              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                            ) : undefined
                           }
-                          onSelect={() => void renameWithApple(chat)}
+                          aria-busy={renamingWithAppleId === chat.id}
+                          title={
+                            titleReveal?.chatId === chat.id ? (
+                              <GeneratedTitleReveal
+                                key={`${chat.id}-${titleReveal.version}`}
+                                previousTitle={titleReveal.previousTitle}
+                                title={chat.title}
+                              />
+                            ) : (
+                              chat.title
+                            )
+                          }
+                          trailing={
+                            chatShortcutsVisible && shortcutBinding ? (
+                              <kbd
+                                aria-hidden="true"
+                                className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                              >
+                                {prettyAccelerator(shortcutBinding)}
+                              </kbd>
+                            ) : undefined
+                          }
+                          aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+                          selected={chat.id === activeChatId}
+                          onPointerEnter={() => prefetchChat(chat.id)}
+                          onFocus={() => prefetchChat(chat.id)}
+                          onClick={() => openChat(chat.id)}
+                        />
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          icon="pencil"
+                          disabled={renamingWithAppleId === chat.id}
+                          onSelect={() => {
+                            setRenameValue(chat.title);
+                            setRenaming(chat);
+                          }}
                         >
-                          <span className="min-w-0 flex-1">
-                            {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
-                          </span>
-                          {!appleRenameReady ? (
-                            <span className="text-small text-tertiary">
-                              {foundationModels.isLoading ? "Checking…" : "Unavailable"}
-                            </span>
-                          ) : null}
+                          Rename
                         </ContextMenuItem>
-                      ) : null}
-                      <ContextMenuSeparator />
-                      <ContextMenuItem
-                        icon="trash"
-                        color="red"
-                        disabled={renamingWithAppleId === chat.id}
-                        onSelect={() => setDeleting(chat)}
-                      >
-                        Delete
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>;
+                        {foundationModels.data !== null ? (
+                          <ContextMenuItem
+                            disabled={!appleRenameReady || renamingWithAppleId !== null}
+                            aria-label={
+                              renamingWithAppleId === chat.id
+                                ? "Renaming with Apple"
+                                : appleRenameReady
+                                  ? "Rename with Apple"
+                                  : `Rename with Apple. ${appleRenameDetail}`
+                            }
+                            onSelect={() => void renameWithApple(chat)}
+                          >
+                            <span className="min-w-0 flex-1">
+                              {renamingWithAppleId === chat.id
+                                ? "Renaming with Apple…"
+                                : "Rename with Apple"}
+                            </span>
+                            {!appleRenameReady ? (
+                              <span className="text-small text-tertiary">
+                                {foundationModels.isLoading ? "Checking…" : "Unavailable"}
+                              </span>
+                            ) : null}
+                          </ContextMenuItem>
+                        ) : null}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem
+                          icon="trash"
+                          color="red"
+                          disabled={renamingWithAppleId === chat.id}
+                          onSelect={() => setDeleting(chat)}
+                        >
+                          Delete
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
                 })}
               </SidebarListGroup>
             ))
@@ -758,9 +772,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         description={
           deletingWorktree ? (
             <Text variant="small" color="secondary">
-              The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is deleted only if it
-              has no commits beyond where Aiden created it. Chats stay on disk. Dirty worktrees are refused.
-              {environmentPanel.editorState.workspaceId === deletingWorktree.id && environmentPanel.editorState.dirty
+              The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
+              deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
+              Dirty worktrees are refused.
+              {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
+              environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
                 : ""}
             </Text>
@@ -780,9 +796,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         description={
           removingWorkspace ? (
             <Text variant="small" color="secondary">
-              “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be listed. The folder
-              itself is not touched.
-              {environmentPanel.editorState.workspaceId === removingWorkspace.id && environmentPanel.editorState.dirty
+              “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be
+              listed. The folder itself is not touched.
+              {environmentPanel.editorState.workspaceId === removingWorkspace.id &&
+              environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
                 : ""}
             </Text>

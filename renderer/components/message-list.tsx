@@ -1,42 +1,23 @@
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
-import { ThinkingOrb, type OrbTheme } from "thinking-orbs";
 import { Callout, ErrorBoundary, Text } from "./ui";
+import { AidenOrb } from "./aiden-orb";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { MessageBubble } from "./message-bubble";
 import { ReasoningBlock } from "./reasoning-block";
+import { SubagentChips } from "./subagent-chips";
 import type { ChatMessage } from "../lib/types";
 import type { AgentActivity } from "../lib/agent-activity";
-import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import {
+  captureSubagentChipFocus,
+  resolveSubagentChipFocusHandoff,
+  retainSubagentChipFocusAfterPointerDown,
+  type SubagentChipFocusCapture,
+} from "../lib/subagent-panel-state";
 import type { GenerationTimeline } from "../shared/generation-timeline";
-
-interface OrbAppearance {
-  theme: OrbTheme;
-  paused: boolean;
-}
-
-function readOrbAppearance(): OrbAppearance {
-  if (typeof document === "undefined") return { theme: "light", paused: true };
-  const root = document.documentElement;
-  return {
-    theme: root.dataset.appearanceScheme === "dark" ? "dark" : "light",
-    paused: root.dataset.reduceMotion === "true",
-  };
-}
-
-function useOrbAppearance(): OrbAppearance {
-  const [appearance, setAppearance] = React.useState(readOrbAppearance);
-
-  React.useEffect(() => {
-    const update = () => setAppearance(readOrbAppearance());
-    window.addEventListener(APPEARANCE_CHANGE_EVENT, update);
-    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
-  }, []);
-
-  return appearance;
-}
+import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -47,6 +28,9 @@ interface MessageListProps {
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
+  liveSubagents: readonly SubagentRunSnapshotV1[];
+  subagentsEnabled: boolean;
+  onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
   error: string | null;
@@ -59,17 +43,81 @@ export function MessageList({
   streamComplete,
   onStreamHandoffComplete,
   timeline,
+  liveSubagents,
+  subagentsEnabled,
+  onOpenSubagent,
   agentActivity,
   error,
 }: MessageListProps) {
-  const orbAppearance = useOrbAppearance();
+  const transcriptRef = React.useRef<HTMLDivElement | null>(null);
+  const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
+
+  React.useEffect(() => {
+    const captureFocusedChip = (target: EventTarget | null) => {
+      const chip =
+        target instanceof Element
+          ? target.closest<HTMLElement>("[data-subagent-chip-run-id]")
+          : null;
+      if (chip && transcriptRef.current?.contains(chip)) {
+        chipFocusCaptureRef.current = captureSubagentChipFocus(chip);
+        return;
+      }
+      if (
+        (target === document.body || target === document.documentElement) &&
+        chipFocusCaptureRef.current &&
+        !chipFocusCaptureRef.current.element.isConnected
+      ) {
+        return;
+      }
+      chipFocusCaptureRef.current = null;
+    };
+    const onFocusIn = (event: FocusEvent) => captureFocusedChip(event.target);
+    const onPointerDown = (event: PointerEvent) => {
+      chipFocusCaptureRef.current = retainSubagentChipFocusAfterPointerDown(
+        chipFocusCaptureRef.current,
+        event.target instanceof Node ? event.target : null,
+      );
+    };
+    document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, []);
+
+  React.useLayoutEffect(() => {
+    const root = transcriptRef.current;
+    if (!root) return;
+    const handoff = resolveSubagentChipFocusHandoff(
+      chipFocusCaptureRef.current,
+      document.activeElement,
+      [document.body, document.documentElement],
+      root.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
+    );
+    if (handoff.action === "clear") {
+      chipFocusCaptureRef.current = null;
+      return;
+    }
+    if (handoff.action === "focus") {
+      chipFocusCaptureRef.current = captureSubagentChipFocus(handoff.target);
+      handoff.target.focus({ preventScroll: true });
+    }
+  });
 
   return (
-    <div className="aiden-dock-inset mx-auto flex w-full max-w-3xl flex-col gap-5 py-6">
+    <div
+      ref={transcriptRef}
+      className="aiden-dock-inset mx-auto flex w-full max-w-3xl flex-col gap-5 py-6"
+      data-subagent-chip-focus-scope="true"
+    >
       {messages.map((m) => (
         <div key={m.id} className="flex min-w-0 flex-col gap-3">
           {m.role === "assistant" && m.timeline?.steps.length ? (
             <ActivityFeed timeline={m.timeline} animate={false} />
+          ) : null}
+          {subagentsEnabled && m.role === "assistant" && m.subagents ? (
+            <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
           ) : null}
           {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
           <ErrorBoundary
@@ -81,9 +129,12 @@ export function MessageList({
         </div>
       ))}
 
-      {timeline || streamingReasoning || streamingText ? (
+      {timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (
         <div className="flex min-w-0 flex-col gap-3">
           <ActivityFeed timeline={timeline} />
+          {subagentsEnabled && liveSubagents.length > 0 ? (
+            <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
+          ) : null}
           {streamingReasoning ? (
             <ReasoningBlock
               content={streamingReasoning}
@@ -108,7 +159,7 @@ export function MessageList({
         </div>
       ) : null}
 
-      <AgentActivityTransition activity={agentActivity} appearance={orbAppearance} />
+      <AgentActivityTransition activity={agentActivity} />
 
       <EventPresence present={Boolean(error)}>
         {error ? (
@@ -141,13 +192,7 @@ function UnrenderableMessage({ content }: { content: string }) {
   );
 }
 
-function AgentActivityTransition({
-  activity,
-  appearance,
-}: {
-  activity: AgentActivity | null;
-  appearance: OrbAppearance;
-}) {
+function AgentActivityTransition({ activity }: { activity: AgentActivity | null }) {
   interface ExitingActivity {
     id: number;
     value: AgentActivity;
@@ -197,14 +242,7 @@ function AgentActivityTransition({
       }`}
       data-agent-activity={value.phase}
     >
-      <ThinkingOrb
-        aria-hidden="true"
-        state={value.orbState}
-        size={20}
-        theme={appearance.theme}
-        paused={appearance.paused}
-        className="shrink-0 text-primary"
-      />
+      <AidenOrb state={value.orbState} size={20} className="shrink-0 text-primary" />
       <Text
         variant="small"
         color="secondary"

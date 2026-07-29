@@ -16,6 +16,15 @@ import {
 import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
 import { AppCommandPalette } from "../components/command-palette";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
+import {
+  preferLatestTerminalChat,
+  reconcileChatReadUntilAuthoritative,
+  subscribeChatReadReconciliations,
+  subscribeChatSettlements,
+  subscribeDetachedTerminalChats,
+} from "../lib/chat-terminal-sync";
+import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
+import type { Chat } from "../lib/types";
 
 export function RootView() {
   useTheme();
@@ -23,12 +32,21 @@ export function RootView() {
     <WorkspaceProvider>
       <WorkspaceTerminalProvider>
         <EnvironmentPanelProvider>
-          <CommandSystemProvider>
+          <EnvironmentCommandSystemProvider>
             <RootContent />
-          </CommandSystemProvider>
+          </EnvironmentCommandSystemProvider>
         </EnvironmentPanelProvider>
       </WorkspaceTerminalProvider>
     </WorkspaceProvider>
+  );
+}
+
+function EnvironmentCommandSystemProvider({ children }: React.PropsWithChildren) {
+  const { compactModalOpen } = useEnvironmentPanel();
+  return (
+    <CommandSystemProvider applicationModal={compactModalOpen}>
+      {children}
+    </CommandSystemProvider>
   );
 }
 
@@ -47,6 +65,34 @@ function RootContent() {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits before leaving the chat."
         : null;
+  const reconcileChatCacheAfterIdle = React.useCallback(
+    async (chatId: string) => {
+      const chatKey = queryKeys.chat(chatId);
+      await reconcileChatReadUntilAuthoritative({
+        isDeleted: () => isChatCacheDeleted(chatId),
+        waitUntilIdle: () => chatsApi.waitUntilIdle(chatId),
+        refreshChat: async () => {
+          await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+          if (isChatCacheDeleted(chatId)) return;
+          // Force the exact transcript read even if navigation made its query
+          // inactive while the old renderer was draining. A later revisit must
+          // never observe the provisional cache entry.
+          await queryClient.fetchQuery({
+            queryKey: chatKey,
+            queryFn: () => chatsApi.get(chatId),
+            staleTime: 0,
+          });
+        },
+        refreshChatList: async () => {
+          await queryClient.refetchQueries({
+            queryKey: queryKeys.chats,
+            type: "all",
+          });
+        },
+      });
+    },
+    [queryClient],
+  );
 
   useCommandHandler(
     "terminal.toggle",
@@ -127,6 +173,45 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  React.useEffect(
+    () =>
+      subscribeDetachedTerminalChats(
+        onNotification,
+        (chat) => {
+          if (isChatCacheDeleted(chat.id)) return;
+          void (async () => {
+            if (isChatCacheDeleted(chat.id)) return;
+            const chatKey = queryKeys.chat(chat.id);
+            // A rapid A → B → A revisit can have a stale read in flight when the
+            // detached terminal payload arrives. Cancel it before installing the
+            // durable main-process result so the old read cannot win afterward.
+            await queryClient.cancelQueries({ queryKey: chatKey, exact: true });
+            if (isChatCacheDeleted(chat.id)) return;
+            queryClient.setQueryData<Chat | null>(chatKey, (current) =>
+              isChatCacheDeleted(chat.id) ? current : preferLatestTerminalChat(current, chat),
+            );
+            await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+          })();
+        },
+        (owner) => reconcileChatCacheAfterIdle(owner.chatId),
+      ),
+    [queryClient, reconcileChatCacheAfterIdle],
+  );
+
+  React.useEffect(
+    () => subscribeChatReadReconciliations((owner) => reconcileChatCacheAfterIdle(owner.chatId)),
+    [reconcileChatCacheAfterIdle],
+  );
+
+  React.useEffect(
+    () =>
+      subscribeChatSettlements(onNotification, (settlement) => {
+        if (isChatCacheDeleted(settlement.chatId)) return;
+        void reconcileChatCacheAfterIdle(settlement.chatId);
+      }),
+    [reconcileChatCacheAfterIdle],
+  );
+
   React.useEffect(() => {
     // ~/.aiden/config.json was edited outside the app. Only the lists sourced
     // from the portable file are stale; workspaces and UI settings are stored
@@ -166,7 +251,7 @@ function RootContent() {
   return (
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
-      <AssistantDock />
+      <AssistantDock interactionBlocked={environmentPanel.compactModalOpen} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
   );

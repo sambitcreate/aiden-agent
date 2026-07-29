@@ -4,7 +4,13 @@
 // tool set.
 
 import * as React from "react";
-import { chatsApi, onNotification, startGeneration, type GenerationHandle } from "../../lib/ipc";
+import {
+  chatsApi,
+  createChatTurnId,
+  onNotification,
+  startGeneration,
+  type GenerationHandle,
+} from "../../lib/ipc";
 import type { Chat, ChatMeta } from "../../lib/types";
 import { useProviders } from "../../lib/queries";
 import {
@@ -21,9 +27,7 @@ export interface AssistantMessage {
 
 export type AssistantGenerationPhase = "idle" | "streaming" | "stopping";
 
-export function assistantGenerationIsActive(
-  phase: AssistantGenerationPhase,
-): boolean {
+export function assistantGenerationIsActive(phase: AssistantGenerationPhase): boolean {
   return phase !== "idle";
 }
 
@@ -73,8 +77,7 @@ export function settleFailedAssistantMessages(
   partialContent: string | undefined,
   bufferedDelta: string,
 ): AssistantMessage[] {
-  if (partialContent?.trim())
-    return settleAssistantMessages(messages, partialContent);
+  if (partialContent?.trim()) return settleAssistantMessages(messages, partialContent);
   if (bufferedDelta) {
     const last = messages[messages.length - 1];
     if (last?.role === "assistant") {
@@ -85,9 +88,7 @@ export function settleFailedAssistantMessages(
     }
   }
   const last = messages[messages.length - 1];
-  return last?.role === "assistant" && last.content === ""
-    ? messages.slice(0, -1)
-    : messages;
+  return last?.role === "assistant" && last.content === "" ? messages.slice(0, -1) : messages;
 }
 
 /** Remove a user turn that never reached durable chat history and its placeholder. */
@@ -148,8 +149,7 @@ function visibleMessages(chat: Chat | null): AssistantMessage[] {
 
 export function useAssistantChat(): AssistantChat {
   const [messages, setMessages] = React.useState<AssistantMessage[]>([]);
-  const [generationPhase, setGenerationPhase] =
-    React.useState<AssistantGenerationPhase>("idle");
+  const [generationPhase, setGenerationPhase] = React.useState<AssistantGenerationPhase>("idle");
   const streaming = assistantGenerationIsActive(generationPhase);
   const [error, setError] = React.useState<string | null>(null);
   const [lastNotice, setLastNotice] = React.useState<AssistantNotice | null>(null);
@@ -163,11 +163,7 @@ export function useAssistantChat(): AssistantChat {
   const conversationLoadingRef = React.useRef(false);
   const [turnSaving, setTurnSaving] = React.useState(false);
   const modelReady = isModelSelectionAvailable(selection, providers.data);
-  const ready =
-    modelReady &&
-    !conversationLoading &&
-    !turnSaving &&
-    generationPhase !== "stopping";
+  const ready = modelReady && !conversationLoading && !turnSaving && generationPhase !== "stopping";
   const readiness: AssistantReadiness = conversationLoading
     ? "conversation-loading"
     : turnSaving
@@ -243,11 +239,7 @@ export function useAssistantChat(): AssistantChat {
 
   const loadThread = React.useCallback(
     (chatId: string) => {
-      if (
-        !canChangeThread ||
-        persistingTurnRef.current !== null ||
-        handleRef.current
-      ) {
+      if (!canChangeThread || persistingTurnRef.current !== null || handleRef.current) {
         return;
       }
       // Switching threads mid-stream would otherwise keep appending the old
@@ -294,11 +286,7 @@ export function useAssistantChat(): AssistantChat {
   );
 
   const newThread = React.useCallback(() => {
-    if (
-      !canChangeThread ||
-      persistingTurnRef.current !== null ||
-      handleRef.current
-    ) {
+    if (!canChangeThread || persistingTurnRef.current !== null || handleRef.current) {
       return;
     }
     abandonTurn("lifecycle");
@@ -333,6 +321,7 @@ export function useAssistantChat(): AssistantChat {
       const { providerId, model } = current;
       const content = text.trim();
       const turn = ++turnRef.current;
+      const messageTurnId = createChatTurnId();
       const isCurrent = () => turn === turnRef.current;
       setError(null);
       setGenerationPhase("streaming");
@@ -400,8 +389,7 @@ export function useAssistantChat(): AssistantChat {
             onDone: (fullContent) => {
               if (!isCurrent()) return;
               clearPendingDelta();
-              if (stoppingTurnRef.current === turn)
-                stoppingTurnRef.current = null;
+              if (stoppingTurnRef.current === turn) stoppingTurnRef.current = null;
               setGenerationPhase("idle");
               handleRef.current = null;
               // A cancelled generation still reports done, with no content.
@@ -426,11 +414,7 @@ export function useAssistantChat(): AssistantChat {
               setGenerationPhase("idle");
               handleRef.current = null;
               setMessages((existing) =>
-                settleFailedAssistantMessages(
-                  existing,
-                  partialContent,
-                  bufferedDelta,
-                ),
+                settleFailedAssistantMessages(existing, partialContent, bufferedDelta),
               );
               if (stoppedByUser) refreshThreads();
               fail(message);
@@ -444,6 +428,7 @@ export function useAssistantChat(): AssistantChat {
               if (isCurrent()) fail(`Aiden cannot approve ${prompt.toolName} here; it was denied.`);
             },
           },
+          messageTurnId,
         );
       };
 
@@ -456,7 +441,7 @@ export function useAssistantChat(): AssistantChat {
           return chatsApi.appendMessage(
             activeChatId,
             { role: "user", content },
-            { providerId, model, autoTitle: true },
+            { providerId, model, autoTitle: true, turnId: messageTurnId },
           );
         }
         // No title: the chat store's default is what lets background
@@ -470,7 +455,7 @@ export function useAssistantChat(): AssistantChat {
         return chatsApi.appendMessage(
           created.id,
           { role: "user", content },
-          { providerId, model, autoTitle: true },
+          { providerId, model, autoTitle: true, turnId: messageTurnId },
         );
       };
 
@@ -481,12 +466,14 @@ export function useAssistantChat(): AssistantChat {
           if (persistingTurnRef.current === turn) persistingTurnRef.current = null;
           if (stoppedPersistingTurnRef.current === turn) stoppedPersistingTurnRef.current = null;
           if (!isCurrent()) {
+            void chatsApi.abandonTurn(chat.id, messageTurnId);
             refreshThreads();
             return;
           }
           setTurnSaving(false);
           setActiveChatId(chat.id);
           if (stoppedDuringPersistence) {
+            void chatsApi.abandonTurn(chat.id, messageTurnId);
             refreshThreads();
             return;
           }
@@ -514,17 +501,12 @@ export function useAssistantChat(): AssistantChat {
       setGenerationPhase("idle");
       setMessages((existing) => {
         const last = existing[existing.length - 1];
-        return last?.role === "assistant" && last.content === ""
-          ? existing.slice(0, -1)
-          : existing;
+        return last?.role === "assistant" && last.content === "" ? existing.slice(0, -1) : existing;
       });
       return;
     }
     const handle = handleRef.current;
-    const nextPhase = assistantGenerationPhaseAfterStop(
-      generationPhase,
-      Boolean(handle),
-    );
+    const nextPhase = assistantGenerationPhaseAfterStop(generationPhase, Boolean(handle));
     if (!handle || nextPhase !== "stopping") return;
     stoppingTurnRef.current = turnRef.current;
     setGenerationPhase(nextPhase);

@@ -59,8 +59,31 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
 test("workspace menu middle-truncates folder paths", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /import \{ truncatePathMiddle \} from "\.\.\/lib\/truncate-path"/u);
-  assert.match(sidebar, /sublabel=\{\s*w\.folderPath \? truncatePathMiddle\(w\.folderPath\) : undefined\s*\}/u);
+  assert.match(
+    sidebar,
+    /sublabel=\{\s*w\.folderPath \? truncatePathMiddle\(w\.folderPath\) : undefined\s*\}/u,
+  );
   assert.match(sidebar, /title=\{w\.folderPath \?\? undefined\}/u);
+});
+
+test("successful chat deletion removes the exact transcript cache before list refresh", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const deletion = between(sidebar, "const commitDelete = async () => {", "\n  };");
+  const remove = deletion.indexOf("await chatsApi.remove(deleting.id)");
+  const purge = deletion.indexOf("await removeDeletedChatFromCache(qc, deleting.id)");
+  const refresh = deletion.indexOf("await qc.invalidateQueries({ queryKey: queryKeys.chats })");
+
+  assert.ok(remove >= 0);
+  assert.ok(purge > remove);
+  assert.ok(refresh > purge);
+});
+
+test("managed worktrees expose only the recovery-aware delete action", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  assert.match(
+    sidebar,
+    /active\.managedWorktree[\s\S]+Delete worktree…[\s\S]+!active\.managedWorktree[\s\S]+Remove “\{active\.name\}”/u,
+  );
 });
 
 test("settings reuses the chat sidebar width so the chrome does not jump", () => {

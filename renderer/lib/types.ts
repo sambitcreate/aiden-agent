@@ -8,6 +8,7 @@ import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
+import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -147,6 +148,10 @@ export interface ManagedWorktree {
   repositoryPath: string;
   worktreePath: string;
   branch: string;
+  worktreeGitDir?: string;
+  ownershipToken?: string;
+  worktreeDevice?: number;
+  worktreeInode?: number;
   createdFromHead: string;
 }
 
@@ -457,6 +462,7 @@ export interface ChatMessage {
   reasoning?: string;
   attachments?: Attachment[];
   timeline?: GenerationTimeline;
+  subagents?: SubagentMessageReferenceV1;
 }
 
 export interface ChatMeta {
@@ -472,6 +478,18 @@ export interface ChatMeta {
 export interface Chat extends ChatMeta {
   computerUseEnabled?: boolean;
   messages: ChatMessage[];
+}
+
+/**
+ * Main-process chat reads may be intentionally provisional when a generation
+ * owned by a replaced renderer has not crossed its durability barrier yet.
+ */
+export interface ChatReadResponse {
+  chat: Chat | null;
+  reconciliation: {
+    chatId: string;
+    workspaceId: string;
+  } | null;
 }
 
 export type ScheduledTaskMode = "llm" | "script";

@@ -14,7 +14,11 @@ const PREVIEW_VISIBLE_MS = 8_000;
 /** Must match aiden-assistant-dock-out in styles.css. */
 const PANEL_EXIT_MS = 120;
 
-export function AssistantDock(): React.ReactElement {
+export function AssistantDock({
+  interactionBlocked = false,
+}: {
+  interactionBlocked?: boolean;
+}): React.ReactElement {
   const chat = useAssistantChat();
   const [open, setOpen] = React.useState(false);
   const [present, setPresent] = React.useState(false);
@@ -25,14 +29,11 @@ export function AssistantDock(): React.ReactElement {
   const bubbleRef = React.useRef<HTMLButtonElement>(null);
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
   const restoreFocusPendingRef = React.useRef(false);
-  // Replies that land while the panel is open are already visible; only count
-  // the ones the user could have missed.
-  const openRef = React.useRef(open);
-  openRef.current = open;
   const lastSeenReplyRef = React.useRef<number | null>(null);
 
   const openPanel = React.useCallback(() => {
-    if (!openRef.current) {
+    if (interactionBlocked) return;
+    if (!open) {
       const activeElement = document.activeElement;
       restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null;
       restoreFocusPendingRef.current = false;
@@ -42,13 +43,13 @@ export function AssistantDock(): React.ReactElement {
     setOpen(true);
     setUnread(0);
     setPreview(null);
-  }, []);
+  }, [interactionBlocked, open]);
 
   const minimizePanel = React.useCallback(() => {
     restoreFocusPendingRef.current = true;
     setOpen(false);
   }, []);
-  useCommandHandler("assistant.open", openPanel);
+  useCommandHandler("assistant.open", openPanel, !interactionBlocked);
 
   // Keep the panel mounted through its exit animation, exactly as the
   // environment summary card does, so minimizing settles instead of vanishing.
@@ -86,10 +87,10 @@ export function AssistantDock(): React.ReactElement {
     const notice = chat.lastNotice;
     if (!notice || notice.at === lastSeenReplyRef.current) return;
     lastSeenReplyRef.current = notice.at;
-    if (openRef.current) return;
+    if (open) return;
     setUnread((count) => count + 1);
     setPreview(assistantPreviewText(notice.text));
-  }, [chat.lastNotice]);
+  }, [chat.lastNotice, open]);
 
   React.useEffect(() => {
     if (!preview) return;
@@ -98,7 +99,13 @@ export function AssistantDock(): React.ReactElement {
   }, [preview]);
 
   return (
-    <div className="pointer-events-none absolute bottom-4 right-4 z-40 flex flex-col items-end">
+    <div
+      inert={interactionBlocked ? true : undefined}
+      aria-hidden={interactionBlocked ? true : undefined}
+      data-environment-modal-background="assistant"
+      className="pointer-events-none absolute bottom-4 right-4 z-40 flex flex-col items-end"
+      style={{ visibility: interactionBlocked ? "hidden" : undefined }}
+    >
       {present ? (
         <div
           className="assistant-dock-panel"
