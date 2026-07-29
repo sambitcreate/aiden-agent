@@ -48,6 +48,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:config-externally-changed",
   "app:command",
   "app:navigate",
+  "app:update-state",
   "chat:approval",
   "chat:delta",
   "chat:done",
