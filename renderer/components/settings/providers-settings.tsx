@@ -80,7 +80,7 @@ function BuiltinProviderRows({
     <React.Fragment key={provider.id}>
       {index > 0 ? <Separator /> : null}
       <div className="flex items-center gap-3 px-3.5 py-3">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
           <ProviderIcon
             providerId={provider.id}
             providerLabel={provider.label}
@@ -304,7 +304,7 @@ export function ProvidersSettings() {
           aria-busy={refreshingFoundationModels}
         >
           <div className="flex items-start gap-3 px-3.5 py-3">
-            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
               <ProviderIcon
                 providerId="apple-foundation-models"
                 providerLabel="Apple Foundation Models"
@@ -433,7 +433,7 @@ export function ProvidersSettings() {
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}
                 <div className="flex items-center gap-3 px-3.5 py-3">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
                     <ProviderIcon providerId={p.id} providerLabel={p.label} className="size-4.5" />
                   </div>
                   <div className="min-w-0 flex-1">

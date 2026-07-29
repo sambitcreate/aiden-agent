@@ -67,6 +67,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "providers:auth:prompt",
   "providers:auth:status-changed",
   "schedule:updated",
+  "settings:appearance-changed",
   "shortcut:changed",
   "terminal:data",
   "terminal:exit",

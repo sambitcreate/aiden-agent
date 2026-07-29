@@ -36,7 +36,7 @@ export function useTheme(): void {
 
     const hydrationRevision = readAppearanceIntentRevision();
     void runAppearanceIntent(hydrationRevision, async (isCurrent) => {
-      const settings = await settingsApi.get();
+      const appearance = await settingsApi.getAppearance();
       if (!active || !isCurrent()) return;
       let themeInfo = await nativeRevision.readStable(
         () => window.aidenAPI.nativeTheme.getInfo(),
@@ -44,13 +44,7 @@ export function useTheme(): void {
       if (!active || !isCurrent()) return;
       nativeDark = themeInfo.shouldUseDarkColors;
       nativeHighContrast = themeInfo.shouldUseHighContrastColors === true;
-      const persisted = settings.appearance
-        ? normalizeAppearanceConfig(settings.appearance)
-        : readCachedAppearance();
-      config = persisted ?? {
-        ...createDefaultAppearanceConfig(),
-        mode: themeInfo.themeSource,
-      };
+      config = normalizeAppearanceConfig(appearance);
       if (themeInfo.themeSource !== config.mode) {
         await window.aidenAPI.nativeTheme.setThemeSource(config.mode);
         const updated = await nativeRevision.readStable(

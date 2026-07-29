@@ -340,7 +340,7 @@ export function CodexProviderSettings() {
     >
       <div className="flex flex-col gap-3 px-3.5 py-3 sm:flex-row sm:items-start">
         <div className="flex min-w-0 flex-1 items-start gap-3">
-          <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
+          <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
             <ProviderIcon
               providerId="openai-codex"
               providerLabel="ChatGPT / Codex"

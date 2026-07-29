@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   THEME_PRESETS,
@@ -11,7 +12,79 @@ import {
   resolveThemeTokens,
   serializeThemeVariant,
   themeVariantSafetyIssues,
+  type AppearanceScheme,
+  type ThemeVariantConfig,
 } from "./appearance";
+
+const NORMAL_TEXT_TOKENS = [
+  "--text-secondary",
+  "--text-tertiary",
+  "--text-quaternary",
+  "--syntax-comment",
+  "--syntax-keyword",
+  "--syntax-string",
+  "--syntax-number",
+  "--syntax-title",
+  "--syntax-variable",
+  "--support-red",
+  "--support-green",
+  "--support-warning",
+  "--terminal-foreground",
+  "--terminal-black",
+  "--terminal-red",
+  "--terminal-green",
+  "--terminal-yellow",
+  "--terminal-blue",
+  "--terminal-magenta",
+  "--terminal-cyan",
+  "--terminal-white",
+] as const;
+
+function assertSemanticContrast(
+  variant: ThemeVariantConfig,
+  scheme: AppearanceScheme,
+  label: string,
+): void {
+  const tokens = resolveThemeTokens(variant, scheme);
+  const surfaces = [
+    tokens["--theme-canvas"],
+    tokens["--theme-sidebar"],
+    tokens["--surface-popover"],
+  ] as const;
+  for (const role of NORMAL_TEXT_TOKENS) {
+    for (const surface of surfaces) {
+      assert.ok(
+        colorContrastRatio(tokens[role], surface) >= 4.5,
+        `${label} ${role} remains readable on ${surface}`,
+      );
+    }
+  }
+  for (const support of ["red", "green", "warning"] as const) {
+    assert.ok(
+      colorContrastRatio(
+        tokens[`--support-${support}`],
+        tokens[`--support-${support}-foreground`],
+      ) >= 4.5,
+      `${label} ${support} fill has readable content`,
+    );
+  }
+  for (const state of ["--accent", "--accent-hover", "--accent-active"] as const) {
+    assert.ok(
+      colorContrastRatio(tokens[state], tokens["--accent-foreground"]) >= 4.5,
+      `${label} ${state} has readable control content`,
+    );
+  }
+  for (const surface of surfaces) {
+    assert.ok(
+      colorContrastRatio(tokens["--toolbar-icon"], surface) >= 3,
+      `${label} toolbar icon remains visible on ${surface}`,
+    );
+    assert.ok(
+      colorContrastRatio(tokens["--focus-ring"], surface) >= 3,
+      `${label} focus ring remains visible on ${surface}`,
+    );
+  }
+}
 
 test("the built-in theme pairs remain readable and avoid black dark canvases", () => {
   for (const preset of THEME_PRESETS) {
@@ -19,8 +92,16 @@ test("the built-in theme pairs remain readable and avoid black dark canvases", (
     assert.ok(colorContrastRatio(preset.dark.canvas, preset.dark.foreground) >= 7, `${preset.label} dark contrast`);
     assert.notEqual(preset.dark.canvas, "#000000");
     assert.notEqual(preset.dark.raised, "#000000");
-    assert.ok(colorContrastRatio(preset.light.accent, preset.light.raised) >= 4.5, `${preset.label} light accent contrast`);
-    assert.ok(colorContrastRatio(preset.dark.accent, preset.dark.raised) >= 4.5, `${preset.label} dark accent contrast`);
+    for (const surface of ["canvas", "sidebar", "raised"] as const) {
+      assert.ok(
+        colorContrastRatio(preset.light.accent, preset.light[surface]) >= 4.5,
+        `${preset.label} light accent contrast on ${surface}`,
+      );
+      assert.ok(
+        colorContrastRatio(preset.dark.accent, preset.dark[surface]) >= 4.5,
+        `${preset.label} dark accent contrast on ${surface}`,
+      );
+    }
     assert.deepEqual(themeVariantSafetyIssues(getPresetVariant(preset.id, "light"), "light"), []);
     assert.deepEqual(themeVariantSafetyIssues(getPresetVariant(preset.id, "dark"), "dark"), []);
   }
@@ -51,10 +132,75 @@ test("built-in themes keep light neutrals softer and dark neutrals calmer", () =
   const light = resolveThemeTokens(getPresetVariant("aiden", "light"), "light");
   const dark = resolveThemeTokens(getPresetVariant("aiden", "dark"), "dark");
   assert.equal(light["--text-primary"], "#3D3F41");
+  assert.equal(light["--text-secondary"], "#5B606B");
+  assert.equal(light["--text-quaternary"], "#666D7B");
   assert.equal(light["--surface-control"], "rgb(61 63 65 / 0.084)");
   assert.equal(dark["--text-primary"], "#D1D4DA");
+  assert.equal(dark["--text-secondary"], "#A9B1BA");
+  assert.equal(dark["--text-quaternary"], "#9AA3AE");
   assert.equal(dark["--surface-control"], "rgb(209 212 218 / 0.094)");
   assert.equal(dark["--accent"], "#3E97F6");
+});
+
+test("every built-in theme keeps semantic foregrounds readable on canvas, sidebars, and popovers", () => {
+  for (const preset of THEME_PRESETS) {
+    assertSemanticContrast(
+      getPresetVariant(preset.id, "light"),
+      "light",
+      `${preset.label} light`,
+    );
+    assertSemanticContrast(
+      getPresetVariant(preset.id, "dark"),
+      "dark",
+      `${preset.label} dark`,
+    );
+  }
+});
+
+test("custom themes clash-correct semantic colors without rejecting safe primitives", () => {
+  const collision = {
+    ...getPresetVariant("aiden", "dark"),
+    preset: "custom" as const,
+    background: "#FF5E57",
+    foreground: "#000000",
+    accent: "#000000",
+  };
+  assert.deepEqual(themeVariantSafetyIssues(collision, "dark"), []);
+  assertSemanticContrast(collision, "dark", "danger-collision custom dark");
+
+  const boundaryAccent = {
+    ...getPresetVariant("aiden", "light"),
+    preset: "custom" as const,
+    background: "#FFFFFF",
+    foreground: "#000000",
+    accent: "#6E6E6E",
+  };
+  assert.deepEqual(themeVariantSafetyIssues(boundaryAccent, "light"), []);
+  assertSemanticContrast(boundaryAccent, "light", "boundary-accent custom light");
+
+  const toolbarCollision = {
+    ...getPresetVariant("aiden", "light"),
+    preset: "custom" as const,
+    background: "#7B7B7B",
+    foreground: "#000000",
+    accent: "#000000",
+    contrast: 0,
+  };
+  assert.deepEqual(themeVariantSafetyIssues(toolbarCollision, "light"), []);
+  assertSemanticContrast(toolbarCollision, "light", "toolbar-collision custom light");
+
+  const sidebarCollision = {
+    ...getPresetVariant("aiden", "light"),
+    preset: "custom" as const,
+    background: "#FFFFFF",
+    foreground: "#767676",
+    accent: "#000000",
+    contrast: 100,
+  };
+  assert.match(
+    themeVariantSafetyIssues(sidebarCollision, "light").join(" "),
+    /foreground needs at least 4\.5:1 contrast against its surfaces/i,
+  );
 });
 
 test("appearance normalization refreshes named presets without overwriting custom themes", () => {
@@ -98,6 +244,46 @@ test("appearance normalization safely clamps user-controlled values", () => {
   assert.equal(normalized.uiFontSize, 18);
   assert.equal(normalized.codeFontSize, 10);
   assert.equal(normalized.reduceMotion, "system");
+  assert.equal(createDefaultAppearanceConfig().diffMarkers, "symbols");
+  assert.equal(normalizeAppearanceConfig({}).diffMarkers, "symbols");
+});
+
+test("the shared focus treatment rings actions but leaves text entry outline-free", () => {
+  const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");
+  const assistantBubble = readFileSync(
+    new URL("../components/assistant/assistant-bubble.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /:root :where\([\s\S]*?\):focus-visible\s*\{[\s\S]*?outline: 2px solid var\(--focus-ring\);[\s\S]*?outline-offset: 2px;[\s\S]*?\}/u,
+  );
+  assert.match(
+    styles,
+    /:root :where\([\s\S]*?input:not\(\[type\]\),[\s\S]*?input:is\([\s\S]*?\),[\s\S]*?textarea[\s\S]*?\):focus-visible\s*\{\s*outline: none;\s*\}/u,
+  );
+  assert.match(
+    styles,
+    /--color-support-red-foreground: var\(--support-red-foreground\);/u,
+  );
+  assert.match(
+    styles,
+    /--color-support-green-foreground: var\(--support-green-foreground\);/u,
+  );
+  assert.match(
+    styles,
+    /--color-support-warning-foreground: var\(--support-warning-foreground\);/u,
+  );
+  assert.match(
+    ui,
+    /bg-red text-red-foreground[\s\S]*?hover:bg-red[\s\S]*?active:bg-red[\s\S]*?focus-visible:bg-red/u,
+  );
+  assert.match(
+    ui,
+    /SwitchPrimitive\.Thumb className="[^"]*bg-white[^"]*data-\[state=checked\]:bg-accent-foreground[^"]*"/u,
+  );
+  assert.match(assistantBubble, /bg-support-red[\s\S]*?text-support-red-foreground/u);
 });
 
 test("strict appearance parsing rejects incomplete and unsafe IPC payloads", () => {
@@ -114,6 +300,19 @@ test("strict appearance parsing rejects incomplete and unsafe IPC payloads", () 
   unreadable.light.preset = "custom";
   unreadable.light.foreground = unreadable.light.background;
   assert.throws(() => parseAppearanceConfig(unreadable), /4\.5:1 contrast/i);
+
+  const unreadablePopover = createDefaultAppearanceConfig();
+  unreadablePopover.light = {
+    ...unreadablePopover.light,
+    preset: "custom",
+    background: "#767676",
+    foreground: "#FFFFFF",
+    accent: "#000000",
+  };
+  assert.throws(
+    () => parseAppearanceConfig(unreadablePopover),
+    /foreground needs at least 4\.5:1 contrast against its surfaces/i,
+  );
 });
 
 test("per-scheme theme JSON round-trips without losing editable fields", () => {
@@ -179,6 +378,6 @@ test("unsafe custom theme drafts report recovery guidance", () => {
   };
   const issues = themeVariantSafetyIssues(variant, "light");
   assert.equal(issues.length, 2);
-  assert.match(issues.join(" "), /foreground and background/i);
+  assert.match(issues.join(" "), /foreground needs at least 4\.5:1 contrast against its surfaces/i);
   assert.match(issues.join(" "), /accent/i);
 });

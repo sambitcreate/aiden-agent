@@ -8,6 +8,10 @@ import {
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
 
+function occurrences(source: string, value: string): number {
+  return source.split(value).length - 1;
+}
+
 test("keeps the selected Pi providers first in product order and puts every other provider under More", () => {
   const providers = [
     { id: "cloudflare-workers-ai" },
@@ -103,4 +107,45 @@ test("bundled provider icons stay compact, vector-only, and complete for mapped 
       `${svgName} must use a compact logomark viewBox`,
     );
   }
+});
+
+test("provider marks and icon wells remain theme-aware in both appearances", () => {
+  const providerIconSource = readFileSync(
+    new URL("../components/provider-icon.tsx", import.meta.url),
+    "utf8",
+  );
+  const providersSettingsSource = readFileSync(
+    new URL("../components/settings/providers-settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const codexProviderSettingsSource = readFileSync(
+    new URL("../components/settings/codex-provider-settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const multicolorProviderSlugs = providerIconSource.match(
+    /const MULTICOLOR_PROVIDER_ICON_SLUGS[\s\S]*?\]\);/u,
+  )?.[0];
+
+  assert.ok(multicolorProviderSlugs);
+  assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
+  assert.match(multicolorProviderSlugs, /"fireworks"/u);
+  assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  assert.doesNotMatch(
+    `${providersSettingsSource}\n${codexProviderSettingsSource}`,
+    /bg-surface-subtle/u,
+  );
+  assert.equal(
+    occurrences(
+      providersSettingsSource,
+      "rounded-control bg-well text-secondary",
+    ),
+    3,
+  );
+  assert.equal(
+    occurrences(
+      codexProviderSettingsSource,
+      "rounded-control bg-well text-secondary",
+    ),
+    1,
+  );
 });

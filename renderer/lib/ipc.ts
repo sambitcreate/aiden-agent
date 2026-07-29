@@ -72,6 +72,10 @@ import {
   rememberDetachedLifecycleStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
+import type {
+  AppearanceConfig,
+  AppearancePreviewSnapshot,
+} from "../shared/appearance";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -146,6 +150,11 @@ export const providersApi = {
 
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
+  getAppearance: () => invoke<AppearanceConfig>("settings:getAppearance"),
+  getAppearanceState: () =>
+    invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
+  previewAppearance: (appearance: AppearanceConfig) =>
+    invoke<AppearanceConfig>("settings:previewAppearance", appearance),
   set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
   setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),

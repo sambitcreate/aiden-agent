@@ -68,7 +68,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         variant === "toolbar" && "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
         variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
         variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
-        variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed focus-visible:bg-red/90",
+        variant === "destructive" && "bg-red text-red-foreground shadow-control hover:bg-red hover:shadow-control-hover active:bg-red active:shadow-control-pressed focus-visible:bg-red",
         className,
       )}
       {...props}
@@ -764,7 +764,7 @@ export function Dialog({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 bg-transparent"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -779,7 +779,7 @@ export function Dialog({
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none",
+            "fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
             size === "large" && "w-[min(92vw,680px)]",
           )}
         >
@@ -848,7 +848,7 @@ export function AlertDialog({
       }}
     >
       <AlertDialogPrimitive.Portal>
-        <AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" />
+        <AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-transparent" />
         <AlertDialogPrimitive.Content
           data-slot="dialog-content"
           aria-busy={busy}
@@ -861,7 +861,7 @@ export function AlertDialog({
             }
           }}
           onEscapeKeyDown={(event) => busy && event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none"
+          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none"
         >
           <AlertDialogPrimitive.Title className="text-heading2 font-semibold">{title}</AlertDialogPrimitive.Title>
           {description ? (
@@ -950,7 +950,7 @@ export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrim
 export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} data-slot="popover-content" position={position} className={cn(menuContentClass, "max-h-72 origin-[var(--radix-select-content-transform-origin)]", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
 export const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>>(function SelectItem({ className, children, ...props }, ref) { return <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}><span className="absolute left-2"><SelectPrimitive.ItemIndicator><Check className="size-3.5" /></SelectPrimitive.ItemIndicator></span><SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText></SelectPrimitive.Item>; });
 
-export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-transform duration-150 ease-out data-[state=checked]:translate-x-[18px]" /></SwitchPrimitive.Root>; });
+export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" /></SwitchPrimitive.Root>; });
 export const RadioGroup = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Root>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & { orientation?: "horizontal" | "vertical" }>(function RadioGroup({ className, orientation, ...props }, ref) { return <RadioGroupPrimitive.Root ref={ref} className={cn("flex gap-3", orientation === "vertical" && "flex-col", className)} {...props} />; });
 export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
 

@@ -264,6 +264,8 @@ export function AppCommandPalette({
             ...previousAppearance,
             mode,
           };
+          await settingsApi.previewAppearance(appearance);
+          if (!isCurrent()) return;
           await settingsApi.set({ appearance });
           persisted = true;
           if (!isCurrent()) return;
@@ -292,7 +294,13 @@ export function AppCommandPalette({
         } catch (error) {
           if (!isCurrent()) return;
           let rollbackError: unknown = null;
-          if (persisted && previousAppearance) {
+          if (!persisted && previousAppearance) {
+            try {
+              await settingsApi.previewAppearance(previousAppearance);
+            } catch (reason) {
+              rollbackError = reason;
+            }
+          } else if (persisted && previousAppearance) {
             try {
               await settingsApi.set({ appearance: previousAppearance });
               if (!isCurrent()) return;
@@ -332,13 +340,13 @@ export function AppCommandPalette({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 bg-transparent"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
           data-command-palette-content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[16vh] z-50 w-[min(92vw,640px)] -translate-x-1/2 overflow-hidden rounded-dialog bg-popover shadow-dialog outline-none"
+          className="fixed left-1/2 top-[16vh] z-50 w-[min(92vw,640px)] -translate-x-1/2 overflow-hidden rounded-dialog bg-popover shadow-modal outline-none"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             requestAnimationFrame(() =>

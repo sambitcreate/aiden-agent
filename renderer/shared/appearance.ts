@@ -33,6 +33,11 @@ export interface AppearanceConfig {
   fontSmoothing: boolean;
 }
 
+export interface AppearancePreviewSnapshot {
+  appearance: AppearanceConfig;
+  pending: boolean;
+}
+
 interface ThemePalette {
   canvas: string;
   sidebar: string;
@@ -103,7 +108,7 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
       raised: "#FFFFFF",
       foreground: "#3A434E",
       secondary: "#637083",
-      accent: "#087A86",
+      accent: "#087581",
       success: "#2DB67D",
       warning: "#E0A72E",
       danger: "#E24D5B",
@@ -155,7 +160,7 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
       raised: "#FFFFFF",
       foreground: "#3F4943",
       secondary: "#65736B",
-      accent: "#157A64",
+      accent: "#157862",
       success: "#3DBF7D",
       warning: "#D4A22A",
       danger: "#E05353",
@@ -210,7 +215,7 @@ const DEFAULT_APPEARANCE: AppearanceConfig = {
   reduceMotion: "system",
   uiFontSize: 14,
   codeFontSize: 12,
-  diffMarkers: "color",
+  diffMarkers: "symbols",
   fontSmoothing: true,
 };
 
@@ -479,6 +484,65 @@ function alphaHex(hex: string, alpha: number): string {
   return `rgb(${red} ${green} ${blue} / ${clamp(alpha, 0, 1).toFixed(3)})`;
 }
 
+function minimumContrastRatio(color: string, surfaces: readonly string[]): number {
+  return Math.min(...surfaces.map((surface) => colorContrastRatio(color, surface)));
+}
+
+/**
+ * Preserve the requested hue when possible, then move it only as far toward
+ * black or white as needed to remain readable on every application surface.
+ * Valid custom themes always provide at least one readable accent fallback,
+ * so semantic roles can recover from a palette collision without rejecting
+ * otherwise-safe user-selected primitives.
+ */
+function contrastCorrectColor(
+  preferred: string,
+  surfaces: readonly string[],
+  minimum: number,
+  fallbacks: readonly string[] = [],
+): string {
+  const normalized = mixHex(preferred, preferred, 0);
+  if (minimumContrastRatio(normalized, surfaces) >= minimum) return normalized;
+
+  const steps = 256;
+  for (let index = 1; index <= steps; index += 1) {
+    const amount = index / steps;
+    const candidates = [
+      mixHex(normalized, "#000000", amount),
+      mixHex(normalized, "#FFFFFF", amount),
+    ].filter((candidate) => minimumContrastRatio(candidate, surfaces) >= minimum);
+    if (candidates.length > 0) {
+      return candidates.sort(
+        (left, right) =>
+          minimumContrastRatio(right, surfaces) - minimumContrastRatio(left, surfaces),
+      )[0];
+    }
+  }
+
+  const fallbackCandidates = [
+    ...fallbacks.map((candidate) => mixHex(candidate, candidate, 0)),
+    "#000000",
+    "#FFFFFF",
+  ];
+  const readableFallback = fallbackCandidates.find(
+    (candidate) => minimumContrastRatio(candidate, surfaces) >= minimum,
+  );
+  if (readableFallback) return readableFallback;
+  return fallbackCandidates.sort(
+    (left, right) =>
+      minimumContrastRatio(right, surfaces) - minimumContrastRatio(left, surfaces),
+  )[0];
+}
+
+function foregroundForFill(
+  fill: string,
+  scheme: AppearanceScheme,
+): string {
+  const preferred = scheme === "light" ? "#FFFFFF" : "#000000";
+  const alternate = preferred === "#FFFFFF" ? "#000000" : "#FFFFFF";
+  return colorContrastRatio(fill, preferred) >= 4.5 ? preferred : alternate;
+}
+
 function selectedPalette(variant: ThemeVariantConfig, scheme: AppearanceScheme): ThemePalette {
   return variant.preset === "custom"
     ? PRESETS_BY_ID.aiden[scheme]
@@ -513,22 +577,117 @@ export function resolveThemeTokens(
   const sidebar = variant.preset === "custom"
     ? mixHex(background, foreground, 0.025 + contrast * (light ? 0.025 : 0.045))
     : palette.sidebar;
-  const textSecondaryAlpha = 0.58 + contrast * 0.2;
-  const textTertiaryAlpha = 0.42 + contrast * 0.16;
+  const textSurfaces = [background, sidebar, raised] as const;
+  const toolbarIcon = contrastCorrectColor(
+    mixHex(foreground, "#FFFFFF", light ? 0.3 : 0.08),
+    textSurfaces,
+    3,
+    [foreground, variant.accent],
+  );
+  const secondaryBase = contrastCorrectColor(
+    variant.preset === "custom"
+      ? mixHex(background, foreground, light ? 0.64 : 0.7)
+      : palette.secondary,
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const textSecondary = contrastCorrectColor(
+    mixHex(secondaryBase, foreground, 0.28),
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const textTertiary = contrastCorrectColor(
+    mixHex(secondaryBase, foreground, 0.14),
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const textQuaternary = contrastCorrectColor(
+    secondaryBase,
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
   const controlAlpha = 0.055 + contrast * 0.065;
   const borderAlpha = 0.09 + contrast * 0.12;
-  const accentHover = mixHex(variant.accent, light ? "#000000" : "#FFFFFF", light ? 0.07 : 0.14);
-  const accentActive = mixHex(variant.accent, "#000000", light ? 0.14 : 0.08);
   const accentForeground = colorContrastRatio(variant.accent, "#FFFFFF")
     >= colorContrastRatio(variant.accent, "#000000")
     ? "#FFFFFF"
     : "#000000";
+  const accentContrastTarget = accentForeground === "#FFFFFF" ? "#000000" : "#FFFFFF";
+  const accentHover = mixHex(
+    variant.accent,
+    accentContrastTarget,
+    light ? 0.07 : 0.14,
+  );
+  const accentActive = mixHex(
+    variant.accent,
+    accentContrastTarget,
+    light ? 0.14 : 0.22,
+  );
+  const supportRed = contrastCorrectColor(
+    palette.danger,
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const supportGreen = contrastCorrectColor(
+    palette.success,
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const supportWarning = contrastCorrectColor(
+    palette.warning,
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const syntaxKeyword = contrastCorrectColor(
+    light ? "#C83349" : "#FF7F8D",
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const syntaxString = contrastCorrectColor(
+    light
+      ? mixHex("#176B58", variant.accent, 0.12)
+      : mixHex("#8CE0C6", variant.accent, 0.12),
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const syntaxNumber = contrastCorrectColor(
+    light
+      ? mixHex("#2D5BA7", variant.accent, 0.22)
+      : mixHex("#92BFFF", variant.accent, 0.24),
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const syntaxTitle = contrastCorrectColor(
+    light
+      ? mixHex("#7546A8", variant.accent, 0.12)
+      : mixHex("#D4A8FF", variant.accent, 0.12),
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
+  const syntaxVariable = contrastCorrectColor(
+    light ? "#C45C19" : "#FFB06B",
+    textSurfaces,
+    4.5,
+    [foreground, variant.accent],
+  );
 
   return {
     "--text-primary": foreground,
-    "--text-secondary": alphaHex(foreground, textSecondaryAlpha),
-    "--text-tertiary": alphaHex(foreground, textTertiaryAlpha),
-    "--text-quaternary": alphaHex(foreground, 0.28 + contrast * 0.12),
+    "--toolbar-icon": toolbarIcon,
+    "--text-secondary": textSecondary,
+    "--text-tertiary": textTertiary,
+    "--text-quaternary": textQuaternary,
     "--surface-background": alphaHex(background, 0.94),
     "--surface-sidebar": alphaHex(sidebar, variant.translucentSidebar ? 0.78 : 1),
     "--surface-popover": raised,
@@ -546,31 +705,64 @@ export function resolveThemeTokens(
     "--accent-foreground": accentForeground,
     "--accent-hover": accentHover,
     "--accent-active": accentActive,
-    "--focus-ring": mixHex(variant.accent, light ? "#000000" : "#FFFFFF", light ? 0.08 : 0.2),
-    "--support-red": palette.danger,
-    "--support-green": palette.success,
-    "--support-warning": palette.warning,
+    "--focus-ring": contrastCorrectColor(
+      variant.accent,
+      textSurfaces,
+      3,
+      [foreground],
+    ),
+    "--support-red": supportRed,
+    "--support-red-foreground": foregroundForFill(supportRed, scheme),
+    "--support-green": supportGreen,
+    "--support-green-foreground": foregroundForFill(supportGreen, scheme),
+    "--support-warning": supportWarning,
+    "--support-warning-foreground": foregroundForFill(supportWarning, scheme),
     "--window-gradient-start": alphaHex(background, 0.98),
     "--window-gradient-end": alphaHex(mixHex(background, sidebar, 0.55), 0.94),
     "--glass-fill": alphaHex(sidebar, variant.translucentSidebar ? 0.68 : 0.96),
-    "--syntax-comment": alphaHex(foreground, 0.52),
-    "--syntax-keyword": light ? "#C83349" : "#FF7F8D",
-    "--syntax-string": light ? mixHex("#176B58", variant.accent, 0.12) : mixHex("#8CE0C6", variant.accent, 0.12),
-    "--syntax-number": light ? mixHex("#2D5BA7", variant.accent, 0.22) : mixHex("#92BFFF", variant.accent, 0.24),
-    "--syntax-title": light ? mixHex("#7546A8", variant.accent, 0.12) : mixHex("#D4A8FF", variant.accent, 0.12),
-    "--syntax-variable": light ? "#C45C19" : "#FFB06B",
+    "--syntax-comment": textTertiary,
+    "--syntax-keyword": syntaxKeyword,
+    "--syntax-string": syntaxString,
+    "--syntax-number": syntaxNumber,
+    "--syntax-title": syntaxTitle,
+    "--syntax-variable": syntaxVariable,
     "--terminal-background": raised,
     "--terminal-foreground": foreground,
     "--terminal-cursor": variant.accent,
     "--terminal-selection": alphaHex(variant.accent, light ? 0.2 : 0.3),
-    "--terminal-black": mixHex(background, foreground, light ? 0.18 : 0.1),
-    "--terminal-red": palette.danger,
-    "--terminal-green": palette.success,
-    "--terminal-yellow": palette.warning,
-    "--terminal-blue": mixHex(variant.accent, light ? "#233C75" : "#D8E7FF", 0.22),
-    "--terminal-magenta": light ? "#895A9D" : "#DCBAFF",
-    "--terminal-cyan": light ? "#367D8C" : "#91E9EE",
-    "--terminal-white": light ? "#DDE2E8" : foreground,
+    "--terminal-black": contrastCorrectColor(
+      mixHex(background, foreground, light ? 0.18 : 0.1),
+      textSurfaces,
+      4.5,
+      [foreground, variant.accent],
+    ),
+    "--terminal-red": supportRed,
+    "--terminal-green": supportGreen,
+    "--terminal-yellow": supportWarning,
+    "--terminal-blue": contrastCorrectColor(
+      mixHex(variant.accent, light ? "#233C75" : "#D8E7FF", 0.22),
+      textSurfaces,
+      4.5,
+      [foreground, variant.accent],
+    ),
+    "--terminal-magenta": contrastCorrectColor(
+      light ? "#895A9D" : "#DCBAFF",
+      textSurfaces,
+      4.5,
+      [foreground, variant.accent],
+    ),
+    "--terminal-cyan": contrastCorrectColor(
+      light ? "#367D8C" : "#91E9EE",
+      textSurfaces,
+      4.5,
+      [foreground, variant.accent],
+    ),
+    "--terminal-white": contrastCorrectColor(
+      light ? "#DDE2E8" : foreground,
+      textSurfaces,
+      4.5,
+      [foreground, variant.accent],
+    ),
     "--theme-canvas": background,
     "--theme-sidebar": sidebar,
     "--theme-raised": raised,
@@ -603,17 +795,33 @@ export function themeVariantSafetyIssues(
 ): string[] {
   const label = scheme === "light" ? "Light theme" : "Dark theme";
   const issues: string[] = [];
-  const textRatio = colorContrastRatio(variant.foreground, variant.background);
-  if (textRatio < 4.5) {
-    issues.push(`${label} foreground and background need at least 4.5:1 contrast (currently ${textRatio.toFixed(2)}:1).`);
-  }
-
   const palette = selectedPalette(variant, scheme);
   const raised = variant.preset === "custom"
-    ? mixHex(variant.background, scheme === "light" ? "#FFFFFF" : variant.foreground, scheme === "light" ? 0.72 : 0.1)
+    ? mixHex(
+        variant.background,
+        scheme === "light" ? "#FFFFFF" : variant.foreground,
+        scheme === "light" ? 0.72 : 0.12,
+      )
     : palette.raised;
+  const sidebar = variant.preset === "custom"
+    ? mixHex(
+        variant.background,
+        variant.foreground,
+        scheme === "light" ? 0.05 : 0.07,
+      )
+    : palette.sidebar;
+  const textRatio = Math.min(
+    colorContrastRatio(variant.foreground, variant.background),
+    colorContrastRatio(variant.foreground, sidebar),
+    colorContrastRatio(variant.foreground, raised),
+  );
+  if (textRatio < 4.5) {
+    issues.push(`${label} foreground needs at least 4.5:1 contrast against its surfaces (currently ${textRatio.toFixed(2)}:1).`);
+  }
+
   const weakestSurfaceRatio = Math.min(
     colorContrastRatio(variant.accent, variant.background),
+    colorContrastRatio(variant.accent, sidebar),
     colorContrastRatio(variant.accent, raised),
   );
   if (weakestSurfaceRatio < 4.5) {

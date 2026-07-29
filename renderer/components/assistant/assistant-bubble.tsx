@@ -42,7 +42,7 @@ export const AssistantBubble = React.forwardRef<HTMLButtonElement, AssistantBubb
             <img src={AIDEN_MARK_URL} alt="" className="size-full scale-[1.32] object-cover" />
           </span>
           {badge ? (
-            <span className="absolute -right-0.5 -top-0.5 flex min-w-5 items-center justify-center rounded-full bg-support-red px-1 text-[11px] font-semibold leading-5 text-white">
+            <span className="absolute -right-0.5 -top-0.5 flex min-w-5 items-center justify-center rounded-full bg-support-red px-1 text-[11px] font-semibold leading-5 text-support-red-foreground">
               {badge}
             </span>
           ) : null}

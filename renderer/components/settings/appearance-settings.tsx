@@ -577,6 +577,9 @@ export function AppearanceSettings() {
     setConfig(next);
     apply(next);
     if (appearanceSafetyIssues(next).length === 0) {
+      // Keep hidden/reused auxiliary windows on the live preview while the
+      // durable settings write remains intentionally debounced.
+      void settingsApi.previewAppearance(next).catch(() => {});
       scheduleSave(next, revision);
     } else if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
@@ -590,7 +593,7 @@ export function AppearanceSettings() {
     const nativeRevision = createNativeAppearanceRevisionTracker();
     const hydrationRevision = readAppearanceIntentRevision();
     void (async () => {
-      const settings = await settingsApi.get();
+      const appearanceState = await settingsApi.getAppearanceState();
       const nativeInfo = await nativeRevision.readStable(
         () => window.aidenAPI.nativeTheme.getInfo(),
       );
@@ -600,13 +603,15 @@ export function AppearanceSettings() {
         setHydrated(true);
         return;
       }
-      const next = settings.appearance
-        ? normalizeAppearanceConfig(settings.appearance)
-        : { ...(readCachedAppearance() ?? createDefaultAppearanceConfig()), mode: nativeInfo.themeSource };
+      const next = normalizeAppearanceConfig(appearanceState.appearance);
       configRef.current = next;
       setConfig(next);
-      pendingSaveRef.current = null;
-      dirtyRef.current = false;
+      if (appearanceState.pending) {
+        scheduleSave(next, beginAppearanceIntent());
+      } else {
+        pendingSaveRef.current = null;
+        dirtyRef.current = false;
+      }
       applyAppearanceConfig(next, nativeInfo.shouldUseDarkColors, nativeInfo.shouldUseHighContrastColors === true);
       setHydrated(true);
     })().catch((error: unknown) => {

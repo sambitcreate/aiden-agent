@@ -13,6 +13,7 @@ import {
   DictationOperationGate,
   withDictationTimeout,
 } from "../lib/dictation-operation-gate";
+import { startPillAppearanceSync } from "../lib/pill-appearance";
 
 type Phase = "idle" | "recording" | "transcribing" | "pasted" | "copied" | "error";
 
@@ -43,6 +44,13 @@ export function PillApp() {
   const rafRef = React.useRef(0);
   const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const operationGateRef = React.useRef(new DictationOperationGate());
+  const appearanceReadyRef = React.useRef<Promise<void>>(Promise.resolve());
+
+  React.useEffect(() => {
+    const sync = startPillAppearanceSync();
+    appearanceReadyRef.current = sync.ready;
+    return sync.stop;
+  }, []);
 
   const stopWaveform = React.useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -176,6 +184,7 @@ export function PillApp() {
   }, [releaseRecording, stopWaveform]);
 
   React.useEffect(() => {
+    let active = true;
     const unsubscribe = onNotification<DictationStatePayload>("dictation:state", (payload) => {
       switch (payload.state) {
         case "recording":
@@ -201,9 +210,17 @@ export function PillApp() {
       }
     });
     // Signal the coordinator that the subscription is live (replays a missed
-    // "recording" broadcast when the pill window was freshly created).
-    void dictationApi.ready();
-    return unsubscribe;
+    // "recording" broadcast when the pill window was freshly created). Wait
+    // for the authoritative appearance first so the first rendered pill frame
+    // never exposes the entrypoint fallback palette.
+    void appearanceReadyRef.current.then(() => {
+      if (active) return dictationApi.ready();
+      return undefined;
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [discardRecording, startRecording, stopRecording, stopWaveform]);
 
   return (

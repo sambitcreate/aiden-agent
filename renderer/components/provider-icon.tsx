@@ -67,7 +67,6 @@ const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
 };
 
 const MULTICOLOR_PROVIDER_ICON_SLUGS = new Set<ProviderIconSlug>([
-  "ant-ling",
   "fireworks",
   "groq",
   "opencode",

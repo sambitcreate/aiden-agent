@@ -132,9 +132,23 @@ test("Command-K, full Settings, and hydration share appearance intent ownership"
 
   assert.match(palette, /beginAppearanceIntent\(\)/u);
   assert.match(palette, /runAppearanceIntent\(revision/u);
+  assert.match(
+    palette,
+    /settingsApi\.previewAppearance\(appearance\);[\s\S]*?settingsApi\.set\(\{ appearance \}\)/u,
+  );
+  assert.match(
+    palette,
+    /!persisted && previousAppearance[\s\S]*?settingsApi\.previewAppearance\(previousAppearance\)/u,
+  );
   assert.match(settings, /beginAppearanceIntent\(\)/u);
   assert.match(settings, /runAppearanceIntent\(revision/u);
   assert.match(settings, /hydrationRevision !== readAppearanceIntentRevision\(\)/u);
+  assert.match(settings, /settingsApi\.getAppearanceState\(\)/u);
+  assert.match(
+    settings,
+    /appearanceState\.pending[\s\S]*?scheduleSave\(next, beginAppearanceIntent\(\)\)/u,
+  );
+  assert.match(theme, /settingsApi\.getAppearance\(\)/u);
   assert.match(theme, /runAppearanceIntent\(hydrationRevision/u);
   assert.match(theme, /nativeRevision\.readStable/u);
   assert.match(settings, /nativeRevision\.readStable/u);
