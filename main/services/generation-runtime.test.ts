@@ -20,6 +20,7 @@ import {
   terminalGenerationError,
   terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
+  waitForGenerationStateClear,
 } from "./generation-runtime.js";
 
 test("uses only the connection-bound runtime model as the image gate", () => {
@@ -133,6 +134,16 @@ test("clears transient agent state before bounded helper teardown", async () => 
   assert.equal(completed, false);
   assert.equal(transientScreenshot, null);
   assert.deepEqual(events, ["reset", "close"]);
+});
+
+test("a non-settling parent initialization cannot be mistaken for a cleared generation", async () => {
+  const never = new Promise<void>(() => {});
+  const cleared = await waitForGenerationStateClear(
+    () => true,
+    () => [never],
+    Date.now() + 20,
+  );
+  assert.equal(cleared, false);
 });
 
 test("forwards the chat identity through Pi Agent options into the native stream", () => {

@@ -2,11 +2,13 @@
 // across the process boundary).
 
 import type { AppearanceConfig } from "../shared/appearance";
+import type { KeybindingOverridesV1 } from "../shared/keybindings";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
+import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -146,6 +148,10 @@ export interface ManagedWorktree {
   repositoryPath: string;
   worktreePath: string;
   branch: string;
+  worktreeGitDir?: string;
+  ownershipToken?: string;
+  worktreeDevice?: number;
+  worktreeInode?: number;
   createdFromHead: string;
 }
 
@@ -456,6 +462,7 @@ export interface ChatMessage {
   reasoning?: string;
   attachments?: Attachment[];
   timeline?: GenerationTimeline;
+  subagents?: SubagentMessageReferenceV1;
 }
 
 export interface ChatMeta {
@@ -471,6 +478,18 @@ export interface ChatMeta {
 export interface Chat extends ChatMeta {
   computerUseEnabled?: boolean;
   messages: ChatMessage[];
+}
+
+/**
+ * Main-process chat reads may be intentionally provisional when a generation
+ * owned by a replaced renderer has not crossed its durability barrier yet.
+ */
+export interface ChatReadResponse {
+  chat: Chat | null;
+  reconciliation: {
+    chatId: string;
+    workspaceId: string;
+  } | null;
 }
 
 export type ScheduledTaskMode = "llm" | "script";
@@ -631,6 +650,37 @@ export interface FoundationModelsConnectionStatus {
   retryable: boolean;
 }
 
+/** How much the Aiden assistant may do with app settings through its tools. */
+export type AssistantSettingsPermission = "full" | "ask" | "none";
+
+/** Aiden assistant window, hotkey, and proactive-watching settings. */
+export interface AssistantConfig {
+  /** Proactivity master switch. Off by default — nudging is opt-in. */
+  enabled: boolean;
+  hotkeyEnabled: boolean;
+  hotkeyAccelerator: string;
+  /** Required pin before proactivity may run. See main/services/types.ts. */
+  providerId?: string;
+  model?: string;
+  watchUncommitted: boolean;
+  watchUntouchedProjects: boolean;
+  watchConfigChanges: boolean;
+  pollIntervalMinutes: number;
+  untouchedThresholdDays: number;
+  quietHoursEnabled: boolean;
+  /** "HH:MM" local time. */
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  maxNudgesPerDay: number;
+  urgencyThreshold: number;
+  settingsPermission: AssistantSettingsPermission;
+}
+
+export interface AssistantConfigSnapshot {
+  config: AssistantConfig;
+  hotkeyActive: boolean;
+}
+
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
@@ -642,6 +692,7 @@ export interface AppSettings {
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  keybindings?: KeybindingOverridesV1;
   chatTitleProviderId?: ChatTitleProviderId;
   appearance?: AppearanceConfig;
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
@@ -653,6 +704,7 @@ export interface AppSettings {
   scheduledDefaultPermission?: ScheduledTaskPermission;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  assistant?: AssistantConfig;
   profileName?: string;
 }
 
@@ -777,6 +829,8 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
+  /** Renderers may only request the attended Aiden mode. */
+  mode?: "assistant";
   thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{
     role: ChatRole;

@@ -4,7 +4,9 @@ import {
   COMMAND_CHAT_SHORTCUT_LIMIT,
   COMMAND_CHAT_SHORTCUT_REVEAL_MS,
   commandChatShortcutNumber,
+  chatShortcutRevealModifierSets,
   createSidebarChatShortcutAssignments,
+  sidebarChatNavigationTargets,
 } from "./sidebar-chat-shortcuts.js";
 
 test("assigns Command digits from the canonical sidebar order without sorting", () => {
@@ -37,6 +39,27 @@ test("caps shortcut assignments at nine ordered chats", () => {
   assert.equal(assignments[8]?.chat.id, "chat-9");
 });
 
+test("previous and next chat commands exist only when they have a target", () => {
+  const chats = [{ id: "first" }, { id: "second" }, { id: "third" }];
+
+  assert.deepEqual(sidebarChatNavigationTargets(chats, "first"), {
+    previous: null,
+    next: chats[1],
+  });
+  assert.deepEqual(sidebarChatNavigationTargets(chats, "second"), {
+    previous: chats[0],
+    next: chats[2],
+  });
+  assert.deepEqual(sidebarChatNavigationTargets(chats, "third"), {
+    previous: chats[1],
+    next: null,
+  });
+  assert.deepEqual(sidebarChatNavigationTargets(chats.slice(0, 1), "first"), {
+    previous: null,
+    next: null,
+  });
+});
+
 test("accepts only exact non-repeating Command digits one through nine", () => {
   const base = {
     key: "4",
@@ -59,4 +82,16 @@ test("accepts only exact non-repeating Command digits one through nine", () => {
 
 test("uses the requested half-second shortcut hint delay", () => {
   assert.equal(COMMAND_CHAT_SHORTCUT_REVEAL_MS, 500);
+});
+
+test("derives hint reveal modifiers from customized chat bindings", () => {
+  assert.deepEqual(
+    chatShortcutRevealModifierSets([
+      "Control+1",
+      "Alt+2",
+      "Command+Shift+3",
+      null,
+    ]),
+    [["Control"], ["Alt"], ["Meta", "Shift"]],
+  );
 });

@@ -12,11 +12,13 @@ import { MessageList } from "../components/message-list";
 import { Composer } from "../components/composer";
 import { ModelPicker } from "../components/model-picker";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
+import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 import { ThinkingControl } from "../components/thinking-control";
 import {
   chatsApi,
+  createChatTurnId,
   settingsApi,
-  onNotification,
   startGeneration,
   gitApi,
   workspacesApi,
@@ -36,10 +38,7 @@ import {
 import { useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
-import {
-  EnvironmentPanelToggle,
-  useEnvironmentPanel,
-} from "../components/environment-panel";
+import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
 import { EventPresence } from "../components/event-presence";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -50,10 +49,7 @@ import {
 import { computerUseReadinessReady } from "../lib/computer-use-control";
 import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
-import {
-  latestActiveAgentStep,
-  type GenerationTimeline,
-} from "../shared/generation-timeline";
+import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
   CODEX_THINKING_LEVELS,
@@ -70,6 +66,14 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
+import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
+import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
+import { persistedChatWorkspaceId } from "../shared/chat-workspace";
+import {
+  isDetachedLifecycleChatDraining,
+  subscribeDetachedLifecycleStreams,
+} from "../lib/chat-terminal-sync";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -92,16 +96,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
-  const {
-    activeId,
-    workspaces,
-    select: selectWorkspace,
-  } = useActiveWorkspace();
+  const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
   const chatWorkspaceId = chat.data?.workspaceId;
-  const effectiveWorkspace = workspaces.find(
-    (workspace) => workspace.id === chatWorkspaceId,
+  const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
+  const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
+  const detachedGenerationDraining = React.useSyncExternalStore(
+    subscribeDetachedLifecycleStreams,
+    () => isDetachedLifecycleChatDraining(chatId, effectiveWorkspaceId),
+    () => false,
   );
-  const effectiveWorkspaceId = chatWorkspaceId;
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
@@ -113,9 +116,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ? "Save or discard the open file's edits first"
         : undefined;
   const { providerId, model, select } = useModelSelection(providers.data);
-  const selectedProvider = providers.data?.find(
-    (provider) => provider.id === providerId,
-  );
+  const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
     model &&
@@ -160,13 +161,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ? "Loading chat…"
     : chat.isError
       ? "This chat could not be loaded. Try again."
-      : undefined;
-  const ready =
-    modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
+      : detachedGenerationDraining
+        ? "Finishing the previous response…"
+        : undefined;
+  const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
   const readinessMessage =
-    chatReadinessMessage ??
-    modelReadinessMessage ??
-    computerUseReadinessMessage;
+    chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -178,15 +178,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     providerId === GOOGLE_PROVIDER_ID &&
     Boolean(model) &&
     modelInfo.data?.[model]?.reasoning === true;
-  const thinkingMetadata = model
-    ? selectedProvider?.modelMetadata?.[model]
-    : undefined;
+  const thinkingMetadata = model ? selectedProvider?.modelMetadata?.[model] : undefined;
   const googleThinkingLevels = React.useMemo<GoogleThinkingLevel[]>(() => {
     const declared = thinkingMetadata?.thinkingLevels;
     if (!declared?.length) return [...GOOGLE_THINKING_LEVELS];
-    const supported = GOOGLE_THINKING_LEVELS.filter((level) =>
-      declared.includes(level),
-    );
+    const supported = GOOGLE_THINKING_LEVELS.filter((level) => declared.includes(level));
     return supported.includes("off") ? supported : ["off", ...supported];
   }, [thinkingMetadata?.thinkingLevels]);
   const storedGoogleThinkingLevel = model
@@ -206,21 +202,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     Boolean(model) &&
     modelInfo.data?.[model]?.reasoning === true &&
     codexThinkingLevels.length > 0;
-  const storedCodexThinkingLevel = model
-    ? settings.data?.codexThinkingByModel?.[model]
-    : undefined;
+  const storedCodexThinkingLevel = model ? settings.data?.codexThinkingByModel?.[model] : undefined;
   const codexThinkingLevel = normalizeCodexThinkingLevel(
     codexThinkingLevels,
     storedCodexThinkingLevel,
   );
-  const anthropicThinkingLevels =
-    React.useMemo<AnthropicThinkingLevel[]>(() => {
-      const declared = thinkingMetadata?.thinkingLevels;
-      if (!declared?.length) return [];
-      return ANTHROPIC_THINKING_LEVELS.filter((level) =>
-        declared.includes(level),
-      );
-    }, [thinkingMetadata?.thinkingLevels]);
+  const anthropicThinkingLevels = React.useMemo<AnthropicThinkingLevel[]>(() => {
+    const declared = thinkingMetadata?.thinkingLevels;
+    if (!declared?.length) return [];
+    return ANTHROPIC_THINKING_LEVELS.filter((level) => declared.includes(level));
+  }, [thinkingMetadata?.thinkingLevels]);
   const anthropicThinkingSupported =
     providerId === ANTHROPIC_PROVIDER_ID &&
     Boolean(model) &&
@@ -235,48 +226,42 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   React.useEffect(() => {
-    if (chat.data && chatWorkspaceId && chatWorkspaceId !== activeId) {
-      selectWorkspace(chatWorkspaceId);
+    if (chat.data && effectiveWorkspaceId && effectiveWorkspaceId !== activeId) {
+      selectWorkspace(effectiveWorkspaceId);
     }
-  }, [activeId, chat.data, chatWorkspaceId, selectWorkspace]);
+  }, [activeId, chat.data, effectiveWorkspaceId, selectWorkspace]);
 
   React.useEffect(() => {
     if (!chat.data || effectiveWorkspace) return;
     if (terminal.open) terminal.toggle();
     environmentPanel.close();
-  }, [
-    chat.data,
-    effectiveWorkspace,
-    environmentPanel.close,
-    terminal.open,
-    terminal.toggle,
-  ]);
+  }, [chat.data, effectiveWorkspace, environmentPanel.close, terminal.open, terminal.toggle]);
 
   const [streamingText, setStreamingText] = React.useState<string | null>(null);
-  const [streamingReasoning, setStreamingReasoning] = React.useState<
-    string | null
-  >(null);
+  const [streamingReasoning, setStreamingReasoning] = React.useState<string | null>(null);
   const [streamComplete, setStreamComplete] = React.useState(false);
   const [isStartingGeneration, setIsStartingGeneration] = React.useState(false);
   const [isStoppingGeneration, setIsStoppingGeneration] = React.useState(false);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
   const [canStopGeneration, setCanStopGeneration] = React.useState(false);
-  const [hasUnpersistedResponse, setHasUnpersistedResponse] =
-    React.useState(false);
-  const [generationTimeline, setGenerationTimeline] =
-    React.useState<GenerationTimeline | null>(null);
+  const [hasUnpersistedResponse, setHasUnpersistedResponse] = React.useState(false);
+  const [generationTimeline, setGenerationTimeline] = React.useState<GenerationTimeline | null>(
+    null,
+  );
+  const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshotV1[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [thinkingSaving, setThinkingSaving] = React.useState(false);
-  const [decidingApprovalId, setDecidingApprovalId] = React.useState<
-    string | null
-  >(null);
+  const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationIntentRef = React.useRef(0);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const terminalShortcut = useShortcutLabel("terminal.toggle");
+  const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
   const pendingDeltaRef = React.useRef("");
@@ -289,13 +274,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   chatIdRef.current = chatId;
 
-  // Global shortcut / menu focuses the composer.
-  React.useEffect(() => {
-    return onNotification("app:focus-composer", () =>
-      composerRef.current?.focus(),
-    );
-  }, []);
-
   // Cancel any in-flight generation when leaving the chat.
   React.useEffect(() => {
     mountedRef.current = true;
@@ -304,8 +282,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       generationIntentRef.current += 1;
       generationRef.current?.cancel("lifecycle");
       generationRef.current = null;
-      if (deltaFrameRef.current !== null)
-        window.cancelAnimationFrame(deltaFrameRef.current);
+      if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltaRef.current = "";
       pendingReasoningDeltaRef.current = "";
@@ -330,48 +307,62 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setHasUnpersistedResponse(false);
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
+    setLiveSubagents([]);
     setError(null);
     setApprovals([]);
     setDecidingApprovalId(null);
   }, [chatId]);
 
-  const messages = chat.data?.messages ?? [];
+  const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
+  const subagentReferences = React.useMemo(
+    () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
+    [environmentPanel.subagentsEnabled, messages],
+  );
   const hasMessages = messages.length > 0;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+
+  React.useLayoutEffect(() => {
+    if (!effectiveWorkspaceId) return;
+    return () => environmentPanel.releaseSubagents(chatId, effectiveWorkspaceId);
+  }, [chatId, effectiveWorkspaceId, environmentPanel.releaseSubagents]);
+
+  React.useLayoutEffect(() => {
+    if (!environmentPanel.subagentsEnabled || !effectiveWorkspaceId) return;
+    environmentPanel.syncSubagents(chatId, effectiveWorkspaceId, subagentReferences, liveSubagents);
+  }, [
+    chatId,
+    effectiveWorkspaceId,
+    environmentPanel.subagentsEnabled,
+    environmentPanel.syncSubagents,
+    liveSubagents,
+    subagentReferences,
+  ]);
 
   React.useLayoutEffect(() => {
     environmentPanel.setAgentBusy(isGenerating || isStartingGeneration);
     return () => environmentPanel.setAgentBusy(false);
   }, [environmentPanel.setAgentBusy, isGenerating, isStartingGeneration]);
 
-  const waitForStreamHandoff = React.useCallback(
-    async (hasContent: boolean) => {
-      const reduceMotion =
-        document.documentElement.dataset.reduceMotion === "true";
-      if (reduceMotion || !hasContent) return;
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(fallback);
-          if (streamHandoffRef.current === finish)
-            streamHandoffRef.current = null;
-          resolve();
-        };
-        const fallback = window.setTimeout(
-          finish,
-          STREAMING_REVEAL_FALLBACK_MS,
-        );
-        streamHandoffRef.current = finish;
-      });
-    },
-    [],
-  );
+  const waitForStreamHandoff = React.useCallback(async (hasContent: boolean) => {
+    const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
+    if (reduceMotion || !hasContent) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(fallback);
+        if (streamHandoffRef.current === finish) streamHandoffRef.current = null;
+        resolve();
+      };
+      const fallback = window.setTimeout(finish, STREAMING_REVEAL_FALLBACK_MS);
+      streamHandoffRef.current = finish;
+    });
+  }, []);
 
   const runGeneration = React.useCallback(
-    (history: Chat["messages"]) => {
+    (history: Chat["messages"], messageTurnId: string) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
       setIsStoppingGeneration(false);
@@ -389,6 +380,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       streamHandoffRef.current = null;
       setGenerationTimeline(null);
       generationTimelineRef.current = null;
+      setLiveSubagents([]);
       setApprovals([]);
       const scheduleStreamFlush = () => {
         if (deltaFrameRef.current !== null) return;
@@ -398,11 +390,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           const pendingReasoningDelta = pendingReasoningDeltaRef.current;
           pendingDeltaRef.current = "";
           pendingReasoningDeltaRef.current = "";
-          if (
-            !mountedRef.current ||
-            generationIntentRef.current !== generationIntent
-          )
-            return;
+          if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
           if (pendingDelta) {
             streamedTextRef.current += pendingDelta;
             setStreamingText(streamedTextRef.current);
@@ -425,7 +413,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               ? codexThinkingLevel
               : anthropicThinkingSupported
                 ? anthropicThinkingLevel
-              : undefined,
+                : undefined,
           messages: history.map((m) => ({
             role: m.role,
             content: m.content,
@@ -434,48 +422,53 @@ export function ChatPane({ chatId }: { chatId: string }) {
         },
         {
           onDelta: (delta) => {
-            if (
-              mountedRef.current &&
-              generationIntentRef.current === generationIntent
-            ) {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
               pendingDeltaRef.current += delta;
               scheduleStreamFlush();
             }
           },
           onReasoningDelta: (delta) => {
-            if (
-              mountedRef.current &&
-              generationIntentRef.current === generationIntent
-            ) {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
               pendingReasoningDeltaRef.current += delta;
               scheduleStreamFlush();
             }
           },
           onStatus: (phase) => {
-            if (
-              !mountedRef.current ||
-              generationIntentRef.current !== generationIntent
-            )
-              return;
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
           },
+          ...(environmentPanel.subagentsEnabled
+            ? {
+                onSubagents: (snapshot: SubagentRunSnapshotV1) => {
+                  if (
+                    !mountedRef.current ||
+                    generationIntentRef.current !== generationIntent ||
+                    chatIdRef.current !== chatId ||
+                    snapshot.chatId !== chatId ||
+                    snapshot.workspaceId !== effectiveWorkspaceId
+                  ) {
+                    return;
+                  }
+                  setLiveSubagents((current) =>
+                    mergeSubagentSnapshots(current, [snapshot], {
+                      chatId,
+                      workspaceId: effectiveWorkspaceId,
+                    }),
+                  );
+                },
+              }
+            : {}),
           onTimeline: (timeline) => {
-            if (
-              mountedRef.current &&
-              generationIntentRef.current === generationIntent
-            ) {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
               generationTimelineRef.current = timeline;
               setGenerationTimeline(timeline);
             }
           },
           onApproval: (prompt) => {
-            if (
-              mountedRef.current &&
-              generationIntentRef.current === generationIntent
-            ) {
+            if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setApprovals((prev) => [...prev, prompt]);
             }
           },
@@ -483,17 +476,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
             setCanStopGeneration(false);
-            if (deltaFrameRef.current !== null)
-              window.cancelAnimationFrame(deltaFrameRef.current);
+            if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
             deltaFrameRef.current = null;
             pendingDeltaRef.current = "";
             pendingReasoningDeltaRef.current = "";
             streamedTextRef.current = full;
             streamedReasoningRef.current = finalReasoning ?? "";
             setStreamingText(full);
-            setStreamingReasoning(
-              finalReasoning?.trim() ? finalReasoning : null,
-            );
+            setStreamingReasoning(finalReasoning?.trim() ? finalReasoning : null);
             setStreamComplete(true);
             if (finalTimeline) {
               generationTimelineRef.current = finalTimeline;
@@ -506,6 +496,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               void qc.invalidateQueries({ queryKey: queryKeys.chats });
             }
             if (mountedRef.current) {
+              setLiveSubagents([]);
               setStreamingText(null);
               setStreamingReasoning(null);
               streamedTextRef.current = "";
@@ -518,13 +509,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setApprovals([]);
             }
           },
-          onError: (
-            message,
-            partialContent,
-            finalTimeline,
-            updatedChat,
-            finalReasoning,
-          ) => {
+          onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
@@ -533,8 +518,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 window.cancelAnimationFrame(deltaFrameRef.current);
               }
               deltaFrameRef.current = null;
-              const bufferedPartial =
-                streamedTextRef.current + pendingDeltaRef.current;
+              const bufferedPartial = streamedTextRef.current + pendingDeltaRef.current;
               const bufferedReasoning =
                 streamedReasoningRef.current + pendingReasoningDeltaRef.current;
               pendingDeltaRef.current = "";
@@ -543,9 +527,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               const resolvedReasoning = finalReasoning ?? bufferedReasoning;
               streamedTextRef.current = resolvedPartialContent;
               streamedReasoningRef.current = resolvedReasoning;
-              setStreamingReasoning(
-                resolvedReasoning.trim() ? resolvedReasoning : null,
-              );
+              setStreamingReasoning(resolvedReasoning.trim() ? resolvedReasoning : null);
               setStreamComplete(true);
               if (finalTimeline) {
                 generationTimelineRef.current = finalTimeline;
@@ -566,6 +548,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
               if (mountedRef.current) {
+                if (updatedChat || !partial) setLiveSubagents([]);
                 if (!partial || updatedChat) {
                   setStreamingText(null);
                   setStreamingReasoning(null);
@@ -582,14 +565,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setApprovals([]);
                 setError(
-                  partial
-                    ? `Generation stopped after a partial response: ${message}`
-                    : message,
+                  partial ? `Generation stopped after a partial response: ${message}` : message,
                 );
               }
             })();
           },
         },
+        messageTurnId,
       );
       generationRef.current = handle;
     },
@@ -598,6 +580,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       codexThinkingLevel,
       codexThinkingSupported,
       effectiveWorkspaceId,
+      environmentPanel.subagentsEnabled,
       googleThinkingLevel,
       googleThinkingSupported,
       providerId,
@@ -610,11 +593,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const handleSend = React.useCallback(
     async (text: string, attachments: Attachment[]) => {
       if (computerUseSaving) {
-        throw new Error(
-          "Wait for the Computer Use setting to finish saving before sending.",
-        );
+        throw new Error("Wait for the Computer Use setting to finish saving before sending.");
+      }
+      if (detachedGenerationDraining) {
+        throw new Error("Wait for the previous response to finish saving before sending again.");
       }
       const generationIntent = ++generationIntentRef.current;
+      const messageTurnId = createChatTurnId();
       setIsStoppingGeneration(false);
       setIsStartingGeneration(true);
       try {
@@ -625,17 +610,26 @@ export function ChatPane({ chatId }: { chatId: string }) {
             content: text,
             attachments: attachments.length ? attachments : undefined,
           },
-          { providerId, model, autoTitle: true },
+          { providerId, model, autoTitle: true, turnId: messageTurnId },
         );
         qc.setQueryData(queryKeys.chat(chatId), updated);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
-        if (generationIntentRef.current !== generationIntent) return;
-        runGeneration(updated.messages);
+        if (generationIntentRef.current !== generationIntent) {
+          await chatsApi.abandonTurn(chatId, messageTurnId);
+          return;
+        }
+        runGeneration(updated.messages, messageTurnId);
       } finally {
-        setIsStartingGeneration(false);
+        if (
+          mountedRef.current &&
+          chatIdRef.current === chatId &&
+          generationIntentRef.current === generationIntent
+        ) {
+          setIsStartingGeneration(false);
+        }
       }
     },
-    [chatId, computerUseSaving, providerId, model, qc, runGeneration],
+    [chatId, computerUseSaving, detachedGenerationDraining, providerId, model, qc, runGeneration],
   );
 
   const handleStop = React.useCallback(() => {
@@ -649,8 +643,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationIntentRef.current += 1;
     generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
-    if (deltaFrameRef.current !== null)
-      window.cancelAnimationFrame(deltaFrameRef.current);
+    if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
     deltaFrameRef.current = null;
     pendingDeltaRef.current = "";
     pendingReasoningDeltaRef.current = "";
@@ -667,6 +660,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setCanStopGeneration(false);
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
+    setLiveSubagents([]);
     setApprovals([]);
     setDecidingApprovalId(null);
   }, []);
@@ -702,8 +696,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const openFolder = React.useCallback(() => {
-    if (effectiveWorkspace?.folderPath)
-      void workspacesApi.openFolder(effectiveWorkspace.id);
+    if (effectiveWorkspace?.folderPath) void workspacesApi.openFolder(effectiveWorkspace.id);
   }, [effectiveWorkspace?.folderPath, effectiveWorkspace?.id]);
 
   const changePermission = React.useCallback(
@@ -718,9 +711,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           "Wait for the open file to finish saving before changing workspace access.",
         );
       if (environmentPanel.editorState.dirty)
-        throw new Error(
-          "Save or discard the open file's edits before changing workspace access.",
-        );
+        throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       await workspacesApi.update(effectiveWorkspace.id, { permission });
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
@@ -781,14 +772,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      googleThinkingSupported,
-      isGenerating,
-      isStartingGeneration,
-      model,
-      qc,
-      thinkingSaving,
-    ],
+    [googleThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeCodexThinking = React.useCallback(
@@ -816,14 +800,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      codexThinkingSupported,
-      isGenerating,
-      isStartingGeneration,
-      model,
-      qc,
-      thinkingSaving,
-    ],
+    [codexThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const changeAnthropicThinking = React.useCallback(
@@ -851,14 +828,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      anthropicThinkingSupported,
-      isGenerating,
-      isStartingGeneration,
-      model,
-      qc,
-      thinkingSaving,
-    ],
+    [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -870,14 +840,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
         );
       }
       if (environmentPanel.editorState.saving) {
-        throw new Error(
-          "Wait for the open file to finish saving before switching workspaces.",
-        );
+        throw new Error("Wait for the open file to finish saving before switching workspaces.");
       }
       if (environmentPanel.editorState.dirty) {
-        throw new Error(
-          "Save or discard the open file's edits before switching workspaces.",
-        );
+        throw new Error("Save or discard the open file's edits before switching workspaces.");
       }
       if (workspaceId === effectiveWorkspaceId) return;
       const updated = await chatsApi.moveEmptyToWorkspace(chatId, workspaceId);
@@ -898,12 +864,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const createScratchWorkspace = React.useCallback(async () => {
-    if (!isNewChat)
-      throw new Error("Start a new chat before choosing a scratch folder.");
+    if (!isNewChat) throw new Error("Start a new chat before choosing a scratch folder.");
     if (environmentPanel.editorState.dirty)
-      throw new Error(
-        "Save or discard the open file's edits before creating a scratch workspace.",
-      );
+      throw new Error("Save or discard the open file's edits before creating a scratch workspace.");
     if (environmentPanel.editorState.saving)
       throw new Error(
         "Wait for the open file to finish saving before creating a scratch workspace.",
@@ -928,25 +891,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
     async (branchName: string) => {
       if (!effectiveWorkspace) throw new Error("Choose a Git workspace first.");
       if (isGenerating || isStartingGeneration)
-        throw new Error(
-          "Stop the current response before changing Git workspaces.",
-        );
+        throw new Error("Stop the current response before changing Git workspaces.");
       if (environmentPanel.gitOperationBusy)
         throw new Error(
           "Wait for the current Git operation to finish before changing Git workspaces.",
         );
       if (environmentPanel.editorState.saving)
-        throw new Error(
-          "Wait for the open file to finish saving before changing Git workspaces.",
-        );
+        throw new Error("Wait for the open file to finish saving before changing Git workspaces.");
       if (environmentPanel.editorState.dirty)
-        throw new Error(
-          "Save or discard the open file's edits before changing Git workspaces.",
-        );
-      const workspace = await gitApi.createWorktree(
-        effectiveWorkspace.id,
-        branchName,
-      );
+        throw new Error("Save or discard the open file's edits before changing Git workspaces.");
+      const workspace = await gitApi.createWorktree(effectiveWorkspace.id, branchName);
       await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
       if (isNewChat) {
         await moveNewChatToWorkspace(workspace.id);
@@ -990,8 +944,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
     isModelLoading,
-    streamingText:
-      canStopGeneration || isStoppingGeneration ? streamingText : null,
+    streamingText: canStopGeneration || isStoppingGeneration ? streamingText : null,
     pendingApproval: Boolean(pending),
     toolActivity,
   });
@@ -1004,24 +957,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     if (!pending) return;
     const previousFocus =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const frame = requestAnimationFrame(() => approvalDenyRef.current?.focus());
     return () => {
       cancelAnimationFrame(frame);
-      if (previousFocus?.isConnected)
-        requestAnimationFrame(() => previousFocus.focus());
+      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
     };
   }, [pending?.approvalId]);
 
   React.useLayoutEffect(() => {
     if (pending) return;
     const focused = document.activeElement;
-    if (
-      focused instanceof HTMLElement &&
-      approvalCardRef.current?.contains(focused)
-    ) {
+    if (focused instanceof HTMLElement && approvalCardRef.current?.contains(focused)) {
       composerRef.current?.focus({ preventScroll: true });
     }
   }, [pending]);
@@ -1044,8 +991,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onClick={terminal.toggle}
             disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
             aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+            aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
             aria-pressed={terminal.open}
-            title="Toggle terminal (⌘J)"
+            title={`Toggle terminal (${terminalShortcut})`}
             data-terminal-toggle
           >
             <TerminalSquare />
@@ -1066,7 +1014,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <>
           <EventPresence
             present={Boolean(pending)}
-            className="mx-auto w-full max-w-3xl px-3 pb-2 sm:px-5"
+            className="aiden-dock-inset mx-auto w-full max-w-3xl pb-2"
           >
             {pending ? (
               <div>
@@ -1091,12 +1039,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       >
                         {toolLabel(pending.toolName)} needs approval
                       </Text>
-                      <Text
-                        variant="small"
-                        color="secondary"
-                        as="p"
-                        className="mt-0.5"
-                      >
+                      <Text variant="small" color="secondary" as="p" className="mt-0.5">
                         Review this one action before Aiden continues.
                       </Text>
                     </div>
@@ -1125,9 +1068,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       disabled={decidingApprovalId === pending.approvalId}
                       onClick={() => void decideApproval(pending, "allow")}
                     >
-                      {decidingApprovalId === pending.approvalId
-                        ? "Sending…"
-                        : "Allow once"}
+                      {decidingApprovalId === pending.approvalId ? "Sending…" : "Allow once"}
                     </Button>
                   </div>
                 </section>
@@ -1163,9 +1104,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
             gitOperationBusy={environmentPanel.gitOperationBusy}
             workspaceChangeBlockedReason={settingsBlockedReason}
-            gitMutationBlockedReason={
-              environmentPanel.gitMutationBlockedReason ?? undefined
-            }
+            gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
             gitWorktreeDescription={
               isNewChat
                 ? "Creates a separate workspace and moves this empty chat there. This checkout stays unchanged."
@@ -1177,9 +1116,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 ? {
                     enabled: chatComputerUseEnabled,
                     ready: computerUseReady,
-                    checking:
-                      computerUseStatus.isLoading ||
-                      computerUseStatus.isFetching,
+                    checking: computerUseStatus.isLoading || computerUseStatus.isFetching,
                     saving: computerUseSaving,
                     detail: computerUseStatusDetail,
                   }
@@ -1192,9 +1129,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   level={googleThinkingLevel}
                   levels={googleThinkingLevels}
                   canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={
-                    thinkingSaving || isStartingGeneration || isGenerating
-                  }
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeGoogleThinking(level)}
                 />
               ) : codexThinkingSupported ? (
@@ -1202,9 +1137,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   providerLabel="Codex"
                   level={codexThinkingLevel}
                   levels={codexThinkingLevels}
-                  disabled={
-                    thinkingSaving || isStartingGeneration || isGenerating
-                  }
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeCodexThinking(level)}
                 />
               ) : anthropicThinkingSupported ? (
@@ -1213,9 +1146,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   level={anthropicThinkingLevel}
                   levels={anthropicThinkingLevels}
                   canDisable={thinkingMetadata?.thinkingCanDisable !== false}
-                  disabled={
-                    thinkingSaving || isStartingGeneration || isGenerating
-                  }
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeAnthropicThinking(level)}
                 />
               ) : undefined
@@ -1248,9 +1179,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           <EmptyState
             title="What would you like to work on?"
             description={
-              (providers.data ?? []).some(
-                (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
-              )
+              (providers.data ?? []).some((p) => p.models.length > 0 && (p.hasKey || !p.needsKey))
                 ? undefined
                 : "Set up a provider in Settings to start."
             }
@@ -1264,6 +1193,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           streamComplete={streamComplete}
           onStreamHandoffComplete={() => streamHandoffRef.current?.()}
           timeline={generationTimeline}
+          liveSubagents={liveSubagents}
+          subagentsEnabled={environmentPanel.subagentsEnabled}
+          onOpenSubagent={environmentPanel.openSubagent}
           agentActivity={visibleAgentActivity}
           error={error}
         />

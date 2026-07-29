@@ -18,6 +18,9 @@ import type { DiscoveredSkill, Skill, WorkspacePermission } from "./types.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
 import { scheduleTaskToolsForContext } from "./schedule-tool.js";
+import { registerSubagentTool } from "./subagents/feature-flag.js";
+import { buildSubagentCapabilityTools } from "./subagents/capability-tools.js";
+import type { SubagentCapabilityRequest } from "./subagents/capability-profile.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -149,6 +152,22 @@ export interface ToolContext {
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
   allowMcpTools?: boolean;
+  /** Only a foreground, persisted-workspace generation may register the delegation tool. */
+  allowSubagents?: boolean;
+  /**
+   * "assistant" is the Aiden dock, which has no tool UI and no approval
+   * affordance. Its tool set is an explicit allowlist rather than the workspace
+   * set minus exclusions, so a tool added elsewhere cannot appear there by
+   * default.
+   */
+  mode?: "assistant" | "subagent";
+  /** Lazily constructed so the disabled feature flag prevents registration entirely. */
+  createSubagentTool?: () => AgentTool;
+  /**
+   * When present, bypasses normal workspace/ambient assembly and positively
+   * constructs only the resolved child capability intersection.
+   */
+  capabilityProfile?: SubagentCapabilityRequest | unknown;
 }
 
 export function buildSchedulingTools(
@@ -158,17 +177,45 @@ export function buildSchedulingTools(
 }
 
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
+  const hasCapabilityProfile = Object.prototype.hasOwnProperty.call(ctx, "capabilityProfile");
+  if (ctx.mode === "subagent" || hasCapabilityProfile) {
+    if (ctx.mode !== "subagent") {
+      throw new Error("Subagent capabilities require the explicit subagent tool mode.");
+    }
+    return buildSubagentCapabilityTools({
+      workspaceRoot: ctx.workspaceRoot,
+      permission: ctx.permission,
+      capabilityProfile: ctx.capabilityProfile,
+    }).tools;
+  }
+  if (ctx.mode !== undefined && ctx.mode !== "assistant") {
+    throw new Error(`Unknown agent tool mode: ${JSON.stringify(ctx.mode)}.`);
+  }
+
   const tools: AgentTool[] = [];
-  const settings = await configStore.getSettings();
+
+  // Aiden's surface renders text only — no tool rows, no approval prompt — so
+  // anything reaching it runs invisibly. The workspace set is wrong for it in
+  // both directions: Exa is an outbound channel a prompt injection could use to
+  // exfiltrate the conversation, and a skill tool returns file contents and an
+  // absolute base directory to a persona that tells the user it cannot read
+  // files. Aiden's own read-only tools land here in a later phase; until then it
+  // has none, and its system prompt says so.
+  if (ctx.mode === "assistant") return tools;
 
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
   tools.push(...buildSchedulingTools(ctx));
+  if (ctx.allowSubagents === true) {
+    registerSubagentTool(tools, ctx.createSubagentTool);
+  }
 
   // Folder-scoped coding tools (read/write/edit/list/glob/grep/run_command).
   // Withheld entirely when permission is "none" or no folder is bound.
   if (ctx.workspaceRoot && ctx.permission !== "none") {
     tools.push(...buildCodingTools(ctx.workspaceRoot));
   }
+
+  const settings = await configStore.getSettings();
 
   // Exa web search.
   if (settings.exaEnabled) {

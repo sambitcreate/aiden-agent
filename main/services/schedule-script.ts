@@ -1,11 +1,27 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
+import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import { validateScriptName } from "./schedule-store.js";
 
 const SCRIPT_TIMEOUT_MS = 60_000;
 const SCRIPT_OUTPUT_LIMIT = 1024 * 1024;
+
+/**
+ * Script roots, workspace first. An explicitly injected home wins over
+ * AIDEN_CONFIG_DIR so tests stay hermetic; the default path honours the override
+ * so redirecting the config directory moves scripts along with it.
+ */
+function scriptRoots(input: { workspaceRoot?: string; homeDirectory?: string }): string[] {
+  const globalRoot =
+    input.homeDirectory === undefined
+      ? aidenConfigDir()
+      : path.join(input.homeDirectory, AIDEN_DIR_NAME);
+  return [
+    input.workspaceRoot ? path.join(input.workspaceRoot, AIDEN_DIR_NAME, "scripts") : undefined,
+    path.join(globalRoot, "scripts"),
+  ].filter((value): value is string => Boolean(value));
+}
 
 export interface ScriptProcessResult {
   stdout: string;
@@ -50,10 +66,7 @@ export async function resolveScheduledScript(input: {
   homeDirectory?: string;
 }): Promise<string> {
   const script = validateScriptName(input.script);
-  const roots = [
-    input.workspaceRoot ? path.join(input.workspaceRoot, ".aiden", "scripts") : undefined,
-    path.join(input.homeDirectory ?? os.homedir(), ".aiden", "scripts"),
-  ].filter((value): value is string => Boolean(value));
+  const roots = scriptRoots(input);
   for (const root of roots) {
     const resolved = await existingScriptInRoot(root, script);
     if (resolved) return resolved;
@@ -67,10 +80,7 @@ export async function listScheduledScripts(input: {
   workspaceRoot?: string;
   homeDirectory?: string;
 }): Promise<string[]> {
-  const roots = [
-    input.workspaceRoot ? path.join(input.workspaceRoot, ".aiden", "scripts") : undefined,
-    path.join(input.homeDirectory ?? os.homedir(), ".aiden", "scripts"),
-  ].filter((value): value is string => Boolean(value));
+  const roots = scriptRoots(input);
   const names = new Set<string>();
   for (const root of roots) {
     try {

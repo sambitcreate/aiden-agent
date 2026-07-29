@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
-import { FEATURED_PI_PROVIDER_IDS, splitPiBuiltinProviders } from "./pi-provider-display.js";
+import {
+  FEATURED_PI_PROVIDER_IDS,
+  PROVIDER_ICON_SLUGS,
+  resolveProviderIconSlug,
+  splitPiBuiltinProviders,
+} from "./pi-provider-display.js";
+
+function occurrences(source: string, value: string): number {
+  return source.split(value).length - 1;
+}
 
 test("keeps the selected Pi providers first in product order and puts every other provider under More", () => {
   const providers = [
@@ -41,5 +51,101 @@ test("safely places a Pi provider added after this release under More", () => {
   assert.deepEqual(
     more.map((provider) => provider.id),
     ["future-pi-provider"],
+  );
+});
+
+test("resolves provider logos without branding unknown custom or future providers", () => {
+  assert.equal(resolveProviderIconSlug("openai"), "openai");
+  assert.equal(resolveProviderIconSlug("together"), "together");
+  assert.equal(resolveProviderIconSlug("custom:lmstudio"), "lmstudio");
+  assert.equal(resolveProviderIconSlug("custom:ollama"), "ollama");
+  assert.equal(resolveProviderIconSlug("gemini"), "google");
+  assert.equal(resolveProviderIconSlug("moonshot"), "moonshotai");
+  assert.equal(resolveProviderIconSlug("radius"), undefined);
+  assert.equal(resolveProviderIconSlug("custom:connection-abc"), undefined);
+  assert.equal(resolveProviderIconSlug("future-pi-provider"), undefined);
+});
+
+test("uses product marks for Claude and Grok models while keeping provider marks elsewhere", () => {
+  assert.equal(resolveProviderIconSlug("anthropic"), "anthropic");
+  assert.equal(resolveProviderIconSlug("anthropic", "claude-sonnet-4"), "claude");
+  assert.equal(resolveProviderIconSlug("xai"), "xai");
+  assert.equal(resolveProviderIconSlug("xai", "grok-4-fast"), "grok");
+  assert.equal(resolveProviderIconSlug("openrouter", "anthropic/claude-sonnet-4"), "openrouter");
+  assert.equal(resolveProviderIconSlug("opencode", "anthropic/claude-sonnet-4"), "opencode");
+  assert.equal(
+    resolveProviderIconSlug("custom:connection-abc", "anthropic/claude-sonnet-4"),
+    undefined,
+  );
+});
+
+test("bundled provider icons stay compact, vector-only, and complete for mapped slugs", () => {
+  const assetDirectory = new URL("../assets/provider-logos/", import.meta.url);
+  const svgNames = readdirSync(assetDirectory).filter((name) => name.endsWith(".svg"));
+
+  for (const slug of PROVIDER_ICON_SLUGS) {
+    assert.equal(existsSync(new URL(`${slug}.svg`, assetDirectory)), true, `${slug} asset`);
+  }
+
+  for (const svgName of svgNames) {
+    const source = readFileSync(new URL(svgName, assetDirectory), "utf8");
+    assert.doesNotMatch(
+      source,
+      /<(?:foreignObject|image|script)\b|\bon\w+\s*=|data:image/iu,
+      `${svgName} must remain an isolated vector asset`,
+    );
+    const viewBox = source
+      .match(/\bviewBox=["']\s*([^"']+)/iu)?.[1]
+      ?.trim()
+      .split(/\s+/u)
+      .map(Number);
+    assert.equal(viewBox?.length, 4, `${svgName} needs a viewBox`);
+    const [, , width = 0, height = 0] = viewBox ?? [];
+    assert.ok(width > 0 && height > 0, `${svgName} needs positive dimensions`);
+    assert.ok(
+      Math.max(width / height, height / width) <= 2,
+      `${svgName} must use a compact logomark viewBox`,
+    );
+  }
+});
+
+test("provider marks and icon wells remain theme-aware in both appearances", () => {
+  const providerIconSource = readFileSync(
+    new URL("../components/provider-icon.tsx", import.meta.url),
+    "utf8",
+  );
+  const providersSettingsSource = readFileSync(
+    new URL("../components/settings/providers-settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const codexProviderSettingsSource = readFileSync(
+    new URL("../components/settings/codex-provider-settings.tsx", import.meta.url),
+    "utf8",
+  );
+  const multicolorProviderSlugs = providerIconSource.match(
+    /const MULTICOLOR_PROVIDER_ICON_SLUGS[\s\S]*?\]\);/u,
+  )?.[0];
+
+  assert.ok(multicolorProviderSlugs);
+  assert.doesNotMatch(multicolorProviderSlugs, /"ant-ling"/u);
+  assert.match(multicolorProviderSlugs, /"fireworks"/u);
+  assert.match(providerIconSource, /backgroundColor: "currentColor"/u);
+  assert.doesNotMatch(
+    `${providersSettingsSource}\n${codexProviderSettingsSource}`,
+    /bg-surface-subtle/u,
+  );
+  assert.equal(
+    occurrences(
+      providersSettingsSource,
+      "rounded-control bg-well text-secondary",
+    ),
+    3,
+  );
+  assert.equal(
+    occurrences(
+      codexProviderSettingsSource,
+      "rounded-control bg-well text-secondary",
+    ),
+    1,
   );
 });

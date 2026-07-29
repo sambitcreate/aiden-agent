@@ -20,6 +20,82 @@ export const FEATURED_PI_PROVIDER_IDS = [
 
 const featuredProviderIds = new Set<string>(FEATURED_PI_PROVIDER_IDS);
 
+export const PROVIDER_ICON_SLUGS = [
+  "amazon-bedrock",
+  "ant-ling",
+  "anthropic",
+  "apple-foundation-models",
+  "azure-openai-responses",
+  "cerebras",
+  "claude",
+  "cloudflare-ai-gateway",
+  "cloudflare-workers-ai",
+  "deepseek",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "google-vertex",
+  "grok",
+  "groq",
+  "huggingface",
+  "kimi-coding",
+  "lmstudio",
+  "minimax",
+  "minimax-cn",
+  "mistral",
+  "moonshotai",
+  "moonshotai-cn",
+  "nvidia",
+  "ollama",
+  "openai",
+  "openai-codex",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "together",
+  "vercel-ai-gateway",
+  "xai",
+  "xiaomi",
+  "xiaomi-token-plan-ams",
+  "xiaomi-token-plan-cn",
+  "xiaomi-token-plan-sgp",
+  "zai",
+  "zai-coding-cn",
+] as const;
+
+export type ProviderIconSlug = (typeof PROVIDER_ICON_SLUGS)[number];
+
+const providerIconSlugs = new Set<string>(PROVIDER_ICON_SLUGS);
+
+const PROVIDER_ICON_ALIASES: Readonly<Record<string, ProviderIconSlug>> = {
+  "custom:lmstudio": "lmstudio",
+  "custom:ollama": "ollama",
+  gemini: "google",
+  "lm-studio": "lmstudio",
+  moonshot: "moonshotai",
+};
+
+export function resolveProviderIconSlug(
+  providerId: string,
+  modelId?: string,
+): ProviderIconSlug | undefined {
+  const normalizedProviderId = providerId.trim().toLocaleLowerCase();
+  const normalizedModelId = modelId?.trim().toLocaleLowerCase() ?? "";
+
+  if (normalizedProviderId === "anthropic" && normalizedModelId.includes("claude")) {
+    return "claude";
+  }
+  if (normalizedProviderId === "xai" && normalizedModelId.includes("grok")) {
+    return "grok";
+  }
+
+  const alias = PROVIDER_ICON_ALIASES[normalizedProviderId];
+  if (alias) return alias;
+  return providerIconSlugs.has(normalizedProviderId)
+    ? (normalizedProviderId as ProviderIconSlug)
+    : undefined;
+}
+
 /** Split Pi's changing catalog into a product-curated first view and the rest. */
 export function splitPiBuiltinProviders<T extends { id: string }>(
   providers: readonly T[],

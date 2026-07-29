@@ -8,6 +8,48 @@ export interface RendererDocumentOwner {
   onInvalidated(listener: () => void): () => void;
 }
 
+interface RendererDocumentState {
+  epoch: object;
+  listeners: Set<() => void>;
+}
+
+const rendererDocumentStates = new WeakMap<Electron.WebContents, RendererDocumentState>();
+
+function reportInvalidationFailure(): void {
+  try {
+    console.error(
+      "[renderer-document-owner] A renderer invalidation callback failed; remaining callbacks will continue.",
+    );
+  } catch {
+    // Revocation must not depend on diagnostics being available.
+  }
+}
+
+function rendererDocumentState(sender: Electron.WebContents): RendererDocumentState {
+  const existing = rendererDocumentStates.get(sender);
+  if (existing) return existing;
+
+  const state: RendererDocumentState = {
+    epoch: {},
+    listeners: new Set(),
+  };
+  const invalidate = (): void => {
+    state.epoch = {};
+    for (const listener of [...state.listeners]) listener();
+  };
+  const onDestroyed = (): void => {
+    invalidate();
+    sender.removeListener("did-navigate", invalidate);
+    sender.removeListener("render-process-gone", invalidate);
+    rendererDocumentStates.delete(sender);
+  };
+  sender.on("did-navigate", invalidate);
+  sender.on("render-process-gone", invalidate);
+  sender.once("destroyed", onDestroyed);
+  rendererDocumentStates.set(sender, state);
+  return state;
+}
+
 function frameId(frame: Electron.WebFrameMain): string {
   return `${frame.processId}:${frame.routingId}:${frame.frameToken}`;
 }
@@ -50,12 +92,17 @@ export function rendererDocumentOwner(
     throw invalidRequest();
   }
 
+  const documentState = rendererDocumentState(sender);
+  const documentEpoch = documentState.epoch;
+  const isInvalidated = (): boolean =>
+    documentState.epoch !== documentEpoch || !isCurrentMainFrame(sender, frame);
+
   return {
     id: sender.id,
     documentId: frameId(frame),
-    isDestroyed: () => !isCurrentMainFrame(sender, frame),
+    isDestroyed: isInvalidated,
     send: (channel, payload) => {
-      if (!isCurrentMainFrame(sender, frame)) {
+      if (isInvalidated()) {
         throw new Error("The renderer document is no longer active.");
       }
       frame.send(channel, payload);
@@ -65,22 +112,20 @@ export function rendererDocumentOwner(
       const invalidate = (): void => {
         if (!active) return;
         active = false;
-        listener();
+        documentState.listeners.delete(invalidate);
+        try {
+          listener();
+        } catch {
+          reportInvalidationFailure();
+        }
       };
-      const onDestroyed = (): void => invalidate();
-      const onRendererGone = (): void => invalidate();
-      const onNavigationCommitted = (): void => invalidate();
 
-      sender.once("destroyed", onDestroyed);
-      sender.once("render-process-gone", onRendererGone);
-      sender.on("did-navigate", onNavigationCommitted);
-      if (!isCurrentMainFrame(sender, frame)) invalidate();
+      documentState.listeners.add(invalidate);
+      if (isInvalidated()) invalidate();
 
       return () => {
         active = false;
-        sender.removeListener("destroyed", onDestroyed);
-        sender.removeListener("render-process-gone", onRendererGone);
-        sender.removeListener("did-navigate", onNavigationCommitted);
+        documentState.listeners.delete(invalidate);
       };
     },
   };

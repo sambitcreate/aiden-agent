@@ -12,6 +12,11 @@ import { cn } from "../lib/ui-utils";
 import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import {
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 
 const MIN_DRAWER_HEIGHT = 152;
 const MAX_DRAWER_RATIO = 0.5;
@@ -210,17 +215,6 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     }
   }, [newTerminal, open, sessions.length]);
 
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "j") {
-        event.preventDefault();
-        toggle();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [toggle]);
-
   const value = React.useMemo<TerminalContextValue>(() => ({
     open,
     sessions,
@@ -346,12 +340,21 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
     return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, updateAppearance);
   }, []);
 
-  return <div ref={hostRef} onMouseDown={onFocus} className="h-full min-h-0 w-full select-text p-2" />;
+  return (
+    <div
+      ref={hostRef}
+      data-command-scope="terminal"
+      onMouseDown={onFocus}
+      className="h-full min-h-0 w-full select-text p-2"
+    />
+  );
 }
 
 export function TerminalDrawer() {
   const { open, sessions, activeId, layout, canOpen, toggle, newTerminal, split, select, close } = useWorkspaceTerminal();
   const [height, setHeight] = React.useState(initialHeight);
+  const toggleShortcut = useShortcutLabel("terminal.toggle");
+  const toggleShortcutBinding = useShortcutBinding("terminal.toggle");
   const [clearEpoch, setClearEpoch] = React.useState(0);
   const resizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
   const heightRef = React.useRef(height);
@@ -470,7 +473,7 @@ export function TerminalDrawer() {
             <Button variant="transparent" size="small" iconOnly onClick={() => setClearEpoch((value) => value + 1)} disabled={!activeId} aria-label="Clear terminal view" title="Clear terminal view">
               <Minus />
             </Button>
-            <Button variant="transparent" size="small" iconOnly onClick={toggle} aria-label="Hide terminal" title="Hide terminal (⌘J)">
+            <Button variant="transparent" size="small" iconOnly onClick={toggle} aria-label="Hide terminal" aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`Hide terminal (${toggleShortcut})`}>
               <PanelBottomClose />
             </Button>
           </div>

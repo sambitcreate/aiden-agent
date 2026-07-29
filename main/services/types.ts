@@ -6,6 +6,8 @@ import type { CodexThinkingLevel } from "../../renderer/shared/codex-thinking.js
 import type { GenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
+import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
+import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -86,6 +88,13 @@ export interface ManagedWorktree {
   /** Canonical checkout root; the workspace may point at a nested path inside it. */
   worktreePath: string;
   branch: string;
+  /** Stable Git administrative identity; survives worktree moves and branch changes. */
+  worktreeGitDir?: string;
+  /** Aiden marker persisted inside the original Git administrative directory. */
+  ownershipToken?: string;
+  /** Filesystem identity of the original checkout root, used to reject path replacements. */
+  worktreeDevice?: number;
+  worktreeInode?: number;
   /** HEAD the branch pointed to when Aiden created it; used for safe cleanup. */
   createdFromHead: string;
 }
@@ -180,6 +189,8 @@ export interface ChatMessage {
   attachments?: Attachment[];
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
+  /** Bounded references to separately persisted renderer-safe child run records. */
+  subagents?: SubagentMessageReferenceV1;
 }
 
 export interface ModelRanking {
@@ -371,6 +382,43 @@ export interface FoundationModelsConnectionStatus {
   retryable: boolean;
 }
 
+/** How much the Aiden assistant may do with app settings through its tools. */
+export type AssistantSettingsPermission = "full" | "ask" | "none";
+
+/** Aiden assistant window, hotkey, and proactive-watching settings. */
+export interface AssistantConfig {
+  /** Proactivity master switch. Off by default — nudging is opt-in. */
+  enabled: boolean;
+  hotkeyEnabled: boolean;
+  hotkeyAccelerator: string;
+  /**
+   * Required pin for proactivity. An unattended loop must never inherit
+   * whichever model the user happens to have selected, so the ticker refuses to
+   * run until both of these are set. Interactive Aiden chat still follows
+   * lastProviderId/lastModel.
+   */
+  providerId?: string;
+  model?: string;
+  watchUncommitted: boolean;
+  watchUntouchedProjects: boolean;
+  watchConfigChanges: boolean;
+  pollIntervalMinutes: number;
+  untouchedThresholdDays: number;
+  quietHoursEnabled: boolean;
+  /** "HH:MM" local time. */
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  maxNudgesPerDay: number;
+  urgencyThreshold: number;
+  settingsPermission: AssistantSettingsPermission;
+}
+
+/** Authoritative Assistant settings plus the current global-hotkey runtime state. */
+export interface AssistantConfigSnapshot {
+  config: AssistantConfig;
+  hotkeyActive: boolean;
+}
+
 /** Persisted lightweight app settings. */
 export interface AppSettings {
   lastProviderId?: string;
@@ -385,6 +433,8 @@ export interface AppSettings {
   /** Global hotkey that toggles dictation into the focused app (pill + auto-paste). */
   dictationEnabled?: boolean;
   dictationAccelerator?: string;
+  /** Versioned command overrides. Legacy global fields remain migration fallbacks. */
+  keybindings?: KeybindingOverridesV1;
   /** Background chat-title generation policy. Defaults to automatic. */
   chatTitleProviderId?: ChatTitleProviderId;
   /** Paired light/dark palettes and global appearance preferences. */
@@ -403,6 +453,8 @@ export interface AppSettings {
   scheduledDefaultPermission?: ScheduledTaskPermission;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
+  /** Aiden assistant window, hotkey, and proactivity settings. */
+  assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
 }
@@ -503,6 +555,12 @@ export interface ChatStartParams {
   workspaceId?: string;
   providerId: string;
   model: string;
+  /**
+   * Selects the system prompt and tool set. Absent means the normal workspace
+   * chat. "assistant-unattended" is main-only: parseParams never produces it, so
+   * a renderer cannot request the [SILENT] prompt.
+   */
+  mode?: "assistant" | "assistant-unattended";
   /** Small main-validated enum; provider/model support is enforced at runtime. */
   thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{

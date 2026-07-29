@@ -13,8 +13,10 @@ import {
   readPreferredEditorId,
   resolvePreferredEditorId,
 } from "../lib/editor-preference";
-import { onNotification, workspacesApi } from "../lib/ipc";
+import { workspacesApi } from "../lib/ipc";
 import type { ExternalEditor } from "../lib/types";
+import { useCommandHandler, useCommandSystem } from "../lib/command-system";
+import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 
 interface OpenInEditorPickerProps {
   workspaceId?: string;
@@ -38,6 +40,9 @@ function EditorIcon({ editor, className }: { editor: ExternalEditor; className: 
 }
 
 export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPickerProps) {
+  const { binding } = useCommandSystem();
+  const shortcutBinding = binding("workspace.openPreferredEditor");
+  const shortcut = prettyAccelerator(shortcutBinding);
   const [editors, setEditors] = React.useState<ExternalEditor[]>([]);
   const [storedEditorId, setStoredEditorId] = React.useState<string | null>(readPreferredEditorId);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -116,13 +121,10 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
     }
     if (editor) await openInEditor(editor);
   }, [openInEditor, preferredEditor, refreshEditors, storedEditorId]);
-
-  React.useEffect(
-    () =>
-      onNotification("app:open-workspace-preferred-editor", () => {
-        void openPreferredEditor();
-      }),
-    [openPreferredEditor],
+  useCommandHandler(
+    "workspace.openPreferredEditor",
+    openPreferredEditor,
+    Boolean(workspaceId && folderPath && preferredEditor),
   );
 
   if (!workspaceId || !folderPath) return null;
@@ -142,6 +144,7 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
         radius="rounded"
         disabled={disabled}
         onClick={() => void openPreferredEditor()}
+        aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
         aria-label={
           preferredEditor
             ? `Open workspace in ${preferredEditor.label}`
@@ -184,8 +187,15 @@ export function OpenInEditorPicker({ workspaceId, folderPath }: OpenInEditorPick
               <EditorIcon editor={editor} className="size-4 shrink-0 rounded-[3px]" />
               <span className="min-w-0 flex-1 truncate">{editor.label}</span>
               {editor.id === preferredEditorId ? (
-                <span className="ml-5 text-small opacity-55" aria-label="Command O">
-                  ⌘O
+                <span
+                  className="ml-5 text-small opacity-55"
+                  aria-label={
+                    shortcutBinding
+                      ? `Shortcut ${ariaKeyShortcut(shortcutBinding)}`
+                      : "No shortcut assigned"
+                  }
+                >
+                  {shortcut}
                 </span>
               ) : null}
             </DropdownMenuItem>

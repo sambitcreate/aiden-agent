@@ -26,6 +26,8 @@ import {
 } from "./files-panel";
 import { EnvironmentOverview } from "./environment-overview";
 import { ReviewPanel } from "./review-panel";
+import { SubagentOrb } from "./subagent-chips";
+import { SubagentsPanel } from "./subagents-panel";
 import {
   DEFAULT_PANEL_WIDTH,
   MAX_PANEL_WIDTH,
@@ -34,9 +36,55 @@ import {
   clampEnvironmentPanelWidth,
   resolveEnvironmentPanelLayout,
 } from "../lib/environment-panel-layout";
+import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
+import { subagentsApi } from "../lib/ipc";
+import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import {
+  buildSubagentRunViews,
+  captureSubagentDetailRequest,
+  isSubagentSelectionValid,
+  mergeSubagentSnapshots,
+  reconcileSubagentPersistenceHandoff,
+  resolveSubagentDetailResult,
+  resolveSubagentSelection,
+  summarizeSubagentRunViews,
+  type SubagentDetailRequest,
+  type SubagentReferenceMessage,
+  type SubagentRunView,
+  type SubagentRunViewCounts,
+} from "../lib/subagent-view-state";
+import {
+  subagentPanelOwnerKey,
+  subagentPanelSelectionState,
+} from "../lib/subagent-panel-state";
+import {
+  SubagentLiveAnnouncer,
+  type SubagentDetailAnnouncementRequest,
+} from "./subagent-live-announcer";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import {
+  availableEnvironmentPanelTabs,
+  environmentCompactModalFocusableTargets,
+  environmentCompactModalTabWrapTarget,
+  focusEnvironmentCompactModalTransition,
+  normalizeEnvironmentPanelTab,
+  storedEnvironmentPanelTab,
+  type EnvironmentSurfaceMode,
+  type EnvironmentPanelTab,
+} from "../lib/environment-panel-state";
 
-export type EnvironmentPanelTab = "overview" | "review" | "files";
+export type { EnvironmentPanelTab } from "../lib/environment-panel-state";
 export type EnvironmentReviewMode = "changes" | "compare";
+
+interface EnvironmentSubagentContext {
+  chatId: string | null;
+  workspaceId: string | null;
+  references: SubagentReferenceMessage[];
+  liveSnapshots: SubagentRunSnapshotV1[];
+  handoffSnapshots: SubagentRunSnapshotV1[];
+  loadedSnapshots: SubagentRunSnapshotV1[];
+}
 
 interface EnvironmentFileRequest {
   id: number;
@@ -46,15 +94,37 @@ interface EnvironmentFileRequest {
 
 interface EnvironmentPanelContextValue {
   open: boolean;
+  compactModalOpen: boolean;
   tab: EnvironmentPanelTab;
+  subagentsEnabled: boolean;
   reviewMode: EnvironmentReviewMode;
   fileRequest: EnvironmentFileRequest | null;
   close: () => void;
+  setCompactModalOpen: (open: boolean) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
   show: (tab?: EnvironmentPanelTab) => void;
   toggle: (tab?: EnvironmentPanelTab) => void;
   openFile: (path: string) => void;
   openReview: (mode: EnvironmentReviewMode) => void;
+  subagents: EnvironmentSubagentContext;
+  subagentViews: SubagentRunView[];
+  subagentCounts: SubagentRunViewCounts;
+  selectedSubagentRunId: string | null;
+  subagentFocusDetailVersion: number;
+  subagentDetailLoading: boolean;
+  subagentDetailError: string | null;
+  announceSubagentDetail: (ownerKey: string, message: string) => void;
+  setSubagentAnnouncerHost: (host: HTMLElement | null) => void;
+  syncSubagents: (
+    chatId: string,
+    workspaceId: string,
+    references: SubagentReferenceMessage[],
+    liveSnapshots: SubagentRunSnapshotV1[],
+  ) => void;
+  releaseSubagents: (chatId: string, workspaceId: string) => void;
+  openSubagent: (runId: string, returnTarget?: HTMLElement | null) => void;
+  selectSubagent: (runId: string | null) => void;
+  retrySubagentDetail: () => void;
   editorState: FilesEditorState;
   agentBusy: boolean;
   gitOperationBusy: boolean;
@@ -79,7 +149,14 @@ const EMPTY_EDITOR_STATE: FilesEditorState = {
   dirty: false,
   saving: false,
 };
-const ENVIRONMENT_PANEL_TABS = ["review", "files"] as const;
+const EMPTY_SUBAGENT_CONTEXT: EnvironmentSubagentContext = {
+  chatId: null,
+  workspaceId: null,
+  references: [],
+  liveSnapshots: [],
+  handoffSnapshots: [],
+  loadedSnapshots: [],
+};
 
 function storedPanelWidth(): number {
   const stored = localStorage.getItem(WIDTH_STORAGE_KEY);
@@ -90,19 +167,29 @@ function storedPanelWidth(): number {
     : DEFAULT_PANEL_WIDTH;
 }
 
-function storedTab(): EnvironmentPanelTab {
-  const stored = localStorage.getItem(TAB_STORAGE_KEY);
-  return stored === "review" || stored === "files" || stored === "overview" ? stored : "overview";
-}
-
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
   const { activeId } = useActiveWorkspace();
+  const { subagents: subagentsEnabled } = useAppCapabilities();
   const [open, setOpen] = React.useState(() => localStorage.getItem(OPEN_STORAGE_KEY) === "1");
-  const [tab, setTabState] = React.useState<EnvironmentPanelTab>(storedTab);
+  const [compactModalOpen, setCompactModalOpen] = React.useState(false);
+  const [tab, setTabState] = React.useState<EnvironmentPanelTab>(() =>
+    storedEnvironmentPanelTab(localStorage, TAB_STORAGE_KEY, subagentsEnabled),
+  );
   const [reviewMode, setReviewMode] = React.useState<EnvironmentReviewMode>("changes");
   const [fileRequest, setFileRequest] = React.useState<EnvironmentFileRequest | null>(null);
   const [editorState, setEditorState] = React.useState<FilesEditorState>(EMPTY_EDITOR_STATE);
   const [agentBusy, setAgentBusy] = React.useState(false);
+  const [subagents, setSubagents] =
+    React.useState<EnvironmentSubagentContext>(EMPTY_SUBAGENT_CONTEXT);
+  const [selectedSubagentRunId, setSelectedSubagentRunId] = React.useState<string | null>(null);
+  const [subagentFocusDetailVersion, setSubagentFocusDetailVersion] = React.useState(0);
+  const [subagentDetailLoading, setSubagentDetailLoading] = React.useState(false);
+  const [subagentDetailError, setSubagentDetailError] = React.useState<string | null>(null);
+  const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
+  const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
+    React.useState<SubagentDetailAnnouncementRequest | null>(null);
+  const [subagentAnnouncerHost, setSubagentAnnouncerHost] =
+    React.useState<HTMLElement | null>(null);
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
   const [createWorktree, setCreateWorktree] = React.useState<
     ((branchName: string) => Promise<void>) | undefined
@@ -111,6 +198,42 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const fileRequestIdRef = React.useRef(0);
   const gitBusyCountRef = React.useRef(0);
   const returnFocusRef = React.useRef<HTMLElement | null>(null);
+  const returnSubagentRunIdRef = React.useRef<string | null>(null);
+  const subagentChatIdRef = React.useRef<string | null>(null);
+  const subagentWorkspaceIdRef = React.useRef<string | null>(null);
+  const subagentDetailRequestRef = React.useRef<SubagentDetailRequest | undefined>(undefined);
+  const subagentDetailAnnouncementIdRef = React.useRef(0);
+  const subagentViews = React.useMemo(
+    () =>
+      subagentsEnabled && subagents.chatId && subagents.workspaceId
+        ? buildSubagentRunViews(
+            subagents.chatId,
+            subagents.references,
+            [
+              ...subagents.loadedSnapshots,
+              ...subagents.handoffSnapshots,
+              ...subagents.liveSnapshots,
+            ],
+            subagents.workspaceId,
+          )
+        : [],
+    [
+      subagents.chatId,
+      subagents.handoffSnapshots,
+      subagents.liveSnapshots,
+      subagents.loadedSnapshots,
+      subagents.references,
+      subagents.workspaceId,
+      subagentsEnabled,
+    ],
+  );
+  const subagentCounts = React.useMemo(
+    () => summarizeSubagentRunViews(subagentViews),
+    [subagentViews],
+  );
+  const selectedSubagentView = subagentViews.find((entry) => entry.runId === selectedSubagentRunId);
+  const selectedSubagentGenerationId = selectedSubagentView?.generationId;
+  const selectedSubagentSnapshotRevision = selectedSubagentView?.snapshot?.revision;
 
   const rememberFocus = React.useCallback(() => {
     if (document.activeElement instanceof HTMLElement)
@@ -119,44 +242,62 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
 
   const show = React.useCallback(
     (nextTab?: EnvironmentPanelTab) => {
+      const resolvedTab = nextTab
+        ? normalizeEnvironmentPanelTab(nextTab, subagentsEnabled)
+        : undefined;
       if (!open) rememberFocus();
-      if (nextTab) {
-        setTabState(nextTab);
-        localStorage.setItem(TAB_STORAGE_KEY, nextTab);
+      if (resolvedTab) {
+        setTabState(resolvedTab);
+        localStorage.setItem(TAB_STORAGE_KEY, resolvedTab);
       }
       setOpen(true);
       localStorage.setItem(OPEN_STORAGE_KEY, "1");
     },
-    [open, rememberFocus],
+    [open, rememberFocus, subagentsEnabled],
   );
 
   const close = React.useCallback(() => {
     setOpen(false);
     localStorage.setItem(OPEN_STORAGE_KEY, "0");
+    const replacementChip = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
+    ).find((element) => element.dataset.subagentChipRunId === returnSubagentRunIdRef.current);
     const returnTarget = returnFocusRef.current?.isConnected
       ? returnFocusRef.current
-      : (document.querySelector<HTMLElement>("[data-environment-toggle]") ??
+      : (replacementChip ??
+        document.querySelector<HTMLElement>("[data-environment-toggle]") ??
         document.querySelector<HTMLElement>("[data-app-focus-root]"));
     if (returnTarget?.isConnected) requestAnimationFrame(() => returnTarget.focus());
   }, []);
 
-  const setTab = React.useCallback((nextTab: EnvironmentPanelTab) => {
-    setTabState(nextTab);
-    localStorage.setItem(TAB_STORAGE_KEY, nextTab);
-  }, []);
+  const setTab = React.useCallback(
+    (nextTab: EnvironmentPanelTab) => {
+      const resolvedTab = normalizeEnvironmentPanelTab(nextTab, subagentsEnabled);
+      setTabState(resolvedTab);
+      localStorage.setItem(TAB_STORAGE_KEY, resolvedTab);
+    },
+    [subagentsEnabled],
+  );
 
   const toggle = React.useCallback(
     (nextTab?: EnvironmentPanelTab) => {
-      if (open && (!nextTab || nextTab === tab)) close();
-      else show(nextTab);
+      const resolvedTab = nextTab
+        ? normalizeEnvironmentPanelTab(nextTab, subagentsEnabled)
+        : undefined;
+      if (open && (!resolvedTab || resolvedTab === tab)) close();
+      else show(resolvedTab);
     },
-    [close, open, show, tab],
+    [close, open, show, subagentsEnabled, tab],
   );
 
   const openFile = React.useCallback(
     (path: string) => {
       if (activeId) {
-        setFileRequest({ id: ++fileRequestIdRef.current, path, workspaceId: activeId });
+        setFileRequest({
+          id: ++fileRequestIdRef.current,
+          path,
+          workspaceId: activeId,
+        });
       }
       show("files");
     },
@@ -170,6 +311,213 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     },
     [show],
   );
+
+  const syncSubagents = React.useCallback(
+    (
+      chatId: string,
+      workspaceId: string,
+      references: SubagentReferenceMessage[],
+      liveSnapshots: SubagentRunSnapshotV1[],
+    ) => {
+      if (!subagentsEnabled) return;
+      const ownedLiveSnapshots = mergeSubagentSnapshots([], liveSnapshots, {
+        chatId,
+        workspaceId,
+      });
+      const changedOwner =
+        subagentChatIdRef.current !== chatId || subagentWorkspaceIdRef.current !== workspaceId;
+      subagentChatIdRef.current = chatId;
+      subagentWorkspaceIdRef.current = workspaceId;
+      if (changedOwner) {
+        subagentDetailRequestRef.current = undefined;
+        setSelectedSubagentRunId(null);
+        setSubagentDetailLoading(false);
+        setSubagentDetailError(null);
+      }
+      setSubagents((current) => {
+        const handoff = reconcileSubagentPersistenceHandoff(
+          changedOwner ? [] : current.loadedSnapshots,
+          changedOwner ? [] : current.handoffSnapshots,
+          changedOwner ? [] : current.liveSnapshots,
+          ownedLiveSnapshots,
+          references,
+          { chatId, workspaceId },
+        );
+        return {
+          chatId,
+          workspaceId,
+          references,
+          ...handoff,
+        };
+      });
+    },
+    [subagentsEnabled],
+  );
+
+  const releaseSubagents = React.useCallback((chatId: string, workspaceId: string) => {
+    if (subagentChatIdRef.current !== chatId || subagentWorkspaceIdRef.current !== workspaceId) {
+      return;
+    }
+    subagentChatIdRef.current = null;
+    subagentWorkspaceIdRef.current = null;
+    subagentDetailRequestRef.current = undefined;
+    returnSubagentRunIdRef.current = null;
+    setSubagents(EMPTY_SUBAGENT_CONTEXT);
+    setSelectedSubagentRunId(null);
+    setSubagentDetailLoading(false);
+    setSubagentDetailError(null);
+  }, []);
+
+  const openSubagent = React.useCallback(
+    (runId: string, returnTarget?: HTMLElement | null) => {
+      if (!subagentsEnabled) return;
+      if (returnTarget?.isConnected) returnFocusRef.current = returnTarget;
+      returnSubagentRunIdRef.current = runId;
+      subagentDetailRequestRef.current = undefined;
+      setSelectedSubagentRunId(runId);
+      setSubagentDetailLoading(
+        Boolean(subagentViews.find((entry) => entry.runId === runId && !entry.snapshot)),
+      );
+      setSubagentFocusDetailVersion((version) => version + 1);
+      setSubagentDetailRequestVersion((version) => version + 1);
+      setSubagentDetailError(null);
+      show("subagents");
+    },
+    [show, subagentViews, subagentsEnabled],
+  );
+
+  const selectSubagent = React.useCallback(
+    (runId: string | null) => {
+      if (!subagentsEnabled) return;
+      subagentDetailRequestRef.current = undefined;
+      setSelectedSubagentRunId(runId);
+      setSubagentDetailLoading(
+        Boolean(runId && subagentViews.find((entry) => entry.runId === runId && !entry.snapshot)),
+      );
+      setSubagentDetailRequestVersion((version) => version + 1);
+      setSubagentDetailError(null);
+    },
+    [subagentViews, subagentsEnabled],
+  );
+
+  const retrySubagentDetail = React.useCallback(() => {
+    if (!subagentsEnabled || !selectedSubagentRunId) return;
+    subagentDetailRequestRef.current = undefined;
+    setSubagentDetailLoading(true);
+    setSubagentDetailError(null);
+    setSubagentDetailRequestVersion((version) => version + 1);
+  }, [selectedSubagentRunId, subagentsEnabled]);
+
+  const announceSubagentDetail = React.useCallback(
+    (ownerKey: string, message: string) => {
+      if (
+        !subagentsEnabled ||
+        !message ||
+        ownerKey !==
+          subagentPanelOwnerKey(subagentChatIdRef.current, subagentWorkspaceIdRef.current)
+      ) {
+        return;
+      }
+      setSubagentDetailAnnouncement({
+        id: ++subagentDetailAnnouncementIdRef.current,
+        ownerKey,
+        message,
+      });
+    },
+    [subagentsEnabled],
+  );
+
+  React.useEffect(() => {
+    if (!subagentsEnabled) return;
+    const resolved = resolveSubagentSelection(selectedSubagentRunId ?? undefined, subagentViews);
+    if (selectedSubagentRunId && !isSubagentSelectionValid(selectedSubagentRunId, subagentViews)) {
+      subagentDetailRequestRef.current = undefined;
+      setSelectedSubagentRunId(resolved ?? null);
+      return;
+    }
+    if (open && tab === "subagents" && !selectedSubagentRunId && resolved) {
+      setSelectedSubagentRunId(resolved);
+      setSubagentDetailLoading(
+        Boolean(subagentViews.find((entry) => entry.runId === resolved && !entry.snapshot)),
+      );
+    }
+  }, [open, selectedSubagentRunId, subagentViews, subagentsEnabled, tab]);
+
+  React.useEffect(() => {
+    if (!subagentsEnabled) return;
+    const chatId = subagents.chatId;
+    const workspaceId = subagents.workspaceId;
+    const runId = selectedSubagentRunId;
+    subagentDetailRequestRef.current = undefined;
+    if (!chatId || !workspaceId || !runId || !selectedSubagentGenerationId) return;
+    if (selectedSubagentSnapshotRevision !== undefined) {
+      setSubagentDetailLoading(false);
+      return;
+    }
+    const request = captureSubagentDetailRequest(
+      chatId,
+      {
+        runId,
+        generationId: selectedSubagentGenerationId,
+      },
+      workspaceId,
+    );
+    subagentDetailRequestRef.current = request;
+    setSubagentDetailLoading(true);
+    setSubagentDetailError(null);
+    void subagentsApi
+      .get(chatId, runId)
+      .then((snapshot) => {
+        const safeSnapshot = resolveSubagentDetailResult(
+          request,
+          subagentDetailRequestRef.current,
+          subagentChatIdRef.current ?? "",
+          selectedSubagentRunId ?? undefined,
+          snapshot,
+        );
+        if (!safeSnapshot) return;
+        setSubagents((current) => {
+          if (current.chatId !== chatId || current.workspaceId !== workspaceId) return current;
+          const existing = current.loadedSnapshots.find((entry) => entry.runId === runId);
+          if (existing && existing.revision >= safeSnapshot.revision) return current;
+          return {
+            ...current,
+            loadedSnapshots: [
+              ...current.loadedSnapshots.filter((entry) => entry.runId !== runId),
+              safeSnapshot,
+            ],
+          };
+        });
+      })
+      .catch((error: unknown) => {
+        if (
+          request === subagentDetailRequestRef.current &&
+          subagentChatIdRef.current === chatId &&
+          subagentWorkspaceIdRef.current === workspaceId
+        ) {
+          setSubagentDetailError(
+            error instanceof Error ? error.message : "Aiden could not load this subagent.",
+          );
+        }
+      })
+      .finally(() => {
+        if (
+          request === subagentDetailRequestRef.current &&
+          subagentChatIdRef.current === chatId &&
+          subagentWorkspaceIdRef.current === workspaceId
+        ) {
+          setSubagentDetailLoading(false);
+        }
+      });
+  }, [
+    selectedSubagentRunId,
+    selectedSubagentGenerationId,
+    selectedSubagentSnapshotRevision,
+    subagents.chatId,
+    subagents.workspaceId,
+    subagentDetailRequestVersion,
+    subagentsEnabled,
+  ]);
 
   React.useEffect(() => {
     setRendererLifecycleGuard({ dirty: false, saving: false });
@@ -204,7 +552,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   React.useEffect(
     () => () => {
       gitBusyCountRef.current = 0;
-      setRendererLifecycleGuard({ dirty: false, gitBusy: false, saving: false });
+      setRendererLifecycleGuard({
+        dirty: false,
+        gitBusy: false,
+        saving: false,
+      });
     },
     [],
   );
@@ -220,6 +572,13 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   }, []);
 
   const activeEditorState = editorState.workspaceId === activeId ? editorState : EMPTY_EDITOR_STATE;
+  const displayedSubagentSelection = subagentPanelSelectionState(
+    subagentViews,
+    selectedSubagentRunId,
+    open && tab === "subagents",
+    subagentDetailLoading,
+    subagentDetailError,
+  );
   const gitMutationBlockedReason = gitOperationBusy
     ? "Wait for the current Git operation to finish."
     : agentBusy
@@ -230,42 +589,35 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
           ? "Save or discard the open file's edits before changing Git state."
           : null;
 
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.metaKey &&
-        event.shiftKey &&
-        !event.altKey &&
-        !event.ctrlKey &&
-        event.key.toLowerCase() === "e"
-      ) {
-        if (
-          gitOperationBusy ||
-          document.querySelector('[data-slot="dialog-content"][data-state="open"]')
-        ) {
-          return;
-        }
-        event.preventDefault();
-        if (open) close();
-        else show("overview");
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [close, gitOperationBusy, open, show]);
-
   const value = React.useMemo(
     () => ({
       open,
+      compactModalOpen,
       tab,
+      subagentsEnabled,
       reviewMode,
       fileRequest,
       close,
+      setCompactModalOpen,
       setTab,
       show,
       toggle,
       openFile,
       openReview,
+      subagents,
+      subagentViews,
+      subagentCounts,
+      selectedSubagentRunId: displayedSubagentSelection.runId,
+      subagentFocusDetailVersion,
+      subagentDetailLoading: displayedSubagentSelection.loading,
+      subagentDetailError,
+      announceSubagentDetail,
+      setSubagentAnnouncerHost,
+      syncSubagents,
+      releaseSubagents,
+      openSubagent,
+      selectSubagent,
+      retrySubagentDetail,
       editorState: activeEditorState,
       agentBusy,
       gitOperationBusy,
@@ -281,8 +633,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     [
       activeEditorState,
       agentBusy,
+      announceSubagentDetail,
       cancelAgent,
       close,
+      compactModalOpen,
       createWorktree,
       fileRequest,
       gitOperationBusy,
@@ -290,18 +644,49 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       open,
       openFile,
       openReview,
+      openSubagent,
       reportEditorState,
+      releaseSubagents,
       reviewMode,
+      retrySubagentDetail,
+      selectSubagent,
+      selectedSubagentRunId,
+      displayedSubagentSelection.loading,
+      displayedSubagentSelection.runId,
+      subagentFocusDetailVersion,
       setCancelAgentHandler,
+      setCompactModalOpen,
       setCreateWorktreeHandler,
       setTab,
       show,
+      subagentDetailError,
+      subagentDetailLoading,
+      subagents,
+      subagentCounts,
+      subagentViews,
+      subagentsEnabled,
+      syncSubagents,
       tab,
       toggle,
     ],
   );
   return (
-    <EnvironmentPanelContext.Provider value={value}>{children}</EnvironmentPanelContext.Provider>
+    <EnvironmentPanelContext.Provider value={value}>
+      {subagentsEnabled ? (
+        <SubagentLiveAnnouncer
+          ownerKey={subagentPanelOwnerKey(
+            subagents.chatId,
+            subagents.workspaceId,
+          )}
+          runs={subagents.liveSnapshots}
+          detailRequest={subagentDetailAnnouncement}
+          portalHost={
+            open && tab !== "overview" ? subagentAnnouncerHost : null
+          }
+        />
+      ) : null}
+      {children}
+    </EnvironmentPanelContext.Provider>
   );
 }
 
@@ -328,35 +713,68 @@ function EnvironmentPanelSurface({
   setWidth: (value: number) => void;
 }) {
   const panel = useEnvironmentPanel();
+  const toggleShortcut = useShortcutLabel("environment.toggle");
+  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   const { active } = useActiveWorkspace();
   const fullOpen = panel.open && panel.tab !== "overview";
   const compactModal = fullOpen && !inline;
+  const compactTabs = width < 520;
   const surfaceRef = React.useRef<HTMLElement | null>(null);
+  const setSubagentAnnouncerHost = panel.setSubagentAnnouncerHost;
+  const setSurfaceRef = React.useCallback(
+    (node: HTMLElement | null) => {
+      surfaceRef.current = node;
+      setSubagentAnnouncerHost(node);
+    },
+    [setSubagentAnnouncerHost],
+  );
   const activeTabRef = React.useRef<HTMLButtonElement | null>(null);
+  const handledSubagentFocusRef = React.useRef(0);
   const widthRef = React.useRef(width);
+  const previousSurfaceModeRef = React.useRef<EnvironmentSurfaceMode>({
+    fullOpen,
+    compactModal,
+  });
   const activeFileRequest =
     panel.fileRequest?.workspaceId === active?.id ? panel.fileRequest : null;
+  const representativeSubagent =
+    panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
+  const panelTabs = availableEnvironmentPanelTabs(panel.subagentsEnabled);
   widthRef.current = width;
 
   React.useLayoutEffect(() => {
-    if (fullOpen) activeTabRef.current?.focus();
-  }, [fullOpen, panel.tab]);
+    if (!fullOpen) return;
+    if (
+      panel.tab === "subagents" &&
+      panel.subagentFocusDetailVersion > handledSubagentFocusRef.current
+    ) {
+      handledSubagentFocusRef.current = panel.subagentFocusDetailVersion;
+      const frame = window.requestAnimationFrame(() => {
+        const heading = surfaceRef.current?.querySelector<HTMLElement>(
+          "[data-subagent-detail-heading]",
+        );
+        (heading ?? activeTabRef.current)?.focus();
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }
+    activeTabRef.current?.focus();
+  }, [fullOpen, panel.subagentFocusDetailVersion, panel.tab]);
+
+  React.useLayoutEffect(() => {
+    const previous = previousSurfaceModeRef.current;
+    const next = { fullOpen, compactModal };
+    previousSurfaceModeRef.current = next;
+    focusEnvironmentCompactModalTransition(
+      previous,
+      next,
+      surfaceRef.current,
+      document.activeElement,
+      activeTabRef.current,
+    );
+  }, [compactModal, fullOpen]);
 
   React.useEffect(() => {
     if (!compactModal) return;
-    const focusableSelector = [
-      "a[href]",
-      "button:not(:disabled)",
-      "input:not(:disabled)",
-      "textarea:not(:disabled)",
-      "select:not(:disabled)",
-      "[contenteditable='true']",
-      "[tabindex]:not([tabindex='-1'])",
-    ].join(",");
-    const getFocusable = () =>
-      Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter(
-        (element) => element.offsetParent !== null && !element.closest("[inert]"),
-      );
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.key !== "Tab") return;
       if (
@@ -365,23 +783,14 @@ function EnvironmentPanelSurface({
         )
       )
         return;
-      const focusable = getFocusable();
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const activeElement = document.activeElement;
-      if (
-        event.shiftKey &&
-        (activeElement === first || !focusable.includes(activeElement as HTMLElement))
-      ) {
+      const target = environmentCompactModalTabWrapTarget(
+        environmentCompactModalFocusableTargets(surfaceRef.current),
+        document.activeElement,
+        event.shiftKey,
+      );
+      if (target) {
         event.preventDefault();
-        last.focus();
-      } else if (
-        !event.shiftKey &&
-        (activeElement === last || !focusable.includes(activeElement as HTMLElement))
-      ) {
-        event.preventDefault();
-        first.focus();
+        target.focus();
       }
     };
     document.addEventListener("keydown", onKeyDown);
@@ -406,7 +815,9 @@ function EnvironmentPanelSurface({
       const startWidth = widthRef.current;
       setResizing(true);
       const move = (moveEvent: PointerEvent) => {
-        setWidth(clampEnvironmentPanelWidth(startWidth + startX - moveEvent.clientX, containerWidth));
+        setWidth(
+          clampEnvironmentPanelWidth(startWidth + startX - moveEvent.clientX, containerWidth),
+        );
       };
       const finish = (endEvent: PointerEvent) => {
         commitWidth(
@@ -441,13 +852,14 @@ function EnvironmentPanelSurface({
 
   return (
     <aside
-      ref={surfaceRef}
+      ref={setSurfaceRef}
       id="environment-panel"
       inert={!fullOpen ? true : undefined}
       aria-hidden={!fullOpen ? true : undefined}
       role={compactModal ? "dialog" : undefined}
       aria-modal={compactModal ? true : undefined}
       aria-label="Environment work surface"
+      tabIndex={compactModal ? -1 : undefined}
       className={cn(
         "environment-panel z-30 flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-popover text-primary",
         fullOpen ? "border-l border-separator" : "border-l-0",
@@ -494,9 +906,10 @@ function EnvironmentPanelSurface({
           role="tablist"
           aria-label="Environment views"
         >
-          {ENVIRONMENT_PANEL_TABS.map((tab) => {
+          {panelTabs.map((tab) => {
             const selected = panel.tab === tab;
             const Icon = tab === "review" ? GitCompareArrows : Files;
+            const label = tab === "review" ? "Review" : tab === "subagents" ? "Subagents" : "Files";
             return (
               <button
                 key={tab}
@@ -507,21 +920,23 @@ function EnvironmentPanelSurface({
                 tabIndex={selected ? 0 : -1}
                 aria-selected={selected}
                 aria-controls={`environment-${tab}-panel`}
+                aria-label={label}
+                title={compactTabs ? label : undefined}
                 onClick={() => panel.setTab(tab)}
                 onKeyDown={(event) => {
                   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                   event.preventDefault();
-                  const currentIndex = ENVIRONMENT_PANEL_TABS.indexOf(tab);
+                  const currentIndex = panelTabs.indexOf(tab);
                   const nextTab =
                     event.key === "Home"
-                      ? ENVIRONMENT_PANEL_TABS[0]
+                      ? panelTabs[0]
                       : event.key === "End"
-                        ? ENVIRONMENT_PANEL_TABS[ENVIRONMENT_PANEL_TABS.length - 1]
-                        : ENVIRONMENT_PANEL_TABS[
+                        ? panelTabs[panelTabs.length - 1]
+                        : panelTabs[
                             (currentIndex +
                               (event.key === "ArrowRight" ? 1 : -1) +
-                              ENVIRONMENT_PANEL_TABS.length) %
-                              ENVIRONMENT_PANEL_TABS.length
+                              panelTabs.length) %
+                              panelTabs.length
                           ];
                   panel.setTab(nextTab);
                 }}
@@ -532,8 +947,17 @@ function EnvironmentPanelSurface({
                     : "text-secondary hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection",
                 )}
               >
-                <Icon className="size-3.5" />
-                <span>{tab === "review" ? "Review" : "Files"}</span>
+                {tab === "subagents" ? (
+                  <SubagentOrb
+                    role={representativeSubagent?.role}
+                    state={representativeSubagent?.state ?? "finished"}
+                    activity={representativeSubagent?.snapshot?.activity}
+                    size={20}
+                  />
+                ) : (
+                  <Icon className="size-3.5" />
+                )}
+                <span className={compactTabs ? "sr-only" : undefined}>{label}</span>
               </button>
             );
           })}
@@ -544,7 +968,8 @@ function EnvironmentPanelSurface({
           iconOnly
           onClick={panel.close}
           aria-label="Close environment panel"
-          title="Close environment panel (⌘⇧E)"
+          aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
+          title={`Close environment panel (${toggleShortcut})`}
           className="no-drag"
         >
           <X />
@@ -567,6 +992,35 @@ function EnvironmentPanelSurface({
             onOpenFile={panel.openFile}
           />
         </div>
+        {panel.subagentsEnabled ? (
+          <div
+            id="environment-subagents-panel"
+            role="tabpanel"
+            aria-labelledby="environment-subagents-tab"
+            hidden={panel.tab !== "subagents"}
+            className="h-full min-h-0"
+          >
+            <SubagentsPanel
+              chatId={panel.subagents.chatId}
+              workspaceId={panel.subagents.workspaceId}
+              runs={panel.subagentViews}
+              selectedRunId={panel.selectedSubagentRunId}
+              selectedRunSnapshot={
+                panel.subagentViews.find((run) => run.runId === panel.selectedSubagentRunId)
+                  ?.snapshot
+              }
+              detailLoading={panel.subagentDetailLoading}
+              detailError={panel.subagentDetailError}
+              onSelectedRunChange={panel.selectSubagent}
+              onRetryDetail={panel.retrySubagentDetail}
+              onDetailAnnouncement={panel.announceSubagentDetail}
+              detailRequestVersion={panel.subagentFocusDetailVersion}
+              compact={width < 620}
+              active={panel.open && panel.tab === "subagents"}
+              ownerReplacementFallbackFocusTarget={() => activeTabRef.current}
+            />
+          </div>
+        ) : null}
         <div
           id="environment-files-panel"
           role="tabpanel"
@@ -597,6 +1051,10 @@ function EnvironmentSummaryCard() {
   const open = panel.open && panel.tab === "overview";
   const [present, setPresent] = React.useState(open);
   const menuButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const subagentCounts = panel.subagentCounts;
+  const hasSubagents = panel.subagentsEnabled && subagentCounts.active + subagentCounts.done > 0;
+  const representativeSubagent =
+    panel.subagentViews.find((view) => !view.terminal) ?? panel.subagentViews[0];
 
   React.useLayoutEffect(() => {
     if (open) {
@@ -664,16 +1122,44 @@ function EnvironmentSummaryCard() {
               </DropdownMenuContent>
             </DropdownMenu>
           </header>
-          <div className="min-h-0 flex-1">
-            <EnvironmentOverview
-              workspace={active}
-              active={open}
-              presentation="card"
-              mutationBlockedReason={panel.gitMutationBlockedReason}
-              onGitOperationBusyChange={panel.setGitOperationBusy}
-              onOpenReview={panel.openReview}
-              onCreateWorktree={panel.createWorktree}
-            />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1">
+              <EnvironmentOverview
+                workspace={active}
+                active={open}
+                presentation="card"
+                mutationBlockedReason={panel.gitMutationBlockedReason}
+                onGitOperationBusyChange={panel.setGitOperationBusy}
+                onOpenReview={panel.openReview}
+                onCreateWorktree={panel.createWorktree}
+              />
+            </div>
+            {hasSubagents ? (
+              <div className="shrink-0 border-t border-separator px-3 py-3">
+                <Text as="h2" variant="small-strong" color="tertiary" className="mb-1 px-2">
+                  Subagents
+                </Text>
+                <button
+                  type="button"
+                  onClick={() => panel.show("subagents")}
+                  aria-label={`Open Subagents, ${subagentCounts.active} working, ${subagentCounts.done} done`}
+                  className="grid min-h-11 w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-3 rounded-control px-2 text-left outline-none transition-colors duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none"
+                >
+                  <SubagentOrb
+                    role={representativeSubagent?.role}
+                    state={representativeSubagent?.state ?? "finished"}
+                    activity={representativeSubagent?.snapshot?.activity}
+                    size={20}
+                  />
+                  <span className="min-w-0 text-regular text-primary">
+                    {subagentCounts.active} working
+                  </span>
+                  <span className="text-small tabular-nums text-tertiary">
+                    {subagentCounts.done} done
+                  </span>
+                </button>
+              </div>
+            ) : null}
           </div>
         </>
       ) : null}
@@ -716,32 +1202,13 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
   }, [panel]);
 
   const overlayOpen = fullOpen && !inline;
-  React.useEffect(() => {
-    if (!overlayOpen) return;
-    const main = containerRef.current?.closest("main");
-    const shell = main?.parentElement;
-    if (!main || !shell) return;
-    const background = Array.from(shell.children).filter(
-      (element): element is HTMLElement => element instanceof HTMLElement && element !== main,
-    );
-    const snapshots = background.map((element) => ({
-      element,
-      inert: element.inert,
-      ariaHidden: element.getAttribute("aria-hidden"),
-    }));
-    for (const { element } of snapshots) {
-      element.inert = true;
-      element.setAttribute("aria-hidden", "true");
-    }
+  const setCompactModalOpen = panel.setCompactModalOpen;
+  React.useLayoutEffect(() => {
+    setCompactModalOpen(overlayOpen);
     return () => {
-      for (const { element, inert, ariaHidden } of snapshots) {
-        if (!element.isConnected) continue;
-        element.inert = inert;
-        if (ariaHidden === null) element.removeAttribute("aria-hidden");
-        else element.setAttribute("aria-hidden", ariaHidden);
-      }
+      setCompactModalOpen(false);
     };
-  }, [overlayOpen]);
+  }, [overlayOpen, setCompactModalOpen]);
 
   return (
     <div ref={containerRef} className="relative flex h-full min-h-0 w-full flex-1 overflow-hidden">
@@ -776,6 +1243,8 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
 
 export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolean }) {
   const panel = useEnvironmentPanel();
+  const toggleShortcut = useShortcutLabel("environment.toggle");
+  const toggleShortcutBinding = useShortcutBinding("environment.toggle");
   return (
     <Button
       iconOnly
@@ -784,11 +1253,12 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
       onClick={() => (panel.open ? panel.close() : panel.show("overview"))}
       disabled={disabled}
       aria-label={panel.open ? "Hide environment" : "Show environment"}
+      aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
       aria-pressed={panel.open}
       aria-controls={
         panel.open && panel.tab !== "overview" ? "environment-panel" : "environment-summary-card"
       }
-      title="Toggle environment (⌘⇧E)"
+      title={`Toggle environment (${toggleShortcut})`}
       data-environment-toggle
     >
       {panel.open ? <PanelRightClose /> : <PanelRightOpen />}

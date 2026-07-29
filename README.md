@@ -16,11 +16,27 @@ I don't come from a coding background. I'd been bouncing between the coding agen
 
 ## Features
 
-- **Workspaces** - folder/worktree/scratch, the three access levels, tool scoping, Ask-mode approvals, **Computer Use** safety, plus the sidebar/composer detail.
-- **Models and the Model Pad** - the ~36 hosted providers, local options, and a proper explanation of the Model Pad as the distinctive idea.
-- **Native Mac surface** - menus, shortcuts, **Keychain**, **Parakeet**, dictation pill, **Foundation Models**, the **Rust** broker, themes, reduced motion.
-- **Terminal, Git, and review** - the terminal drawer, the environment panel's three modes, the dirty-file guard, external-editor discovery.
-- **Extensibility** - skills, **MCP**, **Exa**, scheduled tasks, voice, attachments.
+- **Aiden Assistant** - press `⌘⌥A` to open a private assistant dock inside the main window. It follows the selected chat model, keeps its own local history and drafts, supports Stop, and can explain the app without receiving workspace tools or a hidden copy of the workspace.
+- **Command palette and shortcuts** - `⌘K` searches commands, chats, models, providers, Settings, and appearance actions. One typed command system also powers native menus, visible shortcut labels, transactional global hotkeys, and the searchable Keyboard Shortcuts editor.
+- **Native Subagents** - a foreground chat can delegate up to four fresh `scout`, `planner`, or `reviewer` tasks. Children are read/search-only, inherit the approved workspace and model, stop with the parent, and appear as live chips plus an inspectable **Subagents** view in Environment.
+- **Workspaces and managed worktrees** - use folders, scratch workspaces, or isolated managed worktrees with three access levels, workspace-scoped tools, Ask-mode approvals, guarded creation/deletion, and crash-aware cleanup.
+- **Models and the Model Pad** - choose from Pi's native hosted-provider catalog, local Ollama or LM Studio models, and declarative compatible endpoints. Provider-specific authentication, model capabilities, availability, and branded marks flow into the picker and Personal Model Pad.
+- **Terminal, Git, and review** - keep a terminal drawer beside the conversation, inspect files and diffs in Environment, edit with dirty-file protection, compare branches, commit or push checked snapshots, and open the workspace in a discovered external editor.
+- **macOS integration and appearance** - native menus, **Keychain**, **Parakeet**, the dictation pill, Apple **Foundation Models**, the signed **Rust** Computer Use broker, semantic themes, high contrast, reduced motion, and consistent light/dark rendering.
+- **Extensibility and background work** - use skills, **MCP**, **Exa** search, scheduled tasks, voice, and attachments through typed, allowlisted boundaries.
+- **Updates and release safety** - signed builds use the verified GitHub release feed. Once an update is downloaded, Aiden shows the version above Profile with **Later** and **Restart now**, then follows the normal save and shutdown guards before relaunching.
+
+## Upcoming
+
+The roadmap is maintained in [the plan index](docs/plans/README.md). These bullets name only the unfinished parts of partially shipped work or features with no runtime implementation yet; they are directions, not release promises:
+
+- **Assistant tools and proactive nudges** - the private dock, shortcut, and Settings foundation ship today. The remaining work is approval-gated settings/status tools plus opt-in, rate-limited suggestions about useful app and workspace maintenance. See the [Aiden Assistant plan](docs/plans/aiden-assistant-plan.md).
+- **Slash commands and explicit skill selection** - Aiden already discovers Agent Skills and lets the model load them as tools. The planned addition is a composer-anchored `/` palette, one authoritative registry for UI and runtime, and explicit turn-scoped skill activation chosen by the user. See the [Slash Commands and Skill Invocation plan](docs/plans/slash-commands-and-skill-invocation-plan.md).
+- **Designer Mode** - no Designer Mode runtime exists yet. The proposed flow selects UI in a local Vite app, requests a bounded change, requires approval, and reviews the exact action diff; Phase 0 remains a go/no-go validation gate. See the [Designer Mode plan](docs/plans/designer-mode-plan.md).
+- **Static-catalog overlays and provider completion** - Pi built-in discovery, encrypted credentials, provider-owned authentication, native streaming, stored dynamic catalogs, manual refresh, and voice credential lookup already ship. Remaining work includes remote overlays for otherwise-static hosted catalogs, Pi-native custom-endpoint composition, historical message provenance, scalable large-catalog recovery UX, and rollout cleanup. See the [Dynamic Model Catalog](docs/plans/dynamic-model-catalog-plan.md) and [Pi Provider Integration](docs/plans/pi-provider-integration-plan.md) plans.
+- **Truthful generation progress notes** - no progress-note runtime exists yet. The plan would show one temporary acknowledgement after an otherwise-silent start, using an explicitly selected on-device or verified hosted route without exposing hidden reasoning. See the [Generation Progress Notes plan](docs/plans/generation-progress-notes-plan.md).
+- **Long-session context and run control** - model-aware deterministic compaction already ships. Remaining work includes visible compaction activity, reconstructable structured checkpoints, durable-versus-working memory separation, queued follow-up messages, and safe mid-run redirects. See the [Compaction](docs/plans/compaction-plan.md) and [Taracodlab Learnings](docs/plans/taracodlab-learnings-plan.md) plans.
+- **Whole-app performance, durability, and battery gates** - atomic/recoverable chat storage and several bounded lifecycles already ship. The broader program still needs production-equivalent baselines, recovery and hard bounds across the remaining stores and payloads, zero-idle Git/renderer scheduling, cancellable heavy helpers, and enforceable packaged release budgets. See the [Performance, Stability, Battery, and Efficiency plan](docs/plans/performance-stability-efficiency-plan.md).
 
 ## Privacy and trust
 
@@ -66,7 +82,9 @@ npm install
 npm run dev
 ```
 
-The development launcher prepares a cached, ad-hoc-signed Aiden runtime so macOS displays **Aiden Agent** instead of Electron while preserving development-only paths and behavior. Native builds discover the newest compatible full Xcode without changing the machine-wide `xcode-select` setting; `DEVELOPER_DIR` remains available as a per-command override.
+The development launcher prepares a cached, ad-hoc-signed **Aiden Agent Dev** runtime that can run beside the installed **Aiden Agent** app. Development uses separate Application Support, Chromium session, log, crash, and `~/.aiden-dev` roots; it does not copy production data, register global shortcuts, or check the production update feed by default. Set `AIDEN_DEV_GLOBAL_SHORTCUTS=1` only when a development run intentionally needs the global bindings.
+
+Native builds discover the newest compatible full Xcode without changing the machine-wide `xcode-select` setting; `DEVELOPER_DIR` remains available as a per-command override.
 
 ### Verify changes
 
@@ -91,6 +109,6 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 
 ## Project status
 
-Aiden Agent is a beta macOS release, starting at version 0.27.0. Public binary distribution is prepared but remains disabled until the signing, notarization, release-repository, and protected-environment setup in [the release guide](docs/releasing.md) is complete.
+Aiden Agent is a beta macOS release. Signed DMG and ZIP builds, checksums, and automatic-update metadata are published through [GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases). The release workflow is fail-closed: it verifies signing, notarization, package contents, updater metadata, and version monotonicity before publishing. See [the release guide](docs/releasing.md) for the complete process.
 
 The project is MIT licensed (see [LICENSE](LICENSE)).

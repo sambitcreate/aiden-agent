@@ -103,6 +103,22 @@ test("aggregates reported tokens while keeping unmetered and local requests visi
   assert.equal(summary.models.find((model) => model.local)?.unmeteredRequests, 1);
 });
 
+test("persists subagent requests as a first-class privacy-safe usage source", async () => {
+  const persistence = memoryPersistence();
+  const store = createUsageStore(persistence, () => NOW);
+  await store.record(
+    record({
+      source: "subagent",
+      providerId: "openai",
+      providerLabel: "OpenAI",
+      modelId: "child-model",
+    }),
+  );
+  assert.equal(persistence.read().buckets[0]?.source, "subagent");
+  const reloaded = createUsageStore(persistence, () => NOW);
+  assert.equal((await reloaded.summary("7d")).totals.requests, 1);
+});
+
 test("computes calendar streaks and honors inclusive date ranges", async () => {
   const persistence = memoryPersistence();
   const store = createUsageStore(persistence, () => NOW);

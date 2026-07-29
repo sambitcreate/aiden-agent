@@ -64,6 +64,9 @@ const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
     .map(([relativePath, type]) => `${type}:${relativePath}`)
     .sort(),
 );
+const WORKTREE_REMOVER_EXECUTABLE = "aiden-worktree-remover";
+const SUBAGENT_RUN_STORE_EXECUTABLE = "aiden-subagent-run-store";
+const REQUIRED_UNIVERSAL_ARCHITECTURES = Object.freeze(["arm64", "x86_64"]);
 
 async function run(command, args) {
   return executeFile(command, args, {
@@ -202,6 +205,57 @@ export function assertComputerUseMachOMinimum(buildDisplay) {
     throw new Error(
       `Computer Use broker LC_BUILD_VERSION is not pinned to macOS 14.4: ${platforms.join(",")}/${minimums.join(",")}`,
     );
+  }
+}
+
+export function assertExactUniversalArchitectures(architectureDisplay, target = "native helper") {
+  const architectures = architectureDisplay.trim().split(/\s+/u).filter(Boolean);
+  const architectureSet = new Set(architectures);
+  if (
+    architectures.length !== REQUIRED_UNIVERSAL_ARCHITECTURES.length ||
+    architectureSet.size !== REQUIRED_UNIVERSAL_ARCHITECTURES.length ||
+    REQUIRED_UNIVERSAL_ARCHITECTURES.some(
+      (architecture) => !architectureSet.has(architecture),
+    )
+  ) {
+    throw new Error(
+      `${target} must contain exactly the arm64 and x86_64 architectures: ${architectures.join(",") || "(none)"}`,
+    );
+  }
+}
+
+export function assertMacOSArchitectureMinimum(
+  buildDisplay,
+  target = "native helper",
+  architecture = "unknown",
+) {
+  const platforms = [...buildDisplay.matchAll(/^\s*platform\s+(\S+)\s*$/gm)].map(
+    (match) => match[1],
+  );
+  const minimums = [...buildDisplay.matchAll(/^\s*minos\s+(\S+)\s*$/gm)].map((match) => match[1]);
+  if (
+    platforms.length !== 1 ||
+    platforms[0] !== "MACOS" ||
+    minimums.length !== 1 ||
+    minimums[0] !== "14.4"
+  ) {
+    throw new Error(
+      `${target} ${architecture} slice is not pinned to macOS 14.4: ${platforms.join(",")}/${minimums.join(",")}`,
+    );
+  }
+}
+
+export async function verifyUniversalMacOSHelper(file, target = "native helper") {
+  const { stdout: architectureDisplay } = await run("/usr/bin/lipo", ["-archs", file]);
+  assertExactUniversalArchitectures(architectureDisplay, target);
+  for (const architecture of REQUIRED_UNIVERSAL_ARCHITECTURES) {
+    const { stdout, stderr } = await run("/usr/bin/vtool", [
+      "-arch",
+      architecture,
+      "-show-build",
+      file,
+    ]);
+    assertMacOSArchitectureMinimum(`${stdout}\n${stderr}`, target, architecture);
   }
 }
 
@@ -346,6 +400,13 @@ export async function verifyMacPackage(appPath) {
   }
   const paths = packagedComputerUsePaths(appPath);
   const appAsar = path.join(paths.app, "Contents", "Resources", "app.asar");
+  const worktreeRemover = path.join(paths.app, "Contents", "Helpers", WORKTREE_REMOVER_EXECUTABLE);
+  const subagentRunStore = path.join(
+    paths.app,
+    "Contents",
+    "Helpers",
+    SUBAGENT_RUN_STORE_EXECUTABLE,
+  );
   for (const file of [
     paths.broker,
     paths.driver,
@@ -355,6 +416,8 @@ export async function verifyMacPackage(appPath) {
     paths.outerProvenance,
     paths.outerLicenseNotice,
     paths.electronExecutable,
+    worktreeRemover,
+    subagentRunStore,
     appAsar,
   ]) {
     await assertRegularFile(file);
@@ -363,6 +426,8 @@ export async function verifyMacPackage(appPath) {
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
+  assertComputerUseExecutableMode((await lstat(worktreeRemover)).mode, worktreeRemover);
+  assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
   if (
     (await readInfoPlistValue(paths.helperInfoPlist, "CFBundleIdentifier")) !==
     AIDEN_COMPUTER_USE_BUNDLE_ID
@@ -400,11 +465,25 @@ export async function verifyMacPackage(appPath) {
     identifier: AIDEN_COMPUTER_USE_BUNDLE_ID,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
+  await verifySignature(worktreeRemover, {
+    identifier: WORKTREE_REMOVER_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
+  await verifySignature(subagentRunStore, {
+    identifier: SUBAGENT_RUN_STORE_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
   const codeDisplays = new Map(
     await Promise.all(
-      [paths.app, paths.helperApp, paths.broker, paths.driver, paths.electronExecutable].map(
-        async (target) => [target, await readCodeDisplay(target)],
-      ),
+      [
+        paths.app,
+        paths.helperApp,
+        paths.broker,
+        paths.driver,
+        paths.electronExecutable,
+        worktreeRemover,
+        subagentRunStore,
+      ].map(async (target) => [target, await readCodeDisplay(target)]),
     ),
   );
   for (const [target, display] of codeDisplays) assertHardenedRuntime(display, target);
@@ -417,6 +496,8 @@ export async function verifyMacPackage(appPath) {
     paths.broker,
   ]);
   assertComputerUseMachOMinimum(`${brokerBuild}\n${brokerBuildErrors}`);
+  await verifyUniversalMacOSHelper(worktreeRemover, "Managed worktree remover");
+  await verifyUniversalMacOSHelper(subagentRunStore, "Private subagent run store");
 
   const driverHash = await sha256(paths.driver);
   if (driverHash !== CUA_DRIVER_SHA256) {
@@ -431,6 +512,8 @@ export async function verifyMacPackage(appPath) {
 
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.helperApp));
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));
+  assertMinimalComputerUseEntitlements(await readEntitlements(worktreeRemover));
+  assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
   assertElectronEntitlements(await readEntitlements(paths.electronExecutable));
   await verifyAidenFuses(paths.app);
   console.log(`Verified hardened macOS package: ${paths.app}`);

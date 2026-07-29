@@ -42,7 +42,7 @@ import {
   SquarePen,
   UserRound,
 } from "lucide-react";
-import { chatsApi, gitApi, workspacesApi } from "../lib/ipc";
+import { appUpdatesApi, chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import { truncatePathMiddle } from "../lib/truncate-path";
 import {
   CHAT_TITLE_FADE_OUT_MS,
@@ -51,17 +51,162 @@ import {
 } from "../lib/chat-title-reveal";
 import {
   COMMAND_CHAT_SHORTCUT_REVEAL_MS,
-  commandChatShortcutNumber,
+  chatShortcutRevealModifierSets,
   createSidebarChatShortcutAssignments,
+  sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
 import { queryKeys, useChats, useFoundationModelsConnection } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
+import { useCommandSystem } from "../lib/command-system";
+import type { CommandId } from "../shared/keybindings";
+import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
+import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
+import {
+  IDLE_APP_UPDATE_SNAPSHOT,
+  type AppUpdateRestartResult,
+  type AppUpdateSnapshot,
+} from "../shared/app-update";
+
+const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
+/** Must match aiden-app-update-banner-out in styles.css. */
+const APP_UPDATE_BANNER_EXIT_MS = 120;
 
 interface ChatSidebarProps {
   activeChatId: string | undefined;
   titleReveal?: ChatTitleRevealEvent | null;
+}
+
+function updateRestartError(result: AppUpdateRestartResult): string | null {
+  if (result.accepted) return null;
+  switch (result.reason) {
+    case "busy":
+      return "Aiden is already preparing another window action.";
+    case "not-ready":
+      return "That update is no longer ready. Check for updates again.";
+    case "unavailable":
+      return "Aiden could not restart into the update.";
+  }
+}
+
+function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
+  const [snapshot, setSnapshot] = React.useState<AppUpdateSnapshot>(IDLE_APP_UPDATE_SNAPSHOT);
+  const [dismissedVersion, setDismissedVersion] = React.useState<string | null>(null);
+  const [restarting, setRestarting] = React.useState(false);
+  const [present, setPresent] = React.useState(false);
+  const [displayedVersion, setDisplayedVersion] = React.useState<string | null>(null);
+  const titleId = React.useId();
+  const readyVersion = snapshot.status === "ready" ? snapshot.version : null;
+  const open = readyVersion !== null && dismissedVersion !== readyVersion;
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const applySnapshot = (next: AppUpdateSnapshot) => {
+      if (cancelled) return;
+      setSnapshot(next);
+      setRestarting(false);
+    };
+    const unsubscribe = appUpdatesApi.onStateChanged(applySnapshot);
+    void appUpdatesApi
+      .state()
+      .then(applySnapshot)
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  // Keep the banner mounted through its exit animation, matching Aiden's
+  // environment summary and assistant dock presence primitives.
+  React.useLayoutEffect(() => {
+    if (open && readyVersion) {
+      setDisplayedVersion(readyVersion);
+      setPresent(true);
+      return;
+    }
+    if (!present) return;
+    if (document.documentElement.dataset.reduceMotion === "true") {
+      setPresent(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setPresent(false), APP_UPDATE_BANNER_EXIT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [open, present, readyVersion]);
+
+  const restart = async () => {
+    if (!open) return;
+    if (blockedReason) {
+      toast.info(blockedReason);
+      return;
+    }
+    setRestarting(true);
+    try {
+      const result = await appUpdatesApi.restart();
+      const message = updateRestartError(result);
+      if (message) {
+        setRestarting(false);
+        toast.error(message);
+      }
+    } catch (error) {
+      setRestarting(false);
+      toast.error(error instanceof Error ? error.message : "Aiden could not restart.");
+    }
+  };
+
+  if (!present || !displayedVersion) return null;
+
+  return (
+    <section
+      aria-labelledby={titleId}
+      aria-hidden={!open ? true : undefined}
+      className="app-update-banner mb-2 origin-bottom rounded-card bg-control/70 px-3 py-3 text-primary"
+      data-state={open ? "open" : "closed"}
+      inert={!open ? true : undefined}
+    >
+      <div className="flex items-start gap-2.5">
+        <img src={AIDEN_MARK_URL} alt="" className="size-8 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <h2 id={titleId} className="text-small-strong">
+            Update ready
+          </h2>
+          <p className="mt-0.5 truncate text-small text-secondary">
+            Aiden Agent {displayedVersion}
+          </p>
+        </div>
+      </div>
+      <p className="mt-2 text-small text-secondary">
+        {blockedReason ?? "Restart to finish installing."}
+      </p>
+      <div className="mt-2 flex items-center justify-end gap-1">
+        <Button
+          size="small"
+          variant="transparent"
+          disabled={!open || restarting}
+          onClick={() => setDismissedVersion(displayedVersion)}
+        >
+          Later
+        </Button>
+        <Button
+          size="small"
+          variant="accent"
+          disabled={!open || restarting || Boolean(blockedReason)}
+          title={blockedReason}
+          onClick={() => void restart()}
+        >
+          {restarting ? (
+            <>
+              <Loader2 className="animate-spin" aria-hidden="true" />
+              Restarting…
+            </>
+          ) : (
+            "Restart now"
+          )}
+        </Button>
+      </div>
+    </section>
+  );
 }
 
 function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string; title: string }) {
@@ -178,8 +323,21 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     () => createSidebarChatShortcutAssignments(orderedGroups),
     [orderedGroups],
   );
-  const shortcutAssignmentsRef = React.useRef(shortcutAssignments);
-  shortcutAssignmentsRef.current = shortcutAssignments;
+  const orderedChats = React.useMemo(
+    () => orderedGroups.flatMap((group) => group.chats),
+    [orderedGroups],
+  );
+  const chatNavigationTargets = React.useMemo(
+    () => sidebarChatNavigationTargets(orderedChats, activeChatId),
+    [activeChatId, orderedChats],
+  );
+  const { binding: commandBinding, register: registerCommand } = useCommandSystem();
+  const chatJumpBindings = Array.from({ length: 9 }, (_, index) =>
+    commandBinding(`chat.jump.${index + 1}` as CommandId),
+  );
+  const revealModifierSignature = chatShortcutRevealModifierSets(chatJumpBindings)
+    .map((modifiers) => modifiers.join("+"))
+    .join("|");
   const shortcutNumberByChatId = React.useMemo(
     () => new Map(shortcutAssignments.map(({ chat, number }) => [chat.id, number])),
     [shortcutAssignments],
@@ -187,8 +345,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const appleRenameReady = foundationModels.data?.state === "ready";
   const appleRenameDetail = foundationModels.isLoading
     ? "Checking Apple Foundation Models availability."
-    : foundationModels.data?.detail ?? "Apple Foundation Models are unavailable.";
-  const workspaceActionBlocked = environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
+    : (foundationModels.data?.detail ?? "Apple Foundation Models are unavailable.");
+  const workspaceActionBlocked =
+    environmentPanel.editorState.saving || environmentPanel.gitOperationBusy;
   const workspaceSwitchBlocked = workspaceActionBlocked || environmentPanel.editorState.dirty;
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
@@ -197,6 +356,22 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
+  const updateRestartBlockedReason = environmentPanel.gitOperationBusy
+    ? "Wait for the current Git operation to finish before restarting."
+    : environmentPanel.editorState.saving
+      ? "Wait for the open file to finish saving before restarting."
+      : undefined;
+  const openChat = React.useCallback(
+    (chatId: string | undefined) => {
+      if (!chatId) return;
+      if (settingsBlockedReason) {
+        toast.info(settingsBlockedReason);
+        return;
+      }
+      void navigate({ to: "/chat/$chatId", params: { chatId } });
+    },
+    [navigate, settingsBlockedReason],
+  );
 
   React.useEffect(() => {
     const clearRevealTimer = () => {
@@ -209,42 +384,46 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       clearRevealTimer();
       setChatShortcutsVisible(false);
     };
-    const isCommandKey = (event: KeyboardEvent) =>
-      event.key === "Meta" || event.code === "MetaLeft" || event.code === "MetaRight";
+    const revealModifierSets = revealModifierSignature
+      .split("|")
+      .filter(Boolean)
+      .map((signature) => signature.split("+"));
+    const revealModifiers = new Set(revealModifierSets.flat());
+    const hasCompleteModifierSet = () =>
+      revealModifierSets.some((required) =>
+        required.every((modifier) => heldCommandKeysRef.current.has(modifier)),
+      );
+    const eventModifier = (event: KeyboardEvent) =>
+      ["Meta", "Control", "Alt", "Shift"].includes(event.key) ? event.key : null;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isCommandKey(event)) {
-        const commandKey = event.code || "Meta";
-        const wasAlreadyHeld = heldCommandKeysRef.current.has(commandKey);
-        heldCommandKeysRef.current.add(commandKey);
-        if (!wasAlreadyHeld && shortcutRevealTimerRef.current === null) {
+      const modifier = eventModifier(event);
+      if (modifier && revealModifiers.has(modifier)) {
+        const wasAlreadyHeld = heldCommandKeysRef.current.has(modifier);
+        heldCommandKeysRef.current.add(modifier);
+        if (
+          !wasAlreadyHeld &&
+          hasCompleteModifierSet() &&
+          shortcutRevealTimerRef.current === null
+        ) {
           shortcutRevealTimerRef.current = window.setTimeout(() => {
             shortcutRevealTimerRef.current = null;
-            if (heldCommandKeysRef.current.size > 0) setChatShortcutsVisible(true);
+            if (hasCompleteModifierSet()) setChatShortcutsVisible(true);
           }, COMMAND_CHAT_SHORTCUT_REVEAL_MS);
         }
         return;
       }
-
-      if (
-        event.defaultPrevented ||
-        document.querySelector('[data-slot="dialog-content"][data-state="open"]')
-      ) {
-        return;
-      }
-
-      const shortcutNumber = commandChatShortcutNumber(event);
-      if (shortcutNumber === null) return;
-      const assignment = shortcutAssignmentsRef.current[shortcutNumber - 1];
-      if (!assignment) return;
-
-      event.preventDefault();
-      void navigate({ to: "/chat/$chatId", params: { chatId: assignment.chat.id } });
     };
     const onKeyUp = (event: KeyboardEvent) => {
-      if (!isCommandKey(event)) return;
-      heldCommandKeysRef.current.delete(event.code || "Meta");
-      if (heldCommandKeysRef.current.size === 0) hideShortcuts();
+      const modifier = eventModifier(event);
+      if (!modifier || !revealModifiers.has(modifier)) return;
+      heldCommandKeysRef.current.delete(modifier);
+      if (heldCommandKeysRef.current.size === 0) {
+        hideShortcuts();
+      } else if (!hasCompleteModifierSet()) {
+        clearRevealTimer();
+        setChatShortcutsVisible(false);
+      }
     };
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible") hideShortcuts();
@@ -262,7 +441,30 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       heldCommandKeysRef.current.clear();
       clearRevealTimer();
     };
-  }, [navigate]);
+  }, [revealModifierSignature]);
+
+  React.useEffect(() => {
+    const unregister = shortcutAssignments.map(({ chat, number }) =>
+      registerCommand(`chat.jump.${number}` as CommandId, () => {
+        openChat(chat.id);
+      }),
+    );
+    if (chatNavigationTargets.previous) {
+      unregister.push(
+        registerCommand("chat.previous", () => {
+          openChat(chatNavigationTargets.previous?.id);
+        }),
+      );
+    }
+    if (chatNavigationTargets.next) {
+      unregister.push(
+        registerCommand("chat.next", () => {
+          openChat(chatNavigationTargets.next?.id);
+        }),
+      );
+    }
+    return () => unregister.forEach((dispose) => dispose());
+  }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
 
   // Move to a workspace and land on one of its chats (creating one if empty).
   const enterWorkspace = React.useCallback(
@@ -293,7 +495,17 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       }
       return true;
     },
-    [activeId, environmentPanel.agentBusy, environmentPanel.cancelAgent, environmentPanel.editorState.dirty, environmentPanel.editorState.saving, environmentPanel.gitOperationBusy, navigate, qc, select],
+    [
+      activeId,
+      environmentPanel.agentBusy,
+      environmentPanel.cancelAgent,
+      environmentPanel.editorState.dirty,
+      environmentPanel.editorState.saving,
+      environmentPanel.gitOperationBusy,
+      navigate,
+      qc,
+      select,
+    ],
   );
 
   const switchWorkspace = React.useCallback(
@@ -416,6 +628,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       environmentPanel.cancelAgent?.();
     }
     await chatsApi.remove(deleting.id);
+    await removeDeletedChatFromCache(qc, deleting.id);
     await qc.invalidateQueries({ queryKey: queryKeys.chats });
     if (deleting.id === activeChatId) void navigate({ to: "/" });
     setDeleting(null);
@@ -450,6 +663,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         actions={<SplitView.SidebarToggle />}
         footer={
           <SidebarFooter>
+            <UpdateReadyBanner blockedReason={updateRestartBlockedReason} />
             <div className="flex flex-col gap-0.5" title={settingsBlockedReason}>
               <SidebarListItem
                 icon={<UserRound />}
@@ -510,9 +724,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   key={w.id}
                   checked={w.id === activeId}
                   disabled={workspaceSwitchBlocked}
-                  sublabel={
-                    w.folderPath ? truncatePathMiddle(w.folderPath) : undefined
-                  }
+                  sublabel={w.folderPath ? truncatePathMiddle(w.folderPath) : undefined}
                   title={w.folderPath ?? undefined}
                   onCheckedChange={() => switchWorkspace(w.id)}
                 >
@@ -539,14 +751,16 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                       Delete worktree…
                     </DropdownMenuItem>
                   ) : null}
-                  <DropdownMenuItem
-                    disabled={workspaceActionBlocked}
-                    icon="trash"
-                    color="red"
-                    onSelect={() => setRemovingWorkspace(active)}
-                  >
-                    Remove “{active.name}”
-                  </DropdownMenuItem>
+                  {!active.managedWorktree ? (
+                    <DropdownMenuItem
+                      disabled={workspaceActionBlocked}
+                      icon="trash"
+                      color="red"
+                      onSelect={() => setRemovingWorkspace(active)}
+                    >
+                      Remove “{active.name}”
+                    </DropdownMenuItem>
+                  ) : null}
                 </>
               ) : null}
             </DropdownMenuContent>
@@ -569,89 +783,94 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
               <SidebarListGroup key={group.label} title={group.label}>
                 {group.chats.map((chat) => {
                   const shortcutNumber = shortcutNumberByChatId.get(chat.id);
-                  return <ContextMenu key={chat.id}>
-                    <ContextMenuTrigger asChild>
-                      <SidebarListItem
-                        icon={
-                          renamingWithAppleId === chat.id
-                            ? <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                            : undefined
-                        }
-                        aria-busy={renamingWithAppleId === chat.id}
-                        title={
-                          titleReveal?.chatId === chat.id ? (
-                            <GeneratedTitleReveal
-                              key={`${chat.id}-${titleReveal.version}`}
-                              previousTitle={titleReveal.previousTitle}
-                              title={chat.title}
-                            />
-                          ) : (
-                            chat.title
-                          )
-                        }
-                        trailing={
-                          chatShortcutsVisible && shortcutNumber ? (
-                            <kbd
-                              aria-hidden="true"
-                              className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                            >
-                              ⌘{shortcutNumber}
-                            </kbd>
-                          ) : undefined
-                        }
-                        aria-keyshortcuts={shortcutNumber ? `Meta+${shortcutNumber}` : undefined}
-                        selected={chat.id === activeChatId}
-                        onPointerEnter={() => prefetchChat(chat.id)}
-                        onFocus={() => prefetchChat(chat.id)}
-                        onClick={() =>
-                          navigate({ to: "/chat/$chatId", params: { chatId: chat.id } })
-                        }
-                      />
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuItem
-                        icon="pencil"
-                        disabled={renamingWithAppleId === chat.id}
-                        onSelect={() => {
-                          setRenameValue(chat.title);
-                          setRenaming(chat);
-                        }}
-                      >
-                        Rename
-                      </ContextMenuItem>
-                      {foundationModels.data !== null ? (
-                        <ContextMenuItem
-                          disabled={!appleRenameReady || renamingWithAppleId !== null}
-                          aria-label={
-                            renamingWithAppleId === chat.id
-                              ? "Renaming with Apple"
-                              : appleRenameReady
-                                ? "Rename with Apple"
-                                : `Rename with Apple. ${appleRenameDetail}`
+                  const shortcutBinding = shortcutNumber
+                    ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
+                    : null;
+                  return (
+                    <ContextMenu key={chat.id}>
+                      <ContextMenuTrigger asChild>
+                        <SidebarListItem
+                          icon={
+                            renamingWithAppleId === chat.id ? (
+                              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                            ) : undefined
                           }
-                          onSelect={() => void renameWithApple(chat)}
+                          aria-busy={renamingWithAppleId === chat.id}
+                          title={
+                            titleReveal?.chatId === chat.id ? (
+                              <GeneratedTitleReveal
+                                key={`${chat.id}-${titleReveal.version}`}
+                                previousTitle={titleReveal.previousTitle}
+                                title={chat.title}
+                              />
+                            ) : (
+                              chat.title
+                            )
+                          }
+                          trailing={
+                            chatShortcutsVisible && shortcutBinding ? (
+                              <kbd
+                                aria-hidden="true"
+                                className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                              >
+                                {prettyAccelerator(shortcutBinding)}
+                              </kbd>
+                            ) : undefined
+                          }
+                          aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+                          selected={chat.id === activeChatId}
+                          onPointerEnter={() => prefetchChat(chat.id)}
+                          onFocus={() => prefetchChat(chat.id)}
+                          onClick={() => openChat(chat.id)}
+                        />
+                      </ContextMenuTrigger>
+                      <ContextMenuContent>
+                        <ContextMenuItem
+                          icon="pencil"
+                          disabled={renamingWithAppleId === chat.id}
+                          onSelect={() => {
+                            setRenameValue(chat.title);
+                            setRenaming(chat);
+                          }}
                         >
-                          <span className="min-w-0 flex-1">
-                            {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
-                          </span>
-                          {!appleRenameReady ? (
-                            <span className="text-small text-tertiary">
-                              {foundationModels.isLoading ? "Checking…" : "Unavailable"}
-                            </span>
-                          ) : null}
+                          Rename
                         </ContextMenuItem>
-                      ) : null}
-                      <ContextMenuSeparator />
-                      <ContextMenuItem
-                        icon="trash"
-                        color="red"
-                        disabled={renamingWithAppleId === chat.id}
-                        onSelect={() => setDeleting(chat)}
-                      >
-                        Delete
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>;
+                        {foundationModels.data !== null ? (
+                          <ContextMenuItem
+                            disabled={!appleRenameReady || renamingWithAppleId !== null}
+                            aria-label={
+                              renamingWithAppleId === chat.id
+                                ? "Renaming with Apple"
+                                : appleRenameReady
+                                  ? "Rename with Apple"
+                                  : `Rename with Apple. ${appleRenameDetail}`
+                            }
+                            onSelect={() => void renameWithApple(chat)}
+                          >
+                            <span className="min-w-0 flex-1">
+                              {renamingWithAppleId === chat.id
+                                ? "Renaming with Apple…"
+                                : "Rename with Apple"}
+                            </span>
+                            {!appleRenameReady ? (
+                              <span className="text-small text-tertiary">
+                                {foundationModels.isLoading ? "Checking…" : "Unavailable"}
+                              </span>
+                            ) : null}
+                          </ContextMenuItem>
+                        ) : null}
+                        <ContextMenuSeparator />
+                        <ContextMenuItem
+                          icon="trash"
+                          color="red"
+                          disabled={renamingWithAppleId === chat.id}
+                          onSelect={() => setDeleting(chat)}
+                        >
+                          Delete
+                        </ContextMenuItem>
+                      </ContextMenuContent>
+                    </ContextMenu>
+                  );
                 })}
               </SidebarListGroup>
             ))
@@ -699,9 +918,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         description={
           deletingWorktree ? (
             <Text variant="small" color="secondary">
-              The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is deleted only if it
-              has no commits beyond where Aiden created it. Chats stay on disk. Dirty worktrees are refused.
-              {environmentPanel.editorState.workspaceId === deletingWorktree.id && environmentPanel.editorState.dirty
+              The clean checkout for “{deletingWorktree.name}” will be removed. Its branch is
+              deleted only if it has no commits beyond where Aiden created it. Chats stay on disk.
+              Dirty worktrees are refused.
+              {environmentPanel.editorState.workspaceId === deletingWorktree.id &&
+              environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
                 : ""}
             </Text>
@@ -721,9 +942,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
         description={
           removingWorkspace ? (
             <Text variant="small" color="secondary">
-              “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be listed. The folder
-              itself is not touched.
-              {environmentPanel.editorState.workspaceId === removingWorkspace.id && environmentPanel.editorState.dirty
+              “{removingWorkspace.name}” will be removed. Its chats stay on disk but won’t be
+              listed. The folder itself is not touched.
+              {environmentPanel.editorState.workspaceId === removingWorkspace.id &&
+              environmentPanel.editorState.dirty
                 ? ` The unsaved edit to ${environmentPanel.editorState.path ?? "the open file"} will be discarded.`
                 : ""}
             </Text>

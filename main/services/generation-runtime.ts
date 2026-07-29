@@ -164,6 +164,33 @@ export async function settleGenerationCleanup(
   });
 }
 
+/**
+ * An aborted generation can still be in setup when shutdown starts, or hand
+ * off to active state during that abort. Wait for both maps to clear under the
+ * caller's existing deadline rather than treating the active snapshot as the
+ * whole parent lifecycle.
+ */
+export async function waitForGenerationStateClear(
+  isBusy: () => boolean,
+  completions: () => readonly (Promise<unknown> | null | undefined)[],
+  deadline: number,
+): Promise<boolean> {
+  while (isBusy()) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    const pending = completions().filter(
+      (completion): completion is Promise<unknown> => completion !== null && completion !== undefined,
+    );
+    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    await Promise.race(
+      pending.length > 0
+        ? [pause, Promise.allSettled(pending).then(() => undefined)]
+        : [pause],
+    );
+  }
+  return true;
+}
+
 /** Keep the chat identity and provider transport attached to every Pi Agent turn. */
 export function buildAgentRuntimeOptions(
   chatId: string,

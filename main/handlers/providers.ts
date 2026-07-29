@@ -28,6 +28,7 @@ import {
   forwardCodexProviderStatusChanges,
   mergeCodexProvider,
 } from "../services/provider-list-core.js";
+import { AppearancePreviewState } from "../services/appearance-preview-core.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -35,7 +36,12 @@ import type {
   ProviderModelType,
   StoredProvider,
 } from "../services/types.js";
-import { parseAppearanceConfig } from "../../renderer/shared/appearance.js";
+import {
+  normalizeAppearanceConfig,
+  parseAppearanceConfig,
+} from "../../renderer/shared/appearance.js";
+
+const appearancePreview = new AppearancePreviewState();
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -319,6 +325,23 @@ export function registerProviderHandlers(): void {
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
+  ipcMain.handle("settings:getAppearance", async () => {
+    const settings = await configStore.getSettings();
+    return appearancePreview.effective(
+      normalizeAppearanceConfig(settings.appearance),
+    );
+  });
+  ipcMain.handle("settings:getAppearanceState", async () => {
+    const settings = await configStore.getSettings();
+    return appearancePreview.snapshot(
+      normalizeAppearanceConfig(settings.appearance),
+    );
+  });
+  ipcMain.handle("settings:previewAppearance", async (_event, value: unknown) => {
+    const appearance = appearancePreview.preview(parseAppearanceConfig(value));
+    ipcMain.broadcast("settings:appearance-changed", appearance);
+    return appearance;
+  });
   ipcMain.handle(
     "settings:setGoogleThinking",
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
@@ -364,6 +387,13 @@ export function registerProviderHandlers(): void {
       next.chatTitleProviderId = p.chatTitleProviderId;
     }
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
-    return configStore.setSettings(next);
+    const saved = await configStore.setSettings(next);
+    if (next.appearance) {
+      const appearance = appearancePreview.persisted(
+        normalizeAppearanceConfig(saved.appearance),
+      );
+      ipcMain.broadcast("settings:appearance-changed", appearance);
+    }
+    return saved;
   });
 }

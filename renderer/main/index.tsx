@@ -10,8 +10,13 @@ import { installDevErrorLogging } from "../lib/dev-log";
 import { applyCachedAppearance } from "../lib/appearance-runtime";
 import { subscribeCodexProviderState } from "../lib/queries";
 import { migrateGoogleProviderPreferences } from "../lib/google-provider-migration";
-import { providersApi } from "../lib/ipc";
+import { appApi, providersApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
+import {
+  AppCapabilitiesProvider,
+  DISABLED_APP_CAPABILITIES,
+  parseAppCapabilities,
+} from "../lib/app-capabilities";
 
 declare const __APP_DISPLAY_NAME__: string | undefined;
 
@@ -32,6 +37,14 @@ if (!rootElement) {
 }
 
 async function bootstrap(): Promise<void> {
+  let appCapabilities = DISABLED_APP_CAPABILITIES;
+  try {
+    const appInfo = await appApi.getInfo();
+    appCapabilities = parseAppCapabilities(appInfo.capabilities);
+  } catch {
+    // Feature capabilities fail closed until main explicitly enables them.
+  }
+
   // Resolve persisted custom aliases before any component reads provider/model
   // preferences. A failed IPC read is non-fatal; the narrow Pi-ID migration
   // above still protects older Gemini/Moonshot selections.
@@ -52,9 +65,11 @@ async function bootstrap(): Promise<void> {
   root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <RouterProvider router={router} />
-        </TooltipProvider>
+        <AppCapabilitiesProvider capabilities={appCapabilities}>
+          <TooltipProvider>
+            <RouterProvider router={router} />
+          </TooltipProvider>
+        </AppCapabilitiesProvider>
         <Toaster />
       </QueryClientProvider>
     </React.StrictMode>,

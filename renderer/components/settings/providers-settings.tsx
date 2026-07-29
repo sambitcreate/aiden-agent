@@ -22,7 +22,8 @@ import {
   Text,
   toast,
 } from "../ui";
-import { ChevronDown, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { CodexProviderSettings } from "./codex-provider-settings";
@@ -79,6 +80,13 @@ function BuiltinProviderRows({
     <React.Fragment key={provider.id}>
       {index > 0 ? <Separator /> : null}
       <div className="flex items-center gap-3 px-3.5 py-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+          <ProviderIcon
+            providerId={provider.id}
+            providerLabel={provider.label}
+            className="size-4.5"
+          />
+        </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <Text variant="strong" truncate>
@@ -239,6 +247,11 @@ export function ProvidersSettings() {
                 disabled={customProviders.some((provider) => provider.id === "custom:lmstudio")}
                 onSelect={() => addCustom("lmstudio")}
               >
+                <ProviderIcon
+                  providerId="custom:lmstudio"
+                  providerLabel="LM Studio"
+                  className="size-4 text-tertiary"
+                />
                 <span className="flex min-w-0 flex-col">
                   <span>LM Studio</span>
                   <span className="text-small text-tertiary">OpenAI-compatible local server</span>
@@ -248,6 +261,11 @@ export function ProvidersSettings() {
                 disabled={customProviders.some((provider) => provider.id === "custom:ollama")}
                 onSelect={() => addCustom("ollama")}
               >
+                <ProviderIcon
+                  providerId="custom:ollama"
+                  providerLabel="Ollama"
+                  className="size-4 text-tertiary"
+                />
                 <span className="flex min-w-0 flex-col">
                   <span>Ollama</span>
                   <span className="text-small text-tertiary">
@@ -286,8 +304,12 @@ export function ProvidersSettings() {
           aria-busy={refreshingFoundationModels}
         >
           <div className="flex items-start gap-3 px-3.5 py-3">
-            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-surface-subtle text-secondary">
-              <Sparkles className="size-4" aria-hidden />
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+              <ProviderIcon
+                providerId="apple-foundation-models"
+                providerLabel="Apple Foundation Models"
+                className="size-4"
+              />
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -411,6 +433,9 @@ export function ProvidersSettings() {
               <React.Fragment key={p.id}>
                 {i > 0 ? <Separator /> : null}
                 <div className="flex items-center gap-3 px-3.5 py-3">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
+                    <ProviderIcon providerId={p.id} providerLabel={p.label} className="size-4.5" />
+                  </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Text variant="strong" truncate>

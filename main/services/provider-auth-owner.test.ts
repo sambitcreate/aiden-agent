@@ -75,11 +75,19 @@ test("rejects a start IPC queued from a document that navigation already replace
   const currentFrame = new FakeFrame(10, 21, "new-document");
   const sender = new FakeWebContents(1, currentFrame);
 
-  assert.throws(
-    () => providerAuthOwner(invokeEvent(sender, oldFrame)),
-    ProviderAuthRequestError,
-  );
+  assert.throws(() => providerAuthOwner(invokeEvent(sender, oldFrame)), ProviderAuthRequestError);
   assert.throws(() => providerAuthOwner(invokeEvent(sender, null)), ProviderAuthRequestError);
+});
+
+test("remembers committed navigation without requiring an invalidation subscriber", () => {
+  const frame = new FakeFrame(10, 20, "document");
+  const sender = new FakeWebContents(1, frame);
+  const owner = providerAuthOwner(invokeEvent(sender, frame));
+
+  sender.emit("did-navigate");
+
+  assert.equal(owner.isDestroyed(), true);
+  assert.throws(() => owner.send("providers:auth:prompt", {}), /no longer active/u);
 });
 
 test("keeps auth alive for prevented provisional links and invalidates committed navigation", () => {
@@ -101,6 +109,34 @@ test("keeps auth alive for prevented provisional links and invalidates committed
 
   sender.emit("did-navigate");
   assert.equal(invalidations, 1);
+  assert.equal(owner.isDestroyed(), true);
+  assert.throws(() => owner.send("providers:auth:prompt", {}), /no longer active/u);
+
+  sender.emit("did-navigate");
+  sender.emit("render-process-gone");
+  assert.equal(invalidations, 1);
+  remove();
+});
+
+test("delayed subagent delivery cannot cross a committed same-frame navigation", async () => {
+  const frame = new FakeFrame(10, 20, "document");
+  const sender = new FakeWebContents(1, frame);
+  const owner = providerAuthOwner(invokeEvent(sender, frame));
+  const remove = owner.onInvalidated(() => undefined);
+  let releasePersistence!: () => void;
+  const persistence = new Promise<void>((resolve) => {
+    releasePersistence = resolve;
+  });
+  const delivery = (async () => {
+    await persistence;
+    owner.send("chat:subagents", { streamId: "generation-one" });
+  })();
+
+  sender.emit("did-navigate");
+  releasePersistence();
+
+  await assert.rejects(delivery, /no longer active/u);
+  assert.deepEqual(frame.sent, []);
   remove();
 });
 
@@ -117,4 +153,32 @@ test("renderer process loss invalidates the captured document once", () => {
   sender.emit("destroyed");
   assert.equal(invalidations, 1);
   remove();
+});
+
+test("one throwing document invalidation cannot starve later revocation callbacks", () => {
+  const frame = new FakeFrame(10, 20, "document");
+  const sender = new FakeWebContents(1, frame);
+  const first = providerAuthOwner(invokeEvent(sender, frame));
+  const second = providerAuthOwner(invokeEvent(sender, frame));
+  let laterInvalidations = 0;
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    first.onInvalidated(() => {
+      throw new Error("simulated terminal teardown failure");
+    });
+    second.onInvalidated(() => {
+      laterInvalidations += 1;
+    });
+
+    assert.doesNotThrow(() => sender.emit("did-navigate"));
+    sender.emit("render-process-gone");
+    sender.emit("destroyed");
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(laterInvalidations, 1);
+  assert.equal(first.isDestroyed(), true);
+  assert.equal(second.isDestroyed(), true);
 });

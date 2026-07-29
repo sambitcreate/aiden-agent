@@ -2,6 +2,8 @@
 
 import type {
   AppSettings,
+  AssistantConfig,
+  AssistantConfigSnapshot,
   ArtificialAnalysisActionResult,
   ArtificialAnalysisStatus,
   ApprovalDecision,
@@ -9,6 +11,7 @@ import type {
   Chat,
   ChatMeta,
   ChatMessage,
+  ChatReadResponse,
   ChatTitleRenameResult,
   ChatStartParams,
   ComputerUseStatus,
@@ -60,6 +63,24 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import { parseSubagentRunSnapshotV1, type SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type { KeybindingMutation, KeybindingSnapshot } from "../shared/keybindings";
+import {
+  parseAppUpdateSnapshot,
+  type AppUpdateRestartResult,
+  type AppUpdateSnapshot,
+} from "../shared/app-update";
+import {
+  fallbackDetachedLifecycleStream,
+  parseChatReadResponse,
+  rememberChatReadReconciliation,
+  rememberDetachedLifecycleStream,
+} from "./chat-terminal-sync";
+import type { AppCapabilities } from "./app-capabilities";
+import type {
+  AppearanceConfig,
+  AppearancePreviewSnapshot,
+} from "../shared/appearance";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -69,6 +90,7 @@ export interface AppInfo {
   name: string;
   version: string;
   environment: string;
+  capabilities: AppCapabilities;
 }
 
 export function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -81,10 +103,21 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
+  rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+};
+
+export const appUpdatesApi = {
+  state: async (): Promise<AppUpdateSnapshot> =>
+    parseAppUpdateSnapshot(await invoke<unknown>("app:getUpdateState")),
+  restart: () => invoke<AppUpdateRestartResult>("app:restartToUpdate"),
+  onStateChanged: (handler: (snapshot: AppUpdateSnapshot) => void) =>
+    onNotification<unknown>("app:update-state", (payload) =>
+      handler(parseAppUpdateSnapshot(payload)),
+    ),
 };
 
 // ── Providers & settings ──────────────────────────────────────────────
@@ -132,6 +165,11 @@ export const providersApi = {
 
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
+  getAppearance: () => invoke<AppearanceConfig>("settings:getAppearance"),
+  getAppearanceState: () =>
+    invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
+  previewAppearance: (appearance: AppearanceConfig) =>
+    invoke<AppearanceConfig>("settings:previewAppearance", appearance),
   set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
   setGoogleThinking: (modelId: string, level: GoogleThinkingLevel) =>
     invoke<AppSettings>("settings:setGoogleThinking", modelId, level),
@@ -139,6 +177,12 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
+};
+
+export const assistantApi = {
+  config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
+  setConfig: (patch: Partial<AssistantConfig>) =>
+    invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
 };
 
 export const artificialAnalysisApi = {
@@ -252,7 +296,12 @@ export interface ModelDownloadProgress {
 }
 
 export const shortcutApi = {
-  apply: () => invoke<void>("shortcut:apply"),
+  get: () => invoke<KeybindingSnapshot>("shortcut:get"),
+  setRecording: (recording: boolean) =>
+    invoke<KeybindingSnapshot>("shortcut:set-recording", recording),
+  set: (mutation: KeybindingMutation) => invoke<KeybindingSnapshot>("shortcut:set", mutation),
+  onChanged: (handler: (snapshot: KeybindingSnapshot) => void) =>
+    onNotification("shortcut:changed", handler),
 };
 
 // ── Global dictation (pill + auto-paste) ──────────────────────────────
@@ -375,7 +424,15 @@ export const gitApi = {
 // ── Chats ─────────────────────────────────────────────────────────────
 export const chatsApi = {
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
-  get: (id: string) => invoke<Chat | null>("chats:get", id),
+  get: async (id: string) => {
+    const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
+    if (!response) throw new Error("The chat read response was invalid.");
+    if (response.reconciliation) {
+      rememberChatReadReconciliation(response.reconciliation);
+    }
+    return response.chat;
+  },
+  waitUntilIdle: (id: string) => invoke<boolean>("chats:waitUntilIdle", id),
   create: (input: { title?: string; workspaceId?: string; providerId?: string; model?: string }) =>
     invoke<Chat>("chats:create", input),
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
@@ -386,6 +443,7 @@ export const chatsApi = {
   setComputerUse: (id: string, enabled: boolean) =>
     invoke<Chat>("chats:setComputerUse", id, enabled),
   remove: (id: string) => invoke<void>("chats:remove", id),
+  abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   appendMessage: (
     id: string,
     message: {
@@ -394,10 +452,15 @@ export const chatsApi = {
       model?: string;
       attachments?: Attachment[];
     },
-    meta?: { providerId?: string; model?: string; autoTitle?: boolean },
+    meta: { providerId?: string; model?: string; autoTitle?: boolean; turnId: string },
   ) => invoke<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
     invoke<void>("chat:approve", approvalId, decision),
+};
+
+export const subagentsApi = {
+  get: async (chatId: string, runId: string) =>
+    parseSubagentRunSnapshotV1(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
 };
 
 // ── Streaming generation ──────────────────────────────────────────────
@@ -446,6 +509,10 @@ export interface ApprovalPrompt {
 interface ChatApproval extends ApprovalPrompt {
   streamId: string;
 }
+interface ChatSubagents {
+  streamId: string;
+  snapshot: unknown;
+}
 
 export interface GenerationHandle {
   streamId: string;
@@ -469,12 +536,13 @@ export interface StreamCallbacks {
     reasoning?: string,
   ) => void;
   onTimeline?: (timeline: GenerationTimeline) => void;
+  onSubagents?: (snapshot: SubagentRunSnapshotV1) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
 }
 
-function makeStreamId(): string {
+export function createChatTurnId(): string {
   return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -486,8 +554,9 @@ function makeStreamId(): string {
 export function startGeneration(
   params: ChatStartParams,
   callbacks: StreamCallbacks,
+  messageTurnId: string,
 ): GenerationHandle {
-  const streamId = makeStreamId();
+  const streamId = messageTurnId;
   const unsubs: Array<() => void> = [];
   const dispose = () => {
     for (const u of unsubs) u();
@@ -531,6 +600,15 @@ export function startGeneration(
       if (p.streamId === streamId) callbacks.onTimeline?.(p.timeline);
     }),
   );
+  if (callbacks.onSubagents) {
+    unsubs.push(
+      onNotification<ChatSubagents>("chat:subagents", (p) => {
+        if (p.streamId !== streamId) return;
+        const snapshot = parseSubagentRunSnapshotV1(p.snapshot);
+        if (snapshot?.generationId === streamId) callbacks.onSubagents?.(snapshot);
+      }),
+    );
+  }
   unsubs.push(
     onNotification<ChatTool>("chat:tool", (p) => {
       if (p.streamId === streamId) callbacks.onTool?.(p.phase, p.toolName);
@@ -548,15 +626,34 @@ export function startGeneration(
     }),
   );
 
-  void invoke<{ streamId: string }>("chat:start", streamId, params).catch((error: unknown) => {
-    callbacks.onError(error instanceof Error ? error.message : String(error));
-    dispose();
-  });
+  void invoke<{ streamId: string }>("chat:start", streamId, params, messageTurnId).catch(
+    (error: unknown) => {
+      if (fallbackDetachedLifecycleStream(streamId)) {
+        dispose();
+        return;
+      }
+      callbacks.onError(error instanceof Error ? error.message : String(error));
+      dispose();
+    },
+  );
 
   return {
     streamId,
     cancel: (origin) => {
-      void invoke("chat:cancel", streamId, origin);
+      if (origin === "lifecycle") {
+        rememberDetachedLifecycleStream({
+          streamId,
+          chatId: params.chatId,
+          workspaceId: params.workspaceId ?? "default",
+        });
+        dispose();
+      }
+      void invoke("chat:cancel", streamId, origin).catch((error: unknown) => {
+        if (origin === "user_stop") {
+          callbacks.onError(error instanceof Error ? error.message : String(error));
+          dispose();
+        }
+      });
     },
   };
 }

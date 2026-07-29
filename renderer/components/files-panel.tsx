@@ -19,6 +19,12 @@ import { AlertDialog, Button, EmptyState, Input, Text, toast } from "./ui";
 import { workspacesApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
+import {
+  useCommandHandler,
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
+import { ariaKeyShortcut } from "../shared/keybindings";
 import type {
   Workspace,
   WorkspaceFileDocument,
@@ -449,15 +455,13 @@ export function FilesPanel({
     }
   }, [dirty, documentState.data, index, interactionBlockedReason, onEditorStateChange, queryClient, reportedWorkspaceId, saving, selectedPath, workspace?.id]);
 
-  const onEditorKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.metaKey && !event.altKey && !event.ctrlKey && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        void saveFile();
-      }
-    },
-    [saveFile],
+  useCommandHandler(
+    "file.save",
+    saveFile,
+    Boolean(selectedPath && documentState.data && !saving && !interactionBlockedReason),
   );
+  const saveShortcut = useShortcutLabel("file.save");
+  const saveShortcutBinding = useShortcutBinding("file.save");
 
   const lineNumbers = React.useMemo(() => {
     const count = Math.max(1, draft.split("\n").length);
@@ -691,8 +695,9 @@ export function FilesPanel({
                 variant="filled"
                 size="small"
                 onClick={() => void saveFile()}
+                aria-keyshortcuts={ariaKeyShortcut(saveShortcutBinding)}
                 disabled={!dirty || saving || !documentState.data || interactionBlocked}
-                title={interactionBlockedReason ?? "Save file (⌘S)"}
+                title={interactionBlockedReason ?? `Save file (${saveShortcut})`}
               >
                 <Save /> Save
               </Button>
@@ -751,6 +756,7 @@ export function FilesPanel({
                     {lineNumbers}
                   </pre>
                   <textarea
+                    data-command-scope="fileEditor"
                     ref={textareaRef}
                     value={draft}
                     onChange={(event) => {
@@ -767,7 +773,6 @@ export function FilesPanel({
                       setSaveError((current) => current?.code === "changed_on_disk" ? current : null);
                       setSaved(false);
                     }}
-                    onKeyDown={onEditorKeyDown}
                     onScroll={(event) => {
                       if (gutterRef.current) gutterRef.current.scrollTop = event.currentTarget.scrollTop;
                     }}

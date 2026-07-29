@@ -18,4 +18,8 @@ test("composer focus tints the whole shell, not only the textarea", () => {
     styles,
     /\.composer-shell:focus-within\s*\{[\s\S]*color-mix\(in srgb, var\(--surface-popover\) 98%, var\(--text-primary\)\)/u,
   );
+  assert.match(
+    styles,
+    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
+  );
 });

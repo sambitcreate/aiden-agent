@@ -18,6 +18,7 @@ import {
   ChartScatter,
   Info,
   Clock3,
+  Sparkles,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -30,7 +31,11 @@ import { ComputerUseSettings } from "../components/settings/computer-use-setting
 import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
-import type { SettingsSection } from "../lib/settings-section";
+import { AssistantSettings } from "../components/settings/assistant-settings";
+import {
+  SETTINGS_DESTINATIONS,
+  type SettingsSection,
+} from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
 
@@ -42,85 +47,26 @@ type NavItem = {
   keywords: string;
 };
 
-const NAV: NavItem[] = [
-  {
-    id: "providers",
-    title: "Providers",
-    icon: <Server className="size-5" />,
-    group: "Agent",
-    keywords: "models api keys",
-  },
-  {
-    id: "modelData",
-    title: "Model Pad",
-    icon: <ChartScatter className="size-5" />,
-    group: "Agent",
-    keywords: "personal models arrange rank capability speed pace artificial analysis suggestions",
-  },
-  {
-    id: "skills",
-    title: "Skills",
-    icon: <Wand2 className="size-5" />,
-    group: "Agent",
-    keywords: "instructions tools",
-  },
-  {
-    id: "mcp",
-    title: "MCP Servers",
-    icon: <Plug className="size-5" />,
-    group: "Agent",
-    keywords: "connections tools protocol",
-  },
-  {
-    id: "websearch",
-    title: "Web Search",
-    icon: <Globe className="size-5" />,
-    group: "Agent",
-    keywords: "internet search",
-  },
-  {
-    id: "scheduledTasks",
-    title: "Scheduled tasks",
-    icon: <Clock3 className="size-5" />,
-    group: "Agent",
-    keywords: "automation cron recurring background scripts notifications",
-  },
-  {
-    id: "computerUse",
-    title: "Computer Use",
-    icon: <MousePointer2 className="size-5" />,
-    group: "Agent",
-    keywords: "desktop native apps accessibility screen recording cua beta",
-  },
-  {
-    id: "voice",
-    title: "Voice",
-    icon: <Mic className="size-5" />,
-    group: "App",
-    keywords: "microphone audio transcription",
-  },
-  {
-    id: "shortcut",
-    title: "Keyboard shortcuts",
-    icon: <Keyboard className="size-5" />,
-    group: "App",
-    keywords: "hotkey command",
-  },
-  {
-    id: "appearance",
-    title: "Appearance",
-    icon: <Palette className="size-5" />,
-    group: "App",
-    keywords: "theme light dark system",
-  },
-  {
-    id: "about",
-    title: "About",
-    icon: <Info className="size-5" />,
-    group: "App",
-    keywords: "version build github repository app information",
-  },
-];
+const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
+  providers: <Server className="size-5" />,
+  modelData: <ChartScatter className="size-5" />,
+  skills: <Wand2 className="size-5" />,
+  mcp: <Plug className="size-5" />,
+  websearch: <Globe className="size-5" />,
+  scheduledTasks: <Clock3 className="size-5" />,
+  assistant: <Sparkles className="size-5" />,
+  computerUse: <MousePointer2 className="size-5" />,
+  voice: <Mic className="size-5" />,
+  shortcut: <Keyboard className="size-5" />,
+  appearance: <Palette className="size-5" />,
+  about: <Info className="size-5" />,
+};
+
+const NAV: NavItem[] = SETTINGS_DESTINATIONS.map((item) => ({
+  ...item,
+  icon: NAV_ICONS[item.id],
+  keywords: item.keywords.join(" "),
+}));
 
 const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
 
@@ -132,6 +78,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
   scheduledTasks: ScheduledTasksSettings,
+  assistant: AssistantSettings,
   voice: VoiceSettings,
   shortcut: ShortcutSettings,
   appearance: AppearanceSettings,

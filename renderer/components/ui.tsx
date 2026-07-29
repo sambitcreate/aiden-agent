@@ -19,6 +19,17 @@ import { createPortal } from "react-dom";
 import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { cn } from "../lib/ui-utils";
+import {
+  useCommandHandler,
+  useShortcutBinding,
+  useShortcutLabel,
+} from "../lib/command-system";
+import {
+  compactSidebarAutoFocusIntent,
+  type CompactSidebarAutoFocusIntent,
+  type CompactSidebarFocusState,
+} from "../lib/compact-sidebar-focus";
+import { ariaKeyShortcut } from "../shared/keybindings";
 
 export { toast };
 export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
@@ -57,7 +68,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         variant === "toolbar" && "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
         variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
         variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
-        variant === "destructive" && "bg-red text-white shadow-control hover:bg-red/90 hover:shadow-control-hover active:bg-red/80 active:shadow-control-pressed focus-visible:bg-red/90",
+        variant === "destructive" && "bg-red text-red-foreground shadow-control hover:bg-red hover:shadow-control-hover active:bg-red active:shadow-control-pressed focus-visible:bg-red",
         className,
       )}
       {...props}
@@ -237,9 +248,16 @@ type SplitViewProps = React.PropsWithChildren<{
   sidebar: React.ReactNode;
   storageKey: string;
   sidebarSize?: { default: number; min: number; max: number };
+  contentModalOpen?: boolean;
 }>;
 
-function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitViewProps) {
+function SplitViewRoot({
+  sidebar,
+  storageKey,
+  sidebarSize,
+  contentModalOpen = false,
+  children,
+}: SplitViewProps) {
   const collapseKey = `${storageKey}.sidebar-collapsed`;
   const widthKey = `${storageKey}.sidebar-width`;
   const limits = sidebarSize ?? { default: 260, min: 220, max: 340 };
@@ -252,10 +270,34 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
   });
   const [leadingAnchor, setLeadingAnchor] = React.useState<HTMLDivElement | null>(null);
   const sidebarRef = React.useRef<HTMLElement>(null);
+  const contentModalOpenRef = React.useRef(contentModalOpen);
+  const previousCompactSidebarFocusStateRef = React.useRef<CompactSidebarFocusState>({
+    compact,
+    expanded: !collapsed,
+    contentModalOpen,
+  });
+  const compactSidebarFocusIntentRef =
+    React.useRef<CompactSidebarAutoFocusIntent | null>(null);
+  React.useLayoutEffect(() => {
+    contentModalOpenRef.current = contentModalOpen;
+  }, [contentModalOpen]);
+  React.useLayoutEffect(() => {
+    const next: CompactSidebarFocusState = {
+      compact,
+      expanded: !collapsed,
+      contentModalOpen,
+    };
+    compactSidebarFocusIntentRef.current = compactSidebarAutoFocusIntent(
+      previousCompactSidebarFocusStateRef.current,
+      next,
+    );
+    previousCompactSidebarFocusStateRef.current = next;
+  }, [collapsed, compact, contentModalOpen]);
   const toggle = React.useCallback(() => setCollapsed((value) => {
     localStorage.setItem(collapseKey, value ? "0" : "1");
     return !value;
   }), [collapseKey]);
+  useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
     let wasCompact = window.innerWidth < 700;
@@ -270,17 +312,6 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.metaKey && event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        toggle();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [toggle]);
 
   const beginResize = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (collapsed) return;
@@ -320,7 +351,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     localStorage.setItem(widthKey, String(Math.round(next)));
   }, [limits.max, limits.min, width, widthKey]);
 
-  const compactOpen = compact && !collapsed;
+  const compactOpen = compact && !collapsed && !contentModalOpen;
 
   React.useEffect(() => {
     if (!compactOpen) return;
@@ -330,9 +361,12 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
       ...Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
       ...Array.from(leadingAnchor?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
     ].filter((element) => element.offsetParent !== null);
-    const frame = requestAnimationFrame(() => {
-      if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
-    });
+    const frame =
+      compactSidebarFocusIntentRef.current === "first-control"
+        ? requestAnimationFrame(() => {
+            if (!leadingAnchor?.contains(previousFocus)) getFocusable()[0]?.focus();
+          })
+        : null;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (document.querySelector('[data-slot="dialog-content"][data-state="open"]')) return;
@@ -358,9 +392,10 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
     };
     document.addEventListener("keydown", onKeyDown);
     return () => {
-      cancelAnimationFrame(frame);
+      if (frame !== null) cancelAnimationFrame(frame);
       document.removeEventListener("keydown", onKeyDown);
-      if (previousFocus?.isConnected) requestAnimationFrame(() => previousFocus.focus());
+      if (!contentModalOpenRef.current && previousFocus?.isConnected)
+        requestAnimationFrame(() => previousFocus.focus());
     };
   }, [collapseKey, compactOpen, leadingAnchor]);
 
@@ -378,8 +413,8 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
         ) : null}
         <aside
           ref={sidebarRef}
-          inert={collapsed ? true : undefined}
-          aria-hidden={collapsed ? true : undefined}
+          inert={collapsed || contentModalOpen ? true : undefined}
+          aria-hidden={collapsed || contentModalOpen ? true : undefined}
           className={cn(
             "h-full shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out",
             compact && !collapsed && "absolute inset-y-0 left-0 z-30 shadow-dialog",
@@ -387,7 +422,7 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
           style={{
             width: collapsed ? 0 : compact ? Math.min(width, viewportWidth - 56) : width,
             opacity: collapsed ? 0 : 1,
-            pointerEvents: collapsed ? "none" : "auto",
+            pointerEvents: collapsed || contentModalOpen ? "none" : "auto",
           }}
         >
           <div style={{ width: compact ? Math.min(width, viewportWidth - 56) : width }} className="h-full">{sidebar}</div>
@@ -399,12 +434,12 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
           aria-valuemin={limits.min}
           aria-valuemax={limits.max}
           aria-valuenow={Math.round(width)}
-          tabIndex={collapsed || compact ? -1 : 0}
+          tabIndex={collapsed || compact || contentModalOpen ? -1 : 0}
           onPointerDown={beginResize}
           onKeyDown={resizeWithKeyboard}
           className={cn(
             "relative z-20 -mx-[3px] w-[7px] shrink-0 cursor-col-resize outline-none before:absolute before:inset-y-0 before:left-[3px] before:w-px before:bg-separator hover:before:bg-primary/20 focus-visible:before:w-0.5 focus-visible:before:bg-accent",
-            (collapsed || compact) && "pointer-events-none opacity-0",
+            (collapsed || compact || contentModalOpen) && "pointer-events-none opacity-0",
           )}
         />
         <main
@@ -414,7 +449,15 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
         >
           {children}
         </main>
-        <div ref={setLeadingAnchor} className="absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center" />
+        <div
+          ref={setLeadingAnchor}
+          inert={contentModalOpen ? true : undefined}
+          aria-hidden={contentModalOpen ? true : undefined}
+          className={cn(
+            "absolute left-[90px] top-0 z-40 flex h-13 w-9 items-center justify-center",
+            contentModalOpen && "pointer-events-none",
+          )}
+        />
       </div>
     </SplitContext.Provider>
   );
@@ -422,6 +465,8 @@ function SplitViewRoot({ sidebar, storageKey, sidebarSize, children }: SplitView
 
 function SidebarToggle() {
   const context = React.useContext(SplitContext);
+  const shortcut = useShortcutLabel("sidebar.toggle");
+  const shortcutBinding = useShortcutBinding("sidebar.toggle");
   if (!context) return null;
   const button = (
     <Button
@@ -430,8 +475,9 @@ function SidebarToggle() {
       variant={context.collapsed ? "toolbar" : "transparent"}
       onClick={context.toggle}
       aria-label={context.collapsed ? "Show sidebar" : "Hide sidebar"}
+      aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
       aria-pressed={!context.collapsed}
-      title="Toggle Sidebar (⌃⌘S)"
+      title={`Toggle sidebar (${shortcut})`}
       className="no-drag transition-[width,height,background-color] duration-300"
     >
       <PanelLeft />
@@ -718,7 +764,7 @@ export function Dialog({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 bg-transparent"
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -733,7 +779,7 @@ export function Dialog({
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none",
+            "fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
             size === "large" && "w-[min(92vw,680px)]",
           )}
         >
@@ -802,7 +848,7 @@ export function AlertDialog({
       }}
     >
       <AlertDialogPrimitive.Portal>
-        <AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" />
+        <AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-transparent" />
         <AlertDialogPrimitive.Content
           data-slot="dialog-content"
           aria-busy={busy}
@@ -815,7 +861,7 @@ export function AlertDialog({
             }
           }}
           onEscapeKeyDown={(event) => busy && event.preventDefault()}
-          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-dialog outline-none"
+          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none"
         >
           <AlertDialogPrimitive.Title className="text-heading2 font-semibold">{title}</AlertDialogPrimitive.Title>
           {description ? (
@@ -904,7 +950,7 @@ export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrim
 export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} data-slot="popover-content" position={position} className={cn(menuContentClass, "max-h-72 origin-[var(--radix-select-content-transform-origin)]", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
 export const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>>(function SelectItem({ className, children, ...props }, ref) { return <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}><span className="absolute left-2"><SelectPrimitive.ItemIndicator><Check className="size-3.5" /></SelectPrimitive.ItemIndicator></span><SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText></SelectPrimitive.Item>; });
 
-export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-transform duration-150 ease-out data-[state=checked]:translate-x-[18px]" /></SwitchPrimitive.Root>; });
+export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" /></SwitchPrimitive.Root>; });
 export const RadioGroup = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Root>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & { orientation?: "horizontal" | "vertical" }>(function RadioGroup({ className, orientation, ...props }, ref) { return <RadioGroupPrimitive.Root ref={ref} className={cn("flex gap-3", orientation === "vertical" && "flex-col", className)} {...props} />; });
 export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
 

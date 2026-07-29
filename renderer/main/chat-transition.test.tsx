@@ -43,6 +43,7 @@ test("chat pane owns its own per-chat reset instead of relying on a remount", ()
     "setStreamingReasoning(null)",
     "setStreamComplete(false)",
     "setGenerationTimeline(null)",
+    "setLiveSubagents([])",
     "setError(null)",
     "setApprovals([])",
   ]) {
@@ -61,6 +62,36 @@ test("per-chat reset runs before paint so no frame carries the outgoing chat", (
   );
 });
 
+test("leaving a chat releases its Environment subagent owner before paint", () => {
+  const pane = source("./chat-pane.tsx");
+
+  assert.match(
+    pane,
+    /React\.useLayoutEffect\(\(\) => \{\s*if \(!effectiveWorkspaceId\) return;\s*return \(\) => environmentPanel\.releaseSubagents\(chatId, effectiveWorkspaceId\)/u,
+  );
+  assert.match(pane, /\[chatId, effectiveWorkspaceId, environmentPanel\.releaseSubagents\]/u);
+});
+
+test("a stale send cannot clear the next chat's starting-generation guard", () => {
+  const pane = source("./chat-pane.tsx");
+  const handleSend = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
+
+  assert.match(
+    handleSend,
+    /mountedRef\.current &&\s*chatIdRef\.current === chatId &&\s*generationIntentRef\.current === generationIntent/u,
+  );
+  assert.match(handleSend, /setIsStartingGeneration\(false\)/u);
+  assert.doesNotMatch(
+    handleSend,
+    /finally \{\s*setIsStartingGeneration\(false\)/u,
+    "An obsolete append must not clear a newer chat's busy ownership.",
+  );
+});
+
 test("composer stays keyed so drafts and attachments do not leak between chats", () => {
   const pane = source("./chat-pane.tsx");
   const composer = between(pane, "<Composer", "readinessMessage=");
@@ -69,7 +100,10 @@ test("composer stays keyed so drafts and attachments do not leak between chats",
   // The key is load-bearing: Composer holds this state with no chatId reset.
   const composerSource = source("../components/composer.tsx");
   assert.match(composerSource, /const \[text, setText\] = React\.useState\(""\)/u);
-  assert.match(composerSource, /const \[attachments, setAttachments\] = React\.useState<Attachment\[\]>\(\[\]\)/u);
+  assert.match(
+    composerSource,
+    /const \[attachments, setAttachments\] = React\.useState<Attachment\[\]>\(\[\]\)/u,
+  );
 });
 
 test("scroll area settles scroll position before paint, not a frame later", () => {
@@ -77,7 +111,7 @@ test("scroll area settles scroll position before paint, not a frame later", () =
   const scrollArea = between(ui, "export function ScrollArea(", "type DialogProps");
   const effect = between(
     scrollArea,
-    "if (autoScrollToBottom && atBottomRef.current) scrollToBottom(\"auto\");",
+    'if (autoScrollToBottom && atBottomRef.current) scrollToBottom("auto");',
     "resizeObserver.observe(element);",
   );
 
@@ -94,7 +128,10 @@ test("scroll area still pads the viewport for its overlaid chrome", () => {
 
   // Toolbar and footer are absolutely positioned, so the viewport must reserve
   // their measured height or the composer overlaps the transcript.
-  assert.match(scrollArea, /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u);
+  assert.match(
+    scrollArea,
+    /style=\{\{ paddingTop: toolbarHeight, paddingBottom: footerHeight \}\}/u,
+  );
   assert.match(scrollArea, /ref=\{toolbarRef\}[^>]*absolute inset-x-0 top-0/u);
   assert.match(scrollArea, /ref=\{footerRef\}[^>]*absolute inset-x-0 bottom-0/u);
 });
@@ -103,7 +140,10 @@ test("sidebar prefetches a chat before the click so the pane does not blank", ()
   const sidebar = source("../components/chat-sidebar.tsx");
 
   assert.match(sidebar, /const prefetchChat = React\.useCallback\(/u);
-  assert.match(sidebar, /qc\.prefetchQuery\(\{\s*queryKey: queryKeys\.chat\(id\),\s*queryFn: \(\) => chatsApi\.get\(id\),/u);
+  assert.match(
+    sidebar,
+    /qc\.prefetchQuery\(\{\s*queryKey: queryKeys\.chat\(id\),\s*queryFn: \(\) => chatsApi\.get\(id\),/u,
+  );
   assert.match(sidebar, /onPointerEnter=\{\(\) => prefetchChat\(chat\.id\)\}/u);
   assert.match(sidebar, /onFocus=\{\(\) => prefetchChat\(chat\.id\)\}/u);
 });

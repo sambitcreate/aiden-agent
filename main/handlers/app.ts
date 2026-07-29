@@ -17,6 +17,8 @@
  */
 
 import { app, logger } from "../platform.js";
+import { currentRuntimeProfile } from "../runtime-profile.js";
+import { subagentsEnabled } from "../services/subagents/feature-flag.js";
 
 // App handlers - these are the methods your app provides to the frontend
 export const appHandlers = {
@@ -26,7 +28,10 @@ export const appHandlers = {
     return {
       name: app.getName(),
       version: app.getVersion(),
-      environment: process.env.NODE_ENV || "production",
+      environment: currentRuntimeProfile().id,
+      capabilities: {
+        subagents: subagentsEnabled(),
+      },
     };
   },
 

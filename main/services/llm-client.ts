@@ -9,7 +9,7 @@
 // hook and waits for the user to Allow or Deny in the UI.
 
 import { Agent } from "@earendil-works/pi-agent-core";
-import { logger } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, skillToolKey } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
@@ -27,13 +27,16 @@ import {
   terminalGenerationError,
   terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
+  waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
+import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import type {
   ApprovalDecision,
+  Chat,
   ChatStartParams,
   DiscoveredSkill,
   Skill,
@@ -63,6 +66,7 @@ import {
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
+import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -72,11 +76,33 @@ import {
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import {
-  startLocalModelLoadMonitor,
-  type LocalModelLoadMonitor,
-} from "./local-runtime-status.js";
+import { startLocalModelLoadMonitor, type LocalModelLoadMonitor } from "./local-runtime-status.js";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
+import { buildAssistantSystemPrompt } from "./assistant/system-prompt.js";
+import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
+import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
+import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { createSubagentTool } from "./subagents/subagent-tool.js";
+import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
+import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
+import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./subagents/role-catalog.js";
+import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
+import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { subagentHealthMetrics } from "./subagents/subagent-health-metrics.js";
+import { subagentRuntimeRegistry } from "./subagents/child-agent-runtime.js";
+import {
+  isSafeSubagentIdentifier,
+  subagentMessageReference,
+} from "../../renderer/shared/subagent-runs.js";
+import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { ChatDeletionGate } from "./chat-deletion-gate.js";
+import { authoritativeChatWorkspaceId } from "./chat-workspace-authority.js";
+import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
+import { ChatTurnAdmission } from "./chat-turn-admission.js";
+import type { ChatTurnLease } from "./chat-turn-admission.js";
+import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+
+subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
 
 type GenerationPermission = WorkspacePermission | "read-only";
 
@@ -91,6 +117,10 @@ export interface GenerationExecutionOptions {
   usageSource?: UsageRequestSource;
   /** Withhold connector tools when their mutation semantics cannot be enforced. */
   allowMcpTools?: boolean;
+  /** Internal foreground policy; scheduled/background callers explicitly disable delegation. */
+  allowSubagents?: boolean;
+  /** Main-owned lease token spanning user-message persistence through generation registration. */
+  turnId?: string;
 }
 
 interface LoadMonitorState {
@@ -111,6 +141,8 @@ interface ActiveGeneration {
 }
 
 const active = new Map<string, ActiveGeneration>();
+const CHAT_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
+const WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS = 5_000;
 const initializing = new Map<
   string,
   {
@@ -126,9 +158,35 @@ const initializing = new Map<
 >();
 const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
+const chatDeletionGate = new ChatDeletionGate();
+const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+const chatTurnAdmission = new ChatTurnAdmission();
 const geminiContextCache = new GeminiContextCache({
   onWarning: (message, error) => logger.warn("pi", message, error),
 });
+
+function chatHasGenerationOwnership(chatId: string): boolean {
+  return (
+    [...initializing.values()].some((entry) => entry.chatId === chatId) ||
+    [...active.values()].some((entry) => entry.chatId === chatId) ||
+    subagentRuntimeRegistry.hasChatChildren(chatId)
+  );
+}
+
+function broadcastChatSettled(
+  chatId: string,
+  workspaceId: string | undefined,
+  fallbackWorkspaceId: string | undefined,
+): void {
+  const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
+  if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
+    return;
+  }
+  ipcMain.broadcast("chats:settled", {
+    chatId,
+    workspaceId: normalizedWorkspaceId,
+  });
+}
 
 function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
@@ -169,7 +227,10 @@ const approvals = new ToolApprovalCoordinator((prompt) => {
     throw new Error("The generation's renderer document is no longer active.");
   }
 });
-const SHUTDOWN_GENERATION_GRACE_MS = 5_000;
+// A parent can be waiting for a child that is still constructing its tools.
+// Give the child's own bounded cancellation drain time to report a cleanup
+// miss before the outer parent shutdown deadline can release a soak receipt.
+const SHUTDOWN_GENERATION_GRACE_MS = DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS + 1_000;
 
 function resetGenerationAgent(agent: Agent, streamId: string): void {
   try {
@@ -181,10 +242,7 @@ function resetGenerationAgent(agent: Agent, streamId: string): void {
 
 /** Escape text interpolated into the XML-ish skill listing (skill files are untrusted input). */
 function escapeSkillXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function formatAvailableSkills(
@@ -193,7 +251,10 @@ function formatAvailableSkills(
 ): string | undefined {
   // Keyed by the same tool key buildAgentTools uses, so every listed skill
   // maps to an actual tool and collisions resolve the same way.
-  const byTool = new Map<string, { name: string; description: string; tool: string; location: string }>();
+  const byTool = new Map<
+    string,
+    { name: string; description: string; tool: string; location: string }
+  >();
   for (const skill of discovered) {
     byTool.set(skillToolKey(skill), {
       name: skill.name,
@@ -223,7 +284,9 @@ function formatAvailableSkills(
     ...list.flatMap((skill) => [
       "  <skill>",
       `    <name>${escapeSkillXml(skill.name)}</name>`,
-      ...(skill.description ? [`    <description>${escapeSkillXml(skill.description)}</description>`] : []),
+      ...(skill.description
+        ? [`    <description>${escapeSkillXml(skill.description)}</description>`]
+        : []),
       `    <tool>${skill.tool}</tool>`,
       `    <location>${escapeSkillXml(skill.location)}</location>`,
       "  </skill>",
@@ -236,6 +299,7 @@ async function buildSystemPrompt(
   folderPath: string | undefined,
   branch: string | undefined,
   permission: GenerationPermission,
+  subagentsAvailable: boolean,
 ): Promise<string> {
   const base =
     "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
@@ -256,6 +320,9 @@ async function buildSystemPrompt(
     permission === "read-only"
       ? "All file paths are relative to this folder. If the request requires a mutation, explain that this scheduled run is read-only."
       : "All file paths are relative to this folder. Prefer editing existing files over creating new ones, read a file before editing it, and keep changes surgical. ";
+  const delegation = subagentsAvailable
+    ? ` Use the subagent tool for independent bounded investigation, comparison, planning, or fresh review—not trivial work—and always reconcile its ordered results yourself. ${SUBAGENT_PARENT_SECURITY_GUIDANCE}`
+    : "";
   return (
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
@@ -266,22 +333,32 @@ async function buildSystemPrompt(
       : permission === "full"
         ? "You may make changes and run commands directly."
         : "") +
+    delegation +
     skillsSuffix
   );
 }
 
 async function prepareGeneration(
   streamId: string,
-  params: ChatStartParams,
+  params: ChatStartParams & { workspaceId: string },
+  chat: Chat,
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
   options: GenerationExecutionOptions,
 ) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
-  const workspace = params.workspaceId
-    ? await configStore.getWorkspace(params.workspaceId)
-    : undefined;
+  const assistantMode = params.mode === "assistant" || params.mode === "assistant-unattended";
+  // Assistant mode is never folder-scoped. Resolving a caller-supplied
+  // workspaceId here would bind the Aiden persona — "you cannot run commands" —
+  // to that folder's coding tools at that folder's permission, and a "full"
+  // workspace skips approval entirely. The reserved assistant workspace exists
+  // to hold threads, not to grant access.
+  const workspace =
+    params.workspaceId && !assistantMode
+      ? await configStore.getWorkspace(params.workspaceId)
+      : undefined;
+  if (workspace) await assertManagedWorktreeAdmission(workspace);
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
@@ -303,12 +380,11 @@ async function prepareGeneration(
     model,
     params.thinkingLevel ?? savedThinkingLevel,
   );
-  const chat = settings.computerUseEnabled ? await chatStore.get(params.chatId) : null;
   let computerUse: ComputerUseController | undefined;
   if (
     options.allowComputerUse !== false &&
     settings.computerUseEnabled === true &&
-    chat?.computerUseEnabled === true &&
+    chat.computerUseEnabled === true &&
     computerUseGenerationGate.isCurrent(computerUseGateSnapshot)
   ) {
     const status = await computerUseStatus.status({ signal });
@@ -325,14 +401,59 @@ async function prepareGeneration(
     }
   }
   const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
+  const allowSubagents = subagentsAllowedForGeneration({
+    assistantMode,
+    allowSubagents: options.allowSubagents,
+    usageSource: options.usageSource,
+    excludedToolNames: options.excludeToolNames,
+    workspaceId: workspace?.id,
+    folderPath,
+    permission,
+  });
+  const subagentSupervisor =
+    allowSubagents && folderPath && workspace?.id
+      ? new SubagentSupervisor({
+          generationId: streamId,
+          chatId: params.chatId,
+          workspaceId: workspace.id,
+          runtime,
+          workspaceRoot: folderPath,
+          permission: toolPermission,
+          inheritedCeiling: inheritedSubagentReadToolCeiling(options.excludeToolNames),
+          healthMetrics: subagentHealthMetrics,
+          projector: new SubagentEventProjector({
+            generationId: streamId,
+            chatId: params.chatId,
+            workspaceId: workspace.id,
+            modelId: model.id,
+            onSnapshot: async (snapshot) => {
+              await subagentRunStore.upsert(snapshot);
+              sendGeneration(streamId, "chat:subagents", {
+                streamId,
+                snapshot,
+              });
+            },
+          }),
+        })
+      : undefined;
+  // The Aiden assistant surface has no approval affordance, so it must not be
+  // handed any tool that can pause for one. Scheduling is the live example:
+  // schedule_task blocks on ToolApprovalCoordinator, which never times out, so
+  // an unapprovable call would hang the panel with no error. Connector tools go
+  // for the same reason — their mutation semantics cannot be enforced here.
   const tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       permission: toolPermission,
       computerUse,
-      allowScheduling: !options.excludeToolNames?.has("schedule_task"),
-      allowMcpTools: options.allowMcpTools,
+      allowScheduling: !assistantMode && !options.excludeToolNames?.has("schedule_task"),
+      allowMcpTools: assistantMode ? false : options.allowMcpTools,
+      allowSubagents,
+      mode: assistantMode ? "assistant" : undefined,
+      createSubagentTool: subagentSupervisor
+        ? () => createSubagentTool(subagentSupervisor)
+        : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   let googleWorkspaceSnapshot: string | undefined;
@@ -367,6 +488,11 @@ async function prepareGeneration(
     computerUse,
     googleWorkspaceSnapshot,
     workspaceId: workspace?.id,
+    subagentSupervisor,
+    // The Aiden system prompt reads its approval posture from settings, which
+    // are already loaded here; re-reading them at the prompt site would be a
+    // second disk round trip inside the generation's hot path.
+    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -377,36 +503,83 @@ export const llmClient = {
     owner: ChatGenerationOwner,
     options: GenerationExecutionOptions = {},
   ): Promise<boolean> {
-    if (chatComputerUseMutationGate.isChanging(params.chatId)) {
-      throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
-    }
-    if (initializing.has(streamId) || active.has(streamId)) {
-      throw new Error("A generation with this stream id is already running.");
-    }
-    if (this.isChatBusy(params.chatId)) {
-      throw new Error("This chat already has a response in progress.");
+    const turnId = options.turnId;
+    const ownsTurn =
+      typeof turnId === "string" &&
+      turnId.length > 0 &&
+      chatTurnAdmission.owns(params.chatId, turnId, owner.documentId);
+    try {
+      if (!ownsTurn) {
+        throw new Error("This message turn expired before generation could start.");
+      }
+      if (chatDeletionGate.isDeleting(params.chatId)) {
+        throw new Error("This chat is being deleted.");
+      }
+      if (chatComputerUseMutationGate.isChanging(params.chatId)) {
+        throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
+      }
+      if (chatWorkspaceMutationGate.isChanging(params.chatId)) {
+        throw new Error("This chat is changing workspaces. Try again in a moment.");
+      }
+      if (initializing.has(streamId) || active.has(streamId)) {
+        throw new Error("A generation with this stream id is already running.");
+      }
+      if (chatHasGenerationOwnership(params.chatId)) {
+        throw new Error("This chat already has a response in progress.");
+      }
+    } catch (error) {
+      if (turnId) {
+        chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
+      }
+      throw error;
     }
     const initialization = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: () => {},
-      workspaceId: params.workspaceId,
+      workspaceId: undefined as string | undefined,
       cancelRequested: false,
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
       loadMonitor: undefined as LoadMonitorState | undefined,
     };
     const computerUseGateSnapshot = computerUseGenerationGate.snapshot();
-    initializing.set(streamId, initialization);
+    if (
+      !turnId ||
+      !chatTurnAdmission.handoff(params.chatId, turnId, owner.documentId, () => {
+        initializing.set(streamId, initialization);
+      })
+    ) {
+      throw new Error("This message turn expired before generation could start.");
+    }
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
       this.cancel(streamId);
     });
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     try {
+      const chat = await chatStore.get(params.chatId);
+      if (!chat) {
+        throw new Error("This chat is no longer available.");
+      }
+      if (chatDeletionGate.isDeleting(params.chatId)) {
+        throw new Error("This chat is being deleted.");
+      }
+      const authoritativeWorkspaceId = authoritativeChatWorkspaceId(
+        chat.workspaceId,
+        params.workspaceId,
+      );
+      initialization.workspaceId = authoritativeWorkspaceId;
+      if (workspaceMutationGate.isChanging(authoritativeWorkspaceId)) {
+        throw new Error("The workspace is changing. Try again in a moment.");
+      }
+      if (initialization.controller.signal.aborted) {
+        throw initialization.controller.signal.reason;
+      }
       setup = await prepareGeneration(
         streamId,
-        params,
+        { ...params, workspaceId: authoritativeWorkspaceId },
+        chat,
         initialization.controller.signal,
         computerUseGateSnapshot,
         (computerUse) => {
@@ -419,10 +592,12 @@ export const llmClient = {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
+        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
+      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const {
@@ -436,6 +611,8 @@ export const llmClient = {
       computerUse,
       googleWorkspaceSnapshot,
       workspaceId,
+      assistantSettingsPermission,
+      subagentSupervisor,
     } = setup;
     initialization.computerUse = computerUse;
     const { model } = runtime;
@@ -483,10 +660,14 @@ export const llmClient = {
       reasoning: string,
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
     ) => {
-      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0) {
+      const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
+      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0 && !subagents) {
         return { chat: undefined, error: undefined };
       }
       try {
+        // The inspector store is authoritative. Never announce terminal chat
+        // completion before every accepted child snapshot is durable.
+        await subagentSupervisor?.flush();
         const chat = await chatStore.appendMessage(
           params.chatId,
           {
@@ -495,15 +676,20 @@ export const llmClient = {
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
             timeline: finalTimeline.steps.length ? finalTimeline : undefined,
+            subagents,
           },
-          { providerId: params.providerId, model: params.model },
+          {
+            providerId: params.providerId,
+            model: params.model,
+            expectedWorkspaceId: initialization.workspaceId,
+          },
         );
         return { chat, error: undefined };
       } catch (error) {
         logger.error("pi", `Could not persist response for stream ${streamId}`, error);
         return {
           chat: undefined,
-          error: error instanceof Error ? error.message : String(error),
+          error: "local storage failed",
         };
       }
     };
@@ -515,7 +701,20 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
-      const systemPrompt = await buildSystemPrompt(folderPath, git.branch, permission);
+      const systemPrompt =
+        params.mode === "assistant" || params.mode === "assistant-unattended"
+          ? buildAssistantSystemPrompt({
+              settingsSections: SETTINGS_SECTIONS,
+              settingsPermission: assistantSettingsPermission,
+              availableTools: tools.map((tool) => tool.name),
+              unattended: params.mode === "assistant-unattended",
+            })
+          : await buildSystemPrompt(
+              folderPath,
+              git.branch,
+              permission,
+              tools.some((tool) => tool.name === "subagent"),
+            );
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -765,10 +964,12 @@ export const llmClient = {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
+        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
+      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const agent = candidate;
@@ -776,6 +977,7 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
+      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
 
@@ -784,7 +986,7 @@ export const llmClient = {
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
-      workspaceId: params.workspaceId,
+      workspaceId: initialization.workspaceId,
       cancelRequested: false,
       computerUse,
       completion: null,
@@ -803,6 +1005,7 @@ export const llmClient = {
       sendGeneration(streamId, "chat:done", { streamId, content: "" });
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
+      broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
       return false;
     }
 
@@ -889,6 +1092,7 @@ export const llmClient = {
         } finally {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
+          broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
         }
       }
     })();
@@ -921,19 +1125,103 @@ export const llmClient = {
       endLoadMonitor(generation, streamId, false);
       void generation.computerUse?.close();
     }
+    subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
     return true;
   },
 
   isChatBusy(chatId: string): boolean {
+    return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+  },
+
+  /** Detect only orphaned renderer ownership; normal visible generations never delay reads. */
+  isChatOwnedByInactiveRenderer(chatId: string): boolean {
     return (
-      [...initializing.values()].some((entry) => entry.chatId === chatId) ||
-      [...active.values()].some((entry) => entry.chatId === chatId)
+      [...initializing.values()].some(
+        (entry) => entry.chatId === chatId && entry.owner.id !== 0 && entry.owner.isDestroyed(),
+      ) ||
+      [...active.values()].some(
+        (entry) => entry.chatId === chatId && entry.owner.id !== 0 && entry.owner.isDestroyed(),
+      )
     );
+  },
+
+  /** Wait for terminal persistence without cancelling work owned by another document. */
+  async waitForChatIdle(chatId: string): Promise<boolean> {
+    const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
+    while (this.isChatBusy(chatId)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      const completions = [...active.values()]
+        .filter((entry) => entry.chatId === chatId && entry.completion)
+        .map((entry) => entry.completion!);
+      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+      if (completions.length > 0) {
+        await Promise.race([Promise.allSettled(completions), pause]);
+      } else {
+        await pause;
+      }
+    }
+    return true;
+  },
+
+  /** Stop and drain foreground work before cross-store chat deletion begins. */
+  async cancelChat(chatId: string): Promise<void> {
+    for (const [streamId, entry] of [...initializing.entries()]) {
+      if (entry.chatId === chatId) this.cancel(streamId);
+    }
+    for (const [streamId, entry] of [...active.entries()]) {
+      if (entry.chatId === chatId) this.cancel(streamId);
+    }
+    subagentRuntimeRegistry.abortChat(chatId);
+    const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
+    while (this.isChatBusy(chatId)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("Aiden could not stop this chat before deletion.");
+      }
+      const completions = [...active.values()]
+        .filter((entry) => entry.chatId === chatId && entry.completion)
+        .map((entry) => entry.completion!);
+      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+      if (completions.length > 0) {
+        await Promise.race([Promise.allSettled(completions), pause]);
+      } else {
+        await pause;
+      }
+    }
+  },
+
+  /** Close generation admission before chat deletion performs its first await. */
+  beginChatDeletion(chatId: string): () => void {
+    return chatDeletionGate.begin(chatId);
   },
 
   beginComputerUseSettingChange(chatId: string): (() => void) | null {
     return chatComputerUseMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
+  },
+
+  beginChatWorkspaceChange(chatId: string): (() => void) | null {
+    if (chatDeletionGate.isDeleting(chatId)) return null;
+    return chatWorkspaceMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
+  },
+
+  /** Claim one append-to-generation turn before its first persistence await. */
+  beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null {
+    if (
+      !turnId ||
+      !ownerId ||
+      chatDeletionGate.isDeleting(chatId) ||
+      chatWorkspaceMutationGate.isChanging(chatId) ||
+      chatComputerUseMutationGate.isChanging(chatId)
+    ) {
+      return null;
+    }
+    return chatTurnAdmission.tryBegin(chatId, turnId, ownerId, chatHasGenerationOwnership(chatId));
+  },
+
+  abandonChatTurn(chatId: string, turnId: string, ownerId: string): boolean {
+    return chatTurnAdmission.releaseMatching(chatId, turnId, ownerId);
   },
 
   /** Closing the global gate cancels every snapshot that could race the setting change. */
@@ -948,25 +1236,24 @@ export const llmClient = {
     }
   },
 
-  /** Stop generations whose tool set was snapshotted from this workspace. */
-  cancelWorkspace(workspaceId: string): void {
-    for (const [streamId, initialization] of initializing.entries()) {
-      if (initialization.workspaceId === workspaceId) {
-        initialization.cancelRequested = true;
-        initialization.controller.abort(new Error("Workspace generation cancelled."));
-        endLoadMonitor(initialization, streamId, false);
-        void initialization.computerUse?.close();
-      }
-    }
-    for (const [streamId, entry] of active.entries()) {
-      if (entry.workspaceId === workspaceId) {
-        entry.cancelRequested = true;
-        entry.agent.abort();
-        endLoadMonitor(entry, streamId, false);
-        void entry.computerUse?.close();
-      }
-    }
-    void geminiContextCache.invalidateWorkspace(workspaceId);
+  /** Stop and drain generations before a workspace authority boundary changes. */
+  async cancelWorkspaceAndSettle(workspaceId: string): Promise<void> {
+    await cancelWorkspaceGenerationsAndSettle({
+      workspaceId,
+      initializations: () => initializing,
+      active: () => active,
+      cancel: (streamId) => {
+        this.cancel(streamId);
+      },
+      abortChildren: (targetWorkspaceId) => {
+        subagentRuntimeRegistry.abortWorkspace(targetWorkspaceId);
+      },
+      hasChildren: (targetWorkspaceId) =>
+        subagentRuntimeRegistry.hasWorkspaceChildren(targetWorkspaceId),
+      timeoutMessage: "Aiden could not stop this workspace before changing its access.",
+      timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
+    });
+    await geminiContextCache.invalidateWorkspace(workspaceId);
   },
 
   abortAll(): void {
@@ -975,18 +1262,30 @@ export const llmClient = {
     approvals.shutdown();
   },
 
-  async shutdown(): Promise<void> {
+  async shutdown(): Promise<boolean> {
     this.abortAll();
+    const deadline = Date.now() + SHUTDOWN_GENERATION_GRACE_MS;
     const generations = [...active.values()];
-    await settleGenerationCleanup(
+    const activeSettled = await settleGenerationCleanup(
       generations.map((entry) => ({
         reset: () => entry.agent.reset(),
         close: entry.computerUse ? () => entry.computerUse!.close() : undefined,
         completion: entry.completion,
       })),
-      SHUTDOWN_GENERATION_GRACE_MS,
+      Math.max(0, deadline - Date.now()),
       (error) => logger.warn("pi", "Could not clear one generation during shutdown.", error),
     );
+    // A parent can still be preparing when shutdown begins. Its controller was
+    // aborted above, but do not report a clean lifecycle until it leaves the
+    // initializing map (or its late active handoff does) within the same bound.
+    const parentStateCleared =
+      activeSettled &&
+      (await waitForGenerationStateClear(
+        () => initializing.size > 0 || active.size > 0,
+        () => [...active.values()].map((entry) => entry.completion),
+        deadline,
+      ));
     await geminiContextCache.shutdown();
+    return activeSettled && parentStateCleared;
   },
 };
