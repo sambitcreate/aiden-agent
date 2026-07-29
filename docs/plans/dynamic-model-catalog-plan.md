@@ -1,6 +1,8 @@
 # Dynamic Model Catalog Plan
 
-Status: implementation plan only  
+Status: Partial — Pi's device-local models store, cache-only hydration, and explicit
+provider refresh are implemented; the remote overlay for otherwise-static hosted
+providers is not.
 Date: 2026-07-24  
 Source audited: local `/Users/sambitbiswas/projects/pi` (`packages/coding-agent` remote catalog + `packages/ai` Models/ModelsStore)  
 Related: `docs/plans/pi-provider-integration-plan.md` (Phases 1–2 already call for `ModelsStore` + refresh; this plan owns the **remote overlay** that plan deferred)
@@ -29,10 +31,10 @@ When this ships:
 
 | Layer | Today | Gap |
 | --- | --- | --- |
-| Selectable hosted models | Mostly Pi `getBuiltinModels` / `builtinModels()` static lists; Google/Codex use Pi-native slices | New upstream models require a Pi pin bump **and** an Aiden release |
+| Selectable hosted models | Pi `builtinModels()` is authoritative for built-ins and provider-owned dynamic catalogs | Providers without their own dynamic fetch still require a Pi pin bump **and** an Aiden release |
 | Capability metadata | Bundled `resources/model-capabilities.json` via `npm run models:refresh`; AA device cache on Connect & fetch | Offline by design; not the Opus-5 availability problem |
-| Pi registry | `ProviderRegistry` + `builtinModels({ credentials })` | No `modelsStore`; no `refresh()` wiring; no remote overlay |
-| Planned store | `pi-models-store.ts` named in provider plan Phase 1 | **Not implemented yet** |
+| Pi registry | `ProviderRegistry` + `builtinModels({ credentials, modelsStore })`; cache-only hydration and explicit force refresh are wired | No Aiden-owned remote overlay for otherwise-static providers |
+| Device-local store | `pi-models-store.ts` persists Pi `ModelsStoreEntry` snapshots under Electron `userData` | The store can retain provider-owned dynamic results, but it cannot create a remote path for a static provider |
 
 Pi coding-agent reference (do not import the package; mirror the pattern):
 
