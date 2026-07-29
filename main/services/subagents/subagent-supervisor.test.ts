@@ -715,6 +715,68 @@ test("child runner bounds non-cooperative deadlines and output-limit cancellatio
   assert.equal(turnControl.cancelCount, 1);
 });
 
+test("child event guard ignores provider text chunking but still bounds lifecycle events", async () => {
+  const streamedControl = fakeChild(async ({ emit }) => {
+    const message = assistant("abcde");
+    await emit({ type: "message_start", message } as AgentEvent);
+    for (const delta of ["a", "b", "c", "d", "e"]) {
+      await emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: {
+          type: "text_delta",
+          contentIndex: 0,
+          delta,
+          partial: message,
+        },
+      } as AgentEvent);
+    }
+    await emit({ type: "message_end", message } as AgentEvent);
+  });
+  const streamed = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    groupId: "stream-chunks",
+    runtime: runtime(),
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Stream", task: "Return a chunked report." },
+    policy: { maxEvents: 2, maxOutputChars: 10 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => streamedControl.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(streamed.status, "completed");
+  assert.equal(streamed.summary, "abcde");
+  assert.equal(streamedControl.cancelCount, 0);
+
+  const lifecycleControl = fakeChild(async ({ emit }) => {
+    await emit({ type: "agent_start" } as AgentEvent);
+    await emit({ type: "agent_start" } as AgentEvent);
+    await emit({ type: "agent_start" } as AgentEvent);
+  });
+  const lifecycleLimited = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    groupId: "lifecycle-events",
+    runtime: runtime(),
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Bound", task: "Emit too many lifecycle events." },
+    policy: { maxEvents: 2 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => lifecycleControl.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(lifecycleLimited.status, "failed");
+  assert.match(lifecycleLimited.warning ?? "", /event limit/u);
+  assert.equal(lifecycleControl.cancelCount, 1);
+});
+
 test("child deadline includes construction and drains cancellation before returning", async () => {
   let constructionCleanupFailures = 0;
   const hungConstruction = await runSubagentChild({
@@ -858,6 +920,25 @@ test("model-facing tool is sequential and delegates validated tasks to the super
   const tool = createSubagentTool(supervisor);
   assert.equal(tool.name, "subagent");
   assert.equal(tool.executionMode, "sequential");
+  const wireSchema = JSON.parse(JSON.stringify(tool.parameters)) as {
+    properties: {
+      tasks: {
+        items: {
+          properties: {
+            role: {
+              type?: string;
+              enum?: string[];
+              anyOf?: unknown;
+            };
+          };
+        };
+      };
+    };
+  };
+  const roleSchema = wireSchema.properties.tasks.items.properties.role;
+  assert.equal(roleSchema.type, "string");
+  assert.deepEqual(roleSchema.enum, ["scout", "planner", "reviewer"]);
+  assert.equal(roleSchema.anyOf, undefined);
   const result = await tool.execute("call", request(["Review"]));
   const block = result.content[0];
   assert.match(block?.type === "text" ? block.text : "", /## 1\. Review/);
