@@ -25,6 +25,7 @@ import { SUBAGENT_PARENT_SECURITY_GUIDANCE, subagentRoleSystemPrompt } from "./r
 import { sanitizeSubagentText } from "./safe-text.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
+import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 
 const TEST_SUPERVISOR_SCOPE = {
   chatId: "chat-test",
@@ -187,6 +188,56 @@ test("supervisor preflights the generation launch budget without partial launche
   assert.equal(supervisor.launchesUsed, 4);
   await supervisor.execute(request(["5"]));
   assert.equal(supervisor.launchesUsed, 5);
+});
+
+test("supervisor retries UUIDs that the renderer-safe boundary classifies as encoded text", async () => {
+  const encodedTextFalsePositive = "6423280b-1d2f-4726-b1f9-b0bd23f98aa9";
+  const safeRunNonce = "123e4567-e89b-42d3-a456-426614174000";
+  const candidates = [encodedTextFalsePositive, safeRunNonce];
+  let allocations = 0;
+  assert.equal(isSafeSubagentIdentifier(`run-${encodedTextFalsePositive}`), false);
+
+  const projector = new SubagentEventProjector({
+    generationId: "identifier-retry",
+    chatId: "chat-identifier-retry",
+    workspaceId: "workspace-identifier-retry",
+    modelId: "phase2-model",
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "identifier-retry",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    randomUUID: () => {
+      const candidate = candidates[allocations];
+      allocations += 1;
+      assert.ok(candidate);
+      return candidate;
+    },
+    runChild: async ({ request: task }) => completed(task.label),
+  });
+
+  await assert.doesNotReject(supervisor.execute(request(["Retry"])));
+  assert.equal(allocations, 2);
+  assert.deepEqual(
+    projector.snapshot().map(({ runId, childId, groupId, state }) => ({
+      runId,
+      childId,
+      groupId,
+      state,
+    })),
+    [
+      {
+        runId: `run-${safeRunNonce}`,
+        childId: `child-${safeRunNonce}`,
+        groupId: "identifier-retry:group-1",
+        state: "completed",
+      },
+    ],
+  );
 });
 
 test("an expired tree deadline launches no children and returns ordered timeouts", async () => {

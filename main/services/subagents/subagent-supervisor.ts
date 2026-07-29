@@ -2,6 +2,7 @@ import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { WorkspacePermission } from "../types.js";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
 import {
   MAX_SUBAGENT_LAUNCHES_PER_GENERATION,
   MAX_SUBAGENT_TOOL_RESULT_CHARS,
@@ -21,6 +22,7 @@ import { SubagentEventProjector, type SubagentRunIdentity } from "./subagent-eve
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
 
 export const DEFAULT_SUBAGENT_TREE_DEADLINE_MS = 10 * 60_000;
+const MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS = 128;
 
 export interface SubagentSupervisorPolicy {
   childDeadlineMs?: number;
@@ -42,6 +44,8 @@ export interface SubagentSupervisorInput {
   policy?: SubagentSupervisorPolicy;
   runChild?: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>;
   now?: () => number;
+  /** Test seam for deterministic opaque-identifier allocation. */
+  randomUUID?: () => string;
 }
 
 function safeFailedResult(request: SubagentTaskRequest): SubagentTaskResult {
@@ -122,6 +126,7 @@ export class SubagentSupervisor {
   private readonly cancellationGraceMs: number;
   private readonly launchBudget: number;
   private readonly runChild: (input: RunSubagentChildInput) => Promise<SubagentTaskResult>;
+  private readonly randomUUID: () => string;
 
   constructor(private readonly input: SubagentSupervisorInput) {
     this.now = input.now ?? (() => performance.now());
@@ -131,6 +136,7 @@ export class SubagentSupervisor {
     this.cancellationGraceMs =
       input.policy?.cancellationGraceMs ?? DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS;
     this.launchBudget = input.policy?.launchBudget ?? MAX_SUBAGENT_LAUNCHES_PER_GENERATION;
+    this.randomUUID = input.randomUUID ?? randomUUID;
     this.runChild =
       input.runChild ??
       ((childInput) =>
@@ -179,6 +185,18 @@ export class SubagentSupervisor {
     }
   }
 
+  private allocateSafeRunIdentity(): { runId: string; childId: string } {
+    for (let attempt = 0; attempt < MAX_SUBAGENT_IDENTIFIER_ALLOCATION_ATTEMPTS; attempt += 1) {
+      const nonce = this.randomUUID();
+      const runId = `run-${nonce}`;
+      const childId = `child-${nonce}`;
+      if (isSafeSubagentIdentifier(runId) && isSafeSubagentIdentifier(childId)) {
+        return { runId, childId };
+      }
+    }
+    throw new Error("Could not allocate a renderer-safe subagent identifier.");
+  }
+
   async execute(input: SubagentToolRequest | unknown, signal?: AbortSignal): Promise<string> {
     if (signal?.aborted) {
       throw signal.reason instanceof Error
@@ -197,11 +215,11 @@ export class SubagentSupervisor {
     this.calls += 1;
     const groupId = `${this.input.generationId}:group-${this.calls}`;
     const identities: SubagentRunIdentity[] = request.tasks.map(() => {
-      const nonce = randomUUID();
+      const { runId, childId } = this.allocateSafeRunIdentity();
       return {
-        runId: `run-${nonce}`,
+        runId,
         groupId,
-        childId: `child-${nonce}`,
+        childId,
       };
     });
     request.tasks.forEach((task, index) => {
