@@ -49,6 +49,62 @@ test("newAgent creates a chat in the active workspace", () => {
   );
 });
 
+test("downloaded updates appear immediately above Profile in the sidebar footer", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const footer = between(sidebar, "footer={", "\n        }");
+  const updateIndex = footer.indexOf("<UpdateReadyBanner");
+  const profileIndex = footer.indexOf('title="Profile"');
+  const settingsIndex = footer.indexOf('title="Settings"');
+
+  assert.notEqual(updateIndex, -1);
+  assert.ok(updateIndex < profileIndex, "the temporary update status should lead the footer");
+  assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
+});
+
+test("update-ready banner offers Later and a guarded restart action", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const banner = between(
+    sidebar,
+    "function UpdateReadyBanner",
+    "\n}\n\nfunction GeneratedTitleReveal",
+  );
+
+  assert.match(banner, /Update ready/u);
+  assert.match(banner, /Aiden Agent \{displayedVersion\}/u);
+  assert.match(banner, /Restart to finish installing\./u);
+  assert.match(banner, />\s*Later\s*</u);
+  assert.match(banner, /appUpdatesApi\.restart\(\)/u);
+  assert.match(banner, /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u);
+});
+
+test("update-ready banner uses the Aiden mark and shared compact-surface motion", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const styles = source("../styles.css");
+  const banner = between(
+    sidebar,
+    "function UpdateReadyBanner",
+    "\n}\n\nfunction GeneratedTitleReveal",
+  );
+
+  assert.match(sidebar, /const AIDEN_MARK_URL = new URL\("\.\.\/\.\.\/resources\/app-icon\.png"/u);
+  assert.match(banner, /<img src=\{AIDEN_MARK_URL\} alt="" className="size-8 shrink-0" \/>/u);
+  assert.doesNotMatch(sidebar, /CircleArrowUp/u);
+  assert.match(banner, /data-state=\{open \? "open" : "closed"\}/u);
+  assert.match(banner, /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u);
+  assert.match(
+    styles,
+    /@keyframes aiden-app-update-banner-in[\s\S]*translateY\(4px\) scale\(0\.98\)/u,
+  );
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="false"\] \.app-update-banner\[data-state="open"\][\s\S]*150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
+  );
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="false"\] \.app-update-banner\[data-state="closed"\][\s\S]*120ms ease-in/u,
+  );
+});
+
 test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
   const pane = source("../main/chat-pane.tsx");
   assert.doesNotMatch(pane, /SquarePen/u);
