@@ -43,6 +43,7 @@ import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
 import { appUpdateService } from "./services/app-updater.js";
+import type { AppUpdateRestartResult } from "../renderer/shared/app-update.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
@@ -96,7 +97,11 @@ let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
 let shutdownStarted = false;
+let installUpdateOnQuit = false;
 let pendingPackagedSubagentSoakReceipt: SubagentPackagedSoakSession | undefined;
+const disposeAppUpdateStateSubscription = appUpdateService.subscribe((snapshot) => {
+  ipcMain.broadcast("app:update-state", snapshot);
+});
 
 const SUBAGENT_PACKAGED_SOAK_WAIT_MS = 30_000;
 const SUBAGENT_PACKAGED_SOAK_POLL_MS = 25;
@@ -203,6 +208,7 @@ function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload
 function cleanupApplication(): void {
   if (cleanupStarted) return;
   cleanupStarted = true;
+  disposeAppUpdateStateSubscription();
   appUpdateService.dispose();
   disposeShortcut();
   disposeDictation();
@@ -300,6 +306,14 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     logger.error("main", "Application service shutdown did not complete cleanly.", error);
   }
   forceAppQuit = true;
+  if (installUpdateOnQuit) {
+    installUpdateOnQuit = false;
+    if (appUpdateService.installDownloadedUpdateAndRestart()) return;
+    logger.error(
+      "updater",
+      "The update installer did not start after shutdown; falling back to a normal quit.",
+    );
+  }
   app.quit();
 }
 
@@ -424,11 +438,11 @@ async function requestWindowReload(
   }
 }
 
-async function requestApplicationQuit(window: BrowserWindow): Promise<void> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return;
+async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
+  if (lifecycleCheckInFlight || window.isDestroyed()) return false;
   lifecycleCheckInFlight = true;
   try {
-    if (!(await authorizeProtectedAction(window, "close"))) return;
+    if (!(await authorizeProtectedAction(window, "close"))) return false;
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
@@ -445,17 +459,22 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<void> {
           noLink: true,
         });
       }
-      return;
+      return false;
     }
     protectedAction = "quit";
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
       computerUseSettings.resumeAfterCancelledShutdown();
-      return;
+      return false;
     }
     await shutdownAndQuit(true);
+    return shutdownStarted;
   } finally {
     lifecycleCheckInFlight = false;
+    if (!shutdownStarted && installUpdateOnQuit) {
+      installUpdateOnQuit = false;
+      appUpdateService.announceSnapshot();
+    }
   }
 }
 
@@ -473,6 +492,44 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
     saving: input.saving === true,
   };
   return true;
+});
+
+ipcMain.handle("app:getUpdateState", (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+    return {
+      status: "idle",
+      version: null,
+    };
+  }
+  return appUpdateService.snapshot();
+});
+
+ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+    return {
+      accepted: false,
+      reason: "unavailable",
+    };
+  }
+  if (lifecycleCheckInFlight || shutdownStarted) {
+    return {
+      accepted: false,
+      reason: "busy",
+    };
+  }
+  if (!appUpdateService.canInstallDownloadedUpdate()) {
+    return {
+      accepted: false,
+      reason: "not-ready",
+    };
+  }
+
+  const window = mainWindow;
+  installUpdateOnQuit = true;
+  setImmediate(() => void requestApplicationQuit(window));
+  return {
+    accepted: true,
+  };
 });
 
 ipcMain.handle("app:renderer-ready", (event) => {
