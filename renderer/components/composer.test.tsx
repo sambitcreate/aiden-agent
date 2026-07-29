@@ -20,6 +20,6 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
   assert.match(
     styles,
-    /:root :where\([\s\S]*?input:not\(\[type\]\),[\s\S]*?input:is\([\s\S]*?\),[\s\S]*?textarea[\s\S]*?\):focus-visible\s*\{\s*outline: none;\s*\}/u,
+    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
 });
