@@ -248,7 +248,7 @@ test("appearance normalization safely clamps user-controlled values", () => {
   assert.equal(normalizeAppearanceConfig({}).diffMarkers, "symbols");
 });
 
-test("the shared focus treatment rings actions but leaves text entry outline-free", () => {
+test("the shared focus treatment never draws an outline", () => {
   const styles = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   const ui = readFileSync(new URL("../components/ui.tsx", import.meta.url), "utf8");
   const assistantBubble = readFileSync(
@@ -257,11 +257,11 @@ test("the shared focus treatment rings actions but leaves text entry outline-fre
   );
   assert.match(
     styles,
-    /:root :where\([\s\S]*?\):focus-visible\s*\{[\s\S]*?outline: 2px solid var\(--focus-ring\);[\s\S]*?outline-offset: 2px;[\s\S]*?\}/u,
+    /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
-  assert.match(
+  assert.doesNotMatch(
     styles,
-    /:root :where\([\s\S]*?input:not\(\[type\]\),[\s\S]*?input:is\([\s\S]*?\),[\s\S]*?textarea[\s\S]*?\):focus-visible\s*\{\s*outline: none;\s*\}/u,
+    /:focus-visible\s*\{[\s\S]*?outline:\s*2px solid var\(--focus-ring\)/u,
   );
   assert.match(
     styles,
