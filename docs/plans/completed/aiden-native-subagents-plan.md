@@ -22,7 +22,8 @@ CLI/TUI extension.
 - Renderer state is owner-bound and sanitized. It never includes credentials,
   hidden prompts/reasoning, raw tool payloads, commands, absolute paths,
   environment values, or Pi artifact/session paths.
-- The feature remains behind `AIDEN_SUBAGENTS_ENABLED=1` through internal soak.
+- The feature shipped behind `AIDEN_SUBAGENTS_ENABLED=1` through internal soak
+  and is enabled by default after the completed Phase 5 gate.
 
 ## Delivery phases
 
@@ -56,6 +57,9 @@ hardening is unnecessary for a multi-user or shared-device release.
 - Focused contracts, the aggregate Subagents suite, type-check, lint, strict
   package verification, a 3-cycle smoke, and the default 100-cycle packaged
   soak all passed. Two fresh final adversarial reviewers returned clean verdicts.
+- Native subagents are enabled by default after that gate. Setting
+  `AIDEN_SUBAGENTS_ENABLED=0` remains an emergency rollback switch that removes
+  both the model-facing tool and renderer capability.
 
 ## Integration base decision
 

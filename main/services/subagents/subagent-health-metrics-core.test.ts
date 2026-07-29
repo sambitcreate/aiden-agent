@@ -281,8 +281,8 @@ test("a packaged-soak snapshot fails closed after a later aggregate write is dro
   await assert.rejects(service.snapshotForPackagedSoak(), /health metrics are incomplete/u);
 });
 
-test("health metrics use the existing subagent opt-in and remain disabled otherwise", () => {
-  assert.equal(subagentHealthMetricsEnabled({}), false);
-  assert.equal(subagentHealthMetricsEnabled({ AIDEN_SUBAGENT_HEALTH_METRICS_ENABLED: "1" }), false);
+test("health metrics follow the default-on subagent rollout and explicit rollback", () => {
+  assert.equal(subagentHealthMetricsEnabled({}), true);
+  assert.equal(subagentHealthMetricsEnabled({ AIDEN_SUBAGENTS_ENABLED: "0" }), false);
   assert.equal(subagentHealthMetricsEnabled({ AIDEN_SUBAGENTS_ENABLED: "1" }), true);
 });

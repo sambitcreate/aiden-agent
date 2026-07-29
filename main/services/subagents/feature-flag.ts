@@ -4,14 +4,17 @@ export const SUBAGENTS_FEATURE_FLAG = "AIDEN_SUBAGENTS_ENABLED";
 export const SUBAGENT_HISTORY_DISABLED_ERROR =
   "Subagent history is unavailable while subagents are disabled.";
 
-/** Subagents are internal opt-in until the packaged soak gate is complete. */
+/**
+ * Native subagents are available by default after the packaged soak gate.
+ * Keep the existing environment variable as an emergency rollback switch.
+ */
 export function subagentsEnabled(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
-  return environment[SUBAGENTS_FEATURE_FLAG] === "1";
+  return environment[SUBAGENTS_FEATURE_FLAG]?.trim() !== "0";
 }
 
-/** Aggregate release evidence exists only inside the same internal opt-in. */
+/** Aggregate release evidence follows the same runtime capability boundary. */
 export function subagentHealthMetricsEnabled(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {

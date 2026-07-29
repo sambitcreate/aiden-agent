@@ -130,8 +130,10 @@ function child(
   });
 }
 
-test("disabled registration never constructs or registers the subagent tool", () => {
-  assert.equal(subagentsEnabled({}), false);
+test("subagents default on after rollout and explicit rollback never constructs the tool", () => {
+  assert.equal(subagentsEnabled({}), true);
+  assert.equal(subagentsEnabled({ AIDEN_SUBAGENTS_ENABLED: "1" }), true);
+  assert.equal(subagentsEnabled({ AIDEN_SUBAGENTS_ENABLED: " 0 " }), false);
   const tools: AgentTool[] = [];
   let constructions = 0;
   const createTool = () => {
@@ -144,14 +146,11 @@ test("disabled registration never constructs or registers the subagent tool", ()
       execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: null }),
     };
   };
-  registerSubagentTool(tools, createTool, {});
+  registerSubagentTool(tools, createTool, { AIDEN_SUBAGENTS_ENABLED: "0" });
   assert.equal(constructions, 0);
   assert.equal(tools.length, 0);
-  assert.throws(
-    () => registerSubagentTool(tools, undefined, { AIDEN_SUBAGENTS_ENABLED: "1" }),
-    /construction is unavailable/,
-  );
-  registerSubagentTool(tools, createTool, { AIDEN_SUBAGENTS_ENABLED: "1" });
+  assert.throws(() => registerSubagentTool(tools, undefined, {}), /construction is unavailable/);
+  registerSubagentTool(tools, createTool, {});
   assert.equal(constructions, 1);
   assert.deepEqual(
     tools.map((tool) => tool.name),
@@ -161,10 +160,10 @@ test("disabled registration never constructs or registers the subagent tool", ()
 
 test("disabled history requests fail with a stable error before any read can begin", () => {
   assert.throws(
-    () => assertSubagentHistoryEnabled({}),
+    () => assertSubagentHistoryEnabled({ AIDEN_SUBAGENTS_ENABLED: "0" }),
     (error: unknown) => error instanceof Error && error.message === SUBAGENT_HISTORY_DISABLED_ERROR,
   );
-  assert.doesNotThrow(() => assertSubagentHistoryEnabled({ AIDEN_SUBAGENTS_ENABLED: "1" }));
+  assert.doesNotThrow(() => assertSubagentHistoryEnabled({}));
 });
 
 test("production tool assembly reaches the feature-gated lazy factory", async () => {
