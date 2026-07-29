@@ -1,6 +1,9 @@
 # Pi Provider Integration Plan
 
-Status: implementation plan only
+Status: Partial — Pi built-in registry, encrypted credential/model stores, generic
+authentication, native routing, explicit refresh, and voice credential lookup are
+implemented. Pi-native custom-endpoint composition, assistant-message provenance,
+large-catalog recovery/virtualization, and rollout cleanup remain open.
 Date: 2026-07-19
 Pi source audited: [`earendil-works/pi`](https://github.com/earendil-works/pi) at `3da591ab`
 Target reviewed Pi release: `0.80.10`
@@ -8,6 +11,28 @@ Target reviewed Pi release: `0.80.10`
 ## Outcome
 
 Aiden should make Pi's `Models` collection the only authority for chat providers, models, authentication, catalog refresh, and streaming. It should not add more entries to Aiden's seven-item preset array.
+
+## Current implementation status (2026-07-29)
+
+Shipped in the current branch:
+
+- `ProviderRegistry` owns every Pi built-in through `builtinModels()`, with encrypted
+  Pi credentials and a device-local Pi models store.
+- Provider-owned setup flows, renderer-safe auth prompts, availability checks,
+  cache-only catalog hydration, explicit refresh, and native Pi streaming are wired.
+- OpenAI and Google transcription resolve API-key credentials through the Pi store.
+- Legacy built-in IDs and keys have guarded compatibility migrations; custom
+  connections remain namespaced so they cannot replace a Pi built-in.
+
+Still open from this plan:
+
+- Compose declarative custom endpoints through Pi instead of the legacy compat
+  adapters.
+- Persist provider ID and API alongside the model on each assistant message, then
+  reconstruct mixed-provider history from that provenance.
+- Finish the gateway-sized model-picker virtualization and inaccessible historical
+  selection recovery states.
+- Complete packaged auth/runtime canaries and the one-release legacy cleanup.
 
 At the reviewed Pi version, the correct listing pattern is:
 
