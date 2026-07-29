@@ -25,6 +25,19 @@ export const COMPUTER_USE_ENTITLEMENTS = path.resolve(
   "entitlements.computer-use.plist",
 );
 
+const MINIMAL_ENTITLEMENT_HELPERS = Object.freeze([
+  "aiden-subagent-run-store",
+  "aiden-worktree-remover",
+]);
+
+function minimalEntitlementHelperPaths(app) {
+  return new Set(
+    MINIMAL_ENTITLEMENT_HELPERS.map((name) =>
+      path.resolve(app, "Contents", "Helpers", name),
+    ),
+  );
+}
+
 async function sha256(file) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk);
@@ -74,6 +87,7 @@ function ignoredBy(originalIgnore, file) {
 
 export function createAidenMacSignOptions(options) {
   const paths = packagedComputerUsePaths(options.app);
+  const minimalHelpers = minimalEntitlementHelperPaths(options.app);
   const originalIgnore = options.ignore;
   const originalOptionsForFile = options.optionsForFile;
   return {
@@ -85,7 +99,11 @@ export function createAidenMacSignOptions(options) {
     optionsForFile(file) {
       const resolved = path.resolve(file);
       const inherited = originalOptionsForFile?.(file) ?? {};
-      if (resolved === paths.helperApp || resolved.startsWith(`${paths.helperApp}${path.sep}`)) {
+      if (
+        resolved === paths.helperApp ||
+        resolved.startsWith(`${paths.helperApp}${path.sep}`) ||
+        minimalHelpers.has(resolved)
+      ) {
         return {
           ...inherited,
           entitlements: COMPUTER_USE_ENTITLEMENTS,

@@ -14,7 +14,9 @@ import {
   assertComputerUseMinimumSystemVersion,
   assertDeveloperIdSignature,
   assertElectronEntitlements,
+  assertExactUniversalArchitectures,
   assertMinimalComputerUseEntitlements,
+  assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
   assertSamePackagedArtifactIdentity,
@@ -311,6 +313,70 @@ test("package verifier checks the broker's Mach-O deployment target, not only In
     () => assertComputerUseMachOMinimum("platform MACOS\nminos 11.0\n"),
     /LC_BUILD_VERSION/,
   );
+});
+
+test("package verifier requires the exact universal architecture set for both private helpers", () => {
+  for (const target of ["Managed worktree remover", "Private subagent run store"]) {
+    assert.doesNotThrow(() => assertExactUniversalArchitectures("x86_64 arm64\n", target));
+    assert.doesNotThrow(() => assertExactUniversalArchitectures("arm64 x86_64\n", target));
+    assert.throws(
+      () => assertExactUniversalArchitectures("arm64\n", target),
+      /exactly the arm64 and x86_64 architectures/u,
+    );
+    assert.throws(
+      () => assertExactUniversalArchitectures("arm64 x86_64 arm64e\n", target),
+      /exactly the arm64 and x86_64 architectures/u,
+    );
+    assert.throws(
+      () => assertExactUniversalArchitectures("arm64 arm64\n", target),
+      /exactly the arm64 and x86_64 architectures/u,
+    );
+    assert.throws(
+      () => assertExactUniversalArchitectures("arm64 x86_64h\n", target),
+      /exactly the arm64 and x86_64 architectures/u,
+    );
+  }
+});
+
+test("package verifier checks each architecture deployment floor independently", () => {
+  for (const target of ["Managed worktree remover", "Private subagent run store"]) {
+    for (const architecture of ["arm64", "x86_64"]) {
+      assert.doesNotThrow(() =>
+        assertMacOSArchitectureMinimum(
+          "Load command 11\nplatform MACOS\nminos 14.4\n",
+          target,
+          architecture,
+        ),
+      );
+      assert.throws(
+        () =>
+          assertMacOSArchitectureMinimum(
+            "platform IOS\nminos 14.4\n",
+            target,
+            architecture,
+          ),
+        new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
+      );
+      assert.throws(
+        () =>
+          assertMacOSArchitectureMinimum(
+            "platform MACOS\nminos 13.0\n",
+            target,
+            architecture,
+          ),
+        new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
+      );
+      assert.throws(
+        () =>
+          assertMacOSArchitectureMinimum(
+            "platform MACOS\nminos 14.4\nplatform MACOS\nminos 14.4\n",
+            target,
+            architecture,
+          ),
+        new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
+      );
+    }
+  }
 });
 
 test("package verifier rejects privileged Computer Use broker entitlements", () => {

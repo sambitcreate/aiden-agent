@@ -18,7 +18,7 @@ test("mac signing hook ignores only the exact pinned driver and retains prior ig
   assert.equal(options.ignore(path.join(app, "already-ignored")), true);
 });
 
-test("mac signing hook assigns minimal entitlements throughout only the Computer Use helper", () => {
+test("mac signing hook assigns minimal entitlements to privileged and standalone native helpers", () => {
   const app = path.resolve("/tmp/Aiden Agent.app");
   const paths = packagedComputerUsePaths(app);
   const electronEntitlements = "/tmp/electron.plist";
@@ -34,6 +34,16 @@ test("mac signing hook assigns minimal entitlements throughout only the Computer
   assert.equal(options.optionsForFile(paths.helperApp).entitlements, COMPUTER_USE_ENTITLEMENTS);
   assert.equal(options.optionsForFile(paths.broker).entitlements, COMPUTER_USE_ENTITLEMENTS);
   assert.equal(options.optionsForFile(paths.broker).timestamp, true);
+  assert.equal(
+    options.optionsForFile(path.join(app, "Contents", "Helpers", "aiden-subagent-run-store"))
+      .entitlements,
+    COMPUTER_USE_ENTITLEMENTS,
+  );
+  assert.equal(
+    options.optionsForFile(path.join(app, "Contents", "Helpers", "aiden-worktree-remover"))
+      .entitlements,
+    COMPUTER_USE_ENTITLEMENTS,
+  );
   assert.equal(
     options.optionsForFile(path.join(app, "Contents", "MacOS", "Aiden Agent")).entitlements,
     electronEntitlements,
