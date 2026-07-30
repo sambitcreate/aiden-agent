@@ -3,12 +3,13 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   CalendarClock,
+  ChevronDown,
   CircleGauge,
   FileClock,
   MessageSquare,
   MoreHorizontal,
+  PencilLine,
   Play,
-  Plus,
   Search,
   Trash2,
 } from "lucide-react";
@@ -31,8 +32,14 @@ import {
   toast,
 } from "./ui";
 import { ScheduledTaskEditor } from "./scheduled-task-editor";
+import { requestAssistantAutomationComposer } from "../lib/assistant-dock";
 import { scheduleApi } from "../lib/ipc";
-import { queryKeys, useScheduledTasks, useScheduledTaskSettings } from "../lib/queries";
+import {
+  queryKeys,
+  useMcpServers,
+  useScheduledTasks,
+  useScheduledTaskSettings,
+} from "../lib/queries";
 import {
   filterScheduledTasks,
   formatNextRun,
@@ -40,7 +47,12 @@ import {
   type ScheduledTaskTab,
 } from "../lib/scheduled-task-view";
 import { useActiveWorkspace } from "../lib/workspace-context";
-import type { ScheduledTask, ScheduledTaskInput, ScheduledTaskSettings } from "../lib/types";
+import type {
+  McpServer,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskSettings,
+} from "../lib/types";
 
 const TEMPLATES: Array<{
   name: string;
@@ -72,7 +84,7 @@ const TEMPLATES: Array<{
   },
 ];
 
-function taskInput(task: ScheduledTask): ScheduledTaskInput {
+function taskInput(task: ScheduledTask, mcpServers: McpServer[]): ScheduledTaskInput {
   return {
     id: task.id,
     name: task.name,
@@ -86,6 +98,11 @@ function taskInput(task: ScheduledTask): ScheduledTaskInput {
     prompt: task.prompt,
     script: task.script,
     permission: task.permission,
+    mcpServerIds:
+      task.mcpServerIds ??
+      (task.mode === "llm" && task.permission === "full" && task.executionProfile === undefined
+        ? mcpServers.filter((server) => server.enabled).map((server) => server.id)
+        : []),
     notify: task.notify,
   };
 }
@@ -93,22 +110,26 @@ function taskInput(task: ScheduledTask): ScheduledTaskInput {
 function newTask(
   settings: ScheduledTaskSettings | undefined,
   workspaceId: string | undefined,
+  mcpServers: McpServer[],
   template?: (typeof TEMPLATES)[number],
 ): ScheduledTaskInput {
+  const mode = settings?.defaultMode ?? "llm";
+  const permission = mode === "script" ? "full" : (settings?.defaultPermission ?? "read-only");
   return {
     name: template?.name ?? "",
     enabled: true,
-    mode: settings?.defaultMode ?? "llm",
+    mode,
     cron: template?.cron ?? "0 9 * * 1-5",
     timezone:
       settings?.defaultTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC",
     workspaceId,
     prompt: template?.prompt ?? "",
     script: "",
-    permission:
-      (settings?.defaultMode ?? "llm") === "script"
-        ? "full"
-        : (settings?.defaultPermission ?? "read-only"),
+    permission,
+    mcpServerIds:
+      mode === "llm" && permission === "full" && settings?.defaultMcpEnabled
+        ? mcpServers.filter((server) => server.enabled).map((server) => server.id)
+        : [],
     notify: settings?.defaultNotify ?? true,
   };
 }
@@ -126,6 +147,7 @@ export function ScheduledTasksView() {
   const { activeId, workspaces } = useActiveWorkspace();
   const tasks = useScheduledTasks();
   const settings = useScheduledTaskSettings();
+  const mcpServers = useMcpServers();
   const [query, setQuery] = React.useState("");
   const [tab, setTab] = React.useState<ScheduledTaskTab>("all");
   const [editing, setEditing] = React.useState<ScheduledTaskInput | null>(null);
@@ -133,6 +155,7 @@ export function ScheduledTasksView() {
   const [busyTaskId, setBusyTaskId] = React.useState<string | null>(null);
   const [enablingAll, setEnablingAll] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const assistantHandoffRef = React.useRef(false);
   const visible = React.useMemo(
     () => filterScheduledTasks(tasks.data ?? [], query, tab),
     [query, tab, tasks.data],
@@ -207,14 +230,39 @@ export function ScheduledTasksView() {
       <ScrollArea
         title="Scheduled tasks"
         actions={
-          <Button
-            variant="accent"
-            onClick={() => setEditing(newTask(settings.data, activeId))}
-            disabled={tasks.isError || settings.isError}
-          >
-            <Plus />
-            Create
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="accent" disabled={tasks.isError || settings.isError}>
+                Create
+                <ChevronDown className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className="w-64"
+              onCloseAutoFocus={(event) => {
+                if (!assistantHandoffRef.current) return;
+                assistantHandoffRef.current = false;
+                event.preventDefault();
+                requestAssistantAutomationComposer();
+              }}
+            >
+              <DropdownMenuItem
+                onSelect={() => {
+                  assistantHandoffRef.current = true;
+                }}
+              >
+                <MessageSquare className="size-4" />
+                Create with Aiden Assistant
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => setEditing(newTask(settings.data, activeId, mcpServers.data ?? []))}
+              >
+                <PencilLine className="size-4" />
+                Create manually
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         }
       >
         <main className="mx-auto w-full max-w-4xl px-5 pb-10 pt-4">
@@ -324,13 +372,20 @@ export function ScheduledTasksView() {
                       <button
                         type="button"
                         className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline-none"
-                        onClick={() => setEditing(taskInput(task))}
+                        onClick={() => setEditing(taskInput(task, mcpServers.data ?? []))}
                       >
                         <span className="flex items-center gap-2">
                           <Text variant="strong" truncate>
                             {task.name}
                           </Text>
                           <Badge color={status.badge}>{status.label}</Badge>
+                          {(task.mcpServerIds?.length ?? 0) > 0 ||
+                          (task.mcpServerIds === undefined &&
+                            task.permission === "full" &&
+                            task.executionProfile === undefined &&
+                            (mcpServers.data ?? []).some((server) => server.enabled)) ? (
+                            <Badge>MCP</Badge>
+                          ) : null}
                         </span>
                         <Text variant="small" color="secondary" truncate className="mt-1 block">
                           {task.cron}
@@ -363,7 +418,9 @@ export function ScheduledTasksView() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onSelect={() => setEditing(taskInput(task))}>
+                          <DropdownMenuItem
+                            onSelect={() => setEditing(taskInput(task, mcpServers.data ?? []))}
+                          >
                             Edit
                           </DropdownMenuItem>
                           <DropdownMenuItem onSelect={() => void runNow(task)}>
@@ -408,7 +465,11 @@ export function ScheduledTasksView() {
                       {index > 0 ? <Separator /> : null}
                       <button
                         type="button"
-                        onClick={() => setEditing(newTask(settings.data, activeId, template))}
+                        onClick={() =>
+                          setEditing(
+                            newTask(settings.data, activeId, mcpServers.data ?? [], template),
+                          )
+                        }
                         className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
                       >
                         <span className="grid size-9 shrink-0 place-items-center rounded-control bg-control text-secondary">
@@ -438,6 +499,8 @@ export function ScheduledTasksView() {
           open
           initial={editing}
           workspaces={workspaces}
+          mcpServers={mcpServers.data ?? []}
+          mcpServersUnavailable={mcpServers.isError}
           busy={saving}
           onOpenChange={(open) => !open && !saving && setEditing(null)}
           onSave={async (input) => {
