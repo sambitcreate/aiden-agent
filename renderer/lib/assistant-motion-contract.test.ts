@@ -32,6 +32,18 @@ test("the panel rises into place as it fades in", () => {
   assert.match(keyframes, /translateY\(0\)/u);
 });
 
+test("automation approvals reuse the app surface entrance motion", () => {
+  const styles = source("../styles.css");
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="false"\] \.assistant-automation-approval\[data-state="open"\][\s\S]*aiden-app-update-banner-in 150ms cubic-bezier\(0\.19, 1, 0\.22, 1\)/u,
+  );
+  assert.match(
+    source("../components/assistant/assistant-automation-approval.tsx"),
+    /className="assistant-automation-approval/u,
+  );
+});
+
 test("the panel settles downward as it fades out", () => {
   const keyframes = between(
     source("../styles.css"),
@@ -118,12 +130,21 @@ test("the hotkey waits for the central command listener and uses the dock comman
   const readySignal = commands.indexOf("appApi.rendererReady()");
   const readinessWait = main.indexOf("await rendererReadiness.wait()");
   const assistantCommand = main.indexOf('commandId: "assistant.open"');
-  assert.match(
-    dock,
-    /useCommandHandler\("assistant\.open", openPanel, !interactionBlocked\)/u,
-  );
+  assert.match(dock, /useCommandHandler\("assistant\.open", openPanel, !interactionBlocked\)/u);
   assert.ok(listener >= 0 && readySignal > listener);
   assert.ok(readinessWait >= 0 && assistantCommand > readinessWait);
+});
+
+test("Scheduled Tasks can open Aiden's composer without discarding an existing draft", () => {
+  const scheduledTasks = source("../components/scheduled-tasks-view.tsx");
+  const dock = source("../components/assistant/assistant-dock.tsx");
+  assert.match(scheduledTasks, /Create with Aiden Assistant/u);
+  assert.match(scheduledTasks, /Create manually/u);
+  assert.match(scheduledTasks, /requestAssistantAutomationComposer/u);
+  assert.match(scheduledTasks, /onCloseAutoFocus/u);
+  assert.match(scheduledTasks, /event\.preventDefault\(\)/u);
+  assert.match(dock, /onAssistantAutomationComposerRequested/u);
+  assert.match(dock, /setDraft\(assistantAutomationDraft\)/u);
 });
 
 test("stopping during first-turn persistence keeps the composer blocked until adoption", () => {
@@ -131,10 +152,7 @@ test("stopping during first-turn persistence keeps the composer blocked until ad
   const panel = source("../components/assistant/assistant-panel.tsx");
   assert.match(chat, /stoppedPersistingTurnRef\.current === turnRef\.current/u);
   assert.match(chat, /setTurnSaving\(true\)/u);
-  assert.match(
-    chat,
-    /const ready =\s*modelReady &&\s*!conversationLoading &&\s*!turnSaving/u,
-  );
+  assert.match(chat, /const ready =\s*modelReady &&\s*!conversationLoading &&\s*!turnSaving/u);
   assert.match(panel, /"turn-saving": "Saving conversation…"/u);
 });
 
@@ -151,10 +169,7 @@ test("stopping an active generation waits for its terminal persistence event", (
   assert.match(chat, /if \(\s*!canChangeThread/u);
   assert.match(chat, /persistingTurnRef\.current !== null/u);
   assert.match(chat, /handleRef\.current/u);
-  assert.doesNotMatch(
-    between(chat, "onError: (message", "onApproval:"),
-    /else fail\(message\)/u,
-  );
+  assert.doesNotMatch(between(chat, "onError: (message", "onApproval:"), /else fail\(message\)/u);
 });
 
 test("assistant notices use a collision-free monotonic marker", () => {
@@ -169,11 +184,11 @@ test("the Assistant composer does not send an in-progress IME composition", () =
   assert.match(panel, /!event\.nativeEvent\.isComposing/u);
 });
 
-test("streamed Assistant replies are announced after the response settles", () => {
+test("streamed Assistant replies stay busy through the formatting handoff", () => {
   const thread = source("../components/assistant/assistant-thread.tsx");
   assert.match(thread, /role="log"/u);
   assert.match(thread, /aria-live="polite"/u);
-  assert.match(thread, /aria-busy=\{streaming\}/u);
+  assert.match(thread, /aria-busy=\{streaming \|\| streamComplete\}/u);
 });
 
 test("every Assistant turn exposes its speaker without relying on bubble styling", () => {
