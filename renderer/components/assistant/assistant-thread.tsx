@@ -1,18 +1,19 @@
 import * as React from "react";
+import { SafeMessageBubble } from "../message-bubble";
 import type { AssistantMessage } from "./use-assistant-chat";
 
-/**
- * The Aiden transcript. Plain text with preserved whitespace rather than
- * Markdown: the persona is instructed to keep formatting sparse, and the main
- * window's renderer carries workspace-chat concerns this window does not have.
- */
+/** The Aiden transcript, rendered through the same message path as the main chat. */
 export function AssistantThread({
   messages,
   streaming,
+  streamComplete,
+  onStreamHandoffComplete,
   error,
 }: {
   messages: AssistantMessage[];
   streaming: boolean;
+  streamComplete: boolean;
+  onStreamHandoffComplete: () => void;
   error: string | null;
 }): React.ReactElement {
   const endRef = React.useRef<HTMLDivElement>(null);
@@ -22,7 +23,7 @@ export function AssistantThread({
       endRef.current?.scrollIntoView({ block: "end" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [messages, streaming]);
+  }, [messages, streamComplete, streaming]);
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-2">
@@ -30,23 +31,26 @@ export function AssistantThread({
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
-        aria-busy={streaming}
-        className="flex flex-col gap-3"
+        aria-busy={streaming || streamComplete}
+        className="flex flex-col gap-5"
       >
         {messages.map((message, index) => {
           const speaker = message.role === "user" ? "You" : "Aiden";
+          const isStreamingReply =
+            (streaming || streamComplete) &&
+            message.role === "assistant" &&
+            index === messages.length - 1;
           return (
-            <div
-              key={index}
-              className={
-                message.role === "user"
-                  ? "self-end max-w-[85%] rounded-2xl bg-control px-3 py-1.5 text-sm text-primary"
-                  : "max-w-full text-sm text-primary"
-              }
-            >
+            <div key={index} className="flex min-w-0 flex-col gap-3">
               <span className="sr-only">{speaker}: </span>
-              <span className="whitespace-pre-wrap break-words">{message.content}</span>
-              {message.role === "assistant" && !message.content && streaming ? (
+              <SafeMessageBubble
+                role={message.role}
+                content={message.content}
+                streaming={isStreamingReply}
+                streamComplete={streamComplete && isStreamingReply}
+                onStreamHandoffComplete={isStreamingReply ? onStreamHandoffComplete : undefined}
+              />
+              {isStreamingReply && !message.content ? (
                 <span className="text-tertiary">…</span>
               ) : null}
             </div>
