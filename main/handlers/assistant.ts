@@ -56,7 +56,6 @@ export function registerAssistantHandlers(): void {
           // Keep compatibility fields and the canonical command map in
           // lockstep without allowing a stale legacy chord to replace a newer
           // canonical binding.
-          let keybindings = migrateLegacyKeybindings(settings.keybindings, settings);
           const patchRecord =
             patch && typeof patch === "object" && !Array.isArray(patch)
               ? patch
@@ -65,23 +64,35 @@ export function registerAssistantHandlers(): void {
             patchRecord !== null && "hotkeyAccelerator" in patchRecord;
           const changesEnabled =
             patchRecord !== null && "hotkeyEnabled" in patchRecord;
+          let keybindings = settings.keybindings;
           if (changesAccelerator) {
-            keybindings = applyKeybindingMutation(keybindings, {
-              commandId: "assistant.open",
-              binding: assistant.hotkeyAccelerator,
-            });
+            keybindings = applyKeybindingMutation(
+              keybindings,
+              {
+                commandId: "assistant.open",
+                binding: assistant.hotkeyAccelerator,
+              },
+              settings,
+            );
           }
           if (changesAccelerator || changesEnabled) {
-            keybindings = applyKeybindingMutation(keybindings, {
-              commandId: "assistant.open",
-              disabled: !assistant.hotkeyEnabled,
-            });
+            keybindings = applyKeybindingMutation(
+              keybindings,
+              {
+                commandId: "assistant.open",
+                disabled: !assistant.hotkeyEnabled,
+              },
+              settings,
+            );
           }
           return {
             next: { ...settings, assistant, keybindings },
             persist: () =>
               configStore
-                .setSettings({ assistant, keybindings })
+                .setSettings({
+                  assistant,
+                  ...(changesAccelerator || changesEnabled ? { keybindings } : {}),
+                })
                 .then(() => undefined),
             value: assistant,
           };

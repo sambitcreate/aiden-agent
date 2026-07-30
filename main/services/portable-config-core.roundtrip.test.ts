@@ -138,7 +138,7 @@ test("reload is serialized behind an in-flight update", async (t) => {
   assert.deepEqual(order, ["update", "reload"]);
 });
 
-test("an external edit during an update leaves the cache agreeing with disk", async (t) => {
+test("an external edit during an update aborts the stale write and remains on disk", async (t) => {
   const { stores, file } = await portableStore(t);
   const started = deferred();
   const release = deferred();
@@ -149,27 +149,32 @@ test("an external edit during an update leaves the cache agreeing with disk", as
     await release.promise;
   });
   await started.promise;
-  await fs.writeFile(file, JSON.stringify({ ...populated, skills: [] }, null, 2), "utf-8");
+  const edited = JSON.stringify({ ...populated, skills: [] }, null, 2);
+  await fs.writeFile(file, edited, "utf-8");
   release.resolve();
-  await update;
+  await assert.rejects(update, /changed outside/u);
   await stores.portable.reload();
 
-  // Last writer wins at transaction granularity; the invariant is that memory
-  // and disk never disagree, because a stale cache would silently clobber the
-  // next write.
+  assert.equal(await fs.readFile(file, "utf-8"), edited);
   assert.deepEqual(await stores.portable.load(), JSON.parse(await fs.readFile(file, "utf-8")));
 });
 
-test("writes leave no staging files behind in the user's folder", async (t) => {
+test("writes retain process-lifetime predecessors for descriptor recovery", async (t) => {
   const { stores, file } = await portableStore(t);
+  const predecessorsBefore = (await fs.readdir(path.dirname(file))).filter((name) =>
+    name.endsWith(".previous"),
+  ).length;
   await stores.portable.save(populated);
   await stores.portable.update((draft) => void (draft.skills = []));
 
   const entries = await fs.readdir(path.dirname(file));
   assert.deepEqual(
-    entries.filter((name) => name.endsWith(".tmp")),
+    entries.filter(
+      (name) => name.endsWith(".tmp") || name.endsWith(".held") || name.includes(".conflict-"),
+    ),
     [],
   );
+  assert.equal(entries.filter((name) => name.endsWith(".previous")).length, predecessorsBefore + 2);
 });
 
 test("a concurrent DataStore on the same file sees a whole document, never a partial one", async (t) => {

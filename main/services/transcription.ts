@@ -12,6 +12,7 @@ import {
 } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
+import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
 
 interface TranscribeInput {
   audioBase64: string;
@@ -53,8 +54,7 @@ async function recordTranscription(input: {
 }
 
 async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
-  await configStore.listProviders();
-  await providerRegistry.migrateLegacyApiKeys();
+  await listProvidersWithLegacyPiCredentialMigration();
   const auth = await providerRegistry.getBuiltinRequestAuth("openai");
   const key = auth?.auth.apiKey;
   if (!key) throw new Error("Set up OpenAI in Settings → Providers to use voice input.");
@@ -112,8 +112,7 @@ async function transcribeOpenAI(input: TranscribeInput): Promise<string> {
 }
 
 async function transcribeGemini(input: TranscribeInput): Promise<string> {
-  await configStore.listProviders();
-  await providerRegistry.migrateLegacyApiKeys();
+  await listProvidersWithLegacyPiCredentialMigration();
   const auth = await providerRegistry.getBuiltinRequestAuth(GOOGLE_PROVIDER_ID);
   const key = auth?.auth.apiKey;
   if (!key) throw new Error("Set up Google Gemini in Settings → Providers to use voice input.");

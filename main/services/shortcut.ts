@@ -3,16 +3,16 @@
 
 import { globalShortcut, logger } from "../platform.js";
 import { configStore } from "./config-store.js";
+import { DataStoreCorruptWriteError } from "./data-store.js";
 import { currentRuntimeProfile } from "../runtime-profile.js";
 import type { AppSettings } from "./types.js";
 import {
   COMMANDS,
   KeybindingValidationError,
   effectiveBindings,
-  hasCanonicalKeybindings,
   migrateLegacyKeybindings,
-  normalizeKeybindingOverrides,
   prettyAccelerator,
+  shouldPersistCanonicalKeybindings,
   validateEffectiveBindings,
   type CommandId,
   type GlobalShortcutStatus,
@@ -30,9 +30,8 @@ import {
 const handlers = new Map<CommandId, () => void>();
 let registered = new Map<CommandId, RegisteredGlobalShortcut>();
 let lastUnavailable = new Map<CommandId, string>();
-let onBindingsChanged:
-  | ((settings: AppSettings, acceleratorsEnabled: boolean) => void)
-  | null = null;
+let onBindingsChanged: ((settings: AppSettings, acceleratorsEnabled: boolean) => void) | null =
+  null;
 let recordingSuspended = false;
 let lastAppliedSettings: AppSettings | null = null;
 const transactions = createShortcutTransactionQueue<AppSettings, KeybindingSnapshot>();
@@ -178,9 +177,7 @@ export function applyShortcutSettings(settings: AppSettings): Promise<Keybinding
 }
 
 /** Temporarily release global accelerators while the recorder captures a chord. */
-export function setShortcutRecordingSuspended(
-  suspended: boolean,
-): Promise<KeybindingSnapshot> {
+export function setShortcutRecordingSuspended(suspended: boolean): Promise<KeybindingSnapshot> {
   return transactions.run(async () => {
     const previous = recordingSuspended;
     if (previous === suspended && suspended) {
@@ -218,10 +215,7 @@ export function setShortcutRecordingSuspended(
         await applyNow(settings).catch(() => undefined);
       } else {
         try {
-          onBindingsChanged?.(
-            { ...settings, keybindings: canonicalKeybindings(settings) },
-            true,
-          );
+          onBindingsChanged?.({ ...settings, keybindings: canonicalKeybindings(settings) }, true);
         } catch {
           // Preserve the global registration failure.
         }
@@ -257,15 +251,20 @@ export async function applyShortcutFromSettings(): Promise<KeybindingSnapshot> {
     return await transactions.run(async () => {
       const settings = await configStore.getSettings();
       const keybindings = canonicalKeybindings(settings);
-      const needsMigration =
-        !hasCanonicalKeybindings(settings.keybindings) ||
-        JSON.stringify(normalizeKeybindingOverrides(settings.keybindings)) !==
-          JSON.stringify(keybindings);
+      const needsMigration = shouldPersistCanonicalKeybindings(settings.keybindings, keybindings);
       // Semantic V1 repair is durable configuration normalization, not a user
       // shortcut transaction. Persist it even when an unrelated global chord
       // is currently owned by another macOS app and runtime registration fails.
       if (needsMigration) {
-        await configStore.setSettings({ keybindings });
+        try {
+          await configStore.setSettings({ keybindings });
+        } catch (error) {
+          if (!(error instanceof DataStoreCorruptWriteError)) throw error;
+          logger.warn(
+            "shortcut",
+            "Skipped keybinding persistence because settings.json does not parse.",
+          );
+        }
       }
       return applyNow({ ...settings, keybindings });
     });

@@ -8,9 +8,7 @@ const GOOGLE_THINKING_LEVEL_SET = new Set<string>(GOOGLE_THINKING_LEVELS);
 const MAX_THINKING_MODEL_PREFERENCES = 256;
 const MAX_MODEL_ID_CHARS = 256;
 
-export function isGoogleThinkingLevel(
-  value: unknown,
-): value is GoogleThinkingLevel {
+export function isGoogleThinkingLevel(value: unknown): value is GoogleThinkingLevel {
   return typeof value === "string" && GOOGLE_THINKING_LEVEL_SET.has(value);
 }
 
@@ -33,9 +31,7 @@ export function googleThinkingLevelsForModel(
   );
 }
 
-export function googleThinkingCanDisable(
-  model: GoogleThinkingModelCapabilities,
-): boolean {
+export function googleThinkingCanDisable(model: GoogleThinkingModelCapabilities): boolean {
   return model.reasoning === true && model.thinkingLevelMap?.off !== null;
 }
 
@@ -59,18 +55,14 @@ export function parseGoogleThinkingPreferences(
   if (entries.length > MAX_THINKING_MODEL_PREFERENCES) {
     throw new Error("Too many Google thinking preferences.");
   }
-  const parsed: Record<string, GoogleThinkingLevel> = {};
+  const parsed: Array<[string, GoogleThinkingLevel]> = [];
   for (const [modelId, level] of entries) {
-    if (
-      !modelId ||
-      modelId.length > MAX_MODEL_ID_CHARS ||
-      !isGoogleThinkingLevel(level)
-    ) {
+    if (!modelId || modelId.length > MAX_MODEL_ID_CHARS || !isGoogleThinkingLevel(level)) {
       throw new Error("Invalid Google thinking preference.");
     }
-    parsed[modelId] = level;
+    parsed.push([modelId, level]);
   }
-  return parsed;
+  return Object.fromEntries(parsed);
 }
 
 export function mergeGoogleThinkingPreference(
@@ -78,11 +70,14 @@ export function mergeGoogleThinkingPreference(
   modelId: string,
   level: GoogleThinkingLevel,
 ): Record<string, GoogleThinkingLevel> {
-  let preferences: Record<string, GoogleThinkingLevel> = {};
-  try {
-    preferences = parseGoogleThinkingPreferences(current);
-  } catch {
-    // A validated mutation repairs malformed manually edited state.
+  const entries =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? Object.entries(current).filter(
+          ([id]) => Boolean(id) && id.length <= MAX_MODEL_ID_CHARS && id !== modelId,
+        )
+      : [];
+  if (entries.length >= MAX_THINKING_MODEL_PREFERENCES) {
+    throw new Error("Too many Google thinking preferences.");
   }
-  return parseGoogleThinkingPreferences({ ...preferences, [modelId]: level });
+  return Object.fromEntries([...entries, [modelId, level]]) as Record<string, GoogleThinkingLevel>;
 }

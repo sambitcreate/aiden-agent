@@ -69,7 +69,7 @@ export interface ResolvedModelRuntime {
 
 export interface ModelRuntimeDependencies {
   getProvider(providerId: string): Promise<StoredProvider | undefined>;
-  getApiKey(providerId: string): Promise<string | null>;
+  getApiKey(provider: StoredProvider): Promise<string | null>;
   resolveRuntimeLimits(provider: StoredProvider, modelId: string): Promise<RuntimeModelLimits>;
   codex: {
     prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
@@ -128,7 +128,7 @@ export async function resolveModelRuntimeWith(
     );
   }
 
-  const storedApiKey = provider.needsKey ? await dependencies.getApiKey(provider.id) : null;
+  const storedApiKey = provider.needsKey ? await dependencies.getApiKey(provider) : null;
   const apiKey = resolveRuntimeApiKey(provider, storedApiKey);
   if (provider.needsKey && !apiKey) {
     throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);

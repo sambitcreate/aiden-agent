@@ -11,16 +11,9 @@ import {
 } from "./codex-thinking.js";
 
 test("Codex thinking levels stay a small explicit request contract", () => {
-  assert.deepEqual(CODEX_THINKING_LEVELS, [
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-  ]);
+  assert.deepEqual(CODEX_THINKING_LEVELS, ["low", "medium", "high", "xhigh", "max"]);
   assert.equal(DEFAULT_CODEX_THINKING_LEVEL, "medium");
-  for (const level of CODEX_THINKING_LEVELS)
-    assert.equal(isCodexThinkingLevel(level), true);
+  for (const level of CODEX_THINKING_LEVELS) assert.equal(isCodexThinkingLevel(level), true);
   for (const value of ["off", "minimal", "dynamic", "", null, 1]) {
     assert.equal(isCodexThinkingLevel(value), false);
   }
@@ -47,10 +40,7 @@ test("Codex choices expose only distinct native outcomes", () => {
     }),
     ["low", "high", "xhigh", "max"],
   );
-  assert.equal(
-    normalizeCodexThinkingLevel(["low", "medium", "high"], undefined),
-    "medium",
-  );
+  assert.equal(normalizeCodexThinkingLevel(["low", "medium", "high"], undefined), "medium");
   assert.equal(normalizeCodexThinkingLevel(["low", "high"], "medium"), "low");
 });
 
@@ -76,28 +66,34 @@ test("Codex thinking preferences validate and merge bounded model entries", () =
   assert.throws(
     () =>
       parseCodexThinkingPreferences(
-        Object.fromEntries(
-          Array.from({ length: 257 }, (_, index) => [
-            `model-${index}`,
-            "medium",
-          ]),
-        ),
+        Object.fromEntries(Array.from({ length: 257 }, (_, index) => [`model-${index}`, "medium"])),
       ),
     /Too many Codex thinking preferences/u,
   );
+  assert.deepEqual(mergeCodexThinkingPreference({ "gpt-5.4": "high" }, "gpt-5.6-sol", "max"), {
+    "gpt-5.4": "high",
+    "gpt-5.6-sol": "max",
+  });
   assert.deepEqual(
-    mergeCodexThinkingPreference({ "gpt-5.4": "high" }, "gpt-5.6-sol", "max"),
+    mergeCodexThinkingPreference({ "gpt-5.4": "minimal" }, "gpt-5.6-sol", "medium"),
     {
-      "gpt-5.4": "high",
-      "gpt-5.6-sol": "max",
+      "gpt-5.4": "minimal",
+      "gpt-5.6-sol": "medium",
     },
   );
-  assert.deepEqual(
-    mergeCodexThinkingPreference(
-      { "gpt-5.4": "minimal" },
-      "gpt-5.6-sol",
-      "medium",
-    ),
-    { "gpt-5.6-sol": "medium" },
+});
+
+test("updating a full preference map preserves every unrelated model", () => {
+  const full = Object.fromEntries(
+    Array.from({ length: 256 }, (_, index) => [`model-${index}`, "high"]),
+  );
+  const updated = mergeCodexThinkingPreference(full, "model-0", "low");
+
+  assert.equal(Object.keys(updated).length, 256);
+  assert.equal(updated["model-0"], "low");
+  assert.equal(updated["model-255"], "high");
+  assert.throws(
+    () => mergeCodexThinkingPreference(full, "model-new", "low"),
+    /Too many Codex thinking preferences/u,
   );
 });

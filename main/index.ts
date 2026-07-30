@@ -29,7 +29,11 @@ import {
 } from "./services/foundation-models-connection.js";
 import { configStore } from "./services/config-store.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
-import { createPortableConfigWatcher } from "./services/portable-config-watch-core.js";
+import {
+  createLastSafeSnapshotReload,
+  createPortableConfigWatcher,
+} from "./services/portable-config-watch-core.js";
+import { setPortableCredentialSnapshotListener } from "./services/portable-credential-snapshot.js";
 import {
   normalizeAppearanceConfig,
   type DockIconPreference,
@@ -76,6 +80,14 @@ import {
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
 import { ensureUserDataDir } from "./services/data-store.js";
+import {
+  reconcileExternalProviderCredentialChanges,
+  reconcilePendingProviderCredentialRotation,
+} from "./services/provider-credential-rotation.js";
+import {
+  reconcileExternalMcpCredentialChanges,
+  reconcilePendingMcpCredentialCleanup,
+} from "./services/mcp-credential-cleanup.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -989,8 +1001,31 @@ if (!ownsSingleInstanceLock) {
 
   // Only a real content change reaches the renderer, and concurrent triggers
   // coalesce, which is what makes this affordable on every focus.
-  const portableConfigWatcher = createPortableConfigWatcher(
+  async function portableCredentialSnapshot() {
+    const [providers, mcpServers] = await Promise.all([
+      configStore.listProviders(),
+      configStore.listMcpServers(),
+    ]);
+    return { providers, mcpServers };
+  }
+  const reloadAndReconcilePortableConfig = createLastSafeSnapshotReload(
+    () => configStore.cachedPortableConfigSafeForCredentialReconciliation(),
+    portableCredentialSnapshot,
     reloadPortableConfig,
+    async (previous, next) => {
+      await Promise.all([
+        reconcileExternalProviderCredentialChanges(previous.providers, next.providers),
+        reconcileExternalMcpCredentialChanges(
+          previous.mcpServers,
+          next.mcpServers,
+          (serverId) => mcpManager.disconnect(serverId),
+        ),
+      ]);
+    },
+  );
+  setPortableCredentialSnapshotListener(() => reloadAndReconcilePortableConfig.syncCurrent());
+  const portableConfigWatcher = createPortableConfigWatcher(
+    reloadAndReconcilePortableConfig,
     () => ipcMain.broadcast("app:config-externally-changed", {}),
     (error: unknown) =>
       logger.warn("portable-config", "Failed to re-read the portable config", error),
@@ -1076,6 +1111,20 @@ if (!ownsSingleInstanceLock) {
         },
       });
       const settings = await configStore.getSettings();
+      try {
+        await reconcilePendingProviderCredentialRotation();
+      } catch (error) {
+        logger.error(
+          "providers",
+          "Could not reconcile an interrupted provider credential rotation.",
+          error,
+        );
+      }
+      try {
+        await reconcilePendingMcpCredentialCleanup();
+      } catch (error) {
+        logger.error("mcp", "Could not reconcile an interrupted MCP credential cleanup.", error);
+      }
       const appearance = normalizeAppearanceConfig(settings.appearance);
       nativeTheme.themeSource = appearance.mode;
       await restoreDockIconPreference(appearance.dockIcon);

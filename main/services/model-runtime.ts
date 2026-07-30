@@ -6,7 +6,9 @@ import { resolveModelRuntimeWith, type ResolvedModelRuntime } from "./model-runt
 import { catalogProviderSlug } from "./models-catalog-core.js";
 import { modelsCatalog } from "./models-catalog.js";
 import { providerRegistry } from "./provider-registry.js";
+import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import { secrets } from "./secrets.js";
+import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
 
 export type { ResolvedModelRuntime };
 
@@ -17,18 +19,18 @@ export async function resolveModelRuntime(
 ): Promise<ResolvedModelRuntime> {
   // Ensure the one-release legacy key migration completes even when a
   // scheduled/background generation runs before Provider Settings is opened.
-  await configStore.listProviders();
+  await listProvidersWithLegacyPiCredentialMigration();
   const resolvedProviderId = await configStore.resolveProviderId(providerId);
   if (!resolvedProviderId) throw new Error("Choose a provider before starting a generation.");
   providerId = resolvedProviderId;
   if (providerRegistry.isBuiltinProvider(providerId)) {
-    await providerRegistry.migrateLegacyApiKeys();
     await providerRegistry.assertBuiltinModelAvailable(providerId, modelId);
   }
   return resolveModelRuntimeWith(
     {
       getProvider: (id) => configStore.getProvider(id),
-      getApiKey: (id) => secrets.getKey(id),
+      getApiKey: (provider) =>
+        secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider))),
       resolveRuntimeLimits: (provider, id) => {
         const piProviderId = catalogProviderSlug(provider.id);
         const piModel = piProviderId

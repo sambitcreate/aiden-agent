@@ -1,10 +1,4 @@
-export const CODEX_THINKING_LEVELS = [
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const CODEX_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export type CodexThinkingLevel = (typeof CODEX_THINKING_LEVELS)[number];
 
@@ -14,9 +8,7 @@ const CODEX_THINKING_LEVEL_SET = new Set<string>(CODEX_THINKING_LEVELS);
 const MAX_THINKING_MODEL_PREFERENCES = 256;
 const MAX_MODEL_ID_CHARS = 256;
 
-export function isCodexThinkingLevel(
-  value: unknown,
-): value is CodexThinkingLevel {
+export function isCodexThinkingLevel(value: unknown): value is CodexThinkingLevel {
   return typeof value === "string" && CODEX_THINKING_LEVEL_SET.has(value);
 }
 
@@ -51,9 +43,7 @@ export function normalizeCodexThinkingLevel(
 }
 
 /** Parse the complete device-local preference map before it crosses into persistence. */
-export function parseCodexThinkingPreferences(
-  value: unknown,
-): Record<string, CodexThinkingLevel> {
+export function parseCodexThinkingPreferences(value: unknown): Record<string, CodexThinkingLevel> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid Codex thinking preferences.");
   }
@@ -61,18 +51,14 @@ export function parseCodexThinkingPreferences(
   if (entries.length > MAX_THINKING_MODEL_PREFERENCES) {
     throw new Error("Too many Codex thinking preferences.");
   }
-  const parsed: Record<string, CodexThinkingLevel> = {};
+  const parsed: Array<[string, CodexThinkingLevel]> = [];
   for (const [modelId, level] of entries) {
-    if (
-      !modelId ||
-      modelId.length > MAX_MODEL_ID_CHARS ||
-      !isCodexThinkingLevel(level)
-    ) {
+    if (!modelId || modelId.length > MAX_MODEL_ID_CHARS || !isCodexThinkingLevel(level)) {
       throw new Error("Invalid Codex thinking preference.");
     }
-    parsed[modelId] = level;
+    parsed.push([modelId, level]);
   }
-  return parsed;
+  return Object.fromEntries(parsed);
 }
 
 export function mergeCodexThinkingPreference(
@@ -80,11 +66,14 @@ export function mergeCodexThinkingPreference(
   modelId: string,
   level: CodexThinkingLevel,
 ): Record<string, CodexThinkingLevel> {
-  let preferences: Record<string, CodexThinkingLevel> = {};
-  try {
-    preferences = parseCodexThinkingPreferences(current);
-  } catch {
-    // A validated mutation repairs malformed manually edited state.
+  const entries =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? Object.entries(current).filter(
+          ([id]) => Boolean(id) && id.length <= MAX_MODEL_ID_CHARS && id !== modelId,
+        )
+      : [];
+  if (entries.length >= MAX_THINKING_MODEL_PREFERENCES) {
+    throw new Error("Too many Codex thinking preferences.");
   }
-  return parseCodexThinkingPreferences({ ...preferences, [modelId]: level });
+  return Object.fromEntries([...entries, [modelId, level]]) as Record<string, CodexThinkingLevel>;
 }

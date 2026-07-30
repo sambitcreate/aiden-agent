@@ -607,3 +607,6 @@ export interface ChatError {
   timeline?: GenerationTimeline;
   chat?: Chat;
 }
+export const MAX_CONFIG_ID_LENGTH = 256;
+export const MAX_PROVIDER_BASE_URL_LENGTH = 4_096;
+export const MAX_PROVIDER_KEY_LENGTH = 1_048_576;

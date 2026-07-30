@@ -5,15 +5,61 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 
-export interface DataStoreOptions {
+export interface DataStoreOptions<T> {
   /**
    * Copy an unparseable file aside before a write replaces it. Set this for any
    * file the user maintains by hand: a JSON typo must cost them a restart, not
    * the file. Left off for regenerable caches, which would only litter.
    */
   preserveCorruptFile?: boolean;
+  /** Normalize valid JSON whose runtime shape does not match the typed store. */
+  normalize?: (value: unknown) => T;
+  /** Report whether valid JSON is safe to persist after normalization. */
+  isSafe?: (value: unknown) => boolean;
+  /**
+   * Re-read the backing file at the start of every mutation. Use this for files
+   * that people edit outside Aiden so a cached healthy value cannot overwrite a
+   * newer hand edit.
+   */
+  reloadBeforeWrite?: boolean;
+  /** Refuse to replace unparseable JSON even when a rescue copy could be made. */
+  rejectCorruptWrite?: boolean;
+  /** Refuse to replace valid JSON that the tolerant reader could not safely normalize. */
+  rejectUnsafeWrite?: boolean;
+  /** Abort a save based on a stale snapshot when the backing file changed. */
+  rejectExternalChanges?: boolean;
+  /** Test seam for racing a protected publication after the destination is held. */
+  beforeProtectedPublish?: () => Promise<void>;
+  /** Test seam for replacing the destination immediately before it is held. */
+  beforeProtectedHold?: () => Promise<void>;
+  /** Test seam for an old descriptor writing after the final held-byte check. */
+  afterProtectedPublish?: () => Promise<void>;
+  /** Test seam for holding a disk read before it becomes the active snapshot. */
+  beforeLoadCommit?: () => Promise<void>;
+}
+
+export class DataStoreExternalChangeError extends Error {
+  constructor() {
+    super("Cannot overwrite a JSON file that changed outside the app.");
+    this.name = "DataStoreExternalChangeError";
+  }
+}
+
+export class DataStoreCorruptWriteError extends Error {
+  constructor() {
+    super("Cannot overwrite a JSON file that does not parse.");
+    this.name = "DataStoreCorruptWriteError";
+  }
+}
+
+export class DataStoreUnsafeWriteError extends Error {
+  constructor() {
+    super("Cannot overwrite a JSON file whose schema is not safe for this app version.");
+    this.name = "DataStoreUnsafeWriteError";
+  }
 }
 
 export class DataStore<T> {
@@ -21,14 +67,20 @@ export class DataStore<T> {
   private filePath: string | null = null;
   private loadPromise: Promise<T> | null = null;
   private mutationTail: Promise<void> = Promise.resolve();
+  /** Predecessor names created by this process remain live until next startup. */
+  private readonly liveHeldFiles = new Set<string>();
+  /** Exact bytes observed by the last load; null means the file was absent. */
+  private diskSnapshot: Buffer | null | undefined;
   /** True when load() fell back to defaults because the file would not parse. */
   private corrupt = false;
+  /** True when valid JSON was normalized for reads but must not be overwritten. */
+  private unsafe = false;
 
   constructor(
     private readonly filename: string,
     private readonly defaultValue: T,
     private readonly rootResolver?: () => string,
-    private readonly options: DataStoreOptions = {},
+    private readonly options: DataStoreOptions<T> = {},
   ) {}
 
   private async getFilePath(): Promise<string> {
@@ -52,15 +104,39 @@ export class DataStore<T> {
     if (!this.loadPromise) {
       this.loadPromise = (async () => {
         let corrupt = false;
+        let data: string | undefined;
+        let bytes: Buffer | undefined;
+        let filePath: string | undefined;
         try {
-          const filePath = await this.getFilePath();
-          const data = await fs.readFile(filePath, "utf-8");
-          this.cache = JSON.parse(data) as T;
+          filePath = await this.getFilePath();
+          await this.recoverHeldFiles(filePath);
+          bytes = await readRegularFile(filePath);
+          data = decodeUtf8(bytes);
+          this.diskSnapshot = Buffer.from(bytes);
+          const parsed = JSON.parse(data) as unknown;
+          await this.options.beforeLoadCommit?.();
+          this.unsafe = this.options.isSafe ? !this.options.isSafe(parsed) : false;
+          this.cache = this.options.normalize ? this.options.normalize(parsed) : (parsed as T);
         } catch (error) {
           // A missing file is the ordinary first-run path. A file that exists
           // but will not parse is the user's data, and a later write must not
           // be allowed to quietly destroy it.
-          corrupt = (error as NodeJS.ErrnoException).code !== "ENOENT";
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "ENOENT" && filePath) {
+            // readFile also reports ENOENT for a dangling symlink. That is an
+            // existing user-owned filesystem object, not the ordinary
+            // first-run "missing file" state, and must stay write-protected.
+            try {
+              await fs.lstat(filePath);
+              corrupt = true;
+            } catch (lstatError) {
+              corrupt = (lstatError as NodeJS.ErrnoException).code !== "ENOENT";
+            }
+          } else {
+            corrupt = true;
+          }
+          this.diskSnapshot = corrupt ? bytes : null;
+          this.unsafe = false;
           this.cache = structuredClone(this.defaultValue);
         }
         this.corrupt = corrupt;
@@ -68,6 +144,24 @@ export class DataStore<T> {
       })();
     }
     return this.loadPromise;
+  }
+
+  /** Whether the current cached value came from an unparseable on-disk file. */
+  async loadedFromCorruptFile(): Promise<boolean> {
+    await this.load();
+    return this.corrupt;
+  }
+
+  /** Whether valid on-disk JSON was unsafe and only normalized for in-memory reads. */
+  async loadedFromUnsafeFile(): Promise<boolean> {
+    await this.load();
+    return this.unsafe;
+  }
+
+  /** Exact bytes observed by the successful cached load, or null when absent. */
+  async loadedDiskContents(): Promise<Buffer | null> {
+    await this.load();
+    return this.diskSnapshot ? Buffer.from(this.diskSnapshot) : null;
   }
 
   private serialized<R>(operation: () => Promise<R>): Promise<R> {
@@ -87,9 +181,215 @@ export class DataStore<T> {
   private async preserveCorrupt(destination: string): Promise<void> {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     try {
-      await fs.copyFile(destination, `${destination}.invalid-${stamp}`);
+      const contents = await readRegularFile(destination);
+      await fs.writeFile(`${destination}.invalid-${stamp}`, contents, {
+        flag: "wx",
+      });
     } catch {
       // Unreadable or already gone — fall through to the write.
+    }
+  }
+
+  private async syncDirectory(directory: string): Promise<void> {
+    const handle = await fs.open(directory, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async restoreHeldFile(
+    held: string,
+    destination: string,
+    preserveConflict: boolean,
+  ): Promise<void> {
+    try {
+      const info = await fs.lstat(held);
+      if (info.isSymbolicLink()) {
+        await fs.symlink(await fs.readlink(held), destination);
+      } else if (info.isDirectory()) {
+        await fs.cp(held, destination, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          dereference: false,
+          preserveTimestamps: true,
+        });
+      } else {
+        await fs.link(held, destination);
+      }
+      await fs.rm(held, { recursive: info.isDirectory(), force: true });
+    } catch (error) {
+      try {
+        await fs.lstat(destination);
+      } catch {
+        throw error;
+      }
+      if (preserveConflict) {
+        await fs.rename(held, `${destination}.conflict-${randomUUID()}`);
+      } else {
+        await fs.rm(held, { recursive: true, force: true });
+      }
+    }
+  }
+
+  private contentHash(contents: string | Uint8Array): string {
+    return createHash("sha256").update(contents).digest("hex");
+  }
+
+  private async recoverHeldFiles(destination: string): Promise<void> {
+    const directory = path.dirname(destination);
+    const prefix = `.${path.basename(destination)}.`;
+    let names: string[];
+    try {
+      names = (await fs.readdir(directory)).filter(
+        (name) => name.startsWith(prefix) && (name.endsWith(".held") || name.endsWith(".previous")),
+      );
+    } catch {
+      return;
+    }
+    for (const name of names.sort()) {
+      const held = path.join(directory, name);
+      if (this.liveHeldFiles.has(held)) continue;
+      const predecessor = name.endsWith(".previous");
+      let info;
+      try {
+        info = await fs.lstat(held);
+      } catch {
+        continue;
+      }
+      if (!predecessor) {
+        let destinationExists = true;
+        try {
+          await fs.lstat(destination);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          destinationExists = false;
+        }
+        if (!destinationExists) {
+          // Any failure propagates into load(), keeping protected stores
+          // read-only instead of seeding defaults over the parked source.
+          await this.restoreHeldFile(held, destination, true);
+          await this.syncDirectory(directory);
+          continue;
+        }
+        if (!info.isFile() || info.isSymbolicLink()) {
+          await this.restoreHeldFile(held, destination, true);
+          await this.syncDirectory(directory);
+          continue;
+        }
+      }
+      if (!info.isFile() || info.isSymbolicLink()) continue;
+      const suffix = predecessor ? ".previous" : ".held";
+      const encodedHash = name.slice(prefix.length, -suffix.length).split(".", 1)[0];
+      try {
+        const contents = await readRegularFile(held);
+        if (/^[a-f0-9]{64}$/u.test(encodedHash) && this.contentHash(contents) === encodedHash) {
+          await fs.rm(held, { force: true });
+        } else {
+          await fs.rename(held, `${destination}.conflict-${randomUUID()}`);
+        }
+        await this.syncDirectory(directory);
+      } catch {
+        // Leave an unreadable recovery candidate untouched for manual review.
+      }
+    }
+  }
+
+  private async publishProtected(
+    staged: string,
+    destination: string,
+    isCurrent: () => boolean,
+  ): Promise<void> {
+    if (this.diskSnapshot === undefined) {
+      throw new Error("Cannot overwrite a JSON file before loading its current contents.");
+    }
+    const expectedHash =
+      this.diskSnapshot === null ? "absent" : this.contentHash(this.diskSnapshot);
+    const held = path.join(
+      path.dirname(destination),
+      `.${path.basename(destination)}.${expectedHash}.${randomUUID()}.held`,
+    );
+    this.liveHeldFiles.add(held);
+    let heldMatches = false;
+    let destinationPublished = false;
+    let destinationHeld = false;
+    if (this.diskSnapshot !== null) {
+      try {
+        await this.options.beforeProtectedHold?.();
+        await fs.rename(destination, held);
+        destinationHeld = true;
+      } catch (error) {
+        this.liveHeldFiles.delete(held);
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new DataStoreExternalChangeError();
+        }
+        throw error;
+      }
+    }
+
+    try {
+      if (this.diskSnapshot !== null) {
+        try {
+          heldMatches = (await readRegularFile(held)).equals(this.diskSnapshot);
+        } catch {
+          throw new DataStoreExternalChangeError();
+        }
+        if (!heldMatches) throw new DataStoreExternalChangeError();
+      }
+      await this.options.beforeProtectedPublish?.();
+      if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      if (this.diskSnapshot !== null && !(await readRegularFile(held)).equals(this.diskSnapshot)) {
+        heldMatches = false;
+        await this.restoreHeldFile(held, destination, true);
+        throw new DataStoreExternalChangeError();
+      }
+      // The destination is absent only inside this protected publication. A
+      // concurrent editor that creates it wins: hard-link publication is the
+      // no-overwrite primitive that rename lacks.
+      if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      await fs.link(staged, destination);
+      destinationPublished = true;
+      await this.syncDirectory(path.dirname(destination));
+      // A writer that already held the old inode can still modify it after the
+      // pre-publication comparison. Publication is already committed at this
+      // point, so preserve that late edit as a conflict instead of reporting a
+      // rejected save while leaving the app's new document canonical.
+      await this.options.afterProtectedPublish?.();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new DataStoreExternalChangeError();
+      }
+      throw error;
+    } finally {
+      if (this.diskSnapshot !== null) {
+        if (destinationHeld && !destinationPublished) {
+          try {
+            this.liveHeldFiles.delete(held);
+            await this.restoreHeldFile(held, destination, true);
+            await this.syncDirectory(path.dirname(destination));
+          } catch {
+            // Keep an unreadable held file for startup recovery rather than
+            // risking deletion of the only copy of a late external edit.
+          }
+        } else if (heldMatches && destinationPublished) {
+          const previous = `${held.slice(0, -".held".length)}.previous`;
+          try {
+            await fs.rename(held, previous);
+            this.liveHeldFiles.delete(held);
+            this.liveHeldFiles.add(previous);
+            await this.syncDirectory(path.dirname(destination));
+          } catch {
+            // A still-named held file is also safe; next startup reconciles it.
+          }
+        }
+        // Once publication is visible, retain every old inode under a
+        // predecessor for this process lifetime. An editor may write through
+        // any descriptor it opened before any later app publication; next
+        // startup compares all predecessor bytes with their encoded hashes and
+        // removes unchanged files or preserves edited ones as conflicts.
+      }
     }
   }
 
@@ -100,8 +400,8 @@ export class DataStore<T> {
    * maintains by hand rather than merely losing a regenerable cache.
    */
   private async writeNow(data: T, isCurrent: () => boolean): Promise<void> {
-    const destination = await this.getFilePath();
     if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+    const destination = await this.getFilePath();
     if (this.options.preserveCorruptFile) {
       // `corrupt` is only assessed by load(). update() always loads first, but a
       // bare save() need not have, and overwriting an unread file is precisely
@@ -113,19 +413,51 @@ export class DataStore<T> {
       path.dirname(destination),
       `.${path.basename(destination)}.${randomUUID()}.tmp`,
     );
+    const serialized = `${JSON.stringify(data, null, 2)}\n`;
     try {
-      await fs.writeFile(staged, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
-      await fs.rename(staged, destination);
+      await fs.writeFile(staged, serialized, "utf-8");
+      const stagedHandle = await fs.open(staged, "r");
+      try {
+        await stagedHandle.sync();
+      } finally {
+        await stagedHandle.close();
+      }
+      if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      if (this.options.rejectExternalChanges) {
+        await this.publishProtected(staged, destination, isCurrent);
+      } else {
+        if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+        await fs.rename(staged, destination);
+        await this.syncDirectory(path.dirname(destination));
+      }
     } finally {
       await fs.rm(staged, { force: true }).catch(() => undefined);
     }
     this.cache = data;
+    this.diskSnapshot = Buffer.from(serialized, "utf-8");
     this.corrupt = false;
+    this.unsafe = false;
   }
 
   async save(data: T, isCurrent: () => boolean = () => true): Promise<void> {
     const snapshot = structuredClone(data);
-    return this.serialized(() => this.writeNow(snapshot, isCurrent));
+    return this.serialized(async () => {
+      const hadCache = this.cache !== null;
+      const changed = this.options.reloadBeforeWrite ? await this.reloadNow() : false;
+      if (this.options.rejectCorruptWrite && this.corrupt) {
+        throw new DataStoreCorruptWriteError();
+      }
+      if (this.options.rejectUnsafeWrite && this.unsafe) {
+        throw new DataStoreUnsafeWriteError();
+      }
+      if (
+        this.options.rejectExternalChanges &&
+        ((hadCache && changed) || (!hadCache && this.diskSnapshot !== null))
+      ) {
+        throw new DataStoreExternalChangeError();
+      }
+      await this.writeNow(snapshot, isCurrent);
+    });
   }
 
   /** Serialize a fresh read-modify-write transaction with every other writer. */
@@ -135,6 +467,13 @@ export class DataStore<T> {
   ): Promise<R> {
     return this.serialized(async () => {
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      if (this.options.reloadBeforeWrite) await this.reloadNow();
+      if (this.options.rejectCorruptWrite && this.corrupt) {
+        throw new DataStoreCorruptWriteError();
+      }
+      if (this.options.rejectUnsafeWrite && this.unsafe) {
+        throw new DataStoreUnsafeWriteError();
+      }
       const draft = structuredClone(await this.load());
       const result = await mutation(draft);
       await this.writeNow(draft, isCurrent);
@@ -159,13 +498,19 @@ export class DataStore<T> {
    * method exists to catch. Re-reading a small config file is not worth that.
    */
   async reload(): Promise<boolean> {
-    return this.serialized(async () => {
-      const before = this.cache === null ? undefined : JSON.stringify(this.cache);
-      this.cache = null;
-      this.loadPromise = null;
-      const next = await this.load();
-      return before !== JSON.stringify(next);
-    });
+    return this.serialized(() => this.reloadNow());
+  }
+
+  private async reloadNow(): Promise<boolean> {
+    // Reads do not join the mutation queue. Let an initial in-flight load finish
+    // before invalidating its promise so it cannot commit stale state after this
+    // reload has read newer bytes.
+    if (this.loadPromise) await this.loadPromise;
+    const before = this.cache === null ? undefined : JSON.stringify(this.cache);
+    this.cache = null;
+    this.loadPromise = null;
+    const next = await this.load();
+    return before !== JSON.stringify(next);
   }
 }
 

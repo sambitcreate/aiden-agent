@@ -5,14 +5,38 @@ import {
   applyKeybindingMutation,
   effectiveBinding,
   effectiveBindings,
+  hasFutureKeybindings,
   KeybindingValidationError,
   migrateLegacyKeybindings,
   normalizeAccelerator,
   normalizeKeybindingOverrides,
   prettyAccelerator,
   repairKeybindingOverrides,
+  shouldPersistCanonicalKeybindings,
   validateEffectiveBindings,
 } from "./keybindings";
+
+test("future keybinding documents are used defensively without being downgraded", () => {
+  const future = { version: 2, commands: { "chat.new": { binding: "Command+J" } } };
+  const canonical = migrateLegacyKeybindings(future, {
+    shortcutAccelerator: "Command+Shift+Space",
+  });
+
+  assert.equal(hasFutureKeybindings(future), true);
+  assert.equal(hasFutureKeybindings({ version: 1, commands: {} }), false);
+  assert.equal(hasFutureKeybindings({ version: 1.5, commands: {} }), false);
+  assert.equal(hasFutureKeybindings({ version: "2", commands: {} }), false);
+  assert.equal(shouldPersistCanonicalKeybindings(future, canonical), false);
+  assert.equal(shouldPersistCanonicalKeybindings(undefined, canonical), true);
+  assert.throws(
+    () =>
+      applyKeybindingMutation(future, {
+        commandId: "chat.new",
+        binding: "Command+Shift+N",
+      }),
+    (error) => error instanceof KeybindingValidationError && error.code === "future-version",
+  );
+});
 
 test("normalizes aliases, modifier order, and punctuation", () => {
   assert.equal(normalizeAccelerator("shift+cmd+["), "Command+Shift+[");
@@ -67,10 +91,7 @@ test("legacy global settings remain effective until overridden", () => {
     }),
     "Command+Shift+Space",
   );
-  assert.equal(
-    effectiveBinding("dictation.toggle", undefined, { dictationEnabled: false }),
-    null,
-  );
+  assert.equal(effectiveBinding("dictation.toggle", undefined, { dictationEnabled: false }), null);
   assert.equal(effectiveBinding("dictation.toggle", undefined, {}), null);
   assert.equal(
     effectiveBinding("dictation.toggle", undefined, { dictationEnabled: true }),
@@ -102,8 +123,7 @@ test("rejects conflicts and reserved bindings without mutating the prior value",
         commandId: "chat.new",
         binding: "Command+C",
       }),
-    (error) =>
-      error instanceof KeybindingValidationError && error.code === "reserved",
+    (error) => error instanceof KeybindingValidationError && error.code === "reserved",
   );
   assert.throws(
     () =>
@@ -111,8 +131,7 @@ test("rejects conflicts and reserved bindings without mutating the prior value",
         commandId: "chat.new",
         binding: "Command+Shift+=",
       }),
-    (error) =>
-      error instanceof KeybindingValidationError && error.code === "reserved",
+    (error) => error instanceof KeybindingValidationError && error.code === "reserved",
   );
   assert.equal(effectiveBindings(current)["chat.new"], "Command+N");
 });
@@ -188,27 +207,80 @@ test("normalization tolerates malformed canonical data and preserves future comm
     version: 1,
     commands: {
       "future.command": { binding: "Command+Shift+U", metadata: { source: "future" } },
+      "chat.new": {
+        binding: "Command+N",
+        futurePolicy: { mode: "future" },
+      },
     },
   });
   const changed = applyKeybindingMutation(normalized, {
     commandId: "terminal.toggle",
     binding: "Command+Control+T",
   });
-  assert.deepEqual(
-    (changed.commands as Record<string, unknown>)["future.command"],
-    { binding: "Command+Shift+U", metadata: { source: "future" } },
-  );
+  assert.deepEqual((changed.commands as Record<string, unknown>)["future.command"], {
+    binding: "Command+Shift+U",
+    metadata: { source: "future" },
+  });
+  assert.deepEqual((changed.commands as Record<string, unknown>)["chat.new"], {
+    futurePolicy: { mode: "future" },
+    binding: "Command+N",
+  });
+  const reboundKnown = applyKeybindingMutation(changed, {
+    commandId: "chat.new",
+    binding: "Command+Shift+N",
+  });
+  assert.deepEqual((reboundKnown.commands as Record<string, unknown>)["chat.new"], {
+    futurePolicy: { mode: "future" },
+    binding: "Command+Shift+N",
+    disabled: false,
+  });
+  const resetKnown = applyKeybindingMutation(reboundKnown, {
+    commandId: "chat.new",
+    reset: true,
+  });
+  assert.deepEqual((resetKnown.commands as Record<string, unknown>)["chat.new"], {
+    futurePolicy: { mode: "future" },
+  });
   const prototypeSafe = normalizeKeybindingOverrides(
     JSON.parse(
       '{"version":1,"commands":{"__proto__":{"settings.open":{"binding":"NotAnAccelerator"}}}}',
     ),
   );
   assert.equal(Object.getPrototypeOf(prototypeSafe.commands), Object.prototype);
-  assert.deepEqual(
-    Object.getOwnPropertyDescriptor(prototypeSafe.commands, "__proto__")?.value,
-    { "settings.open": { binding: "NotAnAccelerator" } },
-  );
+  assert.deepEqual(Object.getOwnPropertyDescriptor(prototypeSafe.commands, "__proto__")?.value, {
+    "settings.open": { binding: "NotAnAccelerator" },
+  });
   assert.equal(effectiveBinding("settings.open", prototypeSafe), "Command+,");
+});
+
+test("current keybinding edits, resets, and repairs preserve unknown root fields", () => {
+  const source = {
+    version: 1 as const,
+    futurePolicy: { owner: "newer-build", revision: 3 },
+    commands: {
+      "chat.new": { binding: "Command+Shift+N" },
+    },
+  };
+  const normalized = normalizeKeybindingOverrides(source);
+  const edited = applyKeybindingMutation(normalized, {
+    commandId: "terminal.toggle",
+    binding: "Command+Control+T",
+  });
+  const reset = applyKeybindingMutation(edited, {
+    commandId: "terminal.toggle",
+    reset: true,
+  });
+  const repaired = repairKeybindingOverrides({
+    ...source,
+    commands: { "chat.new": { binding: "Command+C" } },
+  });
+
+  for (const document of [normalized, edited, reset, repaired]) {
+    assert.deepEqual(document.futurePolicy, {
+      owner: "newer-build",
+      revision: 3,
+    });
+  }
 });
 
 test("an assigned default-unbound command can be disabled and re-enabled", () => {
@@ -279,8 +351,7 @@ test("native menu accelerators cannot share a renderer-scoped binding", () => {
         commandId: "chat.new",
         binding: "Command+S",
       }),
-    (error) =>
-      error instanceof KeybindingValidationError && error.code === "conflict",
+    (error) => error instanceof KeybindingValidationError && error.code === "conflict",
   );
 });
 
@@ -288,11 +359,14 @@ test("repairs V1 bindings accepted before native-menu scope and role reservation
   const scopedConflict = repairKeybindingOverrides({
     version: 1,
     commands: {
-      "chat.new": { binding: "Command+S" },
+      "chat.new": { binding: "Command+S", futurePolicy: { version: 2 } },
     },
   });
   assert.equal(effectiveBinding("chat.new", scopedConflict), "Command+N");
   assert.equal(effectiveBinding("file.save", scopedConflict), "Command+S");
+  assert.deepEqual((scopedConflict.commands as Record<string, unknown>)["chat.new"], {
+    futurePolicy: { version: 2 },
+  });
 
   const roleConflict = migrateLegacyKeybindings({
     version: 1,
@@ -302,18 +376,18 @@ test("repairs V1 bindings accepted before native-menu scope and role reservation
     },
   });
   assert.equal(effectiveBinding("chat.new", roleConflict), "Command+N");
-  assert.deepEqual(
-    (roleConflict.commands as Record<string, unknown>)["future.command"],
-    { binding: "Command+Shift+U" },
-  );
+  assert.deepEqual((roleConflict.commands as Record<string, unknown>)["future.command"], {
+    binding: "Command+Shift+U",
+  });
   assert.doesNotThrow(() => validateEffectiveBindings(effectiveBindings(roleConflict)));
 });
 
 test("explicit replacement disables the previous owner atomically", () => {
-  const replaced = applyKeybindingMutation(
-    undefined,
-    { commandId: "terminal.toggle", binding: "Command+N", replace: true },
-  );
+  const replaced = applyKeybindingMutation(undefined, {
+    commandId: "terminal.toggle",
+    binding: "Command+N",
+    replace: true,
+  });
 
   assert.equal(effectiveBinding("terminal.toggle", replaced), "Command+N");
   assert.equal(effectiveBinding("chat.new", replaced), null);
