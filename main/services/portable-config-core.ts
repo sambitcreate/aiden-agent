@@ -32,10 +32,7 @@ import type {
   StoredProvider,
   Workspace,
 } from "./types.js";
-import {
-  MAX_CONFIG_ID_LENGTH,
-  MAX_PROVIDER_BASE_URL_LENGTH,
-} from "./types.js";
+import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "./types.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 
 /** A provider minus the caches that model discovery refills. */
@@ -148,10 +145,7 @@ function providerAliasResolutions(
 ): Map<string, { terminal: string; depth: number }> | null {
   const resolved = new Map<string, { terminal: string; depth: number }>();
   const resolving = new Set<string>();
-  const visit = (
-    source: string,
-    depth: number,
-  ): { terminal: string; depth: number } | null => {
+  const visit = (source: string, depth: number): { terminal: string; depth: number } | null => {
     const cached = resolved.get(source);
     if (cached) return cached;
     if (depth > MAX_PROVIDER_ALIAS_DEPTH || resolving.has(source)) return null;
@@ -480,6 +474,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationEnabled",
     "computerUseEnabled",
     "scheduledTasksEnabled",
+    "scheduledDefaultMcpEnabled",
     "scheduledDefaultNotify",
   ] as const) {
     keepBoolean(key);
