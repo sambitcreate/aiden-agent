@@ -63,6 +63,7 @@ import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
+import type { ToolApprovalDetails } from "../shared/assistant";
 import { parseSubagentRunSnapshotV1, type SubagentRunSnapshotV1 } from "../shared/subagent-runs";
 import type { KeybindingMutation, KeybindingSnapshot } from "../shared/keybindings";
 import {
@@ -77,10 +78,7 @@ import {
   rememberDetachedLifecycleStream,
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
-import type {
-  AppearanceConfig,
-  AppearancePreviewSnapshot,
-} from "../shared/appearance";
+import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -166,8 +164,7 @@ export const providersApi = {
 export const settingsApi = {
   get: () => invoke<AppSettings>("settings:get"),
   getAppearance: () => invoke<AppearanceConfig>("settings:getAppearance"),
-  getAppearanceState: () =>
-    invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
+  getAppearanceState: () => invoke<AppearancePreviewSnapshot>("settings:getAppearanceState"),
   previewAppearance: (appearance: AppearanceConfig) =>
     invoke<AppearanceConfig>("settings:previewAppearance", appearance),
   set: (patch: Partial<AppSettings>) => invoke<AppSettings>("settings:set", patch),
@@ -505,6 +502,7 @@ export interface ApprovalPrompt {
   toolCallId: string;
   toolName: string;
   summary: string;
+  details?: ToolApprovalDetails;
 }
 interface ChatApproval extends ApprovalPrompt {
   streamId: string;
@@ -622,6 +620,7 @@ export function startGeneration(
           toolCallId: p.toolCallId,
           toolName: p.toolName,
           summary: p.summary,
+          details: p.details,
         });
     }),
   );
