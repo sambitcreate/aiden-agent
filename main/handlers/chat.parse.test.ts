@@ -7,6 +7,7 @@ test("parseParams accepts the assistant mode and rejects the unattended mode", (
   assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");
   assert.equal(parseParams(base).mode, undefined);
   assert.throws(() => parseParams({ ...base, mode: "assistant-unattended" }), /Invalid chat mode/);
+  assert.throws(() => parseParams({ ...base, mode: "assistant-automation" }), /Invalid chat mode/);
   assert.throws(() => parseParams({ ...base, mode: "workspace" }), /Invalid chat mode/);
 });
 
