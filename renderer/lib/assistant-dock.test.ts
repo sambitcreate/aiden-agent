@@ -1,14 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assistantPreviewText, unreadBadgeLabel } from "./assistant-dock.js";
+import {
+  ASSISTANT_AUTOMATION_DRAFT,
+  assistantAutomationDraft,
+  assistantPreviewText,
+  unreadBadgeLabel,
+} from "./assistant-dock.js";
+
+test("automation entry point seeds an empty draft without overwriting user text", () => {
+  assert.equal(assistantAutomationDraft(""), ASSISTANT_AUTOMATION_DRAFT);
+  assert.equal(assistantAutomationDraft("   "), ASSISTANT_AUTOMATION_DRAFT);
+  assert.equal(
+    assistantAutomationDraft("Keep this unfinished question"),
+    "Keep this unfinished question",
+  );
+});
 
 // Invisible characters are built from code points rather than written literally:
 // raw control bytes in the source make git classify this file as binary and
 // throw away its diffs.
 const RIGHT_TO_LEFT_OVERRIDE = String.fromCodePoint(0x202e);
-const INVISIBLES = [0x00, 0x07, 0x1b, 0x200b, 0x2069].map((point) =>
-  String.fromCodePoint(point),
-);
+const INVISIBLES = [0x00, 0x07, 0x1b, 0x200b, 0x2069].map((point) => String.fromCodePoint(point));
 const REPLACEMENT_CHARACTER = String.fromCodePoint(0xfffd);
 const GRINNING_FACE = String.fromCodePoint(0x1f600);
 
