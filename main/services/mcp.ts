@@ -101,8 +101,7 @@ class McpManager {
   private async ensureConnected(server: McpServer, generation: number): Promise<Client> {
     return this.clients.getOrConnect(
       server.id,
-      () =>
-        new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} }),
+      () => new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} }),
       async (client, connectionIsCurrent) => {
         // The MCP SDK transports satisfy the client's transport interface.
         await client.connect(
@@ -118,10 +117,7 @@ class McpManager {
   }
 
   async disconnect(id: string): Promise<void> {
-    await Promise.all([
-      this.clients.disconnect(id),
-      this.statusClients.disconnect(id),
-    ]);
+    await Promise.all([this.clients.disconnect(id), this.statusClients.disconnect(id)]);
   }
 
   async closeAll(): Promise<void> {
@@ -140,16 +136,10 @@ class McpManager {
       return await this.statusClients.run(
         server.id,
         expectedGeneration,
-        () =>
-          new Client(
-            { name: "aiden-agent-test", version: "1.0.0" },
-            { capabilities: {} },
-          ),
+        () => new Client({ name: "aiden-agent-test", version: "1.0.0" }, { capabilities: {} }),
         async (client, connectionIsCurrent) => {
           const active = () => isCurrent() && connectionIsCurrent();
-          await client.connect(
-            makeTransport(await resolveAuth(server, active), active) as never,
-          );
+          await client.connect(makeTransport(await resolveAuth(server, active), active) as never);
         },
         async (client, connectionIsCurrent) => {
           if (!isCurrent() || !connectionIsCurrent()) {
@@ -206,8 +196,11 @@ class McpManager {
 
 export const mcpManager = new McpManager();
 
-/** Merge tools from all enabled servers, skipping any that fail to connect. */
-export async function collectMcpAgentTools(servers: McpServer[]): Promise<AgentTool[]> {
+/** Merge tools from enabled servers. Strict callers fail closed instead of silently losing access. */
+export async function collectMcpAgentTools(
+  servers: McpServer[],
+  options: { strict?: boolean } = {},
+): Promise<AgentTool[]> {
   const all: AgentTool[] = [];
   for (const server of servers) {
     if (!server.enabled) continue;
@@ -225,11 +218,21 @@ export async function collectMcpAgentTools(servers: McpServer[]): Promise<AgentT
         )),
       );
     } catch (error) {
+      if (options.strict) {
+        throw new Error(
+          `MCP server "${server.name}" is unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       logger.warn(
         "mcp",
         `Skipping MCP server "${server.name}": ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+  if (options.strict && servers.length > 0 && all.length === 0) {
+    throw new Error("The approved MCP servers did not provide any tools.");
   }
   return all;
 }
