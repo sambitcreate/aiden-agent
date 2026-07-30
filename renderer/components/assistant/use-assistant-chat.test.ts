@@ -5,13 +5,17 @@ import type { Provider } from "../../lib/types.js";
 import {
   assistantGenerationIsActive,
   assistantGenerationPhaseAfterStop,
+  assistantStreamHandoffFallbackMs,
   canChangeAssistantThread,
   canSendAssistantMessage,
+  enqueueAssistantApproval,
+  isAssistantAutomationApproval,
   rollbackOptimisticAssistantTurn,
   settleFailedAssistantMessages,
   settleAssistantMessages,
   type AssistantMessage,
 } from "./use-assistant-chat.js";
+import type { ApprovalPrompt } from "../../lib/ipc.js";
 
 test("blocks empty and whitespace-only sends", () => {
   assert.equal(canSendAssistantMessage("", { streaming: false, ready: true }), false);
@@ -57,6 +61,7 @@ test("thread changes stay blocked until generation persistence settles", () => {
     canChangeAssistantThread({
       conversationLoading: false,
       streaming: true,
+      rendering: false,
       turnSaving: false,
     }),
     false,
@@ -65,6 +70,7 @@ test("thread changes stay blocked until generation persistence settles", () => {
     canChangeAssistantThread({
       conversationLoading: false,
       streaming: false,
+      rendering: false,
       turnSaving: true,
     }),
     false,
@@ -73,10 +79,100 @@ test("thread changes stay blocked until generation persistence settles", () => {
     canChangeAssistantThread({
       conversationLoading: false,
       streaming: false,
+      rendering: false,
       turnSaving: false,
     }),
     true,
   );
+  assert.equal(
+    canChangeAssistantThread({
+      conversationLoading: false,
+      streaming: false,
+      rendering: true,
+      turnSaving: false,
+    }),
+    false,
+  );
+});
+
+test("Assistant queues each automation approval once and rejects ambient tools", () => {
+  const prompt: ApprovalPrompt = {
+    approvalId: "approval-1",
+    toolCallId: "tool-1",
+    toolName: "schedule_task",
+    summary: "Create Morning brief",
+    details: {
+      kind: "assistant-automation",
+      action: "create",
+      name: "Morning brief",
+      prompt: "Summarize updates.",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      nextRunAt: 1_800_000_000_000,
+      notify: true,
+      mode: "llm",
+      permission: "read-only",
+      workspaceId: null,
+      workspaceName: null,
+      mcpServerIds: [],
+      mcpServerNames: [],
+      schedulerEnabled: true,
+    },
+  };
+  const queued = enqueueAssistantApproval([], prompt);
+  assert.deepEqual(enqueueAssistantApproval(queued, prompt), queued);
+  assert.equal(isAssistantAutomationApproval(prompt), true);
+  assert.equal(
+    isAssistantAutomationApproval({
+      ...prompt,
+      approvalId: "approval-edit",
+      toolName: "edit_automation",
+      details: {
+        ...prompt.details,
+        action: "edit",
+        taskId: "task-1",
+        enabled: true,
+      } as ApprovalPrompt["details"],
+    }),
+    true,
+  );
+  assert.equal(
+    isAssistantAutomationApproval({
+      ...prompt,
+      approvalId: "approval-mismatched-edit",
+      details: {
+        ...prompt.details,
+        action: "edit",
+        taskId: "task-1",
+        enabled: true,
+      } as ApprovalPrompt["details"],
+    }),
+    false,
+  );
+  assert.equal(
+    isAssistantAutomationApproval({ ...prompt, approvalId: "approval-2", toolName: "write_file" }),
+    false,
+  );
+  assert.equal(
+    isAssistantAutomationApproval({
+      ...prompt,
+      approvalId: "approval-3",
+      details: {
+        ...prompt.details,
+        permission: "full",
+      } as unknown as ApprovalPrompt["details"],
+    }),
+    false,
+  );
+  assert.equal(
+    isAssistantAutomationApproval({ ...prompt, approvalId: "approval-4", details: undefined }),
+    false,
+  );
+});
+
+test("stream handoff has a bounded escape when the Markdown renderer never calls back", () => {
+  assert.equal(assistantStreamHandoffFallbackMs(false), 2_000);
+  assert.equal(assistantStreamHandoffFallbackMs(true), 0);
 });
 
 test("a terminal-only response fills the optimistic assistant row", () => {
