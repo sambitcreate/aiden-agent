@@ -70,16 +70,23 @@ function tools(counts: Record<string, number>): AgentToolStep[] {
 }
 
 test("splits a row into a verb and the object it acted on", () => {
-  assert.deepEqual(activityLine(step("read", 0, "read_file", "completed", { target: "src/app.ts" })), {
-    verb: "Read",
-    object: "src/app.ts",
-    tone: "normal",
-  });
+  assert.deepEqual(
+    activityLine(step("read", 0, "read_file", "completed", { target: "src/app.ts" })),
+    {
+      verb: "Read",
+      object: "src/app.ts",
+      tone: "normal",
+    },
+  );
   assert.deepEqual(activityLine(step("glob", 1, "glob", "running", { detail: "src/**/*.ts" })), {
     verb: "Searching files",
     object: "src/**/*.ts",
     tone: "normal",
   });
+  assert.equal(
+    activityLineText(step("automation", 2, "edit_automation", "completed")),
+    "Edited automation",
+  );
 });
 
 test("grep reads as a pattern scoped to a directory", () => {
@@ -130,7 +137,9 @@ test("reasoning rows report measured time and stay active until they settle", ()
 
 test("summarizes a finished turn as one deterministic sentence", () => {
   assert.equal(
-    summarizeActivity(timeline("completed", tools({ read_file: 8, grep: 3, glob: 1, run_command: 1 }))),
+    summarizeActivity(
+      timeline("completed", tools({ read_file: 8, grep: 3, glob: 1, run_command: 1 })),
+    ),
     "Explored 8 files, 4 searches, ran 1 command",
   );
   assert.equal(
@@ -145,12 +154,17 @@ test("summarizes a finished turn as one deterministic sentence", () => {
 
 test("summary leads with the work when nothing was explored", () => {
   assert.equal(summarizeActivity(timeline("completed", tools({ edit_file: 2 }))), "Edited 2 files");
-  assert.equal(summarizeActivity(timeline("completed", tools({ run_command: 1 }))), "Ran 1 command");
+  assert.equal(
+    summarizeActivity(timeline("completed", tools({ run_command: 1 }))),
+    "Ran 1 command",
+  );
 });
 
 test("uncounted tools fall back to a neutral tool-call tally", () => {
   assert.equal(
-    summarizeActivity(timeline("completed", tools({ read_file: 1, schedule_task: 1, notion__search: 1 }))),
+    summarizeActivity(
+      timeline("completed", tools({ read_file: 1, schedule_task: 1, notion__search: 1 })),
+    ),
     "Explored 1 file, 2 tool calls",
   );
 });
