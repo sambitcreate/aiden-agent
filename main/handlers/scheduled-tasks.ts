@@ -11,6 +11,7 @@ import {
 import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
 import type { ScheduledTaskSettings } from "../services/types.js";
 import { scheduledSettingsPatch } from "../services/scheduled-settings-core.js";
+import { selectedMcpServers } from "../services/mcp-selection.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -30,6 +31,7 @@ function settingsDefaults(
     enabled: input.scheduledTasksEnabled !== false,
     defaultMode: input.scheduledDefaultMode === "script" ? "script" : "llm",
     defaultPermission: input.scheduledDefaultPermission === "full" ? "full" : "read-only",
+    defaultMcpEnabled: input.scheduledDefaultMcpEnabled === true,
     defaultNotify: input.scheduledDefaultNotify !== false,
     defaultTimezone: validateTimezone(input.scheduledDefaultTimezone ?? systemTimezone()),
   };
@@ -37,9 +39,13 @@ function settingsDefaults(
 
 export function registerScheduledTaskHandlers(): void {
   ipcMain.handle("schedule:list", () => scheduleStore.list());
-  ipcMain.handle("schedule:save", (_event, input: unknown) =>
-    scheduleService.save(parseScheduledTaskInput(input)),
-  );
+  ipcMain.handle("schedule:save", async (_event, input: unknown) => {
+    const parsed = parseScheduledTaskInput(input);
+    if ((parsed.mcpServerIds?.length ?? 0) > 0) {
+      selectedMcpServers(await configStore.listMcpServers(), parsed.mcpServerIds);
+    }
+    return scheduleService.save(parsed);
+  });
   ipcMain.handle("schedule:remove", (_event, id: unknown) =>
     scheduleService.remove(requiredString(id, "id")),
   );
