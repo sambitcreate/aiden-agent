@@ -209,3 +209,44 @@ test("concurrent lifecycle mutations serialize per task", async () => {
   assert.ok(latest?.nextRunAt);
   testbed.service.stop();
 });
+
+test("revision-checked saves update one task and reject stale overwrites", async () => {
+  const testbed = harness();
+  const task = await addTask(testbed.store);
+  const edited = await testbed.service.save(
+    {
+      id: task.id,
+      name: task.name,
+      enabled: task.enabled,
+      mode: task.mode,
+      cron: task.cron,
+      timezone: "America/New_York",
+      prompt: task.prompt,
+      permission: task.permission,
+      notify: task.notify,
+    },
+    { expectedUpdatedAt: task.updatedAt },
+  );
+  assert.equal(edited.id, task.id);
+  assert.equal(edited.timezone, "America/New_York");
+  assert.equal((await testbed.store.list()).length, 1);
+
+  await assert.rejects(
+    testbed.service.save(
+      {
+        id: task.id,
+        name: task.name,
+        enabled: task.enabled,
+        mode: task.mode,
+        cron: "0 10 * * *",
+        timezone: task.timezone,
+        prompt: task.prompt,
+        permission: task.permission,
+        notify: task.notify,
+      },
+      { expectedUpdatedAt: task.updatedAt },
+    ),
+    /changed before the edit was saved/iu,
+  );
+  assert.equal((await testbed.store.get(task.id))?.cron, "0 9 * * *");
+});
