@@ -494,6 +494,7 @@ export interface ChatReadResponse {
 
 export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
+export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
 
 export interface ScheduledTask {
@@ -511,6 +512,10 @@ export interface ScheduledTask {
   prompt?: string;
   script?: string;
   permission: ScheduledTaskPermission;
+  /** Exact configured MCP servers approved for unattended use. */
+  mcpServerIds?: string[];
+  /** Main-owned runtime profile, exposed read-only for truthful capability display. */
+  executionProfile?: ScheduledTaskExecutionProfile;
   chatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
@@ -543,6 +548,8 @@ export interface ScheduledTaskInput {
   prompt?: string;
   script?: string;
   permission?: ScheduledTaskPermission;
+  /** Exact configured MCP servers this task may invoke unattended. */
+  mcpServerIds?: string[];
   notify?: boolean;
 }
 
@@ -550,6 +557,7 @@ export interface ScheduledTaskSettings {
   enabled: boolean;
   defaultMode: ScheduledTaskMode;
   defaultPermission: ScheduledTaskPermission;
+  defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
 }
@@ -702,6 +710,7 @@ export interface AppSettings {
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
   scheduledDefaultPermission?: ScheduledTaskPermission;
+  scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
