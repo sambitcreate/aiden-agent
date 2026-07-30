@@ -19,6 +19,9 @@ export function scheduledSettingsPatch(
   if (input.defaultPermission === "read-only" || input.defaultPermission === "full") {
     patch.scheduledDefaultPermission = input.defaultPermission;
   }
+  if (typeof input.defaultMcpEnabled === "boolean") {
+    patch.scheduledDefaultMcpEnabled = input.defaultMcpEnabled;
+  }
   if (typeof input.defaultNotify === "boolean") patch.scheduledDefaultNotify = input.defaultNotify;
   if (input.defaultTimezone !== undefined) {
     patch.scheduledDefaultTimezone = validateTimezone(
