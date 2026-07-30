@@ -50,8 +50,14 @@ import type {
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
+  EDIT_AUTOMATION_TOOL_NAME,
   SCHEDULE_TOOL_NAME,
+  prepareAssistantEditAutomationProposal,
+  repairAssistantScheduleMcpTarget,
+  resolveAssistantScheduleMcpServers,
+  resolveAssistantScheduleProject,
   scheduleToolRequiresApproval,
+  summarizeEditAutomationToolCall,
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
@@ -78,7 +84,16 @@ import {
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { startLocalModelLoadMonitor, type LocalModelLoadMonitor } from "./local-runtime-status.js";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
-import { buildAssistantSystemPrompt } from "./assistant/system-prompt.js";
+import {
+  buildAssistantSystemPrompt,
+  withUnattendedAssistantContract,
+} from "./assistant/system-prompt.js";
+import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
+import {
+  advanceAttendedToolErrorState,
+  recoverAttendedToolErrorContext,
+} from "./assistant/tool-loop-guard.js";
+import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
@@ -117,6 +132,8 @@ export interface GenerationExecutionOptions {
   usageSource?: UsageRequestSource;
   /** Withhold connector tools when their mutation semantics cannot be enforced. */
   allowMcpTools?: boolean;
+  /** Exact MCP server identities approved for an unattended generation. */
+  mcpServerIds?: readonly string[];
   /** Internal foreground policy; scheduled/background callers explicitly disable delegation. */
   allowSubagents?: boolean;
   /** Main-owned lease token spanning user-message persistence through generation registration. */
@@ -300,13 +317,13 @@ async function buildSystemPrompt(
   branch: string | undefined,
   permission: GenerationPermission,
   subagentsAvailable: boolean,
+  skillsAvailable = true,
 ): Promise<string> {
   const base =
     "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
-  const skillsText = formatAvailableSkills(
-    await configStore.listSkills(),
-    await discoverSkills(folderPath),
-  );
+  const skillsText = skillsAvailable
+    ? formatAvailableSkills(await configStore.listSkills(), await discoverSkills(folderPath))
+    : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
   if (!folderPath || permission === "none") {
     return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}`;
@@ -348,14 +365,16 @@ async function prepareGeneration(
   options: GenerationExecutionOptions,
 ) {
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
-  const assistantMode = params.mode === "assistant" || params.mode === "assistant-unattended";
-  // Assistant mode is never folder-scoped. Resolving a caller-supplied
-  // workspaceId here would bind the Aiden persona — "you cannot run commands" —
-  // to that folder's coding tools at that folder's permission, and a "full"
-  // workspace skips approval entirely. The reserved assistant workspace exists
-  // to hold threads, not to grant access.
+  const attendedAssistant = params.mode === "assistant";
+  const assistantPersonaMode =
+    params.mode === "assistant" || params.mode === "assistant-unattended";
+  const assistantAutomationMode = params.mode === "assistant-automation";
+  const assistantMode = assistantPersonaMode || assistantAutomationMode;
+  // The dock persona is never folder-scoped. Project automation mode is
+  // main-only and reaches this branch only after the persisted approval profile
+  // has bound the scheduled run to a workspace.
   const workspace =
-    params.workspaceId && !assistantMode
+    params.workspaceId && !assistantPersonaMode
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined;
   if (workspace) await assertManagedWorktreeAdmission(workspace);
@@ -436,21 +455,25 @@ async function prepareGeneration(
           }),
         })
       : undefined;
-  // The Aiden assistant surface has no approval affordance, so it must not be
-  // handed any tool that can pause for one. Scheduling is the live example:
-  // schedule_task blocks on ToolApprovalCoordinator, which never times out, so
-  // an unapprovable call would hang the panel with no error. Connector tools go
-  // for the same reason — their mutation semantics cannot be enforced here.
+  // Assistant modes use positive allowlists: the dock gets safe metadata plus
+  // scheduling, while an approved automation gets only its project tools and
+  // exact MCP identities. Computer Use, skills, and delegation stay out.
   const tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       permission: toolPermission,
       computerUse,
-      allowScheduling: !assistantMode && !options.excludeToolNames?.has("schedule_task"),
-      allowMcpTools: assistantMode ? false : options.allowMcpTools,
+      allowScheduling:
+        (!assistantMode || attendedAssistant) && !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME),
+      allowMcpTools: options.allowMcpTools,
+      mcpServerIds: options.mcpServerIds,
       allowSubagents,
-      mode: assistantMode ? "assistant" : undefined,
+      mode: assistantPersonaMode
+        ? "assistant"
+        : assistantAutomationMode
+          ? "assistant-automation"
+          : undefined,
       createSubagentTool: subagentSupervisor
         ? () => createSubagentTool(subagentSupervisor)
         : undefined,
@@ -614,6 +637,7 @@ export const llmClient = {
       assistantSettingsPermission,
       subagentSupervisor,
     } = setup;
+    const attendedAssistant = params.mode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
     const exposeReasoning = shouldExposeReasoning(params.providerId);
@@ -645,6 +669,7 @@ export const llmClient = {
     }
 
     const deniedToolCalls = new Set<string>();
+    let consecutiveAttendedToolErrorTurns = 0;
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
       sendGeneration(streamId, "chat:timeline", {
         streamId,
@@ -701,20 +726,36 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
+      const assistantMcpServers =
+        params.mode === "assistant"
+          ? await configStore
+              .listMcpServers()
+              .then((servers) => assistantMcpServerInventory(servers))
+              .catch(() => [])
+          : [];
       const systemPrompt =
         params.mode === "assistant" || params.mode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
               availableTools: tools.map((tool) => tool.name),
+              mcpServers: assistantMcpServers,
               unattended: params.mode === "assistant-unattended",
             })
-          : await buildSystemPrompt(
-              folderPath,
-              git.branch,
-              permission,
-              tools.some((tool) => tool.name === "subagent"),
-            );
+          : params.mode === "assistant-automation"
+            ? withUnattendedAssistantContract(
+                `${await buildSystemPrompt(folderPath, git.branch, permission, false, false)}${
+                  options.mcpServerIds?.length
+                    ? "\n\nThe user explicitly approved the available MCP tools for this automation. Use them when the task requires external data or actions. Never claim an external result unless the corresponding tool call succeeded."
+                    : ""
+                }`,
+              )
+            : await buildSystemPrompt(
+                folderPath,
+                git.branch,
+                permission,
+                tools.some((tool) => tool.name === "subagent"),
+              );
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -761,11 +802,35 @@ export const llmClient = {
           tools,
           messages: toPiMessages(params, model, supportsImages),
         },
+        prepareNextTurnWithContext: async ({ toolResults, context }) => {
+          if (!attendedAssistant) return undefined;
+          const state = advanceAttendedToolErrorState(
+            consecutiveAttendedToolErrorTurns,
+            toolResults,
+          );
+          consecutiveAttendedToolErrorTurns = state.consecutiveErrorTurns;
+          if (state.shouldStop) {
+            logger.warn(
+              "pi",
+              `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
+            );
+            const hasEnabledMcpServers = await configStore
+              .listMcpServers()
+              .then((servers) => servers.some((server) => server.enabled))
+              .catch(() => false);
+            return {
+              context: recoverAttendedToolErrorContext(context, hasEnabledMcpServers),
+            };
+          }
+          return undefined;
+        },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
           timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
           let summary: string;
+          let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
+          let attendedScheduleApproval = false;
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
               deniedToolCalls.add(context.toolCall.id);
@@ -796,18 +861,62 @@ export const llmClient = {
               };
             }
           } else {
-            const scheduleApproval =
+            const createScheduleApproval =
               context.toolCall.name === SCHEDULE_TOOL_NAME &&
               scheduleToolRequiresApproval(context.args);
+            const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
+            const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
               permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            attendedScheduleApproval = scheduleApproval && attendedAssistant;
             if (!scheduleApproval && !workspaceApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
-            summary = scheduleApproval
-              ? summarizeScheduleToolCall(context.args)
-              : summarizeToolCall(context.toolCall.name, context.args);
+            if (scheduleApproval && attendedAssistant) {
+              try {
+                const proposal = editScheduleApproval
+                  ? await prepareAssistantEditAutomationProposal(context.args)
+                  : await repairAssistantScheduleMcpTarget(context.args);
+                if (createScheduleApproval) {
+                  const canonicalArgs = context.args as Record<string, unknown>;
+                  canonicalArgs.workspaceId = proposal.input.workspaceId;
+                  canonicalArgs.permission = proposal.input.permission;
+                  canonicalArgs.mcpServerIds = proposal.input.mcpServerIds;
+                }
+                const [project, mcpServers, liveSettings] = await Promise.all([
+                  resolveAssistantScheduleProject(proposal),
+                  resolveAssistantScheduleMcpServers(proposal),
+                  configStore.getSettings(),
+                ]);
+                if (signal?.aborted) {
+                  throw new Error("Automation change was cancelled.");
+                }
+                approvalDetails = {
+                  ...proposal.details,
+                  ...project,
+                  ...mcpServers,
+                  // Consent reflects the current scheduler state at the point
+                  // the prompt is published, not the generation-start snapshot.
+                  schedulerEnabled: liveSettings.scheduledTasksEnabled !== false,
+                };
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "Aiden rejected this automation change.",
+                };
+              }
+            }
+            summary = editScheduleApproval
+              ? summarizeEditAutomationToolCall(context.args)
+              : scheduleApproval
+                ? summarizeScheduleToolCall(context.args)
+                : summarizeToolCall(context.toolCall.name, context.args);
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
           const allowed = await approvals.request(
@@ -819,6 +928,7 @@ export const llmClient = {
                 toolCallId,
                 toolName: context.toolCall.name,
                 summary,
+                details: approvalDetails,
               };
             })(),
             signal,
@@ -844,7 +954,14 @@ export const llmClient = {
               };
             }
           }
-          return allowed ? undefined : { block: true, reason: "The user denied this action." };
+          return allowed
+            ? undefined
+            : {
+                block: true,
+                reason: attendedScheduleApproval
+                  ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
+                  : "The user denied this action.",
+              };
         },
       });
 
@@ -935,6 +1052,21 @@ export const llmClient = {
             break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
+            if (
+              attendedAssistant &&
+              event.isError &&
+              (event.toolName === SCHEDULE_TOOL_NAME ||
+                event.toolName === EDIT_AUTOMATION_TOOL_NAME) &&
+              Array.isArray(event.result?.content)
+            ) {
+              const reason = event.result.content.find(
+                (item: { type?: unknown; text?: unknown }) =>
+                  item.type === "text" && typeof item.text === "string",
+              )?.text;
+              logger.warn("pi", `Attended schedule proposal failed for stream ${streamId}.`, {
+                reason: typeof reason === "string" ? reason.slice(0, 320) : "Unknown error.",
+              });
+            }
             timeline.toolFinished(
               event.toolCallId,
               generationCancelRequested()
