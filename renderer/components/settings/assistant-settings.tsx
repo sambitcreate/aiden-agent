@@ -20,9 +20,9 @@ function HowAidenWorks() {
       </Field>
       <Field
         label="Access"
-        description="Aiden can explain the app, but this surface cannot inspect live settings or projects, edit files, run commands, or use connected tools."
+        description="Aiden can list automations and propose new read-only Ask Aiden tasks with your confirmation. It still cannot inspect live settings or projects, edit files, run commands, or use connected tools."
       >
-        <Badge>Chat only</Badge>
+        <Badge>Automations only</Badge>
       </Field>
       <Field
         label="Background suggestions"
@@ -67,10 +67,7 @@ export function AssistantSettings() {
     return (
       <>
         <FieldSet title="Open Aiden">
-          <Field
-            label="Global shortcut"
-            description="Checking the saved global shortcut."
-          >
+          <Field label="Global shortcut" description="Checking the saved global shortcut.">
             <Badge>Checking…</Badge>
           </Field>
         </FieldSet>
@@ -87,7 +84,15 @@ export function AssistantSettings() {
           description="Open the Aiden dock from anywhere and move focus to its composer."
         >
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <Badge color={runtime?.state === "active" ? "green" : runtime?.state === "unavailable" ? "red" : undefined}>
+            <Badge
+              color={
+                runtime?.state === "active"
+                  ? "green"
+                  : runtime?.state === "unavailable"
+                    ? "red"
+                    : undefined
+              }
+            >
               {runtime?.state === "active"
                 ? "Active"
                 : runtime?.state === "unavailable"
@@ -98,9 +103,7 @@ export function AssistantSettings() {
             <Button
               size="small"
               variant="filled"
-              onClick={() =>
-                void navigate({ to: "/settings", search: { section: "shortcut" } })
-              }
+              onClick={() => void navigate({ to: "/settings", search: { section: "shortcut" } })}
             >
               Manage shortcuts
             </Button>
