@@ -18,6 +18,7 @@ import {
 } from "./ui";
 import { scheduleApi } from "../lib/ipc";
 import type {
+  McpServer,
   ScheduledTaskInput,
   ScheduledTaskMode,
   ScheduledTaskPermission,
@@ -38,6 +39,8 @@ export function ScheduledTaskEditor({
   open,
   initial,
   workspaces,
+  mcpServers,
+  mcpServersUnavailable = false,
   busy,
   onOpenChange,
   onSave,
@@ -45,6 +48,8 @@ export function ScheduledTaskEditor({
   open: boolean;
   initial: ScheduledTaskInput;
   workspaces: Workspace[];
+  mcpServers: McpServer[];
+  mcpServersUnavailable?: boolean;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
@@ -59,6 +64,7 @@ export function ScheduledTaskEditor({
       setDraft({
         ...initial,
         permission: initial.mode === "script" ? "full" : initial.permission,
+        mcpServerIds: initial.mode === "llm" ? (initial.mcpServerIds ?? []) : [],
       });
     }
   }, [initial, open]);
@@ -111,17 +117,46 @@ export function ScheduledTaskEditor({
       ...current,
       mode,
       permission: mode === "script" ? "full" : current.permission,
+      mcpServerIds: mode === "script" ? [] : current.mcpServerIds,
     }));
   };
   const setPermission = (permission: ScheduledTaskPermission) => {
-    setDraft((current) => ({ ...current, permission }));
+    setDraft((current) => ({
+      ...current,
+      permission,
+      mcpServerIds: permission === "read-only" ? [] : current.mcpServerIds,
+    }));
+  };
+  const selectedMcpIds = draft.mcpServerIds ?? [];
+  const enabledMcpIds = new Set(
+    mcpServers.filter((server) => server.enabled).map((server) => server.id),
+  );
+  const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
+  const visibleMcpServers = [
+    ...mcpServers.filter((server) => server.enabled || selectedMcpIds.includes(server.id)),
+    ...unavailableMcpIds
+      .filter((id) => !mcpServers.some((server) => server.id === id))
+      .map((id) => ({ id, name: "Unavailable MCP server", enabled: false })),
+  ];
+  const toggleMcpServer = (id: string, enabled: boolean) => {
+    setDraft((current) => {
+      const ids = new Set(current.mcpServerIds ?? []);
+      if (enabled) ids.add(id);
+      else ids.delete(id);
+      return {
+        ...current,
+        permission: enabled ? "full" : current.permission,
+        mcpServerIds: [...ids],
+      };
+    });
   };
   const valid =
     draft.name.trim() &&
     draft.cron.trim() &&
     draft.timezone?.trim() &&
     (draft.mode === "llm" ? draft.prompt?.trim() : draft.script?.trim()) &&
-    !previewError;
+    !previewError &&
+    (!selectedMcpIds.length || (!mcpServersUnavailable && unavailableMcpIds.length === 0));
 
   return (
     <Dialog
@@ -297,6 +332,52 @@ export function ScheduledTaskEditor({
             <Text variant="small-strong">Full</Text>
           </Field>
         )}
+        {draft.mode === "llm" ? (
+          <Field
+            label="MCP tools"
+            description="Choose the exact connected servers this automation may call unattended. MCP access requires Full permission."
+            orientation="vertical"
+          >
+            {mcpServersUnavailable ? (
+              <Callout color="red">
+                <Text variant="small" color="secondary">
+                  MCP servers could not be loaded. Retry from Settings before granting connector
+                  access.
+                </Text>
+              </Callout>
+            ) : visibleMcpServers.length === 0 ? (
+              <Text variant="small" color="tertiary">
+                No MCP servers are enabled. Connect one in Settings → MCP Servers.
+              </Text>
+            ) : (
+              <ul className="max-h-48 divide-y divide-separator overflow-y-auto rounded-control bg-background">
+                {visibleMcpServers.map((server) => {
+                  const selected = selectedMcpIds.includes(server.id);
+                  return (
+                    <li className="flex min-h-11 items-center gap-3 px-3 py-2" key={server.id}>
+                      <span className="min-w-0 flex-1">
+                        <Text variant="small-strong" truncate>
+                          {server.name}
+                        </Text>
+                        {!server.enabled ? (
+                          <Text variant="small" color="red" className="mt-0.5 block">
+                            Disabled or removed
+                          </Text>
+                        ) : null}
+                      </span>
+                      <Switch
+                        checked={selected}
+                        onCheckedChange={(checked) => toggleMcpServer(server.id, checked)}
+                        disabled={!server.enabled && !selected}
+                        aria-label={`${selected ? "Remove" : "Allow"} ${server.name} for this scheduled task`}
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Field>
+        ) : null}
         {draft.permission === "full" ? (
           <div className="px-4 pb-4">
             <Callout className="flex-row gap-2" color="red">
@@ -304,7 +385,11 @@ export function ScheduledTaskEditor({
               <Text variant="small" color="secondary">
                 {draft.mode === "script"
                   ? "Scripts run unattended with Full access. Only select a script you trust."
-                  : "Full tasks run edits and commands unattended. Use it only for a prompt you trust."}
+                  : selectedMcpIds.length > 0
+                    ? `This task may call ${selectedMcpIds.length} selected MCP ${
+                        selectedMcpIds.length === 1 ? "server" : "servers"
+                      } unattended. MCP tools may read or change external data.`
+                    : "Full tasks run edits and commands unattended. Use it only for a prompt you trust."}
               </Text>
             </Callout>
           </div>
