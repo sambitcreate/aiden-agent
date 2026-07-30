@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
 import { DataStore } from "./data-store.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
-import { assertSafeScheduledPrompt } from "./schedule-guard.js";
+import {
+  ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
+  assertAssistantScheduleExecutionBoundary,
+  assertSafeScheduledPrompt,
+  validateScheduledMcpServerIds,
+} from "./schedule-guard.js";
 import type {
   ScheduledRun,
   ScheduledRunResult,
@@ -128,7 +133,33 @@ function normalizeInput(
   if (input.mode === "script" && input.permission !== "full") {
     throw new Error("Script tasks require Full permission because scripts can change the system.");
   }
+  if (
+    input.executionProfile !== undefined &&
+    input.executionProfile !== ASSISTANT_SCHEDULE_EXECUTION_PROFILE
+  ) {
+    throw new Error("Invalid scheduled task execution profile.");
+  }
   const workspaceId = cleanOptional(input.workspaceId);
+  const permission = input.permission ?? existing?.permission ?? "read-only";
+  const mcpServerIds =
+    input.mcpServerIds === undefined
+      ? existing?.mcpServerIds
+      : validateScheduledMcpServerIds(input.mcpServerIds);
+  if ((mcpServerIds?.length ?? 0) > 0 && input.mode !== "llm") {
+    throw new Error("Only Ask Aiden tasks can use MCP servers.");
+  }
+  if ((mcpServerIds?.length ?? 0) > 0 && permission !== "full") {
+    throw new Error("MCP-enabled scheduled tasks require Full permission.");
+  }
+  const executionProfile = input.executionProfile ?? existing?.executionProfile;
+  assertAssistantScheduleExecutionBoundary({
+    executionProfile,
+    mode: input.mode,
+    permission,
+    script,
+    workspaceId,
+    mcpServerIds,
+  });
   const nextRunAt = enabled ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
   return {
     id: existing?.id ?? cleanOptional(input.id, 160) ?? randomUUID(),
@@ -144,7 +175,9 @@ function normalizeInput(
     model: cleanOptional(input.model),
     prompt,
     script,
-    permission: input.permission ?? existing?.permission ?? "read-only",
+    permission,
+    mcpServerIds,
+    executionProfile,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
@@ -170,25 +203,50 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     typeof task.cron !== "string" ||
     typeof task.timezone !== "string" ||
     (task.permission !== "read-only" && task.permission !== "full") ||
+    (task.executionProfile !== undefined &&
+      task.executionProfile !== ASSISTANT_SCHEDULE_EXECUTION_PROFILE) ||
     typeof task.createdAt !== "number" ||
     typeof task.updatedAt !== "number"
   ) {
     return null;
   }
+  const workspaceId = typeof task.workspaceId === "string" ? task.workspaceId : undefined;
+  const prompt = typeof task.prompt === "string" ? task.prompt : undefined;
+  const script = typeof task.script === "string" ? task.script : undefined;
+  const executionProfile =
+    task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE
+      ? ASSISTANT_SCHEDULE_EXECUTION_PROFILE
+      : undefined;
+  let mcpServerIds: string[] | undefined;
   let scheduleError: string | undefined;
   try {
+    mcpServerIds = validateScheduledMcpServerIds(task.mcpServerIds);
     nextScheduledRun(task.cron, task.timezone);
     if (task.mode === "llm") {
-      if (typeof task.prompt !== "string" || !task.prompt.trim()) {
+      if (!prompt?.trim()) {
         throw new Error("LLM tasks require a prompt.");
       }
-      assertSafeScheduledPrompt(task.prompt);
+      assertSafeScheduledPrompt(prompt);
+      if ((mcpServerIds?.length ?? 0) > 0 && task.permission !== "full") {
+        throw new Error("MCP-enabled scheduled tasks require Full permission.");
+      }
     } else {
-      validateScriptName(typeof task.script === "string" ? task.script : "");
+      validateScriptName(script ?? "");
       if (task.permission !== "full") {
         throw new Error("Script tasks require Full permission.");
       }
+      if ((mcpServerIds?.length ?? 0) > 0) {
+        throw new Error("Only Ask Aiden tasks can use MCP servers.");
+      }
     }
+    assertAssistantScheduleExecutionBoundary({
+      executionProfile,
+      mode: task.mode,
+      permission: task.permission,
+      script,
+      workspaceId,
+      mcpServerIds,
+    });
   } catch (error) {
     scheduleError = error instanceof Error ? error.message : "Invalid stored schedule.";
   }
@@ -201,15 +259,17 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     timezone: task.timezone,
     nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
     lastRunAt: finiteTimestamp(task.lastRunAt),
-    workspaceId: typeof task.workspaceId === "string" ? task.workspaceId : undefined,
+    workspaceId,
     // Resolve aliases only after config has had a chance to protect an edited
     // legacy preset (for example, a custom `gemini` endpoint). The default
     // resolver below still upgrades untouched legacy IDs for standalone tests.
     providerId: typeof task.providerId === "string" ? task.providerId : undefined,
     model: typeof task.model === "string" ? task.model : undefined,
-    prompt: typeof task.prompt === "string" ? task.prompt : undefined,
-    script: typeof task.script === "string" ? task.script : undefined,
+    prompt,
+    script,
     permission: task.permission,
+    mcpServerIds,
+    executionProfile,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
     notify: task.notify !== false,
     lastResult: scheduleError
@@ -323,6 +383,7 @@ export function createScheduleStore(
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+        if (enabled) assertAssistantScheduleExecutionBoundary(existing);
         const timestamp = now();
         const task: ScheduledTask = {
           ...existing,
@@ -350,6 +411,7 @@ export function createScheduleStore(
         const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+        if (patch.enabled === true) assertAssistantScheduleExecutionBoundary(existing);
         const task = { ...existing, ...patch, updatedAt: now() };
         draft[index] = task;
         return structuredClone(task);
