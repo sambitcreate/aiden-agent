@@ -10,7 +10,6 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { cn } from "../lib/ui-utils";
 import { CodeBlock } from "./code-block";
-import "katex/dist/katex.min.css";
 
 interface MarkdownProps {
   content: string;
