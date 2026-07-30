@@ -74,6 +74,14 @@ test("main and subagent activity share Aiden's orb wrapper", () => {
   assert.doesNotMatch(list, /from "thinking-orbs"/u);
 });
 
+test("reasoning keeps its status and disclosure without a brain glyph", () => {
+  const reasoning = source("../components/reasoning-block.tsx");
+  assert.doesNotMatch(reasoning, /\bBrainCircuit\b/u);
+  assert.match(reasoning, /active \? "Thinking…" : "Thinking"/u);
+  assert.match(reasoning, /<ChevronRight/u);
+  assert.match(reasoning, /aria-expanded=\{expanded\}/u);
+});
+
 test("a persistence error retains the only rendered partial response", () => {
   const pane = source("../main/chat-pane.tsx");
   assert.match(pane, /const isGenerating = streamingText !== null && !hasUnpersistedResponse/u);
