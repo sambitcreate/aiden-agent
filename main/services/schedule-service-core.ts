@@ -273,8 +273,23 @@ export function createScheduleServiceCore(dependencies: ScheduleServiceDependenc
       }
     },
 
-    async save(input: ScheduledTaskInput): Promise<ScheduledTask> {
+    async save(
+      input: ScheduledTaskInput,
+      options: { expectedUpdatedAt?: number } = {},
+    ): Promise<ScheduledTask> {
+      if (options.expectedUpdatedAt !== undefined && !input.id) {
+        throw new Error("An expected task revision requires an existing task ID.");
+      }
       const perform = async () => {
+        if (options.expectedUpdatedAt !== undefined && input.id) {
+          const current = await store.get(input.id);
+          if (!current) throw new Error(`Scheduled task ${input.id} not found.`);
+          if (current.updatedAt !== options.expectedUpdatedAt) {
+            throw new Error(
+              "This automation changed before the edit was saved. List it again and retry.",
+            );
+          }
+        }
         const task = await store.save(input);
         if (input.id) {
           stopJob(input.id);
