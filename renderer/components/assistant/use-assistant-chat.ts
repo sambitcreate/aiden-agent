@@ -9,7 +9,9 @@ import {
   createChatTurnId,
   onNotification,
   startGeneration,
+  type ApprovalPrompt,
   type GenerationHandle,
+  type StreamCallbacks,
 } from "../../lib/ipc";
 import type { Chat, ChatMeta } from "../../lib/types";
 import { useProviders } from "../../lib/queries";
@@ -18,7 +20,13 @@ import {
   readModelSelection,
   subscribeModelSelection,
 } from "../../lib/use-model-selection";
-import { ASSISTANT_WORKSPACE_ID } from "../../shared/assistant";
+import { STREAMING_REVEAL_FALLBACK_MS } from "../../lib/streaming-reveal";
+import {
+  ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
+  ASSISTANT_AUTOMATION_TOOL_NAME,
+  ASSISTANT_WORKSPACE_ID,
+  isAssistantAutomationApprovalDetails,
+} from "../../shared/assistant";
 
 export interface AssistantMessage {
   role: "user" | "assistant";
@@ -41,9 +49,10 @@ export function assistantGenerationPhaseAfterStop(
 export function canChangeAssistantThread(state: {
   conversationLoading: boolean;
   streaming: boolean;
+  rendering: boolean;
   turnSaving: boolean;
 }): boolean {
-  return !state.conversationLoading && !state.streaming && !state.turnSaving;
+  return !state.conversationLoading && !state.streaming && !state.rendering && !state.turnSaving;
 }
 
 /**
@@ -104,9 +113,29 @@ export function rollbackOptimisticAssistantTurn(
   return end === messages.length ? messages : messages.slice(0, end);
 }
 
-/** Something the collapsed mark should surface: a finished reply or a failure. */
+export function enqueueAssistantApproval(
+  approvals: ApprovalPrompt[],
+  prompt: ApprovalPrompt,
+): ApprovalPrompt[] {
+  return approvals.some((approval) => approval.approvalId === prompt.approvalId)
+    ? approvals
+    : [...approvals, prompt];
+}
+
+export function isAssistantAutomationApproval(prompt: ApprovalPrompt): boolean {
+  if (!isAssistantAutomationApprovalDetails(prompt.details)) return false;
+  return prompt.details.action === "create"
+    ? prompt.toolName === ASSISTANT_AUTOMATION_TOOL_NAME
+    : prompt.toolName === ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
+}
+
+export function assistantStreamHandoffFallbackMs(reducedMotion: boolean): number {
+  return reducedMotion ? 0 : STREAMING_REVEAL_FALLBACK_MS;
+}
+
+/** Something the collapsed mark should surface: a reply, failure, or approval. */
 export interface AssistantNotice {
-  kind: "reply" | "error";
+  kind: "reply" | "error" | "approval";
   text: string;
   /** Monotonic marker so consumers can tell a new notice from a re-render. */
   at: number;
@@ -118,6 +147,7 @@ export type AssistantReadiness =
   | "loading"
   | "conversation-loading"
   | "stopping"
+  | "rendering"
   | "turn-saving"
   | "unavailable"
   | "unset";
@@ -125,6 +155,7 @@ export type AssistantReadiness =
 export interface AssistantChat {
   messages: AssistantMessage[];
   streaming: boolean;
+  streamComplete: boolean;
   error: string | null;
   ready: boolean;
   readiness: AssistantReadiness;
@@ -132,8 +163,12 @@ export interface AssistantChat {
   threads: ChatMeta[];
   activeChatId: string | null;
   lastNotice: AssistantNotice | null;
+  approvals: ApprovalPrompt[];
+  decidingApprovalId: string | null;
   send: (text: string) => void;
   stop: () => void;
+  finishStreamHandoff: () => void;
+  decideApproval: (prompt: ApprovalPrompt, decision: "allow" | "deny") => Promise<void>;
   openThread: (chatId: string) => void;
   newThread: () => void;
 }
@@ -151,8 +186,11 @@ export function useAssistantChat(): AssistantChat {
   const [messages, setMessages] = React.useState<AssistantMessage[]>([]);
   const [generationPhase, setGenerationPhase] = React.useState<AssistantGenerationPhase>("idle");
   const streaming = assistantGenerationIsActive(generationPhase);
+  const [streamComplete, setStreamComplete] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [lastNotice, setLastNotice] = React.useState<AssistantNotice | null>(null);
+  const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
+  const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   // Aiden follows the app-wide model selection rather than owning one. Mounting
   // useModelSelection here would fork it: that hook keeps per-instance state
   // seeded once at mount, so the dock would never see the composer switch
@@ -163,23 +201,31 @@ export function useAssistantChat(): AssistantChat {
   const conversationLoadingRef = React.useRef(false);
   const [turnSaving, setTurnSaving] = React.useState(false);
   const modelReady = isModelSelectionAvailable(selection, providers.data);
-  const ready = modelReady && !conversationLoading && !turnSaving && generationPhase !== "stopping";
+  const ready =
+    modelReady &&
+    !conversationLoading &&
+    !turnSaving &&
+    !streamComplete &&
+    generationPhase !== "stopping";
   const readiness: AssistantReadiness = conversationLoading
     ? "conversation-loading"
     : turnSaving
       ? "turn-saving"
       : generationPhase === "stopping"
         ? "stopping"
-        : modelReady
-          ? "ready"
-          : providers.isLoading
-            ? "loading"
-            : providers.isError
-              ? "unavailable"
-              : "unset";
+        : streamComplete
+          ? "rendering"
+          : modelReady
+            ? "ready"
+            : providers.isLoading
+              ? "loading"
+              : providers.isError
+                ? "unavailable"
+                : "unset";
   const canChangeThread = canChangeAssistantThread({
     conversationLoading,
     streaming,
+    rendering: streamComplete,
     turnSaving,
   });
   const [threads, setThreads] = React.useState<ChatMeta[]>([]);
@@ -199,6 +245,7 @@ export function useAssistantChat(): AssistantChat {
   const stoppedPersistingTurnRef = React.useRef<number | null>(null);
   const stoppingTurnRef = React.useRef<number | null>(null);
   const noticeSequenceRef = React.useRef(0);
+  const decidingApprovalRef = React.useRef<string | null>(null);
 
   const fail = React.useCallback((message: string) => {
     setError(message);
@@ -237,6 +284,19 @@ export function useAssistantChat(): AssistantChat {
 
   React.useEffect(() => () => abandonTurn("lifecycle"), [abandonTurn]);
 
+  // A formatting/highlighting failure replaces the streaming renderer with its
+  // raw-text fallback, so its normal handoff callback cannot fire. Match the
+  // main transcript's bounded escape hatch to keep the dock usable.
+  React.useEffect(() => {
+    if (!streamComplete) return;
+    const reducedMotion = document.documentElement.dataset.reduceMotion === "true";
+    const timer = window.setTimeout(
+      () => setStreamComplete(false),
+      assistantStreamHandoffFallbackMs(reducedMotion),
+    );
+    return () => window.clearTimeout(timer);
+  }, [streamComplete]);
+
   const loadThread = React.useCallback(
     (chatId: string) => {
       if (!canChangeThread || persistingTurnRef.current !== null || handleRef.current) {
@@ -250,6 +310,10 @@ export function useAssistantChat(): AssistantChat {
       stoppingTurnRef.current = null;
       setTurnSaving(false);
       setGenerationPhase("idle");
+      setStreamComplete(false);
+      setApprovals([]);
+      setDecidingApprovalId(null);
+      decidingApprovalRef.current = null;
       const token = ++loadTokenRef.current;
       conversationLoadingRef.current = true;
       setConversationLoading(true);
@@ -297,6 +361,10 @@ export function useAssistantChat(): AssistantChat {
     conversationLoadingRef.current = false;
     setConversationLoading(false);
     setGenerationPhase("idle");
+    setStreamComplete(false);
+    setApprovals([]);
+    setDecidingApprovalId(null);
+    decidingApprovalRef.current = null;
     setMessages([]);
     setError(null);
     setActiveChatId(null);
@@ -312,7 +380,8 @@ export function useAssistantChat(): AssistantChat {
         stoppedPersistingTurnRef.current === turnRef.current ||
         !canSendAssistantMessage(text, {
           streaming,
-          ready: isModelSelectionAvailable(current, providers.data),
+          ready:
+            isModelSelectionAvailable(current, providers.data) && !streamComplete && !turnSaving,
         })
       ) {
         return;
@@ -321,9 +390,12 @@ export function useAssistantChat(): AssistantChat {
       const { providerId, model } = current;
       const content = text.trim();
       const turn = ++turnRef.current;
-      const messageTurnId = createChatTurnId();
       const isCurrent = () => turn === turnRef.current;
       setError(null);
+      setStreamComplete(false);
+      setApprovals([]);
+      setDecidingApprovalId(null);
+      decidingApprovalRef.current = null;
       setGenerationPhase("streaming");
       setMessages((existing) => [
         ...existing,
@@ -373,8 +445,81 @@ export function useAssistantChat(): AssistantChat {
         if (deltaFrame === null) deltaFrame = requestAnimationFrame(flushDelta);
       };
 
+      const messageTurnId = createChatTurnId();
       const run = (chatId: string, history: AssistantMessage[]) => {
         if (!isCurrent()) return;
+        const callbacks: StreamCallbacks = {
+          onDelta: appendDelta,
+          onDone: (fullContent) => {
+            if (!isCurrent()) return;
+            clearPendingDelta();
+            if (stoppingTurnRef.current === turn) stoppingTurnRef.current = null;
+            setGenerationPhase("idle");
+            handleRef.current = null;
+            setApprovals([]);
+            setDecidingApprovalId(null);
+            decidingApprovalRef.current = null;
+            // A cancelled generation still reports done, with no content.
+            if (fullContent.trim()) {
+              setMessages((existing) => settleAssistantMessages(existing, fullContent));
+              setStreamComplete(true);
+              setLastNotice({
+                kind: "reply",
+                text: fullContent,
+                at: ++noticeSequenceRef.current,
+              });
+            } else {
+              setStreamComplete(false);
+              dropEmptyPlaceholder();
+            }
+            refreshThreads();
+          },
+          onError: (message, partialContent) => {
+            if (!isCurrent()) return;
+            const stoppedByUser = stoppingTurnRef.current === turn;
+            if (stoppedByUser) stoppingTurnRef.current = null;
+            const bufferedDelta = pendingDelta;
+            clearPendingDelta();
+            setGenerationPhase("idle");
+            setStreamComplete(false);
+            handleRef.current = null;
+            setApprovals([]);
+            setDecidingApprovalId(null);
+            decidingApprovalRef.current = null;
+            setMessages((existing) =>
+              settleFailedAssistantMessages(existing, partialContent, bufferedDelta),
+            );
+            if (stoppedByUser) refreshThreads();
+            fail(message);
+          },
+          onApproval: (prompt) => {
+            if (!isAssistantAutomationApproval(prompt)) {
+              void chatsApi.approve(prompt.approvalId, "deny").catch((cause: unknown) => {
+                if (!isCurrent()) return;
+                fail(
+                  cause instanceof Error
+                    ? cause.message
+                    : "Aiden could not deny an unexpected tool request, so the response was stopped.",
+                );
+                handleRef.current?.cancel("user_stop");
+              });
+              if (isCurrent()) {
+                fail(`Aiden blocked the unexpected ${prompt.toolName} approval request.`);
+              }
+              return;
+            }
+            if (!isCurrent()) {
+              void chatsApi.approve(prompt.approvalId, "deny").catch(() => undefined);
+              return;
+            }
+            setApprovals((existing) => enqueueAssistantApproval(existing, prompt));
+            setLastNotice({
+              kind: "approval",
+              text: "Automation needs your confirmation",
+              at: ++noticeSequenceRef.current,
+            });
+          },
+        };
         handleRef.current = startGeneration(
           {
             chatId,
@@ -384,50 +529,7 @@ export function useAssistantChat(): AssistantChat {
             mode: "assistant",
             messages: [...history, { role: "user", content }],
           },
-          {
-            onDelta: appendDelta,
-            onDone: (fullContent) => {
-              if (!isCurrent()) return;
-              clearPendingDelta();
-              if (stoppingTurnRef.current === turn) stoppingTurnRef.current = null;
-              setGenerationPhase("idle");
-              handleRef.current = null;
-              // A cancelled generation still reports done, with no content.
-              if (fullContent.trim()) {
-                setMessages((existing) => settleAssistantMessages(existing, fullContent));
-                setLastNotice({
-                  kind: "reply",
-                  text: fullContent,
-                  at: ++noticeSequenceRef.current,
-                });
-              } else {
-                dropEmptyPlaceholder();
-              }
-              refreshThreads();
-            },
-            onError: (message, partialContent) => {
-              if (!isCurrent()) return;
-              const stoppedByUser = stoppingTurnRef.current === turn;
-              if (stoppedByUser) stoppingTurnRef.current = null;
-              const bufferedDelta = pendingDelta;
-              clearPendingDelta();
-              setGenerationPhase("idle");
-              handleRef.current = null;
-              setMessages((existing) =>
-                settleFailedAssistantMessages(existing, partialContent, bufferedDelta),
-              );
-              if (stoppedByUser) refreshThreads();
-              fail(message);
-            },
-            // Aiden's tool set is built without anything that can pause for
-            // approval (see llm-client's assistantMode gate). If one ever slips
-            // through, deny it: an unanswered approval never times out, and the
-            // panel would sit on an ellipsis forever with no way to explain it.
-            onApproval: (prompt) => {
-              void chatsApi.approve(prompt.approvalId, "deny");
-              if (isCurrent()) fail(`Aiden cannot approve ${prompt.toolName} here; it was denied.`);
-            },
-          },
+          callbacks,
           messageTurnId,
         );
       };
@@ -487,11 +589,15 @@ export function useAssistantChat(): AssistantChat {
           if (!isCurrent()) return;
           setTurnSaving(false);
           setGenerationPhase("idle");
+          setStreamComplete(false);
+          setApprovals([]);
+          setDecidingApprovalId(null);
+          decidingApprovalRef.current = null;
           setMessages((existing) => rollbackOptimisticAssistantTurn(existing, content));
           fail(cause instanceof Error ? cause.message : String(cause));
         });
     },
-    [activeChatId, fail, providers.data, refreshThreads, streaming],
+    [activeChatId, fail, providers.data, refreshThreads, streamComplete, streaming, turnSaving],
   );
 
   const stop = React.useCallback(() => {
@@ -499,6 +605,10 @@ export function useAssistantChat(): AssistantChat {
       stoppedPersistingTurnRef.current = turnRef.current;
       setTurnSaving(true);
       setGenerationPhase("idle");
+      setStreamComplete(false);
+      setApprovals([]);
+      setDecidingApprovalId(null);
+      decidingApprovalRef.current = null;
       setMessages((existing) => {
         const last = existing[existing.length - 1];
         return last?.role === "assistant" && last.content === "" ? existing.slice(0, -1) : existing;
@@ -513,9 +623,46 @@ export function useAssistantChat(): AssistantChat {
     handle.cancel("user_stop");
   }, [generationPhase]);
 
+  const finishStreamHandoff = React.useCallback(() => {
+    setStreamComplete(false);
+  }, []);
+
+  const decideApproval = React.useCallback(
+    async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
+      if (
+        decidingApprovalRef.current ||
+        !approvals.some((approval) => approval.approvalId === prompt.approvalId)
+      ) {
+        return;
+      }
+      decidingApprovalRef.current = prompt.approvalId;
+      setDecidingApprovalId(prompt.approvalId);
+      try {
+        await chatsApi.approve(prompt.approvalId, decision);
+        setError(null);
+        setApprovals((existing) =>
+          existing.filter((approval) => approval.approvalId !== prompt.approvalId),
+        );
+      } catch (cause) {
+        fail(
+          cause instanceof Error
+            ? cause.message
+            : "Aiden could not send that automation decision. Try again or stop the response.",
+        );
+      } finally {
+        if (decidingApprovalRef.current === prompt.approvalId) {
+          decidingApprovalRef.current = null;
+          setDecidingApprovalId(null);
+        }
+      }
+    },
+    [approvals, fail],
+  );
+
   return {
     messages,
     streaming,
+    streamComplete,
     error,
     ready,
     readiness,
@@ -523,8 +670,12 @@ export function useAssistantChat(): AssistantChat {
     threads,
     activeChatId,
     lastNotice,
+    approvals,
+    decidingApprovalId,
     send,
     stop,
+    finishStreamHandoff,
+    decideApproval,
     openThread: loadThread,
     newThread,
   };
