@@ -1,5 +1,5 @@
 import * as React from "react";
-import { BrainCircuit, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 
 interface ReasoningBlockProps {
@@ -60,7 +60,6 @@ export function ReasoningBlock({
         onClick={() => setExpanded((value) => !value)}
         className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:outline-none"
       >
-        <BrainCircuit aria-hidden="true" className="size-3.5 shrink-0" />
         <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>
           {active ? "Thinking…" : "Thinking"}
         </span>
