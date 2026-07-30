@@ -20,7 +20,12 @@ import {
   toast,
 } from "../ui";
 import { scheduleApi } from "../../lib/ipc";
-import { queryKeys, useScheduledTasks, useScheduledTaskSettings } from "../../lib/queries";
+import {
+  queryKeys,
+  useMcpServers,
+  useScheduledTasks,
+  useScheduledTaskSettings,
+} from "../../lib/queries";
 import type { ScheduledTask, ScheduledTaskSettings } from "../../lib/types";
 
 export function ScheduledTasksSettings() {
@@ -28,6 +33,7 @@ export function ScheduledTasksSettings() {
   const queryClient = useQueryClient();
   const settings = useScheduledTaskSettings();
   const tasks = useScheduledTasks();
+  const mcpServers = useMcpServers();
   const [saving, setSaving] = React.useState(false);
   const [removing, setRemoving] = React.useState<ScheduledTask | null>(null);
   const [timezone, setTimezone] = React.useState("");
@@ -50,6 +56,7 @@ export function ScheduledTasksSettings() {
   };
 
   const value = settings.data;
+  const enabledMcpCount = (mcpServers.data ?? []).filter((server) => server.enabled).length;
   const authoritativeError = settings.isError || tasks.isError;
   return (
     <>
@@ -106,9 +113,13 @@ export function ScheduledTasksSettings() {
         >
           <Select
             value={value?.defaultPermission ?? "read-only"}
-            onValueChange={(defaultPermission) =>
-              void save({ defaultPermission: defaultPermission === "full" ? "full" : "read-only" })
-            }
+            onValueChange={(defaultPermission) => {
+              const permission = defaultPermission === "full" ? "full" : "read-only";
+              void save({
+                defaultPermission: permission,
+                ...(permission === "read-only" ? { defaultMcpEnabled: false } : {}),
+              });
+            }}
             disabled={settings.isLoading || saving || authoritativeError}
           >
             <SelectTrigger aria-label="Default scheduled task permission">
@@ -119,6 +130,37 @@ export function ScheduledTasksSettings() {
               <SelectItem value="full">Full</SelectItem>
             </SelectContent>
           </Select>
+        </Field>
+        <Field
+          label="Default MCP access"
+          description="Preselect every currently enabled MCP server for new Full Ask Aiden tasks."
+        >
+          <div className="flex flex-col items-end gap-1">
+            <Switch
+              checked={value?.defaultPermission === "full" && value?.defaultMcpEnabled === true}
+              onCheckedChange={(defaultMcpEnabled) =>
+                void save({
+                  defaultMcpEnabled,
+                  ...(defaultMcpEnabled ? { defaultPermission: "full" } : {}),
+                })
+              }
+              disabled={
+                settings.isLoading ||
+                saving ||
+                authoritativeError ||
+                mcpServers.isError ||
+                enabledMcpCount === 0
+              }
+              aria-label="Enable MCP access for new scheduled tasks"
+            />
+            <Text variant="small" color={mcpServers.isError ? "red" : "tertiary"}>
+              {mcpServers.isError
+                ? "MCP servers unavailable"
+                : enabledMcpCount === 0
+                  ? "No enabled servers"
+                  : `${enabledMcpCount} enabled ${enabledMcpCount === 1 ? "server" : "servers"}`}
+            </Text>
+          </div>
         </Field>
         <Field label="Notifications" description="Notify after non-silent task runs.">
           <div className="flex justify-end">
