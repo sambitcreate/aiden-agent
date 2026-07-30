@@ -26,3 +26,32 @@ test("scheduled task parser rejects malformed permission values instead of prese
     );
   }
 });
+
+test("renderer task mutations cannot forge the main-owned Assistant execution profile", () => {
+  const parsed = parseScheduledTaskInput({
+    ...valid,
+    executionProfile: "assistant",
+  });
+  assert.equal("executionProfile" in parsed, false);
+});
+
+test("scheduled task parser normalizes a bounded exact MCP server scope", () => {
+  assert.deepEqual(
+    parseScheduledTaskInput({
+      ...valid,
+      permission: "full",
+      mcpServerIds: [" gmail ", "gmail", "notion"],
+    }).mcpServerIds,
+    ["gmail", "notion"],
+  );
+  for (const mcpServerIds of [
+    [""],
+    [42],
+    Array.from({ length: 17 }, (_, index) => `mcp-${index}`),
+  ]) {
+    assert.throws(
+      () => parseScheduledTaskInput({ ...valid, permission: "full", mcpServerIds }),
+      /MCP server/iu,
+    );
+  }
+});
