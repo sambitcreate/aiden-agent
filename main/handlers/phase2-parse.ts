@@ -3,13 +3,29 @@
 // See handlers/phase2.ts.
 
 import { asString } from "./voice-codec.js";
-import type { McpServer, McpTransport, Skill } from "../services/types.js";
+import {
+  MAX_CONFIG_ID_LENGTH,
+  type McpServer,
+  type McpTransport,
+  type Skill,
+} from "../services/types.js";
+
+function boundedId(value: unknown): string {
+  const id = asString(value, "id");
+  if (!id.trim()) {
+    throw new Error('Expected non-empty string for "id".');
+  }
+  if (id.length > MAX_CONFIG_ID_LENGTH) {
+    throw new Error(`Expected "id" to be at most ${MAX_CONFIG_ID_LENGTH} characters.`);
+  }
+  return id;
+}
 
 export function parseSkill(value: unknown): Skill {
   if (typeof value !== "object" || value === null) throw new Error("Invalid skill payload.");
   const s = value as Record<string, unknown>;
   return {
-    id: asString(s.id, "id"),
+    id: boundedId(s.id),
     name: asString(s.name, "name"),
     description: typeof s.description === "string" ? s.description : "",
     instructions: typeof s.instructions === "string" ? s.instructions : "",
@@ -35,7 +51,7 @@ export function parseMcpServer(value: unknown): McpServer {
     ? s.args.filter((argument): argument is string => typeof argument === "string")
     : undefined;
   return {
-    id: asString(s.id, "id"),
+    id: boundedId(s.id),
     name: asString(s.name, "name"),
     transport,
     command: typeof s.command === "string" ? s.command : undefined,

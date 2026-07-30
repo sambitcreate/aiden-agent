@@ -6,6 +6,7 @@ import {
   type ProviderConfigMigrationShape,
 } from "./provider-config-migration-core.js";
 import type { StoredProvider } from "./types.js";
+import { MAX_CONFIG_ID_LENGTH } from "./types.js";
 
 function provider(
   id: string,
@@ -102,4 +103,52 @@ test("keeps every edited preset custom and never lets a future Pi ID claim it", 
       isBuiltin: false,
     }),
   });
+});
+
+test("generated IDs avoid alias sources and remembered providers resolve to the terminal alias", () => {
+  const config: ProviderConfigMigrationShape = {
+    providers: [
+      provider("foo", "http://localhost:1234/v1", {
+        needsKey: false,
+        deployment: "local",
+      }),
+    ],
+    providerIdAliases: {
+      "custom:foo": "foo",
+    },
+    settings: { lastProviderId: "custom:foo" },
+  };
+
+  assert.equal(migratePiProviderConfig(config), true);
+  assert.deepEqual(
+    config.providers.map(({ id }) => id),
+    ["custom:foo-2"],
+  );
+  assert.deepEqual(config.providerIdAliases, {
+    "custom:foo": "custom:foo-2",
+    foo: "custom:foo-2",
+  });
+  assert.equal(config.settings.lastProviderId, "custom:foo-2");
+  assert.equal(migratePiProviderConfig(config), false);
+});
+
+test("generated custom IDs stay inside the portable schema budget", () => {
+  const sourceId = "x".repeat(MAX_CONFIG_ID_LENGTH);
+  const config: ProviderConfigMigrationShape = {
+    providers: [
+      provider(sourceId, "http://localhost:1234/v1", {
+        needsKey: false,
+        deployment: "local",
+      }),
+    ],
+    settings: { lastProviderId: sourceId },
+  };
+
+  assert.equal(migratePiProviderConfig(config), true);
+  const [migrated] = config.providers;
+  assert.ok(migrated);
+  assert.equal(migrated.id.length, MAX_CONFIG_ID_LENGTH);
+  assert.equal(config.providerIdAliases?.[sourceId], migrated.id);
+  assert.equal(config.settings.lastProviderId, migrated.id);
+  assert.equal(migratePiProviderConfig(config), false);
 });

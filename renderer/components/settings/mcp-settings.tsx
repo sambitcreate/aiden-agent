@@ -338,8 +338,8 @@ function McpEditor({
     setAuthorizing(true);
     try {
       const server = { ...build(), oauth: true };
+      await mcpApi.save(server); // authorization may only target the durable endpoint
       await mcpApi.authorize(server);
-      await mcpApi.save(server); // persist the OAuth flag + keep the sign-in
       setOauth(true);
       setAuthorized(true);
       onSaved();
@@ -354,7 +354,9 @@ function McpEditor({
   const handleTest = async () => {
     setTesting(true);
     try {
-      const status = await mcpApi.status(build());
+      const record = build();
+      await mcpApi.save(record);
+      const status = await mcpApi.status(record);
       if (oauth) setAuthorized(Boolean(status.authorized));
       if (status.connected) toast.success(`Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`);
       else toast.error(`Connection failed: ${status.error ?? "unknown error"}`);

@@ -32,6 +32,7 @@ test("parseSkill rejects non-object payloads and missing required fields", () =>
   assert.throws(() => parseSkill({}), /Expected non-empty string for "id"/);
   assert.throws(() => parseSkill({ id: "x" }), /Expected non-empty string for "name"/);
   assert.throws(() => parseSkill({ id: "", name: "x" }), /Expected non-empty string for "id"/);
+  assert.throws(() => parseSkill({ id: "   ", name: "x" }), /Expected non-empty string for "id"/);
 });
 
 test("parseMcpServer parses a stdio server with command/args/env", () => {
@@ -79,6 +80,14 @@ test("parseMcpServer rejects non-object payloads and missing required fields", (
   assert.throws(() => parseMcpServer("hi"), /Invalid MCP server payload/);
   assert.throws(() => parseMcpServer({}), /Expected non-empty string for "id"/);
   assert.throws(() => parseMcpServer({ id: "x" }), /Expected non-empty string for "name"/);
+  assert.throws(
+    () => parseMcpServer({ id: "x".repeat(257), name: "Too long" }),
+    /at most 256 characters/u,
+  );
+  assert.throws(
+    () => parseMcpServer({ id: " \t ", name: "Whitespace" }),
+    /Expected non-empty string for "id"/u,
+  );
 });
 
 test("parseMcpServer returns undefined env/headers/args when empty or absent", () => {

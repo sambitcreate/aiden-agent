@@ -10,8 +10,15 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { DataStore } from "./data-store.js";
+import {
+  DataStore,
+  DataStoreCorruptWriteError,
+  DataStoreExternalChangeError,
+  DataStoreUnsafeWriteError,
+} from "./data-store.js";
 import { createChatStore } from "./chat-store-core.js";
 
 async function tmpDir(t: test.TestContext, prefix: string): Promise<string> {
@@ -33,6 +40,84 @@ test("DataStore.load returns the default value when the file is corrupt JSON", a
   await fs.writeFile(path.join(dir, "config.json"), "{not valid json", "utf-8");
   const store = new DataStore("config.json", { count: 99 }, () => dir);
   assert.deepEqual(await store.load(), { count: 99 });
+  assert.equal(await store.loadedFromCorruptFile(), true);
+});
+
+test("DataStore rejects invalid UTF-8 without rewriting the original bytes", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-invalid-utf8-");
+  const file = path.join(dir, "config.json");
+  const invalid = Buffer.from([
+    ...Buffer.from('{"value":"', "utf-8"),
+    0xff,
+    ...Buffer.from('"}', "utf-8"),
+  ]);
+  await fs.writeFile(file, invalid);
+  const store = new DataStore("config.json", { value: "default" }, () => dir, {
+    preserveCorruptFile: true,
+    reloadBeforeWrite: true,
+    rejectCorruptWrite: true,
+    rejectExternalChanges: true,
+  });
+
+  assert.deepEqual(await store.load(), { value: "default" });
+  assert.equal(await store.loadedFromCorruptFile(), true);
+  await assert.rejects(
+    store.update((draft) => void (draft.value = "replacement")),
+    DataStoreCorruptWriteError,
+  );
+  assert.equal((await fs.readFile(file)).equals(invalid), true);
+});
+
+test("DataStore normalizes valid JSON with the wrong runtime shape", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-normalize-");
+  await fs.writeFile(path.join(dir, "config.json"), "null", "utf-8");
+  const store = new DataStore("config.json", { count: 0 }, () => dir, {
+    normalize: (value) =>
+      value && typeof value === "object" ? (value as { count: number }) : { count: 7 },
+  });
+
+  assert.deepEqual(await store.load(), { count: 7 });
+  assert.equal(await store.loadedFromCorruptFile(), false);
+});
+
+test("DataStore exposes valid-but-unsafe normalization state until a safe save", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-unsafe-");
+  await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({ count: "bad" }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    normalize: (value) =>
+      value && typeof value === "object" && typeof (value as { count?: unknown }).count === "number"
+        ? (value as { count: number })
+        : { count: 7 },
+    isSafe: (value) =>
+      Boolean(
+        value &&
+        typeof value === "object" &&
+        typeof (value as { count?: unknown }).count === "number",
+      ),
+  });
+
+  assert.deepEqual(await store.load(), { count: 7 });
+  assert.equal(await store.loadedFromUnsafeFile(), true);
+  await store.save({ count: 8 });
+  assert.equal(await store.loadedFromUnsafeFile(), false);
+});
+
+test("DataStore can make valid-but-unsafe files permanently read-only", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-reject-unsafe-");
+  const target = path.join(dir, "config.json");
+  const original = JSON.stringify({ count: "future-value" });
+  await fs.writeFile(target, original, "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    normalize: () => ({ count: 7 }),
+    isSafe: () => false,
+    reloadBeforeWrite: true,
+    rejectUnsafeWrite: true,
+  });
+
+  await assert.rejects(() => store.update((draft) => void (draft.count = 8)), {
+    name: DataStoreUnsafeWriteError.name,
+  });
+  assert.equal(await fs.readFile(target, "utf-8"), original);
 });
 
 test("DataStore.load caches: a second load does not re-read disk", async (t) => {
@@ -130,6 +215,461 @@ test("DataStore only rescues the corrupt file once, not on every later write", a
   assert.equal(rescued.length, 1);
 });
 
+test("DataStore refreshes before a protected mutation and preserves a new JSON typo", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-external-corrupt-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectCorruptWrite: true,
+  });
+  assert.deepEqual(await store.load(), { count: 1 });
+
+  const broken = '{ "count": broken after load }';
+  await fs.writeFile(file, broken, "utf-8");
+
+  await assert.rejects(
+    store.update((draft) => void (draft.count += 1)),
+    /does not parse/u,
+  );
+  assert.equal(await fs.readFile(file, "utf-8"), broken);
+});
+
+test("DataStore rejects a stale save after a valid external edit", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-external-valid-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+  assert.deepEqual(await store.load(), { count: 1 });
+
+  const edited = JSON.stringify({ count: 2 });
+  await fs.writeFile(file, edited, "utf-8");
+
+  await assert.rejects(store.save({ count: 3 }), /changed outside/u);
+  assert.equal(await fs.readFile(file, "utf-8"), edited);
+});
+
+test("DataStore rejects a first save when it discovers an existing file", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-first-save-existing-");
+  const file = path.join(dir, "config.json");
+  const existing = JSON.stringify({ count: 4 });
+  await fs.writeFile(file, existing, "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+
+  await assert.rejects(store.save({ count: 5 }), /changed outside/u);
+  assert.equal(await fs.readFile(file, "utf-8"), existing);
+});
+
+test("DataStore rejects an external edit made during an async mutation", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-mid-mutation-edit-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+  let mutationStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    mutationStarted = resolve;
+  });
+  let releaseMutation!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseMutation = resolve;
+  });
+
+  const update = store.update(async (draft) => {
+    mutationStarted();
+    await release;
+    draft.count = 2;
+  });
+  await started;
+  const edited = JSON.stringify({ count: 99, externallyAdded: true });
+  await fs.writeFile(file, edited, "utf-8");
+  releaseMutation();
+
+  await assert.rejects(update, /changed outside/u);
+  assert.equal(await fs.readFile(file, "utf-8"), edited);
+});
+
+test("DataStore protected publication never overwrites a file created after the hold", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-post-hold-edit-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  const edited = JSON.stringify({ count: 99, external: true });
+  let publishHookRuns = 0;
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+    beforeProtectedPublish: async () => {
+      publishHookRuns += 1;
+      await fs.writeFile(file, edited, "utf-8");
+    },
+  });
+
+  await assert.rejects(
+    store.update((draft) => void (draft.count = 2)),
+    /changed outside/u,
+  );
+  assert.equal(publishHookRuns, 1);
+  assert.equal(await fs.readFile(file, "utf-8"), edited);
+  assert.equal(
+    (await fs.readdir(dir)).some((name) => name.endsWith(".held")),
+    false,
+  );
+});
+
+test("DataStore restores a special file swapped into the canonical path before the hold", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-pre-hold-special-swap-");
+  const file = path.join(dir, "config.json");
+  const original = JSON.stringify({ count: 1 });
+  await fs.writeFile(file, original, "utf-8");
+  const displaced = path.join(dir, "original.json");
+  const symlinkTarget = path.join(dir, "symlink-target.json");
+  await fs.writeFile(symlinkTarget, JSON.stringify({ count: 9 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+    beforeProtectedHold: async () => {
+      await fs.rename(file, displaced);
+      await fs.symlink(symlinkTarget, file);
+    },
+  });
+
+  await assert.rejects(
+    store.update((draft) => void (draft.count = 2)),
+    DataStoreExternalChangeError,
+  );
+  assert.equal((await fs.lstat(file)).isSymbolicLink(), true);
+  assert.equal(await fs.readFile(displaced, "utf-8"), original);
+  assert.equal(
+    (await fs.readdir(dir)).some((name) => name.endsWith(".held")),
+    false,
+  );
+});
+
+test("DataStore restores a directory swapped into the canonical path before the hold", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-pre-hold-directory-swap-");
+  const file = path.join(dir, "config.json");
+  const original = JSON.stringify({ count: 1 });
+  await fs.writeFile(file, original, "utf-8");
+  const displaced = path.join(dir, "original.json");
+  const nested = path.join(file, "nested");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+    beforeProtectedHold: async () => {
+      await fs.rename(file, displaced);
+      await fs.mkdir(file);
+      await fs.writeFile(nested, "preserve directory contents", "utf-8");
+    },
+  });
+
+  await assert.rejects(
+    store.update((draft) => void (draft.count = 2)),
+    DataStoreExternalChangeError,
+  );
+  assert.equal((await fs.lstat(file)).isDirectory(), true);
+  assert.equal(await fs.readFile(nested, "utf-8"), "preserve directory contents");
+  assert.equal(await fs.readFile(displaced, "utf-8"), original);
+  assert.equal(
+    (await fs.readdir(dir)).some((name) => name.endsWith(".held")),
+    false,
+  );
+});
+
+test("DataStore preserves an in-place edit made through the pre-rename file descriptor", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-held-inode-edit-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  const originalHandle = await fs.open(file, "r+");
+  t.after(() => originalHandle.close().catch(() => undefined));
+  const edited = JSON.stringify({ count: 99, external: true });
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+    beforeProtectedPublish: async () => {
+      await originalHandle.truncate(0);
+      await originalHandle.writeFile(edited, "utf-8");
+      await originalHandle.sync();
+    },
+  });
+
+  await assert.rejects(
+    store.update((draft) => void (draft.count = 2)),
+    /changed outside/u,
+  );
+  assert.equal(await fs.readFile(file, "utf-8"), edited);
+});
+
+test("DataStore keeps an old descriptor recoverable after the protected write returns", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-late-held-inode-edit-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  const originalHandle = await fs.open(file, "r+");
+  t.after(() => originalHandle.close().catch(() => undefined));
+  const edited = JSON.stringify({ count: 99, lateExternal: true });
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+
+  await store.update((draft) => void (draft.count = 2));
+  await originalHandle.truncate(0);
+  await originalHandle.writeFile(edited, "utf-8");
+  await originalHandle.sync();
+
+  assert.deepEqual(JSON.parse(await fs.readFile(file, "utf-8")), { count: 2 });
+  assert.deepEqual(await store.load(), { count: 2 }, "a committed write must refresh its cache");
+  await new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir).load();
+  const conflict = (await fs.readdir(dir)).find((name) => name.startsWith("config.json.conflict-"));
+  assert.ok(conflict);
+  assert.equal(await fs.readFile(path.join(dir, conflict), "utf-8"), edited);
+});
+
+test("DataStore recovery preserves special held-file candidates as conflicts", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-special-held-");
+  const canonical = path.join(dir, "config.json");
+  await fs.writeFile(canonical, JSON.stringify({ count: 2 }), "utf-8");
+  const symlink = path.join(dir, ".config.json.symlink.held");
+  await fs.symlink(canonical, symlink);
+  const fifo = path.join(dir, ".config.json.fifo.held");
+  execFileSync("/usr/bin/mkfifo", [fifo]);
+
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+  assert.deepEqual(await store.load(), { count: 2 });
+  const conflicts = (await fs.readdir(dir)).filter((name) =>
+    name.startsWith("config.json.conflict-"),
+  );
+  assert.equal(conflicts.length, 2);
+  const conflictTypes = await Promise.all(
+    conflicts.map(async (name) => {
+      const info = await fs.lstat(path.join(dir, name));
+      return info.isSymbolicLink() ? "symlink" : info.isFIFO() ? "fifo" : "other";
+    }),
+  );
+  assert.deepEqual(conflictTypes.sort(), ["fifo", "symlink"]);
+});
+
+test("DataStore refuses a canonical FIFO or symlink without blocking startup", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-special-canonical-");
+  const canonical = path.join(dir, "config.json");
+  execFileSync("/usr/bin/mkfifo", [canonical]);
+  const loadWithinDeadline = async (
+    store: DataStore<{ count: number }>,
+  ): Promise<{ count: number }> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        store.load(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("special-file read blocked startup")), 500);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  const fifoStore = new DataStore("config.json", { count: 0 }, () => dir);
+  assert.deepEqual(await loadWithinDeadline(fifoStore), { count: 0 });
+  assert.equal(await fifoStore.loadedFromCorruptFile(), true);
+
+  await fs.rm(canonical);
+  const target = path.join(dir, "actual.json");
+  await fs.writeFile(target, JSON.stringify({ count: 4 }), "utf-8");
+  await fs.symlink(target, canonical);
+  const symlinkStore = new DataStore("config.json", { count: 0 }, () => dir, {
+    preserveCorruptFile: true,
+    rejectCorruptWrite: true,
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+  assert.deepEqual(await loadWithinDeadline(symlinkStore), { count: 0 });
+  assert.equal(await symlinkStore.loadedFromCorruptFile(), true);
+  await assert.rejects(
+    symlinkStore.update((draft) => void (draft.count = 5)),
+    DataStoreCorruptWriteError,
+  );
+  assert.equal((await fs.lstat(canonical)).isSymbolicLink(), true);
+  assert.deepEqual(JSON.parse(await fs.readFile(target, "utf-8")), { count: 4 });
+});
+
+test("DataStore recovers a crash-orphaned held file before loading defaults", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-held-recovery-");
+  const held = path.join(dir, ".config.json.crash.held");
+  await fs.writeFile(held, JSON.stringify({ count: 7 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+
+  assert.deepEqual(await store.load(), { count: 7 });
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, "config.json"), "utf-8")), {
+    count: 7,
+  });
+  assert.equal(
+    (await fs.readdir(dir)).some(
+      (name) => name.startsWith("config.json.previous-") || name.endsWith(".held"),
+    ),
+    false,
+  );
+});
+
+test("DataStore restores crash-held symlinks, FIFOs, and directories without following them", async (t) => {
+  for (const kind of ["symlink", "fifo", "directory"] as const) {
+    const dir = await tmpDir(t, `aiden-ds-held-${kind}-`);
+    const held = path.join(dir, `.config.json.absent.${kind}.held`);
+    const canonical = path.join(dir, "config.json");
+    if (kind === "symlink") {
+      const target = path.join(dir, "external.json");
+      await fs.writeFile(target, JSON.stringify({ count: 9 }), "utf-8");
+      await fs.symlink(target, held);
+    } else if (kind === "fifo") {
+      execFileSync("mkfifo", [held]);
+    } else {
+      await fs.mkdir(path.join(held, "nested"), { recursive: true });
+      await fs.writeFile(path.join(held, "nested", "sentinel.txt"), "untouched", "utf-8");
+    }
+    const store = new DataStore("config.json", { count: 0 }, () => dir, {
+      preserveCorruptFile: true,
+      reloadBeforeWrite: true,
+      rejectCorruptWrite: true,
+      rejectExternalChanges: true,
+    });
+
+    assert.deepEqual(await store.load(), { count: 0 });
+    assert.equal(await store.loadedFromCorruptFile(), true);
+    await assert.rejects(
+      store.update((draft) => void (draft.count = 1)),
+      DataStoreCorruptWriteError,
+    );
+    const info = await fs.lstat(canonical);
+    if (kind === "symlink") assert.equal(info.isSymbolicLink(), true);
+    if (kind === "fifo") assert.equal(info.isFIFO(), true);
+    if (kind === "directory") {
+      assert.equal(info.isDirectory(), true);
+      assert.equal(
+        await fs.readFile(path.join(canonical, "nested", "sentinel.txt"), "utf-8"),
+        "untouched",
+      );
+    }
+  }
+});
+
+test("DataStore retains process-lifetime predecessors without imposing a write-count limit", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-predecessor-bound-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, `${JSON.stringify({ count: 0 })}\n`, "utf-8");
+  const store = new DataStore("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectUnsafeWrite: true,
+    rejectExternalChanges: true,
+  });
+  await store.load();
+
+  for (let count = 1; count <= 64; count += 1) {
+    await store.update((draft) => void (draft.count = count));
+  }
+  assert.equal(JSON.parse(await fs.readFile(file, "utf-8")).count, 64);
+  assert.equal((await fs.readdir(dir)).filter((name) => name.endsWith(".previous")).length, 64);
+});
+
+test("DataStore preserves an old-descriptor edit after multiple later app writes", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-predecessor-conflict-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, `${JSON.stringify({ count: 0 })}\n`, "utf-8");
+  const originalHandle = await fs.open(file, "r+");
+  t.after(() => originalHandle.close().catch(() => undefined));
+  const store = new DataStore("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+
+  await store.update((draft) => void (draft.count = 1));
+  await store.update((draft) => void (draft.count = 2));
+  await store.update((draft) => void (draft.count = 3));
+  await originalHandle.truncate(0);
+  await originalHandle.writeFile(JSON.stringify({ count: 99, lateExternal: true }), "utf-8");
+  await originalHandle.sync();
+
+  assert.equal(JSON.parse(await fs.readFile(file, "utf-8")).count, 3);
+  const relaunched = new DataStore("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+  });
+  assert.deepEqual(await relaunched.load(), { count: 3 });
+  const conflict = (await fs.readdir(dir)).find((name) => name.startsWith("config.json.conflict-"));
+  assert.ok(conflict);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dir, conflict), "utf-8")), {
+    count: 99,
+    lateExternal: true,
+  });
+});
+
+test("DataStore removes an unchanged crash-held predecessor when canonical data exists", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-held-cleanup-");
+  const oldContents = JSON.stringify({ count: 1 });
+  const oldHash = createHash("sha256").update(oldContents).digest("hex");
+  const held = path.join(dir, `.config.json.${oldHash}.crash.held`);
+  await fs.writeFile(held, oldContents, "utf-8");
+  await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({ count: 2 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+
+  assert.deepEqual(await store.load(), { count: 2 });
+  assert.deepEqual(await fs.readdir(dir), ["config.json"]);
+});
+
+test("DataStore preserves a changed crash-held predecessor as a conflict", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-held-conflict-");
+  const expected = JSON.stringify({ count: 1 });
+  const edited = JSON.stringify({ count: 9, external: true });
+  const expectedHash = createHash("sha256").update(expected).digest("hex");
+  await fs.writeFile(path.join(dir, `.config.json.${expectedHash}.crash.held`), edited, "utf-8");
+  await fs.writeFile(path.join(dir, "config.json"), JSON.stringify({ count: 2 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
+
+  assert.deepEqual(await store.load(), { count: 2 });
+  const conflict = (await fs.readdir(dir)).find((name) => name.startsWith("config.json.conflict-"));
+  assert.ok(conflict);
+  assert.equal(await fs.readFile(path.join(dir, conflict), "utf-8"), edited);
+});
+
+test("DataStore.reload waits for an in-flight initial load before reading newer bytes", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-load-reload-race-");
+  const file = path.join(dir, "config.json");
+  await fs.writeFile(file, JSON.stringify({ count: 1 }), "utf-8");
+  let firstRead!: () => void;
+  const read = new Promise<void>((resolve) => {
+    firstRead = resolve;
+  });
+  let releaseFirstRead!: () => void;
+  const release = new Promise<void>((resolve) => {
+    releaseFirstRead = resolve;
+  });
+  let loadCommits = 0;
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    beforeLoadCommit: async () => {
+      loadCommits += 1;
+      if (loadCommits !== 1) return;
+      firstRead();
+      await release;
+    },
+  });
+
+  const initialLoad = store.load();
+  await read;
+  await fs.writeFile(file, JSON.stringify({ count: 2 }), "utf-8");
+  const reload = store.reload();
+  releaseFirstRead();
+
+  assert.deepEqual(await initialLoad, { count: 1 });
+  assert.equal(await reload, true);
+  assert.deepEqual(await store.load(), { count: 2 });
+});
+
 test("DataStore.reload on a missing file yields the default value", async (t) => {
   const dir = await tmpDir(t, "aiden-ds-reload-gone-");
   const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir);
@@ -179,6 +719,29 @@ test("DataStore.update throws when isCurrent() reports the document is stale", a
       ),
     /renderer document is no longer active/i,
   );
+});
+
+test("DataStore rechecks renderer ownership immediately before protected publication", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-owner-before-publish-");
+  const file = path.join(dir, "config.json");
+  const original = JSON.stringify({ count: 1 });
+  await fs.writeFile(file, original, "utf-8");
+  let current = true;
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    reloadBeforeWrite: true,
+    rejectExternalChanges: true,
+    beforeProtectedPublish: async () => void (current = false),
+  });
+
+  await assert.rejects(
+    () =>
+      store.update(
+        (draft) => void (draft.count = 2),
+        () => current,
+      ),
+    /renderer document is no longer active/u,
+  );
+  assert.equal(await fs.readFile(file, "utf-8"), original);
 });
 
 test("DataStore.update serializes concurrent transactions in arrival order", async (t) => {

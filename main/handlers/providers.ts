@@ -2,10 +2,7 @@
 
 import { ipcMain, logger } from "../platform.js";
 import { configStore } from "../services/config-store.js";
-import {
-  canUseStoredProviderKey,
-  sameProviderConnection,
-} from "../services/provider-key-policy.js";
+import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
 import { listModels, normalizeProviderBaseUrl, testConnection } from "../services/models.js";
 import {
@@ -29,6 +26,16 @@ import {
   mergeCodexProvider,
 } from "../services/provider-list-core.js";
 import { AppearancePreviewState } from "../services/appearance-preview-core.js";
+import {
+  removeProviderWithCredentialCleanup,
+  saveProviderWithCredentialRotation,
+  setProviderKeyWithCredentialRotation,
+} from "../services/provider-credential-rotation.js";
+import {
+  normalizeProviderCredentialInput,
+  providerConnectionSnapshot,
+} from "../services/provider-credential-rotation-core.js";
+import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -36,6 +43,7 @@ import type {
   ProviderModelType,
   StoredProvider,
 } from "../services/types.js";
+import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "../services/types.js";
 import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
@@ -48,6 +56,14 @@ function asString(value: unknown, name: string): string {
     throw new Error(`Expected non-empty string for "${name}".`);
   }
   return value;
+}
+
+function asProviderId(value: unknown): string {
+  const id = asString(value, "id");
+  if (id.length > MAX_CONFIG_ID_LENGTH) {
+    throw new Error(`Expected "id" to be at most ${MAX_CONFIG_ID_LENGTH} characters.`);
+  }
+  return id;
 }
 
 function optionalPositiveNumber(value: unknown): number | undefined {
@@ -111,11 +127,15 @@ function parseProvider(value: unknown): StoredProvider {
       : undefined;
   const deployment: ProviderDeployment | undefined =
     p.deployment === "local" || p.deployment === "hosted" ? p.deployment : undefined;
+  const baseUrl = normalizeProviderBaseUrl(asString(p.baseUrl, "baseUrl"));
+  if (baseUrl.length > MAX_PROVIDER_BASE_URL_LENGTH) {
+    throw new Error(`Expected "baseUrl" to be at most ${MAX_PROVIDER_BASE_URL_LENGTH} characters.`);
+  }
   const provider: StoredProvider = {
-    id: asString(p.id, "id"),
+    id: asProviderId(p.id),
     kind,
     label: asString(p.label, "label"),
-    baseUrl: normalizeProviderBaseUrl(asString(p.baseUrl, "baseUrl")),
+    baseUrl,
     models,
     modelMetadata,
     defaultModel,
@@ -143,11 +163,11 @@ async function connectionKey(
   // A saved key is valid only for the saved endpoint/protocol. A draft with a
   // different endpoint must receive a newly typed key before it can be tested.
   if (!canUseStoredProviderKey(saved, provider)) return null;
-  return secrets.getKey(provider.id);
+  return secrets.getProviderKey(provider.id, JSON.stringify(providerConnectionSnapshot(provider)));
 }
 
 function replacementKey(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  return normalizeProviderCredentialInput(value);
 }
 
 /**
@@ -155,7 +175,11 @@ function replacementKey(value: unknown): string | null {
  * existing key is removed before a changed endpoint becomes usable, so a
  * renderer payload cannot redirect it to another host.
  */
-async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
+async function saveProvider(
+  provider: StoredProvider,
+  keyOverride: unknown,
+  isCurrent: () => boolean,
+) {
   if (providerRegistry.isBuiltinProvider(provider.id)) {
     throw new Error(
       `${provider.label} is built into Pi and has no editable endpoint configuration.`,
@@ -167,30 +191,12 @@ async function saveProvider(provider: StoredProvider, keyOverride: unknown) {
     );
   }
   assertMutableProviderId(provider.id);
-  const previous = await configStore.getProvider(provider.id);
-  const connectionChanged = Boolean(previous && !sameProviderConnection(previous, provider));
   const replacement = provider.needsKey ? replacementKey(keyOverride) : null;
-
-  if (connectionChanged || !provider.needsKey) await secrets.deleteKey(provider.id);
-  // Never restore a key after an endpoint/protocol change. A configuration
-  // write can fail after the in-memory store has advanced, and restoring the
-  // old credential would then expose it to the newly supplied endpoint.
-  const saved = await configStore.saveProvider(provider);
-  if (replacement) await secrets.setKey(provider.id, replacement);
-  return saved;
+  return saveProviderWithCredentialRotation(provider, replacement, isCurrent);
 }
 
 async function listProviders() {
-  // Ensure legacy config/key migrations (including gemini → google) complete
-  // before Pi copies the now-canonical API keys into its credential store.
-  const customProviders = await configStore.listProviders();
-  try {
-    await providerRegistry.migrateLegacyApiKeys();
-  } catch (error) {
-    logger.warn("providers", "Could not migrate a legacy provider credential into Pi.", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  const customProviders = await listProvidersWithLegacyPiCredentialMigration();
   const providers = [
     ...(await providerRegistry.listBuiltinProviders()),
     ...customProviders.filter((provider) => !providerRegistry.isBuiltinProvider(provider.id)),
@@ -233,15 +239,14 @@ export function registerProviderHandlers(): void {
     return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
   });
 
-  ipcMain.handle(
-    "providers:save",
-    async (_event, providerValue: unknown, keyOverride?: unknown) => {
-      return saveProvider(parseProvider(providerValue), keyOverride);
-    },
-  );
+  ipcMain.handle("providers:save", async (event, providerValue: unknown, keyOverride?: unknown) => {
+    const owner = providerAuthOwner(event);
+    return saveProvider(parseProvider(providerValue), keyOverride, () => !owner.isDestroyed());
+  });
 
-  ipcMain.handle("providers:remove", async (_event, id: unknown) => {
-    const providerId = asString(id, "id");
+  ipcMain.handle("providers:remove", async (event, id: unknown) => {
+    const owner = providerAuthOwner(event);
+    const providerId = asProviderId(id);
     if (providerRegistry.isBuiltinProvider(providerId)) {
       throw new Error("Pi built-in providers cannot be removed.");
     }
@@ -249,11 +254,11 @@ export function registerProviderHandlers(): void {
       throw new Error("Only Aiden custom connections can be removed.");
     }
     assertMutableProviderId(providerId);
-    await configStore.removeProvider(providerId);
+    await removeProviderWithCredentialCleanup(providerId, () => !owner.isDestroyed());
   });
 
   ipcMain.handle("providers:setKey", async (event, id: unknown, key: unknown) => {
-    const providerId = asString(id, "id");
+    const providerId = asProviderId(id);
     if (providerRegistry.isBuiltinProvider(providerId)) {
       // Retired UI clients must use the Pi-owned auth flow. Also bind this
       // rejected state-changing request to a live document for parity with
@@ -265,18 +270,9 @@ export function registerProviderHandlers(): void {
       throw new Error("Only Aiden custom connections can store an endpoint key.");
     }
     assertMutableProviderId(providerId);
-    const provider = await configStore.getProvider(providerId);
-    if (provider && !provider.needsKey) {
-      await secrets.deleteKey(providerId);
-      return { hasKey: false, provider };
-    }
-    const value = typeof key === "string" ? key.trim() : "";
-    if (value) {
-      await secrets.setKey(providerId, value);
-    } else {
-      await secrets.deleteKey(providerId);
-    }
-    return { hasKey: Boolean(value), provider: provider ?? null };
+    const owner = providerAuthOwner(event);
+    const value = normalizeProviderCredentialInput(key);
+    return setProviderKeyWithCredentialRotation(providerId, value, () => !owner.isDestroyed());
   });
 
   // Optional keyOverride lets the user test a freshly typed key before saving it.
@@ -327,15 +323,11 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("settings:get", async () => configStore.getSettings());
   ipcMain.handle("settings:getAppearance", async () => {
     const settings = await configStore.getSettings();
-    return appearancePreview.effective(
-      normalizeAppearanceConfig(settings.appearance),
-    );
+    return appearancePreview.effective(normalizeAppearanceConfig(settings.appearance));
   });
   ipcMain.handle("settings:getAppearanceState", async () => {
     const settings = await configStore.getSettings();
-    return appearancePreview.snapshot(
-      normalizeAppearanceConfig(settings.appearance),
-    );
+    return appearancePreview.snapshot(normalizeAppearanceConfig(settings.appearance));
   });
   ipcMain.handle("settings:previewAppearance", async (_event, value: unknown) => {
     const appearance = appearancePreview.preview(parseAppearanceConfig(value));
@@ -389,9 +381,7 @@ export function registerProviderHandlers(): void {
     if (p.appearance !== undefined) next.appearance = parseAppearanceConfig(p.appearance);
     const saved = await configStore.setSettings(next);
     if (next.appearance) {
-      const appearance = appearancePreview.persisted(
-        normalizeAppearanceConfig(saved.appearance),
-      );
+      const appearance = appearancePreview.persisted(normalizeAppearanceConfig(saved.appearance));
       ipcMain.broadcast("settings:appearance-changed", appearance);
     }
     return saved;

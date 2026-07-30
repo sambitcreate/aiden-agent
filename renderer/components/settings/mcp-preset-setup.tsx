@@ -79,8 +79,8 @@ export function PresetSetupDialog({
     setAuthorizing(true);
     try {
       const record = build();
-      await mcpApi.authorize(record);
       await mcpApi.save(record);
+      await mcpApi.authorize(record);
       setAuthorized(true);
       await onSaved();
       toast.success(`Authorized — you're signed in to ${preset.name}.`);
@@ -94,10 +94,14 @@ export function PresetSetupDialog({
   const handleTest = async () => {
     setTesting(true);
     try {
-      const changed = await persistKey(); // store a freshly pasted key before connecting
-      if (changed) await onSaved();
+      await mcpApi.save(build());
+      await persistKey(); // store a freshly pasted key before connecting
+      await onSaved();
       const status = await mcpApi.status(build());
-      if (status.connected) toast.success(`Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`);
+      if (status.connected)
+        toast.success(
+          `Connected — ${status.toolCount} tool${status.toolCount === 1 ? "" : "s"} available.`,
+        );
       else toast.error(`Connection failed: ${status.error ?? "unknown error"}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -164,8 +168,8 @@ export function PresetSetupDialog({
       onConfirm={async () => {
         setSaving(true);
         try {
-          await persistKey();
           await mcpApi.save(build());
+          await persistKey();
           await onSaved();
           onOpenChange(false);
         } catch (error) {
@@ -177,7 +181,14 @@ export function PresetSetupDialog({
     >
       <FieldSet>
         {server ? (
-          <Field label="Status" description={enabled ? "Tools from this server are available to the assistant." : "Disabled — the assistant cannot use this server."}>
+          <Field
+            label="Status"
+            description={
+              enabled
+                ? "Tools from this server are available to the assistant."
+                : "Disabled — the assistant cannot use this server."
+            }
+          >
             <Switch
               aria-label={`Enable ${preset.name}`}
               checked={enabled}
@@ -188,7 +199,12 @@ export function PresetSetupDialog({
         ) : null}
 
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={preset.name} autoFocus />
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={preset.name}
+            autoFocus
+          />
         </Field>
         <Field label="Server address" description="The URL where this MCP server is available.">
           <Input
@@ -240,7 +256,12 @@ export function PresetSetupDialog({
             </div>
           </Field>
         ) : (
-          <Field label="Authentication" description={authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."}>
+          <Field
+            label="Authentication"
+            description={
+              authorized ? "Signed in. Re-run to refresh access." : "Opens your browser to sign in."
+            }
+          >
             <div className="flex items-center gap-2">
               <Button
                 size="small"
@@ -266,7 +287,9 @@ export function PresetSetupDialog({
               size="small"
               variant="filled"
               onClick={handleTest}
-              disabled={saving || testing || authorizing || toggling || !name.trim() || !credentialReady}
+              disabled={
+                saving || testing || authorizing || toggling || !name.trim() || !credentialReady
+              }
             >
               {testing ? "Connecting…" : "Test connection"}
             </Button>

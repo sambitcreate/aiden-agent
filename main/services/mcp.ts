@@ -14,6 +14,18 @@ import { assertMcpPresetServer, createNoRedirectFetch, presetSecretId } from "./
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import {
+  mcpCredentialConnectionSnapshot,
+  mcpRuntimeConnectionSnapshot,
+} from "./mcp-credential-cleanup-core.js";
+import {
+  reconcilePendingMcpCredentialCleanup,
+  withConfiguredMcp,
+} from "./mcp-credential-cleanup.js";
+import {
+  GenerationBoundConnectionAttempts,
+  GenerationBoundConnectionCache,
+} from "./generation-bound-connection-cache.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -24,15 +36,24 @@ interface Transport {
  * authenticated by API key, the key lives in the encrypted secrets store
  * (never in config.json) and is injected as the preset's auth header here.
  */
-async function resolveAuth(server: McpServer): Promise<McpServer> {
+async function resolveAuth(
+  server: McpServer,
+  isCurrent: () => boolean = () => true,
+): Promise<McpServer> {
+  if (!isCurrent()) throw new Error("The renderer document is no longer active.");
   const preset = assertMcpPresetServer(server);
   if (!preset || preset.auth.kind !== "apiKey") return server;
-  const key = await secrets.getKey(presetSecretId(server.id));
+  await reconcilePendingMcpCredentialCleanup();
+  const key = await secrets.getOrBindLegacyProviderKey(
+    presetSecretId(server.id),
+    JSON.stringify(mcpCredentialConnectionSnapshot(server)),
+  );
+  if (!isCurrent()) throw new Error("The renderer document is no longer active.");
   if (!key) throw new Error(`${preset.name} needs an API key — add one in Settings → MCP Servers.`);
   return { ...server, headers: { ...server.headers, [preset.auth.headerName]: key } };
 }
 
-function makeTransport(server: McpServer): Transport {
+function makeTransport(server: McpServer, isCurrent: () => boolean = () => true): Transport {
   if (server.transport === "stdio") {
     if (!server.command) throw new Error("This MCP server needs a command to run.");
     return new StdioClientTransport({
@@ -48,7 +69,7 @@ function makeTransport(server: McpServer): Transport {
   const presetFetch = preset?.auth.kind === "apiKey" ? createNoRedirectFetch() : undefined;
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
-  const authProvider = server.oauth ? oauthProviderFor(server) : undefined;
+  const authProvider = server.oauth ? oauthProviderFor(server, isCurrent) : undefined;
   if (server.transport === "sse") {
     return new SSEClientTransport(url, {
       requestInit,
@@ -74,39 +95,71 @@ function sanitize(name: string): string {
 }
 
 class McpManager {
-  private clients = new Map<string, Client>();
+  private readonly clients = new GenerationBoundConnectionCache<Client>();
+  private readonly statusClients = new GenerationBoundConnectionAttempts<Client>();
 
-  private async ensureConnected(server: McpServer): Promise<Client> {
-    const existing = this.clients.get(server.id);
-    if (existing) return existing;
-    const client = new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} });
-    // The MCP SDK transports satisfy the client's transport interface.
-    await client.connect(makeTransport(await resolveAuth(server)) as never);
-    this.clients.set(server.id, client);
-    return client;
+  private async ensureConnected(server: McpServer, generation: number): Promise<Client> {
+    return this.clients.getOrConnect(
+      server.id,
+      () =>
+        new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} }),
+      async (client, connectionIsCurrent) => {
+        // The MCP SDK transports satisfy the client's transport interface.
+        await client.connect(
+          makeTransport(
+            await resolveAuth(server, connectionIsCurrent),
+            connectionIsCurrent,
+          ) as never,
+        );
+      },
+      async (client) => client.close(),
+      generation,
+    );
   }
 
   async disconnect(id: string): Promise<void> {
-    const client = this.clients.get(id);
-    if (client) {
-      await client.close().catch(() => {});
-      this.clients.delete(id);
-    }
+    await Promise.all([
+      this.clients.disconnect(id),
+      this.statusClients.disconnect(id),
+    ]);
   }
 
   async closeAll(): Promise<void> {
-    for (const [id] of this.clients) await this.disconnect(id);
+    for (const id of new Set([...this.clients.ids(), ...this.statusClients.ids()])) {
+      await this.disconnect(id);
+    }
   }
 
   /** Connect and return status (used by the settings "test" action). */
   async status(
     server: McpServer,
+    isCurrent: () => boolean = () => true,
+    expectedGeneration: number = this.statusGeneration(server.id),
   ): Promise<{ connected: boolean; toolCount: number; tools: string[]; error?: string }> {
-    const client = new Client({ name: "aiden-agent-test", version: "1.0.0" }, { capabilities: {} });
     try {
-      await client.connect(makeTransport(await resolveAuth(server)) as never);
-      const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-      return { connected: true, toolCount: tools.length, tools: tools.map((t) => t.name) };
+      return await this.statusClients.run(
+        server.id,
+        expectedGeneration,
+        () =>
+          new Client(
+            { name: "aiden-agent-test", version: "1.0.0" },
+            { capabilities: {} },
+          ),
+        async (client, connectionIsCurrent) => {
+          const active = () => isCurrent() && connectionIsCurrent();
+          await client.connect(
+            makeTransport(await resolveAuth(server, active), active) as never,
+          );
+        },
+        async (client, connectionIsCurrent) => {
+          if (!isCurrent() || !connectionIsCurrent()) {
+            throw new Error("The MCP connection was superseded.");
+          }
+          const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
+          return { connected: true, toolCount: tools.length, tools: tools.map((t) => t.name) };
+        },
+        async (client) => client.close(),
+      );
     } catch (error) {
       return {
         connected: false,
@@ -114,14 +167,12 @@ class McpManager {
         tools: [],
         error: error instanceof Error ? error.message : String(error),
       };
-    } finally {
-      await client.close().catch(() => {});
     }
   }
 
   /** Build pi agent tools for a connected server. Tool names are prefixed with the server name. */
-  async agentToolsFor(server: McpServer): Promise<AgentTool[]> {
-    const client = await this.ensureConnected(server);
+  async agentToolsFor(server: McpServer, generation: number): Promise<AgentTool[]> {
+    const client = await this.ensureConnected(server, generation);
     const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
     const prefix = sanitize(server.name || server.id);
     return tools.map(
@@ -143,6 +194,14 @@ class McpManager {
       }),
     );
   }
+
+  connectionGeneration(id: string): number {
+    return this.clients.generation(id);
+  }
+
+  statusGeneration(id: string): number {
+    return this.statusClients.generation(id);
+  }
 }
 
 export const mcpManager = new McpManager();
@@ -153,7 +212,18 @@ export async function collectMcpAgentTools(servers: McpServer[]): Promise<AgentT
   for (const server of servers) {
     if (!server.enabled) continue;
     try {
-      all.push(...(await mcpManager.agentToolsFor(server)));
+      let generation = 0;
+      all.push(
+        ...(await withConfiguredMcp(
+          server.id,
+          mcpRuntimeConnectionSnapshot(server),
+          () => mcpManager.agentToolsFor(server, generation),
+          () => true,
+          () => {
+            generation = mcpManager.connectionGeneration(server.id);
+          },
+        )),
+      );
     } catch (error) {
       logger.warn(
         "mcp",

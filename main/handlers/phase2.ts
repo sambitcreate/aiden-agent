@@ -4,7 +4,25 @@ import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { secrets } from "../services/secrets.js";
 import { mcpManager } from "../services/mcp.js";
-import { authorizeMcpServer, clearOAuth, hasOAuthTokens } from "../services/mcp-oauth.js";
+import {
+  authorizeMcpServer,
+  endReservedMcpAuthorization,
+  hasOAuthTokens,
+  reserveMcpAuthorization,
+} from "../services/mcp-oauth.js";
+import type { McpOAuthOperation } from "../services/mcp-oauth-operation.js";
+import {
+  mutateCredentialForConfiguredMcp,
+  mutateMcpWithCredentialCleanup,
+  withConfiguredMcp,
+} from "../services/mcp-credential-cleanup.js";
+import {
+  mcpCredentialConnectionSnapshot,
+  mcpRuntimeConnectionSnapshot,
+  pendingMcpCredentialCleanupForRemove,
+  pendingMcpCredentialCleanupForSave,
+  replaceMcpCredentialAfterDisconnect,
+} from "../services/mcp-credential-cleanup-core.js";
 import {
   assertMcpPresetServer,
   getMcpPresetForServerId,
@@ -16,6 +34,8 @@ import { discoverSkills } from "../services/skills-discovery.js";
 import { transcribe } from "../services/transcription.js";
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
+import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { asString, parseSkill, parseMcpServer };
@@ -23,8 +43,12 @@ export { asString, parseSkill, parseMcpServer };
 export function registerPhase2Handlers(): void {
   // ── Skills ───────────────────────────────────────────────────────────
   ipcMain.handle("skills:list", async () => configStore.listSkills());
-  ipcMain.handle("skills:save", async (_event, skill: unknown) => configStore.saveSkill(parseSkill(skill)));
-  ipcMain.handle("skills:remove", async (_event, id: unknown) => configStore.removeSkill(asString(id, "id")));
+  ipcMain.handle("skills:save", async (_event, skill: unknown) =>
+    mutatePortableConfigAndSync(() => configStore.saveSkill(parseSkill(skill))),
+  );
+  ipcMain.handle("skills:remove", async (_event, id: unknown) =>
+    mutatePortableConfigAndSync(() => configStore.removeSkill(asString(id, "id"))),
+  );
   // Read-only skills discovered on disk from `.agents` folders (workspace + global).
   ipcMain.handle("skills:discovered", async (_event, folderPath: unknown) =>
     discoverSkills(typeof folderPath === "string" && folderPath ? folderPath : undefined),
@@ -39,63 +63,158 @@ export function registerPhase2Handlers(): void {
     return Promise.all(
       MCP_PRESETS.map(async (preset) => {
         const serverId = presetServerId(preset.id);
-        const existing = servers.find(
-          (s) => s.id === serverId && s.presetId === preset.id,
-        );
+        const existing = servers.find((s) => s.id === serverId && s.presetId === preset.id);
+        if (existing) assertMcpPresetServer(existing);
         const ready =
           preset.auth.kind === "apiKey"
-            ? await secrets.hasKey(presetSecretId(serverId))
+            ? Boolean(
+                existing &&
+                (await secrets.getOrBindLegacyProviderKey(
+                  presetSecretId(serverId),
+                  JSON.stringify(mcpCredentialConnectionSnapshot(existing)),
+                )),
+              )
             : await hasOAuthTokens(serverId, existing?.url ?? preset.url);
-        return { preset, serverId, configured: Boolean(existing), enabled: existing?.enabled ?? true, ready };
+        return {
+          preset,
+          serverId,
+          configured: Boolean(existing),
+          enabled: existing?.enabled ?? true,
+          ready,
+        };
       }),
     );
   });
   // Save or clear a preset's API key. Empty key clears; the key is never returned.
-  ipcMain.handle("mcp:setPresetKey", async (_event, serverId: unknown, key: unknown) => {
+  ipcMain.handle("mcp:setPresetKey", async (event, serverId: unknown, key: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("MCP changes must come from the active application document."),
+    );
+    const isCurrent = () => !owner.isDestroyed();
     const id = asString(serverId, "serverId");
     const preset = getMcpPresetForServerId(id);
     if (!preset || preset.auth.kind !== "apiKey") {
       throw new Error("This MCP preset does not accept an API key.");
     }
     const value = typeof key === "string" ? key.trim() : "";
-    if (value) await secrets.setKey(presetSecretId(id), value);
-    else await secrets.deleteKey(presetSecretId(id));
-    await mcpManager.disconnect(id); // reconnect with the new key on next use
+    await mutateCredentialForConfiguredMcp(
+      id,
+      (configured) =>
+        replaceMcpCredentialAfterDisconnect(
+          () => mcpManager.disconnect(id),
+          async () => {
+            if (value)
+              await secrets.setProviderKey(
+                presetSecretId(id),
+                value,
+                JSON.stringify(mcpCredentialConnectionSnapshot(configured)),
+                isCurrent,
+              );
+            else await secrets.deleteKey(presetSecretId(id), isCurrent);
+          },
+        ),
+      isCurrent,
+    );
     return { hasKey: Boolean(value) };
   });
-  ipcMain.handle("mcp:save", async (_event, server: unknown) => {
+  ipcMain.handle("mcp:save", async (event, server: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("MCP changes must come from the active application document."),
+    );
+    const isCurrent = () => !owner.isDestroyed();
     const parsed = parseMcpServer(server);
     assertMcpPresetServer(parsed);
-    const existing = (await configStore.listMcpServers()).find((item) => item.id === parsed.id);
-    await mcpManager.disconnect(parsed.id); // force reconnect with new config next use
-    if (existing?.oauth && !parsed.oauth) await clearOAuth(parsed.id);
-    return configStore.saveMcpServer(parsed);
+    return mutateMcpWithCredentialCleanup(
+      parsed.id,
+      (current) => pendingMcpCredentialCleanupForSave(current, parsed),
+      async () => {
+        await mcpManager.disconnect(parsed.id);
+        return configStore.saveMcpServer(parsed, isCurrent);
+      },
+      isCurrent,
+    );
   });
-  ipcMain.handle("mcp:remove", async (_event, id: unknown) => {
+  ipcMain.handle("mcp:remove", async (event, id: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("MCP changes must come from the active application document."),
+    );
+    const isCurrent = () => !owner.isDestroyed();
     const serverId = asString(id, "id");
-    await mcpManager.disconnect(serverId);
-    await clearOAuth(serverId);
-    await secrets.deleteKey(presetSecretId(serverId));
-    await configStore.removeMcpServer(serverId);
+    await mutateMcpWithCredentialCleanup(
+      serverId,
+      (current) => pendingMcpCredentialCleanupForRemove(current, serverId),
+      async () => {
+        await mcpManager.disconnect(serverId);
+        await configStore.removeMcpServer(serverId, isCurrent);
+      },
+      isCurrent,
+    );
   });
-  ipcMain.handle("mcp:status", async (_event, server: unknown) => {
+  ipcMain.handle("mcp:status", async (event, server: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("MCP status must come from the active application document."),
+    );
     const parsed = parseMcpServer(server);
-    const status = await mcpManager.status(parsed);
-    return {
-      ...status,
-      authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url) : undefined,
-    };
+    let statusGeneration = 0;
+    return withConfiguredMcp(
+      parsed.id,
+      mcpRuntimeConnectionSnapshot(parsed),
+      async () => {
+        const status = await mcpManager.status(
+          parsed,
+          () => !owner.isDestroyed(),
+          statusGeneration,
+        );
+        return {
+          ...status,
+          authorized: parsed.oauth ? await hasOAuthTokens(parsed.id, parsed.url) : undefined,
+        };
+      },
+      () => !owner.isDestroyed(),
+      () => {
+        statusGeneration = mcpManager.statusGeneration(parsed.id);
+      },
+    );
   });
   // Browser OAuth sign-in for a remote MCP server. Stores tokens on success.
-  ipcMain.handle("mcp:authorize", async (_event, server: unknown) => {
+  ipcMain.handle("mcp:authorize", async (event, server: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("MCP authorization must come from the active application document."),
+    );
     const parsed = parseMcpServer(server);
     const preset = assertMcpPresetServer(parsed);
     if (preset && preset.auth.kind !== "oauth") {
       throw new Error("This MCP preset uses an API key instead of OAuth.");
     }
-    await mcpManager.disconnect(parsed.id);
-    await authorizeMcpServer(parsed);
-    return { authorized: true };
+    const ownerAbort = new AbortController();
+    let reserved: McpOAuthOperation | undefined;
+    const stopWatching = owner.onInvalidated(() =>
+      ownerAbort.abort(new Error("The renderer document is no longer active.")),
+    );
+    try {
+      return await withConfiguredMcp(
+        parsed.id,
+        mcpRuntimeConnectionSnapshot(parsed),
+        async () => {
+          await mcpManager.disconnect(parsed.id);
+          await authorizeMcpServer(parsed, () => !owner.isDestroyed(), ownerAbort.signal, reserved);
+          reserved = undefined;
+          return { authorized: true };
+        },
+        () => !owner.isDestroyed(),
+        () => {
+          reserved = reserveMcpAuthorization(parsed.id);
+        },
+      );
+    } finally {
+      if (reserved) endReservedMcpAuthorization(reserved);
+      stopWatching();
+    }
   });
   ipcMain.handle("mcp:oauthStatus", async (_event, id: unknown) => {
     const serverId = asString(id, "id");
@@ -133,5 +252,4 @@ export function registerPhase2Handlers(): void {
       signal: AbortSignal.timeout(120_000),
     });
   });
-
 }

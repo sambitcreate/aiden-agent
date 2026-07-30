@@ -14,8 +14,7 @@ import {
 test("Google thinking levels stay a small explicit request contract", () => {
   assert.deepEqual(GOOGLE_THINKING_LEVELS, ["off", "low", "medium", "high"]);
   assert.equal(DEFAULT_GOOGLE_THINKING_LEVEL, "off");
-  for (const level of GOOGLE_THINKING_LEVELS)
-    assert.equal(isGoogleThinkingLevel(level), true);
+  for (const level of GOOGLE_THINKING_LEVELS) assert.equal(isGoogleThinkingLevel(level), true);
   for (const value of ["minimal", "xhigh", "dynamic", "", null, 1]) {
     assert.equal(isGoogleThinkingLevel(value), false);
   }
@@ -32,10 +31,7 @@ test("Google thinking preferences validate model ids, values, and size", () => {
       "gemini-3-flash-preview": "low",
     },
   );
-  assert.throws(
-    () => parseGoogleThinkingPreferences(null),
-    /Invalid Google thinking preferences/u,
-  );
+  assert.throws(() => parseGoogleThinkingPreferences(null), /Invalid Google thinking preferences/u);
   assert.throws(
     () => parseGoogleThinkingPreferences({ "gemini-2.5-pro": "dynamic" }),
     /Invalid Google thinking preference/u,
@@ -47,9 +43,7 @@ test("Google thinking preferences validate model ids, values, and size", () => {
   assert.throws(
     () =>
       parseGoogleThinkingPreferences(
-        Object.fromEntries(
-          Array.from({ length: 257 }, (_, index) => [`model-${index}`, "off"]),
-        ),
+        Object.fromEntries(Array.from({ length: 257 }, (_, index) => [`model-${index}`, "off"])),
       ),
     /Too many Google thinking preferences/u,
   );
@@ -97,30 +91,37 @@ test("Google thinking choices expose only distinct native outcomes", () => {
     }),
     false,
   );
-  assert.equal(
-    normalizeGoogleThinkingLevel(["off", "low", "high"], "medium"),
-    "off",
-  );
+  assert.equal(normalizeGoogleThinkingLevel(["off", "low", "high"], "medium"), "off");
 });
 
-test("one preference mutation preserves other models and repairs malformed state", () => {
+test("one preference mutation preserves current and opaque future model values", () => {
   assert.deepEqual(
-    mergeGoogleThinkingPreference(
-      { "gemini-2.5-pro": "high" },
-      "gemini-2.5-flash",
-      "low",
-    ),
+    mergeGoogleThinkingPreference({ "gemini-2.5-pro": "high" }, "gemini-2.5-flash", "low"),
     {
       "gemini-2.5-pro": "high",
       "gemini-2.5-flash": "low",
     },
   );
   assert.deepEqual(
-    mergeGoogleThinkingPreference(
-      { "gemini-2.5-pro": "invalid" },
-      "gemini-2.5-flash",
-      "low",
-    ),
-    { "gemini-2.5-flash": "low" },
+    mergeGoogleThinkingPreference({ "gemini-2.5-pro": "invalid" }, "gemini-2.5-flash", "low"),
+    {
+      "gemini-2.5-pro": "invalid",
+      "gemini-2.5-flash": "low",
+    },
+  );
+});
+
+test("updating a full preference map preserves every unrelated model", () => {
+  const full = Object.fromEntries(
+    Array.from({ length: 256 }, (_, index) => [`model-${index}`, "high"]),
+  );
+  const updated = mergeGoogleThinkingPreference(full, "model-0", "low");
+
+  assert.equal(Object.keys(updated).length, 256);
+  assert.equal(updated["model-0"], "low");
+  assert.equal(updated["model-255"], "high");
+  assert.throws(
+    () => mergeGoogleThinkingPreference(full, "model-new", "low"),
+    /Too many Google thinking preferences/u,
   );
 });

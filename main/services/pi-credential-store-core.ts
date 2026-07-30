@@ -2,6 +2,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import { readRegularUtf8File } from "./regular-file-read.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -154,7 +155,7 @@ export class EncryptedPiCredentialStore implements CredentialStore {
 
   private async readDocument(): Promise<CredentialDocument> {
     try {
-      return parseDocument(await fs.readFile(await this.resolvedFilePath(), "utf8"));
+      return parseDocument(await readRegularUtf8File(await this.resolvedFilePath()));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return emptyDocument();
       throw error;

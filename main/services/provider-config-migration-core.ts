@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_DEFAULT_MODELS } from "./anthropic-provider.js";
 import { customProviderId, isCustomProviderId } from "./custom-provider-id.js";
 import {
@@ -7,7 +8,7 @@ import {
   googleProviderModelMetadata,
   googleProviderModelIds,
 } from "./google-provider.js";
-import type { AppSettings, StoredProvider } from "./types.js";
+import { MAX_CONFIG_ID_LENGTH, type AppSettings, type StoredProvider } from "./types.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 
 /** IDs Aiden persisted before Pi became the cloud-provider authority. */
@@ -119,12 +120,57 @@ function isUntouchedPiPreset(provider: StoredProvider): boolean {
 }
 
 function uniqueCustomId(sourceId: string, usedIds: Set<string>): string {
-  const base = customProviderId(sourceId);
+  const unbounded = customProviderId(sourceId);
+  const digest = createHash("sha256").update(unbounded).digest("hex").slice(0, 12);
+  const base =
+    unbounded.length <= MAX_CONFIG_ID_LENGTH
+      ? unbounded
+      : `${unbounded.slice(0, MAX_CONFIG_ID_LENGTH - digest.length - 1)}-${digest}`;
   let candidate = base;
   let suffix = 2;
-  while (usedIds.has(candidate)) candidate = `${base}-${suffix++}`;
+  while (usedIds.has(candidate)) {
+    const collisionSuffix = `-${suffix++}`;
+    candidate = `${base.slice(0, MAX_CONFIG_ID_LENGTH - collisionSuffix.length)}${collisionSuffix}`;
+  }
   usedIds.add(candidate);
   return candidate;
+}
+
+function setAlias(aliases: Record<string, string>, source: string, target: string): void {
+  Object.defineProperty(aliases, source, {
+    value: target,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function ownAlias(aliases: Readonly<Record<string, string>>, source: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(aliases, source) ? aliases[source] : undefined;
+}
+
+function terminalAlias(
+  aliases: Readonly<Record<string, string>>,
+  source: string,
+): string | undefined {
+  let cursor = source;
+  let target = ownAlias(aliases, cursor);
+  if (target === undefined) return undefined;
+  const visited = new Set([source]);
+  while (target !== undefined) {
+    if (visited.has(target)) return undefined;
+    visited.add(target);
+    cursor = target;
+    target = ownAlias(aliases, cursor);
+  }
+  return cursor;
+}
+
+function flattenAliasTargets(aliases: Record<string, string>): void {
+  for (const source of Object.keys(aliases)) {
+    const terminal = terminalAlias(aliases, source);
+    if (terminal !== undefined) setAlias(aliases, source, terminal);
+  }
 }
 
 /**
@@ -135,8 +181,12 @@ function uniqueCustomId(sourceId: string, usedIds: Set<string>): string {
 export function migratePiProviderConfig(config: ProviderConfigMigrationShape): boolean {
   const beforeProviders = JSON.stringify(config.providers);
   const beforeAliases = JSON.stringify(config.providerIdAliases ?? {});
-  const aliases = { ...(config.providerIdAliases ?? {}) };
-  const usedIds = new Set(config.providers.map((provider) => provider.id));
+  const aliases = Object.fromEntries(Object.entries(config.providerIdAliases ?? {}));
+  const usedIds = new Set([
+    ...config.providers.map((provider) => provider.id),
+    ...Object.keys(aliases),
+    ...Object.values(aliases),
+  ]);
 
   config.providers = config.providers.flatMap((provider) => {
     const isLegacyPiProvider = LEGACY_PI_PROVIDER_IDS.has(provider.id);
@@ -150,7 +200,7 @@ export function migratePiProviderConfig(config: ProviderConfigMigrationShape): b
         isLegacyPiProvider ? `${sourceId}-legacy` : sourceId,
         usedIds,
       );
-      aliases[sourceId] = customId;
+      setAlias(aliases, sourceId, customId);
       return [
         {
           ...provider,
@@ -164,10 +214,14 @@ export function migratePiProviderConfig(config: ProviderConfigMigrationShape): b
 
     return [{ ...provider, isPreset: false, isBuiltin: false }];
   });
+  // Preserve every historical source while compressing its route to the same
+  // terminal provider. This keeps a maximum-depth accepted graph inside the
+  // schema when migration adds one final legacy-provider alias.
+  flattenAliasTargets(aliases);
 
   const previousProviderId = config.settings.lastProviderId;
   const migratedProviderId =
-    (previousProviderId ? aliases[previousProviderId] : undefined) ??
+    (previousProviderId ? terminalAlias(aliases, previousProviderId) : undefined) ??
     migrateLegacyPiProviderId(previousProviderId);
   if (migratedProviderId !== previousProviderId)
     config.settings.lastProviderId = migratedProviderId;

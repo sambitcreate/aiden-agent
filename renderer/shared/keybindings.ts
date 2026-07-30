@@ -293,11 +293,13 @@ export const COMMAND_BY_ID = Object.fromEntries(COMMANDS.map((item) => [item.id,
 export interface KeybindingOverride {
   binding?: string | null;
   disabled?: boolean;
+  [key: string]: unknown;
 }
 
 export interface KeybindingOverridesV1 {
   version: 1;
   commands: Partial<Record<CommandId, KeybindingOverride>>;
+  [key: string]: unknown;
 }
 
 export interface LegacyGlobalKeybindings {
@@ -334,7 +336,7 @@ export type KeybindingMutation =
 export class KeybindingValidationError extends Error {
   constructor(
     message: string,
-    readonly code: "invalid" | "reserved" | "conflict" | "registration",
+    readonly code: "invalid" | "reserved" | "conflict" | "registration" | "future-version",
     readonly commandId?: CommandId,
   ) {
     super(message);
@@ -492,10 +494,40 @@ export function matchesAccelerator(event: KeyboardEventLike, accelerator: string
   return acceleratorFromKeyboardEvent(event) === normalizeAccelerator(accelerator);
 }
 
+function futureKeybindingFields(
+  item: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return item
+    ? Object.fromEntries(
+        Object.entries(item)
+          .filter(([key]) => key !== "binding" && key !== "disabled")
+          .map(([key, entry]) => [key, structuredClone(entry)]),
+      )
+    : {};
+}
+
+function futureKeybindingRootFields(
+  record: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  return record
+    ? Object.fromEntries(
+        Object.entries(record)
+          .filter(([key]) => key !== "version" && key !== "commands")
+          .map(([key, entry]) => [key, structuredClone(entry)]),
+      )
+    : {};
+}
+
 export function normalizeKeybindingOverrides(value: unknown): KeybindingOverridesV1 {
-  const result: KeybindingOverridesV1 = { version: 1, commands: {} };
-  if (!value || typeof value !== "object" || Array.isArray(value)) return result;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { version: 1, commands: {} };
+  }
   const record = value as Record<string, unknown>;
+  const result: KeybindingOverridesV1 = {
+    ...futureKeybindingRootFields(record),
+    version: 1,
+    commands: {},
+  };
   if (
     record.version !== 1 ||
     !record.commands ||
@@ -518,12 +550,18 @@ export function normalizeKeybindingOverrides(value: unknown): KeybindingOverride
     }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
     const item = raw as Record<string, unknown>;
-    const binding =
-      item.binding === null ? null : normalizeAccelerator(item.binding);
+    const binding = item.binding === null ? null : normalizeAccelerator(item.binding);
     const disabled = item.disabled === true;
-    if (binding !== null || item.binding === null || disabled) {
+    const futureFields = futureKeybindingFields(item);
+    if (
+      binding !== null ||
+      item.binding === null ||
+      disabled ||
+      Object.keys(futureFields).length > 0
+    ) {
       result.commands[id] = {
-        ...(item.binding !== undefined ? { binding } : {}),
+        ...futureFields,
+        ...(binding !== null || item.binding === null ? { binding } : {}),
         ...(disabled ? { disabled: true } : {}),
       };
     }
@@ -571,6 +609,24 @@ export function hasCanonicalKeybindings(value: unknown): value is KeybindingOver
   );
 }
 
+/** A document from a newer Aiden must remain owned byte-for-byte by that version. */
+export function hasFutureKeybindings(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const version = (value as Record<string, unknown>).version;
+  return typeof version === "number" && Number.isSafeInteger(version) && version > 1;
+}
+
+export function shouldPersistCanonicalKeybindings(
+  stored: unknown,
+  canonical: KeybindingOverridesV1,
+): boolean {
+  if (hasFutureKeybindings(stored)) return false;
+  return (
+    !hasCanonicalKeybindings(stored) ||
+    JSON.stringify(normalizeKeybindingOverrides(stored)) !== JSON.stringify(canonical)
+  );
+}
+
 function defaultBinding(commandId: CommandId): string | null {
   const definition = COMMAND_BY_ID[commandId];
   return definition.defaultEnabled === false ? null : definition.defaultBinding;
@@ -582,9 +638,7 @@ function effectiveBindingFromNormalized(
   legacy?: LegacyGlobalKeybindings,
 ): string | null {
   const override =
-    overrides !== undefined
-      ? overrides.commands[commandId]
-      : legacyBinding(commandId, legacy);
+    overrides !== undefined ? overrides.commands[commandId] : legacyBinding(commandId, legacy);
   if (override?.disabled) return null;
   if (override && "binding" in override) return override.binding ?? null;
   if (override) return COMMAND_BY_ID[commandId].defaultBinding;
@@ -610,10 +664,7 @@ export function effectiveBindings(
     ? normalizeKeybindingOverrides(overrides)
     : undefined;
   return Object.fromEntries(
-    COMMAND_IDS.map((id) => [
-      id,
-      effectiveBindingFromNormalized(id, normalized, legacy),
-    ]),
+    COMMAND_IDS.map((id) => [id, effectiveBindingFromNormalized(id, normalized, legacy)]),
   ) as Record<CommandId, string | null>;
 }
 
@@ -642,27 +693,21 @@ const RESERVED_BINDINGS = new Set([
   "Command+`",
 ]);
 
-export function commandScopesOverlap(
-  left: CommandDefinition,
-  right: CommandDefinition,
-): boolean {
+export function commandScopesOverlap(left: CommandDefinition, right: CommandDefinition): boolean {
   if (left.global || right.global) return true;
   // Electron menu accelerators are resolved before the renderer sees the key.
   // They cannot participate in the renderer's editable/file-editor scoping.
   if (left.nativeMenu || right.nativeMenu) return true;
   if (left.scope === right.scope) return true;
 
-  const appCommand =
-    left.scope === "app" ? left : right.scope === "app" ? right : null;
+  const appCommand = left.scope === "app" ? left : right.scope === "app" ? right : null;
   const other = appCommand === left ? right : left;
   if (appCommand) {
-    if (other.scope === "fileEditor")
-      return appCommand.allowInEditable === true;
+    if (other.scope === "fileEditor") return appCommand.allowInEditable === true;
     return true;
   }
 
-  const chatCommand =
-    left.scope === "chat" ? left : right.scope === "chat" ? right : null;
+  const chatCommand = left.scope === "chat" ? left : right.scope === "chat" ? right : null;
   const fileCommand = chatCommand === left ? right : left;
   if (chatCommand && fileCommand.scope === "fileEditor")
     return chatCommand.allowInEditable === true;
@@ -679,8 +724,7 @@ export function migrateLegacyKeybindings(
   currentValue: unknown,
   legacy?: LegacyGlobalKeybindings,
 ): KeybindingOverridesV1 {
-  if (hasCanonicalKeybindings(currentValue))
-    return repairKeybindingOverrides(currentValue);
+  if (hasCanonicalKeybindings(currentValue)) return repairKeybindingOverrides(currentValue);
 
   const next = normalizeKeybindingOverrides(currentValue);
   const claimed = new Map<string, CommandId>();
@@ -689,20 +733,15 @@ export function migrateLegacyKeybindings(
     if (binding && (RESERVED_BINDINGS.has(binding) || claimed.has(binding))) {
       const fallback = defaultBinding(definition.id);
       binding =
-        fallback && !RESERVED_BINDINGS.has(fallback) && !claimed.has(fallback)
-          ? fallback
-          : null;
+        fallback && !RESERVED_BINDINGS.has(fallback) && !claimed.has(fallback) ? fallback : null;
     }
-    next.commands[definition.id] = binding
-      ? { binding, disabled: false }
-      : { disabled: true };
+    next.commands[definition.id] = binding ? { binding, disabled: false } : { disabled: true };
     if (binding) claimed.set(binding, definition.id);
   }
 
   for (const definition of COMMANDS.filter((item) => !item.global)) {
     const binding = defaultBinding(definition.id);
-    if (binding && claimed.has(binding))
-      next.commands[definition.id] = { disabled: true };
+    if (binding && claimed.has(binding)) next.commands[definition.id] = { disabled: true };
   }
   validateEffectiveBindings(effectiveBindings(next));
   return next;
@@ -716,12 +755,14 @@ export function migrateLegacyKeybindings(
  */
 export function repairKeybindingOverrides(value: unknown): KeybindingOverridesV1 {
   const next = normalizeKeybindingOverrides(value);
-  const resetOrDisable = (
-    commandId: CommandId,
-    binding: string,
-  ): void => {
+  const resetOrDisable = (commandId: CommandId, binding: string): void => {
     if (binding !== defaultBinding(commandId)) {
-      delete next.commands[commandId];
+      const futureFields = futureKeybindingFields(next.commands[commandId]);
+      if (Object.keys(futureFields).length > 0) {
+        next.commands[commandId] = futureFields;
+      } else {
+        delete next.commands[commandId];
+      }
     } else {
       const previous = next.commands[commandId] ?? {};
       next.commands[commandId] = { ...previous, disabled: true };
@@ -744,11 +785,7 @@ export function repairKeybindingOverrides(value: unknown): KeybindingOverridesV1
       const leftId = COMMAND_IDS[leftIndex];
       const leftBinding = bindings[leftId];
       if (!leftBinding) continue;
-      for (
-        let rightIndex = leftIndex + 1;
-        rightIndex < COMMAND_IDS.length;
-        rightIndex += 1
-      ) {
+      for (let rightIndex = leftIndex + 1; rightIndex < COMMAND_IDS.length; rightIndex += 1) {
         const rightId = COMMAND_IDS[rightIndex];
         if (
           bindings[rightId] === leftBinding &&
@@ -785,10 +822,7 @@ export function repairKeybindingOverrides(value: unknown): KeybindingOverridesV1
     resetOrDisable(loser, bindings[loser] as string);
   }
 
-  throw new KeybindingValidationError(
-    "Saved shortcuts could not be repaired safely.",
-    "conflict",
-  );
+  throw new KeybindingValidationError("Saved shortcuts could not be repaired safely.", "conflict");
 }
 
 export function validateEffectiveBindings(bindings: Record<CommandId, string | null>): void {
@@ -826,13 +860,26 @@ export function applyKeybindingMutation(
   mutation: KeybindingMutation,
   legacy?: LegacyGlobalKeybindings,
 ): KeybindingOverridesV1 {
+  if (hasFutureKeybindings(currentValue)) {
+    throw new KeybindingValidationError(
+      "This shortcut document was created by a newer Aiden version and cannot be edited safely.",
+      "future-version",
+      mutation.commandId,
+    );
+  }
   const current = migrateLegacyKeybindings(currentValue, legacy);
   const next: KeybindingOverridesV1 = {
+    ...current,
     version: 1,
     commands: { ...current.commands },
   };
   if ("reset" in mutation) {
-    delete next.commands[mutation.commandId];
+    const futureFields = futureKeybindingFields(next.commands[mutation.commandId]);
+    if (Object.keys(futureFields).length > 0) {
+      next.commands[mutation.commandId] = futureFields;
+    } else {
+      delete next.commands[mutation.commandId];
+    }
   } else if ("binding" in mutation) {
     const binding = normalizeAccelerator(mutation.binding);
     if (!binding) {
@@ -847,25 +894,24 @@ export function applyKeybindingMutation(
         if (
           id !== mutation.commandId &&
           effectiveBindingFromNormalized(id, next) === binding &&
-          commandScopesOverlap(
-            COMMAND_BY_ID[mutation.commandId],
-            COMMAND_BY_ID[id],
-          )
+          commandScopesOverlap(COMMAND_BY_ID[mutation.commandId], COMMAND_BY_ID[id])
         ) {
           const previous = next.commands[id] ?? {};
           next.commands[id] = { ...previous, disabled: true };
         }
       }
     }
-    next.commands[mutation.commandId] = { binding, disabled: false };
+    next.commands[mutation.commandId] = {
+      ...(next.commands[mutation.commandId] ?? {}),
+      binding,
+      disabled: false,
+    };
   } else {
     const previous = next.commands[mutation.commandId] ?? {};
     const definition = COMMAND_BY_ID[mutation.commandId];
     next.commands[mutation.commandId] = {
       ...previous,
-      ...(mutation.disabled === false &&
-      previous.binding == null &&
-      definition.defaultBinding
+      ...(mutation.disabled === false && previous.binding == null && definition.defaultBinding
         ? { binding: definition.defaultBinding }
         : {}),
       disabled: mutation.disabled,

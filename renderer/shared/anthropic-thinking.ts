@@ -1,14 +1,6 @@
-export const ANTHROPIC_THINKING_LEVELS = [
-  "off",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
+export const ANTHROPIC_THINKING_LEVELS = ["off", "low", "medium", "high", "xhigh", "max"] as const;
 
-export type AnthropicThinkingLevel =
-  (typeof ANTHROPIC_THINKING_LEVELS)[number];
+export type AnthropicThinkingLevel = (typeof ANTHROPIC_THINKING_LEVELS)[number];
 
 export const DEFAULT_ANTHROPIC_THINKING_LEVEL: AnthropicThinkingLevel = "high";
 
@@ -16,9 +8,7 @@ const LEVEL_SET = new Set<string>(ANTHROPIC_THINKING_LEVELS);
 const MAX_PREFERENCES = 256;
 const MAX_MODEL_ID_CHARS = 256;
 
-export function isAnthropicThinkingLevel(
-  value: unknown,
-): value is AnthropicThinkingLevel {
+export function isAnthropicThinkingLevel(value: unknown): value is AnthropicThinkingLevel {
   return typeof value === "string" && LEVEL_SET.has(value);
 }
 
@@ -40,9 +30,7 @@ export function anthropicThinkingLevelsForModel(
   });
 }
 
-export function anthropicThinkingCanDisable(
-  model: AnthropicThinkingModelCapabilities,
-): boolean {
+export function anthropicThinkingCanDisable(model: AnthropicThinkingModelCapabilities): boolean {
   return model.reasoning === true && model.thinkingLevelMap?.off !== null;
 }
 
@@ -66,18 +54,14 @@ export function parseAnthropicThinkingPreferences(
   if (entries.length > MAX_PREFERENCES) {
     throw new Error("Too many Anthropic thinking preferences.");
   }
-  const parsed: Record<string, AnthropicThinkingLevel> = {};
+  const parsed: Array<[string, AnthropicThinkingLevel]> = [];
   for (const [modelId, level] of entries) {
-    if (
-      !modelId ||
-      modelId.length > MAX_MODEL_ID_CHARS ||
-      !isAnthropicThinkingLevel(level)
-    ) {
+    if (!modelId || modelId.length > MAX_MODEL_ID_CHARS || !isAnthropicThinkingLevel(level)) {
       throw new Error("Invalid Anthropic thinking preference.");
     }
-    parsed[modelId] = level;
+    parsed.push([modelId, level]);
   }
-  return parsed;
+  return Object.fromEntries(parsed);
 }
 
 export function mergeAnthropicThinkingPreference(
@@ -85,14 +69,17 @@ export function mergeAnthropicThinkingPreference(
   modelId: string,
   level: AnthropicThinkingLevel,
 ): Record<string, AnthropicThinkingLevel> {
-  let preferences: Record<string, AnthropicThinkingLevel> = {};
-  try {
-    preferences = parseAnthropicThinkingPreferences(current);
-  } catch {
-    // A validated mutation repairs malformed manually edited state.
+  const entries =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? Object.entries(current).filter(
+          ([id]) => Boolean(id) && id.length <= MAX_MODEL_ID_CHARS && id !== modelId,
+        )
+      : [];
+  if (entries.length >= MAX_PREFERENCES) {
+    throw new Error("Too many Anthropic thinking preferences.");
   }
-  return parseAnthropicThinkingPreferences({
-    ...preferences,
-    [modelId]: level,
-  });
+  return Object.fromEntries([...entries, [modelId, level]]) as Record<
+    string,
+    AnthropicThinkingLevel
+  >;
 }

@@ -10,6 +10,7 @@ import {
 } from "../services/schedule-store.js";
 import { parseScheduledTaskInput } from "./scheduled-tasks-parse.js";
 import type { ScheduledTaskSettings } from "../services/types.js";
+import { scheduledSettingsPatch } from "../services/scheduled-settings-core.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -73,27 +74,7 @@ export function registerScheduledTaskHandlers(): void {
     const input = (
       patch && typeof patch === "object" && !Array.isArray(patch) ? patch : {}
     ) as Record<string, unknown>;
-    const next = {
-      scheduledTasksEnabled:
-        typeof input.enabled === "boolean" ? input.enabled : current.scheduledTasksEnabled,
-      scheduledDefaultMode:
-        input.defaultMode === "llm" || input.defaultMode === "script"
-          ? input.defaultMode
-          : current.scheduledDefaultMode,
-      scheduledDefaultPermission:
-        input.defaultPermission === "read-only" || input.defaultPermission === "full"
-          ? input.defaultPermission
-          : current.scheduledDefaultPermission,
-      scheduledDefaultNotify:
-        typeof input.defaultNotify === "boolean"
-          ? input.defaultNotify
-          : current.scheduledDefaultNotify,
-      scheduledDefaultTimezone:
-        input.defaultTimezone === undefined
-          ? current.scheduledDefaultTimezone
-          : validateTimezone(requiredString(input.defaultTimezone, "defaultTimezone")),
-    };
-    const saved = await configStore.setSettings(next);
+    const saved = await configStore.setSettings(scheduledSettingsPatch(input, validateTimezone));
     if (
       typeof input.enabled === "boolean" &&
       input.enabled !== (current.scheduledTasksEnabled !== false)
