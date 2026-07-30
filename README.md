@@ -8,6 +8,10 @@
   A native-feeling macOS workspace for chatting with local or hosted AI models and safely working inside the folders you choose.
 </p>
 
+```sh
+brew install --cask sambitcreate/tap/aiden-agent
+```
+
 ![Aiden Agent showing a workspace chat and Personal Model Pad](docs/assets/aiden-agent-app.png)
 
 ## Why Aiden

@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
@@ -101,7 +105,9 @@ jobs:
           shasum -a 256 -- *.dmg *.zip latest-mac.yml > SHA256SUMS
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "Aiden Agent $RELEASE_VERSION" \
-            --notes "Automated verified Aiden Agent beta release." \
+            --notes "Aiden Agent beta release. Changes since the previous release:" \
+            --generate-notes \
             --latest \
             -- *.dmg *.zip latest-mac.yml SHA256SUMS
