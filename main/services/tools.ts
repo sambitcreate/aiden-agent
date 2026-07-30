@@ -21,6 +21,9 @@ import { scheduleTaskToolsForContext } from "./schedule-tool.js";
 import { registerSubagentTool } from "./subagents/feature-flag.js";
 import { buildSubagentCapabilityTools } from "./subagents/capability-tools.js";
 import type { SubagentCapabilityRequest } from "./subagents/capability-profile.js";
+import { createAssistantProjectTool } from "./assistant/project-tool.js";
+import { createAssistantMcpServerTool } from "./assistant/mcp-tool.js";
+import { selectedMcpServers } from "./mcp-selection.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -152,15 +155,15 @@ export interface ToolContext {
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
   allowMcpTools?: boolean;
+  /** Exact configured server identities approved for this unattended generation. */
+  mcpServerIds?: readonly string[];
   /** Only a foreground, persisted-workspace generation may register the delegation tool. */
   allowSubagents?: boolean;
   /**
-   * "assistant" is the Aiden dock, which has no tool UI and no approval
-   * affordance. Its tool set is an explicit allowlist rather than the workspace
-   * set minus exclusions, so a tool added elsewhere cannot appear there by
-   * default.
+   * Assistant modes use positive allowlists rather than the workspace set minus
+   * exclusions, so ambient tools cannot appear there by default.
    */
-  mode?: "assistant" | "subagent";
+  mode?: "assistant" | "assistant-automation" | "subagent";
   /** Lazily constructed so the disabled feature flag prevents registration entirely. */
   createSubagentTool?: () => AgentTool;
   /**
@@ -171,9 +174,18 @@ export interface ToolContext {
 }
 
 export function buildSchedulingTools(
-  context: Pick<ToolContext, "workspaceId" | "allowScheduling">,
+  context: Pick<ToolContext, "workspaceId" | "allowScheduling" | "mode">,
 ): AgentTool[] {
-  return scheduleTaskToolsForContext(context);
+  return scheduleTaskToolsForContext({
+    workspaceId: context.workspaceId,
+    allowScheduling: context.allowScheduling,
+    mode: context.mode === "assistant" ? "assistant-attended" : "standard",
+  });
+}
+
+async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
+  const servers = selectedMcpServers(await configStore.listMcpServers(), ctx.mcpServerIds);
+  return collectMcpAgentTools(servers, { strict: ctx.mcpServerIds !== undefined });
 }
 
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
@@ -188,21 +200,37 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
       capabilityProfile: ctx.capabilityProfile,
     }).tools;
   }
-  if (ctx.mode !== undefined && ctx.mode !== "assistant") {
+  if (ctx.mode !== undefined && ctx.mode !== "assistant" && ctx.mode !== "assistant-automation") {
     throw new Error(`Unknown agent tool mode: ${JSON.stringify(ctx.mode)}.`);
   }
 
+  // Aiden receives a positive allowlist. The attended dock may inspect MCP
+  // server identities and propose a narrowly constrained scheduled task. An
+  // unattended global automation receives only the exact MCP servers approved
+  // on that task.
+  if (ctx.mode === "assistant") {
+    const tools =
+      ctx.allowScheduling === false
+        ? []
+        : [
+            createAssistantProjectTool(),
+            createAssistantMcpServerTool(),
+            ...buildSchedulingTools(ctx),
+          ];
+    if (ctx.allowMcpTools === true) tools.push(...(await configuredMcpTools(ctx)));
+    return tools;
+  }
+
+  // An approved project automation receives folder-scoped coding tools and,
+  // only when explicitly selected on the task, exact MCP server tools.
+  if (ctx.mode === "assistant-automation") {
+    const tools =
+      ctx.workspaceRoot && ctx.permission !== "none" ? buildCodingTools(ctx.workspaceRoot) : [];
+    if (ctx.allowMcpTools === true) tools.push(...(await configuredMcpTools(ctx)));
+    return tools;
+  }
+
   const tools: AgentTool[] = [];
-
-  // Aiden's surface renders text only — no tool rows, no approval prompt — so
-  // anything reaching it runs invisibly. The workspace set is wrong for it in
-  // both directions: Exa is an outbound channel a prompt injection could use to
-  // exfiltrate the conversation, and a skill tool returns file contents and an
-  // absolute base directory to a persona that tells the user it cannot read
-  // files. Aiden's own read-only tools land here in a later phase; until then it
-  // has none, and its system prompt says so.
-  if (ctx.mode === "assistant") return tools;
-
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
   tools.push(...buildSchedulingTools(ctx));
   if (ctx.allowSubagents === true) {
@@ -247,8 +275,7 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
 
   // MCP server tools.
   if (ctx.allowMcpTools !== false) {
-    const servers = await configStore.listMcpServers();
-    tools.push(...(await collectMcpAgentTools(servers)));
+    tools.push(...(await configuredMcpTools(ctx)));
   }
 
   return tools;
