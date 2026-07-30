@@ -162,6 +162,68 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
   }
 });
 
+test("approval details are forwarded only to their owning stream", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-approval",
+        workspaceId: "assistant",
+        providerId: "provider-1",
+        model: "model-1",
+        mode: "assistant",
+        messages: [],
+      },
+      {
+        ...callbacks(),
+        onApproval: (prompt) => received.push(prompt),
+      },
+      "turn-approval",
+    );
+    const payload = {
+      streamId: handle.streamId,
+      approvalId: "approval-1",
+      toolCallId: "tool-1",
+      toolName: "schedule_task",
+      summary: "Create Morning brief",
+      details: {
+        kind: "assistant-automation",
+        action: "create",
+        name: "Morning brief",
+        prompt: "Summarize updates.",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        nextRunAt: 1_800_000_000_000,
+        notify: true,
+        mode: "llm",
+        permission: "read-only",
+        workspaceId: null,
+        workspaceName: null,
+        mcpServerIds: [],
+        mcpServerNames: [],
+        schedulerEnabled: true,
+      },
+    };
+    for (const handler of bridge.listeners.get("chat:approval") ?? []) {
+      handler({ ...payload, streamId: "another-stream" });
+      handler(payload);
+    }
+    assert.deepEqual(received, [
+      {
+        approvalId: payload.approvalId,
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        summary: payload.summary,
+        details: payload.details,
+      },
+    ]);
+    handle.cancel("lifecycle");
+  } finally {
+    restore();
+  }
+});
+
 test("a lifecycle-detached start rejection clears through authoritative fallback", async () => {
   const { bridge, restore } = installFakeBridge({ rejectStart: true });
   const fallbacks: string[] = [];
