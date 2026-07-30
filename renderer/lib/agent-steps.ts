@@ -30,6 +30,7 @@ const VERBS: Record<string, VerbPair> = {
   run_command: { active: "Running", complete: "Ran" },
   web_search: { active: "Searching the web", complete: "Searched the web" },
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
+  edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using Mac", complete: "Used Mac" },
 };
 
