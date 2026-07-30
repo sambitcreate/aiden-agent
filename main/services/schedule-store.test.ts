@@ -95,6 +95,120 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
   );
 });
 
+test("Assistant execution profile persists while allowing project-bound Full access only", async () => {
+  const store = testStore();
+  const created = await store.save({
+    name: "Ask Aiden brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize Aiden notifications.",
+    permission: "read-only",
+    executionProfile: "assistant",
+  });
+  assert.equal(created.executionProfile, "assistant");
+
+  const updated = await store.save({
+    id: created.id,
+    name: "Updated Ask Aiden brief",
+    mode: "llm",
+    cron: "0 10 * * *",
+    timezone: "UTC",
+    prompt: "Summarize only important Aiden notifications.",
+    permission: "read-only",
+  });
+  assert.equal(updated.executionProfile, "assistant");
+
+  await assert.rejects(
+    store.save({
+      id: created.id,
+      name: updated.name,
+      mode: "llm",
+      cron: updated.cron,
+      timezone: updated.timezone,
+      prompt: updated.prompt,
+      permission: "full",
+    }),
+    /Full access requires a project/iu,
+  );
+  const projectTask = await store.save({
+    id: created.id,
+    name: updated.name,
+    mode: "llm",
+    cron: updated.cron,
+    timezone: updated.timezone,
+    workspaceId: "workspace-1",
+    prompt: updated.prompt,
+    permission: "read-only",
+  });
+  assert.equal(projectTask.executionProfile, "assistant");
+  assert.equal(projectTask.workspaceId, "workspace-1");
+
+  const fullTask = await store.save({
+    id: created.id,
+    name: updated.name,
+    mode: "llm",
+    cron: updated.cron,
+    timezone: updated.timezone,
+    workspaceId: "workspace-1",
+    prompt: "Update the project report.",
+    permission: "full",
+  });
+  assert.equal(fullTask.executionProfile, "assistant");
+  assert.equal(fullTask.permission, "full");
+
+  const globalMcpTask = await store.save({
+    id: created.id,
+    name: updated.name,
+    mode: "llm",
+    cron: updated.cron,
+    timezone: updated.timezone,
+    prompt: "Email the morning briefing.",
+    permission: "full",
+    mcpServerIds: ["gmail"],
+  });
+  assert.equal(globalMcpTask.workspaceId, undefined);
+  assert.deepEqual(globalMcpTask.mcpServerIds, ["gmail"]);
+});
+
+test("MCP-enabled tasks persist exact scope and require Full Ask Aiden access", async () => {
+  const store = testStore();
+  const task = await store.save({
+    name: "Inbox brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize the inbox.",
+    permission: "full",
+    mcpServerIds: ["gmail", "gmail"],
+  });
+  assert.deepEqual(task.mcpServerIds, ["gmail"]);
+  await assert.rejects(
+    store.save({
+      name: "Read-only connector",
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize the inbox.",
+      permission: "read-only",
+      mcpServerIds: ["gmail"],
+    }),
+    /require Full permission/iu,
+  );
+  await assert.rejects(
+    store.save({
+      name: "Script connector",
+      mode: "script",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      script: "brief.sh",
+      permission: "full",
+      mcpServerIds: ["gmail"],
+    }),
+    /Only Ask Aiden tasks/iu,
+  );
+});
+
 test("run history is capped at the newest 50 entries per task", async () => {
   const store = testStore();
   const task = await store.save({
@@ -165,6 +279,27 @@ test("stored invalid schedules are quarantined instead of aborting startup", asy
   assert.equal(task?.nextRunAt, undefined);
   assert.equal(task?.lastResult, "error");
   assert.match(task?.lastError ?? "", /needs attention/iu);
+});
+
+test("a quarantined Assistant-profile task cannot be re-enabled with elevated capabilities", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "corrupt-assistant",
+      name: "Corrupt Assistant task",
+      enabled: true,
+      mode: "script",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      script: "report.sh",
+      permission: "full",
+      executionProfile: "assistant",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  assert.equal((await store.get("corrupt-assistant"))?.enabled, false);
+  await assert.rejects(store.setEnabled("corrupt-assistant", true), /must remain LLM tasks/iu);
 });
 
 test("loads legacy Gemini scheduled tasks through the native Google provider", async () => {
