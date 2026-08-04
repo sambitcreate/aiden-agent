@@ -79,6 +79,14 @@ Core technologies include Electron 43, React 19, TypeScript, Vite, Tailwind CSS,
 - A full Xcode 26 or newer for the Apple Foundation Models helper
 - An Apple Development or Developer ID Application identity for packaged builds
 
+Node and Rust can come from the checked-in **Nix** flake instead, which pins both to the versions CI uses and reads the Cargo toolchain straight from `native/computer-use-broker/rust-toolchain.toml`. Xcode and the signing identities always come from the host.
+
+```bash
+nix develop
+```
+
+Run `direnv allow` once instead to have the shell load automatically on `cd`.
+
 ### Run locally
 
 ```bash
