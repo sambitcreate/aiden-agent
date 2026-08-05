@@ -41,6 +41,7 @@ export function ScheduledTaskEditor({
   workspaces,
   mcpServers,
   mcpServersUnavailable = false,
+  assistantOwned = false,
   busy,
   onOpenChange,
   onSave,
@@ -50,6 +51,7 @@ export function ScheduledTaskEditor({
   workspaces: Workspace[];
   mcpServers: McpServer[];
   mcpServersUnavailable?: boolean;
+  assistantOwned?: boolean;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
@@ -146,6 +148,7 @@ export function ScheduledTaskEditor({
       return {
         ...current,
         permission: enabled ? "full" : current.permission,
+        workspaceId: enabled ? undefined : current.workspaceId,
         mcpServerIds: [...ids],
       };
     });
@@ -156,7 +159,14 @@ export function ScheduledTaskEditor({
     draft.timezone?.trim() &&
     (draft.mode === "llm" ? draft.prompt?.trim() : draft.script?.trim()) &&
     !previewError &&
-    (!selectedMcpIds.length || (!mcpServersUnavailable && unavailableMcpIds.length === 0));
+    selectedMcpIds.length <= 16 &&
+    !(draft.workspaceId && selectedMcpIds.length > 0) &&
+    (!selectedMcpIds.length || (!mcpServersUnavailable && unavailableMcpIds.length === 0)) &&
+    (!assistantOwned ||
+      (draft.mode === "llm" &&
+        draft.workspaceId === initial.workspaceId &&
+        draft.permission === initial.permission &&
+        JSON.stringify(selectedMcpIds) === JSON.stringify(initial.mcpServerIds ?? [])));
 
   return (
     <Dialog
@@ -183,26 +193,30 @@ export function ScheduledTaskEditor({
           label="Mode"
           description="Ask Aiden with a prompt or run a local script without a model."
         >
-          <div className="grid grid-cols-2 rounded-control bg-control p-0.5">
-            <Button
-              size="small"
-              variant={draft.mode === "llm" ? "filled" : "transparent"}
-              radius="rounded"
-              aria-pressed={draft.mode === "llm"}
-              onClick={() => setMode("llm")}
-            >
-              Ask Aiden
-            </Button>
-            <Button
-              size="small"
-              variant={draft.mode === "script" ? "filled" : "transparent"}
-              radius="rounded"
-              aria-pressed={draft.mode === "script"}
-              onClick={() => setMode("script")}
-            >
-              Run script
-            </Button>
-          </div>
+          {assistantOwned ? (
+            <Text variant="small-strong">Ask Aiden · locked by the approved automation</Text>
+          ) : (
+            <div className="grid grid-cols-2 rounded-control bg-control p-0.5">
+              <Button
+                size="small"
+                variant={draft.mode === "llm" ? "filled" : "transparent"}
+                radius="rounded"
+                aria-pressed={draft.mode === "llm"}
+                onClick={() => setMode("llm")}
+              >
+                Ask Aiden
+              </Button>
+              <Button
+                size="small"
+                variant={draft.mode === "script" ? "filled" : "transparent"}
+                radius="rounded"
+                aria-pressed={draft.mode === "script"}
+                onClick={() => setMode("script")}
+              >
+                Run script
+              </Button>
+            </div>
+          )}
         </Field>
         {draft.mode === "llm" ? (
           <Field
@@ -285,11 +299,13 @@ export function ScheduledTaskEditor({
           description="Paths are always re-resolved by Aiden when the task runs."
         >
           <Select
+            disabled={assistantOwned}
             value={draft.workspaceId ?? "__none__"}
             onValueChange={(workspaceId) =>
               setDraft((current) => ({
                 ...current,
                 workspaceId: workspaceId === "__none__" ? undefined : workspaceId,
+                mcpServerIds: workspaceId === "__none__" ? current.mcpServerIds : [],
               }))
             }
           >
@@ -312,6 +328,7 @@ export function ScheduledTaskEditor({
             description="Read-only can inspect context. Full can edit files and run commands without asking."
           >
             <Select
+              disabled={assistantOwned}
               value={draft.permission ?? "read-only"}
               onValueChange={(value) => setPermission(value === "full" ? "full" : "read-only")}
             >
@@ -368,7 +385,7 @@ export function ScheduledTaskEditor({
                       <Switch
                         checked={selected}
                         onCheckedChange={(checked) => toggleMcpServer(server.id, checked)}
-                        disabled={!server.enabled && !selected}
+                        disabled={assistantOwned || (!server.enabled && !selected)}
                         aria-label={`${selected ? "Remove" : "Allow"} ${server.name} for this scheduled task`}
                       />
                     </li>
@@ -377,6 +394,28 @@ export function ScheduledTaskEditor({
               </ul>
             )}
           </Field>
+        ) : null}
+        {assistantOwned ? (
+          <Callout>
+            <Text variant="small" color="secondary">
+              Project, permission, and connector scope were approved with Aiden Assistant. Edit
+              those fields through Aiden so the complete final scope can be confirmed again.
+            </Text>
+          </Callout>
+        ) : null}
+        {!assistantOwned && draft.workspaceId && selectedMcpIds.length > 0 ? (
+          <Callout color="red">
+            <Text variant="small" color="secondary">
+              Choose either a workspace or MCP servers. Split combined work into separate tasks.
+            </Text>
+          </Callout>
+        ) : null}
+        {selectedMcpIds.length > 16 ? (
+          <Callout color="red">
+            <Text variant="small" color="secondary">
+              Choose at most 16 MCP servers for one scheduled task.
+            </Text>
+          </Callout>
         ) : null}
         {draft.permission === "full" ? (
           <div className="px-4 pb-4">
