@@ -14,7 +14,7 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("approved automations receive only folder-scoped coding tools and exact MCP scope", () => {
+test("project automations receive only folder-scoped coding tools and reject MCP scope", () => {
   const tools = between(
     source("../tools.ts"),
     'if (ctx.mode === "assistant-automation")',
@@ -22,12 +22,16 @@ test("approved automations receive only folder-scoped coding tools and exact MCP
   );
   assert.match(tools, /buildCodingTools\(ctx\.workspaceRoot\)/u);
   assert.match(tools, /ctx\.allowMcpTools === true/u);
-  assert.match(tools, /configuredMcpTools\(ctx\)/u);
+  assert.match(tools, /cannot use MCP connectors/u);
+  assert.doesNotMatch(tools, /configuredMcpTools\(ctx\)/u);
   assert.doesNotMatch(tools, /buildSchedulingTools|makeExaTool|skillToolKey/u);
 
   const execution = source("../schedule-execution.ts");
+  const client = source("../llm-client.ts");
   assert.match(execution, /const allowMcpTools =/u);
   assert.match(execution, /mcpServerIds,/u);
+  assert.match(execution, /providerFingerprint: task\.providerFingerprint/u);
+  assert.match(client, /assertScheduledProviderFingerprint\(runtime\.provider/u);
   assert.match(execution, /allowComputerUse: false/u);
   assert.match(execution, /allowSubagents: false/u);
 });
@@ -45,7 +49,8 @@ test("attended Assistant sees MCP identities but never ambient connector tools",
 
   const client = source("../llm-client.ts");
   assert.match(client, /assistantMcpServerInventory/u);
-  assert.match(client, /mcpServers: assistantMcpServers/u);
+  assert.match(client, /mcpServers: assistantMcpInventory\.servers/u);
+  assert.match(client, /mcpInventoryTruncated: assistantMcpInventory\.truncated/u);
 });
 
 test("the internal project automation mode cannot be requested by the renderer", () => {
@@ -68,7 +73,7 @@ test("repeated attended tool errors are bounded before they can loop indefinitel
   const client = source("../llm-client.ts");
   assert.match(client, /prepareNextTurnWithContext/u);
   assert.match(client, /advanceAttendedToolErrorState/u);
-  assert.match(client, /recoverAttendedToolErrorContext\(context, hasEnabledMcpServers\)/u);
+  assert.match(client, /recoverAttendedToolErrorContext\(context\)/u);
   assert.doesNotMatch(client, /candidate\?\.abort\(\)/u);
 
   const guard = source("./tool-loop-guard.ts");
