@@ -14,6 +14,7 @@ import type {
   ScheduledTask,
   ScheduledTaskInput,
 } from "./types.js";
+import { validateScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 
 const RUNS_PER_TASK = 50;
 const STORED_OUTPUT_LIMIT = 64 * 1024;
@@ -21,11 +22,15 @@ const STORED_ERROR_LIMIT = 4 * 1024;
 
 interface Persistence<T> {
   load(): Promise<T>;
-  update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R>;
+  update<R>(mutation: (draft: T) => R | Promise<R>, isCurrent?: () => boolean): Promise<R>;
 }
 
 function finiteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function nextTaskRevision(timestamp: number, previous?: number): number {
+  return previous === undefined ? timestamp : Math.max(timestamp, previous + 1);
 }
 
 export function systemTimezone(): string {
@@ -145,6 +150,10 @@ function normalizeInput(
     input.mcpServerIds === undefined
       ? existing?.mcpServerIds
       : validateScheduledMcpServerIds(input.mcpServerIds);
+  const mcpServerBindings =
+    input.mcpServerBindings === undefined
+      ? existing?.mcpServerBindings
+      : validateScheduledMcpServerBindings(input.mcpServerBindings);
   if ((mcpServerIds?.length ?? 0) > 0 && input.mode !== "llm") {
     throw new Error("Only Ask Aiden tasks can use MCP servers.");
   }
@@ -152,6 +161,19 @@ function normalizeInput(
     throw new Error("MCP-enabled scheduled tasks require Full permission.");
   }
   const executionProfile = input.executionProfile ?? existing?.executionProfile;
+  const mainOwnedAssistantUpdate = input.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE;
+  const providerId =
+    existing?.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE && !mainOwnedAssistantUpdate
+      ? existing.providerId
+      : cleanOptional(input.providerId);
+  const model =
+    existing?.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE && !mainOwnedAssistantUpdate
+      ? existing.model
+      : cleanOptional(input.model);
+  const providerFingerprint =
+    existing?.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE && !mainOwnedAssistantUpdate
+      ? existing.providerFingerprint
+      : cleanOptional(input.providerFingerprint, 64);
   assertAssistantScheduleExecutionBoundary({
     executionProfile,
     mode: input.mode,
@@ -159,6 +181,10 @@ function normalizeInput(
     script,
     workspaceId,
     mcpServerIds,
+    mcpServerBindings,
+    providerId,
+    model,
+    providerFingerprint,
   });
   const nextRunAt = enabled ? nextScheduledRun(cron, timezone, new Date(now)) : undefined;
   return {
@@ -171,19 +197,21 @@ function normalizeInput(
     nextRunAt,
     lastRunAt: existing?.lastRunAt,
     workspaceId,
-    providerId: cleanOptional(input.providerId),
-    model: cleanOptional(input.model),
+    providerId,
+    model,
+    providerFingerprint,
     prompt,
     script,
     permission,
     mcpServerIds,
+    mcpServerBindings,
     executionProfile,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
     createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
+    updatedAt: nextTaskRevision(now, existing?.updatedAt),
   };
 }
 
@@ -217,10 +245,16 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE
       ? ASSISTANT_SCHEDULE_EXECUTION_PROFILE
       : undefined;
+  const providerId = typeof task.providerId === "string" ? task.providerId : undefined;
+  const model = typeof task.model === "string" ? task.model : undefined;
+  const providerFingerprint =
+    typeof task.providerFingerprint === "string" ? task.providerFingerprint : undefined;
   let mcpServerIds: string[] | undefined;
+  let mcpServerBindings: ScheduledTask["mcpServerBindings"];
   let scheduleError: string | undefined;
   try {
     mcpServerIds = validateScheduledMcpServerIds(task.mcpServerIds);
+    mcpServerBindings = validateScheduledMcpServerBindings(task.mcpServerBindings);
     nextScheduledRun(task.cron, task.timezone);
     if (task.mode === "llm") {
       if (!prompt?.trim()) {
@@ -246,6 +280,10 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
       script,
       workspaceId,
       mcpServerIds,
+      mcpServerBindings,
+      providerId,
+      model,
+      providerFingerprint,
     });
   } catch (error) {
     scheduleError = error instanceof Error ? error.message : "Invalid stored schedule.";
@@ -263,12 +301,14 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     // Resolve aliases only after config has had a chance to protect an edited
     // legacy preset (for example, a custom `gemini` endpoint). The default
     // resolver below still upgrades untouched legacy IDs for standalone tests.
-    providerId: typeof task.providerId === "string" ? task.providerId : undefined,
-    model: typeof task.model === "string" ? task.model : undefined,
+    providerId,
+    model,
+    providerFingerprint,
     prompt,
     script,
     permission: task.permission,
     mcpServerIds,
+    mcpServerBindings,
     executionProfile,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
     notify: task.notify !== false,
@@ -335,20 +375,32 @@ export function createScheduleStore(
     const migratedIds = new Map(
       resolved
         .filter((task, index) => task.providerId !== normalized[index]?.providerId)
-        .map((task) => [task.id, task.providerId]),
+        .map((task, index) => [
+          task.id,
+          { from: normalized[index]?.providerId, to: task.providerId },
+        ]),
     );
     if (migratedIds.size > 0) {
       // Persist the safe alias on first read so a later Pi provider can never
-      // inherit this schedule merely because it claims the historic ID.
+      // inherit this schedule merely because it claims the historic ID. Treat
+      // the migration as a real revision, and do not overwrite a concurrent
+      // edit that already selected another provider.
       await tasks.update((draft) => {
         for (let index = 0; index < draft.length; index += 1) {
           const value = draft[index];
           if (!value || typeof value !== "object" || Array.isArray(value)) continue;
           const id = (value as Record<string, unknown>).id;
-          const providerId = typeof id === "string" ? migratedIds.get(id) : undefined;
-          if (providerId !== undefined) draft[index] = { ...value, providerId };
+          const migration = typeof id === "string" ? migratedIds.get(id) : undefined;
+          const current = normalizeStoredTask(value);
+          if (!migration || !current || current.providerId !== migration.from) continue;
+          draft[index] = {
+            ...value,
+            providerId: migration.to,
+            updatedAt: nextTaskRevision(now(), current.updatedAt),
+          };
         }
       });
+      return list();
     }
     return resolved.sort((a, b) => b.createdAt - a.createdAt);
   }
@@ -357,26 +409,75 @@ export function createScheduleStore(
     return (await list()).find((task) => task.id === id);
   }
 
+  async function restoreIfRevision(
+    id: string,
+    expectedUpdatedAt: number,
+    previous: ScheduledTask | undefined,
+  ): Promise<boolean> {
+    return tasks.update((draft) => {
+      const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+      const current = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+      if (!current || current.updatedAt !== expectedUpdatedAt) return false;
+      if (previous) draft[index] = previous;
+      else draft.splice(index, 1);
+      return true;
+    });
+  }
+
+  async function saveWithRollback(
+    input: ScheduledTaskInput,
+    isCurrent: () => boolean = () => true,
+    expectedUpdatedAt?: number,
+  ): Promise<{
+    task: ScheduledTask;
+    rollback(expectedUpdatedAt?: number): Promise<boolean>;
+  }> {
+    if (!isCurrent()) throw new Error("Scheduled task save was cancelled.");
+    const providerId = await resolveProviderId(input.providerId);
+    if (!isCurrent()) throw new Error("Scheduled task save was cancelled.");
+    const resolvedInput = providerId === input.providerId ? input : { ...input, providerId };
+    const saved = await tasks.update((draft) => {
+      const index = draft
+        .map(normalizeStoredTask)
+        .findIndex((task) => task?.id === resolvedInput.id);
+      const existing = index >= 0 ? (normalizeStoredTask(draft[index]) ?? undefined) : undefined;
+      if (resolvedInput.id && !existing)
+        throw new Error(`Scheduled task ${resolvedInput.id} not found.`);
+      if (expectedUpdatedAt !== undefined && existing?.updatedAt !== expectedUpdatedAt) {
+        throw new Error(
+          "This automation changed before the edit was saved. List it again and retry.",
+        );
+      }
+      const task = normalizeInput(resolvedInput, existing, now());
+      if (index >= 0) draft[index] = task;
+      else draft.push(task);
+      return { task: structuredClone(task), previous: structuredClone(existing) };
+    }, isCurrent);
+    if (!isCurrent()) {
+      await restoreIfRevision(saved.task.id, saved.task.updatedAt, saved.previous);
+      throw new Error("Scheduled task save was cancelled.");
+    }
+    return {
+      task: saved.task,
+      rollback: (expectedRevision = saved.task.updatedAt) =>
+        restoreIfRevision(saved.task.id, expectedRevision, saved.previous),
+    };
+  }
+
   return {
     list,
     get,
 
-    async save(input: ScheduledTaskInput): Promise<ScheduledTask> {
-      const providerId = await resolveProviderId(input.providerId);
-      const resolvedInput = providerId === input.providerId ? input : { ...input, providerId };
-      return tasks.update((draft) => {
-        const index = draft
-          .map(normalizeStoredTask)
-          .findIndex((task) => task?.id === resolvedInput.id);
-        const existing = index >= 0 ? (normalizeStoredTask(draft[index]) ?? undefined) : undefined;
-        if (resolvedInput.id && !existing)
-          throw new Error(`Scheduled task ${resolvedInput.id} not found.`);
-        const task = normalizeInput(resolvedInput, existing, now());
-        if (index >= 0) draft[index] = task;
-        else draft.push(task);
-        return structuredClone(task);
-      });
+    saveWithRollback,
+
+    async save(
+      input: ScheduledTaskInput,
+      isCurrent: () => boolean = () => true,
+    ): Promise<ScheduledTask> {
+      return (await saveWithRollback(input, isCurrent)).task;
     },
+
+    restoreIfRevision,
 
     async setEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
       return tasks.update((draft) => {
@@ -391,7 +492,7 @@ export function createScheduleStore(
           nextRunAt: enabled
             ? nextScheduledRun(existing.cron, existing.timezone, new Date(timestamp))
             : undefined,
-          updatedAt: timestamp,
+          updatedAt: nextTaskRevision(timestamp, existing.updatedAt),
         };
         draft[index] = task;
         return structuredClone(task);
@@ -412,7 +513,11 @@ export function createScheduleStore(
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
         if (patch.enabled === true) assertAssistantScheduleExecutionBoundary(existing);
-        const task = { ...existing, ...patch, updatedAt: now() };
+        const task = {
+          ...existing,
+          ...patch,
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
         draft[index] = task;
         return structuredClone(task);
       });
@@ -442,7 +547,11 @@ export function createScheduleStore(
         const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
         if (!existing) throw new Error(`Scheduled task ${id} not found.`);
         if (existing.chatId !== expectedChatId) return;
-        draft[index] = { ...existing, chatId: undefined, updatedAt: now() };
+        draft[index] = {
+          ...existing,
+          chatId: undefined,
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
       });
     },
 
