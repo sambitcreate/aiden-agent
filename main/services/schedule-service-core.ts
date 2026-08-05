@@ -275,29 +275,54 @@ export function createScheduleServiceCore(dependencies: ScheduleServiceDependenc
 
     async save(
       input: ScheduledTaskInput,
-      options: { expectedUpdatedAt?: number } = {},
+      options: { expectedUpdatedAt?: number; signal?: AbortSignal } = {},
     ): Promise<ScheduledTask> {
       if (options.expectedUpdatedAt !== undefined && !input.id) {
         throw new Error("An expected task revision requires an existing task ID.");
       }
       const perform = async () => {
-        if (options.expectedUpdatedAt !== undefined && input.id) {
+        if (options.signal?.aborted) throw new Error("Scheduled task save was cancelled.");
+        const rescheduleCurrent = async () => {
+          if (!input.id) return;
           const current = await store.get(input.id);
-          if (!current) throw new Error(`Scheduled task ${input.id} not found.`);
-          if (current.updatedAt !== options.expectedUpdatedAt) {
-            throw new Error(
-              "This automation changed before the edit was saved. List it again and retry.",
-            );
-          }
-        }
-        const task = await store.save(input);
+          if (current) await schedule(current);
+        };
         if (input.id) {
           stopJob(input.id);
           await cancelAndSettle(input.id);
+          if (options.signal?.aborted) {
+            await rescheduleCurrent();
+            throw new Error("Scheduled task save was cancelled.");
+          }
+        }
+        let saved: Awaited<ReturnType<ScheduleStore["saveWithRollback"]>>;
+        try {
+          saved = await store.saveWithRollback(
+            input,
+            () => !options.signal?.aborted,
+            options.expectedUpdatedAt,
+          );
+        } catch (error) {
+          await rescheduleCurrent();
+          throw error;
+        }
+        const task = saved.task;
+        const rollbackCancellation = async (expectedUpdatedAt: number) => {
+          stopJob(task.id);
+          await saved.rollback(expectedUpdatedAt);
+          await rescheduleCurrent();
+          throw new Error("Scheduled task save was cancelled.");
+        };
+        if (options.signal?.aborted) {
+          return rollbackCancellation(task.updatedAt);
         }
         await schedule(task);
+        const latest = (await store.get(task.id)) ?? task;
+        if (options.signal?.aborted) {
+          return rollbackCancellation(latest.updatedAt);
+        }
         dependencies.broadcast({ taskId: task.id });
-        return (await store.get(task.id)) ?? task;
+        return latest;
       };
       return input.id ? withTaskLifecycle(input.id, perform) : perform();
     },
