@@ -8,6 +8,10 @@ import {
   scheduledTaskGenerationMode,
   validateScheduledMcpServerIds,
 } from "./schedule-guard.js";
+import {
+  assertScheduledProviderFingerprint,
+  scheduledProviderFingerprint,
+} from "./schedule-provider-binding.js";
 
 test("scheduled prompt guard allows ordinary monitoring instructions and emoji", () => {
   for (const prompt of [
@@ -56,6 +60,9 @@ test("Assistant schedule profile selects the bounded runtime for global and proj
     permission: "read-only" as const,
     workspaceId: undefined,
     script: undefined,
+    providerId: "provider-1",
+    model: "model-1",
+    providerFingerprint: "b".repeat(64),
   };
   assert.doesNotThrow(() => assertAssistantScheduleExecutionBoundary(assistantTask));
   assert.equal(scheduledTaskGenerationMode(assistantTask), "assistant-unattended");
@@ -72,6 +79,7 @@ test("Assistant schedule profile selects the bounded runtime for global and proj
     ...assistantTask,
     permission: "full" as const,
     mcpServerIds: ["gmail"],
+    mcpServerBindings: [{ id: "gmail", fingerprint: "a".repeat(64) }],
   };
   assert.doesNotThrow(() => assertAssistantScheduleExecutionBoundary(mcpTask));
   assert.equal(scheduledTaskGenerationMode(mcpTask), "assistant-unattended");
@@ -95,12 +103,22 @@ test("Assistant schedule profile selects the bounded runtime for global and proj
   assert.throws(
     () =>
       assertAssistantScheduleExecutionBoundary({
+        ...projectTask,
+        permission: "full",
+        mcpServerIds: ["gmail"],
+        mcpServerBindings: [{ id: "gmail", fingerprint: "a".repeat(64) }],
+      }),
+    /either one project or MCP servers, not both/iu,
+  );
+  assert.throws(
+    () =>
+      assertAssistantScheduleExecutionBoundary({
         ...assistantTask,
         mode: "script",
         permission: "full",
         script: "report.sh",
       }),
-    /must remain LLM tasks/iu,
+    /provider\/model-pinned LLM tasks/iu,
   );
 });
 
@@ -115,6 +133,47 @@ test("scheduled MCP identities are bounded, normalized, and deduplicated", () =>
   assert.throws(
     () => validateScheduledMcpServerIds(Array.from({ length: 17 }, (_, index) => `mcp-${index}`)),
     /at most 16/iu,
+  );
+});
+
+test("every scheduled task keeps project and MCP capabilities separate", () => {
+  assert.throws(
+    () =>
+      assertAssistantScheduleExecutionBoundary({
+        executionProfile: undefined,
+        mode: "llm",
+        permission: "full",
+        script: undefined,
+        workspaceId: "workspace-1",
+        mcpServerIds: ["gmail"],
+      }),
+    /either one project or MCP servers, not both/iu,
+  );
+});
+
+test("Assistant provider binding rejects same-ID endpoint or deployment replacement", () => {
+  const local = {
+    id: "custom:provider",
+    kind: "openai" as const,
+    label: "Local",
+    baseUrl: "http://127.0.0.1:1234/v1",
+    models: ["model-1"],
+    needsKey: false,
+    deployment: "local" as const,
+  };
+  const fingerprint = scheduledProviderFingerprint(local);
+  assert.doesNotThrow(() => assertScheduledProviderFingerprint(local, fingerprint));
+  assert.throws(
+    () =>
+      assertScheduledProviderFingerprint(
+        {
+          ...local,
+          baseUrl: "https://hosted.example/v1",
+          deployment: "hosted",
+        },
+        fingerprint,
+      ),
+    /approved provider connection changed/iu,
   );
 });
 
