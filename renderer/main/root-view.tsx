@@ -15,6 +15,7 @@ import {
 } from "../lib/lifecycle-guard";
 import { CommandSystemProvider, useCommandHandler } from "../lib/command-system";
 import { AppCommandPalette } from "../components/command-palette";
+import { OnboardingFlow } from "../components/onboarding-flow";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
 import {
   preferLatestTerminalChat,
@@ -44,9 +45,7 @@ export function RootView() {
 function EnvironmentCommandSystemProvider({ children }: React.PropsWithChildren) {
   const { compactModalOpen } = useEnvironmentPanel();
   return (
-    <CommandSystemProvider applicationModal={compactModalOpen}>
-      {children}
-    </CommandSystemProvider>
+    <CommandSystemProvider applicationModal={compactModalOpen}>{children}</CommandSystemProvider>
   );
 }
 
@@ -251,6 +250,7 @@ function RootContent() {
   return (
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
+      <OnboardingFlow />
       <AssistantDock interactionBlocked={environmentPanel.compactModalOpen} />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
