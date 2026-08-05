@@ -20,6 +20,10 @@ const base: AssistantAutomationApprovalDetails = {
   workspaceName: null,
   mcpServerIds: [],
   mcpServerNames: [],
+  providerId: "local-provider",
+  providerName: "Local Provider",
+  model: "local-model",
+  modelName: "Local Model",
   schedulerEnabled: true,
 };
 
@@ -33,6 +37,17 @@ test("Assistant automation details require a matching project identity for Full 
       workspaceName: "Website",
     }),
     true,
+  );
+  assert.equal(
+    isAssistantAutomationApprovalDetails({
+      ...base,
+      permission: "full",
+      workspaceId: "workspace-1",
+      workspaceName: "Website",
+      mcpServerIds: ["gmail"],
+      mcpServerNames: ["Gmail"],
+    }),
+    false,
   );
   assert.equal(isAssistantAutomationApprovalDetails({ ...base, permission: "full" }), false);
   assert.equal(
