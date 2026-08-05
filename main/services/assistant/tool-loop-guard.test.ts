@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ATTENDED_TOOL_FAILURE_RECOVERY_REPLY,
   MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS,
-  NO_ENABLED_MCP_RECOVERY_REPLY,
-  UNVERIFIED_TARGET_RECOVERY_REPLY,
   advanceAttendedToolErrorState,
   attendedToolRecoveryMessage,
   recoverAttendedToolErrorContext,
@@ -41,20 +40,18 @@ test("repeated attended tool errors recover with one host-directed text-only tur
       messages: [{ role: "user", content: "Create a briefing", timestamp: 1 }],
       tools: [{ name: "schedule_task" } as never],
     },
-    false,
     2,
   );
   assert.deepEqual(context.tools, []);
   assert.deepEqual(context.messages[context.messages.length - 1], {
     role: "user",
-    content: attendedToolRecoveryMessage(false),
+    content: attendedToolRecoveryMessage(),
     timestamp: 2,
   });
-  assert.match(attendedToolRecoveryMessage(false), /exactly this text/iu);
-  assert.match(attendedToolRecoveryMessage(false), /Settings → MCP Servers/u);
-  assert.match(attendedToolRecoveryMessage(false), new RegExp(NO_ENABLED_MCP_RECOVERY_REPLY, "u"));
+  assert.match(attendedToolRecoveryMessage(), /exactly this text/iu);
   assert.match(
-    attendedToolRecoveryMessage(true),
-    new RegExp(UNVERIFIED_TARGET_RECOVERY_REPLY, "u"),
+    attendedToolRecoveryMessage(),
+    new RegExp(ATTENDED_TOOL_FAILURE_RECOVERY_REPLY, "u"),
   );
+  assert.doesNotMatch(attendedToolRecoveryMessage(), /MCP|automation|project|validation/iu);
 });
