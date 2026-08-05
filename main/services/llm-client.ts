@@ -52,6 +52,7 @@ import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
   SCHEDULE_TOOL_NAME,
+  attachAssistantScheduleMcpApproval,
   prepareAssistantEditAutomationProposal,
   repairAssistantScheduleMcpTarget,
   resolveAssistantScheduleMcpServers,
@@ -89,6 +90,10 @@ import {
   withUnattendedAssistantContract,
 } from "./assistant/system-prompt.js";
 import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
+import {
+  assertScheduledProviderFingerprint,
+  scheduledProviderFingerprint,
+} from "./schedule-provider-binding.js";
 import {
   advanceAttendedToolErrorState,
   recoverAttendedToolErrorContext,
@@ -134,6 +139,10 @@ export interface GenerationExecutionOptions {
   allowMcpTools?: boolean;
   /** Exact MCP server identities approved for an unattended generation. */
   mcpServerIds?: readonly string[];
+  /** Exact main-owned MCP connection fingerprints approved for this run. */
+  mcpServerBindings?: readonly import("./types.js").ScheduledMcpServerBinding[];
+  /** Exact Assistant-approved inference connection fingerprint. */
+  providerFingerprint?: string;
   /** Internal foreground policy; scheduled/background callers explicitly disable delegation. */
   allowSubagents?: boolean;
   /** Main-owned lease token spanning user-message persistence through generation registration. */
@@ -384,6 +393,16 @@ async function prepareGeneration(
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
+  if (assistantAutomationMode || params.mode === "assistant-unattended") {
+    assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
+  }
+  const assistantModelSelection = {
+    providerId: runtime.provider.id,
+    providerName: runtime.provider.label,
+    model: model.id,
+    modelName: model.name,
+    providerFingerprint: scheduledProviderFingerprint(runtime.provider),
+  };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
   const savedThinkingLevel =
@@ -468,12 +487,14 @@ async function prepareGeneration(
         (!assistantMode || attendedAssistant) && !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME),
       allowMcpTools: options.allowMcpTools,
       mcpServerIds: options.mcpServerIds,
+      mcpServerBindings: options.mcpServerBindings,
       allowSubagents,
       mode: assistantPersonaMode
         ? "assistant"
         : assistantAutomationMode
           ? "assistant-automation"
           : undefined,
+      assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () => createSubagentTool(subagentSupervisor)
         : undefined,
@@ -640,6 +661,12 @@ export const llmClient = {
     const attendedAssistant = params.mode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
+    const approvalModelSelection = {
+      providerId: runtime.provider.id,
+      providerName: runtime.provider.label,
+      model: model.id,
+      modelName: model.name,
+    };
     const exposeReasoning = shouldExposeReasoning(params.providerId);
 
     if (isLocalProviderDeployment(runtime.provider)) {
@@ -726,29 +753,38 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
-      const assistantMcpServers =
+      const assistantMcpInventory =
         params.mode === "assistant"
           ? await configStore
               .listMcpServers()
               .then((servers) => assistantMcpServerInventory(servers))
-              .catch(() => [])
-          : [];
+              .catch(() => ({
+                servers: [],
+                totalEnabledServers: 0,
+                omittedInvalidIdentities: 0,
+                truncated: false,
+              }))
+          : {
+              servers: [],
+              totalEnabledServers: 0,
+              omittedInvalidIdentities: 0,
+              truncated: false,
+            };
       const systemPrompt =
         params.mode === "assistant" || params.mode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
               availableTools: tools.map((tool) => tool.name),
-              mcpServers: assistantMcpServers,
+              mcpServers: assistantMcpInventory.servers,
+              mcpServerTotal: assistantMcpInventory.totalEnabledServers,
+              mcpInventoryTruncated: assistantMcpInventory.truncated,
+              mcpOmittedInvalidIdentities: assistantMcpInventory.omittedInvalidIdentities,
               unattended: params.mode === "assistant-unattended",
             })
           : params.mode === "assistant-automation"
             ? withUnattendedAssistantContract(
-                `${await buildSystemPrompt(folderPath, git.branch, permission, false, false)}${
-                  options.mcpServerIds?.length
-                    ? "\n\nThe user explicitly approved the available MCP tools for this automation. Use them when the task requires external data or actions. Never claim an external result unless the corresponding tool call succeeded."
-                    : ""
-                }`,
+                await buildSystemPrompt(folderPath, git.branch, permission, false, false),
               )
             : await buildSystemPrompt(
                 folderPath,
@@ -814,12 +850,8 @@ export const llmClient = {
               "pi",
               `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
             );
-            const hasEnabledMcpServers = await configStore
-              .listMcpServers()
-              .then((servers) => servers.some((server) => server.enabled))
-              .catch(() => false);
             return {
-              context: recoverAttendedToolErrorContext(context, hasEnabledMcpServers),
+              context: recoverAttendedToolErrorContext(context),
             };
           }
           return undefined;
@@ -831,6 +863,7 @@ export const llmClient = {
           let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
+          let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
               deniedToolCalls.add(context.toolCall.id);
@@ -884,7 +917,7 @@ export const llmClient = {
                   canonicalArgs.permission = proposal.input.permission;
                   canonicalArgs.mcpServerIds = proposal.input.mcpServerIds;
                 }
-                const [project, mcpServers, liveSettings] = await Promise.all([
+                const [project, mcpResolution, liveSettings] = await Promise.all([
                   resolveAssistantScheduleProject(proposal),
                   resolveAssistantScheduleMcpServers(proposal),
                   configStore.getSettings(),
@@ -892,10 +925,13 @@ export const llmClient = {
                 if (signal?.aborted) {
                   throw new Error("Automation change was cancelled.");
                 }
+                const { mcpServerBindings, ...mcpServers } = mcpResolution;
+                approvedScheduleMcpBindings = mcpServerBindings;
                 approvalDetails = {
                   ...proposal.details,
                   ...project,
                   ...mcpServers,
+                  ...approvalModelSelection,
                   // Consent reflects the current scheduler state at the point
                   // the prompt is published, not the generation-start snapshot.
                   schedulerEnabled: liveSettings.scheduledTasksEnabled !== false,
@@ -935,6 +971,9 @@ export const llmClient = {
             owner.documentId,
           );
           if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
+          if (allowed && attendedScheduleApproval) {
+            attachAssistantScheduleMcpApproval(context.args, approvedScheduleMcpBindings);
+          }
           if (allowed) timeline.toolRunning(context.toolCall.id);
           else if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
           if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
