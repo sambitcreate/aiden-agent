@@ -127,7 +127,7 @@ function newTask(
     script: "",
     permission,
     mcpServerIds:
-      mode === "llm" && permission === "full" && settings?.defaultMcpEnabled
+      !workspaceId && mode === "llm" && permission === "full" && settings?.defaultMcpEnabled
         ? mcpServers.filter((server) => server.enabled).map((server) => server.id)
         : [],
     notify: settings?.defaultNotify ?? true,
@@ -225,6 +225,12 @@ export function ScheduledTasksView() {
       setEnablingAll(false);
     }
   };
+  const creationUnavailable =
+    settings.isLoading ||
+    settings.isError ||
+    mcpServers.isLoading ||
+    mcpServers.isError ||
+    tasks.isError;
   return (
     <>
       <ScrollArea
@@ -232,7 +238,7 @@ export function ScheduledTasksView() {
         actions={
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="accent" disabled={tasks.isError || settings.isError}>
+              <Button variant="accent" disabled={creationUnavailable}>
                 Create
                 <ChevronDown className="size-4" />
               </Button>
@@ -256,6 +262,7 @@ export function ScheduledTasksView() {
                 Create with Aiden Assistant
               </DropdownMenuItem>
               <DropdownMenuItem
+                disabled={creationUnavailable}
                 onSelect={() => setEditing(newTask(settings.data, activeId, mcpServers.data ?? []))}
               >
                 <PencilLine className="size-4" />
@@ -361,6 +368,12 @@ export function ScheduledTasksView() {
               {visible.map((task, index) => {
                 const status = statusPresentation(task);
                 const busy = busyTaskId === task.id;
+                const legacyMcpInventoryUnavailable =
+                  task.mode === "llm" &&
+                  task.permission === "full" &&
+                  task.executionProfile === undefined &&
+                  task.mcpServerIds === undefined &&
+                  (mcpServers.isLoading || mcpServers.isError);
                 return (
                   <React.Fragment key={task.id}>
                     {index > 0 ? <Separator /> : null}
@@ -371,6 +384,7 @@ export function ScheduledTasksView() {
                       />
                       <button
                         type="button"
+                        disabled={legacyMcpInventoryUnavailable}
                         className="min-w-0 flex-1 rounded-control text-left outline-none focus-visible:bg-list-selection focus-visible:outline-none"
                         onClick={() => setEditing(taskInput(task, mcpServers.data ?? []))}
                       >
@@ -419,6 +433,7 @@ export function ScheduledTasksView() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem
+                            disabled={legacyMcpInventoryUnavailable}
                             onSelect={() => setEditing(taskInput(task, mcpServers.data ?? []))}
                           >
                             Edit
@@ -465,12 +480,13 @@ export function ScheduledTasksView() {
                       {index > 0 ? <Separator /> : null}
                       <button
                         type="button"
+                        disabled={creationUnavailable}
                         onClick={() =>
                           setEditing(
                             newTask(settings.data, activeId, mcpServers.data ?? [], template),
                           )
                         }
-                        className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none"
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
                       >
                         <span className="grid size-9 shrink-0 place-items-center rounded-control bg-control text-secondary">
                           <Icon className="size-4" />
@@ -501,6 +517,12 @@ export function ScheduledTasksView() {
           workspaces={workspaces}
           mcpServers={mcpServers.data ?? []}
           mcpServersUnavailable={mcpServers.isError}
+          assistantOwned={Boolean(
+            editing.id &&
+            tasks.data?.some(
+              (task) => task.id === editing.id && task.executionProfile === "assistant",
+            ),
+          )}
           busy={saving}
           onOpenChange={(open) => !open && !saving && setEditing(null)}
           onSave={async (input) => {
