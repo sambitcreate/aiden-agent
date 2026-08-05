@@ -5,6 +5,9 @@ approval-gated global/project/MCP automation creation and editing are implemente
 tools and proactivity remain planned. Phase 1 was redesigned as an in-window dock (see
 "Assistant dock"). The Settings foundation was reconciled with the canonical command system
 on 2026-07-26; Markdown/automation access was added on 2026-07-30.
+The automation boundary was hardened on 2026-08-04 with fingerprint-bound provider and MCP
+connections, exact model pins, monotonic revisions, cancellation compensation, and mutually
+exclusive project/MCP scopes for every scheduled task.
 Spec date 2026-07-23; implementation plan 2026-07-25; dock revision 2026-07-25;
 Settings/shortcut revision 2026-07-26.
 
@@ -165,10 +168,13 @@ to live with the work rather than float beside it, so it was rebuilt as a docked
   fallback.
 - An attended Assistant run may list eligible projects, enabled MCP server identities, and
   automations or propose one LLM automation. Project tasks may be read-only or Full;
-  external-service tasks bind exact MCP server IDs and always use Full. Creation pauses on
+  external-service tasks bind exact MCP server configurations and always use Full. Project and
+  MCP scopes are mutually exclusive; combined workflows must be split into separate automations.
+  Creation pauses on
   an inline check/cross card that names the exact project, MCP servers, and permission.
   Saved tasks retain a main-owned Assistant execution profile so later runs cannot inherit
-  unapproved Scheduled Tasks capabilities or newly added connectors.
+  unapproved Scheduled Tasks capabilities or newly added connectors. The selected provider and
+  model are also pinned at approval and shown on the card.
 - No attachments, no Computer Use, no model picker in v1.
 - Entry points: the ⌘⌥A global hotkey (focuses the main window, then dispatches
   `app:command` with `assistant.open`) and, from Phase 3, clicking a nudge notification.
@@ -407,8 +413,8 @@ driven by the settings UI rather than model tools, so a proactive run cannot sil
 - Attended Assistant runs can only list eligible project/MCP identities, list schedules,
   create the constrained LLM automation above, or edit one exact Aiden-created LLM
   automation after approval. They cannot pause, resume, remove, run-now, or run arbitrary
-  scripts. Full permission requires an approval naming the exact project or MCP scope and
-  unattended mutation risk.
+  scripts. Full permission requires an approval naming either the exact project or the exact
+  fingerprint-bound MCP scope and unattended mutation risk; one automation cannot receive both.
 - `"assistant-unattended"` receives no scheduling tool and cannot create automations.
 - `"assistant-automation"` receives only project coding tools: no scheduling, connectors,
   Computer Use, skills, or subagents.
