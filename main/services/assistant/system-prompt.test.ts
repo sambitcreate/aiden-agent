@@ -63,6 +63,30 @@ test("the host snapshot states explicitly when no MCP server is enabled", () => 
   assert.match(prompt, /"servers":\[\]/u);
 });
 
+test("the host snapshot and handbook disclose a truncated MCP inventory", () => {
+  const prompt = buildAssistantSystemPrompt({
+    ...base,
+    mcpServerTotal: 17,
+    mcpInventoryTruncated: true,
+  });
+  assert.match(prompt, /"status":"enabled_servers_truncated"/u);
+  assert.match(prompt, /"totalEnabledServers":17/u);
+  assert.match(prompt, /"truncated":true/u);
+  assert.match(prompt, /never infer or select an omitted server/iu);
+});
+
+test("the host snapshot distinguishes unsafe omitted identities from no enabled servers", () => {
+  const prompt = buildAssistantSystemPrompt({
+    ...base,
+    mcpServers: [],
+    mcpServerTotal: 1,
+    mcpOmittedInvalidIdentities: 1,
+  });
+  assert.match(prompt, /"status":"enabled_servers_invalid_identities_omitted"/u);
+  assert.match(prompt, /"omittedInvalidIdentities":1/u);
+  assert.doesNotMatch(prompt, /"status":"no_enabled_servers"/u);
+});
+
 test("each grounding clause tracks its own tool", () => {
   const settingsOnly = buildAssistantSystemPrompt({
     ...base,
@@ -105,6 +129,7 @@ test("describes the scoped, approval-gated project automation capability", () =>
   assert.match(prompt, /do not infer\s+Composio,\s+Gmail/iu);
   assert.match(prompt, /workspaceId accepts project\s+IDs only/u);
   assert.match(prompt, /MCP server IDs belong only in mcpServerIds/u);
+  assert.match(prompt, /Choose either one project or MCP servers/iu);
   assert.match(prompt, /TOOL schedule_task:/u);
   assert.match(prompt, /four required fields action, name, cron, and prompt/u);
   assert.match(prompt, /field is named cron, never schedule/u);
