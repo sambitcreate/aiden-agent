@@ -271,6 +271,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           allowComputerUse: false,
           allowMcpTools,
           mcpServerIds,
+          mcpServerBindings: task.mcpServerBindings,
+          providerFingerprint: task.providerFingerprint,
           allowSubagents: false,
           usageSource: "scheduled",
           turnId: streamId,
