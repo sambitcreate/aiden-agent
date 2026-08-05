@@ -17,6 +17,12 @@ export interface AssistantPromptInput {
   availableTools: readonly string[];
   /** Enabled MCP identities captured by the host at generation start. */
   mcpServers?: readonly { id: string; name: string }[];
+  /** Total safe enabled identities before the bounded prompt snapshot. */
+  mcpServerTotal?: number;
+  /** Whether the prompt snapshot omits enabled identities beyond its bound. */
+  mcpInventoryTruncated?: boolean;
+  /** Enabled identities omitted because their labels could not cross the prompt boundary safely. */
+  mcpOmittedInvalidIdentities?: number;
   /** True for background proactive runs: adds the strict [SILENT] contract. */
   unattended: boolean;
 }
@@ -68,7 +74,10 @@ function attendedToolHandbook(input: AssistantPromptInput): string[] {
     instructions.push(
       "TOOL list_mcp_servers: call with exactly {}. It returns",
       '{"servers":[{"id":"exact-server-id","name":"display name"}],"status":"...",',
-      '"instruction":"host-owned next step"}. Follow the returned instruction. Use only exact',
+      '"totalEnabledServers":1,"omittedInvalidIdentities":0,"truncated":false,',
+      '"instruction":"host-owned next step"}.',
+      "Follow the returned instruction. A truncated inventory is authoritative only for its shown",
+      "entries: never infer or select an omitted server. Use only exact",
       "returned ids in schedule_task.mcpServerIds or edit_automation.mcpServerIds; never put them",
       'in workspaceId. If status is "no_enabled_servers", do not create or add external-service',
       "access. Tell the user to connect a server in Settings → MCP Servers. Do not infer Composio,",
@@ -99,6 +108,8 @@ function attendedToolHandbook(input: AssistantPromptInput): string[] {
       "- workspaceId is project-only. MCP server IDs belong only in mcpServerIds. Omit",
       "workspaceId for a global MCP-only automation. Use read-only for inspection-only project",
       "work. Every non-empty mcpServerIds list requires Full access.",
+      "Choose either one project or MCP servers for an automation, never both. Split combined",
+      "local-project and external-service work into separate automations.",
       "- Do not ask 'Shall I create it?' when the request already supplies a clear task and",
       "schedule. Call schedule_task immediately; its inline X/check card is the confirmation.",
       "- If a call reports a missing or invalid field, correct the complete call once. Never",
@@ -203,8 +214,17 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
           "<enabled_mcp_servers_data>",
           JSON.stringify({
             status:
-              mcpServerSnapshot.length > 0 ? "enabled_servers_available" : "no_enabled_servers",
+              (input.mcpOmittedInvalidIdentities ?? 0) > 0
+                ? "enabled_servers_invalid_identities_omitted"
+                : input.mcpInventoryTruncated
+                  ? "enabled_servers_truncated"
+                  : mcpServerSnapshot.length > 0
+                    ? "enabled_servers_available"
+                    : "no_enabled_servers",
             servers: mcpServerSnapshot,
+            totalEnabledServers: input.mcpServerTotal ?? mcpServerSnapshot.length,
+            omittedInvalidIdentities: input.mcpOmittedInvalidIdentities ?? 0,
+            truncated: input.mcpInventoryTruncated ?? false,
           }),
           "</enabled_mcp_servers_data>",
         ]
