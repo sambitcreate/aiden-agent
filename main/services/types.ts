@@ -259,6 +259,11 @@ export type ScheduledTaskPermission = "read-only" | "full";
 export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
 
+export interface ScheduledMcpServerBinding {
+  id: string;
+  fingerprint: string;
+}
+
 export interface ScheduledTask {
   id: string;
   name: string;
@@ -271,6 +276,8 @@ export interface ScheduledTask {
   workspaceId?: string;
   providerId?: string;
   model?: string;
+  /** Main-owned provider-connection fingerprint. Renderer mutations cannot set this field. */
+  providerFingerprint?: string;
   prompt?: string;
   script?: string;
   permission: ScheduledTaskPermission;
@@ -280,6 +287,8 @@ export interface ScheduledTask {
    * historically inherited every enabled MCP server.
    */
   mcpServerIds?: string[];
+  /** Main-owned immutable connection fingerprints for Assistant-approved MCP scope. */
+  mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
   chatId?: string;
@@ -311,11 +320,15 @@ export interface ScheduledTaskInput {
   workspaceId?: string;
   providerId?: string;
   model?: string;
+  /** Main-owned provider-connection fingerprint. Renderer mutations cannot set this field. */
+  providerFingerprint?: string;
   prompt?: string;
   script?: string;
   permission?: ScheduledTaskPermission;
   /** Exact configured MCP servers this task may invoke unattended. */
   mcpServerIds?: string[];
+  /** Main-owned immutable connection fingerprints. Renderer mutations cannot set this field. */
+  mcpServerBindings?: ScheduledMcpServerBinding[];
   /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
   executionProfile?: ScheduledTaskExecutionProfile;
   notify?: boolean;
