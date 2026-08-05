@@ -169,6 +169,13 @@ async function interruptAfterDirectoryIsolation(value, directoryName, markerName
   return isolatedNames[0];
 }
 
+test("main test lifecycle builds the native worktree remover before GitService tests", async () => {
+  const packageManifest = JSON.parse(
+    await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+  );
+  assert.match(packageManifest.scripts?.pretest ?? "", /^npm run build:worktree-remover(?: &&|$)/u);
+});
+
 test("descriptor remover deletes nested owned entries without following symlinks", async (t) => {
   if (process.platform !== "darwin") return;
   const value = await fixture(t, "owned");
