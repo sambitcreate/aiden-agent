@@ -14,16 +14,25 @@ import { secrets } from "./secrets.js";
 import { collectMcpAgentTools } from "./mcp.js";
 import { buildCodingTools } from "./coding-tools.js";
 import { discoverSkills } from "./skills-discovery.js";
-import type { DiscoveredSkill, Skill, WorkspacePermission } from "./types.js";
+import type {
+  DiscoveredSkill,
+  ScheduledMcpServerBinding,
+  Skill,
+  WorkspacePermission,
+} from "./types.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
-import { scheduleTaskToolsForContext } from "./schedule-tool.js";
+import {
+  scheduleTaskToolsForContext,
+  type AssistantScheduleModelSelection,
+} from "./schedule-tool.js";
 import { registerSubagentTool } from "./subagents/feature-flag.js";
 import { buildSubagentCapabilityTools } from "./subagents/capability-tools.js";
 import type { SubagentCapabilityRequest } from "./subagents/capability-profile.js";
 import { createAssistantProjectTool } from "./assistant/project-tool.js";
 import { createAssistantMcpServerTool } from "./assistant/mcp-tool.js";
 import { selectedMcpServers } from "./mcp-selection.js";
+import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -157,6 +166,8 @@ export interface ToolContext {
   allowMcpTools?: boolean;
   /** Exact configured server identities approved for this unattended generation. */
   mcpServerIds?: readonly string[];
+  /** Exact connection fingerprints approved for this unattended generation. */
+  mcpServerBindings?: readonly ScheduledMcpServerBinding[];
   /** Only a foreground, persisted-workspace generation may register the delegation tool. */
   allowSubagents?: boolean;
   /**
@@ -164,6 +175,8 @@ export interface ToolContext {
    * exclusions, so ambient tools cannot appear there by default.
    */
   mode?: "assistant" | "assistant-automation" | "subagent";
+  /** Main-resolved generation identity pinned on new or edited Assistant schedules. */
+  assistantModelSelection?: AssistantScheduleModelSelection;
   /** Lazily constructed so the disabled feature flag prevents registration entirely. */
   createSubagentTool?: () => AgentTool;
   /**
@@ -174,17 +187,22 @@ export interface ToolContext {
 }
 
 export function buildSchedulingTools(
-  context: Pick<ToolContext, "workspaceId" | "allowScheduling" | "mode">,
+  context: Pick<
+    ToolContext,
+    "workspaceId" | "allowScheduling" | "mode" | "assistantModelSelection"
+  >,
 ): AgentTool[] {
   return scheduleTaskToolsForContext({
     workspaceId: context.workspaceId,
     allowScheduling: context.allowScheduling,
     mode: context.mode === "assistant" ? "assistant-attended" : "standard",
+    assistantModelSelection: context.assistantModelSelection,
   });
 }
 
 async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
   const servers = selectedMcpServers(await configStore.listMcpServers(), ctx.mcpServerIds);
+  if (ctx.mcpServerBindings) assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
   return collectMcpAgentTools(servers, { strict: ctx.mcpServerIds !== undefined });
 }
 
@@ -221,13 +239,16 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
     return tools;
   }
 
-  // An approved project automation receives folder-scoped coding tools and,
-  // only when explicitly selected on the task, exact MCP server tools.
+  // An approved project automation receives folder-scoped coding tools only.
+  // Project and connector scopes are intentionally separate so untrusted data
+  // from an external service cannot flow into project mutation tools.
   if (ctx.mode === "assistant-automation") {
-    const tools =
-      ctx.workspaceRoot && ctx.permission !== "none" ? buildCodingTools(ctx.workspaceRoot) : [];
-    if (ctx.allowMcpTools === true) tools.push(...(await configuredMcpTools(ctx)));
-    return tools;
+    if (ctx.allowMcpTools === true || (ctx.mcpServerIds?.length ?? 0) > 0) {
+      throw new Error("Assistant project automations cannot use MCP connectors.");
+    }
+    return ctx.workspaceRoot && ctx.permission !== "none"
+      ? buildCodingTools(ctx.workspaceRoot)
+      : [];
   }
 
   const tools: AgentTool[] = [];
