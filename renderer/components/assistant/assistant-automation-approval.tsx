@@ -38,6 +38,9 @@ export function AssistantAutomationApproval({
   const details = automationDetails(prompt);
   const editing = details?.action === "edit";
   const fullAccess = details?.permission === "full";
+  const mcpServerLabels = details
+    ? details.mcpServerNames.map((name, index) => `${name} (${details.mcpServerIds[index]})`)
+    : [];
   const actionScope = editing
     ? fullAccess
       ? "Full access automation changes"
@@ -46,7 +49,11 @@ export function AssistantAutomationApproval({
       ? "Full access automation"
       : "automation";
   const accessLabel = details
-    ? [details.permission === "full" ? "Full access" : "Read-only", details.workspaceName]
+    ? [
+        details.permission === "full" ? "Full access" : "Read-only",
+        details.workspaceName,
+        mcpServerLabels.length > 0 ? `MCP: ${mcpServerLabels.join(", ")}` : null,
+      ]
         .filter(Boolean)
         .join(" · ")
     : "";
@@ -144,12 +151,18 @@ export function AssistantAutomationApproval({
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
             <Badge>{accessLabel}</Badge>
             <Text as="p" variant="small" color="tertiary">
-              Runs while Aiden is open.
+              Runs with {details.providerName} ({details.providerId}) · {details.modelName} (
+              {details.model}) while Aiden is open.
             </Text>
           </div>
           {details.permission === "full" && details.workspaceName ? (
             <Text as="p" variant="small" className="mt-2 text-support-warning">
               Can edit files and run commands in {details.workspaceName}.
+            </Text>
+          ) : null}
+          {mcpServerLabels.length > 0 ? (
+            <Text as="p" variant="small" className="mt-2 text-support-warning">
+              Can call {mcpServerLabels.join(", ")} unattended.
             </Text>
           ) : null}
           {!details.schedulerEnabled ? (
