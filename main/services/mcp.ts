@@ -26,6 +26,7 @@ import {
   GenerationBoundConnectionAttempts,
   GenerationBoundConnectionCache,
 } from "./generation-bound-connection-cache.js";
+import { assertUniqueMcpAgentToolNames, mcpAgentToolName } from "./mcp-tool-identity.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -88,10 +89,6 @@ interface McpToolInfo {
   name: string;
   description?: string;
   inputSchema?: unknown;
-}
-
-function sanitize(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48);
 }
 
 class McpManager {
@@ -164,10 +161,9 @@ class McpManager {
   async agentToolsFor(server: McpServer, generation: number): Promise<AgentTool[]> {
     const client = await this.ensureConnected(server, generation);
     const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-    const prefix = sanitize(server.name || server.id);
     return tools.map(
       (t): AgentTool => ({
-        name: `${prefix}__${sanitize(t.name)}`,
+        name: mcpAgentToolName(server, t.name),
         label: t.name,
         description: t.description ?? t.name,
         // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
@@ -206,17 +202,17 @@ export async function collectMcpAgentTools(
     if (!server.enabled) continue;
     try {
       let generation = 0;
-      all.push(
-        ...(await withConfiguredMcp(
-          server.id,
-          mcpRuntimeConnectionSnapshot(server),
-          () => mcpManager.agentToolsFor(server, generation),
-          () => true,
-          () => {
-            generation = mcpManager.connectionGeneration(server.id);
-          },
-        )),
+      const serverTools = await withConfiguredMcp(
+        server.id,
+        mcpRuntimeConnectionSnapshot(server),
+        () => mcpManager.agentToolsFor(server, generation),
+        () => true,
+        () => {
+          generation = mcpManager.connectionGeneration(server.id);
+        },
       );
+      assertUniqueMcpAgentToolNames([...all, ...serverTools]);
+      all.push(...serverTools);
     } catch (error) {
       if (options.strict) {
         throw new Error(
