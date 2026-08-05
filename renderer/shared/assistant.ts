@@ -15,6 +15,10 @@ export const ASSISTANT_AUTOMATION_WORKSPACE_NAME_LIMIT = 120;
 export const ASSISTANT_AUTOMATION_MCP_SERVER_LIMIT = 16;
 export const ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT = 160;
 export const ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT = 120;
+export const ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT = 160;
+export const ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT = 120;
+export const ASSISTANT_AUTOMATION_MODEL_ID_LIMIT = 256;
+export const ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT = 256;
 
 /** The exact automation proposal shown before an attended Assistant tool call resumes. */
 export interface AssistantAutomationApprovalDetails {
@@ -36,6 +40,10 @@ export interface AssistantAutomationApprovalDetails {
   workspaceName: string | null;
   mcpServerIds: string[];
   mcpServerNames: string[];
+  providerId: string;
+  providerName: string;
+  model: string;
+  modelName: string;
   schedulerEnabled: boolean;
 }
 
@@ -107,6 +115,11 @@ export function isAssistantAutomationApprovalDetails(
     (details.permission === "read-only" || details.permission === "full") &&
     projectIsValid &&
     mcpServersAreValid &&
+    (details.workspaceId === null || mcpServerIds.length === 0) &&
+    safeApprovalText(details.providerId, ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT) &&
+    safeApprovalText(details.providerName, ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT) &&
+    safeApprovalText(details.model, ASSISTANT_AUTOMATION_MODEL_ID_LIMIT) &&
+    safeApprovalText(details.modelName, ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT) &&
     (mcpServerIds.length === 0 || details.permission === "full") &&
     (details.permission !== "full" || details.workspaceId !== null || mcpServerIds.length > 0) &&
     typeof details.schedulerEnabled === "boolean"
