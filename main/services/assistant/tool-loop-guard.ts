@@ -1,18 +1,13 @@
 import type { AgentContext } from "@earendil-works/pi-agent-core";
 
 export const MAX_CONSECUTIVE_ATTENDED_TOOL_ERROR_TURNS = 2;
-export const NO_ENABLED_MCP_RECOVERY_REPLY =
-  "No automation was created. I couldn't verify an enabled MCP server for this request. Connect or enable the intended server in Settings → MCP Servers, then try again.";
-export const UNVERIFIED_TARGET_RECOVERY_REPLY =
-  "No automation was created because the project or MCP server in the proposal could not be verified. Select the exact available target and try again.";
+export const ATTENDED_TOOL_FAILURE_RECOVERY_REPLY =
+  "I couldn't complete that action after two tool attempts. Review the requested details and try again.";
 
-export function attendedToolRecoveryMessage(hasEnabledMcpServers: boolean): string {
-  const reply = hasEnabledMcpServers
-    ? UNVERIFIED_TARGET_RECOVERY_REPLY
-    : NO_ENABLED_MCP_RECOVERY_REPLY;
+export function attendedToolRecoveryMessage(): string {
   return [
     "[Aiden host guard] Two consecutive tool attempts failed. Do not call or imitate any tool",
-    `again in this response. Reply with exactly this text and nothing else: "${reply}"`,
+    `again in this response. Reply with exactly this text and nothing else: "${ATTENDED_TOOL_FAILURE_RECOVERY_REPLY}"`,
   ].join(" ");
 }
 
@@ -48,7 +43,6 @@ export function advanceAttendedToolErrorState(
  */
 export function recoverAttendedToolErrorContext(
   context: AgentContext,
-  hasEnabledMcpServers: boolean,
   timestamp: number = Date.now(),
 ): AgentContext {
   return {
@@ -57,7 +51,7 @@ export function recoverAttendedToolErrorContext(
       ...context.messages,
       {
         role: "user",
-        content: attendedToolRecoveryMessage(hasEnabledMcpServers),
+        content: attendedToolRecoveryMessage(),
         timestamp,
       },
     ],
