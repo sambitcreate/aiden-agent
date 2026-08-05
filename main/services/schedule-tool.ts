@@ -10,17 +10,28 @@ import { nextScheduledRun, systemTimezone, validateTimezone } from "./schedule-s
 import type {
   McpServer,
   ScheduledRun,
+  ScheduledMcpServerBinding,
   ScheduledTask,
   ScheduledTaskInput,
   Workspace,
 } from "./types.js";
 import {
+  assertScheduledMcpServerBindings,
+  scheduledMcpServerBinding,
+  validateScheduledMcpServerBindings,
+} from "./schedule-mcp-binding.js";
+import { SCHEDULED_PROVIDER_FINGERPRINT } from "./schedule-provider-binding.js";
+import {
   ASSISTANT_AUTOMATION_CRON_LIMIT,
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
   ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
   ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
+  ASSISTANT_AUTOMATION_MODEL_ID_LIMIT,
+  ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT,
   ASSISTANT_AUTOMATION_NAME_LIMIT,
   ASSISTANT_AUTOMATION_PROMPT_LIMIT,
+  ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT,
+  ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT,
   ASSISTANT_AUTOMATION_TIMEZONE_LIMIT,
   ASSISTANT_AUTOMATION_TASK_ID_LIMIT,
   ASSISTANT_AUTOMATION_TOOL_NAME,
@@ -64,17 +75,105 @@ interface EditAutomationToolParams {
   notify?: boolean;
 }
 
+export interface AssistantScheduleModelSelection {
+  providerId: string;
+  providerName: string;
+  model: string;
+  modelName: string;
+  providerFingerprint: string;
+}
+
 export type ScheduleToolAccess =
   | { kind: "standard"; defaultWorkspaceId?: string }
-  | { kind: "assistant-attended" };
+  | { kind: "assistant-attended"; modelSelection: AssistantScheduleModelSelection };
 
 export interface AssistantScheduleProposal {
   input: ScheduledTaskInput;
   expectedUpdatedAt?: number;
   details: Omit<
     AssistantAutomationApprovalDetails,
-    "schedulerEnabled" | "workspaceName" | "mcpServerNames"
+    "schedulerEnabled" | "workspaceName" | "mcpServerNames" | keyof AssistantScheduleModelSelection
   >;
+}
+
+const APPROVED_MCP_BINDINGS = Symbol("assistant-approved-mcp-bindings");
+
+export function attachAssistantScheduleMcpApproval(
+  args: unknown,
+  bindings: readonly ScheduledMcpServerBinding[],
+): void {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    throw new Error("Automation approval arguments are invalid.");
+  }
+  Object.defineProperty(args, APPROVED_MCP_BINDINGS, {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: structuredClone(bindings),
+  });
+}
+
+function approvedMcpBindings(
+  args: unknown,
+  serverIds: readonly string[],
+): ScheduledMcpServerBinding[] {
+  if (serverIds.length === 0) return [];
+  const bindings =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? validateScheduledMcpServerBindings(
+          (args as { [APPROVED_MCP_BINDINGS]?: unknown })[APPROVED_MCP_BINDINGS],
+        )
+      : undefined;
+  if (
+    bindings?.length !== serverIds.length ||
+    serverIds.some((id, index) => bindings[index]?.id !== id)
+  ) {
+    throw new Error("The exact MCP approval expired before this automation could be saved.");
+  }
+  return bindings;
+}
+
+export function validateAssistantScheduleModelSelection(
+  selection: AssistantScheduleModelSelection,
+): AssistantScheduleModelSelection {
+  const providerId = bounded(
+    required(selection.providerId, "Provider ID"),
+    "Provider ID",
+    ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT,
+  );
+  const providerName = bounded(
+    required(selection.providerName, "Provider name"),
+    "Provider name",
+    ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT,
+  );
+  const model = bounded(
+    required(selection.model, "Model ID"),
+    "Model ID",
+    ASSISTANT_AUTOMATION_MODEL_ID_LIMIT,
+  );
+  const modelName = bounded(
+    required(selection.modelName, "Model name"),
+    "Model name",
+    ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT,
+  );
+  if (!SCHEDULED_PROVIDER_FINGERPRINT.test(selection.providerFingerprint)) {
+    throw new Error("Provider fingerprint is invalid.");
+  }
+  for (const [value, label] of [
+    [providerId, "Provider ID"],
+    [providerName, "Provider name"],
+    [model, "Model ID"],
+    [modelName, "Model name"],
+  ] as const) {
+    assertSafeDisplayText(value, label);
+  }
+  return {
+    providerId,
+    providerName,
+    model,
+    modelName,
+    providerFingerprint: selection.providerFingerprint,
+  };
 }
 
 function scheduleToolParams(value: unknown): Partial<ScheduleToolParams> {
@@ -108,7 +207,11 @@ export function summarizeScheduleToolCall(value: unknown): string {
 export interface ScheduleToolDependencies {
   list(): Promise<ScheduledTask[]>;
   get(id: string): Promise<ScheduledTask | undefined>;
-  save(input: ScheduledTaskInput, expectedUpdatedAt?: number): Promise<ScheduledTask>;
+  save(
+    input: ScheduledTaskInput,
+    expectedUpdatedAt?: number,
+    signal?: AbortSignal,
+  ): Promise<ScheduledTask>;
   pause(id: string): Promise<ScheduledTask>;
   resume(id: string): Promise<ScheduledTask>;
   remove(id: string): Promise<void>;
@@ -122,8 +225,11 @@ export interface ScheduleToolDependencies {
 const defaultDependencies: ScheduleToolDependencies = {
   list: async () => (await import("./schedule-store.js")).scheduleStore.list(),
   get: async (id) => (await import("./schedule-store.js")).scheduleStore.get(id),
-  save: async (input, expectedUpdatedAt) =>
-    (await import("./schedule-service.js")).scheduleService.save(input, { expectedUpdatedAt }),
+  save: async (input, expectedUpdatedAt, signal) =>
+    (await import("./schedule-service.js")).scheduleService.save(input, {
+      expectedUpdatedAt,
+      signal,
+    }),
   pause: async (id) => (await import("./schedule-service.js")).scheduleService.pause(id),
   resume: async (id) => (await import("./schedule-service.js")).scheduleService.resume(id),
   remove: async (id) => (await import("./schedule-service.js")).scheduleService.remove(id),
@@ -267,6 +373,11 @@ export function prepareAssistantScheduleProposal(
           ASSISTANT_AUTOMATION_WORKSPACE_ID_LIMIT,
         );
   if (workspaceId) assertSafeDisplayText(workspaceId, "Project ID");
+  if (workspaceId && mcpServerIds.length > 0) {
+    throw new Error(
+      "Aiden automations must choose either one project or MCP servers, not both. Create separate automations for local project work and external-service access.",
+    );
+  }
   const permission =
     mcpServerIds.length > 0 ||
     record.permission === "full" ||
@@ -604,12 +715,19 @@ export async function resolveAssistantScheduleProject(
 export async function resolveAssistantScheduleMcpServers(
   proposal: AssistantScheduleProposal,
   listMcpServers: ScheduleToolDependencies["listMcpServers"] = defaultDependencies.listMcpServers,
-): Promise<Pick<AssistantAutomationApprovalDetails, "mcpServerIds" | "mcpServerNames">> {
+  expectedBindings?: readonly ScheduledMcpServerBinding[],
+): Promise<
+  Pick<AssistantAutomationApprovalDetails, "mcpServerIds" | "mcpServerNames"> & {
+    mcpServerBindings: ScheduledMcpServerBinding[];
+  }
+> {
   const mcpServerIds = proposal.input.mcpServerIds ?? [];
-  if (mcpServerIds.length === 0) return { mcpServerIds: [], mcpServerNames: [] };
+  if (mcpServerIds.length === 0) {
+    return { mcpServerIds: [], mcpServerNames: [], mcpServerBindings: [] };
+  }
   const configured = await listMcpServers();
   const byId = new Map(configured.map((server) => [server.id, server]));
-  const mcpServerNames = mcpServerIds.map((id) => {
+  const servers = mcpServerIds.map((id) => {
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
@@ -619,9 +737,20 @@ export async function resolveAssistantScheduleMcpServers(
       ASSISTANT_AUTOMATION_MCP_SERVER_NAME_LIMIT,
     );
     assertSafeDisplayText(name, "MCP server name");
-    return name;
+    return { server, name };
   });
-  return { mcpServerIds, mcpServerNames };
+  const mcpServerBindings = servers.map(({ server }) => scheduledMcpServerBinding(server));
+  if (expectedBindings) {
+    assertScheduledMcpServerBindings(
+      servers.map(({ server }) => server),
+      expectedBindings,
+    );
+  }
+  return {
+    mcpServerIds,
+    mcpServerNames: servers.map(({ name }) => name),
+    mcpServerBindings,
+  };
 }
 
 export function createAssistantScheduleListTool(
@@ -651,8 +780,10 @@ export function createAssistantScheduleListTool(
 }
 
 export function createAssistantEditAutomationTool(
+  modelSelection: AssistantScheduleModelSelection,
   dependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
+  const approvedModel = validateAssistantScheduleModelSelection(modelSelection);
   return {
     name: EDIT_AUTOMATION_TOOL_NAME,
     label: "Edit Automation",
@@ -721,14 +852,29 @@ export function createAssistantEditAutomationTool(
         get: (id) => dependencies.get(id),
       });
       if (signal?.aborted) throw new Error("Automation edit was cancelled.");
+      const mcpServerBindings = approvedMcpBindings(rawParams, proposal.input.mcpServerIds ?? []);
       await Promise.all([
         resolveAssistantScheduleProject(proposal, (id) => dependencies.getWorkspace(id)),
-        resolveAssistantScheduleMcpServers(proposal, () => dependencies.listMcpServers()),
+        resolveAssistantScheduleMcpServers(
+          proposal,
+          () => dependencies.listMcpServers(),
+          mcpServerBindings,
+        ),
       ]);
       if (signal?.aborted) throw new Error("Automation edit was cancelled.");
       const schedulerEnabled = await dependencies.isSchedulingEnabled();
       if (signal?.aborted) throw new Error("Automation edit was cancelled.");
-      const task = await dependencies.save(proposal.input, proposal.expectedUpdatedAt);
+      const task = await dependencies.save(
+        {
+          ...proposal.input,
+          providerId: approvedModel.providerId,
+          model: approvedModel.model,
+          providerFingerprint: approvedModel.providerFingerprint,
+          mcpServerBindings,
+        },
+        proposal.expectedUpdatedAt,
+        signal,
+      );
       return result({
         task: assistantTaskSummary(task),
         schedulerEnabled,
@@ -747,6 +893,7 @@ export function createScheduleTaskTool(
   dependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
   if (access.kind === "assistant-attended") {
+    const approvedModel = validateAssistantScheduleModelSelection(access.modelSelection);
     return {
       name: SCHEDULE_TOOL_NAME,
       label: "Scheduled Tasks",
@@ -802,15 +949,30 @@ export function createScheduleTaskTool(
       prepareArguments: (rawParams) => canonicalizeAssistantScheduleToolArguments(rawParams),
       execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
         const proposal = await repairAssistantScheduleMcpTarget(rawParams, dependencies);
+        const mcpServerBindings = approvedMcpBindings(rawParams, proposal.input.mcpServerIds ?? []);
         if (signal?.aborted) throw new Error("Scheduled task creation was cancelled.");
         await Promise.all([
           resolveAssistantScheduleProject(proposal, (id) => dependencies.getWorkspace(id)),
-          resolveAssistantScheduleMcpServers(proposal, () => dependencies.listMcpServers()),
+          resolveAssistantScheduleMcpServers(
+            proposal,
+            () => dependencies.listMcpServers(),
+            mcpServerBindings,
+          ),
         ]);
         if (signal?.aborted) throw new Error("Scheduled task creation was cancelled.");
         const schedulerEnabled = await dependencies.isSchedulingEnabled();
         if (signal?.aborted) throw new Error("Scheduled task creation was cancelled.");
-        const task = await dependencies.save(proposal.input);
+        const task = await dependencies.save(
+          {
+            ...proposal.input,
+            providerId: approvedModel.providerId,
+            model: approvedModel.model,
+            providerFingerprint: approvedModel.providerFingerprint,
+            mcpServerBindings,
+          },
+          undefined,
+          signal,
+        );
         return result({
           task: assistantTaskSummary(task),
           schedulerEnabled,
@@ -902,6 +1064,11 @@ export function createScheduleTaskTool(
         }
         const mcpServerIds =
           mode === "llm" ? (validateScheduledMcpServerIds(params.mcpServerIds) ?? []) : [];
+        if (workspaceId && mcpServerIds.length > 0) {
+          throw new Error(
+            "Scheduled tasks must choose either one project or MCP servers, not both.",
+          );
+        }
         if (mcpServerIds.length > 0) {
           const configured = await dependencies.listMcpServers();
           const byId = new Map(configured.map((server) => [server.id, server]));
@@ -958,13 +1125,20 @@ export function scheduleTaskToolsForContext(context: {
   workspaceId?: string;
   allowScheduling?: boolean;
   mode?: "standard" | "assistant-attended";
+  assistantModelSelection?: AssistantScheduleModelSelection;
 }): AgentTool[] {
   if (context.allowScheduling === false) return [];
   if (context.mode === "assistant-attended") {
+    if (!context.assistantModelSelection) {
+      throw new Error("Assistant scheduling requires an exact provider and model selection.");
+    }
     return [
       createAssistantScheduleListTool(),
-      createScheduleTaskTool({ kind: "assistant-attended" }),
-      createAssistantEditAutomationTool(),
+      createScheduleTaskTool({
+        kind: "assistant-attended",
+        modelSelection: context.assistantModelSelection,
+      }),
+      createAssistantEditAutomationTool(context.assistantModelSelection),
     ];
   }
   return [createScheduleTaskTool({ kind: "standard", defaultWorkspaceId: context.workspaceId })];
