@@ -202,6 +202,10 @@ test("approval details are forwarded only to their owning stream", () => {
         workspaceName: null,
         mcpServerIds: [],
         mcpServerNames: [],
+        providerId: "local-provider",
+        providerName: "Local Provider",
+        model: "local-model",
+        modelName: "Local Model",
         schedulerEnabled: true,
       },
     };
