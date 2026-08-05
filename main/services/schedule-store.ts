@@ -424,6 +424,30 @@ export function createScheduleStore(
     });
   }
 
+  async function updateRuntime(
+    id: string,
+    patch: Partial<
+      Pick<
+        ScheduledTask,
+        "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled"
+      >
+    >,
+  ): Promise<ScheduledTask> {
+    return tasks.update((draft) => {
+      const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+      const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+      if (!existing) throw new Error(`Scheduled task ${id} not found.`);
+      if (patch.enabled === true) assertAssistantScheduleExecutionBoundary(existing);
+      const task = {
+        ...existing,
+        ...patch,
+        updatedAt: nextTaskRevision(now(), existing.updatedAt),
+      };
+      draft[index] = task;
+      return structuredClone(task);
+    });
+  }
+
   async function saveWithRollback(
     input: ScheduledTaskInput,
     isCurrent: () => boolean = () => true,
@@ -499,29 +523,7 @@ export function createScheduleStore(
       });
     },
 
-    async updateRuntime(
-      id: string,
-      patch: Partial<
-        Pick<
-          ScheduledTask,
-          "nextRunAt" | "lastRunAt" | "lastResult" | "lastError" | "chatId" | "enabled"
-        >
-      >,
-    ): Promise<ScheduledTask> {
-      return tasks.update((draft) => {
-        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
-        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
-        if (!existing) throw new Error(`Scheduled task ${id} not found.`);
-        if (patch.enabled === true) assertAssistantScheduleExecutionBoundary(existing);
-        const task = {
-          ...existing,
-          ...patch,
-          updatedAt: nextTaskRevision(now(), existing.updatedAt),
-        };
-        draft[index] = task;
-        return structuredClone(task);
-      });
-    },
+    updateRuntime,
 
     async ensureChatId(id: string, create: () => Promise<{ id: string }>): Promise<string> {
       const existing = await get(id);
@@ -534,7 +536,7 @@ export function createScheduleStore(
         if (!latest) throw new Error(`Scheduled task ${id} not found.`);
         if (latest.chatId) return latest.chatId;
         const chat = await create();
-        const updated = await this.updateRuntime(id, { chatId: chat.id });
+        const updated = await updateRuntime(id, { chatId: chat.id });
         return updated.chatId as string;
       })().finally(() => chatClaims.delete(id));
       chatClaims.set(id, claim);
@@ -586,7 +588,7 @@ export function createScheduleStore(
         const other = normalized.filter((value) => value.taskId !== stored.taskId);
         draft.splice(0, draft.length, ...other, ...retained);
       });
-      await this.updateRuntime(stored.taskId, {
+      await updateRuntime(stored.taskId, {
         lastRunAt: stored.finishedAt,
         lastResult: stored.result,
         lastError: stored.error,

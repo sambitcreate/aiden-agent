@@ -104,7 +104,6 @@ interface ComposerProps {
   };
   onChangeComputerUse?: (enabled: boolean) => void | Promise<void>;
 }
-
 const PERMISSION_META: Record<
   WorkspacePermission,
   {
@@ -344,7 +343,7 @@ export function Composer({
 
   return (
     <>
-      <div className="aiden-dock-inset pointer-events-none mx-auto w-full max-w-3xl pb-4 pt-3 sm:pb-5">
+      <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         <div className="pointer-events-auto isolate">
           {computerUse ? (
             <span id={computerUseDescriptionId} className="sr-only">

@@ -285,6 +285,32 @@ test("run history is capped at the newest 50 entries per task", async () => {
   assert.equal((await store.get(task.id))?.lastRunAt, 55);
 });
 
+test("store methods remain safe when called without an object receiver", async () => {
+  const store = testStore();
+  const task = await store.save({
+    name: "Detached methods",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize changes.",
+  });
+  const { ensureChatId, recordRun } = store;
+
+  assert.equal(await ensureChatId(task.id, async () => ({ id: "chat-detached" })), "chat-detached");
+  await recordRun({
+    taskId: task.id,
+    startedAt: 10,
+    finishedAt: 20,
+    result: "success",
+    output: "Done",
+  });
+
+  const updated = await store.get(task.id);
+  assert.equal(updated?.chatId, "chat-detached");
+  assert.equal(updated?.lastRunAt, 20);
+  assert.equal(updated?.lastResult, "success");
+});
+
 test("script names reject traversal and path separators", () => {
   assert.equal(validateScriptName("daily-report.sh"), "daily-report.sh");
   for (const invalid of ["", "..", "../secret.sh", "nested/task.sh", "nested\\task.sh"]) {

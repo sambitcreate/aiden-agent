@@ -108,7 +108,7 @@ export function MessageList({
   return (
     <div
       ref={transcriptRef}
-      className="aiden-dock-inset mx-auto flex w-full max-w-3xl flex-col gap-5 py-6"
+      className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
       data-subagent-chip-focus-scope="true"
     >
       {messages.map((m) => (

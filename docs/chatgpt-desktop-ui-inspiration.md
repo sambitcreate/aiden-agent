@@ -292,7 +292,7 @@ Aiden's shared dialogs currently animate from `scale(.8)` to `scale(1)` in `180m
 
 - Type: system sans, `14px` base, `12px` secondary, `18–20px` compact headings.
 - Toolbar: approximately `40–46px`, with icon buttons no larger than `32–36px` unless they are the primary action.
-- Conversation measure: keep the existing `max-w-3xl` family; wide code/diff content may escape into a review surface.
+- Conversation measure: keep the transcript, pending approval, and composer on the shared centered `52rem` chat-column contract; wide code/diff content may escape into a review surface.
 - Sidebar: preserve the current `220–340px` range and `300ms` width transition.
 - Composer: one continuous rounded surface; context strip attached, not a separate card.
 - Elevation: hairline or a compact shadow, not both at high intensity.

@@ -1014,7 +1014,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <>
           <EventPresence
             present={Boolean(pending)}
-            className="aiden-dock-inset mx-auto w-full max-w-3xl pb-2"
+            className="aiden-dock-inset chat-content-column pb-2"
           >
             {pending ? (
               <div>

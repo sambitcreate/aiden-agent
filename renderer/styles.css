@@ -1621,10 +1621,20 @@ textarea {
    plus its 16px offset plus a little breathing room. */
 :root {
   --aiden-dock-gutter: 4.5rem;
+  --chat-content-max-width: 52rem;
 }
 
 .aiden-dock-inset {
   padding-inline: var(--aiden-dock-gutter);
+}
+
+/* Keep the transcript, pending approval, and composer on one centered column.
+   The dock inset remains separate so the floating Aiden control has matching
+   clearance on both sides at every available width. */
+.chat-content-column {
+  width: 100%;
+  max-width: var(--chat-content-max-width);
+  margin-inline: auto;
 }
 
 /* ── Dictation pill window (renderer/pill) ─────────────────────────────── */
