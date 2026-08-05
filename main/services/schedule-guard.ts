@@ -4,7 +4,16 @@ export const ASSISTANT_SCHEDULE_EXECUTION_PROFILE = "assistant" as const;
 
 type ScheduledTaskExecutionBoundary = Pick<
   ScheduledTask,
-  "executionProfile" | "mode" | "permission" | "script" | "workspaceId" | "mcpServerIds"
+  | "executionProfile"
+  | "mode"
+  | "permission"
+  | "script"
+  | "workspaceId"
+  | "mcpServerIds"
+  | "mcpServerBindings"
+  | "providerId"
+  | "model"
+  | "providerFingerprint"
 >;
 
 export const SCHEDULED_TASK_MCP_SERVER_LIMIT = 16;
@@ -63,16 +72,33 @@ export function validateScheduledMcpServerIds(value: unknown): string[] | undefi
 export function assertAssistantScheduleExecutionBoundary(
   task: ScheduledTaskExecutionBoundary,
 ): void {
+  const mcpServerIds = task.mcpServerIds ?? [];
+  const hasMcpAccess = mcpServerIds.length > 0;
+  if (task.workspaceId !== undefined && hasMcpAccess) {
+    throw new Error(
+      "Scheduled tasks must choose either one project or MCP servers, not both. Split local project work and external-service access into separate tasks.",
+    );
+  }
   if (task.executionProfile !== ASSISTANT_SCHEDULE_EXECUTION_PROFILE) return;
-  const hasMcpAccess = (task.mcpServerIds?.length ?? 0) > 0;
+  const hasExactMcpBindings =
+    !hasMcpAccess ||
+    (task.mcpServerBindings?.length === mcpServerIds.length &&
+      mcpServerIds.every((id, index) => task.mcpServerBindings?.[index]?.id === id));
+  const hasPinnedRuntime = Boolean(
+    task.providerId?.trim() &&
+    task.model?.trim() &&
+    /^[a-f0-9]{64}$/u.test(task.providerFingerprint ?? ""),
+  );
   if (
     task.mode !== "llm" ||
     task.script !== undefined ||
     (task.permission === "full" && task.workspaceId === undefined && !hasMcpAccess) ||
-    (hasMcpAccess && task.permission !== "full")
+    (hasMcpAccess && task.permission !== "full") ||
+    !hasExactMcpBindings ||
+    !hasPinnedRuntime
   ) {
     throw new Error(
-      "Aiden-created automations must remain LLM tasks, and Full access requires a project or approved MCP server.",
+      "Aiden-created automations must remain provider/model-pinned LLM tasks, choose either one project or exactly bound approved MCP servers, and Full access requires a project or exactly bound approved MCP server.",
     );
   }
 }
