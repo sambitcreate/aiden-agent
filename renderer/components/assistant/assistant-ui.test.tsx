@@ -92,6 +92,10 @@ test("automation confirmation shows the approved scope with check and cross acti
           workspaceName: null,
           mcpServerIds: [],
           mcpServerNames: [],
+          providerId: "local-provider",
+          providerName: "Local Provider",
+          model: "local-model",
+          modelName: "Local Model",
           schedulerEnabled: false,
         },
       }}
@@ -104,7 +108,10 @@ test("automation confirmation shows the approved scope with check and cross acti
   assert.match(html, /Every day at 9:00 AM/u);
   assert.match(html, />Read-only</u);
   assert.match(html, /saved but will not run/u);
-  assert.match(html, /Runs while Aiden is open/u);
+  assert.match(
+    html,
+    /Runs with Local Provider \(local-provider\) · Local Model \(local-model\) while Aiden is open/u,
+  );
   assert.match(html, /Summarize &lt;private&gt; updates\./u);
   assert.doesNotMatch(html, /0 9 \* \* \*/u);
   assert.doesNotMatch(html, /No project|Notifications on|MCP:/u);
@@ -134,6 +141,10 @@ test("Full automation confirmation names the project and write scope", () => {
           workspaceName: "Website",
           mcpServerIds: [],
           mcpServerNames: [],
+          providerId: "local-provider",
+          providerName: "Local Provider",
+          model: "local-model",
+          modelName: "Local Model",
           schedulerEnabled: true,
         },
       }}
@@ -146,7 +157,7 @@ test("Full automation confirmation names the project and write scope", () => {
   assert.doesNotMatch(html, /Notifications on/u);
 });
 
-test("MCP automation confirmation keeps the decision compact and Full access explicit", () => {
+test("MCP automation confirmation names the exact unattended connector scope", () => {
   const html = renderToStaticMarkup(
     <AssistantAutomationApproval
       prompt={{
@@ -167,8 +178,12 @@ test("MCP automation confirmation keeps the decision compact and Full access exp
           permission: "full",
           workspaceId: null,
           workspaceName: null,
-          mcpServerIds: ["gmail"],
-          mcpServerNames: ["Gmail"],
+          mcpServerIds: ["personal-gmail", "work-gmail"],
+          mcpServerNames: ["Gmail", "Gmail"],
+          providerId: "local-provider",
+          providerName: "Local Provider",
+          model: "local-model",
+          modelName: "Local Model",
           schedulerEnabled: true,
         },
       }}
@@ -178,8 +193,8 @@ test("MCP automation confirmation keeps the decision compact and Full access exp
   );
   assert.match(html, /aria-label="Decline Full access automation"/u);
   assert.match(html, /aria-label="Confirm Full access automation"/u);
-  assert.match(html, />Full access</u);
-  assert.doesNotMatch(html, /Gmail|MCP:|tools unattended|external data/u);
+  assert.match(html, />Full access · MCP: Gmail \(personal-gmail\), Gmail \(work-gmail\)</u);
+  assert.match(html, /Can call Gmail \(personal-gmail\), Gmail \(work-gmail\) unattended/u);
 });
 
 test("automation edits use a save confirmation and describe paused state truthfully", () => {
@@ -207,6 +222,10 @@ test("automation edits use a save confirmation and describe paused state truthfu
           workspaceName: null,
           mcpServerIds: ["gmail"],
           mcpServerNames: ["Gmail"],
+          providerId: "local-provider",
+          providerName: "Local Provider",
+          model: "local-model",
+          modelName: "Local Model",
           schedulerEnabled: true,
         },
       }}
