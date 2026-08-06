@@ -177,10 +177,7 @@ test("compact Environment modality blocks every app-level interaction seam and c
 
   assert.match(environment, /const overlayOpen = fullOpen && !inline/u);
   assert.match(environment, /setCompactModalOpen\(overlayOpen\)/u);
-  assert.match(
-    environment,
-    /environmentCompactModalFocusableTargets\(surfaceRef\.current\)/u,
-  );
+  assert.match(environment, /environmentCompactModalFocusableTargets\(surfaceRef\.current\)/u);
   assert.match(
     environment,
     /environmentCompactModalTabWrapTarget\([\s\S]*document\.activeElement,[\s\S]*event\.shiftKey/u,
@@ -193,10 +190,7 @@ test("compact Environment modality blocks every app-level interaction seam and c
   assert.doesNotMatch(environment, /\.closest\("main"\)/u);
   assert.doesNotMatch(environment, /const snapshots = background\.map/u);
 
-  assert.match(
-    root,
-    /<CommandSystemProvider applicationModal=\{compactModalOpen\}>/u,
-  );
+  assert.match(root, /<CommandSystemProvider applicationModal=\{compactModalOpen\}>/u);
   assert.match(
     root,
     /<AssistantDock interactionBlocked=\{environmentPanel\.compactModalOpen\} \/>/u,
@@ -293,17 +287,18 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(appHandler, /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*\}/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
-  assert.match(bootstrap, /<AppCapabilitiesProvider capabilities=\{appCapabilities\}>/u);
+  assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
+  assert.match(bootstrap, /refresh=\{refreshAppCapabilities\}/u);
+  const capabilityProvider = source("../lib/app-capabilities.tsx");
+  assert.match(capabilityProvider, /setTimeout\(\(\) => void update\(\), 1_000\)/u);
+  assert.match(capabilityProvider, /if \(!cancelled\) setCurrent\(next\)/u);
   assert.match(
     environment,
     /storedEnvironmentPanelTab\(localStorage, TAB_STORAGE_KEY, subagentsEnabled\)/u,
   );
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
-  assert.match(
-    environment,
-    /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u,
-  );
+  assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
   assert.match(messages, /\{subagentsEnabled && m\.role === "assistant" && m\.subagents \? \(/u);
   assert.match(messages, /\{subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
@@ -338,7 +333,7 @@ test("live snapshots are owner-checked, revisioned, and released across route tr
   const environment = source("./environment-panel.tsx");
 
   assert.match(pane, /environmentPanel\.subagentsEnabled\s+\?\s+\{\s+onSubagents:/u);
-  assert.match(pane, /onSubagents: \(snapshot: SubagentRunSnapshotV1\) => \{/u);
+  assert.match(pane, /onSubagents: \(snapshot: SubagentRunSnapshot\) => \{/u);
   assert.match(
     pane,
     /effectiveWorkspaceId = chat\.data\s+\? persistedChatWorkspaceId\(chatWorkspaceId\)\s+: undefined/u,
@@ -377,6 +372,15 @@ test("saved detail failures expose a versioned retry path", () => {
   assert.match(environment, /retrySubagentDetail/u);
   assert.match(panel, /onRetryDetail/u);
   assert.match(panel, /\sRetry\s*<\/Button>/u);
+});
+
+test("production V2 detail wires Stop without advertising unavailable retry", () => {
+  const environment = source("./environment-panel.tsx");
+
+  assert.match(environment, /const stopSubagent = React\.useCallback/u);
+  assert.match(environment, /await subagentsApi\.stop\(chatId, run\.runId\)/u);
+  assert.match(environment, /onStopRun=\{panel\.stopSubagent\}/u);
+  assert.doesNotMatch(environment, /onRetryRun=/u);
 });
 
 test("unrelated live revisions cannot restart a saved-detail read", () => {
@@ -423,24 +427,16 @@ test("the composed Subagents UI routes activity and detail lifecycle through one
   assert.match(announcer, /portalHost \? createPortal\(region, portalHost\) : region/u);
   assert.match(environment, /ref=\{setSurfaceRef\}/u);
   assert.match(environment, /setSubagentAnnouncerHost\(node\)/u);
-  assert.match(
-    environment,
-    /open && tab !== "overview" \? subagentAnnouncerHost : null/u,
-  );
-  assert.doesNotMatch(
-    environment,
-    /data-environment-modal-background="subagent-announcer"/u,
-  );
+  assert.match(environment, /open && tab !== "overview" \? subagentAnnouncerHost : null/u);
+  assert.doesNotMatch(environment, /data-environment-modal-background="subagent-announcer"/u);
   assert.match(environment, /onDetailAnnouncement=\{panel\.announceSubagentDetail\}/u);
   assert.equal(
-    (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/aria-live="polite"/gu) ?? [])
-      .length,
+    (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/aria-live="polite"/gu) ?? []).length,
     1,
     "the portaled node is the composed Subagents UI's only polite live region",
   );
   assert.equal(
-    (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/role="status"/gu) ?? [])
-      .length,
+    (`${environment}\n${announcer}\n${panel}\n${chips}`.match(/role="status"/gu) ?? []).length,
     1,
   );
   assert.match(announcer, /aria-atomic="true"/u);
