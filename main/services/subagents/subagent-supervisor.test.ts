@@ -153,6 +153,7 @@ function phase6Authority(input: {
   contextRevision: string;
   delegate: boolean;
   parent?: SubagentAuthorityV2;
+  deadlineMs?: number;
   maxQueued?: number;
   maxToolCalls?: number;
   maxOutputChars?: number;
@@ -184,7 +185,7 @@ function phase6Authority(input: {
       mcp: [],
     },
     budgets: {
-      deadlineMs: 30_000,
+      deadlineMs: input.deadlineMs ?? 30_000,
       maxTurns: 8,
       maxToolCalls: input.maxToolCalls ?? 32,
       maxOutputChars: input.maxOutputChars ?? 64_000,
@@ -195,7 +196,7 @@ function phase6Authority(input: {
       maxQueued: input.maxQueued ?? 8,
       maxNetworkOperations: 1,
     },
-    expiresAt: Date.now() + 30_000,
+    expiresAt: Date.now() + (input.deadlineMs ?? 30_000),
   });
 }
 
@@ -456,6 +457,42 @@ test("an expired tree deadline launches no children and returns ordered timeouts
     /tree deadline elapsed/u,
   );
   assert.equal(supervisor.launchesUsed, 0);
+});
+
+test("V2 authority admission floors a high-resolution remaining deadline", async () => {
+  let now = 1_000.25;
+  const preparedDeadlines: number[] = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "fractional-deadline",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    now: () => now,
+    prepareRun: async ({ identity, contextRevision, deadlineMs }) => {
+      preparedDeadlines.push(deadlineMs);
+      return phase6Prepared(
+        // Constructing the persisted authority here reproduces production's
+        // strict V2 budget validation rather than only inspecting the value.
+        phase6Authority({
+          runId: identity.runId,
+          contextRevision,
+          delegate: false,
+          deadlineMs,
+        }),
+      );
+    },
+    runChild: async ({ request: childRequest }) => completed(childRequest.label),
+  });
+  now = 1_000.75;
+
+  const result = await supervisor.execute(request(["Cat", "Moon"]));
+
+  assert.deepEqual(preparedDeadlines, [599_999, 599_999]);
+  assert.match(result, /## 1\. Cat[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Moon[\s\S]*Status: completed/u);
 });
 
 test("supervisor records only canonical non-interrupted terminal outcomes", async () => {
