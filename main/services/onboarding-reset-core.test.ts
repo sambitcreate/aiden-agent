@@ -1,0 +1,70 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  OnboardingResetError,
+  performOnboardingReset,
+  type OnboardingResetOperations,
+} from "./onboarding-reset-core.js";
+
+function operations(
+  events: string[],
+  failures: Partial<Record<keyof OnboardingResetOperations, Error>> = {},
+): OnboardingResetOperations {
+  const run = async (name: keyof OnboardingResetOperations): Promise<void> => {
+    events.push(name);
+    const failure = failures[name];
+    if (failure) throw failure;
+  };
+  return {
+    disconnectArtificialAnalysis: () => run("disconnectArtificialAnalysis"),
+    resetConfiguration: () => run("resetConfiguration"),
+    clearLegacySecrets: () => run("clearLegacySecrets"),
+    clearPiCredentials: () => run("clearPiCredentials"),
+    clearMcpOAuth: () => run("clearMcpOAuth"),
+  };
+}
+
+test("reset disconnects model data before clearing every setup-owned store", async () => {
+  const events: string[] = [];
+
+  await performOnboardingReset(operations(events));
+
+  assert.equal(events[0], "disconnectArtificialAnalysis");
+  assert.deepEqual(
+    new Set(events.slice(1)),
+    new Set(["resetConfiguration", "clearLegacySecrets", "clearPiCredentials", "clearMcpOAuth"]),
+  );
+});
+
+test("reset attempts every cleanup and returns a retryable aggregate failure", async () => {
+  const events: string[] = [];
+  const credentialFailure = new Error("credential sentinel");
+  const oauthFailure = new Error("oauth sentinel");
+
+  await assert.rejects(
+    performOnboardingReset(
+      operations(events, {
+        clearPiCredentials: credentialFailure,
+        clearMcpOAuth: oauthFailure,
+      }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof OnboardingResetError);
+      assert.match(error.message, /Retry Reset onboarding/u);
+      assert.doesNotMatch(error.message, /sentinel/u);
+      assert.deepEqual(error.failures, [credentialFailure, oauthFailure]);
+      return true;
+    },
+  );
+
+  assert.deepEqual(
+    new Set(events),
+    new Set([
+      "disconnectArtificialAnalysis",
+      "resetConfiguration",
+      "clearLegacySecrets",
+      "clearPiCredentials",
+      "clearMcpOAuth",
+    ]),
+  );
+});
