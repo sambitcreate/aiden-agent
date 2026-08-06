@@ -147,7 +147,11 @@ export async function resolveBoundedSubagentMcpInventory(
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<"deadline">((resolve) => {
     timeout = setTimeout(() => resolve("deadline"), deadlineMs);
-    timeout.unref?.();
+    // This timer is the only guaranteed settlement path when configuration
+    // loading or an MCP connection never resolves. Keeping it referenced is
+    // necessary for callers (and Node's test runner) to receive the bounded
+    // empty result instead of being left with a pending promise as the event
+    // loop drains.
   });
   const completed: InspectedSubagentMcpServer[] = [];
   try {
