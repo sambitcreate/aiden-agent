@@ -19,6 +19,17 @@ export const ASSISTANT_AUTOMATION_PROVIDER_ID_LIMIT = 160;
 export const ASSISTANT_AUTOMATION_PROVIDER_NAME_LIMIT = 120;
 export const ASSISTANT_AUTOMATION_MODEL_ID_LIMIT = 256;
 export const ASSISTANT_AUTOMATION_MODEL_NAME_LIMIT = 256;
+export const SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT = 120;
+export const SUBAGENT_WORKSPACE_WRITE_PATH_LIMIT = 512;
+export const SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT = 120;
+export const SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT = 160;
+export const SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT = 12 * 1024;
+export const SUBAGENT_WORKSPACE_WRITE_MAX_BYTES = 10 * 1024 * 1024;
+export const SUBAGENT_WORKSPACE_WRITE_DIGEST_PREFIX_LENGTH = 12;
+export const SUBAGENT_MCP_MUTATION_DIGEST_PREFIX_LENGTH = 12;
+export const SUBAGENT_MCP_MUTATION_DISPLAY_INPUT_BYTES = 8 * 1024;
+export const SUBAGENT_MCP_MUTATION_DISPLAY_ESCAPED_CHARS = 64 * 1024;
+export const SUBAGENT_SHELL_COMMAND_DISPLAY_CHARS = 32 * 1024;
 
 /** The exact automation proposal shown before an attended Assistant tool call resumes. */
 export interface AssistantAutomationApprovalDetails {
@@ -47,7 +58,96 @@ export interface AssistantAutomationApprovalDetails {
   schedulerEnabled: boolean;
 }
 
-export type ToolApprovalDetails = AssistantAutomationApprovalDetails;
+/** Renderer-safe facts for one exact, attended child file mutation. */
+export interface SubagentWorkspaceWriteApprovalDetails {
+  kind: "subagent-workspace-write";
+  operation: "create" | "replace" | "edit";
+  childLabel: string;
+  /** Canonical workspace-relative path. Absolute and parent-traversal paths are rejected. */
+  path: string;
+  workspaceLabel: string;
+  /** Present only when the authorized workspace is an Aiden managed worktree. */
+  worktreeLabel: string | null;
+  isManagedWorktree: boolean;
+  /** Null only for a create that requires the target not to exist. */
+  preDigestPrefix: string | null;
+  postDigestPrefix: string;
+  beforeBytes: number;
+  afterBytes: number;
+  diffPreview: string;
+  diffTruncated: boolean;
+  /** Literal safety claims supplied by the main-owned mutation broker. */
+  commandWillRun: false;
+  refuseIfChanged: true;
+}
+
+/** Renderer-safe host-derived facts for one inert mutating-MCP approval proposal. */
+export interface SubagentMcpMutationApprovalDetails {
+  kind: "subagent-mcp-mutation";
+  childLabel: string;
+  serverId: string;
+  toolName: string;
+  connectionDigestPrefix: string;
+  schemaDigestPrefix: string;
+  profileDigestPrefix: string;
+  argumentDigestPrefix: string;
+  classification: "declared_mutating" | "unproven_mutating";
+  destructive: "destructive" | "additive" | "unknown";
+  idempotency: "idempotent" | "not_declared";
+  openWorld: "open" | "closed" | "unknown";
+  taskSupport: "forbidden" | "optional";
+  timeoutMs: number;
+  canonicalArguments: string;
+  priorUnknownEffect: boolean;
+  automaticRetry: false;
+  rollbackAvailable: false;
+}
+
+/** Renderer-safe exact facts for one attended full-host child command. */
+export interface SubagentShellApprovalDetails {
+  kind: "subagent-shell";
+  childLabel: string;
+  command: string;
+  initialCwd: string;
+  shell: "/bin/zsh -f -c";
+  argumentDigestPrefix: string;
+  rootDigestPrefix: string;
+  effectDigestPrefix: string;
+  timeoutMs: number;
+  stdoutLimitBytes: number;
+  stderrLimitBytes: number;
+  workspaceLabel: string;
+  isManagedWorktree: boolean;
+  worktreeLabel: string | null;
+  environmentProfile: "minimal-private-0700-v1";
+  osSandboxed: false;
+  rollbackAvailable: false;
+  outputSentToModel: true;
+  arbitraryNetworkAvailable: true;
+  detachedProcessesMaySurvive: true;
+}
+
+export type ToolApprovalDetails =
+  | AssistantAutomationApprovalDetails
+  | SubagentWorkspaceWriteApprovalDetails
+  | SubagentMcpMutationApprovalDetails
+  | SubagentShellApprovalDetails;
+
+function unsafeApprovalCodePoint(codePoint: number, multiline: boolean): boolean {
+  const allowedWhitespace =
+    multiline && (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d);
+  return (
+    (!allowedWhitespace && codePoint <= 0x1f) ||
+    (codePoint >= 0x7f && codePoint <= 0x9f) ||
+    codePoint === 0x061c ||
+    codePoint === 0x200e ||
+    codePoint === 0x200f ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    codePoint === 0x2028 ||
+    codePoint === 0x2029 ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069)
+  );
+}
 
 function safeApprovalText(value: unknown, limit: number, multiline = false): value is string {
   if (
@@ -60,19 +160,340 @@ function safeApprovalText(value: unknown, limit: number, multiline = false): val
   }
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
-    const allowedWhitespace =
-      multiline && (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d);
-    const unsafeControl =
-      (!allowedWhitespace && codePoint <= 0x1f) ||
-      (codePoint >= 0x7f && codePoint <= 0x9f) ||
-      (codePoint >= 0x202a && codePoint <= 0x202e) ||
-      (codePoint >= 0x2066 && codePoint <= 0x2069);
-    if (unsafeControl) return false;
+    if (unsafeApprovalCodePoint(codePoint, multiline)) return false;
   }
   return true;
 }
 
-/** Fail-closed renderer boundary for the only approval Aiden may present. */
+function safeApprovalPreview(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT
+  ) {
+    return false;
+  }
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (unsafeApprovalCodePoint(codePoint, true)) return false;
+  }
+  return true;
+}
+
+function hasExactApprovalKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function safeWorkspaceRelativePath(value: unknown): value is string {
+  if (!safeApprovalText(value, SUBAGENT_WORKSPACE_WRITE_PATH_LIMIT)) return false;
+  if (
+    value.normalize("NFKC") !== value ||
+    value.startsWith("/") ||
+    value.startsWith("~") ||
+    value.includes("\\")
+  ) {
+    return false;
+  }
+  const segments = value.split("/");
+  return (
+    segments.length > 0 &&
+    segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..")
+  );
+}
+
+function safeDigestPrefix(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    new RegExp(`^[a-f0-9]{${SUBAGENT_WORKSPACE_WRITE_DIGEST_PREFIX_LENGTH}}$`, "u").test(value)
+  );
+}
+
+function safeMutationDigestPrefix(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    new RegExp(`^[a-f0-9]{${SUBAGENT_MCP_MUTATION_DIGEST_PREFIX_LENGTH}}$`, "u").test(value)
+  );
+}
+
+function canonicalParsedJson(value: unknown): string {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  ) {
+    return JSON.stringify(Object.is(value, -0) ? 0 : value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalParsedJson).join(",")}]`;
+  }
+  if (typeof value !== "object") throw new Error("Invalid JSON value.");
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalParsedJson(record[key])}`)
+    .join(",")}}`;
+}
+
+/** Escape every raw control, bidi, isolate, and Unicode line-separator code point. */
+export function escapeSubagentMcpMutationApprovalJson(value: string): string {
+  let result = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (unsafeApprovalCodePoint(codePoint, false)) {
+      if (codePoint <= 0xffff) {
+        result += `\\u${codePoint.toString(16).padStart(4, "0")}`;
+      } else {
+        const adjusted = codePoint - 0x10000;
+        const high = 0xd800 + (adjusted >> 10);
+        const low = 0xdc00 + (adjusted & 0x3ff);
+        result += `\\u${high.toString(16).padStart(4, "0")}\\u${low.toString(16).padStart(4, "0")}`;
+      }
+    } else {
+      result += character;
+    }
+  }
+  return result;
+}
+
+function safeCanonicalMutationArguments(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length < 2 ||
+    value.length > SUBAGENT_MCP_MUTATION_DISPLAY_ESCAPED_CHARS
+  ) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      new TextEncoder().encode(canonicalParsedJson(parsed)).length >
+        SUBAGENT_MCP_MUTATION_DISPLAY_INPUT_BYTES
+    ) {
+      return false;
+    }
+    return escapeSubagentMcpMutationApprovalJson(canonicalParsedJson(parsed)) === value;
+  } catch {
+    return false;
+  }
+}
+
+/** Malformed privileged mutation details never retain an Allow action. */
+export function isSubagentMcpMutationApprovalDetails(
+  value: unknown,
+): value is SubagentMcpMutationApprovalDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const details = value as Record<string, unknown>;
+  if (
+    !hasExactApprovalKeys(details, [
+      "kind",
+      "childLabel",
+      "serverId",
+      "toolName",
+      "connectionDigestPrefix",
+      "schemaDigestPrefix",
+      "profileDigestPrefix",
+      "argumentDigestPrefix",
+      "classification",
+      "destructive",
+      "idempotency",
+      "openWorld",
+      "taskSupport",
+      "timeoutMs",
+      "canonicalArguments",
+      "priorUnknownEffect",
+      "automaticRetry",
+      "rollbackAvailable",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    details.kind === "subagent-mcp-mutation" &&
+    safeApprovalText(details.childLabel, SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT) &&
+    safeApprovalText(details.serverId, 128) &&
+    safeApprovalText(details.toolName, 128) &&
+    safeMutationDigestPrefix(details.connectionDigestPrefix) &&
+    safeMutationDigestPrefix(details.schemaDigestPrefix) &&
+    safeMutationDigestPrefix(details.profileDigestPrefix) &&
+    safeMutationDigestPrefix(details.argumentDigestPrefix) &&
+    (details.classification === "declared_mutating" ||
+      details.classification === "unproven_mutating") &&
+    (details.destructive === "destructive" ||
+      details.destructive === "additive" ||
+      details.destructive === "unknown") &&
+    (details.idempotency === "idempotent" || details.idempotency === "not_declared") &&
+    (details.openWorld === "open" ||
+      details.openWorld === "closed" ||
+      details.openWorld === "unknown") &&
+    (details.taskSupport === "forbidden" || details.taskSupport === "optional") &&
+    typeof details.timeoutMs === "number" &&
+    Number.isSafeInteger(details.timeoutMs) &&
+    details.timeoutMs >= 1 &&
+    details.timeoutMs <= 120_000 &&
+    safeCanonicalMutationArguments(details.canonicalArguments) &&
+    typeof details.priorUnknownEffect === "boolean" &&
+    details.automaticRetry === false &&
+    details.rollbackAvailable === false
+  );
+}
+
+function safeShellCommand(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    value.length > SUBAGENT_SHELL_COMMAND_DISPLAY_CHARS
+  ) {
+    return false;
+  }
+  return [...value].every((character) => {
+    const point = character.codePointAt(0) ?? 0;
+    return !(
+      point === 0 ||
+      point === 0x0d ||
+      point === 0x1b ||
+      (point < 0x20 && point !== 0x09 && point !== 0x0a) ||
+      (point >= 0x7f && point <= 0x9f) ||
+      point === 0x2028 ||
+      point === 0x2029 ||
+      (point >= 0x202a && point <= 0x202e) ||
+      (point >= 0x2066 && point <= 0x2069)
+    );
+  });
+}
+
+/** Malformed full-host shell claims never retain an Allow action. */
+export function isSubagentShellApprovalDetails(
+  value: unknown,
+): value is SubagentShellApprovalDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const details = value as Record<string, unknown>;
+  if (
+    !hasExactApprovalKeys(details, [
+      "kind",
+      "childLabel",
+      "command",
+      "initialCwd",
+      "shell",
+      "argumentDigestPrefix",
+      "rootDigestPrefix",
+      "effectDigestPrefix",
+      "timeoutMs",
+      "stdoutLimitBytes",
+      "stderrLimitBytes",
+      "workspaceLabel",
+      "isManagedWorktree",
+      "worktreeLabel",
+      "environmentProfile",
+      "osSandboxed",
+      "rollbackAvailable",
+      "outputSentToModel",
+      "arbitraryNetworkAvailable",
+      "detachedProcessesMaySurvive",
+    ])
+  ) {
+    return false;
+  }
+  return (
+    details.kind === "subagent-shell" &&
+    safeApprovalText(details.childLabel, SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT) &&
+    safeShellCommand(details.command) &&
+    safeApprovalText(details.initialCwd, 1024) &&
+    details.initialCwd.startsWith("/") &&
+    details.shell === "/bin/zsh -f -c" &&
+    safeMutationDigestPrefix(details.argumentDigestPrefix) &&
+    safeMutationDigestPrefix(details.rootDigestPrefix) &&
+    safeMutationDigestPrefix(details.effectDigestPrefix) &&
+    typeof details.timeoutMs === "number" &&
+    Number.isSafeInteger(details.timeoutMs) &&
+    details.timeoutMs >= 1 &&
+    details.timeoutMs <= 120_000 &&
+    details.stdoutLimitBytes === 512 * 1024 &&
+    details.stderrLimitBytes === 512 * 1024 &&
+    safeApprovalText(details.workspaceLabel, SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT) &&
+    ((details.isManagedWorktree === false && details.worktreeLabel === null) ||
+      (details.isManagedWorktree === true &&
+        safeApprovalText(details.worktreeLabel, SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT))) &&
+    details.environmentProfile === "minimal-private-0700-v1" &&
+    details.osSandboxed === false &&
+    details.rollbackAvailable === false &&
+    details.outputSentToModel === true &&
+    details.arbitraryNetworkAvailable === true &&
+    details.detachedProcessesMaySurvive === true
+  );
+}
+
+function safeByteCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= SUBAGENT_WORKSPACE_WRITE_MAX_BYTES
+  );
+}
+
+/** Fail closed before structured child-mutation facts are rendered as trusted safety copy. */
+export function isSubagentWorkspaceWriteApprovalDetails(
+  value: unknown,
+): value is SubagentWorkspaceWriteApprovalDetails {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const details = value as Record<string, unknown>;
+  if (
+    !hasExactApprovalKeys(details, [
+      "kind",
+      "operation",
+      "childLabel",
+      "path",
+      "workspaceLabel",
+      "worktreeLabel",
+      "isManagedWorktree",
+      "preDigestPrefix",
+      "postDigestPrefix",
+      "beforeBytes",
+      "afterBytes",
+      "diffPreview",
+      "diffTruncated",
+      "commandWillRun",
+      "refuseIfChanged",
+    ])
+  ) {
+    return false;
+  }
+  const operationIsValid =
+    details.operation === "create" ||
+    details.operation === "replace" ||
+    details.operation === "edit";
+  const worktreeIsValid =
+    (details.isManagedWorktree === false && details.worktreeLabel === null) ||
+    (details.isManagedWorktree === true &&
+      safeApprovalText(details.worktreeLabel, SUBAGENT_WORKSPACE_WRITE_WORKTREE_LABEL_LIMIT));
+  const preimageIsValid =
+    details.operation === "create"
+      ? details.preDigestPrefix === null && details.beforeBytes === 0
+      : safeDigestPrefix(details.preDigestPrefix);
+  return (
+    details.kind === "subagent-workspace-write" &&
+    operationIsValid &&
+    safeApprovalText(details.childLabel, SUBAGENT_WORKSPACE_WRITE_CHILD_LABEL_LIMIT) &&
+    safeWorkspaceRelativePath(details.path) &&
+    safeApprovalText(details.workspaceLabel, SUBAGENT_WORKSPACE_WRITE_WORKSPACE_LABEL_LIMIT) &&
+    worktreeIsValid &&
+    preimageIsValid &&
+    safeDigestPrefix(details.postDigestPrefix) &&
+    safeByteCount(details.beforeBytes) &&
+    safeByteCount(details.afterBytes) &&
+    safeApprovalPreview(details.diffPreview) &&
+    typeof details.diffTruncated === "boolean" &&
+    details.commandWillRun === false &&
+    details.refuseIfChanged === true
+  );
+}
+
+/** Fail-closed renderer boundary for attended Assistant automation approvals. */
 export function isAssistantAutomationApprovalDetails(
   value: unknown,
 ): value is AssistantAutomationApprovalDetails {
