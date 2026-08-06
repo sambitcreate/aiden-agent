@@ -10,7 +10,8 @@ export const productionSubagentWebProxyHost = new SubagentWebProxyHost({
   now: Date.now,
   scheduleTimeout: (callback, delayMs) => {
     const timer = setTimeout(callback, delayMs);
-    timer.unref?.();
+    // This is the request's bounded-settlement deadline; it remains referenced
+    // so an uncooperative fetch cannot leave an awaiting caller unresolved.
     return () => clearTimeout(timer);
   },
 });
