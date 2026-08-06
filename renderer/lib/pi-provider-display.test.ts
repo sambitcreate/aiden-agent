@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   FEATURED_PI_PROVIDER_IDS,
   PROVIDER_ICON_SLUGS,
+  getOnboardingMoreProviders,
   resolveProviderIconSlug,
   splitPiBuiltinProviders,
 } from "./pi-provider-display.js";
@@ -51,6 +52,24 @@ test("safely places a Pi provider added after this release under More", () => {
   assert.deepEqual(
     more.map((provider) => provider.id),
     ["future-pi-provider"],
+  );
+});
+
+test("onboarding reveals every other Pi provider in stable product order", () => {
+  const providers = [
+    { id: "custom:ollama", isBuiltin: false },
+    { id: "groq", isBuiltin: true },
+    { id: "openai-codex", isBuiltin: true },
+    { id: "google", isBuiltin: true },
+    { id: "future-pi-provider", isBuiltin: true },
+    { id: "anthropic", isBuiltin: true },
+    { id: "openai", isBuiltin: true },
+    { id: "deepseek", isBuiltin: true },
+  ];
+
+  assert.deepEqual(
+    getOnboardingMoreProviders(providers).map((provider) => provider.id),
+    ["google", "deepseek", "groq", "future-pi-provider"],
   );
 });
 
@@ -134,18 +153,9 @@ test("provider marks and icon wells remain theme-aware in both appearances", () 
     `${providersSettingsSource}\n${codexProviderSettingsSource}`,
     /bg-surface-subtle/u,
   );
+  assert.equal(occurrences(providersSettingsSource, "rounded-control bg-well text-secondary"), 3);
   assert.equal(
-    occurrences(
-      providersSettingsSource,
-      "rounded-control bg-well text-secondary",
-    ),
-    3,
-  );
-  assert.equal(
-    occurrences(
-      codexProviderSettingsSource,
-      "rounded-control bg-well text-secondary",
-    ),
+    occurrences(codexProviderSettingsSource, "rounded-control bg-well text-secondary"),
     1,
   );
 });
