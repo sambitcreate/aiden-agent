@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startGeneration, type StreamCallbacks } from "./ipc.js";
+import { startGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
 import {
   isDetachedLifecycleChatDraining,
   subscribeDetachedTerminalChats,
@@ -91,6 +91,24 @@ test("lifecycle cancellation releases every stream subscription immediately", as
           channel === "chat:cancel" && args[0] === handle.streamId && args[1] === "lifecycle",
       ),
     );
+  } finally {
+    restore();
+  }
+});
+
+test("subagent management sends no renderer-constructed authority tuple", async () => {
+  const { bridge, restore } = installFakeBridge();
+  try {
+    await assert.rejects(
+      subagentsApi.stop("chat-1", "run-1"),
+      /invalid subagent control response/u,
+    );
+    const request = bridge.invokes.find(({ channel }) => channel === "subagents:manage");
+    assert.deepEqual(request, {
+      channel: "subagents:manage",
+      args: ["chat-1", { version: 2, action: "stop", runId: "run-1" }],
+    });
+    assert.doesNotMatch(JSON.stringify(request), /authorityRevision|ownerDocumentId|workspaceId/u);
   } finally {
     restore();
   }
