@@ -1,12 +1,10 @@
 import {
+  isSubagentRunViewStateActive,
   resolveSubagentSelection,
   splitSubagentRunViews,
   type SubagentRunView,
 } from "./subagent-view-state";
-import {
-  SUBAGENT_ACTIVE_STATES,
-  type SubagentRunSnapshotV1,
-} from "../shared/subagent-runs";
+import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 
 export function subagentRunProgressLabel(
   state: SubagentRunView["state"] | "finished",
@@ -20,6 +18,9 @@ export function subagentRunProgressLabel(
   if (state === "failed") return "Failed";
   if (state === "timed_out") return "Timed out";
   if (state === "interrupted") return "Interrupted";
+  if (state === "needs_attention") return "Needs attention";
+  if (state === "stopped") return "Stopped";
+  if (state === "unknown") return "Outcome unknown";
   return "Finished";
 }
 
@@ -49,54 +50,57 @@ function formatSubagentLiveSummary(
         `${run.label}: ${subagentRunProgressLabel(run.state, run.activity)}`,
     )
     .join("; ");
-  const terminalOutcomes = terminalStates
-    .reduce(
-      (counts, state) => {
-        if (state === "completed") counts.completed += 1;
-        else if (state === "failed") counts.failed += 1;
-        else if (state === "timed_out") counts.timedOut += 1;
-        else if (state === "interrupted") counts.interrupted += 1;
-        else counts.finished += 1;
-        return counts;
-      },
-      { completed: 0, failed: 0, timedOut: 0, interrupted: 0, finished: 0 },
-    );
+  const terminalOutcomes = terminalStates.reduce(
+    (counts, state) => {
+      if (state === "completed") counts.completed += 1;
+      else if (state === "failed") counts.failed += 1;
+      else if (state === "timed_out") counts.timedOut += 1;
+      else if (state === "interrupted") counts.interrupted += 1;
+      else counts.finished += 1;
+      return counts;
+    },
+    { completed: 0, failed: 0, timedOut: 0, interrupted: 0, finished: 0 },
+  );
   const outcomeSummary = [
     terminalOutcomes.completed > 0
       ? `${terminalOutcomes.completed} completed successfully`
       : null,
     terminalOutcomes.failed > 0 ? `${terminalOutcomes.failed} failed` : null,
-    terminalOutcomes.timedOut > 0 ? `${terminalOutcomes.timedOut} timed out` : null,
-    terminalOutcomes.interrupted > 0 ? `${terminalOutcomes.interrupted} interrupted` : null,
-    terminalOutcomes.finished > 0 ? `${terminalOutcomes.finished} finished` : null,
+    terminalOutcomes.timedOut > 0
+      ? `${terminalOutcomes.timedOut} timed out`
+      : null,
+    terminalOutcomes.interrupted > 0
+      ? `${terminalOutcomes.interrupted} interrupted`
+      : null,
+    terminalOutcomes.finished > 0
+      ? `${terminalOutcomes.finished} finished`
+      : null,
   ]
     .filter((outcome): outcome is string => outcome !== null)
     .join("; ");
   return `${active.length} active subagent${active.length === 1 ? "" : "s"}; ${
     outcomeSummary || "0 done"
-  }.${
-    progress ? ` ${progress}.` : ""
-  }`;
+  }.${progress ? ` ${progress}.` : ""}`;
 }
 
 export function subagentSnapshotLiveSummary(
-  runs: readonly SubagentRunSnapshotV1[],
+  runs: readonly SubagentRunSnapshot[],
 ): string {
-  const active = runs.filter((run) => SUBAGENT_ACTIVE_STATES.has(run.state));
+  const active = runs.filter((run) => isSubagentRunViewStateActive(run.state));
   return formatSubagentLiveSummary(
     active,
     runs
-      .filter((run) => !SUBAGENT_ACTIVE_STATES.has(run.state))
+      .filter((run) => !isSubagentRunViewStateActive(run.state))
       .map((run) => run.state),
   );
 }
 
 export function subagentSnapshotLiveSummaryIsTerminal(
-  runs: readonly SubagentRunSnapshotV1[],
+  runs: readonly SubagentRunSnapshot[],
 ): boolean {
   return (
     runs.length > 0 &&
-    runs.every((run) => !SUBAGENT_ACTIVE_STATES.has(run.state))
+    runs.every((run) => !isSubagentRunViewStateActive(run.state))
   );
 }
 
