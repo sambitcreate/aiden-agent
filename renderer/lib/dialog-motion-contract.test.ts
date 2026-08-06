@@ -33,10 +33,20 @@ test("dialogs fade and scale from ninety percent without changing their position
 test("every application-modal overlay stays transparent and unblurred", () => {
   const sharedUi = source("../components/ui.tsx");
   const commandPalette = source("../components/command-palette.tsx");
-  const overlayClass = 'className="fixed inset-0 z-50 bg-transparent"';
+  const sharedOverlays = [
+    ...sharedUi.matchAll(/<(?:DialogPrimitive|AlertDialogPrimitive)\.Overlay[\s\S]*?\/>/gu),
+  ].map((match) => match[0]);
+  const commandPaletteOverlays = [
+    ...commandPalette.matchAll(/<DialogPrimitive\.Overlay[\s\S]*?\/>/gu),
+  ].map((match) => match[0]);
 
-  assert.equal(sharedUi.match(new RegExp(overlayClass, "gu"))?.length, 2);
-  assert.equal(commandPalette.match(new RegExp(overlayClass, "gu"))?.length, 1);
+  assert.equal(sharedOverlays.length, 2);
+  assert.equal(commandPaletteOverlays.length, 1);
+  assert.match(sharedUi, /layer === "onboarding" \? "z-\[70\]" : "z-50"/u);
+  for (const overlay of [...sharedOverlays, ...commandPaletteOverlays]) {
+    assert.match(overlay, /bg-transparent/u);
+    assert.doesNotMatch(overlay, /backdrop-blur|bg-black\//u);
+  }
 
   for (const component of [sharedUi, commandPalette]) {
     assert.doesNotMatch(
