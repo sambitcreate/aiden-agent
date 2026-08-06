@@ -277,6 +277,72 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
   });
 });
 
+test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.stores.portable.update((config) => {
+    config.providerIdAliases = { "legacy-lmstudio": provider.id };
+  });
+  await h.store.saveMcpServer({
+    id: "filesystem",
+    name: "Filesystem",
+    transport: "stdio",
+    command: "mcp-fs",
+    enabled: true,
+  });
+  await h.store.saveSkill({
+    id: "summarize",
+    name: "Summarize",
+    description: "Summarize a document",
+    instructions: "Keep it concise.",
+    enabled: true,
+  });
+  await h.store.saveWorkspace({
+    id: "project",
+    name: "Project",
+    permission: "ask",
+    folderPath: "/Users/example/project",
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await h.store.setSettings({
+    profileName: "Sambit",
+    lastProviderId: provider.id,
+    lastModel: "qwen3-8b",
+    exaEnabled: true,
+  });
+
+  await h.store.resetUserSetup();
+
+  assert.deepEqual(await h.store.listProviders(), []);
+  assert.deepEqual(await h.store.listMcpServers(), []);
+  assert.deepEqual(await h.store.getSettings(), {});
+  assert.deepEqual(await h.store.listSkills(), [
+    {
+      id: "summarize",
+      name: "Summarize",
+      description: "Summarize a document",
+      instructions: "Keep it concise.",
+      enabled: true,
+    },
+  ]);
+  assert.ok((await h.store.listWorkspaces()).some((workspace) => workspace.id === "project"));
+
+  const portable = await readJson<{
+    providerIdAliases: Record<string, string>;
+    skills: Array<{ id: string }>;
+  }>(h.portableFile);
+  assert.deepEqual(portable.providerIdAliases, {});
+  assert.deepEqual(
+    portable.skills.map(({ id }) => id),
+    ["summarize"],
+  );
+  assert.deepEqual(
+    (await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile)).byProvider,
+    {},
+  );
+});
+
 test("reads and writes survive a restart of the whole store", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
