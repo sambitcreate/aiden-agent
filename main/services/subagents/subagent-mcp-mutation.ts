@@ -336,7 +336,6 @@ async function closeBounded(session: SubagentMcpMutationRemoteSessionV2): Promis
       ),
       new Promise<boolean>((resolve) => {
         timer = setTimeout(() => resolve(false), SUBAGENT_MCP_MUTATION_CLOSE_GRACE_MS);
-        timer.unref?.();
       }),
     ]);
   } finally {
@@ -625,7 +624,6 @@ export function createSubagentMcpMutationBrokerV2(
     activeControllers.add(controller);
     const timeoutReason = new Error(UNKNOWN_OUTCOME);
     const timer = setTimeout(() => controller.abort(timeoutReason), timeoutMs);
-    timer.unref?.();
     const operationSignal = AbortSignal.any(
       [controller.signal, effect.signal, input.runSignal].filter(
         (candidate): candidate is AbortSignal => candidate !== undefined,
