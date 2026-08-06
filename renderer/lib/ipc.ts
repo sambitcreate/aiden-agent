@@ -101,6 +101,7 @@ export function onNotification<T>(method: string, handler: (payload: T) => void)
 
 export const appApi = {
   getInfo: () => invoke<AppInfo>("app:getInfo"),
+  resetOnboarding: () => invoke<boolean>("app:resetOnboarding"),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
