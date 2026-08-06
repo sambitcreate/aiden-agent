@@ -88,7 +88,10 @@ export function shouldShowOnboarding(): boolean {
   return localStorage.getItem(STORAGE_KEY) !== "true";
 }
 
-function makeProvider(choice: ProviderChoice, baseUrl: string): Omit<Provider, "hasKey"> | null {
+export function makeOnboardingProvider(
+  choice: ProviderChoice,
+  baseUrl: string,
+): Omit<Provider, "hasKey"> | null {
   if (choice === "openai-signin") return null;
   if (choice === "openai-key") {
     return {
@@ -178,7 +181,7 @@ export function OnboardingFlow() {
       return;
     }
     if (step === "provider") {
-      const provider = makeProvider(choice, baseUrl.trim());
+      const provider = makeOnboardingProvider(choice, baseUrl.trim());
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
         return;
