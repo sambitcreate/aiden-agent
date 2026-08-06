@@ -755,7 +755,13 @@ export class SubagentSupervisor {
         childId,
       };
     });
-    const remainingTreeMs = this.treeDeadlineMs - (this.now() - this.startedAt);
+    // `performance.now()` is intentionally high-resolution and therefore
+    // fractional. The V2 authority contract persists its deadline budget and
+    // correctly accepts only safe integers; normalize at this host-owned
+    // boundary so an otherwise valid launch cannot fail before admission.
+    const remainingTreeMs = Math.floor(
+      this.treeDeadlineMs - (this.now() - this.startedAt),
+    );
     if (remainingTreeMs <= 0) {
       // V2 must never project an unprepared run. Once an authority/projector
       // lifecycle is active, expiry is a pre-admission error with no run.
