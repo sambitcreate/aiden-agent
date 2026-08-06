@@ -47,6 +47,23 @@ test("model schema preserves exact server/tool pairings instead of cross-product
   assert.equal(validate(request("calendar", "lookup")), false);
 });
 
+test("two no-capability scouts need no model-supplied resource budget", () => {
+  const delegated = tool();
+  const validate = new Ajv().compile(delegated.parameters as object);
+  const noCapabilityRhymes = {
+    capabilities: { workspaceRead: false, web: false, mcp: [] },
+    tasks: [
+      { role: "scout", label: "Cat rhyme", task: "Write a four-line rhyme about a cat." },
+      { role: "scout", label: "Moon rhyme", task: "Write a four-line rhyme about the moon." },
+    ],
+  };
+
+  assert.equal(validate(noCapabilityRhymes), true);
+  assert.equal(validate({ ...noCapabilityRhymes, deadlineMs: 60_000 }), false);
+  assert.match(delegated.description, /resource limits, and run IDs are host-owned/u);
+  assert.match(delegated.description, /never send execution, limits, deadline, or budget fields/u);
+});
+
 test("Phase 5E exposes shell only after the complete positive production gate", async () => {
   const requestWithShell = {
     ...request("docs", "lookup"),
