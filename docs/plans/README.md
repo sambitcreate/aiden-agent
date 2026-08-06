@@ -14,6 +14,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Performance, Stability, Battery, and Efficiency](performance-stability-efficiency-plan.md) | Planned | Whole-app source audit is complete; implementation starts with instrumentation, durable state, and hard memory bounds.                                                       |
 | [Pi Provider Integration](pi-provider-integration-plan.md)                                  | Partial | Pi built-ins, stores, auth, native routing, refresh, and voice credential lookup ship; custom composition, provenance, scalable UX, and rollout cleanup remain.              |
 | [Slash Commands and Skill Invocation](slash-commands-and-skill-invocation-plan.md)          | Planned | Pi command, Aiden architecture, and composer UI audits are complete; implementation has not started.                                                                         |
+| [Subagent Orchestration Expansion](subagent-orchestration-expansion-plan.md)                | Active  | Phases 0–6, Phase 7A durable lifecycle, and the canonical Phase 7B1 storage seam are complete; app-lifetime coordinator activation is next.                                |
 | [Taracodlab Learnings](taracodlab-learnings-plan.md)                                        | Partial | Phases A–B and D, plus core Phase E, are implemented; the remaining roadmap is open.                                                                                         |
 
 ## Completed
