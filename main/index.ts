@@ -88,6 +88,7 @@ import {
   reconcileExternalMcpCredentialChanges,
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
+import { resetOnboardingData } from "./services/onboarding-reset.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -490,6 +491,56 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   }
 }
 
+async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
+  if (lifecycleCheckInFlight || window.isDestroyed()) return false;
+  lifecycleCheckInFlight = true;
+  let settingsPrepared = false;
+  try {
+    if (!(await authorizeProtectedAction(window, "close"))) return false;
+    try {
+      await computerUseSettings.shutdown();
+      settingsPrepared = true;
+    } catch (error) {
+      computerUseSettings.resumeAfterCancelledShutdown();
+      logger.error(
+        "main",
+        "Computer Use state was not durable; onboarding reset was cancelled.",
+        error,
+      );
+      if (!window.isDestroyed()) {
+        dialog.showMessageBoxSync(window, {
+          type: "error",
+          title: "Aiden couldn't save Computer Use",
+          message: "Onboarding was not reset because Computer Use could not be safely turned off.",
+          detail: "Check that the app can write its settings, then try again.",
+          buttons: ["Keep Aiden Open"],
+          defaultId: 0,
+          noLink: true,
+        });
+      }
+      return false;
+    }
+
+    await resetOnboardingData();
+    await window.webContents.session.clearStorageData({ storages: ["localstorage"] });
+    protectedAction = "quit";
+    if (!(await closeRendererBeforeShutdown(window))) {
+      protectedAction = null;
+      computerUseSettings.resumeAfterCancelledShutdown();
+      return false;
+    }
+
+    app.relaunch();
+    await shutdownAndQuit(true);
+    return shutdownStarted;
+  } catch (error) {
+    if (settingsPrepared) computerUseSettings.resumeAfterCancelledShutdown();
+    throw error;
+  } finally {
+    lifecycleCheckInFlight = false;
+  }
+}
+
 ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id)
     return false;
@@ -504,6 +555,12 @@ ipcMain.handle("app:setCloseGuard", (event, value: unknown) => {
     saving: input.saving === true,
   };
   return true;
+});
+
+ipcMain.handle("app:resetOnboarding", async (event) => {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || event.sender.id !== window.webContents.id) return false;
+  return requestOnboardingReset(window);
 });
 
 ipcMain.handle("app:getUpdateState", (event) => {
