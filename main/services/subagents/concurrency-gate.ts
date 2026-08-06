@@ -1,5 +1,7 @@
 export type SubagentDeployment = "hosted" | "local";
 
+export const MAX_QUEUED_SUBAGENT_CHILDREN = 32;
+
 interface Waiter {
   deployment: SubagentDeployment;
   signal?: AbortSignal;
@@ -15,7 +17,13 @@ export class SubagentConcurrencyGate {
   private readonly queue: Waiter[] = [];
   private closed = false;
 
-  constructor(limits: Record<SubagentDeployment, number> = { hosted: 2, local: 1 }) {
+  constructor(
+    limits: Record<SubagentDeployment, number> = { hosted: 2, local: 1 },
+    private readonly maxQueued = MAX_QUEUED_SUBAGENT_CHILDREN,
+  ) {
+    if (!Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 1_024) {
+      throw new Error("Invalid subagent concurrency queue limit.");
+    }
     this.limits = {
       hosted: Math.max(1, Math.floor(limits.hosted)),
       local: Math.max(1, Math.floor(limits.local)),
@@ -24,6 +32,10 @@ export class SubagentConcurrencyGate {
 
   get activeCount(): number {
     return this.active.hosted + this.active.local;
+  }
+
+  get queuedCount(): number {
+    return this.queue.length;
   }
 
   private dispatch(): void {
@@ -53,6 +65,9 @@ export class SubagentConcurrencyGate {
       return Promise.reject(
         signal.reason instanceof Error ? signal.reason : new Error("Subagent task cancelled."),
       );
+    }
+    if (this.queue.length >= this.maxQueued) {
+      return Promise.reject(new Error("The app-wide subagent queue limit was reached."));
     }
     return new Promise<() => void>((resolve, reject) => {
       const waiter: Waiter = { deployment, signal, resolve, reject };
