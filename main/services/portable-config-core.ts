@@ -870,6 +870,14 @@ export function createPortableConfigStores(
   testHooks: {
     beforeLocalProtectedPublish?: () => Promise<void>;
     beforeLegacyArchive?: () => Promise<void>;
+    beforePortableExternalCacheCommit?: (
+      previous: PortableConfigShape | null,
+      next: PortableConfigShape,
+    ) => void;
+    beforePortableWritePublish?: (
+      previous: PortableConfigShape | null,
+      next: PortableConfigShape,
+    ) => void;
   } = {},
 ) {
   const portable = new DataStore<PortableConfigShape>(
@@ -884,6 +892,9 @@ export function createPortableConfigStores(
       rejectCorruptWrite: true,
       rejectUnsafeWrite: true,
       rejectExternalChanges: true,
+      beforeExternalCacheCommit:
+        testHooks.beforePortableExternalCacheCommit,
+      beforeWritePublish: testHooks.beforePortableWritePublish,
     },
   );
   const settings = new DataStore<SettingsShape>(SETTINGS_FILENAME, { settings: {} }, localRoot, {
