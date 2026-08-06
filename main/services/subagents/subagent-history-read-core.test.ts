@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SubagentRunSnapshotV1 } from "../../../renderer/shared/subagent-runs.js";
+import type {
+  SubagentRunSnapshotV1,
+  SubagentRunSnapshotV2,
+} from "../../../renderer/shared/subagent-runs.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import {
   parseSubagentHistoryRequestIds,
+  readSubagentHistoryDetailForOwner,
   readSubagentHistoryForOwner,
 } from "./subagent-history-read-core.js";
 
@@ -209,5 +213,63 @@ test("an active exact owner can read its referenced snapshot", async () => {
   });
 
   assert.deepEqual(result, snapshot());
+  assert.equal(owner.removed(), true);
+});
+
+test("history detail remains owner-checked across bounded effect projection", async () => {
+  const owner = fakeOwner();
+  const result = await readSubagentHistoryDetailForOwner(
+    owner.owner,
+    "chat-1",
+    "run-1",
+    {
+      getChat: async () => chat,
+      getSnapshot: async () => snapshot(),
+      getEffectActivity: async () => [{
+        version: 1,
+        kind: "shell",
+        state: "unknown",
+        label: "Command outcome unknown. Check the workspace before retrying.",
+        updatedAt: 3,
+      }],
+    },
+  );
+  assert.equal(result?.snapshot.runId, "run-1");
+  assert.equal(result?.effects[0]?.state, "unknown");
+
+  const invalidated = fakeOwner();
+  const effects = deferred<[]>();
+  const reading = readSubagentHistoryDetailForOwner(
+    invalidated.owner,
+    "chat-1",
+    "run-1",
+    {
+      getChat: async () => chat,
+      getSnapshot: async () => snapshot(),
+      getEffectActivity: () => effects.promise,
+    },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  invalidated.invalidate();
+  effects.resolve([]);
+  await assert.rejects(reading, /renderer document is no longer active/u);
+});
+
+test("an active exact owner retains native V2 context metadata", async () => {
+  const owner = fakeOwner();
+  const v2: SubagentRunSnapshotV2 = {
+    ...snapshot(),
+    version: 2,
+    depth: 1,
+    execution: "foreground",
+    context: "fork",
+    authorityRevision: 1,
+  };
+  const result = await readSubagentHistoryForOwner(owner.owner, "chat-1", "run-1", {
+    getChat: async () => chat,
+    getSnapshot: async () => v2,
+  });
+
+  assert.deepEqual(result, v2);
   assert.equal(owner.removed(), true);
 });
