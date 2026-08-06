@@ -39,6 +39,13 @@ export interface DataStoreOptions<T> {
   afterProtectedPublish?: () => Promise<void>;
   /** Test seam for holding a disk read before it becomes the active snapshot. */
   beforeLoadCommit?: () => Promise<void>;
+  /**
+   * Synchronous authority fence immediately before an externally reloaded
+   * value replaces the in-memory cache. It is never called for app writes.
+   */
+  beforeExternalCacheCommit?: (previous: T | null, next: T) => void;
+  /** Synchronous authority fence immediately before an app write is published. */
+  beforeWritePublish?: (previous: T | null, next: T) => void;
 }
 
 export class DataStoreExternalChangeError extends Error {
@@ -75,6 +82,7 @@ export class DataStore<T> {
   private corrupt = false;
   /** True when valid JSON was normalized for reads but must not be overwritten. */
   private unsafe = false;
+  private externalReloadPrevious: T | null | undefined;
 
   constructor(
     private readonly filename: string,
@@ -116,7 +124,16 @@ export class DataStore<T> {
           const parsed = JSON.parse(data) as unknown;
           await this.options.beforeLoadCommit?.();
           this.unsafe = this.options.isSafe ? !this.options.isSafe(parsed) : false;
-          this.cache = this.options.normalize ? this.options.normalize(parsed) : (parsed as T);
+          const next = this.options.normalize
+            ? this.options.normalize(parsed)
+            : (parsed as T);
+          if (this.externalReloadPrevious !== undefined) {
+            this.options.beforeExternalCacheCommit?.(
+              this.externalReloadPrevious,
+              next,
+            );
+          }
+          this.cache = next;
         } catch (error) {
           // A missing file is the ordinary first-run path. A file that exists
           // but will not parse is the user's data, and a later write must not
@@ -137,7 +154,14 @@ export class DataStore<T> {
           }
           this.diskSnapshot = corrupt ? bytes : null;
           this.unsafe = false;
-          this.cache = structuredClone(this.defaultValue);
+          const next = structuredClone(this.defaultValue);
+          if (this.externalReloadPrevious !== undefined) {
+            this.options.beforeExternalCacheCommit?.(
+              this.externalReloadPrevious,
+              next,
+            );
+          }
+          this.cache = next;
         }
         this.corrupt = corrupt;
         return this.cache;
@@ -423,6 +447,10 @@ export class DataStore<T> {
         await stagedHandle.close();
       }
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+      this.options.beforeWritePublish?.(
+        this.cache === null ? null : structuredClone(this.cache),
+        data,
+      );
       if (this.options.rejectExternalChanges) {
         await this.publishProtected(staged, destination, isCurrent);
       } else {
@@ -506,11 +534,17 @@ export class DataStore<T> {
     // before invalidating its promise so it cannot commit stale state after this
     // reload has read newer bytes.
     if (this.loadPromise) await this.loadPromise;
-    const before = this.cache === null ? undefined : JSON.stringify(this.cache);
+    const previous = this.cache === null ? null : structuredClone(this.cache);
+    const before = previous === null ? undefined : JSON.stringify(previous);
     this.cache = null;
     this.loadPromise = null;
-    const next = await this.load();
-    return before !== JSON.stringify(next);
+    this.externalReloadPrevious = previous;
+    try {
+      const next = await this.load();
+      return before !== JSON.stringify(next);
+    } finally {
+      this.externalReloadPrevious = undefined;
+    }
   }
 }
 
