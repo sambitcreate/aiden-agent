@@ -1,6 +1,6 @@
 import * as React from "react";
 
-import { Button, Dialog, Field, Input, Text, toast } from "../ui";
+import { Button, Dialog, Field, Input, Text, toast, type DialogLayer } from "../ui";
 import { providersApi } from "../../lib/ipc";
 import {
   createProviderAuthSession,
@@ -14,6 +14,7 @@ interface BuiltinProviderEditorProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
+  layer?: DialogLayer;
 }
 
 function eventCopy(event: ProviderAuthEvent): string {
@@ -33,6 +34,7 @@ export function BuiltinProviderEditor({
   open,
   onOpenChange,
   onSaved,
+  layer,
 }: BuiltinProviderEditorProps) {
   const sessionRef = React.useRef<ProviderAuthSession | null>(null);
   const [prompt, setPrompt] = React.useState<ProviderAuthPrompt | null>(null);
@@ -149,6 +151,7 @@ export function BuiltinProviderEditor({
     <Dialog
       open={open}
       onOpenChange={close}
+      layer={layer}
       title={`Set up ${provider.label}`}
       description="Pi owns this provider's endpoint, models, credentials, and request transport."
       confirmLabel="Continue"
