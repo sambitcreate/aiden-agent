@@ -675,6 +675,12 @@ test("metadata policy preserves provenance and rejects drift, unknown xattrs, an
   const root = await fixture(t, "aiden-file-mutator-metadata-");
   const ordinary = path.join(root, "ordinary.txt");
   await writeFile(ordinary, "original\n");
+  await execFileAsync("/usr/bin/xattr", [
+    "-w",
+    "com.apple.provenance",
+    "fixture-provenance",
+    ordinary,
+  ]);
   const before = (
     await execFileAsync("/usr/bin/xattr", ["-px", "com.apple.provenance", ordinary])
   ).stdout.trim();
