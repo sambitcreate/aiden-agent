@@ -24,12 +24,37 @@ const AppCapabilitiesContext = React.createContext<AppCapabilities>(DISABLED_APP
 
 export function AppCapabilitiesProvider({
   capabilities,
+  refresh,
   children,
-}: React.PropsWithChildren<{ capabilities: AppCapabilities }>) {
+}: React.PropsWithChildren<{
+  capabilities: AppCapabilities;
+  refresh?: () => Promise<AppCapabilities>;
+}>) {
+  const [current, setCurrent] = React.useState(capabilities);
+
+  React.useEffect(() => setCurrent(capabilities), [capabilities]);
+
+  React.useEffect(() => {
+    if (!refresh) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const update = async () => {
+      try {
+        const next = await refresh();
+        if (!cancelled) setCurrent(next);
+      } catch {
+        if (!cancelled) timer = setTimeout(() => void update(), 1_000);
+      }
+    };
+    void update();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [refresh]);
+
   return (
-    <AppCapabilitiesContext.Provider value={capabilities}>
-      {children}
-    </AppCapabilitiesContext.Provider>
+    <AppCapabilitiesContext.Provider value={current}>{children}</AppCapabilitiesContext.Provider>
   );
 }
 
