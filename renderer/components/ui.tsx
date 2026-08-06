@@ -723,6 +723,8 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
   );
 }
 
+export type DialogLayer = "default" | "onboarding";
+
 type DialogProps = React.PropsWithChildren<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -738,6 +740,7 @@ type DialogProps = React.PropsWithChildren<{
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
   size?: "large";
+  layer?: DialogLayer;
 }>;
 
 export function Dialog({
@@ -755,6 +758,7 @@ export function Dialog({
   onConfirm,
   returnFocus,
   size,
+  layer = "default",
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(dismissDisabled || cancelDisabled || busy);
@@ -769,7 +773,10 @@ export function Dialog({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className="fixed inset-0 z-50 bg-transparent"
+          className={cn(
+            "fixed inset-0 bg-transparent",
+            layer === "onboarding" ? "z-[70]" : "z-50",
+          )}
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -784,7 +791,8 @@ export function Dialog({
           onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
+            "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none",
+            layer === "onboarding" ? "z-[70]" : "z-50",
             size === "large" && "w-[min(92vw,680px)]",
           )}
         >
