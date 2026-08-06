@@ -4,7 +4,10 @@ import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
 
 async function source(relativePath: string): Promise<string> {
   return fs.readFile(path.join(REPO_ROOT, relativePath), "utf-8");
@@ -21,17 +24,30 @@ function ipcHandlerStart(contents: string, channel: string): number {
 function ipcHandlerSource(contents: string, channel: string): string {
   const channelIndex = contents.indexOf(`"${channel}"`);
   const start = ipcHandlerStart(contents, channel);
-  const next = contents.indexOf("ipcMain.handle", channelIndex + channel.length + 2);
+  const next = contents.indexOf(
+    "ipcMain.handle",
+    channelIndex + channel.length + 2,
+  );
   return contents.slice(start, next === -1 ? undefined : next);
 }
 
 test("live child snapshots are durable before owner-bound renderer delivery", async () => {
   const llm = await source("main/services/llm-client.ts");
-  const persist = llm.indexOf("await subagentRunStore.upsert(snapshot)");
-  const notify = llm.indexOf('sendGeneration(streamId, "chat:subagents"');
+  const prepare = llm.indexOf(
+    "prepareSnapshot: (snapshot) => subagentPersistence.prepare(snapshot)",
+  );
+  const persist = llm.indexOf("await subagentPersistence.upsert(snapshot)");
+  const notify = llm.indexOf(
+    'sendGeneration(streamId, "chat:subagents"',
+    persist,
+  );
+  assert.ok(prepare >= 0);
   assert.ok(persist >= 0);
   assert.ok(notify > persist);
-  assert.match(llm, /await subagentSupervisor\?\.flush\(\);[\s\S]{0,500}chatStore\.appendMessage/u);
+  assert.match(
+    llm,
+    /await subagentSupervisor\?\.flush\(\);[\s\S]{0,500}chatStore\.appendMessage/u,
+  );
 });
 
 test("historical inspector reads require a live document and matching chat owner", async () => {
@@ -41,7 +57,8 @@ test("historical inspector reads require a live document and matching chat owner
     source("renderer/lib/ipc.ts"),
   ]);
   assert.match(handler, /rendererDocumentOwner\(/u);
-  assert.match(handler, /readSubagentHistoryForOwner\(/u);
+  assert.match(handler, /readSubagentHistoryDetailForOwner\(/u);
+  assert.match(handler, /listEffectActivityForRun/u);
   assert.match(handler, /owner\.isDestroyed\(\)/u);
   assert.match(historyRead, /owner\.onInvalidated\(\(\) => undefined\)/u);
   assert.match(historyRead, /finally \{\s+removeOwnerInvalidation\(\);/u);
@@ -55,7 +72,7 @@ test("historical inspector reads require a live document and matching chat owner
   assert.doesNotMatch(handler, /broadcast\(/u);
   assert.doesNotMatch(handler, /throw error|error\.message/u);
   assert.match(handler, /Aiden could not load subagent history/u);
-  assert.match(rendererIpc, /parseSubagentRunSnapshotV1\(/u);
+  assert.match(rendererIpc, /parseSubagentRunSnapshot\(/u);
   assert.match(rendererIpc, /snapshot\?\.generationId === streamId/u);
 });
 
@@ -67,17 +84,21 @@ test("run-store failures keep filesystem details out of renderer-visible errors"
   ]);
   assert.match(llm, /error: "local storage failed"/u);
   assert.match(historyHandler, /Aiden could not load subagent history/u);
-  assert.match(chatHandler, /Aiden could not delete this chat's subagent history/u);
+  assert.match(
+    chatHandler,
+    /Aiden could not delete this chat's subagent history/u,
+  );
 });
 
 test("private run-store I/O is descriptor-bound, generation-checked, and packaged", async () => {
-  const [store, transport, nativeStore, packageJson, verifier] = await Promise.all([
-    source("main/services/subagents/subagent-run-store-core.ts"),
-    source("main/services/subagents/subagent-run-store-io.ts"),
-    source("native/subagent-run-store/main.c"),
-    source("package.json"),
-    source("scripts/verify-macos-package.mjs"),
-  ]);
+  const [store, transport, nativeStore, packageJson, verifier] =
+    await Promise.all([
+      source("main/services/subagents/subagent-run-store-core.ts"),
+      source("main/services/subagents/subagent-run-store-io.ts"),
+      source("native/subagent-run-store/main.c"),
+      source("package.json"),
+      source("scripts/verify-macos-package.mjs"),
+    ]);
   assert.match(store, /\(await storage\(\)\)\.cleanup\(\)/u);
   assert.match(store, /\(await storage\(\)\)\.read\(\)/u);
   assert.match(store, /\.write\(generation, contents\)/u);
@@ -112,8 +133,14 @@ test("chat removal deletes private child history before the chat can disappear",
   ]);
   const beginDeletion = handler.indexOf("llmClient.beginChatDeletion(chatId)");
   const cancel = handler.indexOf("llmClient.cancelChat(chatId)");
-  const deleteRuns = handler.indexOf("await subagentRunStore.deleteChat(chatId)", cancel);
-  const deleteChat = handler.indexOf("await chatStore.remove(chatId)", deleteRuns);
+  const deleteRuns = handler.indexOf(
+    "await subagentRunStore.deleteChat(chatId)",
+    cancel,
+  );
+  const deleteChat = handler.indexOf(
+    "await chatStore.remove(chatId)",
+    deleteRuns,
+  );
   const completeDeletion = handler.indexOf(
     "await subagentRunStore.completeChatDeletion(chatId)",
     deleteChat,
@@ -134,7 +161,9 @@ test("chat removal deletes private child history before the chat can disappear",
   assert.ok(pendingDeletionCheck > completeDeletion);
   assert.ok(releaseAdmission > pendingDeletionCheck);
 
-  const admissionCheck = llm.indexOf("chatDeletionGate.isDeleting(params.chatId)");
+  const admissionCheck = llm.indexOf(
+    "chatDeletionGate.isDeleting(params.chatId)",
+  );
   const registerInitialization = llm.indexOf(
     "initializing.set(streamId, initialization)",
     admissionCheck,
@@ -146,7 +175,10 @@ test("chat removal deletes private child history before the chat can disappear",
   assert.ok(admissionCheck >= 0);
   assert.ok(registerInitialization > admissionCheck);
   assert.ok(requireExistingChat > registerInitialization);
-  assert.doesNotMatch(handler.slice(beginDeletion, deleteRuns), /if \(!\(await chatStore\.get/u);
+  assert.doesNotMatch(
+    handler.slice(beginDeletion, deleteRuns),
+    /if \(!\(await chatStore\.get/u,
+  );
 });
 
 test("the cancellation tree covers renderer invalidation, workspace changes, and shutdown", async () => {
@@ -155,9 +187,18 @@ test("the cancellation tree covers renderer invalidation, workspace changes, and
     source("main/handlers/workspaces.ts"),
     source("main/index.ts"),
   ]);
-  assert.match(llm, /owner\.onInvalidated\(\(\) => \{\s+this\.cancel\(streamId\);/u);
-  assert.match(workspaces, /await llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u);
-  assert.match(workspaces, /await llmClient\.cancelWorkspaceAndSettle\(workspaceId\)/u);
+  assert.match(
+    llm,
+    /owner\.onInvalidated\(\(\) => \{\s+this\.cancel\(streamId\);/u,
+  );
+  assert.match(
+    workspaces,
+    /await llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u,
+  );
+  assert.match(
+    workspaces,
+    /await llmClient\.cancelWorkspaceAndSettle\(workspaceId\)/u,
+  );
   assert.match(llm, /subagentRuntimeRegistry\.abortGeneration\(streamId\)/u);
   assert.match(llm, /subagentRuntimeRegistry\.abortChat\(chatId\)/u);
   assert.match(llm, /subagentRuntimeRegistry\.hasChatChildren\(chatId\)/u);
@@ -180,8 +221,13 @@ test("empty-chat workspace moves serialize against generation authority and term
     source("main/services/chat-store-core.ts"),
   ]);
 
-  const moveHandler = handler.indexOf('ipcMain.handle(\n    "chats:moveEmptyToWorkspace"');
-  const beginMove = handler.indexOf("llmClient.beginChatWorkspaceChange(chatId)", moveHandler);
+  const moveHandler = handler.indexOf(
+    'ipcMain.handle(\n    "chats:moveEmptyToWorkspace"',
+  );
+  const beginMove = handler.indexOf(
+    "llmClient.beginChatWorkspaceChange(chatId)",
+    moveHandler,
+  );
   const workspaceLookup = handler.indexOf(
     "await configStore.getWorkspace(nextWorkspaceId)",
     beginMove,
@@ -195,7 +241,9 @@ test("empty-chat workspace moves serialize against generation authority and term
   assert.ok(workspaceLookup > beginMove);
   assert.ok(moveCommit > workspaceLookup);
 
-  const admissionCheck = llm.indexOf("chatWorkspaceMutationGate.isChanging(params.chatId)");
+  const admissionCheck = llm.indexOf(
+    "chatWorkspaceMutationGate.isChanging(params.chatId)",
+  );
   const registerInitialization = llm.indexOf(
     "initializing.set(streamId, initialization)",
     admissionCheck,
@@ -228,21 +276,31 @@ test("renderer message appends serialize against detached terminal persistence",
     "llmClient.beginChatTurn(chatId, turnId, owner.documentId)",
     appendHandler,
   );
-  const persist = handler.indexOf("await chatStore.appendMessage(", beginAppend);
-  const failureRelease = handler.indexOf("if (!appended) turn.release();", persist);
+  const persist = handler.indexOf(
+    "await chatStore.appendMessage(",
+    beginAppend,
+  );
+  const failureRelease = handler.indexOf(
+    "if (!appended) turn.release();",
+    persist,
+  );
 
   assert.ok(appendHandler >= 0);
   assert.ok(beginAppend > appendHandler);
   assert.ok(persist > beginAppend);
   assert.ok(failureRelease > persist);
   const beginChatTurn = llm.indexOf(
-    "beginChatTurn(chatId: string, turnId: string, ownerId: string)",
+    "beginChatTurn(",
+    llm.indexOf("Claim one append-to-generation turn"),
   );
   const claimTurn = llm.indexOf("chatTurnAdmission.tryBegin(", beginChatTurn);
   assert.ok(beginChatTurn >= 0);
   assert.ok(claimTurn > beginChatTurn);
-  const handoff = llm.indexOf("chatTurnAdmission.handoff(params.chatId, turnId, owner.documentId");
-  const registerGeneration = llm.indexOf("initializing.set(streamId, initialization)", handoff);
+  const handoff = llm.indexOf("chatTurnAdmission.handoff(");
+  const registerGeneration = llm.indexOf(
+    "initializing.set(streamId, initialization)",
+    handoff,
+  );
   assert.ok(handoff >= 0);
   assert.ok(registerGeneration > handoff);
   assert.match(generationHandler, /turnId: messageTurnId/u);
@@ -267,7 +325,10 @@ test("renderer turn tokens cross append and generation IPC without an admission 
     source("renderer/components/assistant/use-assistant-chat.ts"),
   ]);
 
-  assert.match(ipc, /appendMessage:[\s\S]{0,500}turnId: string[\s\S]{0,260}"chats:appendMessage"/u);
+  assert.match(
+    ipc,
+    /appendMessage:[\s\S]{0,500}turnId: string[\s\S]{0,260}"chats:appendMessage"/u,
+  );
   assert.match(
     ipc,
     /startGeneration\([\s\S]{0,180}messageTurnId: string[\s\S]{0,220}const streamId = messageTurnId/u,
@@ -296,7 +357,7 @@ test("main announces normalized settlement only after generation ownership exits
   assert.equal([...llm.matchAll(activeExit)].length, 2);
   assert.match(
     llm,
-    /const normalizedWorkspaceId = persistedChatWorkspaceId\(workspaceId \?\? fallbackWorkspaceId\)/u,
+    /const normalizedWorkspaceId = persistedChatWorkspaceId\(\s*workspaceId \?\? fallbackWorkspaceId,?\s*\)/u,
   );
   assert.match(
     llm,
@@ -315,9 +376,18 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
     "llmClient.isChatOwnedByInactiveRenderer(chatId)",
     getHandler,
   );
-  const idleWait = handler.indexOf("await llmClient.waitForChatIdle(chatId)", inactiveCheck);
-  const read = handler.indexOf("const chat = await chatStore.get(chatId)", idleWait);
-  const response = handler.indexOf("reconciliation: reconciliationRequired", read);
+  const idleWait = handler.indexOf(
+    "await llmClient.waitForChatIdle(chatId)",
+    inactiveCheck,
+  );
+  const read = handler.indexOf(
+    "const chat = await chatStore.get(chatId)",
+    idleWait,
+  );
+  const response = handler.indexOf(
+    "reconciliation: reconciliationRequired",
+    read,
+  );
 
   assert.ok(getHandler >= 0);
   assert.ok(inactiveCheck > getHandler);
@@ -332,16 +402,33 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
     handler,
     /reconciliationRequired \|\|= llmClient\.isChatOwnedByInactiveRenderer\(chatId\)/u,
   );
-  assert.match(
-    llm,
-    /isChatOwnedByInactiveRenderer\(chatId: string\)[\s\S]{0,520}entry\.chatId === chatId && entry\.owner\.id !== 0 && entry\.owner\.isDestroyed\(\)[\s\S]{0,320}entry\.chatId === chatId && entry\.owner\.id !== 0 && entry\.owner\.isDestroyed\(\)/u,
+  const inactiveOwnerStart = llm.indexOf(
+    "isChatOwnedByInactiveRenderer(chatId: string)",
+  );
+  const inactiveOwnerEnd = llm.indexOf(
+    "async waitForChatIdle",
+    inactiveOwnerStart,
+  );
+  assert.ok(inactiveOwnerStart >= 0);
+  assert.ok(inactiveOwnerEnd > inactiveOwnerStart);
+  const inactiveOwnerMethod = llm.slice(inactiveOwnerStart, inactiveOwnerEnd);
+  assert.equal(
+    [
+      ...inactiveOwnerMethod.matchAll(
+        /entry\.chatId === chatId\s*&&\s*entry\.owner\.id !== 0\s*&&\s*entry\.owner\.isDestroyed\(\)/gu,
+      ),
+    ].length,
+    2,
   );
 });
 
 test("application startup reconciles private runs and worktree deletions before UI and schedules", async () => {
   const main = await source("main/index.ts");
   const initialize = main.indexOf("await subagentRunStore.initialize()");
-  const reconcileDeletions = main.indexOf("await reconcilePendingChatDeletions(", initialize);
+  const reconcileDeletions = main.indexOf(
+    "await reconcilePendingChatDeletions(",
+    initialize,
+  );
   const reconcileWorktrees = main.indexOf(
     "await reconcilePendingManagedWorktreeDeletions({",
     reconcileDeletions,
@@ -350,8 +437,14 @@ test("application startup reconciles private runs and worktree deletions before 
     "await gitFinalizeOrphanedManagedWorktreeDeletionJournals(",
     reconcileWorktrees,
   );
-  const createWindow = main.indexOf("await createMainWindow()", finalizeOrphanedJournals);
-  const startSchedules = main.indexOf("await scheduleService.start()", createWindow);
+  const createWindow = main.indexOf(
+    "await createMainWindow()",
+    finalizeOrphanedJournals,
+  );
+  const startSchedules = main.indexOf(
+    "await scheduleService.start()",
+    createWindow,
+  );
   assert.ok(initialize >= 0);
   assert.ok(reconcileDeletions > initialize);
   assert.ok(reconcileWorktrees > reconcileDeletions);
@@ -365,7 +458,9 @@ test("persisted chat workspace ownership closes generation admission before setu
     source("main/services/llm-client.ts"),
     source("main/handlers/workspaces.ts"),
   ]);
-  const chatRead = llm.indexOf("const chat = await chatStore.get(params.chatId)");
+  const chatRead = llm.indexOf(
+    "const chat = await chatStore.get(params.chatId)",
+  );
   const authority = llm.indexOf("authoritativeChatWorkspaceId(", chatRead);
   const bindInitialization = llm.indexOf(
     "initialization.workspaceId = authoritativeWorkspaceId",
@@ -379,7 +474,9 @@ test("persisted chat workspace ownership closes generation admission before setu
     "{ ...params, workspaceId: authoritativeWorkspaceId }",
     admissionCheck,
   );
-  const registerInitialization = llm.indexOf("initializing.set(streamId, initialization)");
+  const registerInitialization = llm.indexOf(
+    "initializing.set(streamId, initialization)",
+  );
   assert.ok(registerInitialization >= 0);
   assert.ok(chatRead > registerInitialization);
   assert.ok(authority > chatRead);
@@ -400,7 +497,10 @@ test("persisted chat workspace ownership closes generation admission before setu
     "await llmClient.cancelWorkspaceAndSettle(existing.id)",
     beginMutation,
   );
-  const saveWorkspace = workspaces.indexOf("configStore.saveWorkspace(next)", cancelGeneration);
+  const saveWorkspace = workspaces.indexOf(
+    "configStore.saveWorkspace(next)",
+    cancelGeneration,
+  );
   assert.ok(updateHandler >= 0);
   assert.ok(beginMutation > updateHandler);
   assert.ok(drainWorkspaceOperations > beginMutation);
@@ -420,9 +520,18 @@ test("managed worktree deletion and terminal creation share workspace mutation a
     source("main/services/terminal.ts"),
     source("main/services/git.ts"),
   ]);
-  const deleteHandler = ipcHandlerStart(workspaces, "git:deleteManagedWorktree");
-  const beginMutation = workspaces.indexOf("workspaceMutationGate.begin(id)", deleteHandler);
-  const destructiveDelete = workspaces.indexOf("gitDeleteManagedWorktree(", deleteHandler);
+  const deleteHandler = ipcHandlerStart(
+    workspaces,
+    "git:deleteManagedWorktree",
+  );
+  const beginMutation = workspaces.indexOf(
+    "workspaceMutationGate.begin(id)",
+    deleteHandler,
+  );
+  const destructiveDelete = workspaces.indexOf(
+    "gitDeleteManagedWorktree(",
+    deleteHandler,
+  );
   assert.ok(deleteHandler >= 0);
   assert.ok(beginMutation > deleteHandler);
   assert.ok(destructiveDelete > beginMutation);
@@ -443,14 +552,23 @@ test("managed worktree deletion and terminal creation share workspace mutation a
   assert.match(terminal, /workspaceMutationGate\.admit\(workspaceId\)/u);
   assert.match(terminal, /rendererDocumentOwner\(/u);
   assert.match(terminal, /owner\.onInvalidated\(onDestroyed\)/u);
-  assert.match(terminal, /async \(\) => \{[\s\S]+const latest = await workspaceFolder/u);
+  assert.match(
+    terminal,
+    /async \(\) => \{[\s\S]+const latest = await workspaceFolder/u,
+  );
   const revalidate = terminalService.indexOf("await revalidateAccess?.()");
-  const finalAbortCheck = terminalService.indexOf("if (ownerInvalidated())", revalidate);
+  const finalAbortCheck = terminalService.indexOf(
+    "if (ownerInvalidated())",
+    revalidate,
+  );
   const spawn = terminalService.indexOf(
     "const pty = (this.options.spawnPty ?? spawn)(",
     finalAbortCheck,
   );
-  const postSpawnCheck = terminalService.indexOf("if (ownerInvalidated())", spawn);
+  const postSpawnCheck = terminalService.indexOf(
+    "if (ownerInvalidated())",
+    spawn,
+  );
   assert.ok(revalidate >= 0);
   assert.ok(finalAbortCheck > revalidate);
   assert.ok(spawn > finalAbortCheck);
@@ -484,13 +602,25 @@ test("managed worktree cleanup is root-bound, resumable, and packaged as signed 
   );
   assert.doesNotMatch(git, /fs\.rm\(removal\.(?:checkout|gitDir)/u);
   assert.match(remover, /shell: false/u);
-  assert.match(remover, /const expectedAuthorizationName = `\.aiden-authorizing-\$\{token\}`/u);
-  assert.match(remover, /identity\.authorize\?\.\(scannedPath, scannedManifestDigest\)/u);
+  assert.match(
+    remover,
+    /const expectedAuthorizationName = `\.aiden-authorizing-\$\{token\}`/u,
+  );
+  assert.match(
+    remover,
+    /identity\.authorize\?\.\(scannedPath, scannedManifestDigest\)/u,
+  );
   assert.match(remover, /child\.stdin\.end\("abort\\n"\)/u);
   assert.match(remover, /"--manifest-mode"/u);
-  assert.match(remover, /path\.basename\(binary\) !== "aiden-worktree-remover-test"/u);
+  assert.match(
+    remover,
+    /path\.basename\(binary\) !== "aiden-worktree-remover-test"/u,
+  );
   assert.match(remover, /managedWorktreeRemovalManifestPresent/u);
-  assert.match(remover, /await syncDirectory\(path\.dirname\(manifestPath\)\)/u);
+  assert.match(
+    remover,
+    /await syncDirectory\(path\.dirname\(manifestPath\)\)/u,
+  );
   assert.match(remover, /`\$\{manifestPath\}\.finalizing`/u);
   assert.match(remover, /`\$\{manifestPath\}\.deleting`/u);
   assert.match(
@@ -515,32 +645,52 @@ test("managed worktree cleanup is root-bound, resumable, and packaged as signed 
   assert.match(nativeRemover, /MANIFEST_FINALIZING_SUFFIX "\.finalizing"/u);
   assert.match(nativeRemover, /MANIFEST_DELETING_SUFFIX "\.deleting"/u);
   assert.match(nativeRemover, /"finalize-manifest"/u);
-  assert.match(nativeRemover, /finalize_manifest_command[\s\S]+O_DIRECTORY \| O_NOFOLLOW/u);
+  assert.match(
+    nativeRemover,
+    /finalize_manifest_command[\s\S]+O_DIRECTORY \| O_NOFOLLOW/u,
+  );
   assert.match(nativeRemover, /inspect_manifest_stages/u);
   assert.match(
     nativeRemover,
     /renameatx_np\(parent_fd, manifest_name, parent_fd, finalizing_name,[\s\S]+verify_manifest_capture[\s\S]+renameatx_np\(parent_fd, finalizing_name, parent_fd, deleting_name,/u,
   );
-  const captureNameStart = nativeRemover.indexOf("static int make_capture_name");
+  const captureNameStart = nativeRemover.indexOf(
+    "static int make_capture_name",
+  );
   const captureNameEnd = nativeRemover.indexOf(
     "static int capture_validated_entry",
     captureNameStart,
   );
   assert.ok(captureNameStart >= 0 && captureNameEnd > captureNameStart);
-  const captureNameSource = nativeRemover.slice(captureNameStart, captureNameEnd);
+  const captureNameSource = nativeRemover.slice(
+    captureNameStart,
+    captureNameEnd,
+  );
   assert.match(nativeRemover, /#define CAPTURE_PREFIX "\.aiden-capture-"/u);
   assert.match(captureNameSource, /unsigned char random\[16\]/u);
-  assert.match(captureNameSource, /arc4random_buf\(random, sizeof\(random\)\)/u);
+  assert.match(
+    captureNameSource,
+    /arc4random_buf\(random, sizeof\(random\)\)/u,
+  );
   assert.equal(nativeRemover.match(/arc4random_buf/gu)?.length, 1);
   const entryBindingStart = nativeRemover.indexOf("entry_binding(");
-  const entryBindingEnd = nativeRemover.indexOf("static int root_binding", entryBindingStart);
+  const entryBindingEnd = nativeRemover.indexOf(
+    "static int root_binding",
+    entryBindingStart,
+  );
   assert.ok(entryBindingStart >= 0 && entryBindingEnd > entryBindingStart);
-  assert.doesNotMatch(nativeRemover.slice(entryBindingStart, entryBindingEnd), /arc4random/u);
+  assert.doesNotMatch(
+    nativeRemover.slice(entryBindingStart, entryBindingEnd),
+    /arc4random/u,
+  );
   assert.match(
     nativeRemover,
     /renameatx_np\(directory_fd, source_name, directory_fd, capture_name,[\s\S]+RENAME_EXCL/u,
   );
-  assert.match(remover, /process\.resourcesPath[\s\S]+"Helpers"[\s\S]+"aiden-worktree-remover"/u);
+  assert.match(
+    remover,
+    /process\.resourcesPath[\s\S]+"Helpers"[\s\S]+"aiden-worktree-remover"/u,
+  );
   assert.match(
     packageJson,
     /"from": "build\/native\/aiden-worktree-remover"[\s\S]+"to": "Helpers\/aiden-worktree-remover"/u,
@@ -563,7 +713,11 @@ test("every workspace path capability is renderer-document owned and mutation ad
   assert.doesNotMatch(workspaces, /sender\.once\("destroyed"/u);
   assert.match(operations, /owner\.onInvalidated\(cancel\)/u);
 
-  for (const channel of ["git:worktrees", "workspaces:openFolder", "workspaces:openInEditor"]) {
+  for (const channel of [
+    "git:worktrees",
+    "workspaces:openFolder",
+    "workspaces:openInEditor",
+  ]) {
     assert.match(
       ipcHandlerSource(workspaces, channel),
       /withWorkspaceOperation\(\s*event,\s*workspaceId,/u,
@@ -578,9 +732,18 @@ test("every workspace path capability is renderer-document owned and mutation ad
     );
   }
 
-  assert.match(ipcHandlerSource(workspaces, "workspaces:gitInfo"), /gitInfo\(.+signal\)/u);
-  assert.match(ipcHandlerSource(workspaces, "git:branches"), /gitBranches\(.+signal\)/u);
-  assert.match(ipcHandlerSource(workspaces, "git:worktrees"), /gitWorktrees\(.+signal\)/u);
+  assert.match(
+    ipcHandlerSource(workspaces, "workspaces:gitInfo"),
+    /gitInfo\(.+signal\)/u,
+  );
+  assert.match(
+    ipcHandlerSource(workspaces, "git:branches"),
+    /gitBranches\(.+signal\)/u,
+  );
+  assert.match(
+    ipcHandlerSource(workspaces, "git:worktrees"),
+    /gitWorktrees\(.+signal\)/u,
+  );
   assert.match(git, /async info\(cwd: string, signal\?: AbortSignal\)/u);
   assert.match(git, /async branches\(cwd: string, signal\?: AbortSignal\)/u);
   assert.match(git, /async worktrees\(cwd: string, signal\?: AbortSignal\)/u);
@@ -594,12 +757,30 @@ test("managed worktree identity gates generation, terminal, scheduled, and works
     source("main/handlers/workspaces.ts"),
     source("main/services/managed-worktree-admission.ts"),
   ]);
-  assert.match(llm, /if \(workspace\) await assertManagedWorktreeAdmission\(workspace\)/u);
-  assert.match(terminal, /workspaceFolder[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);
-  assert.match(terminal, /ensureSessionAccess[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);
-  assert.match(scheduled, /executeScript[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);
-  assert.match(scheduled, /executeLlm[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);
-  assert.match(workspaces, /workspaceDirectory[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);
+  assert.match(
+    llm,
+    /if \(workspace\) await assertManagedWorktreeAdmission\(workspace\)/u,
+  );
+  assert.match(
+    terminal,
+    /workspaceFolder[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
+  );
+  assert.match(
+    terminal,
+    /ensureSessionAccess[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
+  );
+  assert.match(
+    scheduled,
+    /executeScript[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
+  );
+  assert.match(
+    scheduled,
+    /executeLlm[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
+  );
+  assert.match(
+    workspaces,
+    /workspaceDirectory[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
+  );
   assert.match(
     workspaces,
     /workspaces:openInEditor[\s\S]+withWorkspaceOperation\(event, workspaceId,/u,
@@ -617,7 +798,10 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
     source("main/index.ts"),
   ]);
   const accessCheck = terminal.indexOf("async function ensureSessionAccess");
-  const admissionWrapper = terminal.indexOf("commitWithWorkspaceMutationAdmission(", accessCheck);
+  const admissionWrapper = terminal.indexOf(
+    "commitWithWorkspaceMutationAdmission(",
+    accessCheck,
+  );
   const permissionRead = terminal.indexOf(
     "await configStore.getWorkspace(workspaceId)",
     accessCheck,
@@ -626,9 +810,15 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
     "await assertManagedWorktreeAdmission(workspace)",
     permissionRead,
   );
-  const finalMutationCheck = terminal.indexOf("if (mutationSignal.aborted)", managedAdmission);
+  const finalMutationCheck = terminal.indexOf(
+    "if (mutationSignal.aborted)",
+    managedAdmission,
+  );
   const writeHandler = ipcHandlerStart(terminal, "terminal:write");
-  const guardedWrite = terminal.indexOf("withSessionAccess(owner, id", writeHandler);
+  const guardedWrite = terminal.indexOf(
+    "withSessionAccess(owner, id",
+    writeHandler,
+  );
   assert.ok(accessCheck >= 0);
   assert.ok(admissionWrapper > accessCheck);
   assert.ok(permissionRead > accessCheck);
@@ -666,7 +856,10 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
     "await configStore.saveWorkspace(next)",
     updateScheduleCancel,
   );
-  const armPostSaveResume = workspaces.indexOf("ensureResumedOnExit()", updateSave);
+  const armPostSaveResume = workspaces.indexOf(
+    "ensureResumedOnExit()",
+    updateSave,
+  );
   const firstPostSaveResume = workspaces.indexOf(
     "await scheduleService.resumeWorkspace(saved.id)",
     armPostSaveResume,
@@ -714,7 +907,10 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   assert.ok(removeGenerationDrain > removeScheduleRestoration);
   assert.ok(removeRecord > removeGenerationDrain);
 
-  const managedDelete = ipcHandlerStart(workspaces, "git:deleteManagedWorktree");
+  const managedDelete = ipcHandlerStart(
+    workspaces,
+    "git:deleteManagedWorktree",
+  );
   const managedTerminalClose = workspaces.indexOf(
     "terminalService.closeForWorkspace(id)",
     managedDelete,
@@ -746,7 +942,10 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
     "await gitFinalizeManagedWorktreeDeletion",
     managedWorktreeRemoval,
   );
-  const managedDeleteReturn = workspaces.indexOf("return result", managedDeletionFinalize);
+  const managedDeleteReturn = workspaces.indexOf(
+    "return result",
+    managedDeletionFinalize,
+  );
   assert.ok(managedGenerationDrain > managedTerminalClose);
   assert.ok(managedOperationDrain > managedDelete);
   assert.ok(managedGenerationDrain > managedOperationDrain);
@@ -772,8 +971,13 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   );
 
   const didStartLoading = main.indexOf('webContents.on("did-start-loading"');
-  const renderProcessGone = main.indexOf('webContents.on("render-process-gone"');
-  const readyToShow = main.indexOf('createdWindow.once("ready-to-show"', renderProcessGone);
+  const renderProcessGone = main.indexOf(
+    'webContents.on("render-process-gone"',
+  );
+  const readyToShow = main.indexOf(
+    'createdWindow.once("ready-to-show"',
+    renderProcessGone,
+  );
   assert.match(
     main.slice(didStartLoading, renderProcessGone),
     /terminalService\.closeForWebContents\(createdWebContentsId\)/u,
@@ -787,7 +991,10 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
 test("subagent history IPC applies the shared privacy validator before storage and logging", async () => {
   const handler = await source("main/handlers/subagents.ts");
   const featureGate = handler.indexOf("assertSubagentHistoryEnabled();");
-  const ownerResolution = handler.indexOf("rendererDocumentOwner(", featureGate);
+  const ownerResolution = handler.indexOf(
+    "rendererDocumentOwner(",
+    featureGate,
+  );
   const validation = handler.indexOf("parseSubagentHistoryRequestIds(");
   const guardedRead = handler.indexOf("try {", validation);
   const chatRead = handler.indexOf("getChat:", guardedRead);
@@ -805,11 +1012,110 @@ test("subagent history IPC applies the shared privacy validator before storage a
 });
 
 test("child tool telemetry stops before crossing its execution cap", async () => {
-  const runner = await source("main/services/subagents/subagent-child-runner.ts");
+  const runner = await source(
+    "main/services/subagents/subagent-child-runner.ts",
+  );
   const toolEvent = runner.indexOf('event.type === "tool_execution_start"');
-  const cap = runner.indexOf("if (toolCalls >= policy.maxToolCalls)", toolEvent);
+  const cap = runner.indexOf(
+    "if (toolCalls >= policy.maxToolCalls)",
+    toolEvent,
+  );
   const telemetry = runner.indexOf("input.telemetry?.toolStarted", toolEvent);
   assert.ok(toolEvent >= 0);
   assert.ok(cap > toolEvent);
   assert.ok(telemetry > cap);
+});
+
+test("foreground child egress reaches the owner-bound approval UI and consumes at effect time", async () => {
+  const [llm, persistence, runner, runtime, chatPane] = await Promise.all([
+    source("main/services/llm-client.ts"),
+    source("main/services/subagents/subagent-foreground-persistence-v2.ts"),
+    source("main/services/subagents/subagent-child-runner.ts"),
+    source("main/services/subagents/child-agent-runtime.ts"),
+    source("renderer/main/chat-pane.tsx"),
+  ]);
+  assert.match(
+    llm,
+    /requestApproval:[\s\S]{0,260}approvals\.request\([\s\S]{0,160}approvalOwnerDocumentId/u,
+  );
+  assert.match(persistence, /createSubagentOutboundApprovalBrokerV2\(/u);
+  assert.match(
+    persistence,
+    /revokedRuns\.has\(runId\) \? undefined : authorities\.get\(runId\)/u,
+  );
+  const consume = runner.indexOf("outboundApproval.consume({");
+  const execute = runner.indexOf(
+    "return execute(toolCallId, args, signal);",
+    consume,
+  );
+  assert.ok(consume >= 0);
+  assert.ok(execute > consume);
+  assert.match(runtime, /beforeToolCall: spec\.beforeToolCall/u);
+  assert.match(chatPane, /needs approval/u);
+  assert.match(chatPane, /"Allow once"/u);
+});
+
+test("independent child egress rollbacks are evaluated before secrets or MCP inventory", async () => {
+  const llm = await source("main/services/llm-client.ts");
+  const webRollout = llm.indexOf(
+    "const childWebRollout = subagentChildWebEnabled()",
+  );
+  const webSecret = llm.indexOf('secrets.getKey("exa")', webRollout);
+  const mcpRollout = llm.indexOf(
+    "const childMcpRollout = subagentChildMcpEnabled()",
+  );
+  const mcpInventory = llm.indexOf(
+    "resolveProductionSubagentMcpInventory(signal)",
+    mcpRollout,
+  );
+  assert.ok(webRollout >= 0);
+  assert.ok(webSecret > webRollout);
+  assert.match(llm.slice(webRollout, webSecret), /childWebRollout\s*&&/u);
+  assert.ok(mcpRollout >= 0);
+  assert.ok(mcpInventory > mcpRollout);
+  assert.match(llm.slice(mcpRollout, mcpInventory), /childMcpRollout\s*&&/u);
+});
+
+test("production OAuth transport observes bounded credentials before use or persistence", async () => {
+  const [mcp, oauth, clientCore, credentialCore] = await Promise.all([
+    source("main/services/mcp.ts"),
+    source("main/services/mcp-oauth.ts"),
+    source("main/services/subagents/subagent-mcp-client-core.ts"),
+    source("main/services/subagents/subagent-mcp-credential-core.ts"),
+  ]);
+  assert.match(
+    mcp,
+    /createSubagentMcpOAuthTokenObserver\(options\.registerCredentialRedactor\)/u,
+  );
+  assert.match(
+    mcp,
+    /oauthProviderFor\(server, isCurrent, \(tokens\) =>[\s\S]{0,180}observeOAuthTokens/u,
+  );
+  assert.match(
+    clientCore,
+    /makeTransport\([\s\S]{0,320}authenticated[\s\S]{0,320}registerCredentialRedactor/u,
+  );
+  assert.match(
+    credentialCore,
+    /observed\.has\(fingerprint\)[\s\S]{0,260}MAX_SUBAGENT_MCP_OBSERVED_OAUTH_TOKEN_SETS[\s\S]{0,220}register\(createSubagentMcpOAuthTokenRedactor\(tokens\)\)/u,
+  );
+
+  const tokensMethod = oauth.slice(
+    oauth.indexOf("async tokens():"),
+    oauth.indexOf("async saveTokens(", oauth.indexOf("async tokens():")),
+  );
+  assert.ok(tokensMethod.indexOf("this.observeTokens?.(tokens)") >= 0);
+  assert.ok(
+    tokensMethod.indexOf("this.observeTokens?.(tokens)") <
+      tokensMethod.indexOf("return tokens"),
+  );
+  const saveTokensMethod = oauth.slice(
+    oauth.indexOf("async saveTokens("),
+    oauth.indexOf("async saveCodeVerifier(", oauth.indexOf("async saveTokens(")),
+  );
+  assert.ok(saveTokensMethod.indexOf("this.observeTokens?.(tokens)") >= 0);
+  assert.ok(
+    saveTokensMethod.indexOf("this.observeTokens?.(tokens)") <
+      saveTokensMethod.indexOf("await this.boundSession()"),
+  );
 });
