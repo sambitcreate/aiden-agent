@@ -1336,6 +1336,108 @@ test("projector preserves timestamp and revision monotonicity across a backward 
   assert.ok(parseSubagentRunSnapshotV1(snapshot));
 });
 
+test("a newer stopped control snapshot fences every late telemetry and finish callback", async () => {
+  let now = 1_000;
+  const controls: unknown[] = [];
+  const projector = new SubagentEventProjector({
+    generationId: "generation-control",
+    chatId: "chat-control",
+    workspaceId: "workspace-control",
+    modelId: "model-control",
+    now: () => now,
+    onControlSnapshot: async (snapshot) => {
+      controls.push(snapshot);
+    },
+  });
+  const identity = {
+    runId: "run-control",
+    groupId: "group-control",
+    childId: "child-control",
+  };
+  projector.begin(identity, {
+    role: "reviewer",
+    label: "Review control",
+    task: "Review stop fencing.",
+  });
+  now += 1;
+  projector.starting(identity.runId);
+  const current = projector.snapshot()[0]!;
+  const stopped = {
+    ...current,
+    version: 2 as const,
+    revision: current.revision + 1,
+    state: "stopped" as const,
+    activity: undefined,
+    updatedAt: now + 1,
+    finishedAt: now + 1,
+    depth: 1,
+    execution: "foreground" as const,
+    context: "fresh" as const,
+    authorityRevision: 1,
+  };
+
+  const projection = projector.applyControlSnapshot(stopped);
+  projector.starting(identity.runId);
+  projector.running(identity.runId);
+  projector.turnStarted(identity.runId);
+  projector.toolStarted(identity.runId, "read_file");
+  projector.finish(identity.runId, {
+    role: "reviewer",
+    label: "Review control",
+    status: "completed",
+    summary: "Late completion must not win.",
+  });
+  await projector.flush();
+
+  assert.equal(projection.state, "interrupted");
+  assert.equal(projector.snapshot()[0]!.revision, stopped.revision);
+  assert.equal(projector.snapshot()[0]!.state, "interrupted");
+  assert.equal(controls.length, 1);
+});
+
+test("control projection rejects stale, non-stop, foreign, and post-terminal transitions", () => {
+  const projector = new SubagentEventProjector({
+    generationId: "generation-control-reject",
+    chatId: "chat-control-reject",
+    workspaceId: "workspace-control-reject",
+    modelId: "model-control-reject",
+    now: () => 2_000,
+  });
+  projector.begin(
+    { runId: "run-control-reject", groupId: "group-control-reject", childId: "child-control-reject" },
+    { role: "reviewer", label: "Review", task: "Reject invalid controls." },
+  );
+  const current = projector.snapshot()[0]!;
+  const stopped = {
+    ...current,
+    version: 2 as const,
+    revision: current.revision + 1,
+    state: "stopped" as const,
+    activity: undefined,
+    updatedAt: current.updatedAt + 1,
+    finishedAt: current.updatedAt + 1,
+    depth: 1,
+    execution: "foreground" as const,
+    context: "fresh" as const,
+    authorityRevision: 1,
+  };
+
+  assert.throws(
+    () => projector.applyControlSnapshot({ ...stopped, revision: current.revision }),
+    /moved backward/u,
+  );
+  assert.throws(
+    () => projector.applyControlSnapshot({ ...stopped, state: "completed" }),
+    /terminal control/u,
+  );
+  assert.throws(
+    () => projector.applyControlSnapshot({ ...stopped, childId: "child-foreign" }),
+    /immutable run identity/u,
+  );
+  projector.applyControlSnapshot(stopped);
+  assert.throws(() => projector.applyControlSnapshot({ ...stopped, revision: stopped.revision + 1 }), /moved backward/u);
+});
+
 test("assistant message reference is bounded, terminal-only, and strictly parsed", () => {
   let now = 10;
   const projector = new SubagentEventProjector({
