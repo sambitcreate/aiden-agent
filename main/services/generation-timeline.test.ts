@@ -262,6 +262,26 @@ test("version 1 timelines still replay as the current version", () => {
   assert.equal(toolSteps(parsed as GenerationTimeline)[0]?.target, "README.md");
 });
 
+test("compaction is a renderer-safe bounded activity milestone", () => {
+  let now = 100;
+  const projector = new GenerationTimelineProjector(
+    "generation-1",
+    () => {},
+    () => now,
+  );
+
+  const id = projector.compactionStarted();
+  now = 180;
+  projector.compactionFinished(id, "completed");
+
+  const [step] = toolSteps(projector.snapshot());
+  assert.equal(step?.toolName, "compact_context");
+  assert.equal(step?.label, "Compact context");
+  assert.equal(step?.status, "completed");
+  assert.equal(step?.detail, undefined);
+  assert.equal(step?.target, undefined);
+});
+
 test("validates persisted timelines and rejects unsafe replay data", () => {
   const projector = new GenerationTimelineProjector(
     "generation-1",

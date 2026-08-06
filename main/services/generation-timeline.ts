@@ -113,6 +113,8 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Schedule task", detail: safeDetail(values.action) };
     case "computer_use":
       return { label: "Use Mac", detail: safeDetail(values.action) };
+    case "compact_context":
+      return { label: "Compact context" };
     default:
       return { label: titleCaseToolName(toolName) || "Use tool" };
   }
@@ -123,6 +125,7 @@ export class GenerationTimelineProjector {
   private readonly stepIndex = new Map<string, number>();
   private toolSequence = 0;
   private thinkingSequence = 0;
+  private compactionSequence = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
@@ -193,6 +196,21 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || !this.openThinking) return;
     this.settleThinking(this.now());
     this.emit();
+  }
+
+  compactionStarted(): string {
+    this.compactionSequence += 1;
+    const id = `pi-compaction-${this.compactionSequence}`;
+    this.toolStarted(id, "compact_context", {});
+    this.toolRunning(id);
+    return id;
+  }
+
+  compactionFinished(
+    id: string,
+    status: Extract<AgentStepStatus, "completed" | "failed" | "cancelled">,
+  ): void {
+    this.toolFinished(id, status);
   }
 
   publicToolCallId(toolCallId: string): string | undefined {

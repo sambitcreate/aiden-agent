@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   makeOnboardingProvider,
+  onboardingFeatureBoxes,
   OnboardingFlow,
   shouldShowOnboarding,
 } from "./onboarding-flow.js";
@@ -52,6 +53,10 @@ test("onboarding appears only until it is completed", () => {
     assert.equal(shouldShowOnboarding(), false);
     assert.equal(renderOnboarding(), "");
   });
+});
+
+test("onboarding discloses private compaction history", () => {
+  assert.match(JSON.stringify(onboardingFeatureBoxes), /compaction history/u);
 });
 
 test("onboarding provider choices preserve local and hosted defaults", () => {
