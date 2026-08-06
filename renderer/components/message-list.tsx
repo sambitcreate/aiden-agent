@@ -17,7 +17,7 @@ import {
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
 import type { GenerationTimeline } from "../shared/generation-timeline";
-import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -28,7 +28,7 @@ interface MessageListProps {
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
-  liveSubagents: readonly SubagentRunSnapshotV1[];
+  liveSubagents: readonly SubagentRunSnapshot[];
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Current active generation phase, derived from real stream/tool state. */
