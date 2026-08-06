@@ -1,12 +1,45 @@
-import { ChevronLeft, ChevronRight, Laptop, Lock, Sparkles, UserRound } from "lucide-react";
+import {
+  Bot,
+  Blocks,
+  BrainCircuit,
+  CalendarClock,
+  ChartBar,
+  ChartScatter,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Command,
+  Eye,
+  FileDiff,
+  Files,
+  FolderGit2,
+  GitBranch,
+  Globe2,
+  Lock,
+  MessageSquare,
+  Mic2,
+  MousePointer2,
+  Network,
+  Palette,
+  Plug,
+  ShieldCheck,
+  SquareTerminal,
+  UserRound,
+  UsersRound,
+  Wand2,
+  type LucideIcon,
+} from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { ProviderIcon } from "./provider-icon";
+import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { Button, Input, Text, toast } from "./ui";
 import { providersApi, profileApi } from "../lib/ipc";
-import { queryKeys } from "../lib/queries";
+import { markOnboardingComplete, shouldShowOnboarding } from "../lib/onboarding-state";
+import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
+import { queryKeys, useProviders } from "../lib/queries";
 import type { Provider } from "../lib/types";
-
-const STORAGE_KEY = "aiden:onboarding:v1:complete";
 
 type Step = "profile" | "provider" | "tour";
 type ProviderChoice =
@@ -18,74 +51,332 @@ type ProviderChoice =
   | "tailscale";
 
 const steps: Step[] = ["profile", "provider", "tour"];
+const stepLabels: Readonly<Record<Step, string>> = {
+  profile: "Your profile",
+  provider: "Model provider",
+  tour: "Ready to go",
+};
+
+const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
+
+const FEATURE_ILLUSTRATIONS = {
+  workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
+  computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
+  subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
+  filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
+  reviewDiffs: new URL("../assets/onboarding/features/review-diffs.png", import.meta.url).href,
+  terminal: new URL("../assets/onboarding/features/terminal.png", import.meta.url).href,
+  gitWorkflows: new URL("../assets/onboarding/features/git-workflows.png", import.meta.url).href,
+  workspaces: new URL("../assets/onboarding/features/workspaces-worktrees.png", import.meta.url)
+    .href,
+  models: new URL("../assets/onboarding/features/model-freedom.png", import.meta.url).href,
+  modelPad: new URL("../assets/onboarding/features/model-pad.png", import.meta.url).href,
+  thinking: new URL("../assets/onboarding/features/thinking-controls.png", import.meta.url).href,
+  vision: new URL("../assets/onboarding/features/attachments-vision.png", import.meta.url).href,
+  webSearch: new URL("../assets/onboarding/features/web-search.png", import.meta.url).href,
+  skills: new URL("../assets/onboarding/features/skills.png", import.meta.url).href,
+  mcp: new URL("../assets/onboarding/features/mcp-connectors.png", import.meta.url).href,
+  assistant: new URL("../assets/onboarding/features/aiden-assistant.png", import.meta.url).href,
+  schedules: new URL("../assets/onboarding/features/scheduled-automations.png", import.meta.url)
+    .href,
+  voice: new URL("../assets/onboarding/features/voice-dictation.png", import.meta.url).href,
+  commands: new URL("../assets/onboarding/features/command-palette.png", import.meta.url).href,
+  usage: new URL("../assets/onboarding/features/usage-profile.png", import.meta.url).href,
+  permissions: new URL("../assets/onboarding/features/permissions.png", import.meta.url).href,
+  themes: new URL("../assets/onboarding/features/themes-accessibility.png", import.meta.url).href,
+} as const;
 
 const providerChoices: Array<{
   id: ProviderChoice;
   title: string;
   description: string;
-  footnote: string;
+  iconProviderId?: string;
   requiresKey?: boolean;
 }> = [
   {
     id: "openai-key",
     title: "OpenAI API key",
-    description: "Use an OpenAI-compatible hosted endpoint with your own API key.",
-    footnote: "Key is saved through Aiden's local secret storage.",
+    description: "Connect with your own API key.",
+    iconProviderId: "openai",
     requiresKey: true,
   },
   {
     id: "openai-signin",
     title: "ChatGPT sign in",
-    description: "Connect the built-in ChatGPT provider when you prefer browser sign-in.",
-    footnote: "Aiden opens the provider auth flow outside the onboarding card.",
+    description: "Connect through browser sign-in.",
+    iconProviderId: "openai-codex",
   },
   {
     id: "anthropic",
     title: "Anthropic API key",
-    description: "Bring Claude with your Anthropic API key and provider-hosted models.",
-    footnote: "The key stays on this Mac and can be rotated later in Settings.",
+    description: "Connect with your Anthropic API key.",
+    iconProviderId: "anthropic",
     requiresKey: true,
   },
   {
     id: "lmstudio",
     title: "LM Studio",
-    description: "Use models served locally from LM Studio's OpenAI-compatible server.",
-    footnote: "Default URL: http://127.0.0.1:1234/v1",
+    description: "Use models running in LM Studio.",
+    iconProviderId: "lmstudio",
   },
   {
     id: "ollama",
     title: "Ollama",
-    description: "Use local Ollama models through Aiden's OpenAI-compatible adapter.",
-    footnote: "Default URL: http://127.0.0.1:11434/v1",
+    description: "Use models running in Ollama.",
+    iconProviderId: "ollama",
   },
   {
     id: "tailscale",
     title: "Tailscale custom model",
-    description: "Point Aiden at a private OpenAI-compatible model reachable over Tailscale.",
-    footnote: "Add your tailnet URL now; refine models later in Settings.",
+    description: "Connect to a private model on your tailnet.",
   },
 ];
 
-const featureBoxes = [
-  [
-    "Local profile",
-    "Your name personalizes Profile and model-facing context while staying on-device.",
-  ],
-  ["Provider ready", "Start with one model source, then add more hosted or local providers later."],
-  [
-    "Workspace agents",
-    "Chat, run terminal work, review files, and keep context beside the conversation.",
-  ],
-  [
-    "Private by design",
-    "Aiden stores local settings and secrets on this Mac rather than bundling credentials.",
-  ],
-  ["macOS polish", "Glass cards, quiet motion, keyboard focus, and sidebar-friendly navigation."],
-  ["Bento overview", "Hover any tile to reveal how each capability fits into your daily flow."],
-] as const;
+type FeatureGroupId = "create" | "extend" | "control";
+type FeatureBentoSize = "hero" | "tall" | "standard" | "wide";
+type FeatureBentoId = keyof typeof FEATURE_ILLUSTRATIONS;
 
-export function shouldShowOnboarding(): boolean {
-  return localStorage.getItem(STORAGE_KEY) !== "true";
+interface FeatureBento {
+  id: FeatureBentoId;
+  group: FeatureGroupId;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+  imageUrl: string;
+  size: FeatureBentoSize;
+}
+
+const featureGroups: ReadonlyArray<{ id: FeatureGroupId; title: string }> = [
+  { id: "create", title: "Build in your workspace" },
+  { id: "extend", title: "Choose and extend" },
+  { id: "control", title: "Automate and stay in control" },
+];
+
+const featureBentos: FeatureBento[] = [
+  {
+    id: "workspace",
+    group: "create",
+    title: "Workspace Agent",
+    description: "Read, search, edit, and run commands inside the workspace you choose.",
+    icon: MessageSquare,
+    imageUrl: FEATURE_ILLUSTRATIONS.workspace,
+    size: "hero",
+  },
+  {
+    id: "computerUse",
+    group: "create",
+    title: "Computer Use",
+    description: "Inspect and operate Mac apps when you opt in, with approval before every action.",
+    icon: MousePointer2,
+    imageUrl: FEATURE_ILLUSTRATIONS.computerUse,
+    size: "tall",
+  },
+  {
+    id: "subagents",
+    group: "create",
+    title: "Native Subagents",
+    description: "Delegate scout, planner, and reviewer jobs, then inspect their live results.",
+    icon: UsersRound,
+    imageUrl: FEATURE_ILLUSTRATIONS.subagents,
+    size: "standard",
+  },
+  {
+    id: "filesEditor",
+    group: "create",
+    title: "Files & Text Editor",
+    description: "Browse, search, edit, and safely save workspace text files beside the chat.",
+    icon: Files,
+    imageUrl: FEATURE_ILLUSTRATIONS.filesEditor,
+    size: "standard",
+  },
+  {
+    id: "reviewDiffs",
+    group: "create",
+    title: "Review & Diffs",
+    description: "Inspect staged, unstaged, and branch-to-branch diffs before you commit.",
+    icon: FileDiff,
+    imageUrl: FEATURE_ILLUSTRATIONS.reviewDiffs,
+    size: "standard",
+  },
+  {
+    id: "terminal",
+    group: "create",
+    title: "Integrated Terminal",
+    description: "Run a workspace shell in a resizable drawer with tabs and split panes.",
+    icon: SquareTerminal,
+    imageUrl: FEATURE_ILLUSTRATIONS.terminal,
+    size: "standard",
+  },
+  {
+    id: "gitWorkflows",
+    group: "create",
+    title: "Git Workflows",
+    description: "Switch branches, create reviewed commits, and push with stale-state guards.",
+    icon: GitBranch,
+    imageUrl: FEATURE_ILLUSTRATIONS.gitWorkflows,
+    size: "wide",
+  },
+  {
+    id: "workspaces",
+    group: "create",
+    title: "Workspaces & Worktrees",
+    description: "Use folders, scratch spaces, and isolated worktrees while preserving context.",
+    icon: FolderGit2,
+    imageUrl: FEATURE_ILLUSTRATIONS.workspaces,
+    size: "wide",
+  },
+  {
+    id: "models",
+    group: "extend",
+    title: "Model Freedom",
+    description: "Choose from 30+ Pi providers, ChatGPT sign-in, Apple models, or local endpoints.",
+    icon: Blocks,
+    imageUrl: FEATURE_ILLUSTRATIONS.models,
+    size: "hero",
+  },
+  {
+    id: "modelPad",
+    group: "extend",
+    title: "Personal Model Pad",
+    description: "Arrange favorite models on your own map of capability and response pace.",
+    icon: ChartScatter,
+    imageUrl: FEATURE_ILLUSTRATIONS.modelPad,
+    size: "tall",
+  },
+  {
+    id: "thinking",
+    group: "extend",
+    title: "Thinking Controls",
+    description: "Tune supported models' reasoning effort and follow thinking as it streams.",
+    icon: BrainCircuit,
+    imageUrl: FEATURE_ILLUSTRATIONS.thinking,
+    size: "standard",
+  },
+  {
+    id: "vision",
+    group: "extend",
+    title: "Attachments & Vision",
+    description: "Attach text and images for vision-capable models to inspect in conversation.",
+    icon: Eye,
+    imageUrl: FEATURE_ILLUSTRATIONS.vision,
+    size: "standard",
+  },
+  {
+    id: "webSearch",
+    group: "extend",
+    title: "Web Search",
+    description: "Give the workspace agent live Exa search when you choose to connect it.",
+    icon: Globe2,
+    imageUrl: FEATURE_ILLUSTRATIONS.webSearch,
+    size: "standard",
+  },
+  {
+    id: "skills",
+    group: "extend",
+    title: "Reusable Skills",
+    description: "Create reusable instructions or auto-load compatible SKILL.md folders.",
+    icon: Wand2,
+    imageUrl: FEATURE_ILLUSTRATIONS.skills,
+    size: "wide",
+  },
+  {
+    id: "mcp",
+    group: "extend",
+    title: "MCP Connectors",
+    description: "Connect services or any MCP server and expose only the tools you enable.",
+    icon: Plug,
+    imageUrl: FEATURE_ILLUSTRATIONS.mcp,
+    size: "wide",
+  },
+  {
+    id: "assistant",
+    group: "control",
+    title: "Aiden Assistant",
+    description: "Ask about the app and prepare confirmed automations from a private dock.",
+    icon: Bot,
+    imageUrl: FEATURE_ILLUSTRATIONS.assistant,
+    size: "hero",
+  },
+  {
+    id: "schedules",
+    group: "control",
+    title: "Scheduled Automations",
+    description: "Schedule recurring model work or trusted scripts, then run or pause anytime.",
+    icon: CalendarClock,
+    imageUrl: FEATURE_ILLUSTRATIONS.schedules,
+    size: "tall",
+  },
+  {
+    id: "voice",
+    group: "control",
+    title: "Voice & Dictation",
+    description: "Speak into the composer or dictate system-wide with cloud or on-device voice.",
+    icon: Mic2,
+    imageUrl: FEATURE_ILLUSTRATIONS.voice,
+    size: "standard",
+  },
+  {
+    id: "commands",
+    group: "control",
+    title: "Command Palette",
+    description: "Jump to chats, models, providers, settings, and tools with Command-K.",
+    icon: Command,
+    imageUrl: FEATURE_ILLUSTRATIONS.commands,
+    size: "standard",
+  },
+  {
+    id: "usage",
+    group: "control",
+    title: "Private Usage Profile",
+    description: "See on-device activity, token mix, cost coverage, and your top models.",
+    icon: ChartBar,
+    imageUrl: FEATURE_ILLUSTRATIONS.usage,
+    size: "standard",
+  },
+  {
+    id: "permissions",
+    group: "control",
+    title: "Permissioned by Default",
+    description: "Choose No access, Ask first, or Full per workspace; keys stay encrypted.",
+    icon: ShieldCheck,
+    imageUrl: FEATURE_ILLUSTRATIONS.permissions,
+    size: "wide",
+  },
+  {
+    id: "themes",
+    group: "control",
+    title: "Themes & Accessibility",
+    description: "Tune light or dark themes, fonts, contrast, motion, and diff markers.",
+    icon: Palette,
+    imageUrl: FEATURE_ILLUSTRATIONS.themes,
+    size: "wide",
+  },
+];
+
+const FEATURE_LAYOUTS: Readonly<Record<FeatureBentoSize, string>> = {
+  hero: "col-span-4 row-span-2 max-[560px]:col-span-2 max-[420px]:col-span-1",
+  tall: "col-span-2 row-span-2 max-[560px]:col-span-1 max-[420px]:col-span-1",
+  standard: "col-span-2 max-[560px]:col-span-1 max-[420px]:col-span-1",
+  wide: "col-span-3 max-[560px]:col-span-2 max-[420px]:col-span-1",
+};
+
+const FEATURE_IMAGE_LAYOUTS: Readonly<Record<FeatureBentoSize, string>> = {
+  hero: "-right-3 -top-3 h-[116%] w-[72%] object-right",
+  tall: "left-1/2 top-1 h-[72%] w-[92%] -translate-x-1/2 object-center",
+  standard: "right-1 top-1 size-[76px] object-center",
+  wide: "right-1 top-0 h-full w-[46%] object-right",
+};
+
+function FeatureBentoVisual({ feature }: { feature: FeatureBento }) {
+  return (
+    <img
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      src={feature.imageUrl}
+      className={`pointer-events-none absolute object-contain ${FEATURE_IMAGE_LAYOUTS[feature.size]}`}
+    />
+  );
 }
 
 function makeProvider(choice: ProviderChoice, baseUrl: string): Omit<Provider, "hasKey"> | null {
@@ -147,20 +438,46 @@ function makeProvider(choice: ProviderChoice, baseUrl: string): Omit<Provider, "
   };
 }
 
+function builtinProviderSetupLabel(provider: Provider): string {
+  if (provider.hasKey) return "Ready on this Mac";
+  const methods = (provider.authMethods ?? [])
+    .filter((method) => method.canLogin)
+    .map((method) => method.label);
+  if (methods.length > 0) return methods.slice(0, 2).join(" or ");
+  return "Requires system credentials";
+}
+
+function canChooseBuiltinProvider(provider: Provider): boolean {
+  return provider.hasKey || (provider.authMethods ?? []).some((method) => method.canLogin);
+}
+
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
+  const providers = useProviders();
   const [open, setOpen] = React.useState(() => shouldShowOnboarding());
   const [index, setIndex] = React.useState(0);
   const [name, setName] = React.useState("");
-  const [choice, setChoice] = React.useState<ProviderChoice>("openai-signin");
+  const [choice, setChoice] = React.useState<ProviderChoice | null>("openai-signin");
+  const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
+  const [showMoreProviders, setShowMoreProviders] = React.useState(false);
+  const [settingUpProvider, setSettingUpProvider] = React.useState<Provider | null>(null);
   const [apiKey, setApiKey] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const scrollContainerRef = React.useRef<HTMLElement>(null);
+
+  React.useEffect(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [index]);
 
   if (!open) return null;
   const step = steps[index];
-  const selected = providerChoices.find((item) => item.id === choice)!;
-  const canContinue = step !== "profile" || name.trim().length > 0;
+  const selected = providerChoices.find((item) => item.id === choice);
+  const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
+  const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
+  const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
+  const canContinue =
+    step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
 
   const next = async () => {
     if (!canContinue || saving) return;
@@ -178,6 +495,18 @@ export function OnboardingFlow() {
       return;
     }
     if (step === "provider") {
+      if (selectedBuiltinProvider) {
+        if (selectedBuiltinProvider.hasKey) {
+          setIndex(2);
+        } else {
+          setSettingUpProvider(selectedBuiltinProvider);
+        }
+        return;
+      }
+      if (!choice || !selected) {
+        toast.error("Choose a model provider before continuing.");
+        return;
+      }
       const provider = makeProvider(choice, baseUrl.trim());
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
@@ -215,71 +544,99 @@ export function OnboardingFlow() {
       }
       return;
     }
-    localStorage.setItem(STORAGE_KEY, "true");
+    markOnboardingComplete();
     setOpen(false);
   };
 
   return (
-    <div className="fixed inset-0 z-60 grid place-items-center bg-background/72 p-6 backdrop-blur-2xl">
-      <section className="relative grid max-h-[min(760px,calc(100vh-48px))] w-full max-w-5xl grid-cols-[0.92fr_1.08fr] overflow-hidden rounded-[28px] border border-field bg-popover shadow-modal max-[860px]:grid-cols-1">
+    <div className="fixed inset-0 z-60 grid place-items-center bg-background p-4 max-[760px]:p-0">
+      <section
+        aria-label="Set up Aiden"
+        className="relative grid h-[min(600px,calc(100vh-32px))] min-h-0 w-[min(860px,calc(100vw-32px))] grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-dialog bg-popover shadow-modal max-[760px]:h-full max-[760px]:w-full max-[760px]:grid-cols-1 max-[760px]:rounded-none max-[760px]:shadow-none"
+      >
         <div className="drag-region absolute left-0 right-0 top-0 h-10" />
-        <aside className="relative overflow-hidden border-r border-separator bg-sidebar p-8 max-[860px]:hidden">
-          <div className="absolute -left-20 -top-24 size-72 rounded-full bg-accent/20 blur-3xl" />
-          <div className="absolute -bottom-24 right-4 size-72 rounded-full bg-control-active blur-3xl" />
-          <div className="relative flex h-full flex-col justify-between">
+        <aside className="border-r border-separator bg-sidebar px-5 pb-5 pt-7 max-[760px]:hidden">
+          <div className="flex h-full flex-col justify-between">
             <div>
-              <div className="grid size-14 place-items-center rounded-[18px] bg-accent text-accent-foreground shadow-control">
-                <Sparkles />
-              </div>
-              <Text as="h1" variant="heading1" className="mt-7 block max-w-xs">
-                Set up Aiden for your Mac
+              <img
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+                src={APP_ICON_URL}
+                className="size-14"
+              />
+              <Text as="h1" variant="heading1" className="mt-5 block text-[20px] leading-6">
+                Set up Aiden
               </Text>
-              <Text as="p" color="secondary" className="mt-3 block max-w-sm">
-                A short onboarding flow for your local profile, first model provider, and the
-                features that make Aiden feel at home on macOS.
+              <Text as="p" variant="small" color="secondary" className="mt-2 block leading-5">
+                Add your profile and one model connection. You can change either later in Settings.
               </Text>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <ol className="space-y-2" aria-label="Setup progress">
               {steps.map((item, itemIndex) => (
-                <div
+                <li
                   key={item}
-                  className={`h-1.5 rounded-pill ${itemIndex <= index ? "bg-accent" : "bg-control"}`}
-                />
+                  className={`flex items-center gap-2 ${itemIndex <= index ? "text-primary" : "text-tertiary"}`}
+                >
+                  <span
+                    className={`grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${itemIndex <= index ? "bg-accent text-accent-foreground" : "bg-control"}`}
+                  >
+                    {itemIndex < index ? <Check className="size-3" /> : itemIndex + 1}
+                  </span>
+                  <Text variant="small-strong" color={itemIndex <= index ? "primary" : "tertiary"}>
+                    {stepLabels[item]}
+                  </Text>
+                </li>
               ))}
-            </div>
+            </ol>
           </div>
         </aside>
-        <div className="flex min-h-[620px] flex-col p-7">
-          <div className="flex items-center justify-between gap-4">
-            <Text variant="small-strong" color="secondary">
-              Step {index + 1} of {steps.length}
-            </Text>
+        <div className="flex min-h-0 min-w-0 flex-col">
+          <header className="drag-region flex h-14 shrink-0 items-center justify-between gap-4 border-b border-separator px-6 max-[520px]:px-4">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <img
+                alt=""
+                aria-hidden="true"
+                draggable={false}
+                src={APP_ICON_URL}
+                className="hidden size-8 max-[760px]:block"
+              />
+              <Text variant="small-strong" color="secondary">
+                Step {index + 1} of {steps.length}
+              </Text>
+            </div>
             <Button
+              className="no-drag"
               variant="transparent"
               size="small"
               onClick={() => {
-                localStorage.setItem(STORAGE_KEY, "true");
+                markOnboardingComplete();
                 setOpen(false);
               }}
             >
               Skip
             </Button>
-          </div>
+          </header>
 
-          <div className="min-h-0 flex-1 overflow-auto py-8">
+          <main
+            ref={scrollContainerRef}
+            data-onboarding-scroll
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 max-[520px]:px-4"
+          >
             {step === "profile" ? (
-              <div className="mx-auto max-w-lg">
-                <div className="mb-5 grid size-12 place-items-center rounded-card bg-accent/12 text-accent">
-                  <UserRound />
+              <div className="max-w-md">
+                <div className="flex items-start gap-3">
+                  <UserRound className="mt-0.5 size-5 shrink-0 text-accent" />
+                  <div>
+                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                      What should Aiden call you?
+                    </Text>
+                    <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
+                      This personalizes your profile and model context on this Mac.
+                    </Text>
+                  </div>
                 </div>
-                <Text as="h2" variant="heading1" className="block">
-                  What should Aiden call you?
-                </Text>
-                <Text as="p" color="secondary" className="mt-2 block">
-                  Your name is used only in Profile and model-facing personalization. This data
-                  stays on this device.
-                </Text>
-                <label className="mt-8 block">
+                <label className="mt-6 block">
                   <Text variant="small-strong">Name</Text>
                   <Input
                     autoFocus
@@ -293,7 +650,7 @@ export function OnboardingFlow() {
                     }}
                   />
                 </label>
-                <div className="mt-5 flex items-center gap-2 rounded-card bg-well p-3">
+                <div className="mt-4 flex items-center gap-2 text-secondary">
                   <Lock className="size-4 text-accent" />
                   <Text variant="small" color="secondary">
                     Stored privately on this Mac.
@@ -304,33 +661,165 @@ export function OnboardingFlow() {
 
             {step === "provider" ? (
               <div>
-                <Text as="h2" variant="heading1" className="block">
-                  Add your first model provider
-                </Text>
-                <Text as="p" color="secondary" className="mt-2 block">
-                  Choose an API-key provider, ChatGPT sign-in, or a local/private model server.
-                </Text>
-                <div className="mt-6 grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
+                <div className="flex items-start gap-3">
+                  <Network className="mt-0.5 size-5 shrink-0 text-accent" />
+                  <div>
+                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                      Add a model provider
+                    </Text>
+                    <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
+                      Choose one connection to get started.
+                    </Text>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-2 max-[560px]:grid-cols-1">
                   {providerChoices.map((item) => (
                     <button
                       key={item.id}
-                      className={`rounded-card border p-4 text-left transition duration-150 hover:-translate-y-0.5 hover:bg-control hover:shadow-control-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "border-accent bg-accent/10" : "border-field bg-well"}`}
-                      onClick={() => setChoice(item.id)}
+                      type="button"
+                      aria-pressed={choice === item.id}
+                      className={`flex min-h-[68px] items-start gap-2.5 rounded-control border px-3 py-2.5 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "border-accent bg-accent/10" : "border-field bg-well hover:bg-control"}`}
+                      onClick={() => {
+                        setChoice(item.id);
+                        setBuiltinChoiceId(null);
+                      }}
                     >
-                      <Text variant="strong" className="block">
-                        {item.title}
-                      </Text>
-                      <Text variant="small" color="secondary" className="mt-1 block">
-                        {item.description}
-                      </Text>
-                      <Text variant="small" color="tertiary" className="mt-3 block">
-                        {item.footnote}
-                      </Text>
+                      <span className="grid size-8 shrink-0 place-items-center text-primary">
+                        {item.iconProviderId ? (
+                          <ProviderIcon
+                            providerId={item.iconProviderId}
+                            providerLabel={item.title}
+                            className="size-5"
+                          />
+                        ) : (
+                          <Network className="size-5" />
+                        )}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <Text variant="small-strong" className="block">
+                          {item.title}
+                        </Text>
+                        <Text variant="small" color="secondary" className="mt-0.5 block leading-4">
+                          {item.description}
+                        </Text>
+                      </span>
+                      <Check
+                        aria-hidden="true"
+                        className={`mt-0.5 size-4 shrink-0 text-accent ${choice === item.id ? "opacity-100" : "opacity-0"}`}
+                      />
                     </button>
                   ))}
                 </div>
-                <div className="mt-5 grid grid-cols-2 gap-3 max-[720px]:grid-cols-1">
-                  {selected.requiresKey ? (
+                <button
+                  data-onboarding-more-provider-trigger
+                  type="button"
+                  aria-controls="onboarding-more-providers"
+                  aria-expanded={showMoreProviders}
+                  className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-field bg-well px-3 py-2 text-left transition-[background-color,border-color] duration-150 hover:bg-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
+                  onClick={() => setShowMoreProviders((visible) => !visible)}
+                >
+                  <span className="grid size-8 shrink-0 place-items-center text-secondary">
+                    <Blocks className="size-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <Text variant="small-strong" className="block">
+                      Choose from more
+                    </Text>
+                    <Text variant="small" color="secondary" className="mt-0.5 block leading-4">
+                      {providers.isLoading
+                        ? "Loading provider catalog…"
+                        : selectedBuiltinProvider
+                          ? `${selectedBuiltinProvider.label} selected`
+                          : `${moreProviders.length} additional provider${moreProviders.length === 1 ? "" : "s"}`}
+                    </Text>
+                  </span>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`size-4 shrink-0 text-tertiary transition-transform duration-150 ${showMoreProviders ? "rotate-180" : ""}`}
+                  />
+                </button>
+
+                {showMoreProviders ? (
+                  <div
+                    id="onboarding-more-providers"
+                    data-onboarding-more-providers
+                    aria-live="polite"
+                    className="mt-2 rounded-card border border-separator bg-well p-2"
+                  >
+                    {providers.isLoading && moreProviders.length === 0 ? (
+                      <Text variant="small" color="secondary" className="block px-2 py-3">
+                        Loading provider catalog…
+                      </Text>
+                    ) : providers.isError && moreProviders.length === 0 ? (
+                      <div
+                        role="alert"
+                        className="flex items-center justify-between gap-3 px-2 py-2"
+                      >
+                        <Text variant="small" color="secondary">
+                          More providers could not be loaded.
+                        </Text>
+                        <Button
+                          variant="filled"
+                          size="small"
+                          onClick={() => void providers.refetch()}
+                        >
+                          Try again
+                        </Button>
+                      </div>
+                    ) : moreProviders.length === 0 ? (
+                      <Text variant="small" color="secondary" className="block px-2 py-3">
+                        No additional providers are available.
+                      </Text>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-1.5 max-[560px]:grid-cols-1">
+                        {moreProviders.map((provider) => {
+                          const canChoose = canChooseBuiltinProvider(provider);
+                          const isSelected = builtinChoiceId === provider.id;
+                          return (
+                            <button
+                              key={provider.id}
+                              type="button"
+                              disabled={!canChoose}
+                              aria-pressed={isSelected}
+                              className={`flex min-h-14 items-center gap-2.5 rounded-control border px-2.5 py-2 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "border-accent bg-accent/10" : "border-transparent bg-transparent hover:border-field hover:bg-control"}`}
+                              onClick={() => {
+                                setChoice(null);
+                                setBuiltinChoiceId(provider.id);
+                              }}
+                            >
+                              <span className="grid size-8 shrink-0 place-items-center rounded-control bg-popover text-primary shadow-control">
+                                <ProviderIcon
+                                  providerId={provider.id}
+                                  providerLabel={provider.label}
+                                  className="size-4.5"
+                                />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <Text variant="small-strong" truncate className="block">
+                                  {provider.label}
+                                </Text>
+                                <Text
+                                  variant="small"
+                                  color="tertiary"
+                                  truncate
+                                  className="mt-0.5 block"
+                                >
+                                  {builtinProviderSetupLabel(provider)}
+                                </Text>
+                              </span>
+                              <Check
+                                aria-hidden="true"
+                                className={`size-4 shrink-0 text-accent ${isSelected ? "opacity-100" : "opacity-0"}`}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                <div className="mt-4 grid grid-cols-2 gap-3 max-[560px]:grid-cols-1">
+                  {selected?.requiresKey ? (
                     <label>
                       <Text variant="small-strong">API key</Text>
                       <Input
@@ -344,14 +833,16 @@ export function OnboardingFlow() {
                   ) : null}
                   {choice === "tailscale" || choice === "openai-key" || choice === "anthropic" ? (
                     <label>
-                      <Text variant="small-strong">Base URL</Text>
+                      <Text variant="small-strong">
+                        {choice === "tailscale" ? "Model URL" : "Base URL (optional)"}
+                      </Text>
                       <Input
                         className="mt-2"
                         value={baseUrl}
                         placeholder={
                           choice === "tailscale"
                             ? "https://model.tailnet.ts.net/v1"
-                            : "Default provider URL"
+                            : "Use provider default"
                         }
                         onChange={(event) => setBaseUrl(event.currentTarget.value)}
                       />
@@ -363,43 +854,103 @@ export function OnboardingFlow() {
 
             {step === "tour" ? (
               <div>
-                <Text as="h2" variant="heading1" className="block">
-                  Aiden is ready
-                </Text>
-                <Text as="p" color="secondary" className="mt-2 block">
-                  Hover each bento tile to learn what you can explore next.
-                </Text>
-                <div className="mt-6 grid auto-rows-[132px] grid-cols-3 gap-3 max-[760px]:grid-cols-2">
-                  {featureBoxes.map(([title, description], boxIndex) => (
-                    <article
-                      key={title}
-                      className={`group relative overflow-hidden rounded-[22px] border border-field bg-well p-4 shadow-control transition duration-150 hover:-translate-y-1 hover:bg-control hover:shadow-control-hover ${boxIndex === 0 || boxIndex === 5 ? "col-span-2" : ""}`}
-                    >
-                      <div className="absolute right-4 top-4 grid size-9 place-items-center rounded-full bg-popover text-accent shadow-control">
-                        {boxIndex % 2 === 0 ? (
-                          <Sparkles className="size-4" />
-                        ) : (
-                          <Laptop className="size-4" />
-                        )}
-                      </div>
-                      <Text variant="strong" className="block max-w-[70%]">
-                        {title}
-                      </Text>
-                      <Text
-                        variant="small"
-                        color="secondary"
-                        className="absolute bottom-4 left-4 right-4 translate-y-3 opacity-0 transition duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100"
-                      >
-                        {description}
-                      </Text>
-                    </article>
-                  ))}
+                <div className="flex items-start gap-3">
+                  <Check className="mt-0.5 size-5 shrink-0 text-accent" />
+                  <div>
+                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                      Everything Aiden brings together
+                    </Text>
+                    <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
+                      Explore all {featureBentos.length} shipped features. Scroll, then hover or
+                      focus a tile to learn more.
+                    </Text>
+                  </div>
+                </div>
+                <div
+                  data-onboarding-bento
+                  data-onboarding-feature-count={featureBentos.length}
+                  className="mt-5 space-y-7 pb-1"
+                >
+                  {featureGroups.map((group) => {
+                    const features = featureBentos.filter((feature) => feature.group === group.id);
+                    const headingId = `onboarding-feature-group-${group.id}`;
+                    return (
+                      <section key={group.id} aria-labelledby={headingId}>
+                        <div className="mb-2.5 flex items-center justify-between gap-3 px-0.5">
+                          <Text id={headingId} as="h3" variant="small-strong" color="secondary">
+                            {group.title}
+                          </Text>
+                          <Text variant="small" color="tertiary" className="text-[11px]">
+                            {features.length} features
+                          </Text>
+                        </div>
+                        <div className="grid auto-rows-[118px] grid-cols-6 gap-2.5 max-[560px]:auto-rows-[112px] max-[560px]:grid-cols-2 max-[420px]:grid-cols-1">
+                          {features.map((feature) => {
+                            const Icon = feature.icon;
+                            return (
+                              <article
+                                key={feature.id}
+                                tabIndex={0}
+                                aria-label={`${feature.title}. ${feature.description}`}
+                                className={`group relative overflow-hidden rounded-card border border-field bg-well shadow-control outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control-hover focus-visible:border-focus-ring focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
+                              >
+                                <div
+                                  aria-hidden="true"
+                                  className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus:opacity-0"
+                                >
+                                  <FeatureBentoVisual feature={feature} />
+                                  <Text
+                                    variant="small-strong"
+                                    className={`absolute bottom-3 left-3 right-3 block leading-4 ${
+                                      feature.size === "hero"
+                                        ? "max-w-[42%]"
+                                        : feature.size === "tall"
+                                          ? "text-center"
+                                          : feature.size === "standard"
+                                            ? "max-w-[calc(100%_-_80px)]"
+                                            : "max-w-[54%]"
+                                    }`}
+                                  >
+                                    {feature.title}
+                                  </Text>
+                                </div>
+                                <div
+                                  aria-hidden="true"
+                                  className="absolute inset-0 bg-popover p-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100"
+                                >
+                                  <Icon
+                                    aria-hidden="true"
+                                    className="absolute right-3 top-3 size-4 text-accent"
+                                  />
+                                  <div className="absolute bottom-3 left-3 right-3">
+                                    <Text variant="small-strong" className="block leading-4">
+                                      {feature.title}
+                                    </Text>
+                                    <Text
+                                      variant="small"
+                                      color="secondary"
+                                      className="mt-1 block text-[12px] leading-4"
+                                    >
+                                      {feature.description}
+                                    </Text>
+                                  </div>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
-          </div>
+          </main>
 
-          <div className="flex items-center justify-between border-t border-separator pt-5">
+          <footer
+            data-onboarding-footer
+            className="flex shrink-0 items-center justify-between border-t border-separator px-6 py-4 max-[520px]:px-4"
+          >
             <Button
               variant="transparent"
               disabled={index === 0 || saving}
@@ -410,9 +961,23 @@ export function OnboardingFlow() {
             <Button variant="accent" disabled={!canContinue || saving} onClick={() => void next()}>
               {step === "tour" ? "Start using Aiden" : "Next"} <ChevronRight />
             </Button>
-          </div>
+          </footer>
         </div>
       </section>
+      {settingUpProvider ? (
+        <BuiltinProviderEditor
+          provider={settingUpProvider}
+          open
+          layer="onboarding"
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) setSettingUpProvider(null);
+          }}
+          onSaved={() => {
+            void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+            setIndex(2);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
