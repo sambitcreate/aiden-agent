@@ -885,7 +885,9 @@ async function boundedOperation<T>(input: {
   const controller = new AbortController();
   const timeoutReason = new SubagentMcpReadError("timed_out", "Approved MCP read timed out.");
   const timeout = setTimeout(() => controller.abort(timeoutReason), input.timeoutMs);
-  timeout.unref?.();
+  // This deadline is the caller's only guaranteed settlement path when a
+  // remote MCP operation ignores cancellation, so it must keep the process
+  // alive long enough to return the bounded timeout result.
   const relay = () =>
     controller.abort(
       input.parentSignal?.reason instanceof Error
