@@ -21,7 +21,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 chrono-tz = "0.10"
 regex = "1"
 iana-time-zone = "0.1"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile.workspace = true
 serde = { version = "1", features = ["derive"] }
+filetime = "0.2"

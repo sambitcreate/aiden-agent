@@ -1,0 +1,23 @@
+[package]
+name = "aiden-git"
+description = "Structured Git operations for workspace-backed repositories (port of main/services/git.ts): porcelain v2 status, branches, review/diff, commit, push/pull, and managed worktrees."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+regex = "1"
+parking_lot = "0.12"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

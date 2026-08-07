@@ -5,7 +5,20 @@
 
 mod app;
 mod chat;
+// The onboarding flow and dictation pill are compiled here for standalone
+// check coverage (the orchestrator wires them into the shell in a later
+// phase). Until then, dead-code is expected.
+#[allow(dead_code)]
+mod onboarding;
+mod panels;
+#[allow(dead_code)]
+mod pill;
 mod services;
+// The settings surface is compiled here for standalone check coverage (the
+// `SettingsView` entity + `SettingsServices` are wired into the app shell by
+// the orchestrator in a later phase). Until then, dead-code is expected.
+#[allow(dead_code)]
+mod settings;
 mod shell;
 
 use gpui::{px, size, App, AppContext as _, Bounds, KeyBinding, WindowBounds, WindowOptions};

@@ -13,6 +13,7 @@ resolver = "2"
 members = [
     "aiden-core",
     "aiden-data",
+    "aiden-git",
     "aiden-providers",
     "aiden-mcp",
     "aiden-agent",
@@ -39,6 +40,8 @@ repository = "https://github.com/sambitcreate/aiden-agent"
 # --- Internal crates ---
 aiden-core = { path = "aiden-core" }
 aiden-data = { path = "aiden-data" }
+aiden-git = { path = "aiden-git" }
+aiden-mcp = { path = "aiden-mcp" }
 aiden-providers = { path = "aiden-providers" }
 
 # --- UI framework ---

@@ -27,8 +27,11 @@
 //! (portable-config-core.ts + config-store-core.ts), `chat_store`
 //! (chat-store-core.ts), `schedule_store` (schedule-store.ts), `secret_map` +
 //! `pi_credential_store` (secret-map-core.ts + pi-credential-store-core.ts),
-//! `mcp_oauth` (mcp-oauth-store-core.ts), and `portable_watch`
-//! (portable-config-watch-core.ts).
+//! `mcp_oauth` (mcp-oauth-store-core.ts), `portable_watch`
+//! (portable-config-watch-core.ts), `usage_store` (usage-store-core.ts +
+//! usage-store.ts), `profile` (profile.ts + profile-core.ts +
+//! profile-share-core.ts + profile-share-files.ts), and `external_editors`
+//! (external-editors.ts).
 //!
 //! The TS modules being ported inject closures everywhere (`SecretsPort`,
 //! durability seams, test hooks); `Box<dyn Fn>` field types are the norm, so
@@ -55,12 +58,15 @@ use std::os::unix::fs::{symlink, OpenOptionsExt};
 pub mod chat_store;
 pub mod config_dir;
 pub mod config_store;
+pub mod external_editors;
 pub mod mcp_oauth;
 pub mod pi_credential_store;
 pub mod portable_config;
 pub mod portable_watch;
+pub mod profile;
 pub mod schedule_store;
 pub mod secret_map;
+pub mod usage_store;
 
 pub use config_dir::{aiden_config_dir, ConfigDirError, AIDEN_CONFIG_DIR_ENV, AIDEN_DIR_NAME};
 
