@@ -336,6 +336,7 @@ where
 }
 
 /// In-memory source with sample data.
+#[allow(dead_code)] // standalone/demo scaffolding; the app uses `StoreScheduledSource`
 #[derive(Debug, Default)]
 pub struct MemoryScheduledSource {
     pub tasks: std::sync::Mutex<Vec<ScheduledTask>>,
@@ -348,6 +349,7 @@ impl ScheduledTaskSource for MemoryScheduledSource {
     }
 }
 
+#[allow(dead_code)] // standalone/demo scaffolding
 fn sample_task(
     id: &str,
     name: &str,
@@ -384,6 +386,7 @@ fn sample_task(
 }
 
 impl MemoryScheduledSource {
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn sample() -> Self {
         Self {
             tasks: std::sync::Mutex::new(vec![
@@ -434,6 +437,7 @@ impl ScheduledPanelDeps {
     }
 
     /// Demo wiring for standalone use and tests.
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn demo() -> Self {
         Self::new(Arc::new(MemoryScheduledSource::sample()))
     }

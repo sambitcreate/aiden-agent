@@ -1,3 +1,30 @@
+### 2026-08-07 — GPUI port: shell integration wiring (Phase 6 wiring)
+
+- Wired the previously standalone `rust/aiden-ui` surfaces into the app shell:
+  an `AppView` router (`Chat | Scheduled | Usage | Subagents | Settings`) with
+  a sidebar nav section + settings gear, the ⌘K command palette (snapshot
+  `PaletteDataSource` over the chat service/provider catalog, settings-backed
+  recency, palette commands routed onto shell services), the ⌘J terminal
+  drawer (real PTY, created once and hidden/shown), the ⌘⇧D dictation pill
+  (cached `WindowHandle` so re-invoking focuses instead of stacking), and
+  first-run onboarding (completion callback closes the onboarding window and
+  opens the main window).
+- `Stores` gained shared `schedules` + `usage` Arcs; `SettingsServices::from_stores`
+  now returns `Self` and reuses the shared schedule store; `StoreUsageSource`
+  maps `aiden_data::usage_store` summaries onto the usage panel types;
+  `StoreScheduledSource` feeds the scheduled panel from the real store.
+- Found and fixed a real boot bug: the onboarding window's root view was
+  `OnboardingView` without a gpui-component `Root` wrapper, and gpui-component
+  `Input` elements call `Root::read` while painting — first-run boots panicked.
+  The onboarding window now wraps the view in `Root` (completion is delivered
+  via the `on_complete` callback since the root handle no longer targets the
+  view). Onboarding panels/settings/pill `#[allow(dead_code)]` module flags in
+  `main.rs` were removed; remaining demo-scaffolding items keep targeted allows.
+- Verification: `cargo build -p aiden-ui`, `cargo test -p aiden-ui` (104 tests),
+  `cargo clippy -p aiden-ui --all-targets -- -D warnings`, `cargo fmt -p
+  aiden-ui -- --check`, and `cargo check --workspace` all pass; both onboarding
+  (fresh config) and main-window (marker present) smoke boots are clean.
+
 ### 2026-08-06 — GPUI port: aiden-core domain expansion (Phase 4)
 
 - Expanded `rust/aiden-core` with the dependency-free renderer/shared + chat
@@ -714,3 +741,35 @@ Major milestones only. Day-to-day changelog noise lives in git.
   `.papercuts/troubleshooting.md`: parent grep uses RE2 semantics (no JS
   lookbehind), Node-style `path_relative` needed on macOS `/var`→`/private/var`
   skew, and `.await` on mpsc sends is easy to drop silently.
+
+### 2026-08-07 — GPUI port: aiden-git crate + aiden-data usage/profile/external-editors
+
+- New crate `rust/aiden-git` (9 modules, ~7.0k LOC, 32 tests): port of
+  `main/services/git.ts`'s core surface. `GitService::run` mirrors the TS
+  runner (argv-only, env scrub of `GIT_DIR`/`GIT_CONFIG_*`, isolated process
+  group, 1 MiB output cap, 4s/20s/120s read/mutation/push timeouts with
+  SIGTERM→SIGKILL grace), `GitRepo::resolve` asserts the repo root before any
+  command, and mutations serialize per common-dir. Modules: `status`
+  (porcelain v2 parse + granular staged/unstaged/untracked/conflicted counts),
+  `branch` (list/checkout/create), `diff` (review snapshot fencing, per-file
+  diff, numstat, comparison), `commit` (isolated-index commit with
+  `.git/index.lock`, hooks, CAS `update-ref`), `push`/`pull` (reviewed push
+  capability + endpoint-frozen push, optional `--force-with-lease`,
+  `--ff-only` pull), `worktree` (list/add/remove with `aiden-owner` marker +
+  dev/ino pinning), `error` (typed `GitError` + stderr→auth/conflict/dirty
+  classification).
+- `rust/aiden-data` additions (3 modules, ~2.6k LOC, 20 tests):
+  `usage_store.rs` (usage-store-core.ts: tolerant `usage.json` normalization,
+  per-day×source×provider×model buckets, calendar streaks, 7d/30d/90d/1y/all
+  summaries for the heatmap/scoreboard views), `profile.rs` (profile.ts +
+  profile-core.ts + profile-share-core.ts + profile-share-files.ts: name
+  normalization/validation, `/usr/bin/id -F` display name, PNG share-image
+  decode/validate with CRC chunk walk, private temp share files + stale
+  cleanup), `external_editors.rs` (external-editors.ts: 31 editor definitions,
+  resolution/ranking, spotlight query, argv-only `open -b` launch).
+- Workspace: added `aiden-git` to members + `workspace.dependencies`, and
+  added the previously-missing `aiden-mcp` workspace dependency (pre-existing
+  uncommitted `aiden-ui` work referenced it, breaking `cargo check --workspace`).
+- Verified: `cargo test -p aiden-git -p aiden-data` (157 passed),
+  `cargo clippy -p aiden-git -p aiden-data --all-targets -- -D warnings` (clean),
+  `cargo fmt --check` (clean), `cargo check --workspace` (passes).

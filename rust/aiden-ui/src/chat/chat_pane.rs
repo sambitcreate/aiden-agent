@@ -8,7 +8,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
-    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, WindowExt,
+    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
 };
 
 use crate::app::AppState;
@@ -50,80 +50,78 @@ impl AppState {
         }
 
         let has_chats = !self.service.read(cx).filtered_chats().is_empty();
-        let body = if !snapshot.has_providers {
-            // No provider configured: inline notice with a settings action.
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_base()
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .child("No providers configured yet"),
-                        )
-                        .child(
-                            div().text_sm().text_color(theme.muted_foreground).child(
+        let body =
+            if !snapshot.has_providers {
+                // No provider configured: inline notice with a settings action.
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_base()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("No providers configured yet"),
+                            )
+                            .child(div().text_sm().text_color(theme.muted_foreground).child(
                                 "Add a provider in Settings to start chatting with a model.",
-                            ),
-                        ),
-                )
-                .child(
-                    Button::new("open-settings-placeholder")
-                        .small()
-                        .label("Open Settings")
-                        .on_click(cx.listener(|this, _event, window, cx| {
-                            window.push_notification("Settings will arrive in a later phase.", cx);
-                            let _ = this;
-                        })),
-                )
-                .into_any_element()
-        } else if !has_chats {
-            // Quiet empty state: no chats at all (per PRODUCT.md, no
-            // decorative buttons).
-            v_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    Icon::new(IconName::Bot)
-                        .small()
-                        .text_color(theme.muted_foreground),
-                )
-                .child(
-                    div()
-                        .text_lg()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.foreground)
-                        .child("Welcome to Aiden"),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Press ⌘N for a new chat, or type below to begin."),
-                )
-                .into_any_element()
-        } else {
-            // Chat selected but empty.
-            v_flex()
-                .gap_1()
-                .items_center()
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("New chat"),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Ask anything to get started."),
-                )
-                .into_any_element()
-        };
+                            )),
+                    )
+                    .child(
+                        Button::new("open-settings")
+                            .small()
+                            .label("Open Settings")
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.open_settings_section(window, cx);
+                            })),
+                    )
+                    .into_any_element()
+            } else if !has_chats {
+                // Quiet empty state: no chats at all (per PRODUCT.md, no
+                // decorative buttons).
+                v_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        Icon::new(IconName::Bot)
+                            .small()
+                            .text_color(theme.muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child("Welcome to Aiden"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("Press ⌘N for a new chat, or type below to begin."),
+                    )
+                    .into_any_element()
+            } else {
+                // Chat selected but empty.
+                v_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_base()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("New chat"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("Ask anything to get started."),
+                    )
+                    .into_any_element()
+            };
 
         v_flex()
             .id("chat-empty")

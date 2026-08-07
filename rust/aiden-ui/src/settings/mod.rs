@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use aiden_data::config_store::ConfigStore;
-use aiden_data::schedule_store::{create_schedule_store, DataStorePersistence, ScheduleStore};
+use aiden_data::schedule_store::{DataStorePersistence, ScheduleStore};
 use aiden_data::secret_map::ProviderKeysStore;
 use aiden_mcp::client::McpClientManager;
 use gpui::{
@@ -92,25 +92,18 @@ pub struct SettingsServices {
 
 impl SettingsServices {
     /// Build the services from the app's durable stores. The schedule store is
-    /// recreated here (machine-local `schedules.json` + `schedule-runs.json`)
-    /// so the settings surface does not depend on the chat service.
-    pub fn from_stores(stores: &crate::services::stores::Stores) -> anyhow::Result<Self> {
-        let local_root = aiden_data::machine_local_data_dir();
-        let schedules = create_schedule_store(
-            DataStorePersistence::new("schedules.json", Some(local_root.clone())),
-            DataStorePersistence::new("schedule-runs.json", Some(local_root.clone())),
-            Box::new(aiden_data::now_millis),
-            None,
-        );
+    /// shared with the scheduled-tasks panel (both surfaces list the same
+    /// task records), and the MCP manager is fresh per settings surface.
+    pub fn from_stores(stores: &crate::services::stores::Stores) -> Self {
         let config_dir = aiden_data::aiden_config_dir()
             .unwrap_or_else(|_| aiden_data::home_dir().join(".aiden"));
-        Ok(Self {
+        Self {
             config: stores.config.clone(),
             keys: stores.keys.clone(),
-            schedules: Arc::new(schedules),
+            schedules: stores.schedules.clone(),
             mcp: Arc::new(McpClientManager::new()),
             config_dir,
-        })
+        }
     }
 }
 
@@ -212,12 +205,13 @@ impl SettingsView {
         .detach();
     }
 
-    fn select_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+    /// Route the settings surface to a section (the shell calls this when the
+    /// palette or the sidebar gear opens settings).
+    pub(crate) fn select_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
         self.active = section;
         self.error = None;
         cx.notify();
     }
-
     /// Refresh the provider + settings snapshots after a mutation (all section
     /// mutations run on the background and then call this).
     fn refresh(&mut self, cx: &mut Context<Self>) {

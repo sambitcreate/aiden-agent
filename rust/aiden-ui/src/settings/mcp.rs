@@ -37,6 +37,7 @@ pub struct McpServerRow {
     pub transport: String,
     pub command: Option<String>,
     pub args: Vec<String>,
+    #[allow(dead_code)] // kept for round-trip fidelity; the row UI shows command + args
     pub env: BTreeMap<String, String>,
     pub url: Option<String>,
     pub oauth: bool,
@@ -114,6 +115,7 @@ pub fn parse_env_lines(text: &str) -> BTreeMap<String, String> {
 }
 
 /// Format a record as `KEY=VALUE` lines (the TS `recordToLines`).
+#[allow(dead_code)] // round-trip helper for the env editor; the row UI hides env today
 pub fn format_env_lines(record: &BTreeMap<String, String>) -> String {
     record
         .iter()

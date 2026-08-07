@@ -34,11 +34,17 @@ pub enum PaletteCommand {
     FocusComposer,
     OpenAssistant,
     NewChat,
+    // Mode-openers that never leave the palette as commands (they enter a
+    // sub-mode instead); kept so the renderer contract is exhaustive.
+    #[allow(dead_code)]
     SearchChats,
     PreviousChat,
     NextChat,
+    #[allow(dead_code)]
     ChangeModel,
+    #[allow(dead_code)]
     ManageProviders,
+    #[allow(dead_code)]
     SearchSettings,
     OpenSettings,
     ToggleSidebar,
@@ -47,9 +53,22 @@ pub enum PaletteCommand {
     OpenWorkspaceEditor,
     OpenSettingsSection(String),
     SelectChat(String),
-    SelectModel { provider_id: String, model: String },
+    SelectModel {
+        provider_id: String,
+        model: String,
+    },
     RefreshProviders,
     SetAppearanceMode(Mode),
+    /// Cycle system → light → dark appearance.
+    ToggleTheme,
+    /// Route the main content area to the scheduled-tasks panel.
+    OpenScheduled,
+    /// Route the main content area to the usage/profile panel.
+    OpenUsage,
+    /// Route the main content area to the subagent roster.
+    OpenSubagents,
+    /// Exit Aiden.
+    Quit,
 }
 
 /// Palette sub-modes, mirroring the renderer's `CommandPaletteMode`.
@@ -108,6 +127,11 @@ pub const PALETTE_COMMAND_IDS: &[&str] = &[
     "sidebar.toggle",
     "terminal.toggle",
     "environment.toggle",
+    "theme.toggle",
+    "view.scheduled",
+    "view.usage",
+    "view.subagents",
+    "app.quit",
 ];
 
 /// The ids that open a sub-mode instead of executing immediately.
@@ -235,6 +259,41 @@ pub static PALETTE_COMMANDS: &[PaletteCommandDefinition] = &[
         description: "Show or hide files and Git tools.",
         category: PaletteCategory::Tools,
         keywords: &["files", "git", "changes"],
+    },
+    PaletteCommandDefinition {
+        id: "theme.toggle",
+        title: "Toggle appearance",
+        description: "Cycle between system, light, and dark appearance.",
+        category: PaletteCategory::Settings,
+        keywords: &["theme", "dark", "light", "mode"],
+    },
+    PaletteCommandDefinition {
+        id: "view.scheduled",
+        title: "Scheduled tasks",
+        description: "Open the scheduled tasks panel.",
+        category: PaletteCategory::Navigate,
+        keywords: &["schedule", "cron", "automation"],
+    },
+    PaletteCommandDefinition {
+        id: "view.usage",
+        title: "Usage & profile",
+        description: "Open the usage and profile panel.",
+        category: PaletteCategory::Navigate,
+        keywords: &["tokens", "cost", "activity"],
+    },
+    PaletteCommandDefinition {
+        id: "view.subagents",
+        title: "Subagents",
+        description: "Open the subagent roster for this chat.",
+        category: PaletteCategory::Navigate,
+        keywords: &["runs", "scout", "planner"],
+    },
+    PaletteCommandDefinition {
+        id: "app.quit",
+        title: "Quit Aiden",
+        description: "Exit Aiden.",
+        category: PaletteCategory::Aiden,
+        keywords: &["exit", "close", "shutdown"],
     },
 ];
 
@@ -403,12 +462,14 @@ pub trait PaletteDataSource: Send + Sync {
 }
 
 /// In-memory recency store (also used by tests and the standalone demo).
+#[allow(dead_code)] // standalone/demo scaffolding; the app uses `SettingsRecentStore`
 #[derive(Debug, Default)]
 pub struct MemoryRecentStore {
     commands: std::sync::Mutex<Vec<String>>,
 }
 
 impl MemoryRecentStore {
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn new(commands: Vec<String>) -> Self {
         Self {
             commands: std::sync::Mutex::new(commands),
@@ -476,6 +537,7 @@ impl RecentCommandsStore for SettingsRecentStore {
 
 /// Demo in-memory data source so the panel can be exercised standalone and in
 /// tests before the orchestrator wires the real chat service.
+#[allow(dead_code)] // standalone/demo scaffolding; the app uses `AppPaletteSource`
 #[derive(Debug, Default, Clone)]
 pub struct DemoPaletteSource {
     pub chats: Vec<ChatMeta>,
@@ -503,6 +565,7 @@ impl PaletteDataSource for DemoPaletteSource {
 }
 
 impl DemoPaletteSource {
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn sample() -> Self {
         Self {
             chats: vec![
@@ -643,6 +706,7 @@ impl CommandPaletteDeps {
     }
 
     /// Demo wiring so the palette is exercisable standalone.
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn demo() -> Self {
         Self::new(
             Arc::new(DemoPaletteSource::sample()),
@@ -672,6 +736,7 @@ impl CommandPalette {
     }
 
     /// Load the recency history on the background executor (I/O rule).
+    #[allow(dead_code)] // reload hook; the app refreshes recents at construction
     pub fn refresh_recent(&mut self, cx: &mut Context<Self>) {
         let recent = self.recent.clone();
         cx.spawn(async move |this, cx| {
@@ -796,6 +861,11 @@ impl CommandPalette {
             "sidebar.toggle" => PaletteCommand::ToggleSidebar,
             "terminal.toggle" => PaletteCommand::ToggleTerminal,
             "environment.toggle" => PaletteCommand::ToggleEnvironment,
+            "theme.toggle" => PaletteCommand::ToggleTheme,
+            "view.scheduled" => PaletteCommand::OpenScheduled,
+            "view.usage" => PaletteCommand::OpenUsage,
+            "view.subagents" => PaletteCommand::OpenSubagents,
+            "app.quit" => PaletteCommand::Quit,
             _ => return,
         };
         cx.emit(command);

@@ -1,28 +1,192 @@
-//! The application shell: window root, title bar, and orchestration of the
-//! sidebar + chat pane. All render helpers live on `AppState` but are defined
-//! in per-surface modules (`shell::sidebar`, `chat::chat_pane`,
-//! `chat::message_list`) so each file stays small.
+//! The application shell: window root, title bar, view routing, and
+//! orchestration of the sidebar + content area. All render helpers live on
+//! `AppState` but are defined in per-surface modules (`shell::sidebar`,
+//! `chat::chat_pane`, `chat::message_list`) so each file stays small.
+//!
+//! The shell owns the main-window panels (command palette, terminal drawer,
+//! scheduled/usage/subagents, settings) as lazily created entities, and
+//! routes the sidebar palette / gear / keyboard actions onto them.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::sync::Arc;
+
+use aiden_core::appearance::Mode;
 use gpui::{
-    actions, div, AppContext as _, Context, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _, Subscription, Window,
+    actions, div, prelude::FluentBuilder as _, px, AppContext as _, Context, Entity, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _,
+    Subscription, Window,
 };
 use gpui_component::{
     h_flex,
     input::{InputEvent, InputState},
     select::{SelectEvent, SelectItem as _, SelectState},
-    v_flex, ActiveTheme,
+    v_flex, ActiveTheme, IconName, WindowExt as _,
 };
 
 use crate::chat::composer::{decode_model_key, model_items, model_key, ModelItem};
+use crate::panels::command_palette::{
+    CommandPalette, CommandPaletteDeps, PaletteCommand, PaletteDataSource, PaletteProvider,
+    RecentCommandsStore, SettingsRecentStore,
+};
+use crate::panels::scheduled_panel::{
+    ScheduledPanel, ScheduledPanelDeps, ScheduledPanelEvent, ScheduledTaskSource,
+    StoreScheduledSource,
+};
+use crate::panels::subagents_panel::{
+    MemoryRunSource, SubagentRunSource, SubagentsPanel, SubagentsPanelDeps,
+};
+use crate::panels::terminal_drawer::{TerminalDeps, TerminalDrawer};
+use crate::panels::usage_panel::{StoreUsageSource, UsageDataSource, UsagePanel, UsagePanelDeps};
+use crate::pill::{open_pill_window, PillDeps, PillView, SilenceAudioSource};
 use crate::services::chat_service::ChatService;
+use crate::services::provider_kit::ConfiguredProvider;
 use crate::services::stores::Stores;
+use crate::settings::{SettingsSection, SettingsServices, SettingsView};
 
-actions!(aiden, [NewChat, Quit]);
+actions!(
+    aiden,
+    [NewChat, Quit, TogglePalette, ToggleTerminal, TogglePill]
+);
+
+/// The main content area the shell routes to. Session-only: the last view is
+/// never persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppView {
+    #[default]
+    Chat,
+    Scheduled,
+    Usage,
+    Subagents,
+    Settings,
+}
+
+impl AppView {
+    pub const ALL: &'static [AppView] = &[
+        AppView::Chat,
+        AppView::Scheduled,
+        AppView::Subagents,
+        AppView::Usage,
+        AppView::Settings,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AppView::Chat => "Chats",
+            AppView::Scheduled => "Scheduled",
+            AppView::Usage => "Usage",
+            AppView::Subagents => "Subagents",
+            AppView::Settings => "Settings",
+        }
+    }
+
+    pub fn icon(self) -> IconName {
+        match self {
+            AppView::Chat => IconName::BookOpen,
+            AppView::Scheduled => IconName::Calendar,
+            AppView::Usage => IconName::ChartPie,
+            AppView::Subagents => IconName::Bot,
+            AppView::Settings => IconName::Settings2,
+        }
+    }
+}
+
+/// Cycle the appearance mode forward (system → light → dark → system). Pure
+/// so the palette's "Toggle appearance" command is unit-testable.
+pub fn cycle_appearance_mode(mode: Mode) -> Mode {
+    match mode {
+        Mode::System => Mode::Light,
+        Mode::Light => Mode::Dark,
+        Mode::Dark => Mode::System,
+    }
+}
+
+/// Map a palette settings destination id onto a settings section. `"usage"`
+/// deliberately resolves to `None` — usage lives on its own panel.
+pub fn settings_section_from_id(id: &str) -> Option<SettingsSection> {
+    match id {
+        "appearance" => Some(SettingsSection::Appearance),
+        "providers" => Some(SettingsSection::Providers),
+        "shortcuts" => Some(SettingsSection::Shortcuts),
+        "mcp" => Some(SettingsSection::Mcp),
+        "scheduled-tasks" => Some(SettingsSection::ScheduledTasks),
+        "about" => Some(SettingsSection::About),
+        _ => None,
+    }
+}
+
+/// One configured provider as the palette renders it.
+pub fn palette_provider(provider: &ConfiguredProvider) -> PaletteProvider {
+    PaletteProvider {
+        id: provider.id.clone(),
+        label: provider.label.clone(),
+        models: provider.models.clone(),
+        needs_key: provider.needs_key,
+        has_key: provider.has_key,
+    }
+}
+
+/// The live data the command palette reads. The palette's `PaletteDataSource`
+/// methods take no context, so the shell snapshots the chat service on every
+/// palette open (see [`AppState::palette_source_snapshot`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PaletteSourceSnapshot {
+    pub chats: Vec<aiden_core::ChatMeta>,
+    pub providers: Vec<PaletteProvider>,
+    pub selection: Option<(String, String)>,
+    pub appearance: Option<Mode>,
+}
+
+/// `PaletteDataSource` over a [`PaletteSourceSnapshot`] (Send + Sync).
+pub(crate) struct AppPaletteSource {
+    snapshot: Arc<std::sync::Mutex<PaletteSourceSnapshot>>,
+}
+
+impl AppPaletteSource {
+    pub fn new(snapshot: Arc<std::sync::Mutex<PaletteSourceSnapshot>>) -> Self {
+        Self { snapshot }
+    }
+}
+
+impl PaletteDataSource for AppPaletteSource {
+    fn chats(&self) -> Vec<aiden_core::ChatMeta> {
+        let guard = self.snapshot.lock();
+        guard
+            .map(|snapshot| snapshot.chats.clone())
+            .unwrap_or_default()
+    }
+
+    fn providers(&self) -> Vec<PaletteProvider> {
+        let guard = self.snapshot.lock();
+        guard
+            .map(|snapshot| snapshot.providers.clone())
+            .unwrap_or_default()
+    }
+
+    fn selected(&self) -> Option<(String, String)> {
+        let guard = self.snapshot.lock();
+        guard.ok().and_then(|snapshot| snapshot.selection.clone())
+    }
+
+    fn appearance_mode(&self) -> Option<Mode> {
+        let guard = self.snapshot.lock();
+        guard.map(|snapshot| snapshot.appearance).unwrap_or(None)
+    }
+}
+
+/// The pill window handle cache: re-invoking ⌘⇧D focuses the existing pill
+/// instead of stacking windows. A true global hotkey (active while another
+/// app is focused) comes with the aiden-mac wiring in a later phase.
+static PILL_WINDOW: std::sync::Mutex<Option<gpui::WindowHandle<PillView>>> =
+    std::sync::Mutex::new(None);
 
 /// The per-window root view.
 pub struct AppState {
     pub(crate) service: Entity<ChatService>,
+    /// The durable stores (Arc'd) for the lazily created panels + settings.
+    pub(crate) stores: Stores,
+    /// The active main content view (session-only, defaults to Chat).
+    pub(crate) view: AppView,
     /// Multiline auto-growing composer input.
     pub(crate) composer_input: Entity<InputState>,
     /// Sidebar chat search input.
@@ -35,11 +199,22 @@ pub struct AppState {
     last_catalog: Vec<String>,
     appearance_applied: bool,
     _subscriptions: Vec<Subscription>,
+
+    // Lazily created surface entities (created on first navigation/toggle and
+    // kept alive so their state — e.g. the terminal PTY — survives view
+    // switches and drawer toggles).
+    settings: Option<Entity<SettingsView>>,
+    scheduled: Option<Entity<ScheduledPanel>>,
+    usage: Option<Entity<UsagePanel>>,
+    subagents: Option<Entity<SubagentsPanel>>,
+    terminal: Option<Entity<TerminalDrawer>>,
+    palette: Option<Entity<CommandPalette>>,
+    palette_source: Option<Arc<std::sync::Mutex<PaletteSourceSnapshot>>>,
 }
 
 impl AppState {
     pub fn new(stores: Stores, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let service = cx.new(|cx| ChatService::new(stores, cx));
+        let service = cx.new(|cx| ChatService::new(stores.clone(), cx));
         service.update(cx, |service, cx| service.boot(cx));
 
         let composer_input = cx.new(|cx| {
@@ -51,6 +226,8 @@ impl AppState {
 
         let mut this = Self {
             service,
+            stores,
+            view: AppView::default(),
             composer_input,
             search_input,
             model_select: None,
@@ -60,6 +237,13 @@ impl AppState {
             last_catalog: Vec::new(),
             appearance_applied: false,
             _subscriptions: Vec::new(),
+            settings: None,
+            scheduled: None,
+            usage: None,
+            subagents: None,
+            terminal: None,
+            palette: None,
+            palette_source: None,
         };
 
         // Composer: re-render on change; Enter (without shift) sends.
@@ -224,11 +408,386 @@ impl AppState {
     }
 
     fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
+        self.set_view(AppView::Chat, cx);
         self.service.update(cx, |service, cx| service.new_chat(cx));
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
+    }
+
+    // =======================================================================
+    // View routing
+    // =======================================================================
+
+    /// Route the main content area (session-only; never persisted).
+    pub(crate) fn set_view(&mut self, view: AppView, cx: &mut Context<Self>) {
+        if self.view != view {
+            self.view = view;
+            cx.notify();
+        }
+    }
+
+    /// Route to Settings and select the Providers section (the shell's
+    /// default settings landing spot).
+    pub(crate) fn open_settings_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_view(AppView::Settings, cx);
+        let settings = self.settings_entity(window, cx);
+        settings.update(cx, |settings, cx| {
+            settings.select_section(SettingsSection::Providers, cx);
+        });
+    }
+
+    // =======================================================================
+    // Command palette (⌘K)
+    // =======================================================================
+
+    fn on_toggle_palette(
+        &mut self,
+        _: &TogglePalette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_palette(window, cx);
+        self.refresh_palette_source(cx);
+        if let Some(palette) = &self.palette {
+            palette.update(cx, |palette, cx| palette.toggle(window, cx));
+        }
+    }
+
+    /// The live snapshot for the palette (chats, providers, selection,
+    /// appearance) read from the chat service.
+    fn palette_source_snapshot(&self, cx: &mut Context<Self>) -> PaletteSourceSnapshot {
+        let service = self.service.read(cx);
+        PaletteSourceSnapshot {
+            chats: service.chat_list.clone(),
+            providers: service.providers.iter().map(palette_provider).collect(),
+            selection: service
+                .selection
+                .as_ref()
+                .map(|selection| (selection.provider_id.clone(), selection.model.clone())),
+            appearance: Some(service.appearance.mode),
+        }
+    }
+
+    fn refresh_palette_source(&self, cx: &mut Context<Self>) {
+        if let Some(source) = &self.palette_source {
+            if let Ok(mut guard) = source.lock() {
+                *guard = self.palette_source_snapshot(cx);
+            }
+        }
+    }
+
+    /// Create the palette once (the recency store persists to `settings.json`
+    /// through the config store).
+    fn ensure_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            return;
+        }
+        let snapshot = Arc::new(std::sync::Mutex::new(self.palette_source_snapshot(cx)));
+        let data: Arc<dyn PaletteDataSource> = Arc::new(AppPaletteSource::new(snapshot.clone()));
+        let recent: Arc<dyn RecentCommandsStore> =
+            Arc::new(SettingsRecentStore::new(self.stores.config.clone()));
+        let entity = cx.new(|cx| CommandPalette::new(cx, CommandPaletteDeps::new(data, recent)));
+        self._subscriptions.push(cx.subscribe_in(
+            &entity,
+            window,
+            |this, _source, event, window, cx| {
+                this.on_palette_command(event.clone(), window, cx);
+            },
+        ));
+        self.palette = Some(entity);
+        self.palette_source = Some(snapshot);
+    }
+
+    /// Dismiss the palette overlay (used for commands that do not close it
+    /// themselves, e.g. RefreshProviders).
+    fn close_palette(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(palette) = &self.palette {
+            palette.update(cx, |palette, cx| palette.close_state(cx));
+            window.close_dialog(cx);
+        }
+    }
+
+    /// Route one palette command onto the shell services.
+    fn on_palette_command(
+        &mut self,
+        command: PaletteCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            PaletteCommand::NewChat => {
+                self.set_view(AppView::Chat, cx);
+                self.service.update(cx, |service, cx| service.new_chat(cx));
+            }
+            PaletteCommand::SelectChat(id) => {
+                self.set_view(AppView::Chat, cx);
+                self.service
+                    .update(cx, |service, cx| service.select_chat(&id, cx));
+            }
+            PaletteCommand::SelectModel { provider_id, model } => {
+                self.set_view(AppView::Chat, cx);
+                self.service.update(cx, |service, cx| {
+                    service.select_model(&provider_id, &model, cx);
+                });
+            }
+            PaletteCommand::OpenSettings => self.open_settings_section(window, cx),
+            PaletteCommand::OpenSettingsSection(id) => {
+                if let Some(section) = settings_section_from_id(&id) {
+                    self.set_view(AppView::Settings, cx);
+                    let settings = self.settings_entity(window, cx);
+                    settings.update(cx, |settings, cx| {
+                        settings.select_section(section, cx);
+                    });
+                } else if id == "usage" {
+                    self.set_view(AppView::Usage, cx);
+                }
+            }
+            PaletteCommand::SetAppearanceMode(mode) => {
+                self.service
+                    .update(cx, |service, cx| service.set_appearance_mode(mode, cx));
+            }
+            PaletteCommand::ToggleTheme => {
+                let mode = self.service.read(cx).appearance.mode;
+                self.service.update(cx, |service, cx| {
+                    service.set_appearance_mode(cycle_appearance_mode(mode), cx);
+                });
+            }
+            PaletteCommand::OpenScheduled => self.set_view(AppView::Scheduled, cx),
+            PaletteCommand::OpenUsage => self.set_view(AppView::Usage, cx),
+            PaletteCommand::OpenSubagents => self.set_view(AppView::Subagents, cx),
+            PaletteCommand::Quit => cx.quit(),
+            PaletteCommand::ToggleTerminal => self.toggle_terminal(window, cx),
+            PaletteCommand::FocusComposer => {
+                self.composer_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+            PaletteCommand::NextChat | PaletteCommand::PreviousChat => {
+                let forward = matches!(command, PaletteCommand::NextChat);
+                self.cycle_chat(forward, cx);
+            }
+            PaletteCommand::RefreshProviders => {
+                self.service
+                    .update(cx, |service, cx| service.refresh_providers(cx));
+                self.close_palette(window, cx);
+            }
+            PaletteCommand::ToggleSidebar
+            | PaletteCommand::ToggleEnvironment
+            | PaletteCommand::OpenWorkspaceEditor
+            | PaletteCommand::OpenAssistant
+            | PaletteCommand::SearchChats
+            | PaletteCommand::ChangeModel
+            | PaletteCommand::ManageProviders
+            | PaletteCommand::SearchSettings => {
+                // These surface commands map onto real services when their
+                // target surfaces (sidebar collapse, env panel, editor
+                // launching) land; keep them accepted so the palette never
+                // drops a selection silently.
+                tracing::debug!(?command, "palette command has no wired service yet");
+            }
+        }
+    }
+
+    /// Move to the previous/next chat in the sidebar order (palette arrows).
+    fn cycle_chat(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self
+            .service
+            .read(cx)
+            .filtered_chats()
+            .iter()
+            .map(|meta| meta.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let step: i64 = if forward { 1 } else { -1 };
+        let current = self.service.read(cx).active_chat_id.clone();
+        let index = current
+            .as_ref()
+            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+            .unwrap_or(0);
+        let next = ((index as i64 + step).rem_euclid(ids.len() as i64)) as usize;
+        self.set_view(AppView::Chat, cx);
+        self.service
+            .update(cx, |service, cx| service.select_chat(&ids[next], cx));
+    }
+
+    // =======================================================================
+    // Terminal drawer (⌘J, chat view only)
+    // =======================================================================
+
+    fn on_toggle_terminal(
+        &mut self,
+        _: &ToggleTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_terminal(window, cx);
+    }
+
+    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entity = self.terminal_entity(window, cx);
+        entity.update(cx, |terminal, cx| terminal.toggle(window, cx));
+    }
+
+    /// Create the terminal drawer once; the PTY stays alive across toggles
+    /// (the drawer hides/shows, it is never destroyed).
+    fn terminal_entity(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TerminalDrawer> {
+        if let Some(entity) = &self.terminal {
+            return entity.clone();
+        }
+        let deps = TerminalDeps {
+            shell: None,
+            // No workspace concept in the shell yet: start the shell in the
+            // user's home directory.
+            cwd: Some(aiden_data::home_dir()),
+            simple: false,
+        };
+        let entity = cx.new(|cx| TerminalDrawer::new(cx, deps));
+        self.terminal = Some(entity.clone());
+        entity
+    }
+
+    // =======================================================================
+    // Lazy panel entities (created on first navigation)
+    // =======================================================================
+
+    fn settings_entity(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SettingsView> {
+        if let Some(entity) = &self.settings {
+            return entity.clone();
+        }
+        let services = SettingsServices::from_stores(&self.stores);
+        let entity = cx.new(|cx| SettingsView::new(cx, services));
+        self.settings = Some(entity.clone());
+        entity
+    }
+
+    fn scheduled_entity(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ScheduledPanel> {
+        if let Some(entity) = &self.scheduled {
+            return entity.clone();
+        }
+        let source: Arc<dyn ScheduledTaskSource> =
+            Arc::new(StoreScheduledSource::new(self.stores.schedules.clone()));
+        let entity = cx.new(|cx| ScheduledPanel::new(cx, ScheduledPanelDeps::new(source)));
+        let panel = entity.clone();
+        self._subscriptions.push(cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _source, event, window, cx| match event {
+                ScheduledPanelEvent::Refresh => {}
+                ScheduledPanelEvent::ToggleEnabled { id, enabled } => {
+                    this.toggle_scheduled_task(panel.clone(), id, *enabled, cx);
+                }
+                ScheduledPanelEvent::RunNow { .. } => {
+                    // There is no scheduler runtime in the shell yet; the
+                    // panel lists and toggles tasks, execution lands later.
+                    window.push_notification(
+                        "Scheduled task execution lands with the scheduler runtime.",
+                        cx,
+                    );
+                }
+            },
+        ));
+        self.scheduled = Some(entity.clone());
+        entity
+    }
+
+    /// Persist an enable/disable toggle through the shared schedule store,
+    /// then reload the panel.
+    fn toggle_scheduled_task(
+        &mut self,
+        panel: Entity<ScheduledPanel>,
+        id: &str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let schedules = self.stores.schedules.clone();
+        let id = id.to_string();
+        cx.spawn(async move |_this, cx| {
+            cx.background_spawn(async move {
+                let _ = schedules.set_enabled(&id, enabled);
+            })
+            .await;
+            let _ = panel.update(cx, |panel, cx| panel.refresh(cx));
+        })
+        .detach();
+    }
+
+    fn usage_entity(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Entity<UsagePanel> {
+        if let Some(entity) = &self.usage {
+            return entity.clone();
+        }
+        let source: Arc<dyn UsageDataSource> =
+            Arc::new(StoreUsageSource::new(self.stores.usage.clone()));
+        let entity = cx.new(|cx| UsagePanel::new(cx, UsagePanelDeps::new(source)));
+        self.usage = Some(entity.clone());
+        entity
+    }
+
+    fn subagents_entity(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SubagentsPanel> {
+        if let Some(entity) = &self.subagents {
+            return entity.clone();
+        }
+        // No live subagent runtime yet: the roster renders from an empty
+        // in-memory source (the empty state) until the run registry lands.
+        let source: Arc<dyn SubagentRunSource> = Arc::new(MemoryRunSource::default());
+        let entity = cx.new(|cx| SubagentsPanel::new(cx, SubagentsPanelDeps::new(source)));
+        self.subagents = Some(entity.clone());
+        entity
+    }
+
+    // =======================================================================
+    // Dictation pill (⌘⇧D)
+    // =======================================================================
+
+    fn on_toggle_pill(&mut self, _: &TogglePill, _window: &mut Window, cx: &mut Context<Self>) {
+        toggle_pill_window(self, cx);
+    }
+}
+
+/// Open (or focus) the dictation pill window. The handle is cached so a second
+/// ⌘⇧D focuses the existing pill instead of stacking windows; when the window
+/// was closed the stale handle is replaced.
+fn toggle_pill_window(this: &AppState, cx: &mut Context<AppState>) {
+    let mut guard = match PILL_WINDOW.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(handle) = guard.as_ref() {
+        if handle
+            .update(cx, |_view, window, _cx| window.activate_window())
+            .is_ok()
+        {
+            return;
+        }
+    }
+    let deps = PillDeps {
+        audio: Rc::new(RefCell::new(SilenceAudioSource)),
+        appearance: this.service.read(cx).appearance.clone(),
+        // GPUI cannot probe the OS preference; the motion gate defaults to
+        // allowing motion until the platform probe exists.
+        system_reduced_motion: false,
+    };
+    match open_pill_window(cx, deps) {
+        Ok(handle) => *guard = Some(handle),
+        Err(error) => tracing::warn!(%error, "failed to open the dictation pill"),
     }
 }
 
@@ -255,6 +814,9 @@ impl Render for AppState {
             .key_context("App")
             .on_action(cx.listener(Self::on_new_chat))
             .on_action(cx.listener(Self::on_quit))
+            .on_action(cx.listener(Self::on_toggle_palette))
+            .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_toggle_pill))
             .child(
                 gpui_component::TitleBar::new().child(
                     h_flex()
@@ -278,7 +840,141 @@ impl Render for AppState {
                     .flex_1()
                     .size_full()
                     .child(self.sidebar(window, cx))
-                    .child(self.chat_pane(window, cx)),
+                    .child(self.content_view(window, cx)),
             )
+    }
+}
+
+impl AppState {
+    /// The main content area for the active view. Panels paint their own
+    /// full-size root; the wrapper flexes so the panel fills the space left
+    /// by the sidebar.
+    fn content_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let content = match self.view {
+            AppView::Chat => self.chat_view(window, cx).into_any_element(),
+            AppView::Scheduled => self.scheduled_entity(window, cx).into_any_element(),
+            AppView::Usage => self.usage_entity(window, cx).into_any_element(),
+            AppView::Subagents => self.subagents_entity(window, cx).into_any_element(),
+            AppView::Settings => self.settings_entity(window, cx).into_any_element(),
+        };
+        v_flex()
+            .id("view-content")
+            .flex_1()
+            .h_full()
+            .min_w(px(0.))
+            .child(content)
+            .into_any_element()
+    }
+
+    /// The chat surface: message list + composer, with the terminal drawer
+    /// attached at the bottom when it is open (⌘J, chat view only).
+    fn chat_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let terminal_open = self
+            .terminal
+            .as_ref()
+            .is_some_and(|terminal| terminal.read(cx).is_open());
+        v_flex()
+            .id("chat-view")
+            .flex_1()
+            .h_full()
+            .min_w(px(0.))
+            .child(self.chat_pane(window, cx))
+            .when(terminal_open, |el| {
+                el.child(self.terminal_entity(window, cx))
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn view_router_defaults_to_chat_and_labels_are_unique() {
+        assert_eq!(AppView::default(), AppView::Chat);
+        let labels: std::collections::HashSet<_> =
+            AppView::ALL.iter().map(|view| view.label()).collect();
+        assert_eq!(labels.len(), AppView::ALL.len());
+        for view in AppView::ALL {
+            assert!(!view.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn settings_section_mapping_covers_palette_destinations() {
+        assert_eq!(
+            settings_section_from_id("providers"),
+            Some(SettingsSection::Providers)
+        );
+        assert_eq!(
+            settings_section_from_id("appearance"),
+            Some(SettingsSection::Appearance)
+        );
+        assert_eq!(
+            settings_section_from_id("scheduled-tasks"),
+            Some(SettingsSection::ScheduledTasks)
+        );
+        // Usage lives on its own panel, not in settings.
+        assert_eq!(settings_section_from_id("usage"), None);
+        assert_eq!(settings_section_from_id("nonsense"), None);
+    }
+
+    #[test]
+    fn appearance_mode_cycles_through_all_three_modes() {
+        assert_eq!(cycle_appearance_mode(Mode::System), Mode::Light);
+        assert_eq!(cycle_appearance_mode(Mode::Light), Mode::Dark);
+        assert_eq!(cycle_appearance_mode(Mode::Dark), Mode::System);
+    }
+
+    #[test]
+    fn palette_provider_mapping_keeps_the_catalog_shape() {
+        let provider = ConfiguredProvider {
+            id: "custom:ollama".into(),
+            label: "Ollama (local)".into(),
+            kind: aiden_data::portable_config::ProviderKind::Openai,
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            models: vec!["qwen3:8b".into()],
+            default_model: Some("qwen3:8b".into()),
+            needs_key: false,
+            has_key: false,
+        };
+        let mapped = palette_provider(&provider);
+        assert_eq!(mapped.id, "custom:ollama");
+        assert_eq!(mapped.label, "Ollama (local)");
+        assert_eq!(mapped.models, vec!["qwen3:8b"]);
+        assert!(!mapped.needs_key);
+        assert!(!mapped.has_key);
+    }
+
+    #[test]
+    fn app_palette_source_reads_the_snapshot() {
+        let snapshot = Arc::new(std::sync::Mutex::new(PaletteSourceSnapshot {
+            chats: vec![aiden_core::ChatMeta {
+                id: "chat-1".into(),
+                title: "GPUI port notes".into(),
+                workspace_id: None,
+                provider_id: None,
+                model: None,
+                created_at: 1,
+                updated_at: 2,
+            }],
+            providers: vec![PaletteProvider {
+                id: "anthropic".into(),
+                label: "Anthropic".into(),
+                models: vec!["claude-sonnet-4-5".into()],
+                needs_key: true,
+                has_key: true,
+            }],
+            selection: Some(("anthropic".into(), "claude-sonnet-4-5".into())),
+            appearance: Some(Mode::Dark),
+        }));
+        let source = AppPaletteSource::new(snapshot);
+        assert_eq!(source.chats().len(), 1);
+        assert_eq!(source.providers()[0].models, vec!["claude-sonnet-4-5"]);
+        assert_eq!(
+            source.selected(),
+            Some(("anthropic".to_string(), "claude-sonnet-4-5".to_string()))
+        );
+        assert_eq!(source.appearance_mode(), Some(Mode::Dark));
     }
 }

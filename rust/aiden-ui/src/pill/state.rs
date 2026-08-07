@@ -86,6 +86,7 @@ pub enum PillEvent {
     /// Coordinator broadcast: discard the current recording.
     Cancelled,
     /// Local clock tick while listening (elapsed seconds).
+    #[allow(dead_code)] // the coordinator drives the clock; the meter runs on its own timer
     Tick,
 }
 
@@ -181,6 +182,7 @@ pub fn format_elapsed(total_seconds: u64) -> String {
 /// for missing or malformed input. This ports `parsePillAppearanceStorageValue`:
 /// damage falls back to the caller's fallback instead of silently becoming
 /// default appearance values.
+#[allow(dead_code)] // only reachable through `MotionGate::from_settings` (coordinator-facing)
 pub fn strict_appearance_from_settings(
     settings: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<AppearanceConfig> {
@@ -210,6 +212,7 @@ impl Default for MotionGate {
 
 impl MotionGate {
     /// Read the gate from a persisted settings map (missing → `System`).
+    #[allow(dead_code)] // coordinator-facing; the shell injects the defaults today
     pub fn from_settings(settings: &serde_json::Map<String, serde_json::Value>) -> Self {
         let reduce_motion = strict_appearance_from_settings(settings)
             .map(|config| config.reduce_motion)
@@ -255,10 +258,12 @@ impl AppearanceSyncState {
     }
 
     /// The current revision; capture before starting an async hydration.
+    #[allow(dead_code)] // coordinator-facing; hydration lands with the wiring phase
     pub fn revision(&self) -> u64 {
         self.revision
     }
 
+    #[allow(dead_code)] // coordinator-facing
     pub fn has_config(&self) -> bool {
         self.config.is_some()
     }
@@ -275,6 +280,7 @@ impl AppearanceSyncState {
     /// Adopt an authoritative (settings) appearance only if nothing newer
     /// arrived since `hydration_revision` was captured. Returns whether the
     /// config actually changed.
+    #[allow(dead_code)] // coordinator-facing; hydration lands with the wiring phase
     pub fn adopt_authoritative(
         &mut self,
         config: AppearanceConfig,

@@ -176,6 +176,33 @@ impl ChatService {
         self.providers.iter().find(|provider| provider.id == id)
     }
 
+    /// Re-read the provider catalog (+ persisted selection) from the config
+    /// store. Used by the command palette's "Refresh provider catalogs" and
+    /// any future settings-driven catalog invalidation.
+    pub fn refresh_providers(&mut self, cx: &mut Context<Self>) {
+        let stores = self.stores.clone();
+        cx.spawn(async move |this, cx| {
+            let (providers, settings) = cx
+                .background_spawn(async move {
+                    let providers = stores
+                        .config
+                        .list_providers()
+                        .map(|list| list.iter().map(ConfiguredProvider::from).collect())
+                        .unwrap_or_default();
+                    let settings = stores.config.get_settings().unwrap_or_default();
+                    (providers, settings)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.providers = providers;
+                this.selection = this.resolve_selection(&settings);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     // =======================================================================
     // Sidebar state
     // =======================================================================

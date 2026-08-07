@@ -2,9 +2,11 @@
 //! `onboarding-flow.test.tsx`).
 //!
 //! [`OnboardingView`] is an `Entity + Render` flow view backed by the pure
-//! step-state machine in [`state`]. The orchestrator wires it later by opening
-//! a window with [`open_onboarding_window`] (or embedding the view) and
-//! subscribing to [`OnboardingEvent::Completed`].
+//! step-state machine in [`state`]. The orchestrator opens it with
+//! [`open_onboarding_window`] and is notified of completion through the
+//! [`OnboardingServices::on_complete`] foreground callback (the flow's
+//! `InputState` inputs require a gpui-component `Root`, so the window root is
+//! `Root` and the completion event cannot be subscribed to directly).
 //!
 //! Completion mechanism: the view emits the gpui event
 //! [`OnboardingEvent::Completed`] once the first-run marker
@@ -29,7 +31,7 @@ use gpui::{
 };
 use gpui_component::{
     input::{InputEvent, InputState},
-    TitleBar,
+    Root, TitleBar,
 };
 
 use crate::services::appearance::{
@@ -38,8 +40,8 @@ use crate::services::appearance::{
 use crate::services::stores::Stores;
 
 use state::{
-    should_show_onboarding, NextOutcome, OnboardingProvider, Step, MODEL_SELECTION_SETTINGS_KEY,
-    ONBOARDING_COMPLETE_KEY, PROFILE_NAME_SETTINGS_KEY,
+    NextOutcome, OnboardingProvider, Step, MODEL_SELECTION_SETTINGS_KEY, ONBOARDING_COMPLETE_KEY,
+    PROFILE_NAME_SETTINGS_KEY,
 };
 
 actions!(onboarding, [OnboardingNext, OnboardingBack, OnboardingSkip]);
@@ -450,15 +452,16 @@ fn static_str(message: &str) -> &'static str {
     Box::leak(message.to_string().into_boxed_str())
 }
 
-/// Open the onboarding flow in its own window. The window's root view is
-/// [`OnboardingView`] itself (no gpui-component `Root` wrapper — the flow uses
-/// no dialogs/sheets/notifications), so the returned handle targets the view
-/// and the orchestrator can subscribe to [`OnboardingEvent`] or drive it
-/// directly.
+/// Open the onboarding flow in its own window. The window's root view is a
+/// gpui-component `Root` (the flow's `InputState` inputs paint through the
+/// Root layer), with [`OnboardingView`] as the Root's child; the returned
+/// handle therefore targets `Root`, and completion is delivered through the
+/// [`OnboardingServices::on_complete`] callback rather than an event
+/// subscription.
 pub fn open_onboarding_window(
     cx: &mut App,
     services: OnboardingServices,
-) -> anyhow::Result<WindowHandle<OnboardingView>> {
+) -> anyhow::Result<WindowHandle<Root>> {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
@@ -473,9 +476,12 @@ pub fn open_onboarding_window(
     };
 
     cx.open_window(options, |window, cx| {
-        cx.new(|cx| OnboardingView::new(window, cx, services))
+        let view = cx.new(|cx| OnboardingView::new(window, cx, services));
+        cx.new(|cx| Root::new(view, window, cx))
     })
 }
 
+/// Re-exported for the orchestrator's first-run check in `main.rs`.
+pub use state::should_show_onboarding;
 /// Re-exported for the orchestrator and tests.
 pub use state::OnboardingMachine;

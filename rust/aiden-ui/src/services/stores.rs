@@ -11,7 +11,9 @@ use std::sync::Arc;
 use aiden_data::chat_store::{create_chat_store, ChatStore, ChatStoreDurability};
 use aiden_data::config_store::{ConfigStore, ConfigStoreError, SecretsPort};
 use aiden_data::portable_config::{create_portable_config_stores, PortableConfigTestHooks};
+use aiden_data::schedule_store::{create_schedule_store, DataStorePersistence, ScheduleStore};
 use aiden_data::secret_map::{KeyringCredentialCipher, ProviderKeysError, ProviderKeysStore};
+use aiden_data::usage_store::UsageStore;
 
 /// The keychain service name used for provider credentials.
 const KEYCHAIN_SERVICE: &str = "com.sambitcreate.aiden-agent.provider-keys";
@@ -23,6 +25,12 @@ pub struct Stores {
     pub chat: Arc<ChatStore>,
     pub config: Arc<ConfigStore>,
     pub keys: Arc<ProviderKeysStore>,
+    /// Scheduled tasks + run history (machine-local `schedules.json` /
+    /// `schedule-runs.json`). Shared with the settings surface and the
+    /// scheduled-tasks panel so both see the same task list.
+    pub schedules: Arc<ScheduleStore<DataStorePersistence, DataStorePersistence>>,
+    /// Privacy-safe aggregate usage (machine-local `usage.json`).
+    pub usage: Arc<UsageStore>,
 }
 
 impl Stores {
@@ -38,7 +46,7 @@ impl Stores {
         );
 
         let keys = Arc::new(ProviderKeysStore::new(
-            local_root,
+            local_root.clone(),
             KEYCHAIN_SERVICE,
             Arc::new(KeyringCredentialCipher::new(KEYCHAIN_SERVICE)),
         ));
@@ -52,8 +60,21 @@ impl Stores {
             None,
             ChatStoreDurability::default(),
         ));
+        let schedules = Arc::new(create_schedule_store(
+            DataStorePersistence::new("schedules.json", Some(local_root.clone())),
+            DataStorePersistence::new("schedule-runs.json", Some(local_root.clone())),
+            Box::new(aiden_data::now_millis),
+            None,
+        ));
+        let usage = Arc::new(UsageStore::new_data_store(Some(local_root.clone())));
 
-        Ok(Self { chat, config, keys })
+        Ok(Self {
+            chat,
+            config,
+            keys,
+            schedules,
+            usage,
+        })
     }
 }
 

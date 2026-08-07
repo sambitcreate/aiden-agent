@@ -458,6 +458,7 @@ pub struct TerminalDeps {
 }
 
 impl TerminalDeps {
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn demo() -> Self {
         Self::default()
     }
@@ -552,6 +553,7 @@ impl TerminalDrawer {
         self.open
     }
 
+    #[allow(dead_code)] // resize affordance; the drawer uses the default fraction
     pub fn set_height_fraction(&mut self, fraction: f32, cx: &mut Context<Self>) {
         self.height_fraction = fraction.clamp(0.2, 0.8);
         cx.notify();
@@ -571,6 +573,7 @@ impl TerminalDrawer {
     }
 
     /// Scroll the grid viewport.
+    #[allow(dead_code)] // the alacritty grid scrolls via the mouse wheel today
     pub fn scroll(&mut self, delta: i32) {
         if let Some(Backend::Alacritty(backend)) = &self.backend {
             backend

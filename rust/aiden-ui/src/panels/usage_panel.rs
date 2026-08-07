@@ -320,6 +320,7 @@ pub fn compact_number(value: u64) -> String {
 }
 
 /// `profileInitials`.
+#[allow(dead_code)] // renderer-contract helper; the avatar shows a static "A" today
 pub fn profile_initials(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     if words.is_empty() {
@@ -346,7 +347,99 @@ pub trait UsageDataSource: Send + Sync {
     fn summary(&self) -> UsageSummary;
 }
 
+/// Store-backed adapter over `aiden_data::usage_store::UsageStore`. The
+/// store's summary types mirror the panel's (both port the same renderer
+/// contract), so the mapping is a mechanical field copy (see the `From`
+/// impls below).
+pub struct StoreUsageSource {
+    store: Arc<aiden_data::usage_store::UsageStore>,
+}
+
+impl StoreUsageSource {
+    pub fn new(store: Arc<aiden_data::usage_store::UsageStore>) -> Self {
+        Self { store }
+    }
+}
+
+impl UsageDataSource for StoreUsageSource {
+    fn summary(&self) -> UsageSummary {
+        self.store
+            .summary(aiden_data::usage_store::UsageDateRange::Days30)
+            .map(Into::into)
+            .unwrap_or_default()
+    }
+}
+
+impl From<aiden_data::usage_store::UsageSummary> for UsageSummary {
+    fn from(summary: aiden_data::usage_store::UsageSummary) -> Self {
+        Self {
+            start_date: summary.start_date,
+            end_date: summary.end_date,
+            totals: summary.totals.into(),
+            days: summary.days.into_iter().map(Into::into).collect(),
+            models: summary.models.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<aiden_data::usage_store::UsageTotals> for UsageTotals {
+    fn from(totals: aiden_data::usage_store::UsageTotals) -> Self {
+        Self {
+            requests: totals.requests,
+            active_days: totals.active_days,
+            current_streak: totals.current_streak,
+            longest_streak: totals.longest_streak,
+            hosted_cost_usd: totals.hosted_cost_usd,
+            tokens: totals.tokens.into(),
+        }
+    }
+}
+
+impl From<aiden_data::usage_store::UsageTokenBreakdown> for UsageTokenBreakdown {
+    fn from(tokens: aiden_data::usage_store::UsageTokenBreakdown) -> Self {
+        Self {
+            input: tokens.input,
+            output: tokens.output,
+            cache_read: tokens.cache_read,
+            cache_write: tokens.cache_write,
+            reasoning: tokens.reasoning,
+            total: tokens.total,
+        }
+    }
+}
+
+impl From<aiden_data::usage_store::UsageDaySummary> for UsageDaySummary {
+    fn from(day: aiden_data::usage_store::UsageDaySummary) -> Self {
+        Self {
+            date: day.date,
+            requests: day.requests,
+            reported_token_requests: day.reported_token_requests,
+            unmetered_requests: day.unmetered_requests,
+            tokens: day.tokens.into(),
+            hosted_cost_usd: day.hosted_cost_usd,
+        }
+    }
+}
+
+impl From<aiden_data::usage_store::UsageModelSummary> for UsageModelSummary {
+    fn from(model: aiden_data::usage_store::UsageModelSummary) -> Self {
+        Self {
+            provider_id: model.provider_id,
+            provider_label: model.provider_label,
+            model_id: model.model_id,
+            model_label: model.model_label,
+            local: model.local,
+            requests: model.requests,
+            reported_token_requests: model.reported_token_requests,
+            unmetered_requests: model.unmetered_requests,
+            tokens: model.tokens.into(),
+            hosted_cost_usd: model.hosted_cost_usd,
+        }
+    }
+}
+
 /// In-memory source (demo data for standalone use and tests).
+#[allow(dead_code)] // standalone/demo scaffolding; the app uses `StoreUsageSource`
 #[derive(Debug, Default)]
 pub struct MemoryUsageSource {
     pub summary: std::sync::Mutex<UsageSummary>,
@@ -359,6 +452,7 @@ impl UsageDataSource for MemoryUsageSource {
     }
 }
 
+#[allow(dead_code)] // standalone/demo scaffolding
 fn demo_day(date: &str, requests: u64) -> UsageDaySummary {
     UsageDaySummary {
         date: date.to_string(),
@@ -379,6 +473,7 @@ fn demo_day(date: &str, requests: u64) -> UsageDaySummary {
 
 impl MemoryUsageSource {
     /// A ~4-week window ending today.
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn sample() -> Self {
         let end = chrono::Utc::now().date_naive();
         let mut days = Vec::new();
@@ -452,6 +547,7 @@ impl MemoryUsageSource {
 }
 
 impl UsageTokenBreakdown {
+    #[allow(dead_code)] // standalone/demo scaffolding
     fn scale(&self, factor: u64) -> UsageTokenBreakdown {
         UsageTokenBreakdown {
             input: self.input / factor,
@@ -486,6 +582,7 @@ impl UsagePanelDeps {
     }
 
     /// Demo wiring for standalone use and tests.
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn demo() -> Self {
         Self::new(Arc::new(MemoryUsageSource::sample()))
     }
@@ -1015,6 +1112,7 @@ fn mix_color(theme: &gpui_component::Theme, index: usize) -> gpui::Hsla {
     }
 }
 
+#[allow(dead_code)] // renderer-contract helper; heatmap cells render from the calendar grid
 fn activity_description(cell: &ActivityCell) -> String {
     let date = chrono::NaiveDate::parse_from_str(&cell.date, "%Y-%m-%d")
         .map(|date| date.format("%b %d, %Y").to_string())
@@ -1208,5 +1306,71 @@ mod tests {
         assert_eq!(usage_model_score(&model, UsageScoreMetric::Requests), 10.0);
         assert_eq!(usage_model_score(&model, UsageScoreMetric::Tokens), 500.0);
         assert_eq!(usage_model_score(&model, UsageScoreMetric::Cost), 0.25);
+    }
+
+    #[test]
+    fn store_summary_converts_field_by_field_into_the_panel_shape() {
+        let store = aiden_data::usage_store::UsageSummary {
+            range: "30d".into(),
+            start_date: "2026-06-22".into(),
+            end_date: "2026-07-21".into(),
+            totals: aiden_data::usage_store::UsageTotals {
+                requests: 7,
+                active_days: 3,
+                current_streak: 2,
+                longest_streak: 4,
+                hosted_cost_usd: 0.5,
+                tokens: aiden_data::usage_store::UsageTokenBreakdown {
+                    input: 100,
+                    output: 50,
+                    cache_read: 10,
+                    cache_write: 5,
+                    reasoning: 20,
+                    total: 185,
+                },
+                ..aiden_data::usage_store::UsageTotals::default()
+            },
+            days: vec![aiden_data::usage_store::UsageDaySummary {
+                date: "2026-07-21".into(),
+                requests: 7,
+                reported_token_requests: 7,
+                unmetered_requests: 0,
+                tokens: aiden_data::usage_store::UsageTokenBreakdown {
+                    input: 100,
+                    output: 50,
+                    cache_read: 10,
+                    cache_write: 5,
+                    reasoning: 20,
+                    total: 185,
+                },
+                hosted_cost_usd: 0.5,
+            }],
+            models: vec![aiden_data::usage_store::UsageModelSummary {
+                provider_id: "anthropic".into(),
+                provider_label: "Anthropic".into(),
+                model_id: "claude-sonnet-4-5".into(),
+                model_label: "Claude Sonnet 4.5".into(),
+                local: false,
+                requests: 7,
+                reported_token_requests: 7,
+                unmetered_requests: 0,
+                tokens: aiden_data::usage_store::UsageTokenBreakdown {
+                    total: 185,
+                    ..aiden_data::usage_store::UsageTokenBreakdown::default()
+                },
+                hosted_cost_usd: 0.5,
+            }],
+        };
+        let converted: UsageSummary = store.into();
+        assert_eq!(converted.start_date, "2026-06-22");
+        assert_eq!(converted.totals.requests, 7);
+        assert_eq!(converted.totals.current_streak, 2);
+        assert_eq!(converted.totals.longest_streak, 4);
+        assert_eq!(converted.totals.tokens.total, 185);
+        assert_eq!(converted.totals.tokens.reasoning, 20);
+        assert_eq!(converted.days.len(), 1);
+        assert_eq!(converted.days[0].date, "2026-07-21");
+        assert_eq!(converted.models[0].model_id, "claude-sonnet-4-5");
+        assert_eq!(converted.models[0].hosted_cost_usd, 0.5);
     }
 }

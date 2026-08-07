@@ -59,6 +59,7 @@ impl Step {
         Step::Finish,
     ];
 
+    #[allow(dead_code)] // renderer-contract helper; the view tracks the machine step directly
     pub fn index(self) -> usize {
         match self {
             Step::Welcome => 0,
@@ -160,6 +161,7 @@ impl ProviderChoice {
         )
     }
 
+    #[allow(dead_code)] // renderer-contract helper; the view uses the machine defaults
     pub fn base_url_placeholder(self) -> &'static str {
         match self {
             ProviderChoice::Tailscale => "https://model.tailnet.ts.net/v1",
@@ -293,6 +295,9 @@ pub fn should_show_onboarding(settings: &serde_json::Map<String, serde_json::Val
 pub enum NextOutcome {
     Advanced,
     Completed,
+    /// Never constructed by the wired view (it validates before advancing);
+    /// kept so the state machine is exhaustive.
+    #[allow(dead_code)]
     Blocked,
 }
 
@@ -364,6 +369,7 @@ impl OnboardingMachine {
         Step::ALL.len()
     }
 
+    #[allow(dead_code)] // renderer-contract helper; the view emits the completion event
     pub fn is_complete(&self) -> bool {
         self.completed
     }
@@ -414,6 +420,7 @@ impl OnboardingMachine {
     /// Validate + advance in one call. The view uses `validate()` /
     /// `pending_provider_save()` + `advance()` directly for the async provider
     /// step; `next()` covers everything else and all tests.
+    #[allow(dead_code)] // renderer-contract helper; the wired view drives steps explicitly
     pub fn next(&mut self) -> NextOutcome {
         if let Some(message) = self.validate() {
             self.error = Some(message);

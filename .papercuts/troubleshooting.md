@@ -47,3 +47,34 @@ same-lock recursion.
 3. The `regex` crate (RE2-style) rejects JS-only constructs the parent grep
    permitted (`(?<=foo)bar` lookbehind). Ported tests must use RE2-compatible
    patterns; document the deviation rather than emulating backtracking.
+
+## GPUI port: aiden-git + aiden-data additions (2026-08-07)
+
+- `tokio::join!` + borrowed temporary args = E0716. `tokio::join!` wraps its
+  futures in an async block, so `&["a", &format!(...)]` temporaries die at the
+  statement end while the joined future still borrows them. Workaround used:
+  bind argument arrays to named locals or drop `join!` for sequential awaits
+  (git CLI calls are ~ms each, so no perf loss). `&[1]`/`&[128]` in
+  `RunOptions.allow_exit_codes` are fine because integer-literal arrays promote
+  to `'static`.
+- `std::fs::read("/dev/urandom")` never returns (no EOF) → 100% CPU hang in
+  tests. Use `File::open` + `read_exact` for exactly N bytes.
+- `git push` updates the local `refs/remotes/<remote>/<branch>` tracking ref on
+  success (git ≥ 2.x), so a pre-push "absent → CAS with 40-zero old" snapshot
+  fails with "reference already exists". Re-read the tracking ref's old value
+  right before the CAS `update-ref`.
+- `parse_remote_refs` (git.ts) keeps empty `\0` fields — ref/symref pairs must
+  stay aligned. Filtering empty strings mis-pairs `%(refname)%00%(symref)%00`.
+- V8 `localeCompare(…, {numeric:true})` compares digit runs numerically but
+  non-digits char-by-char; a naive "digit-run vs text-run" natural sort gives
+  wrong ordering for `file.txt` vs `file1.txt`.
+- `/var` → `/private/var` skew on macOS: compare worktree paths via
+  `std::fs::canonicalize` on both sides, not string `starts_with`.
+- macOS `MetadataExt::mode()` doesn't exist on darwin; use
+  `metadata.permissions().mode()` (PermissionsExt) for mode assertions.
+- gpui-component 0.5.1 `Input` elements call `Root::read(window, cx)` while
+  painting, so EVERY window that renders an `InputState`-backed input needs a
+  gpui-component `Root` as its window root — a "no dialogs, so no Root" window
+  (the old onboarding window) panics at first paint (`root.rs:268 unwrap`).
+  Root-wrap any window that hosts gpui-component inputs; deliver completion
+  via a callback when the Root handle hides the real view.

@@ -16,6 +16,7 @@ pub trait AudioLevelSource {
     fn levels(&mut self, bars: usize) -> Vec<f32>;
 
     /// Debug name for logs (e.g. "silence" or the future "sherpa-onnx").
+    #[allow(dead_code)] // the meter pipeline does not log the source yet
     fn name(&self) -> &'static str {
         "audio-level-source"
     }

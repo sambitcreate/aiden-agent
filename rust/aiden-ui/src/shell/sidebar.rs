@@ -1,6 +1,7 @@
 //! Left sidebar: brand row, new-chat button, searchable chat list loaded from
-//! the `ChatStore`, and a footer with the model picker, appearance mode
-//! toggle, and a placeholder settings gear.
+//! the `ChatStore`, a view-navigation section (Chats / Scheduled / Subagents /
+//! Usage / Settings), and a footer with the model picker, appearance mode
+//! toggle, and the settings gear.
 
 use aiden_core::appearance::Mode;
 use gpui::{
@@ -12,10 +13,10 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::Input,
-    v_flex, ActiveTheme, Icon, IconName, Sizable as _, WindowExt,
+    v_flex, ActiveTheme, Icon, IconName, Sizable as _,
 };
 
-use crate::app::AppState;
+use crate::app::{AppState, AppView};
 use crate::chat::composer::model_picker;
 use crate::services::chat_service::relative_time;
 
@@ -33,6 +34,7 @@ impl AppState {
             .child(self.sidebar_header(cx))
             .child(self.sidebar_search(cx))
             .child(self.sidebar_list(window, cx))
+            .child(self.sidebar_nav(cx))
             .child(self.sidebar_footer(window, cx))
     }
 
@@ -172,6 +174,7 @@ impl AppState {
                 }
             })
             .on_click(cx.listener(move |this, _event, _window, cx| {
+                this.set_view(AppView::Chat, cx);
                 this.service
                     .update(cx, |service, cx| service.select_chat(&click_id, cx));
             }))
@@ -210,7 +213,66 @@ impl AppState {
             })
     }
 
-    /// Footer: model picker, appearance mode toggle, settings gear (placeholder).
+    /// The view-navigation section: icons + labels for the main content areas
+    /// (Charts first — the active view is highlighted like the chat rows).
+    fn sidebar_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let active = self.view;
+        v_flex()
+            .id("sidebar-nav")
+            .w_full()
+            .px_2()
+            .py_1()
+            .gap_0p5()
+            .child(
+                div()
+                    .px_3()
+                    .pb_1()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.muted_foreground)
+                    .child("Views"),
+            )
+            .children(AppView::ALL.iter().map(|view| {
+                let selected = *view == active;
+                let (bg, fg) = if selected {
+                    (theme.sidebar_accent, theme.sidebar_accent_foreground)
+                } else {
+                    (theme.sidebar, theme.sidebar_foreground)
+                };
+                let view = *view;
+                let label = view.label();
+                let icon = view.icon();
+                h_flex()
+                    .id(ElementId::Name(SharedString::from(format!(
+                        "sidebar-nav-{}",
+                        label.to_ascii_lowercase()
+                    ))))
+                    .w_full()
+                    .px_2()
+                    .py_1p5()
+                    .gap_2()
+                    .items_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(bg)
+                    .text_color(fg)
+                    .hover(move |style| {
+                        if !selected {
+                            style.bg(theme.sidebar_primary)
+                        } else {
+                            style
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.set_view(view, cx);
+                    }))
+                    .child(Icon::new(icon).small().text_color(fg))
+                    .child(div().text_sm().truncate().child(label))
+            }))
+    }
+
+    /// Footer: model picker, appearance mode toggle, settings gear.
     fn sidebar_footer(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let snapshot = self.service.read(cx).snapshot();
@@ -243,13 +305,9 @@ impl AppState {
                             .ghost()
                             .small()
                             .icon(IconName::Settings)
-                            .tooltip("Settings (coming soon)")
+                            .tooltip("Settings")
                             .on_click(cx.listener(|this, _event, window, cx| {
-                                window.push_notification(
-                                    "Settings will arrive in a later phase.",
-                                    cx,
-                                );
-                                let _ = this;
+                                this.open_settings_section(window, cx);
                             })),
                     ),
             )

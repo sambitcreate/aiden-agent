@@ -219,6 +219,7 @@ impl ShortcutsState {
         self.effective = effective_bindings(&self.overrides, None);
     }
 
+    #[allow(dead_code)] // row renderer resolves bindings through `overridden` today
     fn binding_for(&self, command: CommandId) -> Option<&Option<String>> {
         self.effective.get(command.as_str())
     }

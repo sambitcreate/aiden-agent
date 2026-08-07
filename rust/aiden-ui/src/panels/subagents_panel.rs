@@ -59,6 +59,7 @@ pub fn state_label(state: SubagentRunStateV2) -> &'static str {
 }
 
 /// The rendered group for a run: Active or Done.
+#[allow(dead_code)] // renderer-contract grouping type (the panel uses `split_runs`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunGroup {
     Active,
@@ -155,6 +156,7 @@ pub fn children_of<'a>(
 }
 
 /// `resolveSubagentSelection` — keep a valid selection, else the first run.
+#[allow(dead_code)] // renderer-contract helper; selection state stays in the panel
 pub fn resolve_selection<'a>(
     runs: &'a [SubagentRunSnapshotV2],
     requested: Option<&str>,
@@ -189,6 +191,7 @@ impl SubagentRunSource for MemoryRunSource {
     }
 }
 
+#[allow(dead_code)] // standalone/demo scaffolding
 #[allow(clippy::too_many_arguments)]
 fn demo_run(
     run_id: &str,
@@ -240,6 +243,7 @@ fn demo_run(
 }
 
 impl MemoryRunSource {
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn sample() -> Self {
         let now = aiden_data::now_millis();
         Self {
@@ -320,6 +324,7 @@ impl SubagentsPanelDeps {
     }
 
     /// Demo wiring for standalone use and tests.
+    #[allow(dead_code)] // standalone/demo scaffolding
     pub fn demo() -> Self {
         Self::new(Arc::new(MemoryRunSource::sample()))
     }
@@ -614,6 +619,7 @@ impl SubagentsPanel {
 impl gpui::EventEmitter<SubagentPanelEvent> for SubagentsPanel {}
 
 /// Renderer-safe role label (the renderer shows the role string verbatim).
+#[allow(dead_code)] // renderer-contract helper; roles render through the state orb today
 fn role_name(role: SubagentSnapshotRole) -> &'static str {
     match role {
         SubagentSnapshotRole::Scout => "scout",

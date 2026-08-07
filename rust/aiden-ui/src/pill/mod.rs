@@ -36,6 +36,10 @@
 mod audio;
 mod state;
 
+/// Re-exported so the shell can construct [`PillDeps`] with the bundled
+/// silence source (the real sherpa-onnx capture is a later-phase task).
+pub use audio::{AudioLevelSource, SilenceAudioSource};
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -107,6 +111,7 @@ impl PillView {
     /// Apply a `dictation:state` broadcast from the coordinator. This is the
     /// coordinator-facing entry point; call it on the foreground via the
     /// returned `WindowHandle`.
+    #[allow(dead_code)] // coordinator-facing; the aiden-mac hotkey wiring lands later
     pub fn push_dictation(&mut self, payload: &DictationStatePayload, cx: &mut Context<Self>) {
         let event = PillEvent::from_payload(payload);
         self.state.reduce(&event);
@@ -117,12 +122,14 @@ impl PillView {
     }
 
     /// Adopt an appearance broadcast (palette/scheme changes while hidden).
+    #[allow(dead_code)] // coordinator-facing; appearance sync lands with the wiring phase
     pub fn update_appearance(&mut self, config: AppearanceConfig, cx: &mut Context<Self>) {
         self.appearance.adopt(config);
         cx.notify();
     }
 
     /// Inject the OS reduced-motion preference once the platform probe exists.
+    #[allow(dead_code)] // coordinator-facing; the platform probe lands later
     pub fn set_system_reduced_motion(&mut self, reduced: bool) {
         self.motion = self.motion.with_system_reduced(reduced);
     }
