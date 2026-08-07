@@ -1,6 +1,6 @@
 [package]
 name = "aiden-data"
-description = "Durable JSON stores, config-dir resolution, and keychain-backed secrets (port of main/services/data-store.ts, aiden-config-dir.ts)."
+description = "Durable JSON stores, config-dir resolution, chat/schedule/config persistence, and keychain-backed secrets (port of main/services/data-store.ts, aiden-config-dir.ts, portable-config-core.ts, config-store-core.ts, chat-store-core.ts, schedule-store.ts, secret-map-core.ts, pi-credential-store-core.ts, mcp-oauth-store-core.ts, portable-config-watch-core.ts)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,6 +17,10 @@ keyring.workspace = true
 sha2.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono-tz = "0.10"
+regex = "1"
+iana-time-zone = "0.1"
 
 [dev-dependencies]
 tempfile.workspace = true

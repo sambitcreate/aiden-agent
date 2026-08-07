@@ -1,5 +1,6 @@
 //! Aiden persistence layer: a durable JSON `DataStore`, config-dir resolution,
-//! and a keychain-backed secret store.
+//! and the file stores built on top of it (portable config, chat history,
+//! schedules, encrypted secrets, MCP OAuth sessions).
 //!
 //! The `DataStore` is a synchronous port of `main/services/data-store.ts` and
 //! replicates its crash-durability semantics, not just its happy path:
@@ -20,6 +21,19 @@
 //!   are swept, edited ones are preserved as `.conflict-<uid>`.
 //! - **Serialized mutations**: all writes queue behind a single lock tail so a
 //!   reloaded hand-edit can never be clobbered by an in-flight write.
+//!
+//! Additional modules port the higher-level stores: `config_dir`
+//! (aiden-config-dir.ts), `portable_config` + `config_store`
+//! (portable-config-core.ts + config-store-core.ts), `chat_store`
+//! (chat-store-core.ts), `schedule_store` (schedule-store.ts), `secret_map` +
+//! `pi_credential_store` (secret-map-core.ts + pi-credential-store-core.ts),
+//! `mcp_oauth` (mcp-oauth-store-core.ts), and `portable_watch`
+//! (portable-config-watch-core.ts).
+//!
+//! The TS modules being ported inject closures everywhere (`SecretsPort`,
+//! durability seams, test hooks); `Box<dyn Fn>` field types are the norm, so
+//! the `type_complexity` lint is disabled crate-wide.
+#![allow(clippy::type_complexity)]
 
 use std::{
     collections::HashSet,
@@ -37,6 +51,88 @@ use sha2::{Digest, Sha256};
 
 #[cfg(unix)]
 use std::os::unix::fs::{symlink, OpenOptionsExt};
+
+pub mod chat_store;
+pub mod config_dir;
+pub mod config_store;
+pub mod mcp_oauth;
+pub mod pi_credential_store;
+pub mod portable_config;
+pub mod portable_watch;
+pub mod schedule_store;
+pub mod secret_map;
+
+pub use config_dir::{aiden_config_dir, ConfigDirError, AIDEN_CONFIG_DIR_ENV, AIDEN_DIR_NAME};
+
+// ===========================================================================
+// base64 (dependency-free helpers used by the encrypted secret stores)
+// ===========================================================================
+
+pub(crate) mod base64 {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(input: &[u8]) -> String {
+        let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+        for chunk in input.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+            let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+            let triple = (b0 << 16) | (b1 << 8) | b2;
+            out.push(ALPHABET[(triple >> 18) as usize & 63] as char);
+            out.push(ALPHABET[(triple >> 12) as usize & 63] as char);
+            out.push(if chunk.len() > 1 {
+                ALPHABET[(triple >> 6) as usize & 63] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                ALPHABET[triple as usize & 63] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    pub fn decode(input: &str) -> Option<Vec<u8>> {
+        if !input.is_ascii() || input.len() % 4 != 0 {
+            return None;
+        }
+        let mut out = Vec::with_capacity(input.len() / 4 * 3);
+        let bytes = input.as_bytes();
+        let mut index = 0;
+        while index < bytes.len() {
+            let mut acc = 0u32;
+            let mut valid = 0u32;
+            for offset in 0..4 {
+                let byte = *bytes.get(index + offset)?;
+                // Padding still shifts the accumulator so the final byte
+                // lands left-aligned in the top bits of `acc`.
+                let value = if byte == b'=' {
+                    0
+                } else {
+                    let position = ALPHABET.iter().position(|candidate| *candidate == byte)?;
+                    position as u32
+                };
+                acc = (acc << 6) | value;
+                if byte != b'=' {
+                    valid += 6;
+                }
+            }
+            index += 4;
+            if valid >= 8 {
+                out.push((acc >> 16) as u8);
+            }
+            if valid >= 16 {
+                out.push((acc >> 8) as u8);
+            }
+            if valid >= 24 {
+                out.push(acc as u8);
+            }
+        }
+        Some(out)
+    }
+}
 
 // ===========================================================================
 // Errors
@@ -85,6 +181,19 @@ pub struct DataStoreOptions<T> {
     /// Abort a save based on a stale snapshot when the backing file changed
     /// (hard-link protected publication).
     pub reject_external_changes: bool,
+    /// Test seam for racing a protected publication after the destination is held.
+    pub before_protected_publish: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Test seam for replacing the destination immediately before it is held.
+    pub before_protected_hold: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Test seam for an old descriptor writing after the final held-byte check.
+    pub after_protected_publish: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Test seam for holding a disk read before it becomes the active snapshot.
+    pub before_load_commit: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Synchronous authority fence immediately before an externally reloaded
+    /// value replaces the in-memory cache. Never called for app writes.
+    pub before_external_cache_commit: Option<Box<dyn Fn(Option<&T>, &T) + Send + Sync>>,
+    /// Synchronous authority fence immediately before an app write is published.
+    pub before_write_publish: Option<Box<dyn Fn(Option<&T>, &T) + Send + Sync>>,
 }
 
 impl<T> Default for DataStoreOptions<T> {
@@ -97,6 +206,12 @@ impl<T> Default for DataStoreOptions<T> {
             reject_corrupt_write: false,
             reject_unsafe_write: false,
             reject_external_changes: false,
+            before_protected_publish: None,
+            before_protected_hold: None,
+            after_protected_publish: None,
+            before_load_commit: None,
+            before_external_cache_commit: None,
+            before_write_publish: None,
         }
     }
 }
@@ -120,6 +235,8 @@ struct Inner<T> {
     unsafe_file: bool,
     /// Predecessor names created by this process stay live until next startup.
     live_held: HashSet<PathBuf>,
+    /// The cache value that a `reload()` replaced; fences fire against it.
+    external_reload_previous: Option<T>,
 }
 
 /// A JSON file store rooted in a caller-chosen directory.
@@ -149,6 +266,7 @@ where
                 corrupt: false,
                 unsafe_file: false,
                 live_held: HashSet::new(),
+                external_reload_previous: None,
             }),
             filename: filename.into(),
             root,
@@ -189,6 +307,14 @@ where
         Ok(self.inner.lock().unsafe_file)
     }
 
+    /// Exact bytes observed by the successful cached load, or `None` when the
+    /// file was absent. Mirrors `loadedDiskContents()` in data-store.ts.
+    pub fn loaded_disk_contents(&self) -> Result<Option<Vec<u8>>, DataStoreError> {
+        self.load()?;
+        let inner = self.inner.lock();
+        Ok(inner.disk_snapshot.clone().flatten())
+    }
+
     /// The cached value, loading from disk on first call (lazy single-load).
     pub fn load(&self) -> Result<T, DataStoreError> {
         let mut inner = self.inner.lock();
@@ -202,6 +328,19 @@ where
 
     /// Save a full snapshot. Honors the corrupt/unsafe/external-change guards.
     pub fn save(&self, data: &T) -> Result<(), DataStoreError> {
+        self.save_with_current(data, &|| true)
+    }
+
+    /// Like [`save`](Self::save), but refuses the write once the caller's
+    /// renderer-ownership fence reports the document inactive.
+    pub fn save_with_current(
+        &self,
+        data: &T,
+        is_current: &dyn Fn() -> bool,
+    ) -> Result<(), DataStoreError> {
+        if !is_current() {
+            return Err(DataStoreError::DocumentInactive);
+        }
         let mut inner = self.inner.lock();
         let had_cache = inner.cache.is_some();
         let changed = if self.options.reload_before_write {
@@ -226,11 +365,24 @@ where
         {
             return Err(DataStoreError::ExternalChange);
         }
-        self.write_now_locked(&mut inner, data)
+        self.write_now_locked(&mut inner, data, is_current)
     }
 
     /// Serialized read-modify-write transaction.
     pub fn update<R>(&self, mutation: impl FnOnce(&mut T) -> R) -> Result<R, DataStoreError> {
+        self.update_with_current(mutation, &|| true)
+    }
+
+    /// Like [`update`](Self::update) with a renderer-ownership fence checked at
+    /// the start of the transaction and again right before publication.
+    pub fn update_with_current<R>(
+        &self,
+        mutation: impl FnOnce(&mut T) -> R,
+        is_current: &dyn Fn() -> bool,
+    ) -> Result<R, DataStoreError> {
+        if !is_current() {
+            return Err(DataStoreError::DocumentInactive);
+        }
         let mut inner = self.inner.lock();
         if self.options.reload_before_write {
             self.reload_now_locked(&mut inner)?;
@@ -243,7 +395,7 @@ where
         }
         let mut draft = self.load_locked(&mut inner)?;
         let result = mutation(&mut draft);
-        self.write_now_locked(&mut inner, &draft)?;
+        self.write_now_locked(&mut inner, &draft, is_current)?;
         Ok(result)
     }
 
@@ -281,6 +433,9 @@ where
                 bytes = Some(read.clone());
                 match serde_json::from_str::<serde_json::Value>(&text) {
                     Ok(parsed) => {
+                        if let Some(hook) = &self.options.before_load_commit {
+                            hook();
+                        }
                         let unsafe_file = self
                             .options
                             .is_safe
@@ -291,6 +446,7 @@ where
                             Some(normalize) => normalize(parsed),
                             None => serde_json::from_value(parsed)?,
                         };
+                        self.fence_external_commit_locked(inner, &next);
                         inner.disk_snapshot = Some(Some(read));
                         inner.corrupt = false;
                         inner.unsafe_file = unsafe_file;
@@ -322,8 +478,20 @@ where
         inner.corrupt = corrupt;
         inner.unsafe_file = false;
         let next = self.default.clone();
+        self.fence_external_commit_locked(inner, &next);
         inner.cache = Some(next.clone());
         Ok(next)
+    }
+
+    /// Fires `before_external_cache_commit` when this load was initiated by a
+    /// `reload()` (never for ordinary app writes).
+    fn fence_external_commit_locked(&self, inner: &Inner<T>, next: &T) {
+        if inner.external_reload_previous.is_none() {
+            return;
+        }
+        if let Some(fence) = &self.options.before_external_cache_commit {
+            fence(inner.external_reload_previous.as_ref(), next);
+        }
     }
 
     /// Re-read the backing file, invalidating the cached load. Runs inside the
@@ -334,14 +502,25 @@ where
         inner.cache = None;
         inner.file_path = None;
         inner.disk_snapshot = None;
+        inner.external_reload_previous = previous;
         let file_path = self.path_locked(inner)?;
-        let next = self.load_from_disk_locked(inner, &file_path)?;
+        let result = self.load_from_disk_locked(inner, &file_path);
+        inner.external_reload_previous = None;
+        let next = result?;
         Ok(before != Some(serialize_json(&next)))
     }
 
     /// Write a snapshot: stage → fsync → publish (rename or protected) → dir
     /// fsync. Mirrors `writeNow` in data-store.ts.
-    fn write_now_locked(&self, inner: &mut Inner<T>, data: &T) -> Result<(), DataStoreError> {
+    fn write_now_locked(
+        &self,
+        inner: &mut Inner<T>,
+        data: &T,
+        is_current: &dyn Fn() -> bool,
+    ) -> Result<(), DataStoreError> {
+        if !is_current() {
+            return Err(DataStoreError::DocumentInactive);
+        }
         let destination = self.path_locked(inner)?;
 
         if self.options.preserve_corrupt_file {
@@ -366,9 +545,15 @@ where
 
         let result = (|| -> Result<(), DataStoreError> {
             write_staged(&staged, bytes)?;
+            if let Some(fence) = &self.options.before_write_publish {
+                fence(inner.cache.as_ref(), data);
+            }
             if self.options.reject_external_changes {
-                self.publish_protected_locked(inner, &staged, &destination)?;
+                self.publish_protected_locked(inner, &staged, &destination, is_current)?;
             } else {
+                if !is_current() {
+                    return Err(DataStoreError::DocumentInactive);
+                }
                 fs::rename(&staged, &destination)?;
                 sync_directory(&directory)?;
             }
@@ -395,6 +580,7 @@ where
         inner: &mut Inner<T>,
         staged: &Path,
         destination: &Path,
+        is_current: &dyn Fn() -> bool,
     ) -> Result<(), DataStoreError> {
         let directory = destination
             .parent()
@@ -421,6 +607,9 @@ where
         if let Some(ref snapshot_bytes) = snapshot {
             // Hold the old inode; a missing destination here is an external
             // deletion and a conflict.
+            if let Some(hook) = &self.options.before_protected_hold {
+                hook();
+            }
             match fs::rename(destination, &held) {
                 Ok(()) => destination_held = true,
                 Err(err) => {
@@ -443,23 +632,65 @@ where
             }
         }
 
-        // Publish with a hard link: if an external editor created the
-        // destination in the gap, link fails with EEXIST and nobody's data is
-        // overwritten.
-        match fs::hard_link(staged, destination) {
-            Ok(()) => {}
-            Err(err) => {
-                if destination_held {
-                    let _ = self.restore_held_file(&held, destination, true);
-                    inner.live_held.remove(&held);
+        let mut published = false;
+        let result = (|| -> Result<(), DataStoreError> {
+            // The destination is absent only inside this protected publication.
+            // A concurrent editor that creates it wins: hard-link publication is
+            // the no-overwrite primitive that rename lacks.
+            if let Some(hook) = &self.options.before_protected_publish {
+                hook();
+            }
+            if !is_current() {
+                return Err(DataStoreError::DocumentInactive);
+            }
+            if destination_held {
+                // A writer that already held the old inode can still modify it
+                // after the held-byte comparison. Re-verify before publishing.
+                match read_regular_file(&held) {
+                    Ok(read) if read == *snapshot.as_ref().unwrap() => {}
+                    _ => {
+                        held_matches = false;
+                        let _ = self.restore_held_file(&held, destination, true);
+                        inner.live_held.remove(&held);
+                        return Err(DataStoreError::ExternalChange);
+                    }
                 }
-                if err.kind() == io::ErrorKind::AlreadyExists {
-                    return Err(DataStoreError::ExternalChange);
+            }
+            if !is_current() {
+                return Err(DataStoreError::DocumentInactive);
+            }
+            // Publish with a hard link: if an external editor created the
+            // destination in the gap, link fails with EEXIST and nobody's data is
+            // overwritten.
+            match fs::hard_link(staged, destination) {
+                Ok(()) => published = true,
+                Err(err) => {
+                    if err.kind() == io::ErrorKind::AlreadyExists {
+                        return Err(DataStoreError::ExternalChange);
+                    }
+                    return Err(err.into());
                 }
-                return Err(err.into());
+            }
+            sync_directory(directory)?;
+            Ok(())
+        })();
+
+        if result.is_ok() {
+            // Publication is already committed at this point, so preserve a late
+            // old-descriptor edit as a conflict instead of reporting a rejected
+            // save while leaving the app's new document canonical.
+            if let Some(hook) = &self.options.after_protected_publish {
+                hook();
             }
         }
-        sync_directory(directory)?;
+
+        if let Err(err) = result {
+            if destination_held && !published {
+                let _ = self.restore_held_file(&held, destination, true);
+                let _ = sync_directory(directory);
+            }
+            return Err(err);
+        }
 
         // Keep the old inode as a predecessor for this process lifetime so an
         // editor that opened it before publication can be reconciled next
@@ -673,10 +904,24 @@ fn read_regular_file(path: &Path) -> io::Result<Vec<u8>> {
     fs::read(path)
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex(&hasher.finalize())
+}
+
+/// Current wall-clock time in milliseconds since the Unix epoch (`Date.now()`).
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// The reserved workspace id keeping assistant threads out of the main sidebar
+/// (renderer/shared/assistant.ts `ASSISTANT_WORKSPACE_ID`).
+pub fn aiden_core_assistant_workspace_id() -> &'static str {
+    aiden_core::ASSISTANT_WORKSPACE_ID
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -728,25 +973,15 @@ pub fn unique_id() -> String {
 // ===========================================================================
 // Config directories (port of main/services/aiden-config-dir.ts + platform.ts)
 // ===========================================================================
-
-/// The portable root: `$AIDEN_CONFIG_DIR` (must be absolute) else `~/.aiden`.
-/// User-owned and hand-editable — config.json here is the file a human edits.
-pub fn aiden_config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("AIDEN_CONFIG_DIR") {
-        let path = PathBuf::from(&dir);
-        if path.is_absolute() {
-            return path;
-        }
-        tracing::warn!(dir, "AIDEN_CONFIG_DIR ignored: must be absolute");
-    }
-    home_dir().join(".aiden")
-}
+//
+// `aiden_config_dir()` (the portable root) lives in `config_dir`; see its
+// module docs. The machine-local root and the chats subdirectory stay here.
 
 /// The machine-local root: Electron's `app.getPath("userData")`, which on
 /// macOS is `~/Library/Application Support/aiden-agent` (product name from
 /// package.json). Machine-bound state, secrets, and caches live here.
 pub fn machine_local_data_dir() -> PathBuf {
-    if let Some(dirs) = directories::ProjectDirs::from("com", "sambitcreate", "aiden-agent") {
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "aiden-agent") {
         dirs.data_dir().to_path_buf()
     } else {
         home_dir().join("Library/Application Support/aiden-agent")
@@ -755,10 +990,7 @@ pub fn machine_local_data_dir() -> PathBuf {
 
 /// The user's home directory (`$HOME` on Unix).
 pub fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .or_else(|| directories::BaseDirs::new().map(|dirs| dirs.home_dir().to_path_buf()))
-        .expect("could not determine home directory")
+    config_dir::home_dir()
 }
 
 /// The `chats/` subdirectory of the machine-local root (created if missing).
@@ -1096,20 +1328,6 @@ mod tests {
             1,
             "expected one conflict park: {conflicts:?}"
         );
-    }
-
-    #[test]
-    fn aiden_config_dir_resolution() {
-        // Explicit env var wins when absolute.
-        std::env::set_var("AIDEN_CONFIG_DIR", "/tmp/aiden-portable");
-        assert_eq!(aiden_config_dir(), PathBuf::from("/tmp/aiden-portable"));
-        // Relative env var is rejected.
-        std::env::set_var("AIDEN_CONFIG_DIR", "relative/path");
-        assert!(aiden_config_dir().is_absolute());
-        std::env::remove_var("AIDEN_CONFIG_DIR");
-        // Default is ~/.aiden.
-        let expected = home_dir().join(".aiden");
-        assert_eq!(aiden_config_dir(), expected);
     }
 
     #[test]

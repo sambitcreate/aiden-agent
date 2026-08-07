@@ -10,8 +10,125 @@
 //!
 //! Rules: no tokio types, no UI, no filesystem access — this crate is pure domain
 //! logic so `aiden-data`/`aiden-providers`/`aiden-ui` can all depend on it.
+//!
+//! Several domain enums expose an inherent `from_str` mirroring the TypeScript
+//! string-union predicates; the name is intentional (they are used in
+//! `.and_then(Enum::from_str)` chains) so the standard-trait lint is disabled.
+#![allow(clippy::should_implement_trait)]
 
 use serde::{Deserialize, Serialize};
+
+pub mod anthropic_thinking;
+pub mod app_update;
+pub mod appearance;
+pub mod assistant;
+pub mod chat_store_core;
+pub mod chat_title;
+pub mod chat_workspace;
+pub mod claim_check;
+pub mod codex_thinking;
+pub mod dictation;
+pub mod generation_thinking;
+pub mod google_thinking;
+pub mod keybindings;
+pub mod provider_deployment;
+pub mod subagent_management_v2;
+pub mod subagent_runs;
+pub mod subagent_safe_text;
+
+pub use anthropic_thinking::{
+    anthropic_thinking_can_disable, anthropic_thinking_levels_for_model,
+    is_anthropic_thinking_level, merge_anthropic_thinking_preference,
+    normalize_anthropic_thinking_level, parse_anthropic_thinking_preferences,
+    AnthropicThinkingError, AnthropicThinkingLevel, AnthropicThinkingModelCapabilities,
+    DEFAULT_ANTHROPIC_THINKING_LEVEL,
+};
+pub use app_update::{
+    normalize_app_update_version, parse_app_update_snapshot, AppUpdateRestartReason,
+    AppUpdateRestartResult, AppUpdateSnapshot, IDLE_APP_UPDATE_SNAPSHOT,
+};
+pub use appearance::{
+    color_contrast_ratio, create_default_appearance_config, get_preset_variant, is_hex_color,
+    normalize_appearance_config, parse_appearance_config, parse_theme_variant_json,
+    resolve_theme_tokens, serialize_theme_variant, theme_presets, theme_variant_safety_issues,
+    AppearanceConfig, AppearanceMode, AppearancePreviewSnapshot, AppearanceScheme, CodeFont,
+    CodeFontId, DiffMarkerPreference, DiffMarkers, DockIcon, DockIconPreference, Mode, PresetId,
+    ReduceMotion, ReduceMotionPreference, Selection, ThemePreset, ThemePresetId, ThemeSelection,
+    ThemeVariantConfig, UiFont, UiFontId,
+};
+pub use assistant::{
+    canonical_parsed_json, escape_subagent_mcp_mutation_approval_json,
+    is_assistant_automation_approval_details, is_subagent_mcp_mutation_approval_details,
+    is_subagent_shell_approval_details, is_subagent_workspace_write_approval_details,
+    SUBAGENT_MCP_MUTATION_DISPLAY_ESCAPED_CHARS, SUBAGENT_MCP_MUTATION_DISPLAY_INPUT_BYTES,
+};
+pub use chat_store_core::{
+    chat_transaction_id, is_chat_delete_staging, is_chat_write_staging, is_index_write_staging,
+    is_valid_chat_id, is_valid_meta, meta_of, new_chat_id, validate_chat_id, DEFAULT_WORKSPACE_ID,
+    INDEX,
+};
+pub use chat_title::{
+    build_chat_rename_prompt, build_chat_title_prompt, can_replace_generated_chat_title,
+    derive_chat_title_seed, is_default_chat_title, resolve_chat_title_route,
+    sanitize_generated_chat_title, ChatTitleInput, ChatTitleProviderId, ChatTitleRoute,
+    FoundationModelsConnectionState, FoundationModelsConnectionStatus, DEFAULT_CHAT_TITLE,
+    MAX_CHAT_TITLE_LENGTH,
+};
+pub use chat_workspace::{persisted_chat_workspace_id, ChatWorkspace, DEFAULT_CHAT_WORKSPACE_ID};
+pub use claim_check::{attach_claim_check, detect_unverified_success_claim};
+pub use codex_thinking::{
+    codex_thinking_levels_for_model, is_codex_thinking_level, merge_codex_thinking_preference,
+    normalize_codex_thinking_level, parse_codex_thinking_preferences, CodexThinkingError,
+    CodexThinkingLevel, CodexThinkingModelCapabilities, DEFAULT_CODEX_THINKING_LEVEL,
+};
+pub use dictation::{DictationState, DictationStatePayload, DICTATION_STATE_CHANNEL};
+pub use generation_thinking::{
+    is_generation_thinking_level, GenerationThinkingLevel, GENERATION_THINKING_LEVELS,
+};
+pub use google_thinking::{
+    google_thinking_can_disable, google_thinking_levels_for_model, is_google_thinking_level,
+    merge_google_thinking_preference, normalize_google_thinking_level,
+    parse_google_thinking_preferences, GoogleThinkingError, GoogleThinkingLevel,
+    GoogleThinkingModelCapabilities, DEFAULT_GOOGLE_THINKING_LEVEL,
+};
+pub use keybindings::{
+    accelerator_from_keyboard_event, apply_keybinding_mutation, aria_key_shortcut,
+    command_scopes_overlap, effective_binding, effective_bindings, has_canonical_keybindings,
+    has_future_keybindings, is_command_id, matches_accelerator, migrate_legacy_keybindings,
+    normalize_accelerator, normalize_keybinding_overrides, pretty_accelerator,
+    repair_keybinding_overrides, should_persist_canonical_keybindings, validate_effective_bindings,
+    CommandCategory, CommandDefinition, CommandId, CommandScope, GlobalShortcutState,
+    GlobalShortcutStatus, KeybindingError, KeybindingErrorCode, KeybindingMutation,
+    KeybindingOverride, KeybindingOverridesV1, KeybindingSnapshot, KeyboardEventLike,
+    LegacyAssistantKeybindings, LegacyGlobalKeybindings, COMMAND_IDS,
+};
+pub use provider_deployment::{
+    is_local_provider_deployment, is_loopback_provider_base_url, resolve_provider_deployment,
+    ProviderDeployment, ProviderDeploymentFields,
+};
+pub use subagent_management_v2::{
+    parse_subagent_management_result_v2, SubagentManagementRequestV2, SubagentManagementResultV2,
+};
+pub use subagent_runs::{
+    adapt_subagent_run_snapshot_v1_to_v2, adapt_subagent_run_snapshot_v2_to_v1,
+    is_safe_subagent_identifier, parse_subagent_effect_activity_v1,
+    parse_subagent_history_detail_v1, parse_subagent_message_reference_v1,
+    parse_subagent_run_snapshot, parse_subagent_run_snapshot_v1, parse_subagent_run_snapshot_v2,
+    parse_subagent_run_snapshots_v1, subagent_message_reference, SubagentContextModeV2,
+    SubagentEffectActivityKindV1, SubagentEffectActivityStateV1, SubagentEffectActivityV1,
+    SubagentExecutionModeV2, SubagentHistoryDetailV1, SubagentMessageReferenceItemV1,
+    SubagentMessageReferenceV1, SubagentMilestoneKind, SubagentRunSnapshot, SubagentRunSnapshotV1,
+    SubagentRunSnapshotV2, SubagentRunState, SubagentRunStateV2, SubagentSnapshotRole,
+    MAX_SUBAGENT_ACTIVITY_CHARS, MAX_SUBAGENT_EFFECT_ACTIVITY, MAX_SUBAGENT_ERROR_CHARS,
+    MAX_SUBAGENT_LABEL_CHARS, MAX_SUBAGENT_LATEST_TEXT_CHARS, MAX_SUBAGENT_MILESTONES,
+    MAX_SUBAGENT_RUNS_PER_GENERATION, MAX_SUBAGENT_TASK_PREVIEW_CHARS,
+    MAX_SUBAGENT_TERMINAL_MARKDOWN_CHARS, MAX_SUBAGENT_WARNINGS, MAX_SUBAGENT_WARNING_CHARS,
+    SUBAGENT_MILESTONE_KINDS, SUBAGENT_RUN_SNAPSHOT_VERSION, SUBAGENT_RUN_SNAPSHOT_VERSION_V2,
+};
+pub use subagent_safe_text::{
+    contains_high_confidence_secret, contains_high_confidence_secret_including_encodings,
+    sanitize_subagent_snapshot_text, sanitize_subagent_text,
+};
 
 // ===========================================================================
 // 1. Chat domain model (main/services/types.ts)

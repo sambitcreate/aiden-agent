@@ -1,8 +1,9 @@
 //! Anthropic Messages API transport: SSE frame parsing + streaming provider.
 //!
-//! The pure part (`sse_frames`, `parse_anthropic_sse`, [`AnthropicAccumulator`])
-//! is shared between the fixture tests and the live `reqwest-eventsource` stream,
-//! so protocol mapping is exercised without any network.
+//! The pure part (`parse_anthropic_sse`, [`AnthropicAccumulator`]) is shared
+//! between the fixture tests and the live `reqwest-eventsource` stream, so
+//! protocol mapping is exercised without any network. Frame splitting comes
+//! from the crate-shared [`crate::sse`] module.
 
 use aiden_core::{
     AssistantMessage, AssistantMessageEvent, ContentBlock, StopReason, TextContent,
@@ -10,46 +11,13 @@ use aiden_core::{
 };
 use futures::StreamExt;
 
-use crate::{EventStream, Provider, ProviderError, StreamOptions, StreamRequest};
+use crate::sse::sse_frames;
+use crate::{now_ms, EventStream, Provider, ProviderError, StreamOptions, StreamRequest};
 
 /// Anthropic Messages API version header.
 pub const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 /// Default base URL for the Messages API.
 pub const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
-
-// ===========================================================================
-// SSE frame splitting (pure)
-// ===========================================================================
-
-/// A parsed SSE frame: (event name, data payload).
-pub type SseFrame = (String, String);
-
-/// Split a raw SSE byte stream into frames. Handles `\r\n` and `\n` line
-/// endings, joins multi-line `data:` payloads with `\n`, and skips comment
-/// lines (`: ...`) and empty frames.
-pub fn sse_frames(input: &[u8]) -> Vec<SseFrame> {
-    let text = String::from_utf8_lossy(input);
-    let mut frames = Vec::new();
-    for block in text.split("\n\n") {
-        let mut event = String::new();
-        let mut data = Vec::new();
-        let mut saw_data = false;
-        for raw_line in block.lines() {
-            let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-            if let Some(name) = line.strip_prefix("event:") {
-                event = name.trim().to_string();
-            } else if let Some(payload) = line.strip_prefix("data:") {
-                saw_data = true;
-                data.push(payload.trim_start().to_string());
-            }
-            // `:` comments and unknown fields are ignored per the SSE spec.
-        }
-        if saw_data || !event.is_empty() {
-            frames.push((event, data.join("\n")));
-        }
-    }
-    frames
-}
 
 // ===========================================================================
 // Stateful frame accumulator
@@ -229,12 +197,18 @@ impl AnthropicAccumulator {
                     arguments: serde_json::Value::Object(Default::default()),
                     thought_signature: None,
                 });
+                let tool_call = state.tool_call.clone().unwrap_or_else(|| ToolCall {
+                    id: String::new(),
+                    name: String::new(),
+                    arguments: serde_json::Value::Object(Default::default()),
+                    thought_signature: None,
+                });
                 (
                     AssistantMessageEvent::ToolcallStart {
                         content_index: index,
                         partial: self.partial(),
                     },
-                    ContentBlock::ToolCall(state.tool_call.clone().unwrap()),
+                    ContentBlock::ToolCall(tool_call),
                 )
             }
             other => {
@@ -651,11 +625,4 @@ struct MessageDelta {
 #[derive(serde::Deserialize, Default)]
 struct DeltaReason {
     stop_reason: Option<String>,
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
