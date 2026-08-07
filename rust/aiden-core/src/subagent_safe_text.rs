@@ -2011,7 +2011,7 @@ fn decode_hex_token(token: &str) -> Option<String> {
         .strip_prefix("0x")
         .or_else(|| token.strip_prefix("0X"))
         .unwrap_or(token);
-    if hex.len() % 2 != 0 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if !hex.len().is_multiple_of(2) || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return None;
     }
     let bytes: Vec<u8> = hex
@@ -2045,7 +2045,7 @@ fn decode_base32_token(token: &str, alphabet: &str) -> Option<String> {
     if !padding.is_empty() && padding.len() != expected_padding {
         return None;
     }
-    if !padding.is_empty() && normalized.len() % 8 != 0 {
+    if !padding.is_empty() && !normalized.len().is_multiple_of(8) {
         return None;
     }
     let mut bits: u64 = 0;

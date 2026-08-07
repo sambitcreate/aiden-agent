@@ -1,28 +1,36 @@
-//! Aiden macOS integration — scaffold.
+//! Aiden macOS integration — port of the Electron `main/platform.ts` surfaces
+//! that GPUI does not ship, plus the pure `-core` logic they depend on.
 //!
-//! Phase 3 placeholder. This crate will port `main/platform.ts` and the macOS
-//! surfaces GPUI does not ship:
+//! Modules:
 //!
-//! - **Secrets** — `keyring` (apple-native) replacing Electron `safeStorage`
-//!   (Keychain Services); the credential/binding policy from
-//!   `provider-key-policy.ts` (exact id + kind + baseUrl + needsKey match
-//!   before a stored key may be used, quarantine slots for externally rotated
-//!   keys).
-//! - **Global hotkeys** — `global-hotkey` (Accessibility permission flow),
-//!   channel-polling from a GPUI foreground task; the assistant dock hotkey.
-//! - **Notifications** — `objc2-user-notifications` (UNUserNotificationCenter)
-//!   with click-to-open-chat deep links; in-app toasts via
-//!   gpui-component `push_notification` while focused.
-//! - **Tray / dock / activation policy** — `tray-icon` for menu-bar status
-//!   item; activation policy via objc2 (hide Dock icon in menu-bar-only mode).
-//! - **Auto-update** — Sparkle 2 bundle plumbing (framework copy, rpath,
-//!   appcast, EdDSA keys, signing/notarization).
-//! - **Vibrancy** — the Electron window used `hiddenInset` vibrancy; GPUI
-//!   offers `WindowBackgroundAppearance::Blurred` window background plus
-//!   in-content translucency painting.
+//! - **`hotkey`** — global hotkey registration with the transactional model from
+//!   `shortcut-registration-core.ts` / `shortcut-transaction-core.ts` (atomic
+//!   swaps, conflict rollback, serialized read→apply→persist with rollback),
+//!   wired to the `global-hotkey` crate on macOS. Accelerator parsing and
+//!   validation reuse `aiden-core::keybindings`.
+//! - **`notify`** — macOS notifications via `mac-notification-sys`
+//!   (UNUserNotificationCenter), with a permission preflight helper.
+//! - **`tray`** — menu-bar status item via `tray-icon` + `muda` (Open Aiden /
+//!   Quit); returns a handle the GPUI app owns. macOS requires building the
+//!   tray on the main thread with a live event loop.
+//! - **`paste`** — dictation paste-into-frontmost-app via AppleScript / System
+//!   Events exactly as `dictation-paste.ts` does, with the pure
+//!   `paste_transcript` decision behind an injectable deps trait.
+//! - **`updater`** — pure port of `app-updater-core.ts` (enablement decision),
+//!   a minimal semver-ish version comparison, and the `UpdateProvider` trait
+//!   with a no-op stub (no Sparkle/electron-updater replacement yet).
+//! - **`menu`** — the native-menu command contract (`native-menu-command-contract`):
+//!   which commands the app menu owns and the accelerator ownership assertion.
 //!
-//! The default service name for Keychain entries is part of the port contract
-//! and defined here so both the secret store and providers agree.
+//! macOS-only APIs are behind `#[cfg(target_os = "macos")]`; the rest of the
+//! crate provides graceful stubs so `cargo test` passes on any host.
+
+pub mod hotkey;
+pub mod menu;
+pub mod notify;
+pub mod paste;
+pub mod tray;
+pub mod updater;
 
 /// The Keychain service name for provider credentials (was Electron
 /// safeStorage's backing service on macOS).

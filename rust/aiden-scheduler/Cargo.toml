@@ -1,6 +1,6 @@
 [package]
 name = "aiden-scheduler"
-description = "Scheduled task scaffold — will port main/services/schedule-*.ts (croner → cron crate, notifications, script tasks)."
+description = "Scheduled task runtime and contract (port of main/services/schedule-service-core.ts, schedule-notification.ts, schedule-script.ts, schedule-tool.ts, scheduled-settings-core.ts, schedule-mcp-binding.ts, schedule-provider-binding.ts)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,19 @@ repository.workspace = true
 
 [dependencies]
 aiden-core.workspace = true
+aiden-data.workspace = true
+async-trait = "0.1"
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-chrono.workspace = true
-cron.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = "0.7"
+parking_lot.workspace = true
 tracing.workspace = true
+sha2.workspace = true
+regex = "1"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile.workspace = true

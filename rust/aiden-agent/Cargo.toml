@@ -1,6 +1,6 @@
 [package]
 name = "aiden-agent"
-description = "Agent tool loop scaffold — will port main/services/assistant/ + coding-tools.ts (turn loop, tool defs, approvals)."
+description = "Agent tool loop — port of main/services/assistant/ + coding-tools.ts (turn loop driving aiden-providers streams, tool defs + safe-execution core, approvals, system prompts)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,17 @@ repository.workspace = true
 
 [dependencies]
 aiden-core.workspace = true
+aiden-providers.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+async-trait = "0.1"
+# RE2-style linear-time regular expressions, replacing re2-wasm (subagent
+# grep/glob) and standing in for the JS RegExp used by the parent tools.
+regex = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

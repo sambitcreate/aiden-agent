@@ -1,6 +1,6 @@
 [package]
 name = "aiden-mac"
-description = "macOS integration scaffold — will port main/platform.ts (keyring secrets, hotkeys, notifications, updater, dictation, vibrancy)."
+description = "macOS integration for the GPUI app (port of main/platform.ts surfaces, shortcut-registration-core.ts, shortcut-transaction-core.ts, native-menu-command-contract.ts, app-updater-core.ts, dictation-paste.ts)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,4 +13,16 @@ keyring.workspace = true
 directories.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
+futures.workspace = true
+async-trait = "0.1"
+tokio.workspace = true
+global-hotkey = "0.8"
+tray-icon = "0.21"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+mac-notification-sys = "0.6"

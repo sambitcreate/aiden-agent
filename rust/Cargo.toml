@@ -24,7 +24,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+# Bumped from 1.80 for the MCP port: rmcp 3.x (the current crates.io release)
+# requires rustc 1.88. The local toolchain is 1.97+, and no existing member
+# pinned an effective MSRV above 1.80 anyway.
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/sambitcreate/aiden-agent"
 
@@ -36,6 +39,7 @@ repository = "https://github.com/sambitcreate/aiden-agent"
 # --- Internal crates ---
 aiden-core = { path = "aiden-core" }
 aiden-data = { path = "aiden-data" }
+aiden-providers = { path = "aiden-providers" }
 
 # --- UI framework ---
 gpui = "0.2.2"
@@ -49,6 +53,17 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 reqwest-eventsource = "0.6"
 futures = "0.3"
 async-compat = "0.2"
+# MCP (Model Context Protocol) official Rust SDK — client + stdio/http/sse
+# transports. 3.1.1 is the current release (needs rustc 1.88).
+rmcp = { version = "3.1", default-features = false, features = [
+    "client",
+    "macros",
+    "transport-async-rw",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "client-side-sse",
+    "server",
+] }
 
 # --- Serialization ---
 serde = { version = "1", features = ["derive"] }
