@@ -334,7 +334,7 @@ impl SettingsView {
                                 .icon(IconName::Undo2)
                                 .label("Reset to defaults")
                                 .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.shortcuts.reset_all(cx);
+                                    this.shortcuts.reset_all(&this.services, cx);
                                 })),
                         ),
                     ),
@@ -427,7 +427,8 @@ impl SettingsView {
             .gap_3()
             .items_center()
             .on_key_down(cx.listener(move |this, event, _window, cx| {
-                this.shortcuts.on_record_key(event, command, cx);
+                this.shortcuts
+                    .on_record_key(event, command, &this.services, cx);
             }))
             .child(
                 v_flex()
@@ -486,6 +487,7 @@ impl SettingsView {
                                         KeybindingMutation::Reset {
                                             command_id: command,
                                         },
+                                        &this.services,
                                         cx,
                                     );
                                 })),
@@ -506,6 +508,7 @@ impl SettingsView {
                                         command_id: command,
                                         disabled: !checked,
                                     },
+                                    &this.services,
                                     cx,
                                 );
                             })),
@@ -538,6 +541,7 @@ impl ShortcutsState {
         &mut self,
         event: &gpui::KeyDownEvent,
         command: CommandId,
+        services: &SettingsServices,
         cx: &mut Context<SettingsView>,
     ) {
         if self.recording != Some(command) {
@@ -567,13 +571,19 @@ impl ShortcutsState {
                 binding,
                 replace: false,
             },
+            services,
             cx,
         );
     }
 
     /// Persist one mutation through the repair/mutate pipeline.
-    fn apply(&mut self, mutation: KeybindingMutation, cx: &mut Context<SettingsView>) {
-        let services: SettingsServices = cx.entity().read(cx).services.clone();
+    fn apply(
+        &mut self,
+        mutation: KeybindingMutation,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let current = self.overrides.clone();
         let next = match apply_keybinding_mutation(&current, &mutation, None) {
             Ok(next) => next,
@@ -613,8 +623,8 @@ impl ShortcutsState {
     }
 
     /// Reset every command to its catalog default in one persisted document.
-    fn reset_all(&mut self, cx: &mut Context<SettingsView>) {
-        let services: SettingsServices = cx.entity().read(cx).services.clone();
+    fn reset_all(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
+        let services = services.clone();
         let mut next = self.overrides.clone();
         for command in aiden_core::COMMAND_IDS {
             match apply_keybinding_mutation(
