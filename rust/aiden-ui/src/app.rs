@@ -1215,6 +1215,7 @@ mod tests {
             base_url: "http://127.0.0.1:11434/v1".into(),
             models: vec!["qwen3:8b".into()],
             default_model: Some("qwen3:8b".into()),
+            model_metadata: Default::default(),
             needs_key: false,
             has_key: false,
         };

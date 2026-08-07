@@ -1,3 +1,33 @@
+### 2026-08-07 — Provider/model catalog parity audit (TS Electron vs Rust GPUI port)
+
+- **`rust/aiden-providers/src/builtin.rs` (new)**: pi-exact builtin model snapshot
+  for the native anthropic + google providers (ported from
+  `pi-ai/dist/providers/{anthropic,google}.models.js`) — reasoning, thinking
+  level maps, vision, context window, max tokens, and `compat.forceAdaptiveThinking`
+  (claude-fable-5). This is the Rust source of the TS `piExact` metadata that
+  `model-runtime.ts` feeds into `resolveProviderRuntimeLimits`.
+- **`aiden-providers/src/catalog.rs`**: `resolve_provider_runtime_limits` now
+  falls back to `builtin_runtime_metadata()` when no explicit pi-exact record is
+  passed (slugged providers only, matching `model-runtime.ts`); models.dev vision
+  resolution now honors the `attachment` flag before `modalities.input` exactly
+  like TS `resolveRuntimeLimits`; added `provider_runtime_limits_for_request`.
+- **`aiden-data/src/portable_config.rs`**: corrected the Google preset metadata
+  snapshot to match pi-ai-derived exposed thinking levels (gemini-3-pro-preview
+  etc. now `["off","low","high"]`, gemma-4 `["off","high"]` at 262k window) so the
+  byte-for-byte migration identity check matches what TS writes; added
+  `migrate_legacy_google_provider_id`, `migrate_legacy_pi_selection`,
+  `migrate_legacy_google_selection` (parity with `renderer/shared/google-provider.ts`).
+- **`aiden-ui/src/services/provider_kit.rs`**: `build_stream_request_with_tools`
+  now resolves request limits through the catalog (pi-exact builtin → discovered
+  metadata override → conservative 128k/8k) instead of hardcoded 32k/4k and
+  `reasoning:false`, populating `thinking_level_map`/`max_tokens_limit` like TS
+  `buildModel`. (The debug agent had already wired `resolve_api_family` id routing
+  for google/codex, the CodexProvider fail-closed transport, and keyless auth.)
+- Tests: 6 new catalog tests (api-family mapping vs `apiFor`, builtin pi-exact
+  fallback, discovered-over-builtin merge, attachment vision, request limits,
+  codex runtime provider shape) + 3 builtin module tests + 3 portable_config
+  tests (migrations, google metadata) + 1 new provider_kit test.
+
 ### 2026-08-07 — MCP client + subagent runtime deep audit (crash/hang/security fixes)
 
 - **`aiden-mcp::client`**: `McpClientManager` no longer holds the global map

@@ -490,6 +490,14 @@ impl AnthropicProvider {
         }
     }
 
+    /// Point the transport at a configured (custom / gateway) Messages
+    /// endpoint. The value must be the full `/v1/messages` URL — the provider
+    /// POSTs to it verbatim.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+
     fn build_request(
         &self,
         request: &StreamRequest,

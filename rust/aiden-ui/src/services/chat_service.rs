@@ -693,7 +693,12 @@ impl ChatService {
             .as_ref()
             .map(|chat| chat.messages.clone())
             .unwrap_or_default();
-        let messages = chat_history_to_messages(&history, &selection.model, &selection.provider_id);
+        let messages = chat_history_to_messages(
+            &history,
+            &selection.model,
+            &selection.provider_id,
+            provider.api_family(),
+        );
         let snapshot = TurnSnapshot {
             provider: provider.clone(),
             selection: selection.clone(),

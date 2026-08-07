@@ -1636,6 +1636,40 @@ pub fn migrate_legacy_pi_provider_id(provider_id: Option<&str>) -> Option<String
     }
 }
 
+/// `migrateLegacyGoogleProviderId` — the narrow legacy Google migration used
+/// by the google-specific config path (renderer/shared/google-provider.ts).
+pub fn migrate_legacy_google_provider_id(provider_id: Option<&str>) -> Option<String> {
+    match provider_id {
+        Some(LEGACY_GEMINI_PROVIDER_ID) => Some(GOOGLE_PROVIDER_ID.to_string()),
+        Some(other) => Some(other.to_string()),
+        None => None,
+    }
+}
+
+/// `migrateLegacyPiSelection` — remap `"gemini::model"` / `"moonshot::model"`
+/// persisted selections onto the pi provider ids.
+pub fn migrate_legacy_pi_selection(value: &str) -> String {
+    for (legacy, pi) in [
+        (LEGACY_GEMINI_PROVIDER_ID, GOOGLE_PROVIDER_ID),
+        (LEGACY_MOONSHOT_PROVIDER_ID, MOONSHOT_AI_PROVIDER_ID),
+    ] {
+        let prefix = format!("{legacy}::");
+        if let Some(rest) = value.strip_prefix(&prefix) {
+            return format!("{pi}::{rest}");
+        }
+    }
+    value.to_string()
+}
+
+/// `migrateLegacyGoogleSelection` — remap `"gemini::model"` selections only.
+pub fn migrate_legacy_google_selection(value: &str) -> String {
+    let prefix = format!("{LEGACY_GEMINI_PROVIDER_ID}::");
+    match value.strip_prefix(&prefix) {
+        Some(rest) => format!("{GOOGLE_PROVIDER_ID}::{rest}"),
+        None => value.to_string(),
+    }
+}
+
 const LEGACY_PI_PROVIDER_IDS: &[&str] = &[
     "openai",
     "anthropic",
@@ -1703,7 +1737,9 @@ pub type GoogleModelMetadataRow = (
 
 /// Snapshot of pi-ai's Google models, derived with the same
 /// `googleThinkingLevelsForModel` / `googleThinkingCanDisable` rules the TS
-/// `googleProviderModelMetadata()` uses.
+/// `googleProviderModelMetadata()` uses. `thinking_levels` are the *exposed*
+/// Aiden levels (`off` is always exposed when the model reasons; a nulled map
+/// entry removes a level; a nulled `off` also clears `thinking_can_disable`).
 #[rustfmt::skip]
 pub const GOOGLE_PROVIDER_MODEL_METADATA: &[GoogleModelMetadataRow] = &[
     ("gemini-2.0-flash", "Gemini 2.0 Flash", true, false, &[], false, 1_048_576),
@@ -1711,17 +1747,17 @@ pub const GOOGLE_PROVIDER_MODEL_METADATA: &[GoogleModelMetadataRow] = &[
     ("gemini-2.5-flash", "Gemini 2.5 Flash", true, true, &["off", "low", "medium", "high"], true, 1_048_576),
     ("gemini-2.5-flash-lite", "Gemini 2.5 Flash-Lite", true, true, &["off", "low", "medium", "high"], true, 1_048_576),
     ("gemini-2.5-pro", "Gemini 2.5 Pro", true, true, &["off", "low", "medium", "high"], true, 1_048_576),
-    ("gemini-3-flash-preview", "Gemini 3 Flash Preview", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-3-pro-preview", "Gemini 3 Pro Preview", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite Preview", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-3.1-pro-preview-customtools", "Gemini 3.1 Pro Preview Custom Tools", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-3.5-flash", "Gemini 3.5 Flash", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-flash-latest", "Gemini Flash Latest", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemini-flash-lite-latest", "Gemini Flash-Lite Latest", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemma-4-26b-a4b-it", "Gemma 4 26B A4B IT", true, true, &["low", "medium", "high"], false, 1_048_576),
-    ("gemma-4-31b-it", "Gemma 4 31B IT", true, true, &["low", "medium", "high"], false, 1_048_576),
+    ("gemini-3-flash-preview", "Gemini 3 Flash Preview", true, true, &["off", "low", "medium", "high"], false, 1_048_576),
+    ("gemini-3-pro-preview", "Gemini 3 Pro Preview", true, true, &["off", "low", "high"], false, 1_048_576),
+    ("gemini-3.1-flash-lite", "Gemini 3.1 Flash Lite", true, true, &["off", "low", "medium", "high"], false, 1_048_576),
+    ("gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite Preview", true, true, &["off", "low", "medium", "high"], false, 1_048_576),
+    ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", true, true, &["off", "low", "high"], false, 1_048_576),
+    ("gemini-3.1-pro-preview-customtools", "Gemini 3.1 Pro Preview Custom Tools", true, true, &["off", "low", "high"], false, 1_048_576),
+    ("gemini-3.5-flash", "Gemini 3.5 Flash", true, true, &["off", "low", "medium", "high"], false, 1_048_576),
+    ("gemini-flash-latest", "Gemini Flash Latest", true, true, &["off", "low", "medium", "high"], false, 1_048_576),
+    ("gemini-flash-lite-latest", "Gemini Flash-Lite Latest", true, true, &["off", "low", "medium", "high"], false, 1_048_576),
+    ("gemma-4-26b-a4b-it", "Gemma 4 26B A4B IT", true, true, &["off", "high"], false, 262_144),
+    ("gemma-4-31b-it", "Gemma 4 31B IT", true, true, &["off", "high"], false, 262_144),
 ];
 
 fn google_provider_model_metadata() -> BTreeMap<String, ProviderModelMetadata> {
@@ -3095,5 +3131,97 @@ mod tests {
         // The local file is already migrated; the portable file was deleted by
         // the user's own hand (absent portable file means "use defaults").
         assert_eq!(stores2.portable.load().unwrap().providers.len(), 0);
+    }
+
+    #[test]
+    fn legacy_provider_and_selection_migrations_match_the_ts_helpers() {
+        // migrateLegacyPiProviderId: gemini→google, moonshot→moonshotai.
+        assert_eq!(
+            migrate_legacy_pi_provider_id(Some("gemini")).as_deref(),
+            Some("google")
+        );
+        assert_eq!(
+            migrate_legacy_pi_provider_id(Some("moonshot")).as_deref(),
+            Some("moonshotai")
+        );
+        assert_eq!(
+            migrate_legacy_pi_provider_id(Some("anthropic")).as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(migrate_legacy_pi_provider_id(None), None);
+
+        // migrateLegacyGoogleProviderId: only gemini→google.
+        assert_eq!(
+            migrate_legacy_google_provider_id(Some("gemini")).as_deref(),
+            Some("google")
+        );
+        assert_eq!(
+            migrate_legacy_google_provider_id(Some("moonshot")).as_deref(),
+            Some("moonshot")
+        );
+        assert_eq!(
+            migrate_legacy_google_provider_id(Some("google")).as_deref(),
+            Some("google")
+        );
+        assert_eq!(migrate_legacy_google_provider_id(None), None);
+
+        // migrateLegacyPiSelection: both prefixes remap.
+        assert_eq!(
+            migrate_legacy_pi_selection("gemini::gemini-2.5-flash"),
+            "google::gemini-2.5-flash"
+        );
+        assert_eq!(
+            migrate_legacy_pi_selection("moonshot::kimi-k2-0711-preview"),
+            "moonshotai::kimi-k2-0711-preview"
+        );
+        assert_eq!(
+            migrate_legacy_pi_selection("anthropic::claude-sonnet-5"),
+            "anthropic::claude-sonnet-5"
+        );
+        assert_eq!(migrate_legacy_pi_selection("plain-model"), "plain-model");
+
+        // migrateLegacyGoogleSelection: only the gemini prefix remaps.
+        assert_eq!(
+            migrate_legacy_google_selection("gemini::gemini-2.5-pro"),
+            "google::gemini-2.5-pro"
+        );
+        assert_eq!(
+            migrate_legacy_google_selection("moonshot::kimi-k2-0711-preview"),
+            "moonshot::kimi-k2-0711-preview"
+        );
+    }
+
+    #[test]
+    fn google_builtin_metadata_matches_pi_ai_derived_thinking_levels() {
+        // The migration identity check compares this snapshot byte-for-byte
+        // with the metadata TS writes for the canonical google preset. Verify
+        // the exposed-level derivation against pi-ai's thinkingLevelMap.
+        let by_id: std::collections::HashMap<&str, &GoogleModelMetadataRow> =
+            GOOGLE_PROVIDER_MODEL_METADATA
+                .iter()
+                .map(|row| (row.0, row))
+                .collect();
+
+        // 2.5 models: no map → all levels, can disable.
+        let flash = by_id["gemini-2.5-flash"];
+        assert!(flash.3);
+        assert_eq!(flash.4, &["off", "low", "medium", "high"]);
+        assert!(flash.5);
+
+        // gemini-3-pro-preview: off+medium nulled → only off/low/high exposed,
+        // cannot disable.
+        let pro = by_id["gemini-3-pro-preview"];
+        assert_eq!(pro.4, &["off", "low", "high"]);
+        assert!(!pro.5);
+
+        // gemma-4: only off/high survive (low+medium nulled), 262k window.
+        let gemma = by_id["gemma-4-31b-it"];
+        assert_eq!(gemma.4, &["off", "high"]);
+        assert!(!gemma.5);
+        assert_eq!(gemma.6, 262_144);
+
+        // Non-reasoning models expose no levels.
+        let empty: &[&str] = &[];
+        assert_eq!(by_id["gemini-2.0-flash"].4, empty);
     }
 }

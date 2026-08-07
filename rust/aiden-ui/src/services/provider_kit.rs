@@ -6,6 +6,7 @@
 //! aiden-providers transports on the tokio runtime and forwards batched
 //! updates over a channel to the GPUI foreground (see [`drive_stream`]).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use aiden_agent::llm_client::{TerminalTimelineStatus, TimelineProjector, ToolFinishStatus};
@@ -16,6 +17,11 @@ use aiden_core::{
 };
 use aiden_data::config_store::Provider as StoredProvider;
 use aiden_data::portable_config::ProviderKind;
+use aiden_providers::catalog::{self, Modality};
+use aiden_providers::codex::{
+    CodexAuthStore, CodexProvider, OAuthCredential, OPENAI_CODEX_PROVIDER_ID,
+};
+use aiden_providers::google::{GoogleProvider, GOOGLE_PROVIDER_ID};
 use aiden_providers::provider_error_message;
 use aiden_providers::{
     anthropic::AnthropicProvider, openai_completions::OpenAICompletionsProvider, ApiFamily,
@@ -66,17 +72,39 @@ pub struct ConfiguredProvider {
     pub base_url: String,
     pub models: Vec<String>,
     pub default_model: Option<String>,
+    /// Per-model metadata reported by explicit discovery (drives request-time
+    /// reasoning/vision/context limits for the selected model).
+    pub model_metadata: HashMap<String, aiden_data::portable_config::ProviderModelMetadata>,
     pub needs_key: bool,
     pub has_key: bool,
+}
+
+/// The pi-ai API family a provider dispatches through — the `resolveModelRuntimeWith`
+/// routing funnel ported to the chat driver:
+///
+/// 1. `openai-codex` → `openai-codex-responses` (id check, before kind);
+/// 2. `google` → `google-generative-ai` (id check — the stored record is
+///    `kind: "openai"` but streams through Google's native transport);
+/// 3. anthropic-kind → `anthropic-messages`;
+/// 4. everything else (openai, deepseek, moonshotai, `custom:*`) →
+///    `openai-completions`.
+pub fn resolve_api_family(provider_id: &str, kind: ProviderKind) -> ApiFamily {
+    if provider_id == OPENAI_CODEX_PROVIDER_ID {
+        return ApiFamily::OpenAICodexResponses;
+    }
+    if provider_id == GOOGLE_PROVIDER_ID {
+        return ApiFamily::GoogleGenerativeAi;
+    }
+    match kind {
+        ProviderKind::Anthropic => ApiFamily::AnthropicMessages,
+        ProviderKind::Openai => ApiFamily::OpenAICompletions,
+    }
 }
 
 impl ConfiguredProvider {
     /// The pi-ai API family this provider dispatches through.
     pub fn api_family(&self) -> ApiFamily {
-        match self.kind {
-            ProviderKind::Anthropic => ApiFamily::AnthropicMessages,
-            ProviderKind::Openai => ApiFamily::OpenAICompletions,
-        }
+        resolve_api_family(&self.id, self.kind)
     }
 
     /// The concrete transport registered for this provider's API family. The
@@ -84,9 +112,24 @@ impl ConfiguredProvider {
     /// is decoupled from the *configured* provider id so `custom:` providers
     /// work; the request still carries the configured id for auth + headers.
     pub fn transport(&self) -> Arc<dyn Provider> {
-        match self.kind {
-            ProviderKind::Anthropic => Arc::new(AnthropicProvider::new()),
-            ProviderKind::Openai => Arc::new(OpenAICompletionsProvider::with_base_url(
+        match self.api_family() {
+            // Codex OAuth is not wired into the chat driver yet; an empty
+            // auth store makes the transport fail with a clear "sign in"
+            // message (TS parity when the user is not signed in) instead of
+            // misrouting the turn through chat completions.
+            ApiFamily::OpenAICodexResponses => Arc::new(
+                CodexProvider::new(Arc::new(NoCodexAuthStore)).with_base_url(self.base_url.clone()),
+            ),
+            ApiFamily::GoogleGenerativeAi => Arc::new(GoogleProvider::new()),
+            ApiFamily::AnthropicMessages => Arc::new(
+                AnthropicProvider::new().with_base_url(anthropic_messages_url(&self.base_url)),
+            ),
+            ApiFamily::OpenAICompletions => Arc::new(OpenAICompletionsProvider::with_base_url(
+                self.base_url.clone(),
+            )),
+            // `OpenAIResponses` is not a stored-provider family; the catalog
+            // path that resolves it constructs its own transport.
+            ApiFamily::OpenAIResponses => Arc::new(OpenAICompletionsProvider::with_base_url(
                 self.base_url.clone(),
             )),
         }
@@ -102,9 +145,44 @@ impl From<&StoredProvider> for ConfiguredProvider {
             base_url: provider.base_url.clone(),
             models: provider.models.clone(),
             default_model: provider.default_model.clone(),
+            model_metadata: provider
+                .model_metadata
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             needs_key: provider.needs_key,
             has_key: provider.has_key,
         }
+    }
+}
+
+/// The Messages endpoint for a configured Anthropic-compatible base URL:
+/// `resolveRuntimeBaseUrl` (drop a trailing `/v1`) + pi-ai's `/v1/messages`
+/// suffix. A base URL that already ends in `/v1/messages` is used verbatim.
+pub fn anthropic_messages_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/v1/messages") {
+        return trimmed.to_string();
+    }
+    let stripped = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+    format!("{stripped}/v1/messages")
+}
+
+/// Codex OAuth credential storage is owned by the keychain wiring in the
+/// Electron app; the chat driver has no OAuth flow yet, so this no-op store
+/// reports "not signed in" and the transport surfaces the TS sign-in error.
+struct NoCodexAuthStore;
+
+impl CodexAuthStore for NoCodexAuthStore {
+    fn read(&self) -> Result<Option<OAuthCredential>, aiden_providers::ProviderError> {
+        Ok(None)
+    }
+    fn write(
+        &self,
+        _credential: Option<&OAuthCredential>,
+    ) -> Result<(), aiden_providers::ProviderError> {
+        Ok(())
     }
 }
 
@@ -148,12 +226,18 @@ pub struct TurnSnapshot {
 
 /// Map persisted chat history into the normalized `Message` union the
 /// providers serialize onto the wire. System messages are dropped (the
-/// phase-5 build has no system-prompt pipeline).
+/// phase-5 build has no system-prompt pipeline). Assistant messages are
+/// stamped with the resolved API family so `transform_messages`'s
+/// same-model check (`provider`/`api`/`model`) stays accurate when history is
+/// replayed into an anthropic / google / codex turn — a hardcoded
+/// "openai-completions" stamp would demote thinking blocks to plain text.
 pub fn chat_history_to_messages(
     history: &[ChatMessage],
     default_model: &str,
     default_provider: &str,
+    default_api: ApiFamily,
 ) -> Vec<Message> {
+    let api = default_api.as_str().to_string();
     history
         .iter()
         .filter_map(|entry| match entry.role {
@@ -170,7 +254,7 @@ pub fn chat_history_to_messages(
                         text_signature: None,
                     })]
                 },
-                api: "openai-completions".to_string(),
+                api: api.clone(),
                 provider: default_provider.to_string(),
                 model: entry
                     .model
@@ -202,21 +286,78 @@ pub fn build_stream_request_with_tools(
     tools: &[aiden_core::ToolDef],
     messages: Vec<Message>,
 ) -> StreamRequest {
+    let model_id = &snapshot.selection.model;
+    // `buildModel` (model-runtime-core.ts): request-time limits are pi-exact
+    // builtin metadata overridden by connection-discovered metadata, then the
+    // conservative fallback. Discovered fields win because the builtin record
+    // is the *fallback* layer (`resolveProviderRuntimeLimits`).
+    let stored = catalog_provider(&snapshot.provider);
+    let limits = catalog::resolve_provider_runtime_limits(None, &stored, model_id, None);
     StreamRequest {
         provider_id: snapshot.selection.provider_id.clone(),
         api: snapshot.provider.api_family(),
-        model: snapshot.selection.model.clone(),
+        model: model_id.clone(),
         base_url: snapshot.provider.base_url.clone(),
-        reasoning: false,
-        thinking_level_map: None,
-        vision: false,
-        context_window: 32_768,
-        max_tokens_limit: 4_096,
+        reasoning: limits.reasoning,
+        thinking_level_map: limits.thinking_level_map,
+        vision: limits.input.contains(&Modality::Image),
+        context_window: limits.context_window,
+        max_tokens_limit: limits.max_tokens,
         messages,
         system_prompt: None,
         max_tokens: None,
         tools: tools.to_vec(),
         ..Default::default()
+    }
+}
+
+/// Project a `ConfiguredProvider` into the catalog's `StoredProvider` shape so
+/// [`catalog::resolve_provider_runtime_limits`] can merge discovered metadata
+/// with the pi-exact builtin fallback.
+fn catalog_provider(provider: &ConfiguredProvider) -> catalog::StoredProvider {
+    let model_metadata = if provider.model_metadata.is_empty() {
+        None
+    } else {
+        Some(
+            provider
+                .model_metadata
+                .iter()
+                .map(|(model_id, metadata)| {
+                    (
+                        model_id.clone(),
+                        catalog::ProviderModelMetadata {
+                            source: "provider".into(),
+                            name: metadata.name.clone(),
+                            r#type: None,
+                            vision: metadata.vision,
+                            tool_call: metadata.tool_call,
+                            reasoning: metadata.reasoning,
+                            thinking_levels: None,
+                            thinking_can_disable: metadata.thinking_can_disable,
+                            context_length: metadata.context_length.map(|length| length as u32),
+                            parameter_count: metadata.parameter_count.clone(),
+                            format: metadata.format.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        )
+    };
+    catalog::StoredProvider {
+        id: provider.id.clone(),
+        kind: match provider.kind {
+            ProviderKind::Anthropic => catalog::ProviderKind::Anthropic,
+            ProviderKind::Openai => catalog::ProviderKind::Openai,
+        },
+        label: provider.label.clone(),
+        base_url: provider.base_url.clone(),
+        models: provider.models.clone(),
+        model_metadata,
+        default_model: provider.default_model.clone(),
+        needs_key: provider.needs_key,
+        deployment: None,
+        is_preset: None,
+        is_builtin: None,
     }
 }
 
@@ -573,6 +714,7 @@ mod tests {
             base_url: "http://127.0.0.1:1234/v1".into(),
             models: vec!["m1".into()],
             default_model: None,
+            model_metadata: Default::default(),
             needs_key,
             has_key,
         }
@@ -599,7 +741,12 @@ mod tests {
             user(ChatRole::Assistant, "hello there"),
             user(ChatRole::System, "you are a helper"),
         ];
-        let messages = chat_history_to_messages(&history, "claude-sonnet-5", "anthropic");
+        let messages = chat_history_to_messages(
+            &history,
+            "claude-sonnet-5",
+            "anthropic",
+            ApiFamily::AnthropicMessages,
+        );
         assert_eq!(messages.len(), 2, "system messages are dropped");
         assert!(
             matches!(messages[0], Message::User(ref u) if matches!(&u.content, UserContent::Text(t) if t == "hi"))
@@ -609,6 +756,7 @@ mod tests {
         };
         assert_eq!(a.provider, "anthropic");
         assert_eq!(a.model, "claude-sonnet-5");
+        assert_eq!(a.api, "anthropic-messages");
         assert!(matches!(&a.content[0], ContentBlock::Text(t) if t.text == "hello there"));
     }
 
@@ -616,7 +764,12 @@ mod tests {
     fn history_keeps_per_message_model() {
         let mut assistant = user(ChatRole::Assistant, "hi");
         assistant.model = Some("claude-haiku-4".into());
-        let messages = chat_history_to_messages(&[assistant], "claude-sonnet-5", "anthropic");
+        let messages = chat_history_to_messages(
+            &[assistant],
+            "claude-sonnet-5",
+            "anthropic",
+            ApiFamily::AnthropicMessages,
+        );
         let Message::Assistant(ref a) = messages[0] else {
             panic!();
         };
@@ -626,7 +779,8 @@ mod tests {
     #[test]
     fn empty_assistant_history_produces_no_text_block() {
         let assistant = user(ChatRole::Assistant, "");
-        let messages = chat_history_to_messages(&[assistant], "m", "p");
+        let messages =
+            chat_history_to_messages(&[assistant], "m", "p", ApiFamily::OpenAICompletions);
         let Message::Assistant(ref a) = messages[0] else {
             panic!();
         };
@@ -642,6 +796,7 @@ mod tests {
             base_url: "http://127.0.0.1:1234/v1".into(),
             models: vec!["qwen2.5-coder".into()],
             default_model: None,
+            model_metadata: Default::default(),
             needs_key: false,
             has_key: false,
         };
@@ -649,6 +804,236 @@ mod tests {
         // The transport is constructible and reports its fixed info id.
         let transport = provider.transport();
         assert_eq!(transport.info().id, "openai-completions");
+    }
+
+    #[test]
+    fn builtin_providers_route_to_matching_transports() {
+        use aiden_data::portable_config::ProviderKind as Kind;
+
+        // google: kind is "openai" in the stored config but the TS native path
+        // streams it through Google's own transport (google-generative-ai).
+        let google = ConfiguredProvider {
+            id: "google".into(),
+            label: "Google Gemini".into(),
+            kind: Kind::Openai,
+            base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
+            models: vec!["gemini-2.5-flash".into()],
+            default_model: Some("gemini-2.5-flash".into()),
+            model_metadata: Default::default(),
+            needs_key: true,
+            has_key: true,
+        };
+        assert_eq!(google.api_family(), ApiFamily::GoogleGenerativeAi);
+        assert_eq!(google.transport().info().id, "google");
+
+        // openai-codex: routed by id to the codex-responses transport, never
+        // through chat completions.
+        let codex = ConfiguredProvider {
+            id: "openai-codex".into(),
+            label: "ChatGPT / Codex".into(),
+            kind: Kind::Openai,
+            base_url: "https://chatgpt.com/backend-api".into(),
+            models: vec!["gpt-5.4".into()],
+            default_model: Some("gpt-5.4".into()),
+            model_metadata: Default::default(),
+            needs_key: true,
+            has_key: false,
+        };
+        assert_eq!(codex.api_family(), ApiFamily::OpenAICodexResponses);
+        assert_eq!(codex.transport().info().id, "openai-codex");
+
+        // anthropic kind → anthropic-messages.
+        let anthropic = ConfiguredProvider {
+            id: "custom:onboarding-anthropic".into(),
+            label: "Anthropic".into(),
+            kind: Kind::Anthropic,
+            base_url: "https://gateway.example/v1".into(),
+            models: vec!["claude-sonnet-4-5".into()],
+            default_model: Some("claude-sonnet-4-5".into()),
+            model_metadata: Default::default(),
+            needs_key: true,
+            has_key: true,
+        };
+        assert_eq!(anthropic.api_family(), ApiFamily::AnthropicMessages);
+        assert_eq!(anthropic.transport().info().id, "anthropic");
+
+        // openai / deepseek / moonshotai (kind "openai", openai-completions
+        // family per the TS `apiFor` fallback).
+        for id in ["openai", "deepseek", "moonshotai"] {
+            let provider = ConfiguredProvider {
+                id: id.into(),
+                label: id.into(),
+                kind: Kind::Openai,
+                base_url: "https://example.test/v1".into(),
+                models: vec!["m".into()],
+                default_model: None,
+                model_metadata: Default::default(),
+                needs_key: true,
+                has_key: true,
+            };
+            assert_eq!(provider.api_family(), ApiFamily::OpenAICompletions, "{id}");
+            assert_eq!(provider.transport().info().id, "openai-completions", "{id}");
+        }
+    }
+
+    #[test]
+    fn anthropic_messages_url_derives_the_endpoint_from_the_base_url() {
+        // Default API URL keeps its /v1 path.
+        assert_eq!(
+            anthropic_messages_url("https://api.anthropic.com/v1"),
+            "https://api.anthropic.com/v1/messages"
+        );
+        // A gateway without a version segment gets /v1/messages appended
+        // (TS `resolveRuntimeBaseUrl` + pi `apiUrl(..., '/v1/messages')`).
+        assert_eq!(
+            anthropic_messages_url("https://gateway.example"),
+            "https://gateway.example/v1/messages"
+        );
+        // Trailing slashes and an already-complete messages URL are stable.
+        assert_eq!(
+            anthropic_messages_url("https://gateway.example/v1/"),
+            "https://gateway.example/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_url("https://gateway.example/v1/messages"),
+            "https://gateway.example/v1/messages"
+        );
+    }
+
+    #[test]
+    fn model_metadata_drives_request_params() {
+        use aiden_data::portable_config::ProviderModelMetadataSource;
+
+        let metadata = aiden_data::portable_config::ProviderModelMetadata {
+            source: ProviderModelMetadataSource::Provider,
+            name: Some("Gemini 2.5 Flash".into()),
+            r#type: Some(aiden_data::portable_config::ProviderModelType::Llm),
+            vision: Some(true),
+            tool_call: Some(true),
+            reasoning: Some(true),
+            thinking_levels: None,
+            thinking_can_disable: None,
+            context_length: Some(1_000_000),
+            parameter_count: None,
+            format: None,
+        };
+        let provider = ConfiguredProvider {
+            id: "google".into(),
+            label: "Google Gemini".into(),
+            kind: ProviderKind::Openai,
+            base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
+            models: vec!["gemini-2.5-flash".into()],
+            default_model: None,
+            model_metadata: HashMap::from([("gemini-2.5-flash".to_string(), metadata)]),
+            needs_key: true,
+            has_key: true,
+        };
+        let snapshot = TurnSnapshot {
+            provider,
+            selection: ModelSelection {
+                provider_id: "google".into(),
+                model: "gemini-2.5-flash".into(),
+            },
+            messages: Vec::new(),
+            mcp: None,
+        };
+        let request = build_stream_request(&snapshot);
+        assert_eq!(request.api, ApiFamily::GoogleGenerativeAi);
+        assert!(request.reasoning);
+        assert!(request.vision);
+        assert_eq!(request.context_window, 1_000_000);
+
+        // A model without metadata falls back to pi-exact builtin metadata
+        // (google's gemini-2.5-flash is builtin, so reasoning/window survive).
+        let snapshot = TurnSnapshot {
+            selection: ModelSelection {
+                provider_id: "google".into(),
+                model: "unknown-model".into(),
+            },
+            ..snapshot
+        };
+        let request = build_stream_request(&snapshot);
+        assert!(!request.reasoning);
+        assert!(!request.vision);
+        // `CONSERVATIVE_RUNTIME_LIMITS` (128k/8k), not the pre-fix 32k/4k.
+        assert_eq!(request.context_window, 128_000);
+        assert_eq!(request.max_tokens_limit, 8_192);
+    }
+
+    #[test]
+    fn builtin_pi_exact_metadata_drives_request_params_without_discovery() {
+        // An anthropic connection with no discovery metadata still gets
+        // pi-exact limits (`buildModel` + `resolveProviderRuntimeLimits`):
+        // reasoning, vision, the 1M window, max tokens, and the thinking map.
+        let provider = ConfiguredProvider {
+            id: "anthropic".into(),
+            label: "Anthropic".into(),
+            kind: ProviderKind::Anthropic,
+            base_url: "https://api.anthropic.com/v1".into(),
+            models: vec!["claude-sonnet-5".into()],
+            default_model: None,
+            model_metadata: Default::default(),
+            needs_key: true,
+            has_key: true,
+        };
+        let snapshot = TurnSnapshot {
+            provider,
+            selection: ModelSelection {
+                provider_id: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+            },
+            messages: Vec::new(),
+            mcp: None,
+        };
+        let request = build_stream_request(&snapshot);
+        assert_eq!(request.api, ApiFamily::AnthropicMessages);
+        assert!(request.reasoning);
+        assert!(request.vision);
+        assert_eq!(request.context_window, 1_000_000);
+        assert_eq!(request.max_tokens_limit, 128_000);
+        let map = request.thinking_level_map.as_ref().unwrap();
+        assert_eq!(map.get("xhigh"), Some(&Some("xhigh".to_string())));
+        assert_eq!(map.get("max"), Some(&Some("max".to_string())));
+
+        // claude-fable-5 forces adaptive thinking (pi compat).
+        let snapshot = TurnSnapshot {
+            selection: ModelSelection {
+                provider_id: "anthropic".into(),
+                model: "claude-fable-5".into(),
+            },
+            ..snapshot
+        };
+        let _request = build_stream_request(&snapshot);
+        let fable = aiden_providers::builtin::builtin_model(
+            aiden_providers::builtin::ANTHROPIC_PROVIDER_ID,
+            "claude-fable-5",
+        )
+        .unwrap();
+        assert!(fable.force_adaptive_thinking);
+
+        // An unrelated custom provider falls back to conservative limits.
+        let snapshot = TurnSnapshot {
+            provider: ConfiguredProvider {
+                id: "custom:lmstudio".into(),
+                label: "LM Studio".into(),
+                kind: ProviderKind::Openai,
+                base_url: "http://127.0.0.1:1234/v1".into(),
+                models: vec!["m1".into()],
+                default_model: None,
+                model_metadata: Default::default(),
+                needs_key: false,
+                has_key: false,
+            },
+            selection: ModelSelection {
+                provider_id: "custom:lmstudio".into(),
+                model: "m1".into(),
+            },
+            ..snapshot
+        };
+        let request = build_stream_request(&snapshot);
+        assert!(!request.reasoning);
+        assert_eq!(request.context_window, 128_000);
+        assert!(request.thinking_level_map.is_none());
     }
 
     #[test]

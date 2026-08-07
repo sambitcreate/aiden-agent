@@ -415,8 +415,43 @@ fn resolve_catalog_fields(
         .get("modalities")
         .and_then(|m| m.get("input"))
         .and_then(|v| v.as_array());
-    let vision = modalities.map(|inputs| inputs.iter().any(|entry| entry == "image"));
+    // Mirrors the TS `resolveRuntimeLimits` vision precedence: the models.dev
+    // `attachment` flag is the first vision signal, then `modalities.input`.
+    let attachment = raw.get("attachment").and_then(|v| v.as_bool());
+    let modality_vision = modalities.map(|inputs| inputs.iter().any(|entry| entry == "image"));
+    let vision = if attachment == Some(true) || modality_vision == Some(true) {
+        Some(true)
+    } else if attachment == Some(false) || modality_vision.is_some() {
+        Some(false)
+    } else {
+        None
+    };
     (context, max_tokens, reasoning, vision)
+}
+
+/// Pi-exact builtin metadata for a native provider model (`model-runtime.ts`
+/// builds `piExact` from `providerRegistry.models.getModel(piProviderId, id)`;
+/// here the [`crate::builtin`] snapshot is that source of truth).
+pub fn builtin_runtime_metadata(provider_id: &str, model_id: &str) -> Option<RuntimeModelMetadata> {
+    let model = crate::builtin::builtin_model(provider_id, model_id)?;
+    Some(RuntimeModelMetadata {
+        context_window: Some(model.context_window),
+        max_tokens: Some(model.max_tokens),
+        reasoning: Some(model.reasoning),
+        input: Some(if model.vision {
+            vec![Modality::Text, Modality::Image]
+        } else {
+            vec![Modality::Text]
+        }),
+        thinking_level_map: (!model.thinking_level_map.is_empty()).then(|| {
+            model
+                .thinking_level_map
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), value.map(str::to_string)))
+                .collect()
+        }),
+        force_adaptive_thinking: model.force_adaptive_thinking.then_some(true),
+    })
 }
 
 /// `resolveProviderRuntimeLimits` — discovered metadata overrides, builtin
@@ -428,6 +463,13 @@ pub fn resolve_provider_runtime_limits(
     pi_exact: Option<&RuntimeModelMetadata>,
 ) -> RuntimeModelLimits {
     let runtime_slug = catalog_provider_slug(&provider.id);
+    // Mirrors `model-runtime.ts`: piExact is only consulted for providers that
+    // map to a pi/models.dev slug; the builtin snapshot is that source.
+    let pi_exact = match pi_exact {
+        Some(exact) => Some(exact.clone()),
+        None if runtime_slug.is_some() => builtin_runtime_metadata(&provider.id, model_id),
+        None => None,
+    };
     let discovered = provider
         .model_metadata
         .as_ref()
@@ -447,6 +489,30 @@ pub fn resolve_provider_runtime_limits(
         (None, None) => None,
     };
     resolve_runtime_limits(catalog, effective_provider_id, model_id, merged.as_ref())
+}
+
+/// Request-time limits without a models.dev catalog or discovered metadata:
+/// pi-exact builtin metadata when the provider id is a native slug, otherwise
+/// the conservative fallback (`buildModel` in `model-runtime-core.ts`).
+pub fn provider_runtime_limits_for_request(
+    provider_id: &str,
+    kind: ProviderKind,
+    model_id: &str,
+) -> RuntimeModelLimits {
+    let stored = StoredProvider {
+        id: provider_id.to_string(),
+        kind,
+        label: String::new(),
+        base_url: String::new(),
+        models: Vec::new(),
+        model_metadata: None,
+        default_model: None,
+        needs_key: true,
+        deployment: None,
+        is_preset: None,
+        is_builtin: None,
+    };
+    resolve_provider_runtime_limits(None, &stored, model_id, None)
 }
 
 fn discovered_runtime_metadata(metadata: &ProviderModelMetadata) -> RuntimeModelMetadata {
@@ -1334,5 +1400,227 @@ mod tests {
         assert!(!json.contains("base_url"));
         let back: StoredProvider = serde_json::from_str(&json).unwrap();
         assert_eq!(back, stored);
+    }
+
+    #[test]
+    fn api_family_mapping_matches_the_ts_api_for() {
+        // TS `apiFor` (model-runtime-core.ts): kind=anthropic → anthropic-messages,
+        // every other kind → openai-completions.
+        let anthropic_connection = provider(
+            "custom:a",
+            ProviderKind::Anthropic,
+            "https://proxy.example/v1",
+        );
+        let openai_connection = provider("custom:o", ProviderKind::Openai, "https://x/v1");
+        let deps = ModelRuntimeDeps {
+            get_provider: Box::new(|_| None),
+            get_api_key: Box::new(|_| Some("k".to_string())),
+            resolve_runtime_limits: Box::new(|_provider, _model| RuntimeModelLimits {
+                context_window: 128_000,
+                max_tokens: 8192,
+                reasoning: false,
+                input: vec![Modality::Text],
+                thinking_level_map: None,
+                force_adaptive_thinking: false,
+            }),
+            codex_model_available: Box::new(|_| false),
+            native: NativeModelSet {
+                get_provider: Some(Box::new(|_| None)),
+                get_model: None,
+            },
+        };
+        let mut deps = deps;
+        deps.get_provider = Box::new(move |id| {
+            if id == "custom:a" {
+                Some(anthropic_connection.clone())
+            } else if id == "custom:o" {
+                Some(openai_connection.clone())
+            } else {
+                None
+            }
+        });
+        let resolved = resolve_model_runtime(&deps, "custom:a", "m1").unwrap();
+        assert_eq!(resolved.model.api, ApiFamily::AnthropicMessages);
+        assert_eq!(resolved.dispatch, StreamDispatch::Anthropic);
+        let resolved = resolve_model_runtime(&deps, "custom:o", "m1").unwrap();
+        assert_eq!(resolved.model.api, ApiFamily::OpenAICompletions);
+        assert_eq!(resolved.dispatch, StreamDispatch::OpenAICompletions);
+    }
+
+    #[test]
+    fn provider_runtime_limits_fall_back_to_builtin_pi_exact_metadata() {
+        // `model-runtime.ts` passes the pi builtin model as `piExact`; the
+        // builtin snapshot must reproduce that for the native providers.
+        let anthropic = provider(
+            "anthropic",
+            ProviderKind::Openai,
+            "https://api.anthropic.com/v1",
+        );
+        let limits = resolve_provider_runtime_limits(None, &anthropic, "claude-sonnet-5", None);
+        assert_eq!(limits.context_window, 1_000_000);
+        assert_eq!(limits.max_tokens, 128_000);
+        assert!(limits.reasoning);
+        assert!(limits.input.contains(&Modality::Image));
+        let map = limits.thinking_level_map.as_ref().expect("thinking map");
+        assert_eq!(map.get("xhigh"), Some(&Some("xhigh".to_string())));
+        assert_eq!(map.get("max"), Some(&Some("max".to_string())));
+        assert!(!limits.force_adaptive_thinking);
+
+        // claude-fable-5: `compat.forceAdaptiveThinking` surfaces as the limit.
+        let fable = resolve_provider_runtime_limits(None, &anthropic, "claude-fable-5", None);
+        assert!(fable.force_adaptive_thinking);
+        // off is nulled: thinking cannot be disabled.
+        let map = fable.thinking_level_map.as_ref().unwrap();
+        assert_eq!(map.get("off"), Some(&None));
+
+        // Google: native provider id maps to google-generative-ai family data.
+        let google = provider(
+            "google",
+            ProviderKind::Openai,
+            "https://generativelanguage.googleapis.com/v1beta",
+        );
+        let gemma = resolve_provider_runtime_limits(None, &google, "gemma-4-31b-it", None);
+        assert_eq!(gemma.context_window, 262_144);
+        assert!(gemma.reasoning);
+
+        // An unrelated custom provider must not borrow anthropic builtin data.
+        let custom = provider("custom:x", ProviderKind::Openai, "http://127.0.0.1:1");
+        let limits = resolve_provider_runtime_limits(None, &custom, "claude-sonnet-5", None);
+        assert_eq!(
+            limits.context_window,
+            conservative_runtime_limits().context_window
+        );
+        assert!(limits.thinking_level_map.is_none());
+    }
+
+    #[test]
+    fn codex_runtime_provider_matches_the_ts_codex_runtime_provider() {
+        // TS `codexRuntimeProvider` (model-runtime-core.ts:20-28): same id,
+        // kind "openai", label, base URL, empty models, keyed, preset.
+        let deps = ModelRuntimeDeps {
+            get_provider: Box::new(|_| None),
+            get_api_key: Box::new(|_| None),
+            resolve_runtime_limits: Box::new(|_provider, _model| RuntimeModelLimits {
+                context_window: 272_000,
+                max_tokens: 128_000,
+                reasoning: true,
+                input: vec![Modality::Text, Modality::Image],
+                thinking_level_map: None,
+                force_adaptive_thinking: false,
+            }),
+            codex_model_available: Box::new(|id| id == crate::codex::OPENAI_CODEX_DEFAULT_MODEL),
+            native: NativeModelSet::default(),
+        };
+        let resolved = resolve_model_runtime(
+            &deps,
+            "openai-codex",
+            crate::codex::OPENAI_CODEX_DEFAULT_MODEL,
+        )
+        .unwrap();
+        assert_eq!(resolved.provider.id, crate::codex::OPENAI_CODEX_PROVIDER_ID);
+        assert_eq!(resolved.provider.kind, ProviderKind::Openai);
+        assert_eq!(
+            resolved.provider.label,
+            crate::codex::OPENAI_CODEX_PROVIDER_LABEL
+        );
+        assert_eq!(
+            resolved.provider.base_url,
+            crate::codex::OPENAI_CODEX_BASE_URL
+        );
+        assert!(resolved.provider.models.is_empty());
+        assert!(resolved.provider.needs_key);
+        assert_eq!(resolved.provider.is_preset, Some(true));
+        assert_eq!(resolved.model.api, ApiFamily::OpenAICodexResponses);
+        assert_eq!(resolved.dispatch, StreamDispatch::Codex);
+        assert_eq!(resolved.api_key, None);
+        assert!(resolved.headers.is_none());
+    }
+
+    #[test]
+    fn provider_runtime_limits_merge_discovered_over_builtin() {
+        let mut anthropic = provider(
+            "anthropic",
+            ProviderKind::Openai,
+            "https://api.anthropic.com/v1",
+        );
+        anthropic.model_metadata = Some(HashMap::from([(
+            "claude-sonnet-5".to_string(),
+            ProviderModelMetadata {
+                source: "provider".to_string(),
+                context_length: Some(10_000),
+                reasoning: Some(false),
+                vision: Some(false),
+                ..Default::default()
+            },
+        )]));
+        // Discovered metadata wins (TS `mergeRuntimeMetadata(discovered, piExact)`),
+        // while pi-exact fields the discovery did not report survive.
+        let limits = resolve_provider_runtime_limits(None, &anthropic, "claude-sonnet-5", None);
+        assert_eq!(limits.context_window, 10_000);
+        assert!(!limits.reasoning);
+        assert!(!limits.input.contains(&Modality::Image));
+        assert_eq!(limits.max_tokens, 128_000, "builtin maxTokens survives");
+        assert!(
+            limits.thinking_level_map.is_some(),
+            "builtin thinking map survives"
+        );
+    }
+
+    #[test]
+    fn catalog_vision_uses_the_attachment_flag_like_ts() {
+        // TS `resolveRuntimeLimits`: `attachment === true` counts as vision
+        // even when `modalities.input` lacks an explicit "image" entry.
+        let catalog = serde_json::json!({
+            "anthropic": {
+                "models": {
+                    "attachment-only": {
+                        "name": "Attachment Only",
+                        "attachment": true,
+                        "modalities": { "input": ["text", "pdf"] },
+                        "limit": { "context": 200000, "output": 32000 }
+                    },
+                    "image-input": {
+                        "name": "Image Input",
+                        "attachment": false,
+                        "modalities": { "input": ["text", "image"] }
+                    },
+                    "text-only": {
+                        "name": "Text Only",
+                        "attachment": false,
+                        "modalities": { "input": ["text"] }
+                    }
+                }
+            }
+        });
+        let limits = resolve_runtime_limits(Some(&catalog), "anthropic", "attachment-only", None);
+        assert!(limits.input.contains(&Modality::Image));
+        // `attachment === true || inputs include image` → vision (TS OR).
+        let limits = resolve_runtime_limits(Some(&catalog), "anthropic", "image-input", None);
+        assert!(limits.input.contains(&Modality::Image));
+        // Explicit `attachment === false` with text-only input → no vision.
+        let limits = resolve_runtime_limits(Some(&catalog), "anthropic", "text-only", None);
+        assert!(!limits.input.contains(&Modality::Image));
+    }
+
+    #[test]
+    fn request_limits_for_custom_providers_are_conservative() {
+        // Custom connections have no catalog slug and no builtin row, so the
+        // request path lands on `CONSERVATIVE_RUNTIME_LIMITS` (128k/8k).
+        let limits =
+            provider_runtime_limits_for_request("custom:lmstudio", ProviderKind::Openai, "m1");
+        assert_eq!(limits.context_window, 128_000);
+        assert_eq!(limits.max_tokens, 8_192);
+        assert!(!limits.reasoning);
+        assert!(limits.thinking_level_map.is_none());
+
+        // Native anthropic models resolve pi-exact builtin data.
+        let limits = provider_runtime_limits_for_request(
+            "anthropic",
+            ProviderKind::Anthropic,
+            "claude-sonnet-5",
+        );
+        assert_eq!(limits.context_window, 1_000_000);
+        assert!(limits.reasoning);
+        assert!(limits.thinking_level_map.is_some());
     }
 }

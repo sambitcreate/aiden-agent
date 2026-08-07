@@ -28,6 +28,7 @@ use futures::StreamExt;
 pub mod anthropic;
 pub mod artificial_analysis;
 pub mod auth_flow;
+pub mod builtin;
 pub mod catalog;
 pub mod codex;
 pub mod compact;
