@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use aiden_core::appearance::Mode;
+use futures::FutureExt;
 use gpui::{
     actions, div, prelude::FluentBuilder as _, px, AppContext as _, Context, Entity, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _,
@@ -39,7 +40,9 @@ use crate::panels::subagents_panel::{
 };
 use crate::panels::terminal_drawer::{TerminalDeps, TerminalDrawer};
 use crate::panels::usage_panel::{StoreUsageSource, UsageDataSource, UsagePanel, UsagePanelDeps};
-use crate::pill::{open_pill_window, PillDeps, PillView, SilenceAudioSource};
+use crate::pill::{
+    open_pill_window, LiveAudioSource, PillCoordinator, PillCoordinatorDeps, PillDeps, PillView,
+};
 use crate::services::chat_service::ChatService;
 use crate::services::provider_kit::ConfiguredProvider;
 use crate::services::stores::Stores;
@@ -181,10 +184,29 @@ impl PaletteDataSource for AppPaletteSource {
 }
 
 /// The pill window handle cache: re-invoking ⌘⇧D focuses the existing pill
-/// instead of stacking windows. A true global hotkey (active while another
-/// app is focused) comes with the aiden-mac wiring in a later phase.
+/// instead of stacking windows.
 static PILL_WINDOW: std::sync::Mutex<Option<gpui::WindowHandle<PillView>>> =
     std::sync::Mutex::new(None);
+
+/// The wired dictation coordinator, reachable from the pill window's cancel
+/// button and the bridge task (both constructed before `AppState` finishes).
+static PILL_COORDINATOR: std::sync::OnceLock<Arc<PillCoordinator>> = std::sync::OnceLock::new();
+
+/// Window commands the dictation coordinator's injected deps send; the
+/// foreground bridge task (spawned in [`AppState::new`]) performs them on the
+/// GPUI main thread and replies.
+enum PillCommand {
+    /// Open (or focus) the pill window; reply `true` when newly created.
+    Show {
+        reply: tokio::sync::oneshot::Sender<bool>,
+    },
+    /// The coordinator hid the pill (GPUI has no hide API, so close it).
+    Hide,
+    /// App shutdown / coordinator dispose.
+    Destroy,
+    /// Forward a `dictation:state` payload into the pill view.
+    Broadcast(aiden_core::dictation::DictationStatePayload),
+}
 
 /// The per-window root view.
 pub struct AppState {
@@ -260,6 +282,9 @@ impl AppState {
             palette: None,
             palette_source: None,
         };
+
+        // Wire the dictation pill (coordinator + window bridge).
+        wire_pill_coordinator(cx);
 
         // Composer: re-render on change; Enter (without shift) sends.
         this._subscriptions.push(cx.subscribe_in(
@@ -875,37 +900,158 @@ impl AppState {
     // =======================================================================
 
     fn on_toggle_pill(&mut self, _: &TogglePill, _window: &mut Window, cx: &mut Context<Self>) {
-        toggle_pill_window(self, cx);
+        if let Some(pill) = PILL_COORDINATOR.get().cloned() {
+            cx.spawn(async move |_this, _cx| {
+                pill.toggle().await;
+            })
+            .detach();
+        } else {
+            tracing::warn!("dictation pill toggle: coordinator is not wired");
+        }
     }
 }
 
-/// Open (or focus) the dictation pill window. The handle is cached so a second
-/// ⌘⇧D focuses the existing pill instead of stacking windows; when the window
-/// was closed the stale handle is replaced.
-fn toggle_pill_window(this: &AppState, cx: &mut Context<AppState>) {
+/// Open (or focus) the pill window on the foreground; `true` when a new
+/// window was created. Also stores the window handle in [`PILL_WINDOW`] so
+/// later broadcasts can reach the view.
+fn bridge_show_pill(
+    cx: &mut gpui::AsyncApp,
+    audio: &Arc<LiveAudioSource>,
+    appearance: &aiden_core::appearance::AppearanceConfig,
+) -> bool {
+    let on_cancel: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
+        if let Some(pill) = PILL_COORDINATOR.get() {
+            pill.request_cancel();
+        }
+    });
     let mut guard = match PILL_WINDOW.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
     if let Some(handle) = guard.as_ref() {
-        if handle
-            .update(cx, |_view, window, _cx| window.activate_window())
-            .is_ok()
-        {
-            return;
+        let activate =
+            cx.update(|app| handle.update(app, |_view, window, _cx| window.activate_window()));
+        if matches!(activate, Ok(Ok(()))) {
+            return false;
         }
+        // The cached handle is stale (window closed via Escape); replace it.
+        *guard = None;
     }
     let deps = PillDeps {
-        audio: Rc::new(RefCell::new(SilenceAudioSource)),
-        appearance: this.service.read(cx).appearance.clone(),
-        // GPUI cannot probe the OS preference; the motion gate defaults to
-        // allowing motion until the platform probe exists.
+        audio: Rc::new(RefCell::new(audio.clone())),
+        appearance: appearance.clone(),
         system_reduced_motion: false,
+        on_cancel: Some(on_cancel),
     };
-    match open_pill_window(cx, deps) {
-        Ok(handle) => *guard = Some(handle),
-        Err(error) => tracing::warn!(%error, "failed to open the dictation pill"),
+    match cx.update(|app| open_pill_window(app, deps)) {
+        Ok(Ok(handle)) => {
+            *guard = Some(handle);
+            true
+        }
+        _ => false,
     }
+}
+
+/// Close the pill window (GPUI has no hide API; the pill is re-created on the
+/// next toggle, matching the Escape-close model).
+fn bridge_close_pill(cx: &mut gpui::AsyncApp) {
+    let _ = cx.update(|app| {
+        let handle = match PILL_WINDOW.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(handle) = handle {
+            let _ = handle.update(app, |_view, window, _cx| window.remove_window());
+        }
+    });
+}
+
+/// Forward a `dictation:state` payload into the pill view.
+fn bridge_broadcast(
+    cx: &mut gpui::AsyncApp,
+    payload: &aiden_core::dictation::DictationStatePayload,
+) {
+    let _ = cx.update(|app| {
+        let handle = match PILL_WINDOW.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => *poisoned.into_inner(),
+        };
+        if let Some(handle) = handle {
+            let _ = handle.update(app, |view, _window, cx| {
+                view.push_dictation(payload, cx);
+            });
+        }
+    });
+}
+
+/// Wire the dictation pill: spawn the foreground window-command bridge and
+/// construct the coordinator over it. Runs once from [`AppState::new`].
+fn wire_pill_coordinator(cx: &mut Context<AppState>) {
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel::<PillCommand>();
+    let audio = Arc::new(LiveAudioSource::new());
+
+    // Foreground task performing window ops (windows can only be touched on
+    // the main thread). The appearance is read from the live chat service at
+    // open time (the pill paints it immediately).
+    let bridge_audio = audio.clone();
+    cx.spawn(async move |this, cx| {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                PillCommand::Show { reply } => {
+                    let appearance = this
+                        .upgrade()
+                        .and_then(|entity| {
+                            cx.read_entity(&entity, |state, app| {
+                                state.service.read(app).appearance.clone()
+                            })
+                            .ok()
+                        })
+                        .unwrap_or_else(aiden_core::appearance::create_default_appearance_config);
+                    let created = bridge_show_pill(cx, &bridge_audio, &appearance);
+                    let _ = reply.send(created);
+                }
+                PillCommand::Hide => bridge_close_pill(cx),
+                PillCommand::Destroy => bridge_close_pill(cx),
+                PillCommand::Broadcast(payload) => bridge_broadcast(cx, &payload),
+            }
+        }
+    })
+    .detach();
+
+    let show_pill_command = command_tx.clone();
+    let hide_pill_command = command_tx.clone();
+    let destroy_pill_command = command_tx.clone();
+    let broadcast_command = command_tx.clone();
+    let pill = PillCoordinator::new(PillCoordinatorDeps {
+        show_pill: Box::new(move || {
+            let command = show_pill_command.clone();
+            async move {
+                let (reply, reply_rx) = tokio::sync::oneshot::channel();
+                if command.send(PillCommand::Show { reply }).is_err() {
+                    return Err("the pill bridge is shut down".into());
+                }
+                Ok(reply_rx.await.unwrap_or(false))
+            }
+            .boxed()
+        }),
+        hide_pill: Box::new(move || {
+            let _ = hide_pill_command.send(PillCommand::Hide);
+        }),
+        destroy_pill: Box::new(move || {
+            let _ = destroy_pill_command.send(PillCommand::Destroy);
+        }),
+        forward: Box::new(move |payload| {
+            let _ = broadcast_command.send(PillCommand::Broadcast(payload));
+        }),
+        paste: Some(Arc::new(aiden_mac::paste::MacPasteDeps)),
+        log_error: Box::new(|message, error| {
+            tracing::error!("dictation: {message}: {error}");
+        }),
+        model_id: "parakeet-v3".to_string(),
+        audio,
+        transcribe: None,
+    });
+    let _ = PILL_COORDINATOR.set(pill);
 }
 
 impl Render for AppState {

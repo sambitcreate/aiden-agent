@@ -27,6 +27,8 @@
 
 pub mod client;
 pub mod config;
+pub mod connection_cache;
+pub mod credential_cleanup;
 pub mod error;
 pub mod identity;
 pub mod inventory;

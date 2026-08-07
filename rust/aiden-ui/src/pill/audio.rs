@@ -13,9 +13,9 @@
 pub trait AudioLevelSource {
     /// Return `bars` per-bar levels, newest frame first. Clamp defensively:
     /// values outside `0.0..=1.0` are treated as silence/clip by the renderer.
-    fn levels(&mut self, bars: usize) -> Vec<f32>;
+    fn levels(&self, bars: usize) -> Vec<f32>;
 
-    /// Debug name for logs (e.g. "silence" or the future "sherpa-onnx").
+    /// Debug name for logs (e.g. "silence" or "live-microphone").
     #[allow(dead_code)] // the meter pipeline does not log the source yet
     fn name(&self) -> &'static str {
         "audio-level-source"
@@ -28,7 +28,7 @@ pub trait AudioLevelSource {
 pub struct SilenceAudioSource;
 
 impl AudioLevelSource for SilenceAudioSource {
-    fn levels(&mut self, bars: usize) -> Vec<f32> {
+    fn levels(&self, bars: usize) -> Vec<f32> {
         vec![0.0; bars]
     }
 
@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn silence_renders_a_flat_minimum_meter() {
-        let mut source = SilenceAudioSource;
+        let source = SilenceAudioSource;
         let levels = source.levels(WAVEFORM_BARS);
         assert_eq!(levels.len(), WAVEFORM_BARS);
         assert!(levels.iter().all(|level| *level == 0.0));

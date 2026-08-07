@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 pub mod anthropic_thinking;
 pub mod app_update;
 pub mod appearance;
+pub mod appearance_preview;
 pub mod assistant;
 pub mod chat_store_core;
 pub mod chat_title;
@@ -31,6 +32,7 @@ pub mod dictation;
 pub mod generation_thinking;
 pub mod google_thinking;
 pub mod keybindings;
+pub mod model_pad;
 pub mod provider_deployment;
 pub mod subagent_management_v2;
 pub mod subagent_runs;
@@ -56,6 +58,7 @@ pub use appearance::{
     ReduceMotion, ReduceMotionPreference, Selection, ThemePreset, ThemePresetId, ThemeSelection,
     ThemeVariantConfig, UiFont, UiFontId,
 };
+pub use appearance_preview::AppearancePreviewState;
 pub use assistant::{
     canonical_parsed_json, escape_subagent_mcp_mutation_approval_json,
     is_assistant_automation_approval_details, is_subagent_mcp_mutation_approval_details,
@@ -101,6 +104,12 @@ pub use keybindings::{
     GlobalShortcutStatus, KeybindingError, KeybindingErrorCode, KeybindingMutation,
     KeybindingOverride, KeybindingOverridesV1, KeybindingSnapshot, KeyboardEventLike,
     LegacyAssistantKeybindings, LegacyGlobalKeybindings, COMMAND_IDS,
+};
+pub use model_pad::{
+    empty_model_pad_layout, model_pad_layouts_equal, next_model_pad_placement,
+    parse_model_pad_layout, read_model_pad_layout, write_model_pad_layout, ModelPadLayout,
+    ModelPadPlacement, ModelPadPlacementSource, StorageLike, MAX_MODEL_KEY_LENGTH, MAX_PLACEMENTS,
+    MODEL_PAD_LAYOUT_KEY,
 };
 pub use provider_deployment::{
     is_local_provider_deployment, is_loopback_provider_base_url, resolve_provider_deployment,

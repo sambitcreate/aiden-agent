@@ -32,6 +32,7 @@
 pub mod approval;
 pub mod automation;
 pub mod coding_tools;
+pub mod document_owner;
 pub mod llm_client;
 pub mod mcp_tool;
 pub mod project_tool;

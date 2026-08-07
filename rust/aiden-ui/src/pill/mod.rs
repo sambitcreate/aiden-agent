@@ -4,11 +4,13 @@
 //! A tiny frameless, always-on-top, non-activating window (~280×56) that
 //! surfaces the dictation state machine over whichever app is focused. The
 //! Electron original recorded microphone audio inside the pill renderer and
-//! transcribed it through the shared voice pipeline; the GPUI port instead
-//! injects an [`audio::AudioLevelSource`] (see [`audio`] for the silence stub
-//! and the real sherpa-onnx capture TODO) and lets a coordinator push
-//! `aiden_core::dictation::DictationStatePayload` broadcasts through
-//! [`PillView::push_dictation`].
+//! transcribed it through the shared voice pipeline; the GPUI port injects a
+//! [`audio::AudioLevelSource`] — the real capture is
+//! [`live_audio::LiveAudioSource`] (aiden-mac AVAudioEngine capture on a
+//! background thread feeding the meter + the coordinator) — and lets
+//! [`coordinator::PillCoordinator`] drive the pill through
+//! [`PillView::push_dictation`]. The bundled [`audio::SilenceAudioSource`]
+//! remains for tests and non-wired hosts.
 //!
 //! Window pattern: [`open_pill_window`] returns a `WindowHandle<PillView>`; a
 //! later-phase coordinator holds that handle and drives the pill on the
@@ -34,11 +36,18 @@
 //!   global hotkey coordinator lands in a later phase.
 
 mod audio;
+pub mod coordinator;
+pub mod live_audio;
 mod state;
 
-/// Re-exported so the shell can construct [`PillDeps`] with the bundled
-/// silence source (the real sherpa-onnx capture is a later-phase task).
+use std::sync::Arc;
+
+/// Re-exported so the shell can construct [`PillDeps`] with the live capture
+/// source (or the bundled silence stub for non-wired hosts and tests).
+#[allow(unused_imports)] // SilenceAudioSource is a public convenience stub
 pub use audio::{AudioLevelSource, SilenceAudioSource};
+pub use coordinator::{PillCoordinator, PillCoordinatorDeps};
+pub use live_audio::LiveAudioSource;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -74,6 +83,9 @@ pub struct PillDeps {
     /// Injected OS reduced-motion preference (GPUI cannot probe it; see
     /// [`state::MotionGate`]).
     pub system_reduced_motion: bool,
+    /// Called when the user presses the pill's cancel button (the coordinator
+    /// cancel path, mirroring `dictationApi.cancel()` in pill-app.tsx).
+    pub on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// The pill window's root view.
@@ -84,6 +96,7 @@ pub struct PillView {
     /// Latest per-bar levels (fed by the meter task while listening).
     meter_levels: Vec<f32>,
     appearance: AppearanceSyncState,
+    on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
     _meter_task: Option<Task<anyhow::Result<()>>>,
 }
 
@@ -104,6 +117,7 @@ impl PillView {
             motion: MotionGate::default().with_system_reduced(deps.system_reduced_motion),
             meter_levels: vec![0.0; WAVEFORM_BARS],
             appearance,
+            on_cancel: deps.on_cancel,
             _meter_task: None,
         }
     }
@@ -171,12 +185,11 @@ impl PillView {
         window.remove_window();
     }
 
-    /// `cmd+.` placeholder: the global dictation toggle coordinator is a
-    /// later-phase wiring task.
+    /// `cmd+.` in-app toggle: routes through the same coordinator as the
+    /// shell hotkey when wired (the coordinator owns the state machine; the
+    /// in-app binding is a convenience).
     fn on_toggle(&mut self, _: &TogglePill, _window: &mut Window, _cx: &mut Context<Self>) {
-        tracing::info!(
-            "cmd+. dictation toggle placeholder: coordinator wiring lands in a later phase"
-        );
+        tracing::info!("cmd+. dictation toggle: route through the shell's PillCoordinator");
     }
 }
 
@@ -359,6 +372,12 @@ impl PillView {
                     .xsmall()
                     .tooltip("Cancel dictation")
                     .on_click(cx.listener(|this, _event, _window, cx| {
+                        // Mirror pill-app.tsx: the button reports a cancel to
+                        // the coordinator (which broadcasts `cancelled`); the
+                        // local reduce hides the pill immediately.
+                        if let Some(on_cancel) = this.on_cancel.as_ref() {
+                            on_cancel();
+                        }
                         this.state.reduce(&PillEvent::Cancelled);
                         cx.notify();
                     })),

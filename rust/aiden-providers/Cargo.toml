@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 aiden-core.workspace = true
+aiden-git.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 reqwest-eventsource.workspace = true
@@ -23,6 +24,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 sha2.workspace = true
 base64 = "0.22"
 url = "2"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile.workspace = true

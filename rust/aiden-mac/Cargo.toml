@@ -1,14 +1,27 @@
 [package]
 name = "aiden-mac"
-description = "macOS integration for the GPUI app (port of main/platform.ts surfaces, shortcut-registration-core.ts, shortcut-transaction-core.ts, native-menu-command-contract.ts, app-updater-core.ts, dictation-paste.ts)."
+description = "macOS integration for the GPUI app (port of main/platform.ts surfaces, shortcut-registration-core.ts, shortcut-transaction-core.ts, native-menu-command-contract.ts, app-updater-core.ts, dictation-paste.ts, parakeet.ts, dictation-coordinator.ts, local-models.ts)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# On-device speech-to-text: sherpa-onnx (native static lib) + the Parakeet
+# model download manager. Disable to drop the large native dependency
+# (cargo check -p aiden-mac --no-default-features).
+default = ["dictation"]
+dictation = ["dep:sherpa-onnx", "dep:reqwest"]
+# Real update feed: the reqwest-backed FeedUpdateProvider (an
+# electron-updater generic-feed equivalent). The pure feed parse/verify
+# logic in `updater_feed` is always compiled and unit-tested; enabling this
+# feature wires the network transport.
+update-feed = ["dep:reqwest"]
+
 [dependencies]
 aiden-core.workspace = true
+aiden-data.workspace = true
 keyring.workspace = true
 directories.workspace = true
 serde.workspace = true
@@ -20,9 +33,20 @@ async-trait = "0.1"
 tokio.workspace = true
 global-hotkey = "0.8"
 tray-icon = "0.21"
+sha2.workspace = true
+tempfile.workspace = true
+
+# Optional: on-device Parakeet transcription + model downloads.
+sherpa-onnx = { version = "1.13", optional = true }
+reqwest = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
+objc2-avf-audio = "0.3"
+block2 = "0.6"
 mac-notification-sys = "0.6"
+
+[dev-dependencies]
+tempfile.workspace = true

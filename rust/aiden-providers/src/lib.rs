@@ -27,12 +27,15 @@ use futures::StreamExt;
 
 pub mod anthropic;
 pub mod artificial_analysis;
+pub mod auth_flow;
 pub mod catalog;
 pub mod codex;
 pub mod compact;
 pub mod estimate;
+pub mod gemini_cache;
 pub mod google;
 pub mod json;
+pub mod list;
 pub mod openai_completions;
 pub mod openai_responses;
 pub mod registry;

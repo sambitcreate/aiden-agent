@@ -11,6 +11,12 @@ repository.workspace = true
 name = "aiden"
 path = "src/main.rs"
 
+[features]
+default = ["dictation"]
+# On-device dictation (aiden-mac sherpa + model management). Keep in sync
+# with aiden-mac's `dictation` feature.
+dictation = ["aiden-mac/dictation"]
+
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
@@ -23,6 +29,7 @@ aiden-mcp.workspace = true
 aiden-providers.workspace = true
 aiden-agent.workspace = true
 aiden-subagents.workspace = true
+aiden-mac.workspace = true
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
