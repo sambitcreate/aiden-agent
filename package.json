@@ -88,7 +88,9 @@
     "rust:build": "cargo build --manifest-path rust/Cargo.toml",
     "rust:test": "cargo test --manifest-path rust/Cargo.toml",
     "rust:clippy": "cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings",
-    "rust:run": "cargo run --manifest-path rust/Cargo.toml -p aiden-ui"
+    "rust:run": "cargo run --manifest-path rust/Cargo.toml -p aiden-ui",
+    "dev:rs": "AIDEN_DEV=1 cargo run --manifest-path rust/Cargo.toml -p aiden-ui",
+    "dev:rs:build": "cargo build --manifest-path rust/Cargo.toml -p aiden-ui"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.10",

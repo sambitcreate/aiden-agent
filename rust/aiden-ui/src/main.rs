@@ -27,8 +27,27 @@ use app::AppState;
 use services::stores::Stores;
 
 fn main() {
+    let dev = aiden_data::is_dev_mode();
+
+    if dev {
+        eprintln!("\n  ⚡ Aiden-RS-DEV — dev mode (AIDEN_DEV=1)");
+        eprintln!(
+            "  📁 Config:  {}",
+            aiden_data::aiden_config_dir().unwrap_or_default().display()
+        );
+        eprintln!(
+            "  📁 Data:    {}",
+            aiden_data::machine_local_data_dir().display()
+        );
+        eprintln!();
+    }
+
     if let Err(err) = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(if dev {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        })
         .with_target(false)
         .try_init()
     {
@@ -37,7 +56,7 @@ fn main() {
 
     gpui::Application::new()
         .with_assets(gpui_component_assets::Assets)
-        .run(|cx: &mut App| {
+        .run(move |cx: &mut App| {
             // gpui-component MUST be initialized first: theme global, i18n,
             // and component keybindings.
             gpui_component::init(cx);
@@ -108,6 +127,18 @@ fn main() {
 /// Open the main Aiden window: the `AppState` shell under a gpui-component
 /// `Root` (dialogs/notifications/sheets live on the Root layer).
 fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::WindowHandle<Root>> {
+    let dev = aiden_data::is_dev_mode();
+    let app_id = if dev {
+        "com.sambitcreate.aiden-rs-dev"
+    } else {
+        "com.sambitcreate.aiden-agent"
+    };
+    let tabbing_id = if dev {
+        "aiden-rs-dev-main"
+    } else {
+        "aiden-main"
+    };
+
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
@@ -116,8 +147,8 @@ fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::Window
         ))),
         titlebar: Some(TitleBar::title_bar_options()),
         window_background: gpui::WindowBackgroundAppearance::Blurred,
-        app_id: Some("com.sambitcreate.aiden-agent".to_string()),
-        tabbing_identifier: Some("aiden-main".to_string()),
+        app_id: Some(app_id.to_string()),
+        tabbing_identifier: Some(tabbing_id.to_string()),
         ..Default::default()
     };
 

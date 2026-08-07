@@ -984,14 +984,37 @@ pub fn unique_id() -> String {
 // `aiden_config_dir()` (the portable root) lives in `config_dir`; see its
 // module docs. The machine-local root and the chats subdirectory stay here.
 
+/// Whether dev mode is active (`AIDEN_DEV=1`). In dev mode the machine-local
+/// data directory and app identity use an `aiden-rs-dev` suffix so local
+/// testing never clobbers production state.
+pub fn is_dev_mode() -> bool {
+    matches!(
+        std::env::var("AIDEN_DEV").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+/// The product name used for app identity and data-directory resolution.
+/// `Aiden-RS-DEV` in dev mode, `aiden-agent` otherwise.
+pub fn product_name() -> &'static str {
+    if is_dev_mode() {
+        "aiden-rs-dev"
+    } else {
+        "aiden-agent"
+    }
+}
+
 /// The machine-local root: Electron's `app.getPath("userData")`, which on
 /// macOS is `~/Library/Application Support/aiden-agent` (product name from
 /// package.json). Machine-bound state, secrets, and caches live here.
+/// In dev mode (`AIDEN_DEV=1`) this resolves to `aiden-rs-dev` so dev testing
+/// is fully isolated from production state.
 pub fn machine_local_data_dir() -> PathBuf {
-    if let Some(dirs) = directories::ProjectDirs::from("", "", "aiden-agent") {
+    let name = product_name();
+    if let Some(dirs) = directories::ProjectDirs::from("", "", name) {
         dirs.data_dir().to_path_buf()
     } else {
-        home_dir().join("Library/Application Support/aiden-agent")
+        home_dir().join(format!("Library/Application Support/{name}"))
     }
 }
 

@@ -1067,7 +1067,13 @@ impl Render for AppState {
             .active_chat
             .as_ref()
             .map(|chat| chat.title.clone())
-            .unwrap_or_else(|| "Aiden".to_string());
+            .unwrap_or_else(|| {
+                if aiden_data::is_dev_mode() {
+                    "Aiden-RS-DEV".to_string()
+                } else {
+                    "Aiden".to_string()
+                }
+            });
 
         v_flex()
             .id("aiden-root")
