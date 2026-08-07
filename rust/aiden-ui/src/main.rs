@@ -29,6 +29,33 @@ use services::stores::Stores;
 fn main() {
     let dev = aiden_data::is_dev_mode();
 
+    // GPUI runs inside ObjC callbacks (NSApplication run loop) where Rust
+    // panics cannot unwind. Install a hook that logs the panic + backtrace to
+    // stderr AND to a file so we can diagnose crashes that macOS swallows.
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info.payload();
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Box<Any panic payload".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let bt = std::backtrace::Backtrace::force_capture();
+        let full = format!("PANIC: {msg}\nLocation: {location}\nBacktrace:\n{bt}");
+        eprintln!("{full}");
+        if let Ok(dir) = std::env::var("HOME") {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join(".aiden-rs-panic.log"),
+                &full,
+            );
+        }
+    }));
+
     if dev {
         eprintln!("\n  ⚡ Aiden-RS-DEV — dev mode (AIDEN_DEV=1)");
         eprintln!(
