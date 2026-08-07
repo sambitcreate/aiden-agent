@@ -553,6 +553,24 @@ impl TerminalDrawer {
         self.open
     }
 
+    /// Restart the shell in a new working directory (used when the active
+    /// workspace changes). The old PTY is dropped (SIGHUP to its shell) and a
+    /// fresh backend spawns in the new folder.
+    pub fn set_cwd(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
+        self.backend = None;
+        self.shell_error = None;
+        self.title = "Terminal".to_string();
+        self.spawn_backend(
+            cx,
+            &TerminalDeps {
+                shell: None,
+                cwd: Some(cwd),
+                simple: false,
+            },
+        );
+        cx.notify();
+    }
+
     #[allow(dead_code)] // resize affordance; the drawer uses the default fraction
     pub fn set_height_fraction(&mut self, fraction: f32, cx: &mut Context<Self>) {
         self.height_fraction = fraction.clamp(0.2, 0.8);

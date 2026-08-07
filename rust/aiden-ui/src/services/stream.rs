@@ -10,7 +10,8 @@
 //! terminal events are converted with [`StreamReducer::finalize`].
 
 use aiden_core::{
-    AssistantMessage, AssistantMessageEvent, ContentBlock, StopReason, TextContent, ThinkingContent,
+    AssistantMessage, AssistantMessageEvent, ContentBlock, StopReason, TextContent,
+    ThinkingContent, ToolCall, Usage,
 };
 
 /// Errors during streaming that should surface as a chat error banner.
@@ -56,6 +57,11 @@ pub struct StreamReducer {
     pending_thinking_active: Option<bool>,
     pub final_message: Option<AssistantMessage>,
     pub failure: Option<StreamFailure>,
+    /// Token usage from the terminal `Done` message (zero until then).
+    pub usage: Usage,
+    /// Tool calls carried by the terminal `Done` message. The chat driver
+    /// dispatches these through MCP when tools are configured.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl Default for StreamReducer {
@@ -75,6 +81,8 @@ impl StreamReducer {
             pending_thinking_active: None,
             final_message: None,
             failure: None,
+            usage: zero_usage(),
+            tool_calls: Vec::new(),
         }
     }
 
@@ -121,6 +129,8 @@ impl StreamReducer {
                 self.text = text;
                 self.thinking = thinking;
                 self.thinking_active = false;
+                self.usage = message.usage;
+                self.tool_calls = tool_calls_of(&message);
                 self.final_message = Some(message);
             }
             AssistantMessageEvent::Error { error, .. } => {
@@ -195,6 +205,68 @@ pub fn message_content(message: &AssistantMessage) -> (String, String) {
     }
     (text, thinking)
 }
+
+/// The tool calls carried by a terminal assistant message (order preserved).
+pub fn tool_calls_of(message: &AssistantMessage) -> Vec<ToolCall> {
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::ToolCall(tool_call) => Some(tool_call.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Map a terminal `Done` message's usage into the privacy-safe aggregate
+/// record the machine-local [`UsageStore`] expects. Only the token/cost
+/// aggregates cross the boundary — never prompts, chat ids, or content.
+///
+/// [`UsageStore`]: aiden_data::usage_store::UsageStore
+#[allow(clippy::too_many_arguments)]
+pub fn chat_usage_record(
+    usage: &Usage,
+    provider_id: &str,
+    provider_label: &str,
+    model_id: &str,
+    model_label: &str,
+    local: bool,
+    status: UsageRequestStatus,
+    timestamp: u64,
+) -> UsageRequestRecord {
+    let reported = usage.total_tokens > 0 || usage.input > 0 || usage.output > 0;
+    let cost_reported = usage.cost.total > 0.0;
+    let tokens = reported.then(|| UsageTokenBreakdown {
+        input: usage.input,
+        output: usage.output,
+        cache_read: usage.cache_read,
+        cache_write: usage.cache_write,
+        reasoning: usage.reasoning.unwrap_or(0),
+        total: usage.total_tokens,
+    });
+    UsageRequestRecord {
+        timestamp: Some(timestamp),
+        source: UsageRequestSource::Chat,
+        provider_id: provider_id.to_string(),
+        provider_label: provider_label.to_string(),
+        model_id: model_id.to_string(),
+        model_label: model_label.to_string(),
+        local,
+        status,
+        tokens,
+        cost_status: if cost_reported {
+            UsageCostStatus::Reported
+        } else {
+            UsageCostStatus::Unavailable
+        },
+        cost_usd: cost_reported.then_some(usage.cost.total),
+    }
+}
+
+use aiden_data::usage_store::{
+    UsageCostStatus, UsageRequestRecord, UsageRequestSource, UsageRequestStatus,
+    UsageTokenBreakdown,
+};
 fn empty_message() -> AssistantMessage {
     AssistantMessage {
         content: Vec::new(),
@@ -230,11 +302,29 @@ pub fn zero_usage() -> aiden_core::Usage {
     }
 }
 
+/// An empty assistant message for synthesized turns (history replays, tool
+/// rounds that never produced a terminal event).
+pub fn zero_usage_message() -> AssistantMessage {
+    AssistantMessage {
+        content: Vec::new(),
+        api: String::new(),
+        provider: String::new(),
+        model: String::new(),
+        response_model: None,
+        response_id: None,
+        usage: zero_usage(),
+        stop_reason: StopReason::Stop,
+        error_message: None,
+        timestamp: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use aiden_core::{
-        AssistantMessage, ContentBlock, StopReason, TextContent, ThinkingContent, Usage, UsageCost,
+        AssistantMessage, ContentBlock, StopReason, TextContent, ThinkingContent, ToolCall, Usage,
+        UsageCost,
     };
 
     fn partial(text: &str, thinking: &str) -> AssistantMessage {
@@ -411,5 +501,113 @@ mod tests {
         });
         assert!(reducer.take_flush().is_none());
         assert_eq!(reducer.text, "full");
+    }
+
+    #[test]
+    fn done_captures_usage_and_tool_calls_from_the_terminal_message() {
+        let mut with_tools = partial("done", "");
+        with_tools.content.push(ContentBlock::ToolCall(ToolCall {
+            id: "call_1".into(),
+            name: "Docs__lookup_fb4b3e0873c6".into(),
+            arguments: serde_json::json!({ "query": "foo" }),
+            thought_signature: None,
+        }));
+        let mut reducer = StreamReducer::new();
+        reducer.apply(AssistantMessageEvent::Done {
+            reason: StopReason::ToolUse,
+            message: with_tools.clone(),
+        });
+        assert_eq!(reducer.usage.input, 10);
+        assert_eq!(reducer.usage.output, 5);
+        assert_eq!(reducer.tool_calls.len(), 1);
+        assert_eq!(reducer.tool_calls[0].name, "Docs__lookup_fb4b3e0873c6");
+        assert_eq!(reducer.tool_calls[0].arguments["query"], "foo");
+    }
+
+    #[test]
+    fn error_terminal_keeps_zero_usage_until_a_done_arrives() {
+        let mut reducer = StreamReducer::new();
+        let mut failing = partial("partial", "");
+        failing.error_message = Some("boom".into());
+        reducer.apply(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: failing,
+        });
+        assert_eq!(reducer.usage.total_tokens, 0);
+        assert!(reducer.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn chat_usage_record_maps_core_usage_into_the_store_shape() {
+        let usage = Usage {
+            input: 12,
+            output: 7,
+            cache_read: 3,
+            cache_write: 0,
+            cache_write_1h: None,
+            reasoning: Some(2),
+            total_tokens: 22,
+            cost: UsageCost {
+                input: 0.001,
+                output: 0.002,
+                cache_read: 0.0,
+                cache_write: 0.0,
+                total: 0.003,
+            },
+        };
+        let record = chat_usage_record(
+            &usage,
+            "anthropic",
+            "Anthropic",
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+            false,
+            UsageRequestStatus::Completed,
+            1_700_000_000_000,
+        );
+        assert_eq!(record.source, UsageRequestSource::Chat);
+        assert_eq!(record.provider_id, "anthropic");
+        assert_eq!(record.provider_label, "Anthropic");
+        assert_eq!(record.model_id, "claude-sonnet-5");
+        assert_eq!(record.status, UsageRequestStatus::Completed);
+        let tokens = record.tokens.expect("reported tokens");
+        assert_eq!(tokens.input, 12);
+        assert_eq!(tokens.output, 7);
+        assert_eq!(tokens.cache_read, 3);
+        assert_eq!(tokens.reasoning, 2);
+        assert_eq!(tokens.total, 22);
+        assert_eq!(record.cost_status, UsageCostStatus::Reported);
+        assert_eq!(record.cost_usd, Some(0.003));
+
+        // A zeroed (or absent) usage maps to an unmetered, unpriced record.
+        let unmetered = chat_usage_record(
+            &zero_usage(),
+            "ollama",
+            "Ollama",
+            "qwen-local",
+            "Qwen Local",
+            true,
+            UsageRequestStatus::Completed,
+            1_700_000_000_000,
+        );
+        assert!(unmetered.tokens.is_none());
+        assert!(unmetered.local);
+        assert_eq!(unmetered.cost_status, UsageCostStatus::Unavailable);
+        assert_eq!(unmetered.cost_usd, None);
+    }
+
+    #[test]
+    fn chat_usage_record_failed_status_flows_through() {
+        let record = chat_usage_record(
+            &zero_usage(),
+            "openai",
+            "OpenAI",
+            "gpt-test",
+            "GPT Test",
+            false,
+            UsageRequestStatus::Failed,
+            1,
+        );
+        assert_eq!(record.status, UsageRequestStatus::Failed);
     }
 }

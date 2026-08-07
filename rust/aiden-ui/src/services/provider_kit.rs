@@ -8,19 +8,26 @@
 
 use std::sync::Arc;
 
+use aiden_agent::llm_client::{TerminalTimelineStatus, TimelineProjector, ToolFinishStatus};
 use aiden_core::{
-    AssistantMessage, ChatMessage, ChatRole, ContentBlock, Message, StopReason, TextContent,
-    UserContent, UserMessage,
+    AssistantMessage, AssistantMessageEvent, ChatMessage, ChatRole, ContentBlock,
+    GenerationTimeline, Message, StopReason, TextContent, ToolResultMessage, Usage, UserContent,
+    UserMessage,
 };
 use aiden_data::config_store::Provider as StoredProvider;
 use aiden_data::portable_config::ProviderKind;
 use aiden_providers::provider_error_message;
 use aiden_providers::{
     anthropic::AnthropicProvider, openai_completions::OpenAICompletionsProvider, ApiFamily,
-    EventStream, Provider, ProviderError, StreamOptions, StreamRequest,
+    Provider, StreamOptions, StreamRequest,
 };
 
-use crate::services::stream::{zero_usage, StreamReducer, StreamTerminal};
+use crate::services::mcp_tools::{
+    collect_chat_mcp_tools, ChatMcpTools, McpStreamContext, CHAT_MCP_CALL_TIMEOUT_MS,
+};
+use crate::services::stream::{
+    message_content, tool_calls_of, zero_usage, zero_usage_message, StreamReducer, StreamTerminal,
+};
 
 /// Channel message sent from the streaming driver to the foreground.
 #[derive(Debug)]
@@ -31,11 +38,16 @@ pub enum StreamMsg {
         thinking: String,
         thinking_active: Option<bool>,
     },
+    /// A live generation-timeline snapshot (thinking/tool steps). Sent on
+    /// every recorded transition; the foreground mirrors it onto the
+    /// generation state so the live message renders tool activity.
+    Timeline { timeline: Box<GenerationTimeline> },
     /// Terminal success: the final assistant message + full text/thinking.
     Done {
         message: Box<AssistantMessage>,
         full_text: String,
         full_thinking: String,
+        usage: Usage,
     },
     /// Terminal failure.
     Error {
@@ -128,6 +140,10 @@ pub struct TurnSnapshot {
     pub provider: ConfiguredProvider,
     pub selection: ModelSelection,
     pub messages: Vec<Message>,
+    /// Optional MCP tool wiring: when enabled servers are configured, the
+    /// driver collects their tools into the request and dispatches model tool
+    /// calls through the manager (single tool round).
+    pub mcp: Option<McpStreamContext>,
 }
 
 /// Map persisted chat history into the normalized `Message` union the
@@ -173,7 +189,19 @@ pub fn chat_history_to_messages(
 }
 
 /// Build the normalized `StreamRequest` for one turn.
+#[allow(dead_code)] // convenience wrapper; the driver uses the tools variant
 pub fn build_stream_request(snapshot: &TurnSnapshot) -> StreamRequest {
+    build_stream_request_with_tools(snapshot, &[], snapshot.messages.clone())
+}
+
+/// Build the normalized `StreamRequest` for one turn with an explicit tool
+/// surface and message list (the driver re-invokes this after each tool round
+/// with the appended tool results).
+pub fn build_stream_request_with_tools(
+    snapshot: &TurnSnapshot,
+    tools: &[aiden_core::ToolDef],
+    messages: Vec<Message>,
+) -> StreamRequest {
     StreamRequest {
         provider_id: snapshot.selection.provider_id.clone(),
         api: snapshot.provider.api_family(),
@@ -184,9 +212,10 @@ pub fn build_stream_request(snapshot: &TurnSnapshot) -> StreamRequest {
         vision: false,
         context_window: 32_768,
         max_tokens_limit: 4_096,
-        messages: snapshot.messages.clone(),
+        messages,
         system_prompt: None,
         max_tokens: None,
+        tools: tools.to_vec(),
         ..Default::default()
     }
 }
@@ -199,55 +228,210 @@ const FLUSH_INTERVAL_MS: u64 = 30;
 /// Drive one provider turn on the tokio runtime, forwarding batched updates
 /// into `tx`. Never panics: transport failures become a terminal
 /// [`StreamMsg::Error`].
+///
+/// When [`TurnSnapshot::mcp`] is set, the driver first collects the enabled
+/// servers' tools (bounded), passes them into the provider request, and — if
+/// the model emits tool calls — dispatches each through
+/// [`McpClientManager::call_tool`], appends the normalized result, and runs
+/// **one** follow-up provider pass. Multi-round agent loops are out of scope
+/// for the chat driver; a turn that keeps asking for tools after the round
+/// settles with whatever text it produced and the recorded timeline.
 pub async fn drive_stream(
     snapshot: TurnSnapshot,
     api_key: Option<String>,
     tx: tokio::sync::mpsc::UnboundedSender<StreamMsg>,
 ) {
+    // MCP tool collection (bounded, never fails the turn).
+    let mcp = match &snapshot.mcp {
+        Some(context) => {
+            let tools =
+                collect_chat_mcp_tools(&context.manager, &context.servers, &context.preset_key)
+                    .await;
+            Some(McpExecution {
+                manager: context.manager.clone(),
+                tools,
+            })
+        }
+        None => None,
+    };
+    let tool_defs: Vec<aiden_core::ToolDef> = mcp
+        .as_ref()
+        .map(|execution| execution.tools.defs.clone())
+        .unwrap_or_default();
+
+    // The live activity timeline for this turn; every transition is pushed to
+    // the foreground so the streaming bubble renders thinking/tool steps.
+    let timeline_tx = tx.clone();
+    let mut projector = TimelineProjector::new(
+        aiden_data::chat_store::new_uuid_like(),
+        Box::new(move |timeline| {
+            let _ = timeline_tx.send(StreamMsg::Timeline {
+                timeline: Box::new(timeline.clone()),
+            });
+        }),
+    );
+
     let transport = snapshot.provider.transport();
-    let request = build_stream_request(&snapshot);
     let options = StreamOptions {
         api_key,
         timeout_ms: Some(TURN_TIMEOUT_MS),
         ..Default::default()
     };
+    let mut messages = snapshot.messages.clone();
+    let mut tool_round_done = false;
 
-    let result = transport.stream_simple(&request, &options);
-    let mut reducer = StreamReducer::new();
-    let mut interval = tokio::time::interval(std::time::Duration::from_millis(FLUSH_INTERVAL_MS));
+    // At most two passes: the initial turn, then one pass after the model's
+    // tool calls are dispatched and their results are appended.
+    loop {
+        let request = build_stream_request_with_tools(&snapshot, &tool_defs, messages.clone());
+        let mut reducer = StreamReducer::new();
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_millis(FLUSH_INTERVAL_MS));
 
-    let stream_result: Result<EventStream, ProviderError> = result;
-    match stream_result {
-        Ok(mut stream) => {
-            use futures::StreamExt;
-            loop {
-                tokio::select! {
-                    maybe_event = stream.next() => match maybe_event {
-                        Some(Ok(event)) => reducer.apply(event),
-                        Some(Err(error)) => {
-                            reducer.fail(provider_error_message(&error));
-                            break;
-                        }
-                        None => break,
-                    },
-                    _ = interval.tick() => {
-                        if let Some(flush) = reducer.take_flush() {
-                            let _ = tx.send(StreamMsg::Flush {
-                                text: flush.text,
-                                thinking: flush.thinking,
-                                thinking_active: flush.thinking_active,
-                            });
+        match transport.stream_simple(&request, &options) {
+            Ok(mut stream) => {
+                use futures::StreamExt;
+                loop {
+                    tokio::select! {
+                        maybe_event = stream.next() => match maybe_event {
+                            Some(Ok(event)) => {
+                                project_timeline_event(&mut projector, &event);
+                                reducer.apply(event);
+                            }
+                            Some(Err(error)) => {
+                                reducer.fail(provider_error_message(&error));
+                                break;
+                            }
+                            None => break,
+                        },
+                        _ = interval.tick() => {
+                            send_flush(&mut reducer, &tx);
                         }
                     }
                 }
             }
+            Err(error) => {
+                reducer.fail(provider_error_message(&error));
+            }
         }
-        Err(error) => {
-            reducer.fail(provider_error_message(&error));
-        }
-    }
+        send_flush(&mut reducer, &tx);
 
-    // Drain one final flush so trailing deltas reach the UI.
+        if reducer.failure.is_some() {
+            let timeline = projector.finish(TerminalTimelineStatus::Failed);
+            let _ = tx.send(StreamMsg::Timeline {
+                timeline: Box::new(timeline),
+            });
+            match reducer.finalize() {
+                StreamTerminal::Error {
+                    message,
+                    partial_text,
+                    partial_thinking,
+                    ..
+                } => {
+                    let _ = tx.send(StreamMsg::Error {
+                        message,
+                        partial_text,
+                        partial_thinking,
+                    });
+                }
+                StreamTerminal::Done { .. } => unreachable!("a failing reducer finalizes as Error"),
+            }
+            return;
+        }
+
+        let final_message = reducer
+            .final_message
+            .clone()
+            .unwrap_or_else(zero_usage_message);
+        let tool_calls = tool_calls_of(&final_message);
+        let dispatch_ready = mcp.as_ref().is_some_and(|execution| {
+            !execution.tools.dispatch.is_empty() && !tool_calls.is_empty()
+        });
+        if dispatch_ready && !tool_round_done {
+            tool_round_done = true;
+            let mut executed = false;
+            if let Some(execution) = mcp.as_ref() {
+                for call in &tool_calls {
+                    let result = execute_tool_call(&mut projector, execution, call).await;
+                    executed = true;
+                    messages.push(Message::ToolResult(ToolResultMessage {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        content: vec![ContentBlock::Text(TextContent {
+                            text: result.text,
+                            text_signature: None,
+                        })],
+                        details: None,
+                        added_tool_names: None,
+                        is_error: result.is_error,
+                        timestamp: aiden_data::now_millis(),
+                    }));
+                }
+            }
+            if executed {
+                continue;
+            }
+        }
+
+        // Settled success: the turn produced a final assistant message (with
+        // or without tool calls the single-pass driver does not re-dispatch).
+        let terminal = reducer.finalize();
+        match terminal {
+            StreamTerminal::Done { message } => {
+                let timeline = projector.finish(TerminalTimelineStatus::Completed);
+                let _ = tx.send(StreamMsg::Timeline {
+                    timeline: Box::new(timeline),
+                });
+                let usage = message.usage;
+                let (full_text, full_thinking) = message_content(&message);
+                let _ = tx.send(StreamMsg::Done {
+                    message,
+                    full_text,
+                    full_thinking,
+                    usage,
+                });
+            }
+            StreamTerminal::Error { .. } => unreachable!("failure handled above"),
+        }
+        return;
+    }
+}
+
+/// The manager + collected tool surface the driver executes tool calls with.
+struct McpExecution {
+    manager: Arc<aiden_mcp::McpClientManager>,
+    tools: ChatMcpTools,
+}
+
+/// Project stream events onto the live timeline: thinking stretches and tool
+/// step lifecycle (start when the model begins emitting a call, running once
+/// the call is complete, terminal status set by the executor).
+fn project_timeline_event(projector: &mut TimelineProjector, event: &AssistantMessageEvent) {
+    match event {
+        AssistantMessageEvent::ThinkingStart { .. } => projector.thinking_started(),
+        AssistantMessageEvent::ThinkingEnd { .. } => projector.thinking_ended(),
+        AssistantMessageEvent::ToolcallStart { partial, .. } => {
+            if let Some(call) = first_tool_call(partial) {
+                if !call.id.is_empty() && !call.name.is_empty() {
+                    projector.tool_started(&call.id, &call.name, &call.arguments);
+                }
+            }
+        }
+        AssistantMessageEvent::ToolcallEnd { tool_call, .. } if !tool_call.id.is_empty() => {
+            projector.tool_running(&tool_call.id);
+        }
+        _ => {}
+    }
+}
+
+fn first_tool_call(message: &AssistantMessage) -> Option<aiden_core::ToolCall> {
+    message.content.iter().find_map(|block| match block {
+        ContentBlock::ToolCall(call) => Some(call.clone()),
+        _ => None,
+    })
+}
+
+fn send_flush(reducer: &mut StreamReducer, tx: &tokio::sync::mpsc::UnboundedSender<StreamMsg>) {
     if let Some(flush) = reducer.take_flush() {
         let _ = tx.send(StreamMsg::Flush {
             text: flush.text,
@@ -255,27 +439,51 @@ pub async fn drive_stream(
             thinking_active: flush.thinking_active,
         });
     }
+}
 
-    match reducer.finalize() {
-        StreamTerminal::Done { message, .. } => {
-            let (full_text, full_thinking) = crate::services::stream::message_content(&message);
-            let _ = tx.send(StreamMsg::Done {
-                message,
-                full_text,
-                full_thinking,
-            });
+/// The normalized text result of a dispatched MCP tool call.
+struct DispatchedToolResult {
+    text: String,
+    is_error: bool,
+}
+
+/// Dispatch one model tool call through the connected MCP server and settle
+/// its timeline step. Unknown namespaced names fail closed.
+async fn execute_tool_call(
+    projector: &mut TimelineProjector,
+    execution: &McpExecution,
+    call: &aiden_core::ToolCall,
+) -> DispatchedToolResult {
+    let Some(target) = execution.tools.dispatch.get(&call.name) else {
+        projector.tool_finished(&call.id, ToolFinishStatus::Failed);
+        return DispatchedToolResult {
+            text: format!("Unknown tool \"{}\".", call.name),
+            is_error: true,
+        };
+    };
+    let outcome = execution
+        .manager
+        .call_tool(
+            &target.server_id,
+            &target.tool_name,
+            call.arguments.clone(),
+            std::time::Duration::from_millis(CHAT_MCP_CALL_TIMEOUT_MS),
+        )
+        .await;
+    match outcome {
+        Ok(result) => {
+            projector.tool_finished(&call.id, ToolFinishStatus::Completed);
+            DispatchedToolResult {
+                text: result.text,
+                is_error: false,
+            }
         }
-        StreamTerminal::Error {
-            message,
-            partial_text,
-            partial_thinking,
-            ..
-        } => {
-            let _ = tx.send(StreamMsg::Error {
-                message,
-                partial_text,
-                partial_thinking,
-            });
+        Err(error) => {
+            projector.tool_finished(&call.id, ToolFinishStatus::Failed);
+            DispatchedToolResult {
+                text: error.to_string(),
+                is_error: true,
+            }
         }
     }
 }
@@ -295,6 +503,7 @@ pub fn resolve_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn user(role: ChatRole, content: &str) -> ChatMessage {
         ChatMessage {
@@ -380,5 +589,178 @@ mod tests {
         let back = ModelSelection::from_settings(&value).expect("parses back");
         assert_eq!(back, selection);
         assert!(ModelSelection::from_settings(&serde_json::json!({})).is_none());
+    }
+
+    /// An assistant message whose only content block is a tool call.
+    fn tool_use_message(id: &str, name: &str, args: serde_json::Value) -> AssistantMessage {
+        AssistantMessage {
+            content: vec![ContentBlock::ToolCall(aiden_core::ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: args,
+                thought_signature: None,
+            })],
+            api: "anthropic-messages".into(),
+            provider: "anthropic".into(),
+            model: "claude".into(),
+            response_model: None,
+            response_id: None,
+            usage: aiden_core::Usage {
+                input: 5,
+                output: 2,
+                cache_read: 0,
+                cache_write: 0,
+                cache_write_1h: None,
+                reasoning: None,
+                total_tokens: 7,
+                cost: aiden_core::UsageCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                    total: 0.0,
+                },
+            },
+            stop_reason: StopReason::ToolUse,
+            error_message: None,
+            timestamp: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn stream_events_project_onto_the_live_timeline() {
+        // The driver folds normalized events into the TimelineProjector; the
+        // projected steps must be renderer-safe (public `tool-N` / `think-N`
+        // ids, resolved statuses, settled on finish).
+        let mut projector = TimelineProjector::new("generation-1", Box::new(|_| {}));
+        projector.thinking_started();
+        let thinking_partial = AssistantMessage {
+            content: vec![ContentBlock::Thinking(aiden_core::ThinkingContent {
+                thinking: "hmm".into(),
+                thinking_signature: None,
+                redacted: None,
+            })],
+            ..tool_use_message("unused", "unused", serde_json::json!({}))
+        };
+        project_timeline_event(
+            &mut projector,
+            &AssistantMessageEvent::ThinkingDelta {
+                content_index: 0,
+                delta: "hmm".into(),
+                partial: thinking_partial,
+            },
+        );
+        project_timeline_event(
+            &mut projector,
+            &AssistantMessageEvent::ThinkingEnd {
+                content_index: 0,
+                content: "hmm".into(),
+                partial: tool_use_message("unused", "unused", serde_json::json!({})),
+            },
+        );
+
+        // The model emits a tool call: start (partial carries id+name), end.
+        project_timeline_event(
+            &mut projector,
+            &AssistantMessageEvent::ToolcallStart {
+                content_index: 0,
+                partial: tool_use_message(
+                    "toolu_abc",
+                    "Docs__lookup_fb4b3e0873c6",
+                    serde_json::json!({ "query": "ports" }),
+                ),
+            },
+        );
+        project_timeline_event(
+            &mut projector,
+            &AssistantMessageEvent::ToolcallEnd {
+                content_index: 0,
+                tool_call: aiden_core::ToolCall {
+                    id: "toolu_abc".into(),
+                    name: "Docs__lookup_fb4b3e0873c6".into(),
+                    arguments: serde_json::json!({ "query": "ports" }),
+                    thought_signature: None,
+                },
+                partial: tool_use_message(
+                    "toolu_abc",
+                    "Docs__lookup_fb4b3e0873c6",
+                    serde_json::json!({}),
+                ),
+            },
+        );
+        // The dispatcher settles the executed step before the turn finishes.
+        projector.tool_finished("toolu_abc", ToolFinishStatus::Completed);
+        let timeline = projector.finish(TerminalTimelineStatus::Completed);
+
+        assert_eq!(timeline.steps.len(), 2);
+        match &timeline.steps[0] {
+            aiden_core::AgentStep::Thinking(thinking) => {
+                assert_eq!(thinking.id, "think-1");
+                assert!(thinking.finished_at.is_some());
+                assert!(thinking.duration_ms.is_some());
+            }
+            other => panic!("expected thinking step, got {other:?}"),
+        }
+        match &timeline.steps[1] {
+            aiden_core::AgentStep::Tool(tool) => {
+                assert_eq!(tool.id, "tool-1");
+                assert_eq!(tool.tool_call_id, "call-1");
+                assert_eq!(tool.tool_name, "Docs__lookup_fb4b3e0873c6");
+                assert_eq!(tool.status, aiden_core::AgentStepStatus::Completed);
+                // Provider call ids never cross the safe boundary.
+                let serialized = serde_json::to_string(&timeline).unwrap();
+                assert!(!serialized.contains("toolu_abc"));
+            }
+            other => panic!("expected tool step, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn executed_tool_calls_settle_running_steps_as_completed_or_failed() {
+        let mut projector = TimelineProjector::new("generation-1", Box::new(|_| {}));
+        let call = aiden_core::ToolCall {
+            id: "toolu_1".into(),
+            name: "Docs__lookup_fb4b3e0873c6".into(),
+            arguments: serde_json::json!({ "query": "ports" }),
+            thought_signature: None,
+        };
+        projector.tool_started(&call.id, &call.name, &call.arguments);
+        projector.tool_running(&call.id);
+
+        // Unknown namespaced name fails closed.
+        let unknown = aiden_core::ToolCall {
+            id: "toolu_2".into(),
+            name: "Missing__tool_000000000000".into(),
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        };
+        projector.tool_started(&unknown.id, &unknown.name, &unknown.arguments);
+        projector.tool_running(&unknown.id);
+        projector.tool_finished(&unknown.id, ToolFinishStatus::Failed);
+
+        let execution = McpExecution {
+            manager: Arc::new(aiden_mcp::McpClientManager::new()),
+            tools: ChatMcpTools {
+                defs: Vec::new(),
+                dispatch: HashMap::new(),
+            },
+        };
+        let snapshot =
+            futures::executor::block_on(execute_tool_call(&mut projector, &execution, &call));
+        assert!(snapshot.is_error);
+        let timeline = projector.finish(TerminalTimelineStatus::Completed);
+        let statuses: Vec<&str> = timeline
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                aiden_core::AgentStep::Tool(tool) => Some(match tool.status {
+                    aiden_core::AgentStepStatus::Completed => "completed",
+                    aiden_core::AgentStepStatus::Failed => "failed",
+                    _ => "other",
+                }),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(statuses, vec!["failed", "failed"]);
     }
 }

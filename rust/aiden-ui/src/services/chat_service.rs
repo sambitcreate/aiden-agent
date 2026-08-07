@@ -10,11 +10,15 @@
 //! (mirroring the renderer's intent-invalidation refs).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use aiden_core::appearance::{create_default_appearance_config, AppearanceConfig, Mode};
-use aiden_core::{meta_of, Chat, ChatMessage, ChatMeta, ChatRole};
+use aiden_core::{meta_of, Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline};
 use aiden_data::chat_store::{AppendMessageMeta, ChatMessageInput, ChatStoreInput};
 use aiden_data::now_millis;
+use aiden_data::portable_config::{Workspace, WorkspacePermission};
+use aiden_data::usage_store::{UsageRequestRecord, UsageRequestStatus};
 use gpui::{AppContext as _, Context, Task};
 use gpui_tokio_bridge::{JoinError, Tokio};
 use tokio::sync::mpsc;
@@ -23,12 +27,13 @@ use crate::services::appearance::{
     appearance_from_settings, appearance_to_settings, apply_appearance, resolve_scheme,
     SETTINGS_APPEARANCE_KEY,
 };
+use crate::services::mcp_tools::McpStreamContext;
 use crate::services::provider_kit::{
     chat_history_to_messages, drive_stream, resolve_api_key, ConfiguredProvider, ModelSelection,
     StreamMsg, TurnSnapshot,
 };
 use crate::services::stores::Stores;
-use crate::services::stream::message_content;
+use crate::services::stream::{chat_usage_record, message_content, zero_usage};
 
 /// The persisted-selection settings key (`settings.json`).
 const MODEL_SELECTION_KEY: &str = "modelSelection";
@@ -45,6 +50,9 @@ pub struct GenerationState {
     pub complete: bool,
     pub error: Option<String>,
     pub model: Option<String>,
+    /// Live activity timeline (thinking/tool steps). Mirrored from the driver's
+    /// `TimelineProjector` and persisted with the assistant message on settle.
+    pub timeline: Option<GenerationTimeline>,
 }
 
 /// A lightweight owned snapshot of everything the shell renders for the active
@@ -79,6 +87,12 @@ pub struct ChatService {
     generations: HashMap<String, u64>,
     pub(crate) booted: bool,
 
+    /// The active workspace (name/path chip, git repo root, terminal cwd, and
+    /// agent sandbox root).
+    pub workspace: Option<Workspace>,
+    /// All persisted workspaces (the picker's "recent" list).
+    pub workspaces: Vec<Workspace>,
+
     _stream_task: Option<Task<anyhow::Result<()>>>,
     _driver: Option<Task<Result<(), JoinError>>>,
 }
@@ -100,6 +114,8 @@ impl ChatService {
             generation: None,
             generations: HashMap::new(),
             booted: false,
+            workspace: None,
+            workspaces: Vec::new(),
             _stream_task: None,
             _driver: None,
         }
@@ -114,7 +130,7 @@ impl ChatService {
     pub fn boot(&mut self, cx: &mut Context<Self>) {
         let stores = self.stores.clone();
         cx.spawn(async move |this, cx| {
-            let (chats, providers, settings, appearance) = cx
+            let (chats, providers, settings, appearance, workspaces) = cx
                 .background_spawn(async move {
                     let chats = stores.chat.list(None).unwrap_or_default();
                     let providers = stores
@@ -124,7 +140,8 @@ impl ChatService {
                         .unwrap_or_default();
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let appearance = appearance_from_settings(&settings);
-                    (chats, providers, settings, appearance)
+                    let workspaces = stores.config.list_workspaces().unwrap_or_default();
+                    (chats, providers, settings, appearance, workspaces)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -132,6 +149,10 @@ impl ChatService {
                 this.providers = providers;
                 this.appearance = appearance;
                 this.selection = this.resolve_selection(&settings);
+                this.workspaces = workspaces;
+                // The most recently used workspace is the active one (the TS
+                // keeps this in localStorage; `updatedAt` is the port's proxy).
+                this.workspace = this.workspaces.iter().max_by_key(|w| w.updated_at).cloned();
                 this.booted = true;
                 cx.notify();
             })
@@ -204,6 +225,94 @@ impl ChatService {
     }
 
     // =======================================================================
+    // Workspaces
+    // =======================================================================
+
+    /// The active workspace's folder (terminal cwd / git repo root / sandbox).
+    #[allow(dead_code)] // pending workspace-picker wiring (workspace owner)
+    pub fn workspace_folder(&self) -> Option<PathBuf> {
+        self.workspace
+            .as_ref()
+            .and_then(|workspace| workspace.folder_path.as_ref())
+            .map(PathBuf::from)
+    }
+
+    /// Switch to a known workspace; the recency bump persists on the background.
+    #[allow(dead_code)] // pending workspace-picker wiring (workspace owner)
+    pub fn select_workspace(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(workspace) = self.workspaces.iter().find(|w| w.id == id).cloned() else {
+            return;
+        };
+        if self.workspace.as_ref().map(|w| w.id.as_str()) == Some(id) {
+            return;
+        }
+        self.workspace = Some(workspace.clone());
+        self.persist_workspace(workspace, cx);
+        cx.notify();
+    }
+
+    /// Create (or refresh) a workspace from a folder chosen in the OS panel and
+    /// make it active. Mirrors the TS `saveWorkspaceForFolder` (realpath, must
+    /// be a directory, name = basename, permission `ask`).
+    #[allow(dead_code)] // pending workspace-picker wiring (workspace owner)
+    pub fn add_workspace_from_folder(&mut self, folder: &std::path::Path, cx: &mut Context<Self>) {
+        let stores = self.stores.clone();
+        let folder = folder.to_path_buf();
+        cx.spawn(async move |this, cx| {
+            let created = cx
+                .background_spawn(async move {
+                    let canonical = std::fs::canonicalize(&folder).ok()?;
+                    if !canonical.is_dir() {
+                        return None;
+                    }
+                    let name = canonical
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| "Workspace".to_string());
+                    let now = aiden_data::now_millis();
+                    let workspace = Workspace {
+                        id: aiden_data::chat_store::new_uuid_like(),
+                        name,
+                        folder_path: Some(canonical.display().to_string()),
+                        permission: WorkspacePermission::Ask,
+                        managed_worktree: None,
+                        created_at: now,
+                        updated_at: now,
+                    };
+                    stores.config.save_workspace(&workspace).ok()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(saved) = created {
+                    if let Some(index) = this.workspaces.iter().position(|w| w.id == saved.id) {
+                        this.workspaces[index] = saved.clone();
+                    } else {
+                        this.workspaces.push(saved.clone());
+                    }
+                    this.workspace = Some(saved);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Bump `updatedAt` through the config store so the picker's recency order
+    /// and the next boot's active-workspace selection follow the selection.
+    #[allow(dead_code)] // pending workspace-picker wiring (workspace owner)
+    fn persist_workspace(&self, workspace: Workspace, cx: &mut Context<Self>) {
+        let stores = self.stores.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = cx
+                .background_spawn(async move { stores.config.save_workspace(&workspace).ok() })
+                .await;
+        })
+        .detach();
+    }
+
+    // =======================================================================
     // Sidebar state
     // =======================================================================
 
@@ -236,6 +345,10 @@ impl ChatService {
             .selection
             .as_ref()
             .map(|selection| selection.model.clone());
+        let workspace_id = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.id.clone());
         cx.spawn(async move |this, cx| {
             let created = cx
                 .background_spawn(async move {
@@ -243,7 +356,7 @@ impl ChatService {
                         .chat
                         .create(ChatStoreInput {
                             title: None,
-                            workspace_id: None,
+                            workspace_id: workspace_id.as_deref(),
                             provider_id: provider_id.as_deref(),
                             model: model.as_deref(),
                         })
@@ -454,6 +567,33 @@ impl ChatService {
     // Send / stop / stream application
     // -----------------------------------------------------------------------
 
+    /// The MCP tool wiring for one turn: present only when the portable config
+    /// has enabled servers. The keychain is only touched on the background
+    /// driver thread via the injected preset-key resolver.
+    fn mcp_context(&self) -> Option<McpStreamContext> {
+        let enabled: Vec<aiden_data::portable_config::McpServer> = self
+            .stores
+            .config
+            .list_mcp_servers()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|server| server.enabled)
+            .collect();
+        if enabled.is_empty() {
+            return None;
+        }
+        let keys = self.stores.keys.clone();
+        Some(McpStreamContext {
+            manager: self.stores.mcp.clone(),
+            servers: enabled,
+            preset_key: Some(Arc::new(move |server_id| {
+                keys.get(&aiden_mcp::preset_secret_id(server_id))
+                    .ok()
+                    .flatten()
+            })),
+        })
+    }
+
     pub fn send_message(&mut self, text: &str, cx: &mut Context<Self>) {
         let text = text.trim().to_string();
         if text.is_empty() || self.generation_active() {
@@ -484,7 +624,7 @@ impl ChatService {
             Some(id) => id,
             None => match self.stores.chat.create(ChatStoreInput {
                 title: None,
-                workspace_id: None,
+                workspace_id: self.workspace.as_ref().map(|w| w.id.as_str()),
                 provider_id: Some(&selection.provider_id),
                 model: Some(&selection.model),
             }) {
@@ -515,6 +655,7 @@ impl ChatService {
             complete: false,
             error: None,
             model: Some(selection.model.clone()),
+            timeline: None,
         });
         cx.notify();
 
@@ -549,6 +690,7 @@ impl ChatService {
             provider: provider.clone(),
             selection: selection.clone(),
             messages,
+            mcp: self.mcp_context(),
         };
 
         // Keychain lookup happens inside the tokio driver (background thread).
@@ -612,12 +754,21 @@ impl ChatService {
                         generation.text.clone(),
                         generation.thinking.clone(),
                         generation.model.clone(),
+                        generation.timeline.clone(),
                     ));
                 }
             }
         }
-        if let Some((chat_id, text, thinking, model)) = partial {
-            self.persist_assistant(&chat_id, &text, &thinking, model.as_deref(), None, cx);
+        if let Some((chat_id, text, thinking, model, timeline)) = partial {
+            self.persist_assistant(
+                &chat_id,
+                &text,
+                &thinking,
+                model.as_deref(),
+                None,
+                timeline,
+                cx,
+            );
         }
         self._stream_task = None;
         self._driver = None;
@@ -637,11 +788,20 @@ impl ChatService {
                     generation.text.clone(),
                     generation.thinking.clone(),
                     generation.model.clone(),
+                    generation.timeline.clone(),
                 )
             })
         });
-        if let Some((chat_id, text, thinking, model)) = partial {
-            self.persist_assistant(&chat_id, &text, &thinking, model.as_deref(), None, cx);
+        if let Some((chat_id, text, thinking, model, timeline)) = partial {
+            self.persist_assistant(
+                &chat_id,
+                &text,
+                &thinking,
+                model.as_deref(),
+                None,
+                timeline,
+                cx,
+            );
         }
         self._stream_task = None;
         self._driver = None;
@@ -673,14 +833,24 @@ impl ChatService {
                 }
                 cx.notify();
             }
+            StreamMsg::Timeline { timeline } => {
+                if let Some(generation) = self.generation.as_mut() {
+                    generation.timeline = Some(*timeline);
+                }
+                cx.notify();
+            }
             StreamMsg::Done {
                 message,
                 full_text,
                 full_thinking,
-                ..
+                usage,
             } => {
                 let model = message.model.clone();
                 let (final_text, final_thinking) = message_content(&message);
+                let timeline = self
+                    .generation
+                    .as_ref()
+                    .and_then(|generation| generation.timeline.clone());
                 if let Some(generation) = self.generation.as_mut() {
                     generation.text = full_text;
                     generation.thinking = full_thinking;
@@ -694,6 +864,11 @@ impl ChatService {
                     &final_thinking,
                     Some(&model),
                     Some(&message),
+                    timeline,
+                    cx,
+                );
+                self.record_usage(
+                    self.build_usage_record(&usage, UsageRequestStatus::Completed),
                     cx,
                 );
                 cx.notify();
@@ -708,6 +883,10 @@ impl ChatService {
                     .generation
                     .as_ref()
                     .and_then(|generation| generation.model.clone());
+                let timeline = self
+                    .generation
+                    .as_ref()
+                    .and_then(|generation| generation.timeline.clone());
                 if let Some(generation) = self.generation.as_mut() {
                     generation.text = partial_text.clone();
                     generation.thinking = partial_thinking.clone();
@@ -722,12 +901,67 @@ impl ChatService {
                         &partial_thinking,
                         model.as_deref(),
                         None,
+                        timeline,
                         cx,
                     );
                 }
+                self.record_usage(
+                    self.build_usage_record(&zero_usage(), UsageRequestStatus::Failed),
+                    cx,
+                );
                 cx.notify();
             }
         }
+    }
+
+    /// The privacy-safe aggregate record for the just-settled generation,
+    /// keyed to the selected provider/model (usage is recorded even when the
+    /// provider reported no tokens — the request itself still counts).
+    fn build_usage_record(
+        &self,
+        usage: &aiden_core::Usage,
+        status: UsageRequestStatus,
+    ) -> UsageRequestRecord {
+        let provider = self.selected_provider();
+        let provider_id = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.provider_id.as_str())
+            .unwrap_or("unknown");
+        let model = self
+            .generation
+            .as_ref()
+            .and_then(|generation| generation.model.clone())
+            .unwrap_or_else(|| {
+                self.selection
+                    .as_ref()
+                    .map(|selection| selection.model.clone())
+                    .unwrap_or_else(|| "unknown".to_string())
+            });
+        chat_usage_record(
+            usage,
+            provider_id,
+            provider
+                .map(|provider| provider.label.as_str())
+                .unwrap_or("Unknown"),
+            &model,
+            &model,
+            provider.is_some_and(|provider| !provider.needs_key),
+            status,
+            now_millis(),
+        )
+    }
+
+    /// Append one usage record to the machine-local `usage.json` (background
+    /// write; failures are logged, never surfaced).
+    fn record_usage(&self, record: UsageRequestRecord, cx: &mut Context<Self>) {
+        let stores = self.stores.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = cx
+                .background_spawn(async move { stores.usage.record(&record) })
+                .await;
+        })
+        .detach();
     }
 
     /// Watcher cleanup when the stream channel closes without a terminal event
@@ -800,6 +1034,7 @@ impl ChatService {
         .detach();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn persist_assistant(
         &self,
         chat_id: &str,
@@ -807,6 +1042,7 @@ impl ChatService {
         thinking: &str,
         model: Option<&str>,
         final_message: Option<&aiden_core::AssistantMessage>,
+        timeline: Option<GenerationTimeline>,
         cx: &mut Context<Self>,
     ) {
         let stores = self.stores.clone();
@@ -820,6 +1056,7 @@ impl ChatService {
             .and_then(|message| message.response_id.clone())
             .unwrap_or_else(aiden_data::chat_store::new_uuid_like);
         let timestamp = final_message.map_or(created_at, |message| message.timestamp);
+        let timeline_value = timeline.and_then(|timeline| serde_json::to_value(&timeline).ok());
         cx.spawn(async move |this, cx| {
             let task_chat_id = chat_id.clone();
             let updated = cx
@@ -835,7 +1072,7 @@ impl ChatService {
                             Some(thinking)
                         },
                         attachments: None,
-                        timeline: None,
+                        timeline: timeline_value,
                         subagents: None,
                         created_at: Some(timestamp),
                     };

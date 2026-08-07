@@ -176,6 +176,12 @@ pub fn resolve_selection<'a>(
 /// Read-only source of V2 subagent run snapshots for the current chat.
 pub trait SubagentRunSource: Send + Sync {
     fn snapshots(&self) -> Vec<SubagentRunSnapshotV2>;
+
+    /// Snapshots scoped to one chat. The default returns everything; live
+    /// sources narrow to the active chat's lineage.
+    fn snapshots_for_chat(&self, _chat_id: &str) -> Vec<SubagentRunSnapshotV2> {
+        self.snapshots()
+    }
 }
 
 /// In-memory source (demo data for standalone use and tests).
@@ -294,6 +300,92 @@ impl MemoryRunSource {
 }
 
 // ===========================================================================
+// Live run source (aiden-subagents run_store_v2 read path)
+// ===========================================================================
+
+/// The on-disk V2 run store directory relative to the machine-local data root
+/// (mirrors `aiden-subagents`' `V2_DIRECTORY`).
+const SUBAGENT_RUNS_V2_DIRECTORY: &str = "subagent-runs-v2";
+
+/// Reads the committed V2 run store (`userData/subagent-runs-v2/runs.json`)
+/// written by the subagent system and projects its snapshots for the panel.
+///
+/// The read is tolerant: a missing file, an uncommitted database, or a corrupt
+/// record degrades to the empty state (never demo data). `snapshots_for_chat`
+/// narrows to one chat's lineage via the snapshot's `chatId`.
+#[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
+#[derive(Debug)]
+pub struct LiveRunSource {
+    runs_file: std::path::PathBuf,
+}
+
+impl LiveRunSource {
+    #[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
+    pub fn new() -> Self {
+        Self {
+            runs_file: aiden_data::machine_local_data_dir()
+                .join(SUBAGENT_RUNS_V2_DIRECTORY)
+                .join("runs.json"),
+        }
+    }
+
+    /// A source pointed at an explicit `runs.json` path (tests).
+    #[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
+    pub fn with_runs_file(runs_file: std::path::PathBuf) -> Self {
+        Self { runs_file }
+    }
+
+    #[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
+    fn read_snapshots(&self) -> Vec<SubagentRunSnapshotV2> {
+        let contents = match std::fs::read(&self.runs_file) {
+            Ok(contents) => contents,
+            Err(_) => return Vec::new(),
+        };
+        let value: serde_json::Value = match serde_json::from_slice(&contents) {
+            Ok(value) => value,
+            Err(_) => return Vec::new(),
+        };
+        // The canonical committed V2 database first...
+        if let Some(database) =
+            aiden_subagents::run_store_v2::parse_mutable_subagent_run_database_v2(&value)
+        {
+            return database.snapshots;
+        }
+        // ...then a tolerant per-snapshot fallback so a partially-written or
+        // migration-era store still surfaces its completed runs.
+        value
+            .get("snapshots")
+            .and_then(serde_json::Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(aiden_core::subagent_runs::parse_subagent_run_snapshot_v2)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl Default for LiveRunSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SubagentRunSource for LiveRunSource {
+    fn snapshots(&self) -> Vec<SubagentRunSnapshotV2> {
+        self.read_snapshots()
+    }
+
+    fn snapshots_for_chat(&self, chat_id: &str) -> Vec<SubagentRunSnapshotV2> {
+        self.read_snapshots()
+            .into_iter()
+            .filter(|snapshot| snapshot.chat_id == chat_id)
+            .collect()
+    }
+}
+
+// ===========================================================================
 // The panel entity
 // ===========================================================================
 
@@ -310,6 +402,8 @@ pub struct SubagentsPanel {
     pub(crate) expanded: std::collections::BTreeSet<String>,
     pub(crate) now: u64,
     pub(crate) loaded: bool,
+    /// The active chat the roster is scoped to (live sources filter on it).
+    pub(crate) active_chat: Option<String>,
     _tick: Option<gpui::Task<()>>,
 }
 
@@ -339,6 +433,7 @@ impl SubagentsPanel {
             expanded: std::collections::BTreeSet::new(),
             now: aiden_data::now_millis(),
             loaded: false,
+            active_chat: None,
             _tick: None,
         };
         this.refresh(cx);
@@ -346,11 +441,31 @@ impl SubagentsPanel {
         this
     }
 
+    /// Scope the roster to one chat and reload immediately. The orchestrator
+    /// calls this when the active chat changes so live sources narrow their
+    /// reads to that chat's lineage.
+    #[allow(dead_code)] // wired by the shell owner (app.rs routes chat switches)
+    pub fn set_active_chat(&mut self, chat_id: Option<String>, cx: &mut Context<Self>) {
+        if self.active_chat.as_deref() == chat_id.as_deref() {
+            return;
+        }
+        self.active_chat = chat_id;
+        self.refresh(cx);
+    }
+
     /// Load snapshots from the source on the background executor.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let source = self.source.clone();
+        let chat_id = self.active_chat.clone();
         cx.spawn(async move |this, cx| {
-            let snapshots = cx.background_spawn(async move { source.snapshots() }).await;
+            let snapshots = cx
+                .background_spawn(async move {
+                    match chat_id.as_deref() {
+                        Some(chat_id) => source.snapshots_for_chat(chat_id),
+                        None => source.snapshots(),
+                    }
+                })
+                .await;
             this.update(cx, |this, cx| {
                 this.snapshots = snapshots;
                 this.loaded = true;
@@ -361,17 +476,27 @@ impl SubagentsPanel {
         .detach();
     }
 
-    /// Keep running durations fresh while the panel is mounted.
+    /// Keep running durations fresh while the panel is mounted, and re-read
+    /// the run store every 2 seconds so live runs advance while visible.
     fn start_ticking(&mut self, cx: &mut Context<Self>) {
-        let tick = cx.spawn(async move |this, cx| loop {
-            cx.background_executor()
-                .timer(std::time::Duration::from_secs(1))
-                .await;
-            this.update(cx, |this, cx| {
-                this.now = aiden_data::now_millis();
-                cx.notify();
-            })
-            .ok();
+        let tick = cx.spawn(async move |this, cx| {
+            let mut refresh_every = 0u8;
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.now = aiden_data::now_millis();
+                    refresh_every += 1;
+                    if refresh_every >= 2 {
+                        refresh_every = 0;
+                        this.refresh(cx);
+                    } else {
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
         });
         self._tick = Some(tick);
     }
@@ -905,5 +1030,96 @@ mod tests {
             Some("one")
         );
         assert_eq!(resolve_selection(&runs, None).unwrap().run_id, "one");
+    }
+
+    // =====================================================================
+    // LiveRunSource (run_store_v2 read path)
+    // =====================================================================
+
+    #[test]
+    fn live_source_returns_the_empty_state_when_no_store_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = LiveRunSource::with_runs_file(dir.path().join("missing.json"));
+        assert!(source.snapshots().is_empty());
+        assert!(source.snapshots_for_chat("chat-1").is_empty());
+    }
+
+    #[test]
+    fn live_source_parses_snapshots_and_filters_by_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        let runs_file = dir.path().join("runs.json");
+        let run_a = demo_run(
+            "run-a",
+            None,
+            "Scout A",
+            SubagentSnapshotRole::Scout,
+            SubagentRunStateV2::Completed,
+            1_000,
+            Some(2_000),
+            2,
+        );
+        let mut run_b = demo_run(
+            "run-b",
+            None,
+            "Scout B",
+            SubagentSnapshotRole::Scout,
+            SubagentRunStateV2::Running,
+            3_000,
+            None,
+            1,
+        );
+        run_b.chat_id = "chat-other".to_string();
+        let store = serde_json::json!({
+            "version": 2,
+            "snapshots": [serde_json::to_value(&run_a).unwrap(), serde_json::to_value(&run_b).unwrap()],
+        });
+        std::fs::write(&runs_file, serde_json::to_string_pretty(&store).unwrap()).unwrap();
+
+        let source = LiveRunSource::with_runs_file(runs_file);
+        assert_eq!(source.snapshots().len(), 2);
+        let scoped = source.snapshots_for_chat("chat-1");
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].run_id, "run-a");
+    }
+
+    #[test]
+    fn live_source_tolerates_corrupt_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let runs_file = dir.path().join("runs.json");
+        std::fs::write(&runs_file, "{ not json").unwrap();
+        let source = LiveRunSource::with_runs_file(runs_file);
+        assert!(source.snapshots().is_empty());
+
+        // A store whose snapshots array mixes valid + invalid entries keeps
+        // the valid ones.
+        let dir = tempfile::tempdir().unwrap();
+        let runs_file = dir.path().join("runs.json");
+        let good = demo_run(
+            "run-good",
+            None,
+            "Good",
+            SubagentSnapshotRole::Scout,
+            SubagentRunStateV2::Completed,
+            1,
+            Some(2),
+            1,
+        );
+        let store = serde_json::json!({
+            "version": 2,
+            "snapshots": [serde_json::to_value(&good).unwrap(), { "version": 2 }],
+        });
+        std::fs::write(&runs_file, serde_json::to_string(&store).unwrap()).unwrap();
+        let source = LiveRunSource::with_runs_file(runs_file);
+        let snapshots = source.snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].run_id, "run-good");
+    }
+
+    #[test]
+    fn live_source_is_never_demo_data() {
+        // An unreadable path must degrade to empty, not the demo roster.
+        let source =
+            LiveRunSource::with_runs_file(std::path::PathBuf::from("/nonexistent/runs.json"));
+        assert!(source.snapshots().is_empty());
     }
 }

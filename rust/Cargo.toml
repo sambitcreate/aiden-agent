@@ -47,6 +47,7 @@ aiden-mcp = { path = "aiden-mcp" }
 aiden-providers = { path = "aiden-providers" }
 aiden-agent = { path = "aiden-agent" }
 aiden-scheduler = { path = "aiden-scheduler" }
+aiden-subagents = { path = "aiden-subagents" }
 
 # --- UI framework ---
 gpui = "0.2.2"

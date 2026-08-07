@@ -6,6 +6,8 @@
 //! main window; the persisted appearance is applied by the chat service.
 
 mod app;
+mod approvals;
+mod assistant;
 mod chat;
 mod onboarding;
 mod panels;
@@ -13,6 +15,7 @@ mod pill;
 mod services;
 mod settings;
 mod shell;
+mod workspace;
 
 use std::cell::RefCell;
 use std::rc::Rc;

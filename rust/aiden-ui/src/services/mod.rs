@@ -3,6 +3,7 @@
 
 pub mod appearance;
 pub mod chat_service;
+pub mod mcp_tools;
 pub mod provider_kit;
 pub mod stores;
 pub mod stream;

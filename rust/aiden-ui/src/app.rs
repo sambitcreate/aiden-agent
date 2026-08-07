@@ -24,6 +24,7 @@ use gpui_component::{
     v_flex, ActiveTheme, IconName, WindowExt as _,
 };
 
+use crate::assistant::{AssistantPanel, AssistantPanelDeps, AssistantPanelEvent};
 use crate::chat::composer::{decode_model_key, model_items, model_key, ModelItem};
 use crate::panels::command_palette::{
     CommandPalette, CommandPaletteDeps, PaletteCommand, PaletteDataSource, PaletteProvider,
@@ -43,6 +44,7 @@ use crate::services::chat_service::ChatService;
 use crate::services::provider_kit::ConfiguredProvider;
 use crate::services::stores::Stores;
 use crate::settings::{SettingsSection, SettingsServices, SettingsView};
+use crate::workspace::{NotificationKind, WorkspaceEvent, WorkspaceState};
 
 actions!(
     aiden,
@@ -55,6 +57,7 @@ actions!(
 pub enum AppView {
     #[default]
     Chat,
+    Assistant,
     Scheduled,
     Usage,
     Subagents,
@@ -64,6 +67,7 @@ pub enum AppView {
 impl AppView {
     pub const ALL: &'static [AppView] = &[
         AppView::Chat,
+        AppView::Assistant,
         AppView::Scheduled,
         AppView::Subagents,
         AppView::Usage,
@@ -73,6 +77,7 @@ impl AppView {
     pub fn label(self) -> &'static str {
         match self {
             AppView::Chat => "Chats",
+            AppView::Assistant => "Assistant",
             AppView::Scheduled => "Scheduled",
             AppView::Usage => "Usage",
             AppView::Subagents => "Subagents",
@@ -83,6 +88,7 @@ impl AppView {
     pub fn icon(self) -> IconName {
         match self {
             AppView::Chat => IconName::BookOpen,
+            AppView::Assistant => IconName::PanelBottom,
             AppView::Scheduled => IconName::Calendar,
             AppView::Usage => IconName::ChartPie,
             AppView::Subagents => IconName::Bot,
@@ -197,8 +203,13 @@ pub struct AppState {
     pub(crate) message_scroll: ScrollHandle,
     last_message_len: usize,
     last_catalog: Vec<String>,
+    /// Last workspace id seen from the service (terminal cwd re-home on change).
+    last_workspace_id: Option<String>,
     appearance_applied: bool,
     _subscriptions: Vec<Subscription>,
+
+    /// The workspace context bar (chips + pickers) for the chat view.
+    pub(crate) workspace_state: Entity<WorkspaceState>,
 
     // Lazily created surface entities (created on first navigation/toggle and
     // kept alive so their state — e.g. the terminal PTY — survives view
@@ -207,6 +218,7 @@ pub struct AppState {
     scheduled: Option<Entity<ScheduledPanel>>,
     usage: Option<Entity<UsagePanel>>,
     subagents: Option<Entity<SubagentsPanel>>,
+    assistant: Option<Entity<AssistantPanel>>,
     terminal: Option<Entity<TerminalDrawer>>,
     palette: Option<Entity<CommandPalette>>,
     palette_source: Option<Arc<std::sync::Mutex<PaletteSourceSnapshot>>>,
@@ -235,12 +247,15 @@ impl AppState {
             message_scroll: ScrollHandle::new(),
             last_message_len: 0,
             last_catalog: Vec::new(),
+            last_workspace_id: None,
             appearance_applied: false,
             _subscriptions: Vec::new(),
+            workspace_state: cx.new(|cx| WorkspaceState::new(window, cx)),
             settings: None,
             scheduled: None,
             usage: None,
             subagents: None,
+            assistant: None,
             terminal: None,
             palette: None,
             palette_source: None,
@@ -292,12 +307,53 @@ impl AppState {
             },
         ));
 
+        // Workspace bar events: route selections onto the chat service and
+        // surface toasts (the workspace bar does its own git/editor work).
+        this._subscriptions.push(cx.subscribe_in(
+            &this.workspace_state,
+            window,
+            |this, _source, event: &WorkspaceEvent, window, cx| match event {
+                WorkspaceEvent::SelectWorkspace { id } => {
+                    this.service
+                        .update(cx, |service, cx| service.select_workspace(id, cx));
+                }
+                WorkspaceEvent::AdoptFolder { folder } => {
+                    this.service.update(cx, |service, cx| {
+                        service.add_workspace_from_folder(folder, cx)
+                    });
+                }
+                WorkspaceEvent::Notify { message, kind } => {
+                    let notification = match kind {
+                        NotificationKind::Info => {
+                            gpui_component::notification::Notification::info(message.clone())
+                        }
+                        NotificationKind::Success => {
+                            gpui_component::notification::Notification::success(message.clone())
+                        }
+                        NotificationKind::Warning => {
+                            gpui_component::notification::Notification::warning(message.clone())
+                        }
+                        NotificationKind::Error => {
+                            gpui_component::notification::Notification::error(message.clone())
+                        }
+                    };
+                    window.push_notification(notification, cx);
+                }
+            },
+        ));
+
         // Service changes: apply appearance once booted, sync the model picker
-        // catalog, and follow streaming output.
+        // catalog, follow streaming output, and mirror workspace state.
         this._subscriptions
             .push(cx.observe(&this.service, |this, _service, cx| {
                 this.sync_from_service(cx);
             }));
+
+        // The chat view is the default view, so the workspace bar is visible
+        // from startup (refresh + poll are gated on a folder being present).
+        this.workspace_state.update(cx, |state, cx| {
+            state.set_visible(true, cx);
+        });
 
         this
     }
@@ -367,6 +423,29 @@ impl AppState {
             self.last_message_len = message_len;
             self.message_scroll.scroll_to_bottom();
         }
+
+        // Mirror the workspace list / active workspace into the bar (only a
+        // folder change restarts the bar's git poll) and re-home an existing
+        // terminal drawer when the workspace changes.
+        let workspaces = service.workspaces.clone();
+        let active_id = service
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.id.clone());
+        let folder = service.workspace_folder();
+        let workspace_changed = active_id != self.last_workspace_id;
+        if workspace_changed {
+            self.last_workspace_id = active_id.clone();
+        }
+        if workspace_changed {
+            if let Some(terminal) = &self.terminal {
+                let cwd = folder.clone().unwrap_or_else(aiden_data::home_dir);
+                terminal.update(cx, |terminal, cx| terminal.set_cwd(cwd, cx));
+            }
+        }
+        self.workspace_state.update(cx, |state, cx| {
+            state.set_mirror(workspaces, active_id, folder, cx);
+        });
     }
 
     /// Apply the model-picker catalog + selection; called from render with
@@ -425,6 +504,17 @@ impl AppState {
         if self.view != view {
             self.view = view;
             cx.notify();
+        }
+        // The workspace bar (and its git poll) lives in the chat view; refresh
+        // it whenever that view is (re)focused.
+        if view == AppView::Chat {
+            self.workspace_state.update(cx, |state, cx| {
+                state.on_view_focused(cx);
+            });
+        } else {
+            self.workspace_state.update(cx, |state, cx| {
+                state.set_visible(false, cx);
+            });
         }
     }
 
@@ -557,6 +647,7 @@ impl AppState {
             PaletteCommand::OpenScheduled => self.set_view(AppView::Scheduled, cx),
             PaletteCommand::OpenUsage => self.set_view(AppView::Usage, cx),
             PaletteCommand::OpenSubagents => self.set_view(AppView::Subagents, cx),
+            PaletteCommand::OpenAssistant => self.set_view(AppView::Assistant, cx),
             PaletteCommand::Quit => cx.quit(),
             PaletteCommand::ToggleTerminal => self.toggle_terminal(window, cx),
             PaletteCommand::FocusComposer => {
@@ -575,7 +666,6 @@ impl AppState {
             PaletteCommand::ToggleSidebar
             | PaletteCommand::ToggleEnvironment
             | PaletteCommand::OpenWorkspaceEditor
-            | PaletteCommand::OpenAssistant
             | PaletteCommand::SearchChats
             | PaletteCommand::ChangeModel
             | PaletteCommand::ManageProviders
@@ -643,9 +733,13 @@ impl AppState {
         }
         let deps = TerminalDeps {
             shell: None,
-            // No workspace concept in the shell yet: start the shell in the
-            // user's home directory.
-            cwd: Some(aiden_data::home_dir()),
+            // The terminal starts in the active workspace folder (the git repo
+            // root); a later workspace switch re-homes it via `set_cwd`.
+            cwd: self
+                .service
+                .read(cx)
+                .workspace_folder()
+                .or_else(|| Some(aiden_data::home_dir())),
             simple: false,
         };
         let entity = cx.new(|cx| TerminalDrawer::new(cx, deps));
@@ -753,6 +847,29 @@ impl AppState {
         entity
     }
 
+    /// The proactive-assistant panel: created once on first navigation (its
+    /// MCP inventory and recent automations are collected on open) and kept
+    /// alive so a pending thread + approval queue survive view switches.
+    fn assistant_entity(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<AssistantPanel> {
+        if let Some(entity) = &self.assistant {
+            return entity.clone();
+        }
+        let entity = cx.new(|cx| {
+            AssistantPanel::new(window, cx, AssistantPanelDeps::new(self.stores.clone()))
+        });
+        self._subscriptions.push(cx.subscribe_in(
+            &entity,
+            window,
+            |_this, _source, _event: &AssistantPanelEvent, _window, _cx| {},
+        ));
+        self.assistant = Some(entity.clone());
+        entity
+    }
+
     // =======================================================================
     // Dictation pill (⌘⇧D)
     // =======================================================================
@@ -852,6 +969,7 @@ impl AppState {
     fn content_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let content = match self.view {
             AppView::Chat => self.chat_view(window, cx).into_any_element(),
+            AppView::Assistant => self.assistant_entity(window, cx).into_any_element(),
             AppView::Scheduled => self.scheduled_entity(window, cx).into_any_element(),
             AppView::Usage => self.usage_entity(window, cx).into_any_element(),
             AppView::Subagents => self.subagents_entity(window, cx).into_any_element(),

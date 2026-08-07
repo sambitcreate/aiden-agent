@@ -14,6 +14,7 @@ use aiden_data::portable_config::{create_portable_config_stores, PortableConfigT
 use aiden_data::schedule_store::{create_schedule_store, DataStorePersistence, ScheduleStore};
 use aiden_data::secret_map::{KeyringCredentialCipher, ProviderKeysError, ProviderKeysStore};
 use aiden_data::usage_store::UsageStore;
+use aiden_mcp::McpClientManager;
 
 /// The keychain service name used for provider credentials.
 const KEYCHAIN_SERVICE: &str = "com.sambitcreate.aiden-agent.provider-keys";
@@ -31,6 +32,9 @@ pub struct Stores {
     pub schedules: Arc<ScheduleStore<DataStorePersistence, DataStorePersistence>>,
     /// Privacy-safe aggregate usage (machine-local `usage.json`).
     pub usage: Arc<UsageStore>,
+    /// One shared MCP client manager (per-server connections with generations).
+    /// Chat generations connect through it when enabled servers are configured.
+    pub mcp: Arc<McpClientManager>,
 }
 
 impl Stores {
@@ -67,6 +71,7 @@ impl Stores {
             None,
         ));
         let usage = Arc::new(UsageStore::new_data_store(Some(local_root.clone())));
+        let mcp = Arc::new(McpClientManager::new());
 
         Ok(Self {
             chat,
@@ -74,6 +79,7 @@ impl Stores {
             keys,
             schedules,
             usage,
+            mcp,
         })
     }
 }

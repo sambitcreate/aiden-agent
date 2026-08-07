@@ -17,6 +17,7 @@ use gpui_component::{
 };
 
 use crate::app::AppState;
+use crate::chat::activity_feed::timeline_feed;
 use crate::services::chat_service::{ChatSnapshot, GenerationState};
 
 impl AppState {
@@ -127,6 +128,15 @@ fn render_assistant_message(
         ))))
         .w_full()
         .gap_1()
+        // Persisted activity timeline: thinking/tool steps survive reloads
+        // via the message's `timeline` field.
+        .when_some(
+            message
+                .timeline
+                .as_ref()
+                .filter(|timeline| !timeline.steps.is_empty()),
+            |el, timeline| el.child(timeline_feed(timeline, false, cx)),
+        )
         .when_some(
             message.reasoning.as_ref().filter(|r| !r.trim().is_empty()),
             |el, reasoning| {
@@ -194,11 +204,22 @@ fn render_stream_bubble(
     let error = generation
         .as_ref()
         .and_then(|generation| generation.error.clone());
+    let live_timeline = generation
+        .as_ref()
+        .and_then(|generation| generation.timeline.clone());
 
     v_flex()
         .id("stream-bubble")
         .w_full()
         .gap_1()
+        // Live activity timeline: tool steps and thinking stretches render as
+        // they're recorded by the driver's `TimelineProjector`.
+        .when_some(
+            live_timeline
+                .as_ref()
+                .filter(|timeline| !timeline.steps.is_empty()),
+            |el, timeline| el.child(timeline_feed(timeline, true, cx)),
+        )
         .when(thinking_active || !thinking_text.trim().is_empty(), |el| {
             el.child(
                 v_flex()
@@ -354,6 +375,7 @@ mod tests {
                 complete: true,
                 error: None,
                 model: None,
+                timeline: None,
             }),
             ..Default::default()
         };

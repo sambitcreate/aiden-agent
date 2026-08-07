@@ -18,16 +18,23 @@ gpui-component-assets.workspace = true
 gpui-tokio-bridge.workspace = true
 aiden-core.workspace = true
 aiden-data.workspace = true
+aiden-git.workspace = true
 aiden-mcp.workspace = true
 aiden-providers.workspace = true
+aiden-agent.workspace = true
+aiden-subagents.workspace = true
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 async-compat.workspace = true
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -30,6 +30,7 @@ impl AppState {
             .h_full()
             .min_w(px(0.))
             .bg(theme.background)
+            .child(self.workspace_bar(window, cx))
             .child(self.chat_empty_or_list(&snapshot, window, cx))
             .child(self.composer(&snapshot, window, cx))
     }

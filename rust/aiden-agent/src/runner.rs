@@ -129,6 +129,9 @@ pub struct RunnerConfig {
     pub provider_id: String,
     pub model: String,
     pub system_prompt: Option<String>,
+    /// Provider credential passed through the stream options (resolved by the
+    /// caller — keychain access never happens inside the loop).
+    pub api_key: Option<String>,
     /// Maximum number of tool rounds (stream requests) before the guard stops
     /// the run.
     pub max_tool_iterations: usize,
@@ -148,6 +151,7 @@ impl Default for RunnerConfig {
             provider_id: String::new(),
             model: String::new(),
             system_prompt: None,
+            api_key: None,
             max_tool_iterations: 10,
             max_repeated_calls: 3,
             attended_tool_error_guard: false,
@@ -236,7 +240,13 @@ pub async fn run_agent(
             tools,
             ..Default::default()
         };
-        let mut stream = match provider.stream_simple(&request, &StreamOptions::default()) {
+        let mut stream = match provider.stream_simple(
+            &request,
+            &StreamOptions {
+                api_key: config.api_key.clone(),
+                ..Default::default()
+            },
+        ) {
             Ok(stream) => stream,
             Err(err) => {
                 let message = provider_error_message(&err);
