@@ -1022,7 +1022,7 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
     let hide_pill_command = command_tx.clone();
     let destroy_pill_command = command_tx.clone();
     let broadcast_command = command_tx.clone();
-    let pill = PillCoordinator::new(PillCoordinatorDeps {
+    let (pill, watcher) = PillCoordinator::new(PillCoordinatorDeps {
         show_pill: Box::new(move || {
             let command = show_pill_command.clone();
             async move {
@@ -1051,6 +1051,9 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
         audio,
         transcribe: None,
     });
+    // Spawn the pill watcher on the tokio bridge (NOT tokio::spawn directly —
+    // we're on a GPUI thread without a tokio runtime guard).
+    gpui_tokio_bridge::Tokio::spawn(cx, watcher).detach();
     let _ = PILL_COORDINATOR.set(pill);
 }
 

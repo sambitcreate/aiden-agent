@@ -77,7 +77,15 @@ pub struct PillCoordinator {
 }
 
 impl PillCoordinator {
-    pub fn new(deps: PillCoordinatorDeps) -> Arc<Self> {
+    /// Creates the coordinator and returns `(coordinator, watcher_future)`.
+    /// The caller must spawn `watcher_future` on a tokio runtime (e.g. via
+    /// `gpui_tokio_bridge::Tokio::spawn(cx, watcher)`).
+    pub fn new(
+        deps: PillCoordinatorDeps,
+    ) -> (
+        Arc<Self>,
+        std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    ) {
         let deps = Arc::new(deps);
         let audio = deps.audio.clone();
         let (event_tx, event_rx) = mpsc::unbounded_channel::<CoordinatorEvent>();
@@ -94,11 +102,13 @@ impl PillCoordinator {
             audio,
             event_tx,
         });
-        // Detached watcher: serializes broadcasts + external pill events and
-        // drives the capture/transcribe loop. It lives exactly as long as the
-        // event sender (i.e. as long as `this`), so nothing leaks.
+        // The watcher serializes broadcasts + external pill events and drives
+        // the capture/transcribe loop. It lives exactly as long as the event
+        // sender (i.e. as long as `this`), so nothing leaks. The caller spawns
+        // it — do NOT call tokio::spawn here because we may be on a GPUI thread
+        // without a tokio runtime guard.
         let watcher_this = this.clone();
-        tokio::spawn(async move {
+        let watcher = Box::pin(async move {
             let mut rx = event_rx;
             while let Some(event) = rx.recv().await {
                 match event {
@@ -110,7 +120,7 @@ impl PillCoordinator {
                 }
             }
         });
-        this
+        (this, watcher)
     }
 
     /// The underlying state machine (stage queries for tests/instrumentation).
@@ -377,6 +387,8 @@ mod tests {
             audio,
             transcribe,
         });
+        let (pill, watcher) = pill;
+        tokio::spawn(watcher); // tests are #[tokio::test] — runtime is available
         (pill, test_handles)
     }
 
