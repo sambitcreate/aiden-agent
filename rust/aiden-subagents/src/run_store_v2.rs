@@ -2480,4 +2480,38 @@ mod tests {
         let run = store.get("run-1").unwrap().unwrap();
         assert_eq!(run.state, SubagentRunStateV2::Interrupted);
     }
+
+    #[test]
+    fn corrupted_committed_store_fails_closed_without_panicking_or_destroying_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        // A truncated / partially-written runs.json (e.g. an interrupted
+        // external write). The store must not crash, must not silently delete
+        // the evidence, and must fail every subsequent mutation.
+        let corrupted = "{\"version\":2,\"storeRevision\":1,\"migration\":{";
+        std::fs::write(directory.path().join("runs.json"), corrupted).unwrap();
+
+        let store = create_subagent_run_store_v2(
+            directory.path().to_path_buf(),
+            SubagentRunStoreV2Options {
+                now: Some(Box::new(|| 1_000)),
+                max_runs: None,
+            },
+        )
+        .unwrap();
+        // initialize surfaces the corruption as an error (no panic).
+        let error = store.initialize().unwrap_err();
+        assert!(error.to_string().contains("preserved"), "{error}");
+        // The corrupt file is left in place (preserved as evidence).
+        let on_disk = std::fs::read(directory.path().join("runs.json")).unwrap();
+        assert_eq!(String::from_utf8_lossy(&on_disk), corrupted);
+        // Every later mutation fails closed instead of overwriting the
+        // unreadable store.
+        assert!(store.reserve_run("run-1").is_err());
+        assert!(store
+            .upsert(
+                &snapshot("run-1", 1, "queued", "chat-1"),
+                &native_manifest("run-1", "Explore the workspace."),
+            )
+            .is_err());
+    }
 }

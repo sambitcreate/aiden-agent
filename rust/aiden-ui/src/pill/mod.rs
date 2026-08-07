@@ -182,6 +182,14 @@ impl PillView {
     }
 
     fn on_close(&mut self, _: &ClosePill, window: &mut Window, _cx: &mut Context<Self>) {
+        // The coordinator owns the recording state machine. Closing the pill
+        // (Escape) without reporting a cancel leaves the coordinator in
+        // `Recording`: the microphone keeps capturing with no visible UI until
+        // the next hotkey toggle. Report the cancel (mirroring the cancel
+        // button) so the coordinator discards the session and stops capture.
+        if let Some(on_cancel) = self.on_cancel.as_ref() {
+            on_cancel();
+        }
         window.remove_window();
     }
 

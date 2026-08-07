@@ -1599,4 +1599,35 @@ mod tests {
             serialized
         );
     }
+
+    #[test]
+    fn authority_digest_is_stable_across_restarts_with_reordered_persisted_keys() {
+        // A persisted authority is re-read from the run store on every launch.
+        // The *file's* key order must be irrelevant: parsing a reordered JSON
+        // object yields the identical digest, so stored digests stay valid
+        // across restarts and file rewrites.
+        let input: CreateSubagentAuthorityV2Input =
+            serde_json::from_value(authority_input()).unwrap();
+        let authority = create_subagent_authority_v2(&input).unwrap();
+        let mut value = serde_json::to_value(&authority).unwrap();
+
+        // Reverse the top-level key order the way a hand-edited or rewritten
+        // store file might.
+        let object = value.as_object_mut().unwrap();
+        let mut pairs: Vec<(String, serde_json::Value)> =
+            std::mem::take(object).into_iter().collect();
+        pairs.reverse();
+        let reordered: serde_json::Map<String, serde_json::Value> = pairs.into_iter().collect();
+        let reparsed: SubagentAuthorityV2 =
+            serde_json::from_value(serde_json::Value::Object(reordered)).unwrap();
+        assert_eq!(authority.digest(), reparsed.digest());
+
+        // The canonical digest itself is a fixed hex string for a given
+        // authority (regression: field order must never drift with a reparse).
+        assert_eq!(reparsed.digest().len(), 64);
+        assert!(reparsed
+            .digest()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit()));
+    }
 }

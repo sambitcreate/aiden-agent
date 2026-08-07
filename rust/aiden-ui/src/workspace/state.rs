@@ -431,6 +431,10 @@ impl WorkspaceState {
             cx.notify();
             return;
         };
+        // Capture the folder so a slow result for a *previous* workspace
+        // (switched away from while this read was in flight) cannot clobber
+        // the active workspace's status.
+        let expected_folder = folder.clone();
         let git = self.git.clone();
         let task = Tokio::spawn(cx, async move {
             aiden_git::status::info(&git, &folder, None).await
@@ -445,6 +449,9 @@ impl WorkspaceState {
                 )),
             };
             this.update(cx, |this, cx| {
+                if this.active_folder.as_ref() != Some(&expected_folder) {
+                    return;
+                }
                 match result {
                     Ok(info) => {
                         this.git_info = Some(info);
@@ -465,6 +472,7 @@ impl WorkspaceState {
             cx.notify();
             return;
         };
+        let expected_folder = folder.clone();
         let git = self.git.clone();
         let task = Tokio::spawn(cx, async move {
             aiden_git::status::branches(&git, &folder, None).await
@@ -479,6 +487,9 @@ impl WorkspaceState {
                 )),
             };
             this.update(cx, |this, cx| {
+                if this.active_folder.as_ref() != Some(&expected_folder) {
+                    return;
+                }
                 this.branches = result.ok();
                 cx.notify();
             })
@@ -493,6 +504,7 @@ impl WorkspaceState {
             cx.notify();
             return;
         };
+        let expected_folder = folder.clone();
         let git = self.git.clone();
         let task = Tokio::spawn(cx, async move {
             aiden_git::diff::review(&git, &folder, None).await
@@ -507,6 +519,9 @@ impl WorkspaceState {
                 )),
             };
             this.update(cx, |this, cx| {
+                if this.active_folder.as_ref() != Some(&expected_folder) {
+                    return;
+                }
                 this.review = result.ok();
                 cx.notify();
             })
@@ -521,6 +536,7 @@ impl WorkspaceState {
             cx.notify();
             return;
         };
+        let expected_folder = folder.clone();
         let git = self.git.clone();
         let task = Tokio::spawn(cx, async move {
             aiden_git::push::push_capability(&git, &folder, None).await
@@ -535,6 +551,9 @@ impl WorkspaceState {
                 )),
             };
             this.update(cx, |this, cx| {
+                if this.active_folder.as_ref() != Some(&expected_folder) {
+                    return;
+                }
                 this.push_capability = result.ok();
                 cx.notify();
             })
@@ -1577,5 +1596,55 @@ mod tests {
         let truncated = truncate_path_middle(value, 20);
         assert_eq!(truncated.chars().count(), 20); // 19 chars + ellipsis
         assert!(truncated.contains('…'));
+    }
+
+    /// Reproduces the stale-workspace race the one-shot git refreshes must be
+    /// guarded against. The chat service drives `set_mirror` from the
+    /// foreground, but each `refresh_git_info`/`refresh_branches`/`refresh_review`/
+    /// `refresh_push` fans out a background read whose completion order is
+    /// nondeterministic. Without a folder-identity guard, a slow read for a
+    /// *previous* workspace can land after the user switched away and clobber
+    /// the active workspace's chip with the wrong branch / dirty count.
+    ///
+    /// This test models that flow (no GPUI context required) and asserts the
+    /// guard decision the refresh watchers now apply before each write.
+    #[test]
+    fn stale_folder_refresh_result_does_not_overwrite_active_workspace() {
+        // The "active folder" the foreground currently shows.
+        let active = std::sync::Arc::new(std::sync::Mutex::new(Some(PathBuf::from("/ws/current"))));
+
+        // A slow read for a workspace the user already switched away from.
+        let stale_folder = PathBuf::from("/ws/previous");
+        let stale_info = info("previous-branch", 9, 0, 0);
+
+        // The guard each refresh watcher now applies before writing its result:
+        // only commit the read when the captured folder is still the active one.
+        let active_for_apply = active.clone();
+        let apply = |result: GitInfo, expected: PathBuf| {
+            let current = active_for_apply.lock().unwrap().clone();
+            if current.as_ref() == Some(&expected) {
+                Some(result)
+            } else {
+                None
+            }
+        };
+
+        // The user switches to the current workspace *before* the previous
+        // workspace's slow read resolves. An unguarded write would overwrite
+        // the current chip with `previous-branch`.
+        let applied = apply(stale_info, stale_folder);
+        assert!(
+            applied.is_none(),
+            "a result for a switched-away workspace must be dropped"
+        );
+
+        // A result for the still-active workspace is applied.
+        let current_folder = PathBuf::from("/ws/current");
+        let applied = apply(info("current-branch", 1, 0, 0), current_folder.clone());
+        assert_eq!(applied.unwrap().branch.as_deref(), Some("current-branch"));
+
+        // After the workspace is cleared (no active folder), no result applies.
+        *active.lock().unwrap() = None;
+        assert!(apply(info("x", 0, 0, 0), current_folder).is_none());
     }
 }

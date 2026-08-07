@@ -404,19 +404,28 @@ pub fn sse_payload_stream(
 
 /// Build an Anthropic-style request body from a normalized request (stub shape
 /// for the phase-3 scaffold; the exact prompt-cache/session fields arrive with
-/// the compaction work).
+/// the compaction work). Nullable optional fields (`system`, `temperature`)
+/// are omitted rather than emitted as JSON `null`, which the Messages API
+/// rejects with a validation error.
 pub fn anthropic_request_body(
     request: &StreamRequest,
     options: &StreamOptions,
 ) -> serde_json::Value {
-    serde_json::json!({
-        "model": request.model,
-        "max_tokens": request.max_tokens.unwrap_or(8192),
-        "stream": true,
-        "system": request.system_prompt,
-        "messages": request.messages,
-        "temperature": options.temperature,
-    })
+    let mut body = serde_json::Map::new();
+    body.insert("model".into(), serde_json::json!(request.model));
+    body.insert(
+        "max_tokens".into(),
+        serde_json::json!(request.max_tokens.unwrap_or(8192)),
+    );
+    body.insert("stream".into(), serde_json::Value::Bool(true));
+    if let Some(system) = &request.system_prompt {
+        body.insert("system".into(), serde_json::json!(system));
+    }
+    body.insert("messages".into(), serde_json::json!(request.messages));
+    if let Some(temperature) = options.temperature {
+        body.insert("temperature".into(), serde_json::json!(temperature));
+    }
+    serde_json::Value::Object(body)
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -580,6 +589,53 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"overloaded"}
             panic!("expected error event");
         };
         assert_eq!(*reason, StopReason::Error);
+    }
+
+    #[test]
+    fn stream_ending_without_message_stop_is_a_terminal_error() {
+        // A connection dropped after content was delivered but before
+        // `message_stop` must not silently truncate the response.
+        let fixture = br#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","model":"claude-sonnet-5","content":[],"usage":{"input_tokens":12,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer"}}
+"#;
+        let events = parse_anthropic_sse(fixture).unwrap();
+        let AssistantMessageEvent::Error { reason, error } = events.last().unwrap() else {
+            panic!("expected terminal error event, got {events:?}");
+        };
+        assert_eq!(*reason, StopReason::Error);
+        // The partial message survives so consumers can preserve delivered text.
+        let ContentBlock::Text(block) = &error.content[0] else {
+            panic!("expected text block");
+        };
+        assert_eq!(block.text, "partial answer");
+        assert!(error
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("message_stop"));
+    }
+
+    #[test]
+    fn complete_and_error_only_streams_emit_no_spurious_terminal() {
+        // A complete stream ends on `done` with no extra event.
+        let events = parse_anthropic_sse(FIXTURE).unwrap();
+        assert!(matches!(
+            events.last(),
+            Some(AssistantMessageEvent::Done { .. })
+        ));
+        // An error-only stream (no message_start) emits exactly one error.
+        let fixture = br#"event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}
+"#;
+        let events = parse_anthropic_sse(fixture).unwrap();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], AssistantMessageEvent::Error { .. }));
     }
 
     fn kind(event: &AssistantMessageEvent) -> &'static str {

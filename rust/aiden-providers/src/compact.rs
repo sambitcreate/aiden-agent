@@ -184,12 +184,30 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     let head = available.div_ceil(2);
     let tail = available / 2;
     let mut result = String::new();
+    // Byte offsets may land inside a multi-byte character; snap to the nearest
+    // char boundary so truncation never panics on non-ASCII tool output.
+    let head = floor_char_boundary(text, head);
+    let tail_start = floor_char_boundary(text, text.len().saturating_sub(tail));
     result.push_str(&text[..head]);
     result.push_str(&marker);
-    if tail > 0 {
-        result.push_str(&text[text.len() - tail..]);
+    if tail_start < text.len() {
+        result.push_str(&text[tail_start..]);
     }
     result
+}
+
+/// The largest char boundary at or below `index` (MSRV-safe stand-in for
+/// `str::floor_char_boundary`, which stabilized after the crate's MSRV).
+fn floor_char_boundary(text: &str, index: usize) -> usize {
+    let index = index.min(text.len());
+    if text.is_char_boundary(index) {
+        index
+    } else {
+        (0..index)
+            .rev()
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(0)
+    }
 }
 
 fn truncate_tool_result(message: &Message) -> (Message, bool) {
@@ -769,6 +787,30 @@ mod tests {
         let truncated = truncate_text(&text, 50);
         assert!(truncated.contains("[... 50 characters compacted ...]"));
         assert_eq!(truncated.len(), 50);
+    }
+
+    #[test]
+    fn truncate_text_never_panics_on_multibyte_boundaries() {
+        // A >32KB tool result made of 2-byte chars: the byte-offset head/tail
+        // math must land on char boundaries, not panic the compaction path.
+        // (Snapping to char boundaries may overshoot the budget by one char.)
+        let text = "é".repeat(40_000);
+        let truncated = truncate_text(&text, 32_000);
+        assert!(truncated.len() <= 32_000 + 4);
+        assert!(truncated.contains("characters compacted"));
+        assert!(truncated.starts_with('é'));
+        assert!(truncated.ends_with('é'));
+
+        // The 4-byte emoji variant.
+        let emoji = "\u{1F600}".repeat(20_000);
+        let truncated = truncate_text(&emoji, 16_000);
+        assert!(truncated.len() <= 16_000 + 8);
+        assert!(truncated.contains("characters compacted"));
+
+        // A tiny budget where the marker itself exceeds the budget must not
+        // underflow into an invalid slice.
+        let truncated = truncate_text("hello world", 5);
+        assert!(truncated.len() >= 5);
     }
 
     #[test]

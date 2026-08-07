@@ -27,6 +27,7 @@
 //! channel — deferred.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use aiden_data::portable_config::{McpServer, McpTransport};
@@ -40,8 +41,9 @@ use rmcp::transport::streamable_http_client::{
 };
 use rmcp::transport::TokioChildProcess;
 use rmcp::{ClientHandler, ServiceError};
+use sha2::{Digest, Sha256};
 
-use crate::config::McpServerSpec;
+use crate::config::{credential_connection_snapshot, McpServerSpec};
 use crate::error::McpError;
 use crate::inventory::McpToolInfo;
 
@@ -50,6 +52,24 @@ pub const CLIENT_VERSION: &str = "1.0.0";
 /// Callers may leave this to the per-call `timeout` parameter.
 pub const DEFAULT_CALL_TIMEOUT_MS: u64 = 60_000;
 pub const DEFAULT_LIST_TIMEOUT_MS: u64 = 30_000;
+/// Upper bound for a normalized tool result. A pathological (or simply
+/// verbose) MCP server must never be able to blow up the transcript that is
+/// re-sent to the provider on the next request, so results are truncated here.
+pub const MAX_MCP_TOOL_RESULT_CHARS: usize = 200_000;
+
+/// Truncate `text` to at most `max` chars, keeping the tail marker and only
+/// cutting on char boundaries.
+fn truncate_chars(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let marker = "\n… [truncated]";
+    let mut limit = max.saturating_sub(marker.len()).min(text.len());
+    while !text.is_char_boundary(limit) {
+        limit -= 1;
+    }
+    format!("{}{}", &text[..limit], marker)
+}
 
 /// The client handler identity announced during `initialize`
 /// (`{name: "aiden-agent", version: "1.0.0"}`).
@@ -84,6 +104,12 @@ pub struct McpClient {
     pub server_id: String,
     pub server_name: String,
     pub transport: McpTransport,
+    /// Canonical fingerprint of the spec this connection was built from (see
+    /// [`spec_fingerprint`]). [`McpClientManager::ensure_connected`] compares
+    /// it against the current spec and reconnects when the server record
+    /// changed, so a stale process (and stale credentials) can never keep
+    /// serving a reconfigured server.
+    pub fingerprint: String,
     running: RunningService<RoleClient, AidenClientHandler>,
 }
 
@@ -93,8 +119,33 @@ impl std::fmt::Debug for McpClient {
             .field("server_id", &self.server_id)
             .field("server_name", &self.server_name)
             .field("transport", &self.transport)
+            .field("fingerprint", &self.fingerprint)
             .finish_non_exhaustive()
     }
+}
+
+/// Canonical fingerprint of a connection spec: transport + the credential
+/// connection snapshot (secret maps reduced to hashes), so it is deterministic
+/// and never embeds secrets. Any change to the record's command, URL, env,
+/// headers, or injected preset key changes the fingerprint and forces a
+/// reconnect.
+pub fn spec_fingerprint(spec: &McpServerSpec) -> String {
+    let transport = match spec.transport {
+        McpTransport::Stdio => "stdio",
+        McpTransport::Http => "http",
+        McpTransport::Sse => "sse",
+    };
+    let snapshot = credential_connection_snapshot(&spec.server);
+    let mut hasher = Sha256::new();
+    hasher.update(b"aiden-mcp-connection-v1\0");
+    hasher.update(transport.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(
+        serde_json::to_string(&snapshot)
+            .expect("snapshot is serializable")
+            .as_bytes(),
+    );
+    format!("{:x}", hasher.finalize())
 }
 
 impl McpClient {
@@ -192,11 +243,12 @@ fn to_text(result: &CallToolResult) -> String {
             parts.push(text.text.clone());
         }
     }
-    if parts.is_empty() {
+    let text = if parts.is_empty() {
         serde_json::to_string(result).unwrap_or_else(|_| "MCP tool returned no result.".to_string())
     } else {
         parts.join("\n")
-    }
+    };
+    truncate_chars(&text, MAX_MCP_TOOL_RESULT_CHARS)
 }
 
 async fn timed<T>(
@@ -236,6 +288,7 @@ pub async fn connect_stdio(spec: &McpServerSpec) -> Result<McpClient, McpError> 
         server_id: spec.server.id.clone(),
         server_name: spec.server.name.clone(),
         transport: McpTransport::Stdio,
+        fingerprint: spec_fingerprint(spec),
         running,
     })
 }
@@ -271,6 +324,7 @@ pub async fn connect_remote(spec: &McpServerSpec) -> Result<McpClient, McpError>
         server_id: spec.server.id.clone(),
         server_name: spec.server.name.clone(),
         transport: spec.transport,
+        fingerprint: spec_fingerprint(spec),
         running,
     })
 }
@@ -300,32 +354,111 @@ pub struct McpStatus {
 /// One cached client per server id with connection generations. In the TS
 /// main process the renderer is never trusted with the client; here the
 /// manager's methods are the only handles.
-#[derive(Debug, Default)]
+///
+/// Clients are held behind `Arc` so a call can clone the handle, release the
+/// map lock, and then await the remote without blocking every other server's
+/// operations. [`Self::ensure_connected`] never holds the lock across the
+/// connect itself, and reconnects when the server record's fingerprint
+/// changes.
+#[derive(Default)]
 pub struct McpClientManager {
-    clients: tokio::sync::Mutex<HashMap<String, McpClient>>,
+    clients: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
     generations: tokio::sync::Mutex<HashMap<String, u64>>,
+    #[cfg(test)]
+    connect_override: tokio::sync::Mutex<Option<ConnectOverride>>,
 }
+
+impl std::fmt::Debug for McpClientManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpClientManager")
+            .field("clients", &"..")
+            .field("generations", &"..")
+            .finish()
+    }
+}
+
+#[cfg(test)]
+type ConnectOverride = Box<
+    dyn Fn(&McpServerSpec) -> futures::future::BoxFuture<'static, Result<McpClient, McpError>>
+        + Send
+        + Sync,
+>;
 
 impl McpClientManager {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Connect the server if it is not already connected, and claim the next
-    /// generation. A spec whose record changed (fingerprint) should be passed
-    /// through a fresh `connect` after `disconnect`.
-    pub async fn ensure_connected(&self, spec: &McpServerSpec) -> Result<(), McpError> {
-        let mut clients = self.clients.lock().await;
-        if clients.contains_key(&spec.server.id) {
-            return Ok(());
+    /// Test-only constructor that substitutes the transport connector so tests
+    /// can drive connects deterministically without spawning real servers.
+    #[cfg(test)]
+    pub fn with_connect(connect: ConnectOverride) -> Self {
+        Self {
+            clients: tokio::sync::Mutex::new(HashMap::new()),
+            generations: tokio::sync::Mutex::new(HashMap::new()),
+            connect_override: tokio::sync::Mutex::new(Some(connect)),
         }
-        let client = connect(spec).await?;
-        let mut generations = self.generations.lock().await;
-        let next = generations.get(&spec.server.id).copied().unwrap_or(0) + 1;
-        generations.insert(spec.server.id.clone(), next);
+    }
+
+    async fn connect_spec(&self, spec: &McpServerSpec) -> Result<McpClient, McpError> {
+        #[cfg(test)]
+        {
+            let override_fn = self.connect_override.lock().await;
+            if let Some(connect) = override_fn.as_ref() {
+                return connect(spec).await;
+            }
+        }
+        connect(spec).await
+    }
+
+    /// Clone the cached client handle without holding the map lock across any
+    /// await that follows.
+    async fn client_for(&self, server_id: &str) -> Result<Arc<McpClient>, McpError> {
+        self.clients
+            .lock()
+            .await
+            .get(server_id)
+            .cloned()
+            .ok_or_else(not_connected(server_id))
+    }
+
+    /// Connect the server if it is not already connected (or its spec changed),
+    /// and claim the next generation. A record whose fingerprint changed is
+    /// reconnected: the old client is dropped (cancelling its service and
+    /// killing the stdio child), so a reconfigured command, URL, env, header,
+    /// or preset key always takes effect.
+    pub async fn ensure_connected(&self, spec: &McpServerSpec) -> Result<(), McpError> {
+        let fingerprint = spec_fingerprint(spec);
+        {
+            let clients = self.clients.lock().await;
+            if let Some(existing) = clients.get(&spec.server.id) {
+                if existing.fingerprint == fingerprint {
+                    return Ok(());
+                }
+            }
+        }
+        // Connect outside the lock: a slow spawn/handshake must never
+        // serialize unrelated servers or block a second chat generation.
+        let client = Arc::new(self.connect_spec(spec).await?);
+        let mut clients = self.clients.lock().await;
+        if let Some(existing) = clients.get(&spec.server.id) {
+            if existing.fingerprint == fingerprint {
+                // A concurrent connect won; the loser's transport is dropped
+                // (cancelling its service and killing the child).
+                return Ok(());
+            }
+        }
         clients.insert(spec.server.id.clone(), client);
+        drop(clients);
+        self.bump_generation(&spec.server.id).await;
         tracing::info!(server = %spec.server.id, "MCP server connected");
         Ok(())
+    }
+
+    async fn bump_generation(&self, server_id: &str) {
+        let mut generations = self.generations.lock().await;
+        let next = generations.get(server_id).copied().unwrap_or(0) + 1;
+        generations.insert(server_id.to_string(), next);
     }
 
     pub async fn is_connected(&self, server_id: &str) -> bool {
@@ -333,10 +466,7 @@ impl McpClientManager {
     }
 
     pub async fn list_tools(&self, server_id: &str) -> Result<Vec<McpToolInfo>, McpError> {
-        let clients = self.clients.lock().await;
-        let client = clients
-            .get(server_id)
-            .ok_or_else(not_connected(server_id))?;
+        let client = self.client_for(server_id).await?;
         client.list_tools().await
     }
 
@@ -344,10 +474,7 @@ impl McpClientManager {
         &self,
         server_id: &str,
     ) -> Result<Vec<rmcp::model::Resource>, McpError> {
-        let clients = self.clients.lock().await;
-        let client = clients
-            .get(server_id)
-            .ok_or_else(not_connected(server_id))?;
+        let client = self.client_for(server_id).await?;
         client.list_resources().await
     }
 
@@ -355,15 +482,13 @@ impl McpClientManager {
         &self,
         server_id: &str,
     ) -> Result<Vec<rmcp::model::Prompt>, McpError> {
-        let clients = self.clients.lock().await;
-        let client = clients
-            .get(server_id)
-            .ok_or_else(not_connected(server_id))?;
+        let client = self.client_for(server_id).await?;
         client.list_prompts().await
     }
 
     /// Call a raw remote tool through its connected client, normalized by
-    /// `mcp_agent_tool_result`.
+    /// `mcp_agent_tool_result`. The map lock is released before the await, so
+    /// a slow tool on one server never blocks another server's operations.
     pub async fn call_tool(
         &self,
         server_id: &str,
@@ -371,10 +496,7 @@ impl McpClientManager {
         args: serde_json::Value,
         timeout: Duration,
     ) -> Result<McpToolTextResult, McpError> {
-        let clients = self.clients.lock().await;
-        let client = clients
-            .get(server_id)
-            .ok_or_else(not_connected(server_id))?;
+        let client = self.client_for(server_id).await?;
         client.call_tool(tool, args, timeout).await
     }
 
@@ -450,6 +572,19 @@ impl McpClientManager {
             .get(server_id)
             .copied()
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+impl McpClientManager {
+    /// Test-only: the fingerprint of the cached client for `server_id` (used
+    /// to assert reconnects replace a stale connection).
+    pub(crate) async fn cached_fingerprint(&self, server_id: &str) -> Option<String> {
+        self.clients
+            .lock()
+            .await
+            .get(server_id)
+            .map(|client| client.fingerprint.clone())
     }
 }
 
@@ -545,6 +680,7 @@ pub async fn collect_mcp_agent_tools(
 mod tests {
     use super::*;
     use crate::identity::mcp_agent_tool_name;
+    use futures::FutureExt;
     use rmcp::model::TextContent;
 
     fn result(content: Vec<ContentBlock>, is_error: bool) -> CallToolResult {
@@ -686,6 +822,7 @@ mod tests {
             server_id: "fixture".into(),
             server_name: "Fixture".into(),
             transport: McpTransport::Http,
+            fingerprint: "0".repeat(64),
             running,
         };
 
@@ -721,5 +858,414 @@ mod tests {
         assert!(matches!(err, McpError::Protocol(_)));
 
         server_task.abort();
+    }
+
+    // ---------------------------------------------------------------------
+    // Spec fingerprints (reconnect detection)
+    // ---------------------------------------------------------------------
+
+    fn stdio_spec(id: &str, command: &str) -> McpServerSpec {
+        McpServerSpec {
+            server: aiden_data::portable_config::McpServer {
+                id: id.into(),
+                name: id.into(),
+                transport: McpTransport::Stdio,
+                command: Some(command.into()),
+                args: Some(vec!["--serve".into()]),
+                env: Some(
+                    [("TOKEN".to_string(), "secret".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                url: None,
+                headers: None,
+                oauth: None,
+                preset_id: None,
+                enabled: true,
+            },
+            transport: McpTransport::Stdio,
+            stdio: Some(crate::config::StdioSpec {
+                command: command.into(),
+                args: vec!["--serve".into()],
+                env: [("TOKEN".to_string(), "secret".to_string())]
+                    .into_iter()
+                    .collect(),
+            }),
+            remote: None,
+            preset: None,
+        }
+    }
+
+    #[test]
+    fn spec_fingerprints_are_deterministic_and_change_with_the_config() {
+        let spec = stdio_spec("docs", "mcp-docs");
+        let again = stdio_spec("docs", "mcp-docs");
+        assert_eq!(spec_fingerprint(&spec), spec_fingerprint(&again));
+
+        // A different command (or URL, env, header) changes the fingerprint.
+        let changed_command = stdio_spec("docs", "mcp-docs-v2");
+        assert_ne!(spec_fingerprint(&spec), spec_fingerprint(&changed_command));
+
+        let changed_env = {
+            let mut spec = spec.clone();
+            let stdio = spec.stdio.as_mut().expect("stdio");
+            stdio.env.insert("TOKEN".into(), "new-secret".into());
+            spec.server.env = Some(stdio.env.clone());
+            spec
+        };
+        assert_ne!(spec_fingerprint(&spec), spec_fingerprint(&changed_env));
+
+        // The fingerprint never embeds secret values (env is hashed).
+        let fingerprint = spec_fingerprint(&spec);
+        assert!(!fingerprint.contains("secret"));
+        assert_eq!(fingerprint.len(), 64);
+
+        // Transport is part of the identity.
+        let remote = McpServerSpec {
+            transport: McpTransport::Http,
+            remote: Some(crate::config::RemoteSpec {
+                url: "https://docs.test/mcp".into(),
+                headers: Default::default(),
+            }),
+            ..spec.clone()
+        };
+        assert_ne!(spec_fingerprint(&spec), spec_fingerprint(&remote));
+    }
+
+    // ---------------------------------------------------------------------
+    // Manager lifecycle (in-process duplex fixtures through with_connect)
+    // ---------------------------------------------------------------------
+
+    fn remote_spec(id: &str) -> McpServerSpec {
+        McpServerSpec {
+            server: aiden_data::portable_config::McpServer {
+                id: id.into(),
+                name: id.into(),
+                transport: McpTransport::Http,
+                command: None,
+                args: None,
+                env: None,
+                url: Some(format!("https://{id}.test/mcp")),
+                headers: None,
+                oauth: None,
+                preset_id: None,
+                enabled: true,
+            },
+            transport: McpTransport::Http,
+            stdio: None,
+            remote: Some(crate::config::RemoteSpec {
+                url: format!("https://{id}.test/mcp"),
+                headers: Default::default(),
+            }),
+            preset: None,
+        }
+    }
+
+    /// A fixture server that can delay its `tools/call` response and signal
+    /// when a call has started (so tests can deterministically observe the
+    /// manager's lock behavior).
+    struct DelayedFixtureServer {
+        started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        delay_ms: u64,
+    }
+
+    impl rmcp::ServerHandler for DelayedFixtureServer {
+        fn get_info(&self) -> rmcp::model::ServerInfo {
+            rmcp::model::ServerInfo::new(
+                rmcp::model::ServerCapabilities::builder()
+                    .enable_tools()
+                    .build(),
+            )
+        }
+
+        fn list_tools(
+            &self,
+            _request: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, RmcpError>>
+               + rmcp::service::MaybeSendFuture
+               + '_ {
+            let tools = vec![Tool::new(
+                "echo",
+                "Echoes the arguments back",
+                serde_json::from_value::<rmcp::model::JsonObject>(serde_json::json!({
+                    "type": "object",
+                    "properties": { "text": { "type": "string" } }
+                }))
+                .expect("schema map"),
+            )];
+            std::future::ready(Ok(rmcp::model::ListToolsResult::with_all_items(tools)))
+        }
+
+        fn call_tool(
+            &self,
+            request: CallToolRequestParams,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> impl std::future::Future<Output = Result<rmcp::model::CallToolResponse, RmcpError>>
+               + rmcp::service::MaybeSendFuture
+               + '_ {
+            let started = self.started.lock().unwrap().take();
+            if let Some(tx) = started {
+                let _ = tx.send(());
+            }
+            let delay_ms = self.delay_ms;
+            async move {
+                if delay_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                }
+                let args = request.arguments.unwrap_or_default();
+                let text = serde_json::to_string(&args).unwrap_or_else(|_| "{}".into());
+                Ok(rmcp::model::CallToolResponse::Complete(
+                    CallToolResult::success(vec![ContentBlock::text(text)]),
+                ))
+            }
+        }
+    }
+
+    /// Build a real rmcp client over a duplex connected to a
+    /// [`DelayedFixtureServer`]. The returned client's fingerprint matches
+    /// `spec_fingerprint(spec)` so the manager's reconnect decision sees an
+    /// up-to-date (or stale, if the spec later changes) connection.
+    async fn fixture_client(
+        spec: &McpServerSpec,
+        delay_ms: u64,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> McpClient {
+        let (server_half, client_half) = tokio::io::duplex(16 * 1024);
+        tokio::spawn(async move {
+            let running = rmcp::serve_server(
+                DelayedFixtureServer {
+                    started: std::sync::Mutex::new(started),
+                    delay_ms,
+                },
+                server_half,
+            )
+            .await
+            .expect("fixture server handshake");
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            drop(running);
+        });
+        let running = AidenClientHandler::default()
+            .serve(client_half)
+            .await
+            .expect("fixture client handshake");
+        McpClient {
+            server_id: spec.server.id.clone(),
+            server_name: spec.server.name.clone(),
+            transport: spec.transport,
+            fingerprint: spec_fingerprint(spec),
+            running,
+        }
+    }
+
+    fn counting_connect(
+        connects: Arc<std::sync::atomic::AtomicUsize>,
+        delay_ms: u64,
+    ) -> ConnectOverride {
+        Box::new(move |spec: &McpServerSpec| {
+            let connects = connects.clone();
+            let spec = spec.clone();
+            async move {
+                connects.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(fixture_client(&spec, delay_ms, None).await)
+            }
+            .boxed()
+        })
+    }
+
+    #[tokio::test]
+    async fn a_slow_tool_call_does_not_hold_the_manager_lock() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // The fixture's call_tool sleeps 300ms, so the call below is still in
+        // flight while we probe the manager.
+        let manager = Arc::new(McpClientManager::with_connect(counting_connect(
+            connects.clone(),
+            300,
+        )));
+        let spec = remote_spec("slow");
+        manager.ensure_connected(&spec).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let call = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .call_tool(
+                        "slow",
+                        "echo",
+                        serde_json::json!({ "text": "x" }),
+                        Duration::from_secs(5),
+                    )
+                    .await
+            })
+        };
+        // Let the call enter the manager and park on the slow remote.
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        // Even while the call is in flight, other manager operations return
+        // immediately instead of waiting for the call to finish.
+        let observed =
+            tokio::time::timeout(Duration::from_millis(100), manager.is_connected("slow"))
+                .await
+                .expect("is_connected must not block behind an in-flight call");
+        assert!(observed);
+        let result = tokio::time::timeout(Duration::from_secs(5), call)
+            .await
+            .expect("call completes")
+            .unwrap()
+            .unwrap();
+        assert!(result.text.contains("text"));
+    }
+
+    #[tokio::test]
+    async fn a_slow_call_on_one_server_does_not_block_another_servers_connect() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(McpClientManager::with_connect(counting_connect(
+            connects.clone(),
+            0,
+        )));
+        manager
+            .ensure_connected(&remote_spec("server-a"))
+            .await
+            .unwrap();
+
+        // Fire a call to server-a that blocks on the (instant) fixture; the
+        // real regression is connect-time: ensure_connected must not hold the
+        // map lock while a connect is in flight. Drive that with a delayed
+        // connect override for server-b.
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let slow_connect: ConnectOverride = {
+            let release_rx = std::sync::Mutex::new(Some(release_rx));
+            Box::new(move |spec: &McpServerSpec| {
+                let release_rx = release_rx.lock().unwrap().take();
+                let spec = spec.clone();
+                async move {
+                    if let Some(rx) = release_rx {
+                        let _ = rx.await;
+                    }
+                    Ok(fixture_client(&spec, 0, None).await)
+                }
+                .boxed()
+            })
+        };
+        let manager_b = Arc::new(McpClientManager::with_connect(slow_connect));
+        let spec_b = remote_spec("server-b");
+        let connect_task = {
+            let manager_b = manager_b.clone();
+            let spec_b = spec_b.clone();
+            tokio::spawn(async move { manager_b.ensure_connected(&spec_b).await })
+        };
+        // Give the connect a chance to start and park on the release channel.
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+        // While server-b's connect is in flight, an unrelated manager operation
+        // (server-a's is_connected) must not block on the connect.
+        let observed = tokio::time::timeout(
+            Duration::from_millis(100),
+            manager_b.is_connected("server-a"),
+        )
+        .await
+        .expect("is_connected must not block behind an in-flight connect");
+        assert!(!observed);
+        let _ = release_tx.send(());
+        connect_task
+            .await
+            .expect("connect task")
+            .expect("ensure_connected succeeds");
+    }
+
+    #[tokio::test]
+    async fn a_changed_spec_reconnects_and_advances_the_generation() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(McpClientManager::with_connect(counting_connect(
+            connects.clone(),
+            0,
+        )));
+
+        let spec_a = remote_spec("docs");
+        manager.ensure_connected(&spec_a).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(manager.connection_generation("docs").await, 1);
+
+        // An unchanged spec reuses the cached connection.
+        manager.ensure_connected(&spec_a).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(manager.connection_generation("docs").await, 1);
+
+        // A changed record (different URL) forces a fresh connection and the
+        // old one is dropped (its transport is cancelled).
+        let spec_b = {
+            let mut spec = spec_a.clone();
+            spec.server.url = Some("https://docs.test/mcp/v2".into());
+            spec.remote = Some(crate::config::RemoteSpec {
+                url: "https://docs.test/mcp/v2".into(),
+                headers: Default::default(),
+            });
+            spec
+        };
+        manager.ensure_connected(&spec_b).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(manager.connection_generation("docs").await, 2);
+        assert_eq!(
+            manager.cached_fingerprint("docs").await.as_deref(),
+            Some(spec_fingerprint(&spec_b).as_str())
+        );
+
+        // Back to the original record → reconnect again (double-checked).
+        manager.ensure_connected(&spec_a).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(
+            manager.cached_fingerprint("docs").await.as_deref(),
+            Some(spec_fingerprint(&spec_a).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_connects_to_the_same_server_both_succeed_with_one_cached() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(McpClientManager::with_connect(counting_connect(
+            connects.clone(),
+            0,
+        )));
+        let spec = remote_spec("docs");
+        let first = {
+            let manager = manager.clone();
+            let spec = spec.clone();
+            tokio::spawn(async move { manager.ensure_connected(&spec).await })
+        };
+        let second = {
+            let manager = manager.clone();
+            let spec = spec.clone();
+            tokio::spawn(async move { manager.ensure_connected(&spec).await })
+        };
+        first.await.expect("first").expect("connected");
+        second.await.expect("second").expect("connected");
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(manager.connected_ids().await, vec!["docs"]);
+        // The cached client is current for the requested spec.
+        assert_eq!(
+            manager.cached_fingerprint("docs").await.as_deref(),
+            Some(spec_fingerprint(&spec).as_str())
+        );
+        // The generation advanced exactly once for the winning connection.
+        assert_eq!(manager.connection_generation("docs").await, 1);
+        // A subsequent ensure_connected finds the cached client (no new spawn).
+        manager.ensure_connected(&spec).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn oversized_tool_results_are_truncated_to_the_bound() {
+        let big = "x".repeat(MAX_MCP_TOOL_RESULT_CHARS * 2);
+        let result = CallToolResult::success(vec![ContentBlock::text(big)]);
+        let normalized = mcp_agent_tool_result(&result, "docs", "read").unwrap();
+        assert!(normalized.text.len() <= MAX_MCP_TOOL_RESULT_CHARS);
+        assert!(normalized.text.ends_with("… [truncated]"));
+
+        // A single under-limit result is untouched.
+        let small = CallToolResult::success(vec![ContentBlock::text("hello")]);
+        let normalized = mcp_agent_tool_result(&small, "docs", "read").unwrap();
+        assert_eq!(normalized.text, "hello");
     }
 }

@@ -250,7 +250,15 @@ impl OnboardingView {
                 match self.machine.advance() {
                     NextOutcome::Advanced => self.persist_after_step(from, cx),
                     NextOutcome::Completed => self.complete_onboarding(cx),
-                    NextOutcome::Blocked => unreachable!("validate() passed"),
+                    // `advance()` never yields `Blocked` (only `next()` does, and
+                    // the wired view calls `advance()` directly after `validate()`).
+                    // Treat the unreachable case as a quiet no-op instead of
+                    // panicking inside an ObjC event callback (panic_cannot_unwind).
+                    NextOutcome::Blocked => {
+                        tracing::error!(
+                            "onboarding advance returned Blocked after a passing validate"
+                        );
+                    }
                 }
                 cx.notify();
             }
@@ -364,7 +372,14 @@ impl OnboardingView {
                         match this.machine.advance() {
                             NextOutcome::Advanced => {}
                             NextOutcome::Completed => this.complete_onboarding(cx),
-                            NextOutcome::Blocked => unreachable!("validated before the write"),
+                            // Same invariant as `on_next_pressed`: `advance()`
+                            // never yields Blocked. Stay panic-free on the
+                            // foreground update dispatched from this task.
+                            NextOutcome::Blocked => {
+                                tracing::error!(
+                                    "onboarding advance returned Blocked after the provider write"
+                                );
+                            }
                         }
                         cx.notify();
                     });
@@ -410,13 +425,30 @@ impl OnboardingView {
 
     /// Queue the first-run marker into settings.json, then run the completion
     /// callback and emit the event.
+    ///
+    /// Two ordering rules keep the completion path crash/race-free:
+    ///
+    /// 1. The marker is written BEFORE the callback runs. The callback opens
+    ///    the main window; if a quit lands right after "Start using Aiden",
+    ///    a fire-and-forget marker write could be lost and onboarding would
+    ///    reappear on the next launch.
+    ///
+    /// 2. The callback is deferred out of the current update cycle. gpui
+    ///    takes a window out of the app's window map for the duration of any
+    ///    event dispatch (`update_window_id` → `windows.get_mut(id)?.take()?`),
+    ///    and the callback closes THIS window (`handle.update(remove_window)`)
+    ///    before opening the main one. Invoked synchronously from a button /
+    ///    key handler on this window, that nested `handle.update` fails with
+    ///    "window not found" and the onboarding window stays open on top of
+    ///    the main window — both visible at once. Deferring runs the callback
+    ///    at the end of the effect cycle, after this window is back in the map.
     fn complete_onboarding(&mut self, cx: &mut Context<Self>) {
         if self.completed_emitted {
             return;
         }
         self.completed_emitted = true;
         let stores = self.stores.clone();
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             let _ = cx
                 .background_spawn(async move {
                     let mut patch = serde_json::Map::new();
@@ -424,15 +456,19 @@ impl OnboardingView {
                         ONBOARDING_COMPLETE_KEY.to_string(),
                         serde_json::Value::String("true".into()),
                     );
-                    let _ = stores.config.set_settings(&patch, &|| true);
+                    stores.config.set_settings(&patch, &|| true)
                 })
                 .await;
+            this.update(cx, |this, cx| {
+                if let Some(callback) = this.on_complete.take() {
+                    cx.defer(move |cx| callback(cx));
+                }
+                cx.emit(OnboardingEvent::Completed);
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
-        if let Some(callback) = self.on_complete.take() {
-            callback(cx);
-        }
-        cx.emit(OnboardingEvent::Completed);
     }
 
     /// Apply the machine's appearance config to the running theme (live

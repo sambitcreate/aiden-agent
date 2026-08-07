@@ -4,6 +4,56 @@
 //! opens either the onboarding flow (first run) or the main window. The
 //! onboarding completion callback closes the onboarding window and opens the
 //! main window; the persisted appearance is applied by the chat service.
+//!
+//! # Runtime contract: tokio from GPUI context
+//!
+//! GPUI runs everything on its own event loop + background executor. Those
+//! threads do **not** carry a tokio runtime guard, so calling any tokio API
+//! that needs the current thread's runtime handle will panic with
+//! `"there is no reactor running, must be called from the context of a Tokio
+//! 1.x runtime"` — and, because GPUI is driven from inside ObjC callbacks
+//! (the `NSApplication` run loop), Rust cannot unwind, so the panic becomes a
+//! `SIGABRT` that kills the app. See `main.rs`'s panic hook for how these are
+//! captured.
+//!
+//! From any GPUI context (a `render`/event handler, or a `cx.spawn` /
+//! `cx.background_spawn` future), you MUST NOT call:
+//!
+//! - `tokio::spawn(...)` and `tokio::task::spawn_blocking(...)` — they read
+//!   `Handle::current()`, which panics with no guard.
+//! - `tokio::time::sleep` / `tokio::time::interval` / `tokio::time::timeout` —
+//!   they register with the timer driver, which is absent on GPUI threads.
+//! - `tokio::net::*` / `tokio::fs::*` — same IO-driver dependency.
+//! - `tokio::runtime::Handle::current()` — panics outright.
+//! - A blocking runtime's `block_on(...)` — risks deadlocking the foreground.
+//!
+//! ## Correct patterns
+//!
+//! 1. CPU/disk/network work that needs tokio goes through the bridge:
+//!    `gpui_tokio_bridge::Tokio::spawn(cx, fut)` runs `fut` on the dedicated
+//!    tokio runtime registered by `gpui_tokio_bridge::init(cx)` in `main`, and
+//!    surfaces the result as a GPUI `Task<Result<R, JoinError>>`. Inside `fut`
+//!    there IS a tokio guard, so nested `spawn`/`spawn_blocking`/timers/IO are
+//!    fine. The original `PillCoordinator` crash (commit 24e5d57) was exactly a
+//!    violation of this: `PillCoordinator::new` called bare `tokio::spawn` from
+//!    the GPUI foreground. `PillCoordinator::new` now returns the watcher
+//!    future and the caller spawns it via the bridge.
+//!
+//! 2. Foreground (`cx.spawn`) tasks must contain ONLY executor-agnostic
+//!    futures: GPUI's own primitives, plain `async`/`await`, and — yes —
+//!    `tokio::sync::mpsc`/`watch`/`oneshot` receivers (their `poll_*` is
+//!    purely waker-based and crosses executors fine). They must NOT await any
+//!    tokio-driver future. The standard shape is: a `Tokio::spawn` "driver"
+//!    owns the tokio work and a `cx.spawn` "watcher" drains the channel it owns
+//!    into entity updates (see `services::chat_service` stream wiring and
+//!    `workspace::state::WorkspaceState::start_poll`).
+//!
+//! 3. At shutdown (no runtime guaranteed), use the dedicated blocking variants
+//!    rather than the async ones (see `LiveAudioSource::stop_capture_blocking`).
+//!
+//! When in doubt: anything that touches `tokio::{spawn, task::spawn_blocking,
+//! time, net, fs}` belongs behind a `Tokio::spawn(cx, ..)` — never on the GPUI
+//! foreground, and never inside a `cx.spawn`/`cx.background_spawn` body.
 
 mod app;
 mod approvals;

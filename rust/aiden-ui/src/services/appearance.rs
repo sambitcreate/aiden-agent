@@ -53,7 +53,16 @@ pub fn variant_for(config: &AppearanceConfig, scheme: Scheme) -> &ThemeVariantCo
 pub fn build_theme_config(variant: &ThemeVariantConfig, scheme: Scheme, name: &str) -> ThemeConfig {
     let tokens = resolve_theme_tokens(variant, scheme, false);
     let json = theme_config_json(&tokens, name, theme_mode(scheme));
-    serde_json::from_value(json).expect("aiden theme config must parse as a gpui ThemeConfig")
+    // The JSON is projected from our own token map, so a parse failure means a
+    // token-name drift or a gpui-component schema change. `build_theme_config`
+    // runs from appearance apply paths that originate in ObjC callbacks (the
+    // sidebar mode toggle), where a panic becomes a panic_cannot_unwind
+    // SIGABRT. Fall back to the default theme + a logged error instead of
+    // aborting the app.
+    serde_json::from_value(json).unwrap_or_else(|error| {
+        tracing::error!("aiden theme config failed to parse as a gpui ThemeConfig: {error}");
+        ThemeConfig::default()
+    })
 }
 
 fn color(tokens: &BTreeMap<String, String>, key: &str) -> serde_json::Value {

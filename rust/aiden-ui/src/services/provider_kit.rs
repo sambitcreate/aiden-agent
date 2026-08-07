@@ -316,6 +316,14 @@ pub async fn drive_stream(
         }
         send_flush(&mut reducer, &tx);
 
+        // Defensive: a provider stream that ended without a terminal event
+        // (no Done/Error arrived) must not be mistaken for a successful empty
+        // turn — surface it as a failure so partial content is preserved and
+        // the user sees an error banner instead of a silent truncation.
+        if reducer.failure.is_none() && reducer.final_message.is_none() {
+            reducer.fail("Stream ended without a terminal event.");
+        }
+
         if reducer.failure.is_some() {
             let timeline = projector.finish(TerminalTimelineStatus::Failed);
             let _ = tx.send(StreamMsg::Timeline {
@@ -489,13 +497,16 @@ async fn execute_tool_call(
 }
 
 /// Resolve a stored API key for the provider (keychain access — call on a
-/// background thread, never the GPUI foreground).
+/// background thread, never the GPUI foreground). Keyless providers (local
+/// runtimes like LM Studio / Ollama) resolve to the process-only compatibility
+/// token so the transports do not refuse to build a keyless request — the
+/// transports require a non-empty key or an auth header.
 pub fn resolve_api_key(
     keys: &aiden_data::secret_map::ProviderKeysStore,
     provider: &ConfiguredProvider,
 ) -> Option<String> {
     if !provider.needs_key {
-        return None;
+        return Some(aiden_providers::catalog::PI_AUTH_COMPATIBILITY_TOKEN.to_string());
     }
     keys.get(&provider.id).ok().flatten()
 }
@@ -504,6 +515,68 @@ pub fn resolve_api_key(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// A trivial in-memory cipher so `ProviderKeysStore` is constructible in
+    /// tests without touching the macOS Keychain.
+    #[derive(Default)]
+    struct MemoryCipher(std::sync::Mutex<HashMap<String, String>>);
+
+    impl aiden_data::secret_map::SecretCipher for MemoryCipher {
+        fn is_encryption_available(&self) -> bool {
+            true
+        }
+        fn encrypt_string(
+            &self,
+            account: &str,
+            value: &str,
+        ) -> Result<Vec<u8>, aiden_data::secret_map::SecretCipherError> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(format!("encrypted:{value}").into_bytes())
+        }
+        fn decrypt_string(
+            &self,
+            account: &str,
+            value: &[u8],
+        ) -> Result<String, aiden_data::secret_map::SecretCipherError> {
+            let text = String::from_utf8_lossy(value);
+            if !text.starts_with("encrypted:") {
+                return Err(aiden_data::secret_map::SecretCipherError::NeedsRotation);
+            }
+            let plaintext = text.trim_start_matches("encrypted:").to_string();
+            let vaulted = self.0.lock().unwrap().get(account).cloned();
+            match vaulted {
+                Some(stored) if stored == plaintext => Ok(plaintext),
+                _ => Err(aiden_data::secret_map::SecretCipherError::UnrecognizedFormat),
+            }
+        }
+    }
+
+    fn key_store() -> aiden_data::secret_map::ProviderKeysStore {
+        use aiden_data::secret_map::SecretCipher;
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: std::sync::Arc<dyn SecretCipher> = std::sync::Arc::new(MemoryCipher::default());
+        aiden_data::secret_map::ProviderKeysStore::new(
+            dir.path().to_path_buf(),
+            "aiden-test",
+            cipher,
+        )
+    }
+
+    fn keyed_provider(id: &str, needs_key: bool, has_key: bool) -> ConfiguredProvider {
+        ConfiguredProvider {
+            id: id.into(),
+            label: id.into(),
+            kind: ProviderKind::Openai,
+            base_url: "http://127.0.0.1:1234/v1".into(),
+            models: vec!["m1".into()],
+            default_model: None,
+            needs_key,
+            has_key,
+        }
+    }
 
     fn user(role: ChatRole, content: &str) -> ChatMessage {
         ChatMessage {
@@ -589,6 +662,34 @@ mod tests {
         let back = ModelSelection::from_settings(&value).expect("parses back");
         assert_eq!(back, selection);
         assert!(ModelSelection::from_settings(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn keyless_providers_resolve_a_compatibility_token() {
+        // A keyless local runtime (LM Studio / Ollama) must still produce a
+        // non-empty key value so the OpenAI-completions transport does not
+        // refuse the request with "No API key for provider".
+        let keyless = keyed_provider("custom:lmstudio", false, false);
+        let keys = key_store();
+        assert_eq!(
+            resolve_api_key(&keys, &keyless).as_deref(),
+            Some(aiden_providers::catalog::PI_AUTH_COMPATIBILITY_TOKEN)
+        );
+    }
+
+    #[test]
+    fn keyed_providers_resolve_the_stored_key() {
+        let keyed = keyed_provider("anthropic", true, true);
+        let keys = key_store();
+        keys.set(&keyed.id, "secret-key-1").unwrap();
+        assert_eq!(
+            resolve_api_key(&keys, &keyed).as_deref(),
+            Some("secret-key-1")
+        );
+        // A keyed provider with no stored key resolves to None (the transport
+        // then reports the missing-key error to the user).
+        let missing = keyed_provider("openai", true, false);
+        assert_eq!(resolve_api_key(&keys, &missing), None);
     }
 
     /// An assistant message whose only content block is a tool call.

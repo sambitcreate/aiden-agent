@@ -51,6 +51,9 @@ pub struct AnthropicAccumulator {
     stop_reason: StopReason,
     /// A transport-level failure to surface as a terminal error event.
     error: Option<String>,
+    /// Set when `message_stop` is processed; `finish` relies on it to detect
+    /// a connection dropped mid-stream (EOF without a terminal event).
+    message_stop_seen: bool,
 }
 
 impl Default for AnthropicAccumulator {
@@ -87,6 +90,7 @@ impl Default for AnthropicAccumulator {
             blocks: Vec::new(),
             stop_reason: StopReason::Stop,
             error: None,
+            message_stop_seen: false,
         }
     }
 }
@@ -392,10 +396,29 @@ impl AnthropicAccumulator {
                 "message_stop without message_start".to_string(),
             ));
         }
+        self.message_stop_seen = true;
         self.message.stop_reason = self.stop_reason;
         Ok(Some(AssistantMessageEvent::Done {
             reason: self.stop_reason,
             message: self.message.clone(),
+        }))
+    }
+
+    /// Finish the stream: when the connection closed before `message_stop`
+    /// arrived (a dropped connection or a provider truncation), emit a
+    /// terminal `Error` event carrying the partial message so consumers do not
+    /// mistake a truncated generation for a complete one. Streams that never
+    /// produced a `message_start` emit nothing (they never had content).
+    pub fn finish(&mut self) -> Result<Option<AssistantMessageEvent>, ProviderError> {
+        if self.message_stop_seen || !self.started {
+            return Ok(None);
+        }
+        self.message.stop_reason = StopReason::Error;
+        self.message.error_message =
+            Some("Stream ended before message_stop (connection dropped)".to_string());
+        Ok(Some(AssistantMessageEvent::Error {
+            reason: StopReason::Error,
+            error: self.message.clone(),
         }))
     }
 
@@ -427,7 +450,8 @@ impl AnthropicAccumulator {
 // ===========================================================================
 
 /// Parse a complete SSE byte stream into normalized events (testable without
-/// network).
+/// network). A stream that ends before `message_stop` (dropped connection)
+/// produces a terminal `Error` event carrying the partial message.
 pub fn parse_anthropic_sse(input: &[u8]) -> Result<Vec<AssistantMessageEvent>, ProviderError> {
     let mut accumulator = AnthropicAccumulator::new();
     let mut events = Vec::new();
@@ -435,6 +459,9 @@ pub fn parse_anthropic_sse(input: &[u8]) -> Result<Vec<AssistantMessageEvent>, P
         if let Some(event) = accumulator.step(&event, &data)? {
             events.push(event);
         }
+    }
+    if let Some(event) = accumulator.finish()? {
+        events.push(event);
     }
     Ok(events)
 }
@@ -512,26 +539,38 @@ impl Provider for AnthropicProvider {
         let accumulator = AnthropicAccumulator::new();
 
         let stream = futures::stream::unfold(
-            (source, accumulator),
-            |(mut source, mut accumulator)| async move {
+            (source, accumulator, false),
+            |(mut source, mut accumulator, mut finished)| async move {
                 loop {
+                    if finished {
+                        return None;
+                    }
                     match source.next().await {
                         Some(Ok(reqwest_eventsource::Event::Open)) => continue,
                         Some(Ok(reqwest_eventsource::Event::Message(message))) => {
                             if let Some(event) =
                                 accumulator.step(&message.event, &message.data).transpose()
                             {
-                                return Some((event, (source, accumulator)));
+                                return Some((event, (source, accumulator, finished)));
                             }
                             continue;
                         }
                         Some(Err(err)) => {
+                            finished = true;
                             return Some((
                                 Err(ProviderError::Stream(err.to_string())),
-                                (source, accumulator),
+                                (source, accumulator, finished),
                             ));
                         }
-                        None => return None,
+                        None => {
+                            // Connection closed: flush the terminal event
+                            // (an Error when message_stop never arrived).
+                            let terminal = accumulator.finish().ok().flatten();
+                            if let Some(terminal) = terminal {
+                                return Some((Ok(terminal), (source, accumulator, true)));
+                            }
+                            return None;
+                        }
                     }
                 }
             },

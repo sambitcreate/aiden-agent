@@ -1,3 +1,188 @@
+### 2026-08-07 — MCP client + subagent runtime deep audit (crash/hang/security fixes)
+
+- **`aiden-mcp::client`**: `McpClientManager` no longer holds the global map
+  lock across awaits — clients are `Arc`-shared and cloned out under the lock, so
+  a 60s tool call (or a slow stdio connect) can no longer serialize every other
+  server or stall a second chat generation. `ensure_connected` connects outside
+  the lock (double-checked insert) and now reconnects when the server record's
+  canonical fingerprint (`spec_fingerprint`, transport + credential snapshot)
+  changes — a reconfigured command/URL/env/header/preset key no longer leaves a
+  stale process (and stale credentials) serving forever. Tool results are capped
+  at `MAX_MCP_TOOL_RESULT_CHARS` (200k) so a verbose server cannot blow up the
+  transcript. Tests: cross-server non-blocking probe, connect-during-call probe,
+  reconnect-on-spec-change, concurrent-connect, fingerprint determinism (no
+  secret leakage), truncation.
+- **`aiden-subagents::shell_runner`**: the timed-out path never killed the
+  command — the deadline arm broke the loop but the cleanup only killed on
+  overflow/cancel, so `child.wait()` blocked for the command's full remaining
+  lifetime (e.g. `sleep 5` with a 100ms timeout stalled 5s; the pre-existing
+  `timeout_produces_timed_out_outcome` test was silently slow/flaky). Cleanup now
+  kills the whole process group (`process_group(0)` + `killpg`, fallback
+  `child.kill()`) for timeout/overflow/cancel, and the post-exit pipe drain is
+  bounded by a 1s grace period so an orphaned grandchild holding the pipes cannot
+  stall the caller indefinitely. `uuid_like()` now mixes a process-wide atomic
+  counter into the time seed — two concurrent shell runs (or parallel tests) in
+  the same clock tick collided on the private temp dir ("private tree failed").
+- **`aiden-ui::approvals::approval_bridge`**: `decide` on a dead entry (runner
+  cancelled after `resolve` took the receiver) now removes the leaked pending
+  card; a stale never-resolvable approval no longer lingers in the queue.
+- **`aiden-ui::panels::subagents_panel`**: refreshes are coalesced through a
+  `RefreshGate` (the 2s tick can fire during a slow up-to-8 MiB `runs.json`
+  read), and a refresh that outlives a chat switch no longer applies stale
+  results for the previous scope.
+- **Verified-by-test (no change needed)**: authority digest stability across
+  restarts even with reordered persisted JSON keys; nested self-spawn + depth
+  caps; empty/null-byte shell command rejection; run-store V2 corrupted file
+  fails closed preserving evidence (no crash); workspace path sandboxing rejects
+  `../../etc/passwd` escapes on both executors (new traversal test battery).
+
+### 2026-08-07 — GPUI port: remaining services (provider auth flow, updater provider, MCP credential cleanup, connection caches, Gemini context cache, appearance preview, model pad, document owner)
+
+- **App updater** (`rust/aiden-mac`): `updater_feed.rs` — the pure electron-updater
+  generic-feed core (strict JSON feed parse, artifact selection, sha-256 download
+  verification, feed/artifact size caps; always compiled + tested, no network);
+  `feed_update_provider.rs` behind the new `update-feed` cargo feature — a real
+  `FeedUpdateProvider` implementing the existing `UpdateProvider` seam (fetch →
+  channel policy via `should_offer_update` → download → verify → stage), with the
+  quit-and-install step defined as an `UpdateInstaller` trait the GPUI binary wires
+  later (TS `autoUpdater.quitAndInstall`). FeedClient is injectable; tests never
+  touch the network. Default builds stay feed-free.
+- **provider-auth-flow-core** → `rust/aiden-providers/src/auth_flow.rs` (~1.2k LOC +
+  ~1.5k test): the full interactive auth coordinator — single global flow slot
+  owned by (owner id, document id), prompt/event DTO contract, select-option
+  mapping, https-only external URLs, sanitized error classification + diagnostics,
+  per-prompt abort, bounded flow timeout + auth-cleanup window, credential-commit
+  point of no return, logout/shutdown waits. 27 tests mirror the TS suite
+  (ownership fencing, token redaction, timeout/cleanup races, late-credential
+  suppression, commit/finishing, shutdown waits).
+- **provider-auth-owner** → `rust/aiden-agent/src/document_owner.rs`: the
+  renderer-document-owner engine behind provider-auth-owner.ts — epoch-based
+  document capture, navigation/process-loss/destroyed invalidation (once), send
+  fencing, one-throwing-listener isolation. 7 tests against an Electron-free
+  `RendererWebContents` trait.
+- **mcp-credential-cleanup-core** → `rust/aiden-mcp/src/credential_cleanup.rs`:
+  secret-map sha-256 hashing, credential/runtime connection snapshots, strict
+  journal parsing, cleanup-after-config resolution (7 tests).
+- **generation-bound-connection-cache** → `rust/aiden-mcp/src/connection_cache.rs`:
+  `GenerationBoundConnectionCache` + `GenerationBoundConnectionAttempts` with
+  supersede-close-after-ready semantics (7 tests; fixes a parking_lot re-entrant
+  deadlock and the TS-fire-and-forget async semantics via spawn).
+- **gemini-context-cache** → `rust/aiden-providers/src/gemini_cache.rs` (~0.9k LOC):
+  deterministic bounded workspace snapshot (metadata only, never contents),
+  fingerprint-keyed cache with 1h TTL / backoff / expiry-margin, injectable
+  `GeminiFetch`, bounded deadlines, per-workspace 8-cache eviction, invalidation +
+  shutdown remote deletes (10 tests; credentials header-only, never in URLs).
+- **provider-list-core** → `rust/aiden-providers/src/list.rs`: Codex virtual
+  provider merge, reserved-id collision filtering, status-channel forwarding (4
+  tests). **appearance-preview-core** → `aiden-core/appearance_preview.rs` (2
+  tests); **model-pad-layout** → `aiden-core/model_pad.rs` (4 tests).
+- Scan of `main/services/*.ts` confirmed already-ported: provider-config-migration
+  (`aiden-data::portable_config::migrate_pi_provider_config`), mcp-presets
+  (`aiden-mcp::config`), profile-share-core (`aiden-data::profile` PNG validation),
+  secret-map, appearance preview snapshot type. No standalone telemetry/portability
+  service exists (usage accounting covers privacy-safe analytics).
+- Workspace: added `aiden-mac` to `[workspace.dependencies]` (aiden-ui references
+  it via `aiden-mac.workspace = true`; without the entry the workspace manifest
+  would not load). New deps: aiden-providers gains `aiden-git` + `uuid`;
+  aiden-mac gains `sha2` + `tempfile`; aiden-mcp gains `parking_lot`.
+- Verified: `cargo test --workspace --no-fail-fast` (1225 passed), `cargo clippy
+  --workspace --all-targets -- -D warnings` (clean), `cargo fmt --all -- --check`
+  (clean), plus `cargo test/clippy -p aiden-mac --features update-feed` (84 passed,
+  clean) and `cargo check --workspace --all-features`.
+
+### 2026-08-07 — GPUI port: workspace context bar (workspace picker, git chips/dialogs, open-in-editor)
+
+- New `rust/aiden-ui/src/workspace/` module: the chat-pane header bar renders
+  three chips — workspace (name/path → `WorkspacePicker` overlay with the
+  recent-workspaces list from the portable-config `workspaces` section +
+  "Choose folder…" via `gpui::PathPromptOptions`/`prompt_for_paths`, the
+  native macOS open panel), git (branch name, dirty dot, ahead/behind via
+  `aiden_git::status::info`, refreshed on chat-view focus + 15 s poll while
+  visible, → `BranchPicker` with switch/create branches through
+  `aiden_git::branch::{checkout,create_branch}` and Commit/Push entries), and
+  open-in-editor (editors detected on the background through
+  `aiden_data::external_editors::EditorCache`, argv-only `open -b` launch).
+  `CommitDialog` uses the `aiden_git::diff::review` snapshot + numstat summary
+  (`commit_selection_description`), commits via `aiden_git::commit::commit`
+  and toasts the subject/branch; `PushDialog` uses `push_capability`
+  (upstream detection + ahead count), pushes via `aiden_git::push::push`, and
+  hides force-with-lease behind a confirm (type the destination branch name;
+  the lease pin resolves from `refs/remotes/<remote>/<dest>`). All git and
+  editor detection runs on the tokio bridge (`gpui_tokio_bridge::Tokio` — the
+  task is created before the `cx.spawn` continuation because continuation
+  `cx` is an `AsyncApp`), never the foreground. Git errors render inline with
+  `GitErrorCode` taxonomy hints (`git_error_hint`).
+- `rust/aiden-ui/src/services/chat_service.rs` (additive): `workspace` /
+  `workspaces` fields, boot loads the list and activates the most-recently
+  updated one, `select_workspace` / `add_workspace_from_folder`
+  (canonicalize + basename name + `ask` permission, uuid-like id) /
+  `workspace_folder`; new chats carry the workspace id.
+- Shell wiring (app.rs / chat/chat_pane.rs): the bar renders above the
+  transcript; `AppState` mirrors service workspace state into
+  `WorkspaceState::set_mirror` (poll restarts only on folder change),
+  routes `WorkspaceEvent::{SelectWorkspace, AdoptFolder, Notify}`, starts
+  the terminal drawer in the workspace folder and re-homes an existing one
+  via a new additive `TerminalDrawer::set_cwd`; chat-view focus refreshes
+  the git chip.
+- Native dialog approach: **gpui built-in `prompt_for_paths`** (present in
+  gpui 0.2.2 `App`) — no `rfd` dependency added.
+- Tests: 8 new unit tests in `workspace/state.rs` (git-chip formatting
+  incl. detached/unborn/pluralization, branch ordering with current pinning,
+  commit selection descriptions, editor ranking passthrough + Finder last,
+  case-insensitive workspace/branch filters, `GitErrorCode` hints,
+  `truncate_path_middle` port). Live (not stubbed) git/editor paths behind
+  the `WorkspaceState` methods.
+- Verified: `cargo test -p aiden-ui` (136 passed), `cargo clippy -p aiden-ui
+  --all-targets -- -D warnings` (clean), `cargo fmt -p aiden-ui`, `cargo
+  check --workspace` (passes), 10 s smoke run of `target/debug/aiden` with
+  no stderr/panics. Known limit: an already-open terminal keeps its original
+  cwd until the workspace changes (the PTY is not migrated on first open).
+
+### 2026-08-07 — GPUI port: aiden-computer-use crate (Computer Use + Apple Foundation Models)
+
+- Added `rust/aiden-computer-use` to the workspace: the broker client, the
+  cua-driver MCP session protocol, and the Apple Foundation Models helper
+  client (ports of `main/services/computer-use/*` and
+  `main/services/foundation-models-connection*.ts`; the Swift helper and the
+  native Rust broker are untouched).
+- **Broker/bridge client** (`contract.rs`, `jsonrpc.rs`, `lines.rs`,
+  `socket.rs`, `process.rs`, `session.rs`, `host.rs`, `binary.rs`): exact
+  replication of the native broker wire protocol — the pinned 20-tool
+  allow-list (`start_session … set_value`), line-delimited JSON-RPC 2.0 with
+  the broker guard's message classification (`process_client_message` /
+  `process_driver_message`, including the `check_permissions{prompt:true}` →
+  recheck rewrite and local `-32601` denials), 1 MiB client / 64 MiB server
+  frame bounds, the `{"type":"ready","protocolVersion":2}` readiness frame,
+  socket confinement to `/tmp/acu-*` with `control.sock`/`lease.sock` fixed
+  names, and the 25 ms retry/backoff connect loop. `CuaDriverSession` is the
+  MCP client over the bridge's stdio (initialize → tools/list → start_session
+  → tool calls) with per-call timeouts, serialized queue, session-id
+  injection, and the broken/closed lifecycle. `host.rs` (macOS) spawns the
+  broker via `open` and the bridge with Node-compatible fd 3 (IPC socketpair)
+  / fd 4 (readiness pipe); `binary.rs` pins the driver sha-256 + signing
+  requirements.
+- **Pure policy logic**: `safety.rs` (action normalization, blocked key/text
+  payloads, approval summaries, per-generation one-use `ComputerUseGrantLedger`
+  with sorted-key canonical JSON fingerprints), `generation_gate.rs`,
+  `settings_core.rs` (durable disable-as-kill-switch coordinator, with a real
+  `aiden_data::ConfigStore` wiring for `computerUseEnabled`), `status_core.rs`
+  (revision-gated cached readiness service with fixed error-status mapping).
+- **Foundation Models client** (`foundation_models.rs`): the file-exchange
+  protocol (request.json ≤20 KB / response.json ≤64 KB / process-id / cancelled
+  under a `aiden-foundation-models-*` 0700 tempdir, `open -W -n` spawner,
+  helper pid SIGTERM termination, bounded stdout/stderr) plus the connection
+  state machine (platform gate at macOS 26 + arm64, single-flight cached
+  status, title generation with model_unavailable/assets_unavailable cache
+  downgrade).
+- Tests: 87 lib tests (safety/gates/settings/status/FM ported from the TS
+  suites, JSON-RPC framing roundtrips, protocol message shapes, FM fixture
+  transcripts, reconnect/backoff) + 4 integration tests against an in-process
+  mock broker on a tempdir Unix socket speaking the guarded wire protocol. No
+  real broker/driver/helper launches in tests.
+- Verification: `cargo test -p aiden-computer-use` (91), `cargo clippy -p
+  aiden-computer-use --all-targets -- -D warnings`, `cargo fmt -p
+  aiden-computer-use -- --check`, and `cargo check --workspace` all pass.
+
 ### 2026-08-07 — GPUI port: shell integration wiring (Phase 6 wiring)
 
 - Wired the previously standalone `rust/aiden-ui` surfaces into the app shell:
@@ -773,3 +958,25 @@ Major milestones only. Day-to-day changelog noise lives in git.
 - Verified: `cargo test -p aiden-git -p aiden-data` (157 passed),
   `cargo clippy -p aiden-git -p aiden-data --all-targets -- -D warnings` (clean),
   `cargo fmt --check` (clean), `cargo check --workspace` (passes).
+
+### 2026-08-07 — GPUI port: main-process services (web-search, artificial-analysis, approvals, quit/readiness, dev-log, llm-client orchestration)
+
+- `rust/aiden-providers` (2 modules, ~1.9k LOC + ~1.1k test, 174 crate tests): `web_search.rs` (Exa `POST /search` client — byte-faithful wire body verified against a recorded fixture, result normalization capped at 1200 chars, injectable transport so tests never hit the network, key via the existing `ApiKeyResolver` pattern under the `exa` credential id; default 20s timeout / zero retries, matching the TS) and `artificial_analysis.rs` (all four `artificial-analysis-*.ts` cores: catalog types + `parseArtificialAnalysisUserCache` validation, percentiles with average-rank ties, paginated Free-endpoint fetch with page/byte/model caps, `ArtificialAnalysisRuntime` with the TS action/state mutex split, `FileArtificialAnalysisCacheStore` atomic 0600 writes, IPC-safe action wrapper; the explicit-user-action contract is encoded in the type system via a `UserInitiated` token constructible only through `UserInitiated::explicit()`, and the user's key is never bundled — it resolves through the resolver under the `artificial-analysis` credential id). Added `async-trait`, `chrono` deps + `tempfile` dev-dep.
+- `rust/aiden-agent` (3 modules, ~1.5k LOC + ~1.3k test, 91 crate tests): `tool_approval.rs` (ToolApprovalCoordinator with synchronous publish + one-shot `PendingApprovalRequest::wait`, owner-document fencing, abort-signal expiry), `superseding_task.rs` (generation gate — waiters follow replacements, stale failures never displace the current generation, generic `E: Clone` error), `llm_client.rs` (essential llm-client.ts orchestration: `toPiMessages` message assembly, the `generation-runtime.ts` pure contract — thinking resolution/image gating/terminal fallbacks/bounded cleanup —, `TimelineProjector` against `aiden-core::GenerationTimeline`, `ChatTurnAdmission`, `startGenerationAndMaybeTitle`, and a `GenerationManager` with stream/chat admission, cancel/shutdown drains, and a usage-capture hook). `llm-client.ts` was confirmed to be **Pi agent-loop glue**, not a client.
+- `rust/aiden-data` (1 module, ~0.4k LOC, 7 tests): `dev_log.rs` (dev-log.ts: serialized append, 2 MB rotation to `.prev.log`, 4096-char line cap, byte-faithful secret redaction).
+- `rust/aiden-mac` (2 modules, ~0.6k LOC, 12 tests): `quit_barrier.rs` (renderer-close barrier over a `RendererQuitWindow` trait with a first-wins outcome slot, plus the pure quit decision — in-flight generations block unless forced) and `readiness.rs` (renderer-readiness-core.ts adapted to service-warmup gates: generation-following waiters, disposal releases).
+- Workspace: reverted the uncommitted `aiden-subagents` workspace-member addition (its manifest references a non-existent workspace dep and blocks every cargo command); noted for the subagents phase.
+- Verified: `cargo test -p aiden-providers -p aiden-agent -p aiden-data -p aiden-mac` (430 passed), `cargo clippy` on all four with `-D warnings` (clean), `cargo fmt --check` (clean), `cargo check --workspace` (passes).
+
+### 2026-08-07 — GPUI port: live wiring for the chat (usage recording, generation timelines, MCP tools, subagent live source)
+
+- `rust/aiden-ui/src/services/stream.rs`: `StreamReducer` now captures the terminal `Done` message's `aiden_core::Usage` and `ToolCall`s; new `chat_usage_record` maps a core `Usage` into the privacy-safe `UsageRequestRecord` shape (`source: chat`, token breakdown, cost status) — unit-tested (reported/unmetered/local/failed cases). Added `zero_usage_message` for synthesized turns.
+- `rust/aiden-ui/src/services/mcp_tools.rs` (new): bounded chat MCP tool collection (`collect_chat_mcp_tools`, per-server/total caps, failing servers skipped, preset API-key injection via an injected keychain resolver) plus the namespaced dispatch map (`McpToolTarget` server/tool pair). Unit-tested for namespaced round-trip, disabled/unreachable servers, and preset-key injection.
+- `rust/aiden-ui/src/services/provider_kit.rs`: `TurnSnapshot` gains `mcp: Option<McpStreamContext>`; `build_stream_request_with_tools` (additive) puts the tool defs on the wire; `drive_stream` now (a) projects stream events onto an `aiden-agent` `TimelineProjector` (thinking/tool steps published live as `StreamMsg::Timeline`), (b) dispatches model tool calls through `McpClientManager::call_tool` with the namespaced name mapping and appends normalized `ToolResultMessage`s for one follow-up pass (single tool round; multi-round agent loop is a follow-up), and (c) threads the terminal `Usage` through `StreamMsg::Done`. Unit-tested event→timeline projection and tool-dispatch fail-closed.
+- `rust/aiden-ui/src/services/stores.rs`: `Stores` gains a shared `Arc<McpClientManager>`.
+- `rust/aiden-ui/src/services/chat_service.rs`: `GenerationState` gains a live `timeline`; `StreamMsg::Timeline` mirrors it; terminal `Done`/`Error` persist the timeline on the assistant message (`ChatMessageInput.timeline`) and record usage (`source: chat`) into `UsageStore` on the background executor; `send_message` wires `mcp_context()` (enabled servers from the portable config + preset-key resolver).
+- `rust/aiden-ui/src/chat/activity_feed.rs` (new) + `message_list.rs`: port of `activity-feed.tsx`/`agent-steps.ts` — persisted assistant messages render their timeline (thinking/tool trail) above the bubble, and the live stream bubble renders `generation.timeline` (spinner on active steps). Pure step-line/summary logic unit-tested against the renderer contract.
+- `rust/aiden-ui/src/panels/subagents_panel.rs`: `SubagentRunSource` gains `snapshots_for_chat` (default = all); new `LiveRunSource` reads `userData/subagent-runs-v2/runs.json` via the aiden-subagents V2 parser (tolerant fallback to per-snapshot parse; missing/corrupt file → empty state, never demo data); panel tracks `active_chat` (`set_active_chat`) and refreshes snapshots on a 2s cadence while mounted. Parsing/filtering unit-tested.
+- Cargo: `aiden-ui` gains `aiden-agent`, `aiden-subagents`, `aiden-git` workspace deps (+ `tempfile` dev-dep); `aiden-subagents` added to `workspace.dependencies`.
+- Verified: `cargo test -p aiden-ui` (136 passed, incl. ~18 new), `cargo clippy -p aiden-ui --all-targets -- -D warnings` (clean), `cargo fmt -p aiden-ui --check` (clean), `cargo check --workspace` (passes). Remaining degraded behaviors: single-pass MCP tool loop (a second model tool-use round settles with the recorded timeline), usage is only recorded on terminal Done/Error (not user stops), and preset API-key MCP servers need the keychain resolver wired (keyless presets are skipped).
+- `rust/aiden-mac` dictation port (2026-08-07): new `audio` (AVAudioEngine input-tap capture via `objc2-avf-audio` → downmix + linear resample to mono 16 kHz Float32, `AudioCapture` trait + pure resampler unit tests), `dictation_coordinator` (exact port of `dictation-coordinator.ts` — serialized tokio-mutex queue, idle/starting/recording/transcribing/delivering, hide timers, 100k transcript cap; all four TS tests mirrored + 11 more), `sherpa` + `local_models` (Parakeet catalog, GitHub-release tar.bz2 download w/ progress 0–90/90–100 %, `/usr/bin/tar --strip-components=1` extraction, cancel-by-id registry, env-overridable models root) + `local_runtime_status` (Ollama/LM Studio load-state parsers) — all behind a new `dictation` cargo feature (default ON; `--no-default-features` builds clean). `aiden-ui` pill wiring: `pill/live_audio.rs` (`LiveAudioSource` — background-thread capture feeding a shared `CaptureBuffer` for the meter bars + transcription drain), `pill/coordinator.rs` (`PillCoordinator` — broadcast watcher drives capture → sherpa transcribe → paste via `paste.rs`; missing model → exact "Download it in Settings → Voice" error; fake-capture/fake-transcribe tests), and the app shell (`app.rs` `wire_pill_coordinator` — foreground window-command bridge over `PILL_WINDOW`, `PillCommand` channel, live appearance read at open, cancel button → coordinator). sherpa-onnx 1.13.4 verified: crates.io static feature downloads a prebuilt macOS lib at build time and the FFI links/runs. Verified: `cargo test -p aiden-mac` (72), `cargo test -p aiden-ui` (191), `cargo clippy -p aiden-mac --all-targets -- -D warnings` (clean), `cargo check --workspace` (passes). Live dictation is wired in-app (⌘⇧D → record → transcribe → paste); model download UI in Settings → Voice remains a later-phase surface.

@@ -31,6 +31,11 @@ pub const SUBAGENT_SHELL_COMMAND_BYTES: usize = 64 * 1024;
 pub const SUBAGENT_SHELL_STREAM_BYTES: usize = 512 * 1024;
 const RESPONSE_FIXED_BYTES: usize = 164;
 const MAX_PROTOCOL_BYTES: usize = RESPONSE_FIXED_BYTES + SUBAGENT_SHELL_STREAM_BYTES * 2;
+/// Grace period after a timeout/cancel/overflow kill while any remaining pipe
+/// data is drained. The drain is *bounded* so a backgrounded grandchild that
+/// inherited the output pipes (and therefore keeps them open past the kill)
+/// can never stall the caller indefinitely.
+const CLEANUP_GRACE_MS: u64 = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentShellWorkspaceRoot {
@@ -257,6 +262,27 @@ pub struct SubagentShellResponseIdentity {
     pub effect_digest: String,
 }
 
+/// Best-effort kill of the child's whole process group (`process_group(0)` is
+/// set at spawn, so the group id equals the child's pid). A timed-out command
+/// may have backgrounded children that inherited the output pipes; killing
+/// only the direct child would leave them running (and the pipes open).
+#[cfg(unix)]
+fn kill_process_group(child: &tokio::process::Child) -> bool {
+    match child.id() {
+        Some(pid) => {
+            // SAFETY: `killpg` with a valid pid; failure (ESRCH etc.) is
+            // best-effort and reported as false.
+            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) == 0 }
+        }
+        None => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_child: &tokio::process::Child) -> bool {
+    false
+}
+
 /// The in-process execution boundary. Spawns `/bin/zsh -f -c` through tokio
 /// with the C helper's environment scrubbing, stream caps, and process-group
 /// cleanup, then returns the exact AIDSR001 response bytes.
@@ -340,6 +366,8 @@ async fn run_shell_impl(
         .env("NPM_CONFIG_AUDIT", "false")
         .env("ZDOTDIR", "/dev/null")
         .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(_) => {
@@ -363,6 +391,7 @@ async fn run_shell_impl(
     let mut exit_code: Option<u32> = None;
     let mut signal: Option<u32> = None;
     let mut overflow = false;
+    let mut timed_out = false;
     let (mut out_open, mut err_open) = (true, true);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(input.timeout_ms);
     let cancelled = input.cancelled;
@@ -371,6 +400,7 @@ async fn run_shell_impl(
         let mut err_buf = [0u8; 16 * 1024];
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => {
+                timed_out = true;
                 outcome = SubagentShellOutcome::TimedOut;
                 break;
             }
@@ -424,22 +454,35 @@ async fn run_shell_impl(
             }
         }
     }
-    let cleanup = if overflow {
-        outcome = SubagentShellOutcome::OutputLimit;
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        true
-    } else if cancelled {
-        outcome = SubagentShellOutcome::Cancelled;
-        let _ = child.kill().await;
+    // Every non-normal exit path kills the child's process group (falling back
+    // to a direct-child kill) before reaping. The timed-out path MUST kill too:
+    // the loop broke at the deadline while the command was still running, and
+    // waiting for it would block the caller for the command's remaining
+    // lifetime (e.g. `sleep 5` with a 100ms timeout would stall 5s).
+    let needs_kill = overflow || timed_out || cancelled;
+    let cleanup = if needs_kill {
+        if overflow {
+            outcome = SubagentShellOutcome::OutputLimit;
+        } else if cancelled {
+            outcome = SubagentShellOutcome::Cancelled;
+        }
+        if !kill_process_group(&child) {
+            let _ = child.kill().await;
+        }
         let _ = child.wait().await;
         true
     } else {
         child.wait().await.is_ok()
     };
-    // Drain any remaining output after the child exits.
+    // Drain any remaining output after the child exits — bounded, so a
+    // backgrounded grandchild that inherited the output pipes and survived the
+    // group kill can never stall the caller past the grace period.
     let mut remaining = Vec::new();
-    let _ = stdout.read_to_end(&mut remaining).await;
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_millis(CLEANUP_GRACE_MS),
+        stdout.read_to_end(&mut remaining),
+    )
+    .await;
     for byte in remaining {
         if out_bytes.len() < SUBAGENT_SHELL_STREAM_BYTES {
             out_bytes.push(byte);
@@ -512,11 +555,18 @@ fn remove_tree(path: &str) {
 }
 
 fn uuid_like() -> String {
+    // Mix a process-wide monotonic counter into the time seed so concurrent
+    // callers (two subagent shells running in parallel) never derive the same
+    // id from an equal clock reading. A collision would make the second
+    // `create_dir` fail with "private tree failed".
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut bytes = [0u8; 16];
     let mut state = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0x9e37_79b9_7f4a_7c15);
+        .unwrap_or(0x9e37_79b9_7f4a_7c15)
+        ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15);
     for chunk in bytes.chunks_mut(8) {
         state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = state;
@@ -592,6 +642,29 @@ mod tests {
         // Invalid command controls.
         assert!(encode_subagent_shell_request(&SubagentShellRequest {
             command: "echo \u{1b}".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 120_000,
+        })
+        .is_err());
+        // Empty commands are rejected (never executed through /bin/zsh -c "").
+        assert!(encode_subagent_shell_request(&SubagentShellRequest {
+            command: String::new(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 120_000,
+        })
+        .is_err());
+        // Null bytes and other C-string hazards are rejected.
+        assert!(encode_subagent_shell_request(&SubagentShellRequest {
+            command: "echo \0 pwned".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 120_000,
+        })
+        .is_err());
+        assert!(encode_subagent_shell_request(&SubagentShellRequest {
+            command: "printf 'x\r\n'".to_string(),
             effect_digest: digest(),
             nonce: nonce(),
             timeout_ms: 120_000,
@@ -708,6 +781,7 @@ mod tests {
             timeout_ms: 100,
             cancelled: false,
         };
+        let started = std::time::Instant::now();
         let frame = run_subagent_shell(&input, &pinned).await.unwrap();
         let result = decode_subagent_shell_response(
             &frame,
@@ -718,6 +792,53 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.outcome, SubagentShellOutcome::TimedOut);
+        // Regression: the timed-out command must be killed, not awaited.
+        // Before the process-group cleanup, `child.wait()` blocked for the
+        // command's full remaining lifetime (here 5s).
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "timed-out command was left running: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backgrounded_grandchild_cannot_stall_the_runner() {
+        // Regression: a timed-out command with a backgrounded child inheriting
+        // the output pipes must still return promptly. Killing only the direct
+        // child would leave the grandchild holding the pipes open, and the
+        // drain would hang until it exits on its own.
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        let input = SubagentShellRunInput {
+            command: "sleep 60 & wait".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 100,
+            cancelled: false,
+        };
+        let started = std::time::Instant::now();
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        assert_eq!(result.outcome, SubagentShellOutcome::TimedOut);
+        // The group kill + bounded drain must return well under the
+        // grandchild's lifetime (60s); allow generous CI slack.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "runner stalled behind an orphaned grandchild: {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

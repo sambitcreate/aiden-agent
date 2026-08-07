@@ -610,4 +610,78 @@ mod tests {
         );
         assert_eq!(record.status, UsageRequestStatus::Failed);
     }
+
+    #[test]
+    fn out_of_order_events_never_panic_or_double_count() {
+        let mut reducer = StreamReducer::new();
+        // text_end before any text_start/delta: the terminal content wins.
+        reducer.apply(AssistantMessageEvent::TextEnd {
+            content_index: 0,
+            content: "arrived first".into(),
+            partial: partial("arrived first", ""),
+        });
+        assert_eq!(reducer.text, "arrived first");
+        // thinking_end before thinking_start: closes the (inactive) thinking.
+        reducer.apply(AssistantMessageEvent::ThinkingEnd {
+            content_index: 0,
+            content: "think".into(),
+            partial: partial("arrived first", "think"),
+        });
+        assert_eq!(reducer.thinking, "think");
+        assert!(!reducer.thinking_active);
+        // A late delta after the terminal content does not resurrect old text.
+        reducer.apply(AssistantMessageEvent::TextDelta {
+            content_index: 0,
+            delta: "late".into(),
+            partial: partial("arrived firstlate", ""),
+        });
+        assert_eq!(reducer.text, "arrived first");
+        assert!(matches!(reducer.finalize(), StreamTerminal::Done { .. }));
+    }
+
+    #[test]
+    fn done_with_no_prior_content_still_finalizes() {
+        // A `Done` that arrives with no preceding deltas (e.g. a provider that
+        // returns only a terminal event) must produce a successful turn whose
+        // content comes from the terminal message.
+        let mut reducer = StreamReducer::new();
+        reducer.apply(AssistantMessageEvent::Done {
+            reason: StopReason::Stop,
+            message: partial("The answer.", "I checked the docs"),
+        });
+        let flush = reducer.take_flush();
+        assert!(flush.is_none(), "Done is not a delta");
+        match reducer.finalize() {
+            StreamTerminal::Done { message } => {
+                assert_eq!(message_content(&message).0, "The answer.");
+                assert_eq!(message_content(&message).1, "I checked the docs");
+            }
+            other => panic!("expected done, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eof_without_terminal_is_an_error_terminal() {
+        // A stream that just stops (reducer never sees Done or Error) must
+        // finalize as an error, not a success with an empty message.
+        let mut reducer = StreamReducer::new();
+        reducer.apply(AssistantMessageEvent::TextDelta {
+            content_index: 0,
+            delta: "partial".into(),
+            partial: partial("partial", ""),
+        });
+        // The driver's terminal guard (drive_stream) records the failure.
+        reducer.fail("Stream ended without a terminal event.");
+        match reducer.finalize() {
+            StreamTerminal::Error {
+                message,
+                partial_text,
+                ..
+            } => {
+                assert_eq!(message, "Stream ended without a terminal event.");
+                assert_eq!(partial_text, "partial");
+            }
+            other => panic!("expected error, got {other:?}"),
+        }
+    }
 }

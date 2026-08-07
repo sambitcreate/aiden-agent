@@ -742,6 +742,13 @@ impl AppState {
     }
 
     fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The drawer only renders inside the chat view (see `chat_view`).
+        // Toggling it from another view would silently flip its open state
+        // with no visible feedback, and the drawer would pop open (with its
+        // live PTY) the next time the user returns to Chat.
+        if self.view != AppView::Chat {
+            return;
+        }
         let entity = self.terminal_entity(window, cx);
         entity.update(cx, |terminal, cx| terminal.toggle(window, cx));
     }

@@ -1582,6 +1582,33 @@ data: {"candidates":[{"finishReason":"SAFETY"}]}
     }
 
     #[test]
+    fn empty_data_frames_mid_stream_are_tolerated() {
+        // Proxies sometimes emit bare `data:` keepalives; they must not kill
+        // the stream with a JSON parse error.
+        let fixture = br#"data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}
+
+data: 
+
+data:
+data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}
+
+data: {"candidates":[{"finishReason":"STOP"}]}
+"#;
+        let events =
+            parse_google_sse_with_now(GOOGLE_PROVIDER_ID, "gemini-2.5-flash", fixture, NOW)
+                .unwrap();
+        let kinds: Vec<&str> = events.iter().map(kind).collect();
+        assert_eq!(
+            kinds,
+            ["text_start", "text_delta", "text_delta", "text_end", "done"]
+        );
+        let AssistantMessageEvent::TextEnd { content, .. } = &events[3] else {
+            panic!("expected text_end");
+        };
+        assert_eq!(content, "Hello world");
+    }
+
+    #[test]
     fn response_id_is_captured_from_first_chunk() {
         let fixture = br#"data: {"responseId":"resp_abc","candidates":[{"content":{"parts":[{"text":"hi"}]}}]}
 

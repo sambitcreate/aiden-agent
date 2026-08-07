@@ -260,6 +260,13 @@ impl DictationCoordinatorDeps for CoordinatorDepsAdapter {
     }
 
     fn set_timer(&self, callback: Box<dyn FnOnce() + Send>, delay_ms: u64) -> TimerHandle {
+        // Runtime contract: this is only ever invoked from the dictation
+        // coordinator's state machine, which runs inside the pill watcher — and
+        // the watcher is spawned via `gpui_tokio_bridge::Tokio::spawn` (see
+        // `app::wire_pill_coordinator`). So a tokio guard IS present here and
+        // `tokio::spawn` + `tokio::time::sleep` are safe. Do NOT call this impl
+        // from a GPUI foreground/cx.spawn context — see the crate-root runtime
+        // contract in `main.rs`.
         let handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             callback();
@@ -390,6 +397,45 @@ mod tests {
         let (pill, watcher) = pill;
         tokio::spawn(watcher); // tests are #[tokio::test] — runtime is available
         (pill, test_handles)
+    }
+
+    /// Regression guard for the runtime contract (see the crate-root doc in
+    /// `main.rs`): [`PillCoordinator::new`] must NOT touch the tokio runtime,
+    /// because in production it is constructed on the GPUI foreground, which
+    /// carries no tokio runtime guard. Historically `new()` called bare
+    /// `tokio::spawn` internally — which was masked in CI because every other
+    /// test here runs under `#[tokio::test]` (a runtime IS present), so it only
+    /// panicked in the real app (fix: commit 24e5d57).
+    ///
+    /// This is deliberately a plain `#[test]` with NO tokio runtime. If anyone
+    /// reintroduces a `tokio::spawn` / `tokio::time::*` / `spawn_blocking`
+    /// inside `new()`, it will panic here ("there is no reactor running") and
+    /// fail CI instead of crashing the app at runtime.
+    #[test]
+    fn new_does_not_require_a_tokio_runtime() {
+        let handles = FakeCaptureHandles::default();
+        let audio = Arc::new(LiveAudioSource::with_capture_factory(handles.factory()));
+        let (pill, watcher) = PillCoordinator::new(PillCoordinatorDeps {
+            show_pill: Box::new(|| async { Ok(true) }.boxed()),
+            hide_pill: Box::new(|| {}),
+            destroy_pill: Box::new(|| {}),
+            forward: Box::new(|_payload| {}),
+            paste: Some(Arc::new(FakePasteDeps)),
+            log_error: Box::new(|_message, _error| {}),
+            model_id: "regression-model".to_string(),
+            audio,
+            transcribe: None,
+        });
+        // The coordinator is usable immediately and holds the audio source; the
+        // watcher future is the caller's responsibility to spawn on a tokio
+        // runtime. We deliberately do NOT poll/await `watcher` here (that would
+        // need a tokio executor) — only assert construction succeeded.
+        assert!(!pill.audio().is_running());
+        // Dropping both without spawning is safe and requires no runtime: the
+        // event sender drops, so the watcher (if ever driven elsewhere) would
+        // observe the closed channel and exit.
+        drop(watcher);
+        drop(pill);
     }
 
     #[tokio::test]

@@ -404,7 +404,36 @@ pub struct SubagentsPanel {
     pub(crate) loaded: bool,
     /// The active chat the roster is scoped to (live sources filter on it).
     pub(crate) active_chat: Option<String>,
+    /// Coalesces overlapping background refreshes (see [`RefreshGate`]).
+    refresh_gate: RefreshGate,
     _tick: Option<gpui::Task<()>>,
+}
+
+/// Serializes the panel's disk-read refreshes. The 2-second tick can fire
+/// while a previous refresh is still reading the (up to 8 MiB) run store on
+/// the background executor; overlapping reads would pile up detached tasks and
+/// could apply stale results over newer ones. [`RefreshGate`] lets at most one
+/// refresh run at a time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RefreshGate {
+    in_flight: bool,
+}
+
+impl RefreshGate {
+    /// Claim the gate. `Ok(())` means this caller should start a refresh;
+    /// `Err(())` means one is already running and this call is a no-op.
+    fn begin(&mut self) -> Result<(), ()> {
+        if self.in_flight {
+            Err(())
+        } else {
+            self.in_flight = true;
+            Ok(())
+        }
+    }
+
+    fn finish(&mut self) {
+        self.in_flight = false;
+    }
 }
 
 /// Dependencies for [`SubagentsPanel::new`].
@@ -434,6 +463,7 @@ impl SubagentsPanel {
             now: aiden_data::now_millis(),
             loaded: false,
             active_chat: None,
+            refresh_gate: RefreshGate::default(),
             _tick: None,
         };
         this.refresh(cx);
@@ -453,20 +483,34 @@ impl SubagentsPanel {
         self.refresh(cx);
     }
 
-    /// Load snapshots from the source on the background executor.
+    /// Load snapshots from the source on the background executor. Overlapping
+    /// refreshes are coalesced: at most one disk read is in flight at a time,
+    /// and a refresh that outlives a chat switch never applies results for the
+    /// previous scope.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.refresh_gate.begin().is_err() {
+            return;
+        }
         let source = self.source.clone();
         let chat_id = self.active_chat.clone();
+        let read_scope = chat_id.clone();
         cx.spawn(async move |this, cx| {
             let snapshots = cx
                 .background_spawn(async move {
-                    match chat_id.as_deref() {
+                    match read_scope.as_deref() {
                         Some(chat_id) => source.snapshots_for_chat(chat_id),
                         None => source.snapshots(),
                     }
                 })
                 .await;
             this.update(cx, |this, cx| {
+                this.refresh_gate.finish();
+                if this.active_chat.as_deref() != chat_id.as_deref() {
+                    // The scoped chat changed while reading; re-read for the
+                    // new scope instead of applying stale results.
+                    this.refresh(cx);
+                    return;
+                }
                 this.snapshots = snapshots;
                 this.loaded = true;
                 cx.notify();
@@ -1121,5 +1165,25 @@ mod tests {
         let source =
             LiveRunSource::with_runs_file(std::path::PathBuf::from("/nonexistent/runs.json"));
         assert!(source.snapshots().is_empty());
+    }
+
+    // =====================================================================
+    // RefreshGate (refresh coalescing)
+    // =====================================================================
+
+    #[test]
+    fn refresh_gate_coalesces_overlapping_refreshes() {
+        let mut gate = RefreshGate::default();
+        // First refresh claims the gate.
+        assert_eq!(gate.begin(), Ok(()));
+        // A second refresh while one is in flight is a no-op (the 2s tick can
+        // fire during a slow run-store read).
+        assert_eq!(gate.begin(), Err(()));
+        assert_eq!(gate.begin(), Err(()));
+        // Finishing reopens the gate.
+        gate.finish();
+        assert_eq!(gate.begin(), Ok(()));
+        gate.finish();
+        assert_eq!(gate, RefreshGate::default());
     }
 }

@@ -428,6 +428,13 @@ impl ChatService {
                 if this.active_chat_id.as_deref() == Some(id.as_str()) {
                     this.active_chat_id = None;
                     this.active_chat = None;
+                    // Don't strand the user on an empty pane with a populated
+                    // sidebar: fall back to the most recent remaining chat.
+                    if let Some(next) = next_chat_after_delete(&this.chat_list) {
+                        let next_id = next.id.clone();
+                        this.active_chat_id = Some(next_id.clone());
+                        this.load_chat(&next_id, cx);
+                    }
                 }
                 cx.notify();
             })
@@ -631,9 +638,10 @@ impl ChatService {
                 Ok(chat) => {
                     let meta = meta_of(&chat);
                     self.chat_list.insert(0, meta);
-                    self.active_chat_id = Some(chat.id.clone());
+                    let chat_id = chat.id.clone();
+                    self.active_chat_id = Some(chat_id.clone());
                     self.active_chat = Some(chat);
-                    self.active_chat_id.clone().unwrap()
+                    chat_id
                 }
                 Err(error) => {
                     self.active_error = Some(format!("Couldn't create the chat: {error}"));
@@ -1103,6 +1111,13 @@ impl ChatService {
     }
 }
 
+/// The chat the sidebar selects after the active chat is deleted: the most
+/// recent remaining chat (the list is newest-updated first), or none when the
+/// list is now empty. Pure so the fallback behavior is unit-testable.
+pub fn next_chat_after_delete(remaining: &[ChatMeta]) -> Option<&ChatMeta> {
+    remaining.first()
+}
+
 /// Relative timestamp for the sidebar, mirroring the renderer's formatting.
 pub fn relative_time(updated_at: u64, now: u64) -> String {
     let seconds = now.saturating_sub(updated_at) / 1000;
@@ -1135,5 +1150,36 @@ mod tests {
         let older = relative_time(now - 30 * 86_400_000, now);
         assert!(!older.is_empty());
         assert_ne!(older, "Just now");
+    }
+
+    #[test]
+    fn deleting_the_active_chat_falls_back_to_the_most_recent_remaining() {
+        let chat = |id: &str, updated_at: u64| ChatMeta {
+            id: id.to_string(),
+            title: id.to_string(),
+            workspace_id: None,
+            provider_id: None,
+            model: None,
+            created_at: 1,
+            updated_at,
+        };
+        let list = vec![chat("c1", 30), chat("c2", 20), chat("c3", 10)];
+
+        // The head is what the sidebar picks after the active chat is gone.
+        assert_eq!(
+            next_chat_after_delete(&list).map(|chat| chat.id.as_str()),
+            Some("c1")
+        );
+
+        // After retaining everything except the deleted chat, the fallback is
+        // the new head — never None while chats remain.
+        let after_delete: Vec<ChatMeta> = list.into_iter().filter(|chat| chat.id != "c1").collect();
+        assert_eq!(
+            next_chat_after_delete(&after_delete).map(|chat| chat.id.as_str()),
+            Some("c2")
+        );
+
+        // An empty list means the empty pane state (no fallback, no panic).
+        assert_eq!(next_chat_after_delete(&[]), None);
     }
 }

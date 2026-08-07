@@ -103,14 +103,25 @@ impl ApprovalBridge {
     /// order-independent. One-shot: a second `decide` for the same id is a
     /// no-op (the channel already carries the first decision). `AllowSession`
     /// additionally records the tool in the session allow-list.
+    ///
+    /// A second `decide` also cleans up a *dead* entry: when the runner was
+    /// cancelled after `resolve` took the receiver (so nothing can ever read a
+    /// decision again), the entry is removed so the UI queue does not leak a
+    /// stale, never-resolvable approval card.
     pub fn decide(&self, approval_id: &str, decision: ApprovalDecision) -> bool {
         let tool_name = {
-            let pending = lock(&self.pending);
+            let mut pending = lock(&self.pending);
             let Some(entry) = pending.get(approval_id) else {
                 return false;
             };
             let delivered = entry.tx.try_send(decision).is_ok();
             if !delivered {
+                if entry.rx.is_none() {
+                    // The runner's resolve already took the receiver and was
+                    // then cancelled: nobody can consume this decision, so the
+                    // entry is dead. Drop it to avoid a stale approval card.
+                    pending.remove(approval_id);
+                }
                 return false;
             }
             entry.tool_name.clone()
@@ -489,6 +500,43 @@ mod tests {
         assert!(outcome.is_err());
         assert!(outcome.unwrap_err().contains("cancelled"));
         assert_eq!(bridge.pending_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_resolver_leak_is_cleaned_up_on_the_next_decide() {
+        let bridge = ApprovalBridge::new();
+        let _ = bridge.evaluate(&call("write_file", serde_json::json!({ "path": "x" })));
+        let approval_id = bridge.pending_ids()[0].clone();
+        // The runner parks in resolve (taking the receiver), then is cancelled
+        // without cancel_all — the stop path that drops the driver task.
+        let resolve = {
+            let bridge = bridge.clone();
+            let id = approval_id.clone();
+            tokio::spawn(async move { bridge.resolve(&id).await })
+        };
+        // Give the resolver time to take the receiver and park on recv.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        resolve.abort();
+        // Once the runtime processes the abort the parked receiver is dropped,
+        // and the next decide must discover the dead entry and remove it
+        // instead of leaving a stale, never-resolvable approval card.
+        let mut cleaned = false;
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+            if !bridge.decide(&approval_id, ApprovalDecision::AllowOnce) {
+                cleaned = true;
+                break;
+            }
+        }
+        assert!(
+            cleaned,
+            "the dead entry must be cleaned up once the receiver is dropped"
+        );
+        assert_eq!(bridge.pending_count(), 0);
+        assert_eq!(
+            bridge.resolve(&approval_id).await.unwrap_err(),
+            "approval request is no longer pending"
+        );
     }
 
     #[tokio::test]

@@ -1455,6 +1455,14 @@ impl ChatStore {
                     .iter()
                     .any(|entry| entry.role == ChatRole::User);
             chat.messages.push(full.clone());
+            // The chat service persists the user message, the assistant turn,
+            // and a retry's next user message from separate background tasks.
+            // They serialize through this lock but can acquire it out of
+            // submission order, so a plain `push` could land an earlier
+            // assistant turn after a later user message. Every message carries
+            // a monotonic `created_at`, so a stable sort by timestamp makes the
+            // on-disk order deterministic regardless of append interleaving.
+            chat.messages.sort_by_key(|entry| entry.created_at);
             chat.updated_at = now_millis();
             if let Some(meta) = &meta {
                 if let Some(provider_id) = meta.provider_id {
@@ -1718,6 +1726,72 @@ mod tests {
         assert!(store
             .move_empty_chat_to_workspace(&chat.id, "other")
             .is_err());
+    }
+
+    /// The chat service persists the user message, the assistant turn, and a
+    /// retry's next user message from independent background tasks. They
+    /// serialize through the store lock but can acquire it out of submission
+    /// order, so the on-disk message order must be derived from each message's
+    /// monotonic `created_at` rather than the (nondeterministic) append order.
+    #[test]
+    fn append_message_orders_history_by_created_at_under_out_of_order_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(store_in(dir.path()));
+        let chat = store.create(ChatStoreInput::default()).unwrap();
+        let id = std::sync::Arc::new(chat.id);
+
+        // Three messages with deliberately staggered timestamps. They are
+        // appended from separate threads so the lock-acquisition order is
+        // nondeterministic; without timestamp ordering this could persist as
+        // user1, user2, assistant (a corrupted transcript).
+        let cases: Vec<(ChatRole, &str, u64)> = vec![
+            (ChatRole::User, "first", 1_000),
+            (ChatRole::Assistant, "reply", 2_000),
+            (ChatRole::User, "second", 3_000),
+        ];
+        let mut handles = Vec::new();
+        for (role, content, created_at) in cases {
+            let store = store.clone();
+            let id = id.clone();
+            handles.push(std::thread::spawn(move || {
+                store
+                    .append_message(
+                        &id,
+                        ChatMessageInput {
+                            id: None,
+                            role,
+                            content: content.to_string(),
+                            model: None,
+                            reasoning: None,
+                            attachments: None,
+                            timeline: None,
+                            subagents: None,
+                            created_at: Some(created_at),
+                        },
+                        None,
+                    )
+                    .unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let loaded = store.get(&id).unwrap().unwrap();
+        let order: Vec<&str> = loaded.messages.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["first", "reply", "second"],
+            "history must follow created_at regardless of append interleaving"
+        );
+        assert_eq!(
+            loaded
+                .messages
+                .iter()
+                .map(|m| m.created_at)
+                .collect::<Vec<_>>(),
+            vec![1_000, 2_000, 3_000],
+        );
     }
 
     #[test]

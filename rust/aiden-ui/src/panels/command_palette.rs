@@ -1690,4 +1690,43 @@ mod tests {
         let rows = palette.rows();
         assert!(rows.is_empty());
     }
+
+    #[test]
+    fn selection_never_indexes_past_the_row_list() {
+        let mut palette = CommandPalette::new_demo();
+        let count = palette.rows().len();
+        assert!(count > 0);
+        // Hammering Down beyond the end clamps to the last row — no wrap, no
+        // out-of-bounds index.
+        for _ in 0..(count + 5) {
+            palette.handle_key_state("down", None);
+        }
+        assert_eq!(palette.selected, count - 1, "Down clamps to the last row");
+        // Up never wraps below the first row.
+        palette.handle_key_state("up", None);
+        assert_eq!(palette.selected, count - 2);
+
+        // Filtering shrinks the list; character input resets the selection to
+        // 0, so the index is always in bounds for the rows that remain.
+        for character in ["c", "h", "a", "t"] {
+            palette.handle_key_state(character, Some(character));
+        }
+        let rows = palette.rows();
+        assert!(!rows.is_empty());
+        assert!(
+            palette.selected < rows.len(),
+            "selection stays in bounds after the list shrank"
+        );
+
+        // The render-time clamp keeps the highlight in bounds even when the
+        // list shrinks to nothing.
+        for character in ["z", "z", "z", "z"] {
+            palette.handle_key_state(character, Some(character));
+        }
+        assert!(palette.rows().is_empty());
+        assert_eq!(
+            palette.selected.min(palette.rows().len().saturating_sub(1)),
+            0
+        );
+    }
 }

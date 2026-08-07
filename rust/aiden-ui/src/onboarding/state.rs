@@ -261,7 +261,11 @@ pub fn make_onboarding_provider(
             // TS passes the raw (possibly empty) tailnet URL through; the
             // machine validates it before advancing.
             ProviderChoice::Tailscale => "",
-            ProviderChoice::OpenaiSignin => unreachable!("returns None above"),
+            // `make_onboarding_provider` returns `None` for OpenaiSignin at the
+            // top of this function, so this arm is dead code. Return an empty
+            // URL rather than panicking so the pure helper can never abort its
+            // caller (it runs on the background driver task).
+            ProviderChoice::OpenaiSignin => "",
         }
     } else {
         base_url.trim()
@@ -914,12 +918,130 @@ mod tests {
     }
 
     #[test]
-    fn blocked_advance_sets_the_error_and_clear_resets_it() {
+    fn blocked_advance_sets_the_error_and_clears_resets_it() {
         let mut machine = OnboardingMachine::new();
         assert_eq!(machine.next(), NextOutcome::Blocked);
         assert!(machine.error.is_some());
         machine.name = "Ada".into();
         assert_eq!(machine.next(), NextOutcome::Advanced);
         assert_eq!(machine.error, None);
+    }
+
+    // The wired view calls `advance()` (not `next()`) after a passing
+    // `validate()`, and treats the `Blocked` arm as a defensive no-op instead
+    // of panicking (ObjC callbacks cannot unwind). This locks in the invariant
+    // that makes that no-op correct: `advance()` only ever yields `Advanced`
+    // or `Completed`, never `Blocked`.
+    #[test]
+    fn advance_never_yields_blocked_across_the_whole_flow() {
+        let mut machine = OnboardingMachine::new();
+        machine.name = "Ada".into();
+        loop {
+            let outcome = machine.advance();
+            assert!(
+                matches!(outcome, NextOutcome::Advanced | NextOutcome::Completed),
+                "advance() must never return Blocked, got {outcome:?}"
+            );
+            if outcome == NextOutcome::Completed {
+                break;
+            }
+        }
+        assert!(machine.is_complete());
+        // Advancing past completion keeps yielding Completed (never Blocked).
+        assert_eq!(machine.advance(), NextOutcome::Completed);
+    }
+
+    #[test]
+    fn back_and_reenter_preserves_entered_step_data() {
+        let mut machine = OnboardingMachine::new();
+        machine.name = "Ada".into();
+        machine.next(); // → Provider
+        machine.choice = ProviderChoice::Anthropic;
+        machine.api_key = "  sk-ant-abcdef  ".into();
+        machine.base_url = "https://gateway.example/v1".into();
+        machine.back(); // → Welcome
+        assert_eq!(machine.current(), Step::Welcome);
+        machine.next(); // → Provider again
+                        // The machine keeps every field the user entered; the inputs mirror
+                        // it, so re-advancing never requires re-entering data.
+        assert_eq!(machine.choice, ProviderChoice::Anthropic);
+        assert_eq!(machine.api_key, "  sk-ant-abcdef  ");
+        assert_eq!(machine.base_url, "https://gateway.example/v1");
+        // The provider is saved again on re-advance; the save is an upsert by
+        // id (config_store::save_provider), so this is idempotent.
+        assert_eq!(
+            machine.pending_provider_save().api_key.as_deref(),
+            Some("sk-ant-abcdef")
+        );
+    }
+
+    #[test]
+    fn advance_is_bounded_by_the_finish_step() {
+        let mut machine = OnboardingMachine::new();
+        machine.name = "Ada".into();
+        // Walk the flow, then hammer Next well past the end.
+        for _ in 0..10 {
+            let _ = machine.next();
+        }
+        assert_eq!(machine.current(), Step::Finish);
+        assert!(machine.is_complete());
+        // The step index never escapes the step list.
+        assert_eq!(machine.step_index(), Step::Finish.index());
+        assert_eq!(machine.current(), Step::from_index(machine.step_index()));
+    }
+
+    #[test]
+    fn should_show_onboarding_when_the_marker_is_missing_or_malformed() {
+        // Non-string marker values (corrupt / legacy) still show the flow —
+        // the TS contract is `localStorage.getItem(key) !== "true"`.
+        assert!(should_show_onboarding(&settings_with(
+            ONBOARDING_COMPLETE_KEY,
+            serde_json::json!(true)
+        )));
+        assert!(should_show_onboarding(&settings_with(
+            ONBOARDING_COMPLETE_KEY,
+            serde_json::json!(1)
+        )));
+        assert!(should_show_onboarding(&settings_with(
+            ONBOARDING_COMPLETE_KEY,
+            serde_json::Value::Null
+        )));
+        // The exact TS string hides it.
+        assert!(!should_show_onboarding(&settings_with(
+            ONBOARDING_COMPLETE_KEY,
+            serde_json::json!("true")
+        )));
+    }
+
+    #[test]
+    fn model_step_with_no_provider_or_catalog_still_advances() {
+        let mut machine = OnboardingMachine::new();
+        machine.name = "Ada".into();
+        machine.next(); // → Provider
+        machine.next(); // → Model (no saved provider, no boot catalog)
+        assert!(machine.model_options().is_empty());
+        assert_eq!(machine.selection(), None);
+        assert_eq!(
+            machine.validate(),
+            None,
+            "no models to pick from is not a blocking validation error"
+        );
+        assert_eq!(machine.next(), NextOutcome::Advanced);
+        assert_eq!(machine.current(), Step::Appearance);
+    }
+
+    #[test]
+    fn skip_then_advance_never_reenters_editing() {
+        let mut machine = OnboardingMachine::new();
+        machine.skip();
+        assert!(machine.is_complete());
+        // The machine stays at Welcome (index 0) but reports complete, so the
+        // view's completion guard prevents any further navigation. Calling
+        // `next()` here cannot advance (the empty name fails `validate()`), so
+        // it returns `Blocked` and the machine remains complete + parked.
+        assert_eq!(machine.step_index(), 0);
+        assert_eq!(machine.next(), NextOutcome::Blocked);
+        assert!(machine.is_complete());
+        assert_eq!(machine.step_index(), 0);
     }
 }

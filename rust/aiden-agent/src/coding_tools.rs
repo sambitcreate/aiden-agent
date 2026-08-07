@@ -2625,6 +2625,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn traversal_escapes_cannot_reach_etc_passwd_or_home() {
+        // The audit's canonical escape attempt: `../../etc/passwd` and every
+        // dotted/absolute variant must fail closed on both the parent and the
+        // pinned subagent executor.
+        let dir = tempfile::Builder::new()
+            .prefix("aiden-ws-")
+            .tempdir()
+            .unwrap();
+        let root = dir.path().join("workspace");
+        std::fs::create_dir_all(&root).unwrap();
+        let escapes = [
+            "../../etc/passwd",
+            "../../../etc/passwd",
+            "../../../../../../etc/passwd",
+            "/etc/passwd",
+            "sub/../../../../etc/passwd",
+            "..//..//etc//passwd",
+            "../workspace/../etc/passwd",
+            "../../etc/passwd/.",
+            "a/../../etc/passwd",
+        ];
+        // The parent executor must reject every escape too.
+        let parent = parent_executor(&root);
+        for escape in escapes {
+            let result = parent
+                .execute(&tool_call("read_file", json!({ "path": escape })))
+                .await;
+            assert!(result.is_err(), "parent read_file must reject {escape}");
+            let result = parent
+                .execute(&tool_call("list_dir", json!({ "path": escape })))
+                .await;
+            assert!(result.is_err(), "parent list_dir must reject {escape}");
+        }
+        let subagent = subagent_executor(&root).unwrap();
+        for escape in escapes {
+            let result = subagent
+                .execute(&tool_call("read_file", json!({ "path": escape })))
+                .await;
+            assert!(result.is_err(), "subagent read_file must reject {escape}");
+        }
+        // A write through the parent executor must stay inside the root too.
+        for escape in [
+            "../escaped.txt",
+            "../../etc/escaped.txt",
+            "/tmp/escaped.txt",
+        ] {
+            let result = parent
+                .execute(&tool_call(
+                    "write_file",
+                    json!({ "path": escape, "content": "pwned" }),
+                ))
+                .await;
+            assert!(result.is_err(), "parent write_file must reject {escape}");
+        }
+        assert!(!dir.path().join("etc/passwd").exists());
+        assert!(!dir.path().join("escaped.txt").exists());
+        assert!(!std::path::Path::new("/tmp/escaped.txt").exists());
+    }
+
+    #[test]
+    fn percent_encoded_dot_segments_are_plain_filenames_not_escapes() {
+        // There is no URL decoding in the path tools: `%2e%2e` is a literal
+        // segment, never `..`. Regression guard against a future "helpful"
+        // decoder turning it into a traversal.
+        let (_dir, root) = tmp_root();
+        // A literal `..` still pops: `sub/%2e%2e/..` ends at `sub`, inside root.
+        assert_eq!(
+            resolve_in_root(&root, "sub/%2e%2e/..").unwrap(),
+            root.join("sub")
+        );
+        // Encoded-dot segments cannot climb out of the root: they are literal
+        // names, so the resolved path stays a child of the root.
+        let literal = resolve_in_root(&root, "%2e%2e/%2e%2e/etc/passwd").unwrap();
+        assert!(
+            literal.starts_with(normalized(&root)),
+            "encoded dots must not escape the workspace"
+        );
+        // And a genuine traversal through a literal-dot directory is still
+        // rejected when it would leave the root.
+        assert!(resolve_in_root(&root, "%2e%2e/../../escape").is_err());
+    }
+
+    #[tokio::test]
     async fn symlinks_inside_the_root_cannot_escape_it() {
         let dir = tempfile::Builder::new()
             .prefix("aiden-ws-")

@@ -199,11 +199,14 @@ pub fn settle_messages(
             if last.content == full_content {
                 return next;
             }
-            let last = next.pop().unwrap();
+            // `last` is `&AssistantMessage` borrowed from `next`; clone the
+            // fields we need so the borrow ends before the mutable `pop`.
+            let thinking = last.thinking.clone();
+            next.pop();
             next.push(AssistantMessage {
                 role: AssistantRole::Assistant,
                 content: full_content.to_string(),
-                thinking: last.thinking,
+                thinking,
             });
         }
         _ => next.push(AssistantMessage::assistant(full_content)),
@@ -218,8 +221,10 @@ pub fn settle_failed_messages(
     partial_content: Option<&str>,
     buffered_delta: &str,
 ) -> Vec<AssistantMessage> {
-    if partial_content.is_some_and(|content| !content.trim().is_empty()) {
-        return settle_messages(messages, partial_content.unwrap());
+    if let Some(content) = partial_content {
+        if !content.trim().is_empty() {
+            return settle_messages(messages, content);
+        }
     }
     let mut next = messages;
     if !buffered_delta.is_empty() {
@@ -458,6 +463,37 @@ mod tests {
 
         // Empty content leaves the transcript untouched.
         assert_eq!(settle_messages(messages.clone(), "  ").len(), 2);
+    }
+
+    #[test]
+    fn settle_messages_preserves_thinking_when_replacing_the_last_reply() {
+        // Regression guard for the borrow-safe rewrite of the replace branch:
+        // the prior assistant entry's `thinking` must survive the pop + push.
+        let messages = vec![
+            AssistantMessage::user("q"),
+            AssistantMessage {
+                role: AssistantRole::Assistant,
+                content: "partial".to_string(),
+                thinking: "reasoning that must survive".to_string(),
+            },
+        ];
+        let settled = settle_messages(messages, "the final reply");
+        assert_eq!(settled.len(), 2);
+        let last = &settled[1];
+        assert_eq!(last.role, AssistantRole::Assistant);
+        assert_eq!(last.content, "the final reply");
+        assert_eq!(last.thinking, "reasoning that must survive");
+    }
+
+    #[test]
+    fn settle_failed_messages_routes_non_empty_partial_through_settle() {
+        // Guards the unwrap-free partial branch: a non-empty partial reply is
+        // settled into the transcript; an all-whitespace partial is ignored.
+        let settled = settle_failed_messages(vec![AssistantMessage::user("q")], Some("   "), "");
+        assert_eq!(settled.len(), 1, "whitespace-only partial is not settled");
+        let settled =
+            settle_failed_messages(vec![AssistantMessage::user("q")], Some("real partial"), "");
+        assert_eq!(settled.last().unwrap().content, "real partial");
     }
 
     #[test]

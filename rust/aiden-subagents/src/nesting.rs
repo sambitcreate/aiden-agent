@@ -873,6 +873,45 @@ mod tests {
     }
 
     #[test]
+    fn a_subagent_cannot_spawn_itself_or_reuse_tree_identities() {
+        let root = root();
+        let child_node = child(&root, "run-1", &["read_file"]);
+        // Self-spawn: a run id equal to the parent's is rejected (no infinite
+        // recursion through identity reuse).
+        let self_spawn = create_subagent_tree_descendant_v2(
+            &child_node,
+            &json!({
+                "runId": "run-1",
+                "capabilities": capabilities(),
+                "toolNames": ["read_file"],
+            }),
+        );
+        assert!(self_spawn.is_err());
+        // Reusing the tree root's id is also rejected.
+        let root_spawn = create_subagent_tree_descendant_v2(
+            &child_node,
+            &json!({
+                "runId": "tree-1",
+                "capabilities": capabilities(),
+                "toolNames": ["read_file"],
+            }),
+        );
+        assert!(root_spawn.is_err());
+        // Depth is hard-capped at MAX_SUBAGENT_TREE_DEPTH, so recursion cannot
+        // grow unbounded even with fresh ids.
+        let grandchild = child(&child_node, "run-2", &["read_file"]);
+        assert!(create_subagent_tree_descendant_v2(
+            &grandchild,
+            &json!({
+                "runId": "run-3",
+                "capabilities": capabilities(),
+                "toolNames": ["read_file"],
+            }),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn ledger_reserves_all_or_nothing_and_tracks_usage() {
         let root = root();
         let children: Vec<MintedSubagentTree> = vec![
