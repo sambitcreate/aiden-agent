@@ -1,0 +1,83 @@
+# Aiden Agent — GPUI + Rust port workspace (Phase 3: scaffold + bootable window).
+#
+# Dependency pins come from docs/gpui-port/PORT-PLAN.md §"Dependency pins".
+# Deviations (discovered while scaffolding):
+#   - `gpui_platform` does NOT exist on crates.io. gpui 0.2.2 ships its own
+#     platform backends behind features; `font-kit` is already in gpui's default
+#     features (and is what gpui-component 0.5.1 enables transitively). The
+#     workspace therefore pins plain `gpui = "0.2.2"` and the font-kit concern
+#     is covered by default features.
+#   - `gpui-tokio-bridge` is pinned to the latest published release (0.1.0).
+[workspace]
+resolver = "2"
+members = [
+    "aiden-core",
+    "aiden-data",
+    "aiden-providers",
+    "aiden-mcp",
+    "aiden-agent",
+    "aiden-scheduler",
+    "aiden-mac",
+    "aiden-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+repository = "https://github.com/sambitcreate/aiden-agent"
+
+# ---------------------------------------------------------------------------
+# Shared dependency pins. All gpui* crates must resolve to ONE gpui version;
+# cargo's resolver (2) enforces this, so keep the gpui pins in lockstep.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+# --- Internal crates ---
+aiden-core = { path = "aiden-core" }
+aiden-data = { path = "aiden-data" }
+
+# --- UI framework ---
+gpui = "0.2.2"
+gpui-component = "0.5"
+gpui-component-assets = "0.5"
+gpui-tokio-bridge = "0.1"
+
+# --- Async / networking ---
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+reqwest-eventsource = "0.6"
+futures = "0.3"
+async-compat = "0.2"
+
+# --- Serialization ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# --- Errors ---
+thiserror = "2"
+anyhow = "1"
+
+# --- Local persistence / secrets ---
+# NOTE: keyring 4.x has no `apple-native` feature (that name is keyring 2.x-era).
+# The default `v1` feature set already selects the native Apple Keychain store
+# (`apple-native-keyring-store/keychain`) on macOS.
+keyring = "4"
+directories = "6"
+sha2 = "0.10"
+tempfile = "3"
+
+# --- Domain helpers ---
+chrono = "0.4"
+cron = "0.15"
+parking_lot = "0.12"
+
+# --- Observability ---
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# NOTE: `panic = "abort"` must NOT be set — gpui's windowed apps need unwinding.

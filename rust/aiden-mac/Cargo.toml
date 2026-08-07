@@ -1,0 +1,16 @@
+[package]
+name = "aiden-mac"
+description = "macOS integration scaffold — will port main/platform.ts (keyring secrets, hotkeys, notifications, updater, dictation, vibrancy)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiden-core.workspace = true
+keyring.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

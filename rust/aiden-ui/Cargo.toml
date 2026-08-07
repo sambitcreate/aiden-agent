@@ -1,0 +1,25 @@
+[package]
+name = "aiden-ui"
+description = "Aiden Agent GPUI application shell (port of renderer/** + main/windows/)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aiden"
+path = "src/main.rs"
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
+gpui-tokio-bridge.workspace = true
+aiden-core.workspace = true
+aiden-data.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+async-compat.workspace = true

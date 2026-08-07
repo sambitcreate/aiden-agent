@@ -1,0 +1,23 @@
+[package]
+name = "aiden-data"
+description = "Durable JSON stores, config-dir resolution, and keychain-backed secrets (port of main/services/data-store.ts, aiden-config-dir.ts)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiden-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+directories.workspace = true
+keyring.workspace = true
+sha2.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+serde = { version = "1", features = ["derive"] }

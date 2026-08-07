@@ -6,6 +6,9 @@ build/
 release/
 native/computer-use-broker/target/
 
+# Rust workspace build output (GPUI port)
+/rust/target/
+
 # Agent context (auto-generated, not worth versioning)
 .claude/
 .agents/

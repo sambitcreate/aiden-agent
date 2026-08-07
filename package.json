@@ -84,7 +84,11 @@
     "models:refresh": "node scripts/update-model-capabilities.mjs",
     "release:update-model-capabilities": "npm run models:refresh",
     "dist": "node scripts/run-macos-distribution.mjs",
-    "test:portable-config": "tsx --test main/services/aiden-config-dir.test.ts main/services/portable-config-core.test.ts main/services/portable-config-core.roundtrip.test.ts main/services/portable-config-watch-core.test.ts main/services/data-store.test.ts main/services/data-store.resilience.test.ts main/services/config-store-core.test.ts main/services/secret-map-core.test.ts"
+    "test:portable-config": "tsx --test main/services/aiden-config-dir.test.ts main/services/portable-config-core.test.ts main/services/portable-config-core.roundtrip.test.ts main/services/portable-config-watch-core.test.ts main/services/data-store.test.ts main/services/data-store.resilience.test.ts main/services/config-store-core.test.ts main/services/secret-map-core.test.ts",
+    "rust:build": "cargo build --manifest-path rust/Cargo.toml",
+    "rust:test": "cargo test --manifest-path rust/Cargo.toml",
+    "rust:clippy": "cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings",
+    "rust:run": "cargo run --manifest-path rust/Cargo.toml -p aiden-ui"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.80.10",

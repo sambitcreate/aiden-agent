@@ -1,0 +1,16 @@
+[package]
+name = "aiden-scheduler"
+description = "Scheduled task scaffold — will port main/services/schedule-*.ts (croner → cron crate, notifications, script tasks)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiden-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+cron.workspace = true
+tracing.workspace = true
