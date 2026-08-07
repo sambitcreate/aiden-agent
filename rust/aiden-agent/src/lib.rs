@@ -32,10 +32,13 @@
 pub mod approval;
 pub mod automation;
 pub mod coding_tools;
+pub mod llm_client;
 pub mod mcp_tool;
 pub mod project_tool;
 pub mod runner;
+pub mod superseding_task;
 pub mod system_prompt;
+pub mod tool_approval;
 pub mod tool_loop_guard;
 
 pub use approval::{

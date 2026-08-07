@@ -16,10 +16,12 @@ members = [
     "aiden-git",
     "aiden-providers",
     "aiden-mcp",
+    "aiden-computer-use",
     "aiden-agent",
     "aiden-scheduler",
     "aiden-mac",
     "aiden-ui",
+    "aiden-subagents",
 ]
 
 [workspace.package]
@@ -43,6 +45,8 @@ aiden-data = { path = "aiden-data" }
 aiden-git = { path = "aiden-git" }
 aiden-mcp = { path = "aiden-mcp" }
 aiden-providers = { path = "aiden-providers" }
+aiden-agent = { path = "aiden-agent" }
+aiden-scheduler = { path = "aiden-scheduler" }
 
 # --- UI framework ---
 gpui = "0.2.2"

@@ -18,6 +18,11 @@ serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 async-compat.workspace = true
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2.workspace = true
 base64 = "0.22"
 url = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

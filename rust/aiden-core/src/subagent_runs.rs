@@ -72,6 +72,23 @@ pub const SUBAGENT_MILESTONE_KINDS: &[SubagentMilestoneKind] = &[
     SubagentMilestoneKind::Composing,
 ];
 
+/// `SUBAGENT_ACTIVE_STATES` — the V1 active-state set (`renderer/shared/
+/// subagent-runs.ts`).
+pub const SUBAGENT_ACTIVE_STATES: &[SubagentRunState] = &[
+    SubagentRunState::Queued,
+    SubagentRunState::Starting,
+    SubagentRunState::Running,
+];
+
+/// `SUBAGENT_ACTIVE_STATES_V2` — the V2 active-state set, which additionally
+/// includes `needs_attention`.
+pub const SUBAGENT_ACTIVE_STATES_V2: &[SubagentRunStateV2] = &[
+    SubagentRunStateV2::Queued,
+    SubagentRunStateV2::Starting,
+    SubagentRunStateV2::Running,
+    SubagentRunStateV2::NeedsAttention,
+];
+
 #[derive(
     Debug,
     Clone,
@@ -254,6 +271,12 @@ impl SubagentExecutionModeV2 {
             _ => None,
         }
     }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubagentExecutionModeV2::Foreground => "foreground",
+            SubagentExecutionModeV2::Background => "background",
+        }
+    }
 }
 
 #[derive(
@@ -281,6 +304,12 @@ impl SubagentContextModeV2 {
             "fresh" => Some(SubagentContextModeV2::Fresh),
             "fork" => Some(SubagentContextModeV2::Fork),
             _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubagentContextModeV2::Fresh => "fresh",
+            SubagentContextModeV2::Fork => "fork",
         }
     }
 }
@@ -406,7 +435,7 @@ pub struct SubagentMessageReferenceItemV1 {
 
 /// Version 2 snapshot: adds lineage, retry identity, and lifecycle-only
 /// states on top of the V1 projection.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentRunSnapshotV2 {
     pub version: u8,

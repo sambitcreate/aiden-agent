@@ -26,6 +26,7 @@ use futures::Stream;
 use futures::StreamExt;
 
 pub mod anthropic;
+pub mod artificial_analysis;
 pub mod catalog;
 pub mod codex;
 pub mod compact;
@@ -38,6 +39,7 @@ pub mod registry;
 pub mod responses_shared;
 pub mod sse;
 pub mod transform;
+pub mod web_search;
 
 pub use anthropic::{parse_anthropic_sse, AnthropicAccumulator, AnthropicProvider};
 pub use sse::{data_payloads, sse_frames, SseDecoder};

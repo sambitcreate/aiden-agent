@@ -58,6 +58,7 @@ use std::os::unix::fs::{symlink, OpenOptionsExt};
 pub mod chat_store;
 pub mod config_dir;
 pub mod config_store;
+pub mod dev_log;
 pub mod external_editors;
 pub mod mcp_oauth;
 pub mod pi_credential_store;

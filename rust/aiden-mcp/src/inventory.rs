@@ -233,8 +233,14 @@ fn canonical_value(
             .collect::<Result<Vec<_>, _>>()
             .map(serde_json::Value::Array),
         serde_json::Value::Object(entries) => {
+            // Sort keys explicitly: serde_json's `preserve_order` feature (enabled
+            // transitively under workspace feature unification) turns Map into an
+            // insertion-ordered map, which would otherwise leak input key order
+            // into the "canonical" output and break cross-build determinism.
+            let mut sorted: Vec<(&String, &serde_json::Value)> = entries.iter().collect();
+            sorted.sort_by(|left, right| left.0.cmp(right.0));
             let mut canonical = serde_json::Map::new();
-            for (key, entry) in entries {
+            for (key, entry) in sorted {
                 if matches!(key.as_str(), "__proto__" | "constructor" | "prototype") {
                     return Err(());
                 }

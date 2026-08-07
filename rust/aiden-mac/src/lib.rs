@@ -29,6 +29,8 @@ pub mod hotkey;
 pub mod menu;
 pub mod notify;
 pub mod paste;
+pub mod quit_barrier;
+pub mod readiness;
 pub mod tray;
 pub mod updater;
 

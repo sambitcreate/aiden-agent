@@ -60,6 +60,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiden-computer-use"
+version = "0.1.0"
+dependencies = [
+ "aiden-core",
+ "aiden-data",
+ "anyhow",
+ "futures",
+ "getrandom 0.2.17",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "aiden-core"
 version = "0.1.0"
 dependencies = [
@@ -156,13 +178,16 @@ version = "0.1.0"
 dependencies = [
  "aiden-core",
  "async-compat",
+ "async-trait",
  "base64 0.22.1",
+ "chrono",
  "futures",
  "reqwest 0.12.28",
  "reqwest-eventsource",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tracing",
@@ -187,6 +212,24 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "aiden-subagents"
+version = "0.1.0"
+dependencies = [
+ "aiden-core",
+ "aiden-data",
+ "chrono",
+ "futures",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
  "tracing",
 ]
 

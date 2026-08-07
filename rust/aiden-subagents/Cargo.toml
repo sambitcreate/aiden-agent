@@ -1,0 +1,24 @@
+[package]
+name = "aiden-subagents"
+description = "Subagent system — port of main/services/subagents/** (authority V2, V1/V2 run stores, supervisor/nesting, shell + file-mutation effects, MCP surface, control plane)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiden-core.workspace = true
+aiden-data.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+futures.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+tempfile.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
