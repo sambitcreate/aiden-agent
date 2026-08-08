@@ -7,8 +7,11 @@
 //! per-provider thinking-level select for Anthropic connections, and a default
 //! model persisted into `settings.json` under `modelSelection`.
 
+use std::sync::Arc;
+
 use aiden_data::config_store::Provider as StoredProviderRow;
 use aiden_data::portable_config::{ProviderDeployment, ProviderKind, StoredProvider};
+use aiden_providers::model_capabilities::{lookup_provider, ModelCapabilitiesCatalog};
 use gpui::{
     div, prelude::FluentBuilder as _, px, AppContext as _, Context, ElementId, Entity, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
@@ -42,6 +45,10 @@ pub struct ProviderRow {
     pub needs_key: bool,
     pub has_key: bool,
     pub is_builtin: bool,
+    /// Models contributed by the models.dev capability catalog (not part of
+    /// the stored record). Filled from the capability catalog at boot;
+    /// rendered with a "discovered" badge vs the preset defaults.
+    pub catalog_models: Vec<String>,
 }
 
 impl From<&StoredProviderRow> for ProviderRow {
@@ -56,6 +63,7 @@ impl From<&StoredProviderRow> for ProviderRow {
             needs_key: provider.needs_key,
             has_key: provider.has_key,
             is_builtin: provider.is_builtin.unwrap_or(false),
+            catalog_models: Vec::new(),
         }
     }
 }
@@ -81,6 +89,10 @@ pub struct ProviderDraft {
 #[derive(Default)]
 pub struct ProvidersState {
     pub providers: Vec<ProviderRow>,
+    /// The models.dev capability catalog (`resources/model-capabilities.json`),
+    /// loaded on the background executor at settings boot. Used to enrich
+    /// built-in provider rows with every catalog model.
+    pub capabilities: Option<Arc<ModelCapabilitiesCatalog>>,
     /// Mirror of `settings.json` for `modelSelection` + thinking prefs.
     pub settings: serde_json::Map<String, serde_json::Value>,
     pub editing: Option<ProviderDraft>,
@@ -93,7 +105,7 @@ pub struct ProvidersState {
 
 impl ProvidersState {
     /// The persisted model selection, if it still points at a configured
-    /// provider + model.
+    /// provider + model (catalog-contributed models count as offered).
     pub fn selection(&self) -> Option<ModelSelection> {
         let value = self.settings.get(MODEL_SELECTION_KEY)?;
         let selection = ModelSelection::from_settings(value)?;
@@ -104,6 +116,10 @@ impl ProvidersState {
         let offers = provider.default_model.as_deref() == Some(selection.model.as_str())
             || provider
                 .models
+                .iter()
+                .any(|model| model == &selection.model)
+            || provider
+                .catalog_models
                 .iter()
                 .any(|model| model == &selection.model);
         offers.then_some(selection)
@@ -316,6 +332,8 @@ impl SettingsView {
         let label = row.label.clone();
         let base_url = row.base_url.clone();
         let models = row.models.len();
+        let preset_models = row.models.clone();
+        let catalog_models = row.catalog_models.clone();
         let is_builtin = row.is_builtin;
         let needs_key = row.needs_key;
         let has_key = row.has_key;
@@ -396,7 +414,66 @@ impl SettingsView {
                             } else {
                                 base_url
                             }),
-                    ),
+                    )
+                    // Catalog-sourced models: the capability catalog enriches
+                    // built-in providers beyond their preset defaults. Preset
+                    // models stay unbadged; catalog additions carry a
+                    // "discovered" badge (capped with a "+N more" tail).
+                    .when(!catalog_models.is_empty(), |el| {
+                        let accent = theme.accent;
+                        let muted = theme.muted;
+                        let muted_foreground = theme.muted_foreground;
+                        let shown = catalog_models.len().min(6);
+                        let extra = catalog_models.len() - shown;
+                        el.child(
+                            v_flex()
+                                .gap_1()
+                                .mt_1()
+                                .when(!preset_models.is_empty(), |el| {
+                                    el.child(
+                                        div().text_xs().text_color(muted_foreground).child(
+                                            format!("Preset: {}", preset_models.join(" · ")),
+                                        ),
+                                    )
+                                })
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .flex_wrap()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_md()
+                                                .bg(accent.opacity(0.14))
+                                                .text_xs()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(accent)
+                                                .child("discovered"),
+                                        )
+                                        .children(catalog_models.iter().take(shown).map(|model| {
+                                            let model = model.clone();
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_md()
+                                                .bg(muted.opacity(0.5))
+                                                .text_xs()
+                                                .text_color(muted_foreground)
+                                                .child(model)
+                                        }))
+                                        .when(extra > 0, |el| {
+                                            el.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted_foreground)
+                                                    .child(format!("+{extra} more")),
+                                            )
+                                        }),
+                                ),
+                        )
+                    }),
             )
             .child(if is_builtin {
                 let click_id = id.clone();
@@ -994,6 +1071,28 @@ impl ProvidersState {
     }
 }
 
+/// Fill `row.catalog_models` with the models.dev catalog models for this
+/// provider that the stored record does not already list (the Providers
+/// section badges these as "discovered"). `None` catalog (dev checkouts) or an
+/// unmatched provider id leaves the row untouched.
+pub fn enrich_provider_row(
+    mut row: ProviderRow,
+    catalog: Option<&ModelCapabilitiesCatalog>,
+) -> ProviderRow {
+    let Some(entry) = catalog.and_then(|catalog| lookup_provider(catalog, &row.id)) else {
+        return row;
+    };
+    let mut catalog_models: Vec<String> = entry
+        .models
+        .values()
+        .filter_map(|capability| capability.id.clone())
+        .filter(|id| !row.models.contains(id))
+        .collect();
+    catalog_models.sort();
+    row.catalog_models = catalog_models;
+    row
+}
+
 /// New custom provider id: `custom:connection-<hex timestamp>`, mirroring the
 /// renderer's `custom:connection-<base36 timestamp>` style.
 fn new_custom_provider_id() -> String {
@@ -1047,6 +1146,64 @@ mod tests {
         assert!(
             u64::from_str_radix(suffix, 16).is_ok(),
             "suffix is hex: {suffix}"
+        );
+    }
+
+    #[test]
+    fn provider_rows_get_catalog_discovered_models() {
+        use aiden_providers::model_capabilities::ModelCapabilitiesCatalog;
+
+        let catalog: ModelCapabilitiesCatalog = serde_json::from_value(serde_json::json!({
+            "anthropic": {
+                "id": "anthropic",
+                "models": {
+                    "claude-sonnet-5": { "id": "claude-sonnet-5" },
+                    "claude-sonnet-6": { "id": "claude-sonnet-6" }
+                }
+            }
+        }))
+        .expect("fixture parses");
+        let row = ProviderRow {
+            id: "anthropic".into(),
+            kind: ProviderKind::Anthropic,
+            label: "Anthropic".into(),
+            base_url: "https://api.anthropic.com/v1".into(),
+            models: vec!["claude-sonnet-5".into()],
+            default_model: Some("claude-sonnet-5".into()),
+            needs_key: true,
+            has_key: true,
+            is_builtin: true,
+            catalog_models: Vec::new(),
+        };
+        let enriched = enrich_provider_row(row.clone(), Some(&catalog));
+        assert_eq!(enriched.catalog_models, vec!["claude-sonnet-6"]);
+        assert!(enriched.models.contains(&"claude-sonnet-5".to_string()));
+
+        // Preset-only models are not badged as discovered.
+        let preset = enrich_provider_row(row.clone(), None);
+        assert!(preset.catalog_models.is_empty());
+
+        // Unmatched provider ids stay untouched even with a catalog.
+        let custom = ProviderRow {
+            id: "custom:lmstudio".into(),
+            ..row
+        };
+        assert!(enrich_provider_row(custom, Some(&catalog))
+            .catalog_models
+            .is_empty());
+
+        // The persisted selection still counts catalog models as offered.
+        let state = ProvidersState {
+            providers: vec![enriched],
+            settings: serde_json::from_str(
+                r#"{"modelSelection": {"providerId": "anthropic", "model": "claude-sonnet-6"}}"#,
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        assert_eq!(
+            state.selection().map(|s| s.model),
+            Some("claude-sonnet-6".to_string())
         );
     }
 }

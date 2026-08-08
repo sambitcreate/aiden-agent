@@ -29,8 +29,8 @@ use crate::services::appearance::{
 };
 use crate::services::mcp_tools::McpStreamContext;
 use crate::services::provider_kit::{
-    chat_history_to_messages, drive_stream, resolve_api_key, ConfiguredProvider, ModelSelection,
-    StreamMsg, TurnSnapshot,
+    chat_history_to_messages, drive_stream, enrich_provider, load_capabilities, resolve_api_key,
+    ConfiguredProvider, ModelSelection, StreamMsg, TurnSnapshot,
 };
 use crate::services::stores::Stores;
 use crate::services::stream::{chat_usage_record, message_content, zero_usage};
@@ -72,6 +72,12 @@ pub struct ChatService {
 
     /// Provider catalog from the portable config.
     pub providers: Vec<ConfiguredProvider>,
+    /// The models.dev capability catalog (`resources/model-capabilities.json`,
+    /// built by `npm run models:refresh`). Loaded once at boot on the
+    /// background executor; `None` when the file is absent (dev checkouts) —
+    /// the builtin snapshot and conservative limits remain the fallback.
+    /// Build-time-only data: this never contacts models.dev.
+    pub capabilities: Option<Arc<aiden_providers::model_capabilities::ModelCapabilitiesCatalog>>,
     /// Current provider + model for new turns.
     pub selection: Option<ModelSelection>,
     /// Sidebar list (store order: newest-updated first).
@@ -104,6 +110,7 @@ impl ChatService {
         Self {
             stores,
             providers: Vec::new(),
+            capabilities: None,
             selection: None,
             chat_list: Vec::new(),
             search_query: String::new(),
@@ -126,27 +133,46 @@ impl ChatService {
     // =======================================================================
 
     /// Load chats + provider catalog + settings from the stores (background)
-    /// and populate the in-memory state.
+    /// and populate the in-memory state. The models.dev capability catalog is
+    /// loaded here too and used to enrich the provider model lists; a missing
+    /// file (dev checkouts) logs and falls back to the builtin snapshot.
     pub fn boot(&mut self, cx: &mut Context<Self>) {
         let stores = self.stores.clone();
         cx.spawn(async move |this, cx| {
-            let (chats, providers, settings, appearance, workspaces) = cx
+            let (chats, providers, settings, appearance, workspaces, capabilities) = cx
                 .background_spawn(async move {
                     let chats = stores.chat.list(None).unwrap_or_default();
+                    let capabilities = load_capabilities();
                     let providers = stores
                         .config
                         .list_providers()
-                        .map(|list| list.iter().map(ConfiguredProvider::from).collect())
+                        .map(|list| {
+                            list.iter()
+                                .map(ConfiguredProvider::from)
+                                .map(|provider| match &capabilities {
+                                    Some(catalog) => enrich_provider(provider, catalog),
+                                    None => provider,
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let appearance = appearance_from_settings(&settings);
                     let workspaces = stores.config.list_workspaces().unwrap_or_default();
-                    (chats, providers, settings, appearance, workspaces)
+                    (
+                        chats,
+                        providers,
+                        settings,
+                        appearance,
+                        workspaces,
+                        capabilities,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.chat_list = chats;
                 this.providers = providers;
+                this.capabilities = capabilities;
                 this.appearance = appearance;
                 this.selection = this.resolve_selection(&settings);
                 this.workspaces = workspaces;
@@ -199,16 +225,26 @@ impl ChatService {
 
     /// Re-read the provider catalog (+ persisted selection) from the config
     /// store. Used by the command palette's "Refresh provider catalogs" and
-    /// any future settings-driven catalog invalidation.
+    /// any future settings-driven catalog invalidation. Re-enriches against
+    /// the already-loaded capability catalog.
     pub fn refresh_providers(&mut self, cx: &mut Context<Self>) {
         let stores = self.stores.clone();
+        let capabilities = self.capabilities.clone();
         cx.spawn(async move |this, cx| {
             let (providers, settings) = cx
                 .background_spawn(async move {
                     let providers = stores
                         .config
                         .list_providers()
-                        .map(|list| list.iter().map(ConfiguredProvider::from).collect())
+                        .map(|list| {
+                            list.iter()
+                                .map(ConfiguredProvider::from)
+                                .map(|provider| match &capabilities {
+                                    Some(catalog) => enrich_provider(provider, catalog),
+                                    None => provider,
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default();
                     let settings = stores.config.get_settings().unwrap_or_default();
                     (providers, settings)
@@ -703,6 +739,7 @@ impl ChatService {
             provider: provider.clone(),
             selection: selection.clone(),
             messages,
+            catalog: self.capabilities.clone(),
             mcp: self.mcp_context(),
         };
 

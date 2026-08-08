@@ -2,8 +2,12 @@
 //! the composer) and the pure key encode/decode helpers. The interactive
 //! composer itself is rendered from `AppState` (see `app.rs`).
 
-use gpui::{div, App, Entity, IntoElement, ParentElement as _, SharedString, Styled as _, Window};
+use gpui::{
+    div, prelude::FluentBuilder as _, App, Entity, IntoElement, ParentElement as _, SharedString,
+    Styled as _, Window,
+};
 use gpui_component::{
+    h_flex,
     select::{Select, SelectItem, SelectState},
     v_flex, ActiveTheme, Sizable as _,
 };
@@ -16,6 +20,9 @@ use crate::services::provider_kit::ConfiguredProvider;
 pub struct ModelItem {
     pub provider_label: String,
     pub model: String,
+    /// The model was contributed by the models.dev capability catalog (not a
+    /// provider preset); the picker renders it with a "discovered" badge.
+    pub discovered: bool,
     value_key: String,
 }
 
@@ -31,19 +38,40 @@ impl SelectItem for ModelItem {
     }
 
     fn render(&self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let accent = theme.accent;
+        let model = self.model.clone();
+        let provider_label = self.provider_label.clone();
         v_flex()
             .gap_0p5()
             .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(self.model.clone()),
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(model),
+                    )
+                    .when(self.discovered, |el| {
+                        el.child(
+                            div()
+                                .px_1()
+                                .py_0p5()
+                                .rounded_sm()
+                                .bg(accent.opacity(0.14))
+                                .text_xs()
+                                .text_color(accent)
+                                .child("discovered"),
+                        )
+                    }),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(self.provider_label.clone()),
+                    .child(provider_label),
             )
     }
 }
@@ -62,7 +90,9 @@ pub fn decode_model_key(key: &str) -> Option<(String, String)> {
     Some((provider_id.to_string(), model.to_string()))
 }
 
-/// Build the picker items from the configured providers.
+/// Build the picker items from the configured providers. Catalog-sourced
+/// models (appended to `provider.models` by the boot enrichment) render with
+/// the "discovered" badge; preset/default models do not.
 pub fn model_items(providers: &[ConfiguredProvider]) -> Vec<ModelItem> {
     providers
         .iter()
@@ -76,6 +106,7 @@ pub fn model_items(providers: &[ConfiguredProvider]) -> Vec<ModelItem> {
             models.into_iter().map(move |model| ModelItem {
                 provider_label: provider.label.clone(),
                 value_key: model_key(&provider.id, &model),
+                discovered: provider.catalog_models.contains(&model),
                 model,
             })
         })
@@ -118,9 +149,10 @@ mod tests {
                 label: "Anthropic".into(),
                 kind: aiden_data::portable_config::ProviderKind::Anthropic,
                 base_url: String::new(),
-                models: vec!["claude-sonnet-5".into()],
+                models: vec!["claude-sonnet-5".into(), "claude-sonnet-6".into()],
                 default_model: None,
                 model_metadata: Default::default(),
+                catalog_models: vec!["claude-sonnet-6".into()],
                 needs_key: true,
                 has_key: true,
             },
@@ -132,13 +164,18 @@ mod tests {
                 models: vec!["qwen2.5-coder".into()],
                 default_model: Some("qwen2.5-coder".into()),
                 model_metadata: Default::default(),
+                catalog_models: Vec::new(),
                 needs_key: false,
                 has_key: false,
             },
         ];
         let items = model_items(&providers);
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 3);
         assert_eq!(items[0].value(), "anthropic\u{0}claude-sonnet-5");
-        assert_eq!(items[1].value(), "custom:lmstudio\u{0}qwen2.5-coder");
+        assert!(!items[0].discovered, "preset models carry no badge");
+        assert_eq!(items[1].value(), "anthropic\u{0}claude-sonnet-6");
+        assert!(items[1].discovered, "catalog-sourced models are badged");
+        assert_eq!(items[2].value(), "custom:lmstudio\u{0}qwen2.5-coder");
+        assert!(!items[2].discovered);
     }
 }

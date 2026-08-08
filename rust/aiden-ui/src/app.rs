@@ -1216,6 +1216,7 @@ mod tests {
             models: vec!["qwen3:8b".into()],
             default_model: Some("qwen3:8b".into()),
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key: false,
             has_key: false,
         };

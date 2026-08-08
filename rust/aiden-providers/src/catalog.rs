@@ -454,10 +454,16 @@ pub fn builtin_runtime_metadata(provider_id: &str, model_id: &str) -> Option<Run
     })
 }
 
-/// `resolveProviderRuntimeLimits` — discovered metadata overrides, builtin
-/// pi-exact metadata survives.
+/// `resolveProviderRuntimeLimits` — discovered metadata overrides, then the
+/// models.dev capability catalog, then builtin pi-exact metadata survives.
+///
+/// Priority chain: discovered > models.dev catalog > builtin > conservative.
+/// The catalog is the richest bundled source (`resources/model-capabilities.json`
+/// built by `npm run models:refresh`), so it outranks the static
+/// [`crate::builtin`] snapshot while discovered metadata (reported by the
+/// provider connection itself) still wins.
 pub fn resolve_provider_runtime_limits(
-    catalog: Option<&serde_json::Value>,
+    catalog: Option<&crate::model_capabilities::ModelCapabilitiesCatalog>,
     provider: &StoredProvider,
     model_id: &str,
     pi_exact: Option<&RuntimeModelMetadata>,
@@ -475,20 +481,57 @@ pub fn resolve_provider_runtime_limits(
         .as_ref()
         .and_then(|metadata| metadata.get(model_id))
         .map(discovered_runtime_metadata);
-    let effective_provider_id = if runtime_slug.is_some() {
-        &provider.id
-    } else {
-        ""
-    };
-    let merged = match (discovered, pi_exact) {
-        (Some(discovered), Some(pi_exact)) => {
-            Some(merge_runtime_metadata(discovered, pi_exact.clone()))
+    let from_catalog = catalog
+        .and_then(|catalog| {
+            crate::model_capabilities::lookup_model(catalog, &provider.id, model_id)
+        })
+        .map(|capability| catalog_runtime_metadata(&capability));
+    let merged = merge_limits_chain(discovered, from_catalog, pi_exact);
+    // The catalog is already folded into `merged`, so the raw-JSON field
+    // fallback is no longer consulted.
+    resolve_runtime_limits(None, "", model_id, merged.as_ref())
+}
+
+/// Merge three layers with strict precedence — each earlier layer fills in
+/// whatever the next one omits (`primary.or(fallback)` field-wise).
+fn merge_limits_chain(
+    discovered: Option<RuntimeModelMetadata>,
+    from_catalog: Option<RuntimeModelMetadata>,
+    builtin: Option<RuntimeModelMetadata>,
+) -> Option<RuntimeModelMetadata> {
+    let catalog_layer = match (discovered, from_catalog) {
+        (Some(discovered), Some(from_catalog)) => {
+            Some(merge_runtime_metadata(discovered, from_catalog))
         }
         (Some(discovered), None) => Some(discovered),
-        (None, Some(pi_exact)) => Some(pi_exact.clone()),
+        (None, Some(from_catalog)) => Some(from_catalog),
         (None, None) => None,
     };
-    resolve_runtime_limits(catalog, effective_provider_id, model_id, merged.as_ref())
+    match (catalog_layer, builtin) {
+        (Some(primary), Some(fallback)) => Some(merge_runtime_metadata(primary, fallback)),
+        (Some(primary), None) => Some(primary),
+        (None, Some(fallback)) => Some(fallback),
+        (None, None) => None,
+    }
+}
+
+/// Project a models.dev capability row into the runtime metadata shape. The
+/// catalog explicitly declares reasoning and vision (`attachment`), so those
+/// fields are always known (`Some`) when the row exists.
+fn catalog_runtime_metadata(
+    capability: &crate::model_capabilities::ModelCapability,
+) -> RuntimeModelMetadata {
+    RuntimeModelMetadata {
+        context_window: capability.context_length(),
+        max_tokens: capability.max_output(),
+        reasoning: Some(capability.reasoning),
+        input: Some(if capability.accepts_images() {
+            vec![Modality::Text, Modality::Image]
+        } else {
+            vec![Modality::Text]
+        }),
+        ..Default::default()
+    }
 }
 
 /// Request-time limits without a models.dev catalog or discovered metadata:
@@ -1563,6 +1606,82 @@ mod tests {
         assert!(
             limits.thinking_level_map.is_some(),
             "builtin thinking map survives"
+        );
+    }
+
+    #[test]
+    fn catalog_runtime_limits_override_builtin_defaults() {
+        use crate::model_capabilities::tests::fixture_catalog_json;
+        use crate::model_capabilities::{lookup_provider, ModelCapabilitiesCatalog};
+
+        let catalog: ModelCapabilitiesCatalog =
+            serde_json::from_value(fixture_catalog_json()).expect("fixture parses");
+        let anthropic = provider(
+            "anthropic",
+            ProviderKind::Openai,
+            "https://api.anthropic.com/v1",
+        );
+        // The fixture catalog reports a *different* window for claude-sonnet-5
+        // than the builtin snapshot (1M/128k): the catalog must win while the
+        // builtin thinking map survives (the catalog has no thinking levels).
+        let limits =
+            resolve_provider_runtime_limits(Some(&catalog), &anthropic, "claude-sonnet-5", None);
+        assert_eq!(limits.context_window, 900_000);
+        assert_eq!(limits.max_tokens, 100_000);
+        assert!(limits.reasoning);
+        assert!(limits.input.contains(&Modality::Image));
+        let map = limits
+            .thinking_level_map
+            .as_ref()
+            .expect("builtin map survives");
+        assert_eq!(map.get("xhigh"), Some(&Some("xhigh".to_string())));
+
+        // A model that exists only in the catalog (not in builtin) resolves
+        // from the catalog alone, never the conservative fallback.
+        let only_catalog =
+            resolve_provider_runtime_limits(Some(&catalog), &anthropic, "claude-sonnet-6", None);
+        assert_eq!(only_catalog.context_window, 300_000);
+        assert_eq!(only_catalog.max_tokens, 80_000);
+
+        // Discovered metadata still outranks the catalog.
+        let mut discovered = anthropic.clone();
+        discovered.model_metadata = Some(HashMap::from([(
+            "claude-sonnet-5".to_string(),
+            ProviderModelMetadata {
+                source: "provider".to_string(),
+                context_length: Some(10_000),
+                reasoning: Some(false),
+                vision: Some(false),
+                ..Default::default()
+            },
+        )]));
+        let limits =
+            resolve_provider_runtime_limits(Some(&catalog), &discovered, "claude-sonnet-5", None);
+        assert_eq!(
+            limits.context_window, 10_000,
+            "discovered wins over catalog"
+        );
+        assert!(!limits.reasoning);
+        assert!(!limits.input.contains(&Modality::Image));
+        // The catalog still supplies the fields discovery did not report...
+        assert_eq!(
+            limits.max_tokens, 100_000,
+            "catalog beats builtin maxTokens"
+        );
+
+        // Custom providers never borrow catalog data (no slug match).
+        let custom = provider("custom:x", ProviderKind::Openai, "http://127.0.0.1:1");
+        let limits =
+            resolve_provider_runtime_limits(Some(&catalog), &custom, "claude-sonnet-5", None);
+        assert_eq!(
+            limits.context_window,
+            conservative_runtime_limits().context_window
+        );
+
+        // Enrichment helper sanity: the catalog entry lists all three models.
+        assert_eq!(
+            lookup_provider(&catalog, "anthropic").map(|p| p.models.len()),
+            Some(3)
         );
     }
 

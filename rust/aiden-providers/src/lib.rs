@@ -37,6 +37,7 @@ pub mod gemini_cache;
 pub mod google;
 pub mod json;
 pub mod list;
+pub mod model_capabilities;
 pub mod openai_completions;
 pub mod openai_responses;
 pub mod registry;

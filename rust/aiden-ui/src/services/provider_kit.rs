@@ -22,6 +22,9 @@ use aiden_providers::codex::{
     CodexAuthStore, CodexProvider, OAuthCredential, OPENAI_CODEX_PROVIDER_ID,
 };
 use aiden_providers::google::{GoogleProvider, GOOGLE_PROVIDER_ID};
+use aiden_providers::model_capabilities::{
+    self, lookup_provider, ModelCapabilitiesCatalog, ModelCapability,
+};
 use aiden_providers::provider_error_message;
 use aiden_providers::{
     anthropic::AnthropicProvider, openai_completions::OpenAICompletionsProvider, ApiFamily,
@@ -75,6 +78,11 @@ pub struct ConfiguredProvider {
     /// Per-model metadata reported by explicit discovery (drives request-time
     /// reasoning/vision/context limits for the selected model).
     pub model_metadata: HashMap<String, aiden_data::portable_config::ProviderModelMetadata>,
+    /// Models contributed by the models.dev capability catalog (`resources/
+    /// model-capabilities.json`) — not part of the stored provider record.
+    /// The picker and the settings Providers section badge these as
+    /// "discovered" (catalog-sourced) vs the preset defaults.
+    pub catalog_models: Vec<String>,
     pub needs_key: bool,
     pub has_key: bool,
 }
@@ -151,10 +159,106 @@ impl From<&StoredProvider> for ConfiguredProvider {
                 .unwrap_or_default()
                 .into_iter()
                 .collect(),
+            catalog_models: Vec::new(),
             needs_key: provider.needs_key,
             has_key: provider.has_key,
         }
     }
+}
+
+// ===========================================================================
+// models.dev capability catalog enrichment
+// ===========================================================================
+
+/// Attempt to load the models.dev capability catalog from its default
+/// location. Build-time-only data: this only reads the pre-built
+/// `resources/model-capabilities.json` snapshot (per AGENTS.md the app never
+/// contacts models.dev). `None` when the file is absent (plain dev checkouts)
+/// or unreadable — callers log and fall back to the builtin snapshot.
+pub fn load_capabilities() -> Option<Arc<ModelCapabilitiesCatalog>> {
+    match model_capabilities::load_default_capabilities() {
+        Ok(catalog) => Some(Arc::new(catalog)),
+        Err(error) => {
+            tracing::debug!("model capabilities catalog unavailable: {error}");
+            None
+        }
+    }
+}
+
+/// Project one catalog capability row into the provider-reported metadata
+/// shape (so request-time limits pick up the catalog fields without needing
+/// the typed catalog at every turn).
+fn catalog_metadata(
+    capability: &ModelCapability,
+) -> aiden_data::portable_config::ProviderModelMetadata {
+    use aiden_data::portable_config::{
+        GenerationThinkingLevel, ProviderModelMetadataSource, ProviderModelType,
+    };
+    let thinking_levels: Option<Vec<GenerationThinkingLevel>> =
+        (!capability.reasoning_options.is_empty()).then(|| {
+            capability
+                .reasoning_options
+                .iter()
+                .flat_map(|option| &option.values)
+                .filter_map(|value| match value.as_deref() {
+                    Some("off") => Some(GenerationThinkingLevel::Off),
+                    Some("low") => Some(GenerationThinkingLevel::Low),
+                    Some("medium") => Some(GenerationThinkingLevel::Medium),
+                    Some("high") => Some(GenerationThinkingLevel::High),
+                    Some("xhigh") => Some(GenerationThinkingLevel::Xhigh),
+                    Some("max") => Some(GenerationThinkingLevel::Max),
+                    _ => None,
+                })
+                .collect()
+        });
+    aiden_data::portable_config::ProviderModelMetadata {
+        source: ProviderModelMetadataSource::Provider,
+        name: capability.name.clone(),
+        r#type: Some(ProviderModelType::Llm),
+        vision: Some(capability.accepts_images()),
+        tool_call: Some(capability.tool_call),
+        reasoning: Some(capability.reasoning),
+        thinking_levels,
+        thinking_can_disable: None,
+        context_length: capability.context_length().map(u64::from),
+        parameter_count: None,
+        format: None,
+    }
+}
+
+/// Enrich a configured provider with its models.dev catalog models: append the
+/// catalog ids the stored record does not already list (the picker then shows
+/// ALL catalog models, not just the preset defaults) and back-fill per-model
+/// metadata so request-time limits use the catalog data. Providers without a
+/// catalog slug (`custom:*`, Ollama, LM Studio) are returned untouched.
+pub fn enrich_provider(
+    mut provider: ConfiguredProvider,
+    catalog: &ModelCapabilitiesCatalog,
+) -> ConfiguredProvider {
+    let Some(entry) = lookup_provider(catalog, &provider.id) else {
+        return provider;
+    };
+    let mut catalog_models: Vec<String> = entry
+        .models
+        .values()
+        .filter_map(|capability| capability.id.clone())
+        .filter(|id| !provider.models.contains(id))
+        .collect();
+    catalog_models.sort();
+    for capability in entry.models.values() {
+        let Some(id) = capability.id.clone() else {
+            continue;
+        };
+        provider
+            .model_metadata
+            .entry(id)
+            .or_insert_with(|| catalog_metadata(capability));
+    }
+    // Append the catalog ids the stored record lacks so the picker lists ALL
+    // catalog models for the provider, not just the preset defaults.
+    provider.models.extend(catalog_models.iter().cloned());
+    provider.catalog_models = catalog_models;
+    provider
 }
 
 /// The Messages endpoint for a configured Anthropic-compatible base URL:
@@ -218,6 +322,9 @@ pub struct TurnSnapshot {
     pub provider: ConfiguredProvider,
     pub selection: ModelSelection,
     pub messages: Vec<Message>,
+    /// The models.dev capability catalog (loaded at boot); request-time limits
+    /// consult it between discovered metadata and the builtin fallback.
+    pub catalog: Option<Arc<ModelCapabilitiesCatalog>>,
     /// Optional MCP tool wiring: when enabled servers are configured, the
     /// driver collects their tools into the request and dispatches model tool
     /// calls through the manager (single tool round).
@@ -287,12 +394,17 @@ pub fn build_stream_request_with_tools(
     messages: Vec<Message>,
 ) -> StreamRequest {
     let model_id = &snapshot.selection.model;
-    // `buildModel` (model-runtime-core.ts): request-time limits are pi-exact
-    // builtin metadata overridden by connection-discovered metadata, then the
-    // conservative fallback. Discovered fields win because the builtin record
-    // is the *fallback* layer (`resolveProviderRuntimeLimits`).
+    // `buildModel` (model-runtime-core.ts): request-time limits are the
+    // richest available data — connection-discovered metadata, then the
+    // models.dev capability catalog, then pi-exact builtin metadata, then the
+    // conservative fallback (`resolveProviderRuntimeLimits`).
     let stored = catalog_provider(&snapshot.provider);
-    let limits = catalog::resolve_provider_runtime_limits(None, &stored, model_id, None);
+    let limits = catalog::resolve_provider_runtime_limits(
+        snapshot.catalog.as_deref(),
+        &stored,
+        model_id,
+        None,
+    );
     StreamRequest {
         provider_id: snapshot.selection.provider_id.clone(),
         api: snapshot.provider.api_family(),
@@ -715,6 +827,7 @@ mod tests {
             models: vec!["m1".into()],
             default_model: None,
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key,
             has_key,
         }
@@ -797,6 +910,7 @@ mod tests {
             models: vec!["qwen2.5-coder".into()],
             default_model: None,
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key: false,
             has_key: false,
         };
@@ -820,6 +934,7 @@ mod tests {
             models: vec!["gemini-2.5-flash".into()],
             default_model: Some("gemini-2.5-flash".into()),
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key: true,
             has_key: true,
         };
@@ -836,6 +951,7 @@ mod tests {
             models: vec!["gpt-5.4".into()],
             default_model: Some("gpt-5.4".into()),
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key: true,
             has_key: false,
         };
@@ -851,6 +967,7 @@ mod tests {
             models: vec!["claude-sonnet-4-5".into()],
             default_model: Some("claude-sonnet-4-5".into()),
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key: true,
             has_key: true,
         };
@@ -868,6 +985,7 @@ mod tests {
                 models: vec!["m".into()],
                 default_model: None,
                 model_metadata: Default::default(),
+                catalog_models: Vec::new(),
                 needs_key: true,
                 has_key: true,
             };
@@ -925,6 +1043,7 @@ mod tests {
             models: vec!["gemini-2.5-flash".into()],
             default_model: None,
             model_metadata: HashMap::from([("gemini-2.5-flash".to_string(), metadata)]),
+            catalog_models: Vec::new(),
             needs_key: true,
             has_key: true,
         };
@@ -935,6 +1054,7 @@ mod tests {
                 model: "gemini-2.5-flash".into(),
             },
             messages: Vec::new(),
+            catalog: None,
             mcp: None,
         };
         let request = build_stream_request(&snapshot);
@@ -973,6 +1093,7 @@ mod tests {
             models: vec!["claude-sonnet-5".into()],
             default_model: None,
             model_metadata: Default::default(),
+            catalog_models: Vec::new(),
             needs_key: true,
             has_key: true,
         };
@@ -983,6 +1104,7 @@ mod tests {
                 model: "claude-sonnet-5".into(),
             },
             messages: Vec::new(),
+            catalog: None,
             mcp: None,
         };
         let request = build_stream_request(&snapshot);
@@ -1021,6 +1143,7 @@ mod tests {
                 models: vec!["m1".into()],
                 default_model: None,
                 model_metadata: Default::default(),
+                catalog_models: Vec::new(),
                 needs_key: false,
                 has_key: false,
             },
@@ -1034,6 +1157,156 @@ mod tests {
         assert!(!request.reasoning);
         assert_eq!(request.context_window, 128_000);
         assert!(request.thinking_level_map.is_none());
+    }
+
+    #[test]
+    fn catalog_enrichment_appends_models_and_backfills_metadata() {
+        use aiden_providers::model_capabilities::ModelCapabilitiesCatalog;
+
+        let catalog: ModelCapabilitiesCatalog = serde_json::from_value(serde_json::json!({
+            "anthropic": {
+                "id": "anthropic",
+                "models": {
+                    "claude-sonnet-5": {
+                        "id": "claude-sonnet-5",
+                        "name": "Claude Sonnet 5",
+                        "attachment": true,
+                        "reasoning": true,
+                        "tool_call": true,
+                        "reasoning_options": [
+                            { "type": "effort", "values": ["low", "high"] }
+                        ],
+                        "limit": { "context": 900_000, "output": 100_000 }
+                    },
+                    "claude-sonnet-6": {
+                        "id": "claude-sonnet-6",
+                        "name": "Claude Sonnet 6",
+                        "attachment": true,
+                        "reasoning": true,
+                        "limit": { "context": 300_000, "output": 80_000 }
+                    }
+                }
+            }
+        }))
+        .expect("fixture parses");
+        let provider = ConfiguredProvider {
+            id: "anthropic".into(),
+            label: "Anthropic".into(),
+            kind: ProviderKind::Anthropic,
+            base_url: "https://api.anthropic.com/v1".into(),
+            models: vec!["claude-sonnet-5".into()],
+            default_model: Some("claude-sonnet-5".into()),
+            model_metadata: Default::default(),
+            catalog_models: Vec::new(),
+            needs_key: true,
+            has_key: true,
+        };
+        let enriched = enrich_provider(provider, &catalog);
+        // Only the catalog model the preset did not list is badged.
+        assert_eq!(enriched.catalog_models, vec!["claude-sonnet-6"]);
+        assert!(enriched.models.contains(&"claude-sonnet-6".to_string()));
+        // Metadata back-filled for every catalog model (the preset one too).
+        let sonnet = &enriched.model_metadata["claude-sonnet-5"];
+        assert_eq!(sonnet.context_length, Some(900_000));
+        assert_eq!(sonnet.vision, Some(true));
+        assert_eq!(sonnet.reasoning, Some(true));
+        assert_eq!(
+            sonnet.thinking_levels.as_ref().map(|levels| levels.len()),
+            Some(2)
+        );
+        let sonnet6 = &enriched.model_metadata["claude-sonnet-6"];
+        assert_eq!(sonnet6.context_length, Some(300_000));
+        assert_eq!(sonnet6.name.as_deref(), Some("Claude Sonnet 6"));
+
+        // A provider without a catalog slug is returned untouched.
+        let custom = ConfiguredProvider {
+            id: "custom:lmstudio".into(),
+            label: "LM Studio".into(),
+            kind: ProviderKind::Openai,
+            base_url: "http://127.0.0.1:1234/v1".into(),
+            models: vec!["m1".into()],
+            default_model: None,
+            model_metadata: Default::default(),
+            catalog_models: Vec::new(),
+            needs_key: false,
+            has_key: false,
+        };
+        assert_eq!(enrich_provider(custom.clone(), &catalog), custom);
+    }
+
+    #[test]
+    fn catalog_drives_request_limits_when_passed_in_the_snapshot() {
+        use aiden_providers::model_capabilities::ModelCapabilitiesCatalog;
+
+        let catalog: ModelCapabilitiesCatalog = serde_json::from_value(serde_json::json!({
+            "anthropic": {
+                "id": "anthropic",
+                "models": {
+                    "claude-sonnet-5": {
+                        "id": "claude-sonnet-5",
+                        "name": "Claude Sonnet 5",
+                        "attachment": true,
+                        "reasoning": true,
+                        // Catalog values differ from the builtin snapshot
+                        // (1M/128k) so the override is observable.
+                        "limit": { "context": 900_000, "output": 100_000 }
+                    },
+                    "claude-sonnet-6": {
+                        "id": "claude-sonnet-6",
+                        "name": "Claude Sonnet 6",
+                        "attachment": false,
+                        "reasoning": false,
+                        "limit": { "context": 300_000, "output": 80_000 }
+                    }
+                }
+            }
+        }))
+        .expect("fixture parses");
+        let catalog = Some(Arc::new(catalog));
+        let provider = ConfiguredProvider {
+            id: "anthropic".into(),
+            label: "Anthropic".into(),
+            kind: ProviderKind::Anthropic,
+            base_url: "https://api.anthropic.com/v1".into(),
+            models: vec!["claude-sonnet-5".into(), "claude-sonnet-6".into()],
+            default_model: None,
+            model_metadata: Default::default(),
+            catalog_models: Vec::new(),
+            needs_key: true,
+            has_key: true,
+        };
+        let snapshot = TurnSnapshot {
+            provider: provider.clone(),
+            selection: ModelSelection {
+                provider_id: "anthropic".into(),
+                model: "claude-sonnet-5".into(),
+            },
+            messages: Vec::new(),
+            catalog: catalog.clone(),
+            mcp: None,
+        };
+        // Catalog > builtin: the builtin snapshot reports 1M/128k for
+        // claude-sonnet-5, the catalog 900k/100k. The catalog wins.
+        let request = build_stream_request(&snapshot);
+        assert_eq!(request.context_window, 900_000);
+        assert_eq!(request.max_tokens_limit, 100_000);
+        assert!(request.reasoning);
+        assert!(request.vision);
+
+        // A catalog-only model (absent from builtin) resolves from the catalog
+        // instead of the conservative fallback.
+        let snapshot = TurnSnapshot {
+            selection: ModelSelection {
+                provider_id: "anthropic".into(),
+                model: "claude-sonnet-6".into(),
+            },
+            ..snapshot
+        };
+        let request = build_stream_request(&snapshot);
+        assert_eq!(request.context_window, 300_000);
+        assert_eq!(request.max_tokens_limit, 80_000);
+        assert!(!request.reasoning);
+        assert!(!request.vision);
     }
 
     #[test]

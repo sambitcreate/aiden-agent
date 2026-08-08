@@ -33,6 +33,8 @@ mod providers;
 mod scheduled;
 mod shortcuts;
 
+use providers::enrich_provider_row;
+
 /// The left-nav sections, in display order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
@@ -140,7 +142,11 @@ impl SettingsView {
         this
     }
 
-    /// Load every section's durable state on the background executor.
+    /// Load every section's durable state on the background executor. Also
+    /// loads the models.dev capability catalog and enriches each built-in
+    /// provider row with its catalog models (shown with a "discovered" badge
+    /// in the Providers section). A missing catalog file (dev checkouts) just
+    /// leaves the rows unenriched — never a crash.
     pub fn boot(&mut self, cx: &mut Context<Self>) {
         if self.booted {
             return;
@@ -150,12 +156,14 @@ impl SettingsView {
         cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_spawn(async move {
+                    let capabilities = crate::services::provider_kit::load_capabilities();
                     let providers = services
                         .config
                         .list_providers()
                         .map(|list| {
                             list.iter()
                                 .map(providers::ProviderRow::from)
+                                .map(|row| enrich_provider_row(row, capabilities.as_deref()))
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
@@ -185,13 +193,22 @@ impl SettingsView {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    (providers, settings, schedules, mcp_servers, workspaces)
+                    (
+                        providers,
+                        settings,
+                        schedules,
+                        mcp_servers,
+                        workspaces,
+                        capabilities,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let (providers, settings, schedules, mcp_servers, workspaces) = snapshot;
+                let (providers, settings, schedules, mcp_servers, workspaces, capabilities) =
+                    snapshot;
                 this.providers.providers = providers;
                 this.providers.settings = settings;
+                this.providers.capabilities = capabilities;
                 this.scheduled.schedules = schedules;
                 this.scheduled.workspaces = workspaces;
                 this.mcp.servers = mcp_servers;
@@ -216,6 +233,7 @@ impl SettingsView {
     /// mutations run on the background and then call this).
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let services = self.services.clone();
+        let capabilities = self.providers.capabilities.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_spawn(async move {
@@ -225,6 +243,7 @@ impl SettingsView {
                         .map(|list| {
                             list.iter()
                                 .map(providers::ProviderRow::from)
+                                .map(|row| enrich_provider_row(row, capabilities.as_deref()))
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
