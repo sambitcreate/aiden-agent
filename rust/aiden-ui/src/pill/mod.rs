@@ -244,7 +244,7 @@ impl PillView {
             .border_color(theme.border.alpha(0.6))
             .shadow_md()
             .child(match phase {
-                Phase::Idle => unreachable!("hidden by the caller"),
+                Phase::Idle => div().into_any_element(),
                 Phase::Listening => self.listening_content(motion, cx).into_any_element(),
                 Phase::Transcribing => {
                     let spinner: gpui::AnyElement = if motion {
