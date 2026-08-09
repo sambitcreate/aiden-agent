@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   SLASH_LIMITS,
   SkillInvocationError,
@@ -16,6 +16,7 @@ export interface SkillRegistryCandidate {
   source: SkillSource;
   enabled: boolean;
   path?: string;
+  blockedReason?: string;
 }
 
 export interface ResolvedSkillCandidate extends SkillRegistryCandidate {
@@ -54,11 +55,19 @@ function toolSlug(value: string): string {
     .slice(0, 40);
 }
 
+export function skillToolKey(candidate: Pick<SkillRegistryCandidate, "name" | "stableId">): string {
+  const slug = toolSlug(candidate.name);
+  const fallback = createHash("sha256")
+    .update(candidate.stableId, "utf8")
+    .digest("hex")
+    .slice(0, 12);
+  return `skill_${slug || `unnamed_${fallback}`}`;
+}
+
 /** Mirrors the model-facing tool namespace and also claims the visible-name identity. */
 export function skillCollisionKeys(candidate: SkillRegistryCandidate): readonly string[] {
   const name = canonicalSkillIdentity(candidate.name);
-  const slug = toolSlug(candidate.name) || toolSlug(candidate.stableId) || "unnamed";
-  return [`name:${name}`, `tool:skill_${slug}`];
+  return [`name:${name}`, `tool:${skillToolKey(candidate)}`];
 }
 
 function instructionBytes(candidate: SkillRegistryCandidate): number {
@@ -115,6 +124,14 @@ export function resolveSkillCandidates(
         ...safeCandidate,
         available: false,
         unavailableReason: "Duplicate internal skill identity.",
+      });
+      continue;
+    }
+    if (candidate.blockedReason) {
+      outcomes.set(candidate, {
+        ...safeCandidate,
+        available: false,
+        unavailableReason: candidate.blockedReason,
       });
       continue;
     }

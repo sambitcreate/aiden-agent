@@ -30,7 +30,7 @@ import {
   presetSecretId,
   presetServerId,
 } from "../services/mcp-presets.js";
-import { discoverSkills } from "../services/skills-discovery.js";
+import { skillRegistry } from "../services/skill-registry-main.js";
 import { transcribe } from "../services/transcription.js";
 import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
@@ -44,15 +44,27 @@ export { asString, parseSkill, parseMcpServer };
 export function registerPhase2Handlers(): void {
   // ── Skills ───────────────────────────────────────────────────────────
   ipcMain.handle("skills:list", async () => configStore.listSkills());
-  ipcMain.handle("skills:save", async (_event, skill: unknown) =>
-    mutatePortableConfigAndSync(() => configStore.saveSkill(parseSkill(skill))),
+  ipcMain.handle("skills:save", async (_event, skill: unknown) => {
+    try {
+      return await mutatePortableConfigAndSync(() => configStore.saveSkill(parseSkill(skill)));
+    } finally {
+      skillRegistry.invalidate();
+    }
+  });
+  ipcMain.handle("skills:remove", async (_event, id: unknown) => {
+    try {
+      await mutatePortableConfigAndSync(() => configStore.removeSkill(asString(id, "id")));
+    } finally {
+      skillRegistry.invalidate();
+    }
+  });
+  ipcMain.handle("skills:catalog", async (_event, workspaceId: unknown) =>
+    skillRegistry.catalog(asString(workspaceId, "workspaceId")),
   );
-  ipcMain.handle("skills:remove", async (_event, id: unknown) =>
-    mutatePortableConfigAndSync(() => configStore.removeSkill(asString(id, "id"))),
-  );
-  // Read-only skills discovered on disk from `.agents` folders (workspace + global).
-  ipcMain.handle("skills:discovered", async (_event, folderPath: unknown) =>
-    discoverSkills(typeof folderPath === "string" && folderPath ? folderPath : undefined),
+  // Compatibility alias with the safe workspace-id contract. Renderer paths
+  // are never accepted as discovery authority.
+  ipcMain.handle("skills:discovered", async (_event, workspaceId: unknown) =>
+    skillRegistry.catalog(asString(workspaceId, "workspaceId")),
   );
 
   // ── MCP servers ──────────────────────────────────────────────────────

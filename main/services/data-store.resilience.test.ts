@@ -120,6 +120,51 @@ test("DataStore can make valid-but-unsafe files permanently read-only", async (t
   assert.equal(await fs.readFile(target, "utf-8"), original);
 });
 
+test("DataStore rejects a proposed write that violates its safety schema", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-proposed-unsafe-");
+  const target = path.join(dir, "config.json");
+  await fs.writeFile(target, JSON.stringify({ count: 1 }), "utf-8");
+  const store = new DataStore<{ count: number }>("config.json", { count: 0 }, () => dir, {
+    isSafe: (value) =>
+      Boolean(
+        value &&
+        typeof value === "object" &&
+        typeof (value as { count?: unknown }).count === "number" &&
+        (value as { count: number }).count <= 10,
+      ),
+  });
+
+  await assert.rejects(() => store.save({ count: 11 }), DataStoreUnsafeWriteError);
+  assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { count: 1 });
+});
+
+test("DataStore refuses a regular file above its configured read ceiling", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-oversized-");
+  const target = path.join(dir, "config.json");
+  await fs.writeFile(target, JSON.stringify({ value: "x".repeat(128) }), "utf8");
+  const store = new DataStore("config.json", { value: "default" }, () => dir, {
+    maxBytes: 64,
+  });
+
+  assert.deepEqual(await store.load(), { value: "default" });
+  assert.equal(await store.loadedFromCorruptFile(), true);
+});
+
+test("DataStore rejects JSON escaping that expands a write above its byte ceiling", async (t) => {
+  const dir = await tmpDir(t, "aiden-ds-expanded-write-");
+  const target = path.join(dir, "config.json");
+  await fs.writeFile(target, JSON.stringify({ value: "safe" }), "utf8");
+  const store = new DataStore("config.json", { value: "default" }, () => dir, {
+    maxBytes: 64,
+  });
+
+  await assert.rejects(
+    () => store.save({ value: "\0".repeat(20) }),
+    DataStoreUnsafeWriteError,
+  );
+  assert.deepEqual(JSON.parse(await fs.readFile(target, "utf8")), { value: "safe" });
+});
+
 test("DataStore.load caches: a second load does not re-read disk", async (t) => {
   const dir = await tmpDir(t, "aiden-ds-cache-");
   const file = path.join(dir, "config.json");

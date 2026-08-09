@@ -15,7 +15,6 @@ import type {
   ChatTitleRenameResult,
   ChatStartParams,
   ComputerUseStatus,
-  DiscoveredSkill,
   EngineStatus,
   ExternalEditor,
   GitBranches,
@@ -89,6 +88,7 @@ import {
 } from "./chat-terminal-sync";
 import type { AppCapabilities } from "./app-capabilities";
 import type { AppearanceConfig, AppearancePreviewSnapshot } from "../shared/appearance";
+import { parseSkillCatalog, type SkillCatalogEntry } from "../shared/slash-commands";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -242,8 +242,11 @@ export const skillsApi = {
   list: () => invoke<Skill[]>("skills:list"),
   save: (skill: Skill) => invoke<Skill>("skills:save", skill),
   remove: (id: string) => invoke<void>("skills:remove", id),
-  /** Read-only skills discovered from `.agents` folders (workspace + global). */
-  discovered: (folderPath?: string) => invoke<DiscoveredSkill[]>("skills:discovered", folderPath),
+  catalog: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
+    parseSkillCatalog(await invoke<unknown>("skills:catalog", workspaceId)),
+  /** @deprecated Compatibility alias for the renderer-safe catalog. */
+  discovered: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
+    parseSkillCatalog(await invoke<unknown>("skills:discovered", workspaceId)),
 };
 
 // ── MCP servers ───────────────────────────────────────────────────────

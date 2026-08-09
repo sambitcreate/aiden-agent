@@ -7,19 +7,14 @@
 
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import * as fs from "fs/promises";
-import * as path from "path";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
 import { collectMcpAgentTools } from "./mcp.js";
 import { buildCodingTools } from "./coding-tools.js";
-import { discoverSkills } from "./skills-discovery.js";
-import type {
-  DiscoveredSkill,
-  ScheduledMcpServerBinding,
-  Skill,
-  WorkspacePermission,
-} from "./types.js";
+import type { ScheduledMcpServerBinding, WorkspacePermission } from "./types.js";
+import type { SkillRegistrySnapshot } from "./skill-registry.js";
+import { skillRegistry } from "./skill-registry-main.js";
+import { buildSkillTools } from "./skill-tools.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import { createComputerUseAgentTool } from "./computer-use/tool.js";
 import {
@@ -40,18 +35,7 @@ function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
 }
 
-export function skillToolKey(skill: Skill | DiscoveredSkill): string {
-  const slugify = (value: string) =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 40);
-  const slug = slugify(skill.name);
-  // Names without any ASCII alphanumeric characters (e.g. CJK-only) slug to
-  // nothing; fall back to the id so the tool name stays API-valid.
-  return `skill_${slug || slugify(skill.id) || "unnamed"}`;
-}
+export { skillToolKey } from "./skill-registry-core.js";
 
 function makeExaTool(apiKey: string): AgentTool {
   return {
@@ -99,63 +83,14 @@ function makeExaTool(apiKey: string): AgentTool {
   };
 }
 
-const SKILL_FILE_SAMPLE_LIMIT = 10;
-
-/** Supporting files bundled next to a discovered skill's SKILL.md (sampled). */
-async function listSkillSupportingFiles(skillMdPath: string): Promise<string[]> {
-  const dir = path.dirname(skillMdPath);
-  const files: string[] = [];
-  try {
-    for await (const entry of fs.glob("**/*", { cwd: dir, withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const absolute = path.join(entry.parentPath, entry.name);
-      if (absolute === skillMdPath) continue;
-      files.push(absolute);
-      if (files.length >= SKILL_FILE_SAMPLE_LIMIT) break;
-    }
-  } catch {
-    // Unreadable skill directory — the instructions still stand alone.
-  }
-  return files.sort();
-}
-
-function makeSkillTool(skill: Skill | DiscoveredSkill): AgentTool {
-  const summary = skill.description ? `${skill.name}: ${skill.description}` : skill.name;
-  return {
-    name: skillToolKey(skill),
-    label: skill.name,
-    description: `${summary} — call this to load detailed instructions before performing the task.`,
-    parameters: Type.Object({}),
-    execute: async (): Promise<AgentToolResult<null>> => {
-      if (!("path" in skill)) return textResult(skill.instructions);
-      // Discovered skill: mirror opencode's skill tool output — instructions
-      // plus the base directory and a sample of bundled files, so relative
-      // paths like scripts/ or reference/ inside the skill stay usable.
-      const base = path.dirname(skill.path);
-      const files = await listSkillSupportingFiles(skill.path);
-      return textResult(
-        [
-          `<skill_content name="${skill.name.replace(/"/g, "&quot;")}">`,
-          skill.instructions,
-          "",
-          `Base directory for this skill: ${base}`,
-          "Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
-          ...(files.length > 0
-            ? ["", "Files bundled with this skill (sampled):", ...files.map((file) => `- ${file}`)]
-            : []),
-          "</skill_content>",
-        ].join("\n"),
-      );
-    },
-  };
-}
-
 /** Context describing where and how much the agent may act. */
 export interface ToolContext {
   /** Workspace identity used as the default target for agent-created schedules. */
   workspaceId?: string;
   /** Absolute path to the workspace folder, if one is bound. */
   workspaceRoot?: string;
+  /** Generation-scoped skill snapshot shared with prompt disclosure. */
+  skillSnapshot?: SkillRegistrySnapshot;
   /** Workspace permission level; "none" withholds all folder-scoped tools. */
   permission: WorkspacePermission;
   /** Optional generation-owned controller. Omitted until Computer Use is explicitly enabled. */
@@ -272,26 +207,12 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
     if (key) tools.push(makeExaTool(key));
   }
 
-  // Agent Skills — each enabled skill becomes a tool that returns its instructions.
-  // Config-defined skills first, then skills discovered on disk (see
-  // skills-discovery.ts for the scanned roots). Dedupe by tool key so a disk
-  // skill can't collide with a configured one.
-  const seenSkillKeys = new Set<string>();
-  const skills = await configStore.listSkills();
-  for (const skill of skills) {
-    if (!skill.enabled) continue;
-    const key = skillToolKey(skill);
-    if (seenSkillKeys.has(key)) continue;
-    seenSkillKeys.add(key);
-    tools.push(makeSkillTool(skill));
-  }
-
-  const discovered = await discoverSkills(ctx.workspaceRoot);
-  for (const skill of discovered) {
-    const key = skillToolKey(skill);
-    if (seenSkillKeys.has(key)) continue;
-    seenSkillKeys.add(key);
-    tools.push(makeSkillTool(skill));
+  // Every skill consumer uses this exact authoritative snapshot.
+  const skillSnapshot =
+    ctx.skillSnapshot ??
+    (ctx.workspaceId ? await skillRegistry.snapshot(ctx.workspaceId) : undefined);
+  if (skillSnapshot) {
+    tools.push(...buildSkillTools(skillSnapshot, ctx.permission !== "none"));
   }
 
   // MCP server tools.

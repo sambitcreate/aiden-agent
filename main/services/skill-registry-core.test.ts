@@ -7,6 +7,7 @@ import {
   projectSkillCatalog,
   projectSkillCatalogEntry,
   resolveSkillCandidates,
+  skillToolKey,
   type SkillCatalogProjectionContext,
   type SkillRegistryCandidate,
 } from "./skill-registry-core.js";
@@ -76,6 +77,13 @@ test("collision identity is Unicode-normalized and locale independent", () => {
     candidate("two", "global", true, "é"),
   ]);
   assert.equal(resolved.filter((entry) => entry.available).length, 1);
+});
+
+test("non-ASCII skill names receive distinct stable model tool keys", () => {
+  const first = skillToolKey(candidate("workspace:one", "workspace", true, "审查"));
+  const second = skillToolKey(candidate("workspace:two", "workspace", true, "测试"));
+  assert.match(first, /^skill_unnamed_[a-f0-9]{12}$/u);
+  assert.notEqual(first, second);
 });
 
 test("oversized instructions fail closed", () => {

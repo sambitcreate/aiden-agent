@@ -1,7 +1,6 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Active — Phase 0 contracts are complete; Phase 1 skill-resolution
-  unification is next
+- **Status:** Active — Phases 0–1 are complete; Phase 2 composer palette is next
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
@@ -535,6 +534,19 @@ review lanes returned clean final P0/P1/P2 verdicts after the correction loops.
 skill identity behavior.
 
 ### Phase 1 — Unify skill resolution
+
+**Completed 2026-08-09.** One main-process registry snapshot now drives model
+tools, prompt disclosure, the renderer-safe workspace catalog, and explicit
+resolution. Content-derived revisions preserve unchanged invocation IDs while
+workspace/config/permission changes invalidate every affected consumer.
+Discovery and configured skills have per-file, source, count, aggregate, and
+config-file byte bounds; root/file descriptor identities close symlink and
+replacement races. No Access performs no workspace discovery, catalog IPC
+accepts only main-resolved workspace IDs, and renderer DTOs expose no paths,
+instructions, tool keys, or secrets. The registered 51-test Slash Commands
+gate, focused config/discovery suites, full repository suite, TypeScript,
+ESLint, and diff checks pass. Three independent high-reasoning review lanes
+returned clean final P0/P1/P2 verdicts after the correction loops.
 
 - Implement the main-process skill registry.
 - Move tool assembly and prompt disclosure onto the shared resolver.

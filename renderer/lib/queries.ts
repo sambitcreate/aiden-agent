@@ -72,8 +72,8 @@ export const queryKeys = {
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
   gitWorktrees: (workspaceId: string | undefined) =>
     ["gitWorktrees", workspaceId ?? "none"] as const,
-  discoveredSkills: (folderPath: string | undefined) =>
-    ["discoveredSkills", folderPath ?? "none"] as const,
+  skillCatalog: (workspaceId: string | undefined) =>
+    ["skillCatalog", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -302,10 +302,11 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
   });
 }
 
-export function useDiscoveredSkills(folderPath: string | undefined) {
+export function useDiscoveredSkills(workspaceId: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.discoveredSkills(folderPath),
-    queryFn: () => skillsApi.discovered(folderPath),
+    queryKey: queryKeys.skillCatalog(workspaceId),
+    queryFn: () => skillsApi.catalog(workspaceId as string),
+    enabled: Boolean(workspaceId),
     staleTime: 30_000,
   });
 }

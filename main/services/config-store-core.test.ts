@@ -1298,7 +1298,7 @@ test("malformed portable MCP and skill entries stay byte-identical and read as e
         instructions: "",
         enabled: true,
       }),
-      /(?:Portable config is malformed|Config migration is deferred)/u,
+      /(?:Portable config is malformed|Config migration is deferred|schema is not safe)/u,
     );
     assert.equal(await fs.readFile(h.portableFile, "utf-8"), raw);
   }

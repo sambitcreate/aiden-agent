@@ -735,7 +735,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       await workspacesApi.update(effectiveWorkspace.id, { permission });
-      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
+        qc.invalidateQueries({ queryKey: queryKeys.skillCatalog(effectiveWorkspace.id) }),
+      ]);
     },
     [
       effectiveWorkspace,
