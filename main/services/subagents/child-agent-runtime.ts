@@ -12,6 +12,7 @@ import type {
   ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { writeDevLog } from "../dev-log.js";
 import { buildAgentRuntimeOptions } from "../generation-runtime.js";
 import {
   assertGenerationContextCapacity,
@@ -79,6 +80,11 @@ interface RegisteredSubagentChild {
   yieldingInference: boolean;
 }
 
+export interface SubagentRuntimeRegistryOptions {
+  appendPiMessages?: typeof appendPiMessages;
+  onPiJournalError?: (error: unknown) => void;
+}
+
 function childIdentity(
   groupId: string,
   requestedChildId?: string,
@@ -115,11 +121,14 @@ function boundedSettlement(
 export class SubagentRuntimeRegistry {
   private readonly children = new Map<string, RegisteredSubagentChild>();
   private readonly concurrency: SubagentConcurrencyGate;
+  private readonly appendSessionMessages: typeof appendPiMessages;
+  private readonly onPiJournalError: (error: unknown) => void;
   private shuttingDown = false;
 
   constructor(
     private healthMetrics?: SubagentHealthMetricsSink,
     private readonly maxChildren = MAX_REGISTERED_SUBAGENT_CHILDREN,
+    options: SubagentRuntimeRegistryOptions = {},
   ) {
     if (
       !Number.isInteger(maxChildren) ||
@@ -129,6 +138,15 @@ export class SubagentRuntimeRegistry {
       throw new Error("Invalid subagent runtime child limit.");
     }
     this.concurrency = new SubagentConcurrencyGate();
+    this.appendSessionMessages = options.appendPiMessages ?? appendPiMessages;
+    this.onPiJournalError =
+      options.onPiJournalError ??
+      ((error) => {
+        writeDevLog("error", "subagents", [
+          "Could not append child Pi session messages.",
+          error,
+        ]);
+      });
   }
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
@@ -184,7 +202,7 @@ export class SubagentRuntimeRegistry {
     });
     const sessionPromise = (async () => {
       const session = await new InMemorySessionRepo().create({ id: sessionId });
-      await appendPiMessages(session, spec.initialMessages ?? []);
+      await this.appendSessionMessages(session, spec.initialMessages ?? []);
       return session;
     })();
     const cancellation = new AbortController();
@@ -207,6 +225,21 @@ export class SubagentRuntimeRegistry {
         lastAssistantMessage = event.message;
       }
     });
+    const flushPiMessages = async (
+      session: Awaited<typeof sessionPromise>,
+    ): Promise<boolean> => {
+      if (pendingPiMessages.length === 0) return true;
+      const batch = pendingPiMessages;
+      pendingPiMessages = [];
+      try {
+        await this.appendSessionMessages(session, batch);
+        return true;
+      } catch (error) {
+        pendingPiMessages = [...batch, ...pendingPiMessages];
+        this.onPiJournalError(error);
+        return false;
+      }
+    };
     const deployment: SubagentDeployment = isLocalProviderDeployment(
       spec.runtime.provider,
     )
@@ -287,9 +320,8 @@ export class SubagentRuntimeRegistry {
               } else {
                 await agent.continue();
               }
-              const batch = pendingPiMessages;
-              pendingPiMessages = [];
-              await appendPiMessages(session, batch);
+              const journalFlushed = await flushPiMessages(session);
+              if (!journalFlushed) break;
               if (!lastAssistantMessage) break;
               const result = await coordinator.check(lastAssistantMessage);
               if (!result.messages) break;

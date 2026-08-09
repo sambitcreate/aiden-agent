@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import { appendPiMessages } from "../pi-compaction-session-store.js";
 import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
 import { createSubagentAuthorityV2 } from "./authority-v2.js";
 import {
@@ -597,6 +598,46 @@ test("child context compaction bounds oversized tool output before the next prov
   assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
   assert.match(continuationContext, /conversation history.*compacted.*summary/isu);
   assert.match(continuationContext, /semantic history checkpoint/u);
+  assert.equal(registry.activeCount, 0);
+});
+
+test("child completion survives a Pi journal append failure", async () => {
+  const core = createFauxCore({
+    provider: "aiden-compat-journal-resilience",
+    models: [{ id: "compat-journal-resilience", contextWindow: 8_192 }],
+  });
+  core.setResponses([fauxAssistantMessage("completed despite journal failure")]);
+  const journalErrors: unknown[] = [];
+  let failedAssistantBatch = false;
+  const registry = new SubagentRuntimeRegistry(undefined, undefined, {
+    appendPiMessages: async (session, messages, visibleChatMessageId) => {
+      if (
+        !failedAssistantBatch &&
+        messages.some((message) => message.role === "assistant")
+      ) {
+        failedAssistantBatch = true;
+        throw new Error("injected child journal failure");
+      }
+      await appendPiMessages(session, messages, visibleChatMessageId);
+    },
+    onPiJournalError: (error) => journalErrors.push(error),
+  });
+  const runningChild = child(
+    registry,
+    runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+  );
+
+  await assert.doesNotReject(
+    runningChild.prompt("Complete even if the in-memory journal cannot append."),
+  );
+
+  assert.equal(core.state.callCount, 1);
+  assert.equal(failedAssistantBatch, true);
+  assert.equal(journalErrors.length, 1);
+  assert.match(
+    JSON.stringify(runningChild.agent.state.messages),
+    /completed despite journal failure/u,
+  );
   assert.equal(registry.activeCount, 0);
 });
 
