@@ -255,6 +255,7 @@ dependencies = [
  "aiden-mac",
  "aiden-mcp",
  "aiden-providers",
+ "aiden-scheduler",
  "aiden-subagents",
  "alacritty_terminal",
  "anyhow",

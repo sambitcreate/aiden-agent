@@ -11,14 +11,26 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use aiden_core::appearance::{create_default_appearance_config, AppearanceConfig, Mode};
-use aiden_core::{meta_of, Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline};
-use aiden_data::chat_store::{AppendMessageMeta, ChatMessageInput, ChatStoreInput};
+use aiden_core::chat_title::{
+    build_chat_title_prompt, can_replace_generated_chat_title, sanitize_generated_chat_title,
+    ChatTitleInput,
+};
+use aiden_core::{
+    meta_of, Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline, Message, UserContent,
+    UserMessage,
+};
+use aiden_data::chat_store::{
+    derive_chat_title_seed, AppendMessageMeta, ChatMessageInput, ChatStoreInput,
+};
 use aiden_data::now_millis;
 use aiden_data::portable_config::{Workspace, WorkspacePermission};
 use aiden_data::usage_store::{UsageRequestRecord, UsageRequestStatus};
+use aiden_providers::{StreamOptions, StreamRequest};
+use futures::StreamExt;
 use gpui::{AppContext as _, Context, Task};
 use gpui_tokio_bridge::{JoinError, Tokio};
 use tokio::sync::mpsc;
@@ -33,10 +45,14 @@ use crate::services::provider_kit::{
     ConfiguredProvider, ModelSelection, StreamMsg, TurnSnapshot,
 };
 use crate::services::stores::Stores;
-use crate::services::stream::{chat_usage_record, message_content, zero_usage};
+use crate::services::stream::{chat_usage_record, message_content};
 
 /// The persisted-selection settings key (`settings.json`).
 const MODEL_SELECTION_KEY: &str = "modelSelection";
+
+/// Tool-free system prompt for the background first-turn title request.
+const TITLE_SYSTEM_PROMPT: &str =
+    "You are a helpful assistant that summarizes chat conversations into short, concise titles.";
 
 /// Live state of one generation (one assistant turn).
 #[derive(Debug, Clone)]
@@ -101,6 +117,12 @@ pub struct ChatService {
 
     _stream_task: Option<Task<anyhow::Result<()>>>,
     _driver: Option<Task<Result<(), JoinError>>>,
+    /// The shared stop flag for the in-flight generation. `drive_stream`
+    /// polls it between rounds, on the flush cadence, and during tool
+    /// execution; [`ChatService::stop_generation`] sets it and the driver
+    /// aborts the provider stream (the token is replaced per generation, so a
+    /// stale flag never leaks into the next turn).
+    cancel_token: Option<Arc<AtomicBool>>,
 }
 
 impl ChatService {
@@ -125,6 +147,7 @@ impl ChatService {
             workspaces: Vec::new(),
             _stream_task: None,
             _driver: None,
+            cancel_token: None,
         }
     }
 
@@ -583,9 +606,14 @@ impl ChatService {
         counter
     }
 
+    /// Whether the in-flight watcher should keep draining messages for this
+    /// generation. Counter bumps (a new turn) and chat switches invalidate
+    /// stale streams; a stopped generation keeps matching until the driver
+    /// settles with its terminal `Cancelled` event so partial content and
+    /// usage are recorded.
     fn generation_matches(&self, chat_id: &str, counter: u64) -> bool {
         self.generation.as_ref().is_some_and(|generation| {
-            generation.chat_id == chat_id && generation.counter == counter && !generation.complete
+            generation.chat_id == chat_id && generation.counter == counter
         })
     }
 
@@ -741,14 +769,22 @@ impl ChatService {
             messages,
             catalog: self.capabilities.clone(),
             mcp: self.mcp_context(),
+            // Grounds the coding system prompt (folder path, permission
+            // posture, tool list, safety language).
+            workspace: self.workspace.clone(),
         };
+
+        // A fresh stop flag per generation: the driver polls it and aborts the
+        // provider stream when the user presses Stop.
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel_token = Some(cancel.clone());
 
         // Keychain lookup happens inside the tokio driver (background thread).
         let keys = self.stores.keys.clone();
         let (tx, rx) = mpsc::unbounded_channel::<StreamMsg>();
         let driver = Tokio::spawn(cx, async move {
             let api_key = resolve_api_key(&keys, &snapshot.provider);
-            drive_stream(snapshot, api_key, tx).await;
+            drive_stream(snapshot, api_key, cancel, tx).await;
         });
 
         let watcher = cx.spawn(async move |this, cx| -> anyhow::Result<()> {
@@ -788,9 +824,16 @@ impl ChatService {
         }
     }
 
+    /// Stop the in-flight generation: signal the background driver to abort
+    /// the provider stream (it polls the shared flag), mark the generation
+    /// complete so the UI returns to the send state immediately, and persist
+    /// the partial content. The driver then settles with a terminal
+    /// [`StreamMsg::Cancelled`] carrying whatever usage was captured, which
+    /// the foreground records — the provider stops generating (and billing)
+    /// instead of running to completion into a dead channel.
     pub fn stop_generation(&mut self, cx: &mut Context<Self>) {
-        if let Some(chat_id) = self.generation.as_ref().map(|g| g.chat_id.clone()) {
-            self.bump_generation(&chat_id);
+        if let Some(token) = &self.cancel_token {
+            token.store(true, Ordering::Relaxed);
         }
         let mut partial = None;
         if let Some(generation) = self.generation.as_mut() {
@@ -820,14 +863,20 @@ impl ChatService {
                 cx,
             );
         }
-        self._stream_task = None;
-        self._driver = None;
+        // The watcher and driver stay alive: the driver settles with a
+        // terminal `Cancelled` event (recording usage) and the watcher then
+        // clears them via on_stream_closed.
         cx.notify();
     }
 
     /// Cancel the in-flight generation without touching the current chat
-    /// (used when switching chats / creating a new chat / deleting).
+    /// (used when switching chats / creating a new chat / deleting). Also
+    /// aborts the provider stream so the model stops generating in the
+    /// background.
     fn cancel_generation(&mut self, cx: &mut Context<Self>) {
+        if let Some(token) = &self.cancel_token {
+            token.store(true, Ordering::Relaxed);
+        }
         let partial = self.generation.as_ref().and_then(|generation| {
             if generation.complete {
                 return None;
@@ -921,13 +970,16 @@ impl ChatService {
                     self.build_usage_record(&usage, UsageRequestStatus::Completed),
                     cx,
                 );
+                // After the first assistant response in a fresh chat, ask the
+                // same provider to summarize the exchange into a short title.
+                self.maybe_generate_first_turn_title(&chat_id, cx);
                 cx.notify();
             }
             StreamMsg::Error {
                 message,
                 partial_text,
                 partial_thinking,
-                ..
+                usage,
             } => {
                 let model = self
                     .generation
@@ -955,8 +1007,31 @@ impl ChatService {
                         cx,
                     );
                 }
+                // Record whatever usage the completed tool rounds captured —
+                // never zeroed, so consumed input tokens are not lost on error.
                 self.record_usage(
-                    self.build_usage_record(&zero_usage(), UsageRequestStatus::Failed),
+                    self.build_usage_record(&usage, UsageRequestStatus::Failed),
+                    cx,
+                );
+                cx.notify();
+            }
+            StreamMsg::Cancelled {
+                partial_text,
+                partial_thinking,
+                usage,
+            } => {
+                if let Some(generation) = self.generation.as_mut() {
+                    generation.text = partial_text;
+                    generation.thinking = partial_thinking;
+                    generation.thinking_active = false;
+                    generation.complete = true;
+                    generation.error = None;
+                }
+                // The partial content was already persisted synchronously by
+                // stop_generation; this terminal only records the usage the
+                // driver captured before the abort.
+                self.record_usage(
+                    self.build_usage_record(&usage, UsageRequestStatus::Cancelled),
                     cx,
                 );
                 cx.notify();
@@ -1010,6 +1085,121 @@ impl ChatService {
             let _ = cx
                 .background_spawn(async move { stores.usage.record(&record) })
                 .await;
+        })
+        .detach();
+    }
+
+    /// After the FIRST assistant response in a fresh chat, ask the same
+    /// provider to summarize the first exchange into a short title (mirrors
+    /// `chat-title.ts` `generateFirstTurnTitle`). Runs fully on the background
+    /// executor and never fails the turn: a provider error, a timeout, or an
+    /// unsanitizable response silently keeps the seed already applied on the
+    /// first user message (the first ~50 chars fallback). A manual rename
+    /// always wins — the store's CAS rename only replaces the untouched seed.
+    fn maybe_generate_first_turn_title(&self, chat_id: &str, cx: &mut Context<Self>) {
+        let Some(selection) = self.selection.clone() else {
+            return;
+        };
+        let Some(provider) = self.selected_provider().cloned() else {
+            return;
+        };
+        if provider.needs_key && !provider.has_key {
+            return;
+        }
+        let stores = self.stores.clone();
+        let keys = self.stores.keys.clone();
+        let chat_id = chat_id.to_string();
+        // The background read/rename closure moves its own copy; the outer
+        // `chat_id` stays for the foreground refresh below.
+        let chat_id_for_read = chat_id.clone();
+        cx.spawn(async move |this, cx| {
+            let applied = cx
+                .background_spawn(async move {
+                    // Only a brand-new chat (exactly one user turn) whose title
+                    // is still the default or its seed is renamed by the model.
+                    let chat = stores.chat.get(&chat_id_for_read).ok().flatten()?;
+                    let user_turns = chat
+                        .messages
+                        .iter()
+                        .filter(|message| message.role == ChatRole::User)
+                        .count();
+                    if user_turns != 1 {
+                        return None;
+                    }
+                    let first_user = chat
+                        .messages
+                        .iter()
+                        .find(|message| message.role == ChatRole::User)?;
+                    // The store's own seed derivation guarantees `seed` equals
+                    // the title the first user message was stamped with.
+                    let seed = derive_chat_title_seed(first_user);
+                    if !can_replace_generated_chat_title(&chat.title, &seed) {
+                        return None;
+                    }
+                    let input = ChatTitleInput {
+                        content: first_user.content.clone(),
+                        attachments: first_user.attachments.clone(),
+                    };
+                    let prompt = build_chat_title_prompt(&input);
+                    let api_key = resolve_api_key(&keys, &provider);
+                    let request = StreamRequest {
+                        provider_id: selection.provider_id.clone(),
+                        api: provider.api_family(),
+                        model: selection.model.clone(),
+                        base_url: provider.base_url.clone(),
+                        messages: vec![Message::User(UserMessage {
+                            content: UserContent::Text(prompt),
+                            timestamp: aiden_data::now_millis(),
+                        })],
+                        system_prompt: Some(TITLE_SYSTEM_PROMPT.to_string()),
+                        max_tokens: Some(32),
+                        ..Default::default()
+                    };
+                    let transport = provider.transport();
+                    let stream = transport.stream_simple(
+                        &request,
+                        &StreamOptions {
+                            api_key,
+                            timeout_ms: Some(30_000),
+                            ..Default::default()
+                        },
+                    );
+                    let Ok(mut stream) = stream else {
+                        return None;
+                    };
+                    let mut text = String::new();
+                    while let Some(event) = stream.next().await {
+                        match event {
+                            Ok(aiden_core::AssistantMessageEvent::TextDelta { delta, .. }) => {
+                                text.push_str(&delta);
+                            }
+                            Ok(aiden_core::AssistantMessageEvent::Done { message, .. }) => {
+                                text = message_content(&message).0;
+                                break;
+                            }
+                            Ok(_) | Err(_) => break,
+                        }
+                    }
+                    let title = sanitize_generated_chat_title(&text)?;
+                    // CAS rename: never overwrite a manual rename that landed
+                    // while the background request was in flight.
+                    stores
+                        .chat
+                        .replace_auto_title(&chat_id_for_read, &seed, &title)
+                        .ok()
+                        .flatten()
+                })
+                .await;
+            if let Some(updated) = applied {
+                this.update(cx, |this, cx| {
+                    if this.active_chat_id.as_deref() == Some(chat_id.as_str()) {
+                        this.active_chat = Some(updated);
+                    }
+                    this.refresh_chat_list(cx);
+                    cx.notify();
+                })
+                .ok();
+            }
         })
         .detach();
     }

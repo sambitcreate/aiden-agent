@@ -47,11 +47,40 @@ use crate::services::chat_service::ChatService;
 use crate::services::provider_kit::ConfiguredProvider;
 use crate::services::stores::Stores;
 use crate::settings::{SettingsSection, SettingsServices, SettingsView};
-use crate::workspace::{NotificationKind, WorkspaceEvent, WorkspaceState};
+use crate::workspace::{NotificationKind, Overlay, WorkspaceEvent, WorkspaceState};
 
 actions!(
     aiden,
-    [NewChat, Quit, TogglePalette, ToggleTerminal, TogglePill]
+    [
+        NewChat,
+        Quit,
+        TogglePalette,
+        ToggleTerminal,
+        TogglePill,
+        OpenSettings,
+        SearchChats,
+        PreviousChat,
+        NextChat,
+        ChatJump1,
+        ChatJump2,
+        ChatJump3,
+        ChatJump4,
+        ChatJump5,
+        ChatJump6,
+        ChatJump7,
+        ChatJump8,
+        ChatJump9,
+        OpenWorkspaceFolder,
+        OpenInEditor,
+        CloseWindow,
+        ToggleSidebar,
+        ToggleAssistant,
+        ToggleSubagents,
+        ToggleUsage,
+        FocusComposer,
+        SendMessage,
+        SaveFile,
+    ]
 );
 
 /// The main content area the shell routes to. Session-only: the last view is
@@ -244,6 +273,8 @@ pub struct AppState {
     terminal: Option<Entity<TerminalDrawer>>,
     palette: Option<Entity<CommandPalette>>,
     palette_source: Option<Arc<std::sync::Mutex<PaletteSourceSnapshot>>>,
+    /// Whether the leading sidebar is shown (⌃⌘S / cmd-ctrl-s toggles it).
+    sidebar_visible: bool,
 }
 
 impl AppState {
@@ -281,10 +312,54 @@ impl AppState {
             terminal: None,
             palette: None,
             palette_source: None,
+            sidebar_visible: true,
         };
 
         // Wire the dictation pill (coordinator + window bridge).
         wire_pill_coordinator(cx);
+
+        // Start the scheduled-task runtime: a 30 s tick loop that evaluates
+        // due tasks through the logging executor and records runs (real chat
+        // execution lands with the scheduler-executor follow-up).
+        {
+            let scheduler = this.stores.scheduler.clone();
+            gpui_tokio_bridge::Tokio::spawn(cx, async move {
+                match scheduler.start().await {
+                    Ok(()) => tracing::info!("scheduled-task runtime started"),
+                    Err(error) => {
+                        tracing::error!("scheduled-task runtime failed to start: {error}")
+                    }
+                }
+            })
+            .detach();
+        }
+
+        // Portable config watch: an external `~/.aiden/config.json` edit
+        // (announced by the background poll thread) refreshes the provider
+        // catalog. MCP servers are re-read per turn by the chat service and
+        // reconnected when their fingerprint changed, so no extra work is
+        // needed here beyond the provider refresh.
+        {
+            let mut config_changes = this.stores.subscribe_config_changes();
+            cx.spawn(async move |this, cx| {
+                while config_changes.changed().await.is_ok() {
+                    let version = *config_changes.borrow();
+                    if version == 0 {
+                        // The initial channel value — not a real change.
+                        continue;
+                    }
+                    let _ = this.update(cx, |this, cx| {
+                        tracing::info!(
+                            version,
+                            "portable config externally changed — refreshing providers"
+                        );
+                        this.service
+                            .update(cx, |service, cx| service.refresh_providers(cx));
+                    });
+                }
+            })
+            .detach();
+        }
 
         // Composer: re-render on change; Enter (without shift) sends.
         this._subscriptions.push(cx.subscribe_in(
@@ -517,7 +592,196 @@ impl AppState {
     }
 
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
+        self.request_quit(cx);
+    }
+
+    /// The quit barrier: warn + cancel when a generation is in flight, stop
+    /// the background services that spawn tokio work, mark the barrier ready,
+    /// and quit. Full dialog UX lands later — for now a warning log plus
+    /// clean cancellation so no tokio stream task leaks past shutdown.
+    fn request_quit(&mut self, cx: &mut Context<Self>) {
+        let barrier = self.stores.quit_barrier.clone();
+        if self.service.read(cx).generation_active() {
+            tracing::warn!(
+                "Quit requested with an in-flight generation — cancelling the stream before shutdown."
+            );
+            // Aborts the provider stream: sets the driver's cancel flag and
+            // settles the partial bubble so the watcher/driver tasks end
+            // instead of running to completion into a dead channel.
+            self.service
+                .update(cx, |service, cx| service.stop_generation(cx));
+        }
+        // Stop the scheduler tick loop (aborts the tick task, requests
+        // cancellation of any live runs) so no background tokio task
+        // outlives the app.
+        self.stores.scheduler.stop();
+        // Barrier bookkeeping: the renderer can no longer veto, and the quit
+        // is forced through any lingering generation gate.
+        barrier.note_renderer_closed();
+        barrier.force();
         cx.quit();
+    }
+
+    // =======================================================================
+    // Keyboard shortcuts (parity audit UI §2: catalog parity → wiring parity)
+    // =======================================================================
+
+    /// ⌘,: open Settings (providers section is the landing spot).
+    fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_section(window, cx);
+    }
+
+    /// ⌘⇧F: focus the sidebar chat search.
+    fn on_search_chats(&mut self, _: &SearchChats, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_view(AppView::Chat, cx);
+        self.search_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// ⌘⇧[ / ⌘⇧]: previous/next chat in the sidebar order.
+    fn on_previous_chat(&mut self, _: &PreviousChat, _: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_chat(false, cx);
+    }
+
+    fn on_next_chat(&mut self, _: &NextChat, _: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_chat(true, cx);
+    }
+
+    /// ⌘1..⌘9: jump to the Nth chat in the (search-filtered) sidebar list.
+    fn jump_to_chat(&mut self, index: usize, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self
+            .service
+            .read(cx)
+            .filtered_chats()
+            .iter()
+            .map(|meta| meta.id.clone())
+            .collect();
+        let Some(id) = ids.get(index).cloned() else {
+            tracing::debug!(index, count = ids.len(), "chat jump out of range");
+            return;
+        };
+        self.set_view(AppView::Chat, cx);
+        self.service
+            .update(cx, |service, cx| service.select_chat(&id, cx));
+    }
+
+    fn on_chat_jump_1(&mut self, _: &ChatJump1, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(0, cx);
+    }
+
+    fn on_chat_jump_2(&mut self, _: &ChatJump2, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(1, cx);
+    }
+
+    fn on_chat_jump_3(&mut self, _: &ChatJump3, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(2, cx);
+    }
+
+    fn on_chat_jump_4(&mut self, _: &ChatJump4, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(3, cx);
+    }
+
+    fn on_chat_jump_5(&mut self, _: &ChatJump5, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(4, cx);
+    }
+
+    fn on_chat_jump_6(&mut self, _: &ChatJump6, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(5, cx);
+    }
+
+    fn on_chat_jump_7(&mut self, _: &ChatJump7, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(6, cx);
+    }
+
+    fn on_chat_jump_8(&mut self, _: &ChatJump8, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(7, cx);
+    }
+
+    fn on_chat_jump_9(&mut self, _: &ChatJump9, _: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(8, cx);
+    }
+
+    /// ⌘O: open the macOS workspace-folder picker.
+    fn on_open_workspace_folder(
+        &mut self,
+        _: &OpenWorkspaceFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_state
+            .update(cx, |state, cx| state.choose_folder(window, cx));
+    }
+
+    /// ⌘⇧E: open the "open in editor" overlay for the active workspace.
+    fn on_open_in_editor(&mut self, _: &OpenInEditor, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_view(AppView::Chat, cx);
+        self.workspace_state.update(cx, |state, cx| {
+            state.open_overlay(Overlay::Editors, window, cx);
+        });
+    }
+
+    /// ⌘W: close the window. A single-window app has nothing to fall back to,
+    /// so this is a full quit (same barrier path as ⌘Q) — no windowless
+    /// process lingers in the dock.
+    fn on_close_window(&mut self, _: &CloseWindow, _: &mut Window, cx: &mut Context<Self>) {
+        self.request_quit(cx);
+    }
+
+    /// ⌃⌘S (cmd-ctrl-s): show/hide the sidebar.
+    fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar_visible = !self.sidebar_visible;
+        cx.notify();
+    }
+
+    /// Toggle a panel view: opening it again (or ⌘⇧A/S/U from another view)
+    /// returns to the chat view.
+    fn toggle_view(&mut self, target: AppView, cx: &mut Context<Self>) {
+        if self.view == target {
+            self.set_view(AppView::Chat, cx);
+        } else {
+            self.set_view(target, cx);
+        }
+    }
+
+    /// ⌘⇧A: toggle the Assistant panel.
+    fn on_toggle_assistant(&mut self, _: &ToggleAssistant, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_view(AppView::Assistant, cx);
+    }
+
+    /// ⌘⇧S: toggle the Subagents panel.
+    fn on_toggle_subagents(&mut self, _: &ToggleSubagents, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_view(AppView::Subagents, cx);
+    }
+
+    /// ⌘⇧U: toggle the Usage panel.
+    fn on_toggle_usage(&mut self, _: &ToggleUsage, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_view(AppView::Usage, cx);
+    }
+
+    /// ⌥⌘Space: focus the composer (the TS global `composer.focus`, bound
+    /// in-app until the OS-global hotkey wiring lands).
+    fn on_focus_composer(
+        &mut self,
+        _: &FocusComposer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_view(AppView::Chat, cx);
+        self.composer_input
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// ⌘↩: send the composer contents from anywhere (plain Enter already
+    /// sends while the composer is focused).
+    fn on_send_message(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.composer_input.read(cx).value().to_string();
+        self.send_composer(&text, window, cx);
+    }
+
+    /// ⌘S: no file editor is wired in the GPUI port yet — accept the shortcut
+    /// so the settings catalog stays honest (parity audit UI §2).
+    fn on_save_file(&mut self, _: &SaveFile, _: &mut Window, _cx: &mut Context<Self>) {
+        tracing::debug!("file.save: no file editor is wired yet");
     }
 
     // =======================================================================
@@ -1096,6 +1360,29 @@ impl Render for AppState {
             .on_action(cx.listener(Self::on_toggle_palette))
             .on_action(cx.listener(Self::on_toggle_terminal))
             .on_action(cx.listener(Self::on_toggle_pill))
+            .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_search_chats))
+            .on_action(cx.listener(Self::on_previous_chat))
+            .on_action(cx.listener(Self::on_next_chat))
+            .on_action(cx.listener(Self::on_chat_jump_1))
+            .on_action(cx.listener(Self::on_chat_jump_2))
+            .on_action(cx.listener(Self::on_chat_jump_3))
+            .on_action(cx.listener(Self::on_chat_jump_4))
+            .on_action(cx.listener(Self::on_chat_jump_5))
+            .on_action(cx.listener(Self::on_chat_jump_6))
+            .on_action(cx.listener(Self::on_chat_jump_7))
+            .on_action(cx.listener(Self::on_chat_jump_8))
+            .on_action(cx.listener(Self::on_chat_jump_9))
+            .on_action(cx.listener(Self::on_open_workspace_folder))
+            .on_action(cx.listener(Self::on_open_in_editor))
+            .on_action(cx.listener(Self::on_close_window))
+            .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(Self::on_toggle_assistant))
+            .on_action(cx.listener(Self::on_toggle_subagents))
+            .on_action(cx.listener(Self::on_toggle_usage))
+            .on_action(cx.listener(Self::on_focus_composer))
+            .on_action(cx.listener(Self::on_send_message))
+            .on_action(cx.listener(Self::on_save_file))
             .child(
                 gpui_component::TitleBar::new().child(
                     h_flex()
@@ -1118,7 +1405,9 @@ impl Render for AppState {
                     .id("app-body")
                     .flex_1()
                     .size_full()
-                    .child(self.sidebar(window, cx))
+                    .when(self.sidebar_visible, |el| {
+                        el.child(self.sidebar(window, cx))
+                    })
                     .child(self.content_view(window, cx)),
             )
     }

@@ -29,6 +29,7 @@ aiden-mcp.workspace = true
 aiden-providers.workspace = true
 aiden-agent.workspace = true
 aiden-subagents.workspace = true
+aiden-scheduler.workspace = true
 aiden-mac.workspace = true
 tokio.workspace = true
 futures.workspace = true

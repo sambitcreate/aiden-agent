@@ -68,6 +68,8 @@ mod shell;
 mod workspace;
 
 use std::cell::RefCell;
+use std::io::Write as _;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{px, size, App, AppContext as _, Bounds, KeyBinding, WindowBounds, WindowOptions};
@@ -131,6 +133,18 @@ fn main() {
         eprintln!("failed to init tracing: {err}");
     }
 
+    // Single-instance lock (parity audit config §10): only one process may
+    // open the shared stores at a time. A stale lock (dead owner PID) is
+    // reclaimed; a live owner causes this process to activate the existing
+    // instance and exit. The lock is removed on clean quit below.
+    let single_instance_lock = match acquire_single_instance_lock() {
+        Some(lock) => lock,
+        None => {
+            activate_existing_instance();
+            std::process::exit(0);
+        }
+    };
+
     gpui::Application::new()
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx: &mut App| {
@@ -141,7 +155,14 @@ fn main() {
             // GPUI foreground tasks.
             gpui_tokio_bridge::init(cx);
 
+            // All 26 commands from the keybinding catalog
+            // (renderer/shared/keybindings.ts ↔ aiden-core::keybindings) are
+            // bound in-app where the target surface exists. The settings
+            // editor lists every catalog command; the bindings below are the
+            // catalog defaults mapped onto gpui's key syntax
+            // ("Command+K" → "cmd-k").
             cx.bind_keys([
+                // Core (catalog defaults).
                 KeyBinding::new("cmd-q", app::Quit, Some("App")),
                 KeyBinding::new("cmd-n", app::NewChat, Some("App")),
                 KeyBinding::new("cmd-k", app::TogglePalette, Some("App")),
@@ -150,6 +171,36 @@ fn main() {
                 // another app is focused) comes with the aiden-mac wiring in
                 // a later phase.
                 KeyBinding::new("cmd-shift-d", app::TogglePill, Some("App")),
+                // Settings / navigation.
+                KeyBinding::new("cmd-,", app::OpenSettings, Some("App")),
+                KeyBinding::new("cmd-shift-f", app::SearchChats, Some("App")),
+                KeyBinding::new("cmd-shift-[", app::PreviousChat, Some("App")),
+                KeyBinding::new("cmd-shift-]", app::NextChat, Some("App")),
+                KeyBinding::new("cmd-1", app::ChatJump1, Some("App")),
+                KeyBinding::new("cmd-2", app::ChatJump2, Some("App")),
+                KeyBinding::new("cmd-3", app::ChatJump3, Some("App")),
+                KeyBinding::new("cmd-4", app::ChatJump4, Some("App")),
+                KeyBinding::new("cmd-5", app::ChatJump5, Some("App")),
+                KeyBinding::new("cmd-6", app::ChatJump6, Some("App")),
+                KeyBinding::new("cmd-7", app::ChatJump7, Some("App")),
+                KeyBinding::new("cmd-8", app::ChatJump8, Some("App")),
+                KeyBinding::new("cmd-9", app::ChatJump9, Some("App")),
+                KeyBinding::new("cmd-o", app::OpenWorkspaceFolder, Some("App")),
+                KeyBinding::new("cmd-shift-e", app::OpenInEditor, Some("App")),
+                KeyBinding::new("cmd-ctrl-s", app::ToggleSidebar, Some("App")),
+                // Panel toggles + composer (TS global bindings, in-app scope
+                // until the aiden-mac global hotkey wiring lands).
+                KeyBinding::new("cmd-shift-a", app::ToggleAssistant, Some("App")),
+                KeyBinding::new("cmd-shift-s", app::ToggleSubagents, Some("App")),
+                KeyBinding::new("cmd-shift-u", app::ToggleUsage, Some("App")),
+                KeyBinding::new("cmd-alt-space", app::FocusComposer, Some("App")),
+                KeyBinding::new("cmd-alt-a", app::ToggleAssistant, Some("App")),
+                // Aiden-specific conveniences beyond the TS catalog.
+                KeyBinding::new("cmd-shift-t", app::ToggleTerminal, Some("App")),
+                KeyBinding::new("cmd-enter", app::SendMessage, Some("App")),
+                KeyBinding::new("cmd-w", app::CloseWindow, Some("App")),
+                // file.save: accepted (no-op stub) so the catalog stays honest.
+                KeyBinding::new("cmd-s", app::SaveFile, Some("App")),
             ]);
 
             let stores = match Stores::open() {
@@ -199,6 +250,106 @@ fn main() {
                 cx.activate(true);
             }
         });
+
+    // Reached only after the app quits (⌘Q / the quit-barrier path): release
+    // the single-instance lock so the next launch can claim it. A crash leaves
+    // a stale lock whose dead PID is reclaimed by the next launch.
+    if let Err(error) = std::fs::remove_file(&single_instance_lock) {
+        tracing::warn!("could not remove the single-instance lock: {error}");
+    }
+}
+
+/// Try to claim the machine-local single-instance lock. Returns the lockfile
+/// path to remove on exit, or `None` when another live instance holds it.
+/// A stale lock (a recorded PID that no longer exists) is reclaimed once and
+/// the claim is retried.
+fn acquire_single_instance_lock() -> Option<PathBuf> {
+    let root = aiden_data::machine_local_data_dir();
+    let lock_path = root.join(if aiden_data::is_dev_mode() {
+        "aiden-rs-dev.lock"
+    } else {
+        "aiden.lock"
+    });
+    let _ = std::fs::create_dir_all(&root);
+    for _attempt in 0..2 {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut file) => {
+                let _ = file.write_all(format!("{}\n", std::process::id()).as_bytes());
+                return Some(lock_path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // A live owner's PID inside wins; stale locks are reclaimed.
+                let owner: Option<i32> = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .and_then(|raw| raw.trim().parse().ok());
+                if owner.is_some_and(process_is_alive) {
+                    tracing::info!(
+                        pid = owner.unwrap(),
+                        "another Aiden instance is running — exiting"
+                    );
+                    return None;
+                }
+                tracing::warn!("single-instance lock is stale (owner {owner:?} gone) — reclaiming");
+                let _ = std::fs::remove_file(&lock_path);
+            }
+            Err(error) => {
+                tracing::warn!("single-instance lock could not be acquired: {error}");
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// Whether a process with `pid` is alive (`kill -0` exit status; no signal is
+/// sent). `false` for a missing process, a dead PID, or a permission error.
+fn process_is_alive(pid: i32) -> bool {
+    std::process::Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// Best-effort: bring the already-running instance to the front via
+/// AppleScript. Requires Automation permission on modern macOS; the child is
+/// bounded to two seconds so a permission prompt can never hang startup, and
+/// the caller exits immediately after, killing this thread.
+fn activate_existing_instance() {
+    let bundle_id = if aiden_data::is_dev_mode() {
+        "com.sambitcreate.aiden-rs-dev"
+    } else {
+        "com.sambitcreate.aiden-agent"
+    };
+    tracing::info!(
+        "another Aiden instance is running — asking it to activate (bundle id {bundle_id})"
+    );
+    let script = format!("tell application id \"{bundle_id}\" to activate");
+    std::thread::spawn(move || {
+        let Ok(mut child) = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .spawn()
+        else {
+            return;
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    });
 }
 
 /// Open the main Aiden window: the `AppState` shell under a gpui-component

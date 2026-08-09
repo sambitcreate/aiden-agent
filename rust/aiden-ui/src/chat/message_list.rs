@@ -1,15 +1,39 @@
 //! Message transcript: user bubbles, assistant markdown (via gpui-component's
-//! `TextView`), collapsible thinking blocks, the streaming assistant bubble,
-//! and the terminal error banner with retry.
+//! `TextView` with per-code-block copy actions and tree-sitter highlighting),
+//! collapsible thinking blocks, the streaming assistant bubble (with a blinking
+//! cursor), hover-revealed message copy actions, and the terminal error banner
+//! with retry.
+//!
+//! # Markdown + code blocks
+//!
+//! Assistant content is rendered through `TextView::markdown`, which the
+//! `gpui-component` crate parses into GFM nodes and syntax-highlights fenced
+//! code blocks with tree-sitter (via the theme's `HighlightTheme`, wired by
+//! `services::appearance`). The `code_block_actions(...)` hook lets us attach a
+//! language label + copy button to every fenced block without forking the
+//! parser, so tables, lists, inline code, and links keep working.
+//!
+//! # Scroll behavior
+//!
+//! The transcript implements *stick-to-bottom*: it only pins to the bottom
+//! while the user is already at the bottom (the typical case during streaming).
+//! Scrolling up stops the pinning and the "Jump to bottom" button in
+//! `chat_pane` appears instead. `scroll_at_bottom` is the shared geometry check
+//! (`app.rs` gates its notification-driven scroll on it).
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use aiden_core::{ChatMessage, ChatRole};
 use gpui::{
     div, prelude::FluentBuilder as _, px, relative, App, Context, ElementId, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    InteractiveElement as _, IntoElement, ParentElement as _, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
+    clipboard::Clipboard,
     h_flex,
     spinner::Spinner,
     text::TextView,
@@ -19,6 +43,13 @@ use gpui_component::{
 use crate::app::AppState;
 use crate::chat::activity_feed::timeline_feed;
 use crate::services::chat_service::{ChatSnapshot, GenerationState};
+
+/// Pixels from the very bottom that still count as "at the bottom" — mirrors
+/// the TS `ScrollArea` threshold (`remaining < 24`).
+const BOTTOM_TOLERANCE_PX: f32 = 24.0;
+
+/// Group name used to reveal the per-message copy buttons on hover.
+const MESSAGE_ACTIONS_GROUP: &str = "message-actions";
 
 impl AppState {
     /// The scrollable transcript. Renders persisted messages, then the live
@@ -34,6 +65,13 @@ impl AppState {
         let show_stream = should_show_stream_bubble(&snapshot);
         let generation = snapshot.generation.clone();
 
+        // Stick-to-bottom: keep the transcript pinned while the user is at the
+        // bottom (typical while streaming). Once they scroll up this stops
+        // pinning and the "Jump to bottom" button (in `chat_pane`) takes over.
+        if scroll_at_bottom(&scroll) {
+            scroll.scroll_to_bottom();
+        }
+
         v_flex()
             .id("message-list")
             .track_scroll(&scroll)
@@ -43,6 +81,13 @@ impl AppState {
             .px_4()
             .py_3()
             .gap_2()
+            // Re-render on scroll so the "Jump to bottom" button appears as
+            // soon as the user scrolls away from the bottom (idle chats do not
+            // otherwise re-render).
+            .on_scroll_wheel({
+                let app_id = cx.entity().entity_id();
+                move |_event, _window, cx| cx.notify(app_id)
+            })
             .children(
                 snapshot.messages.iter().map(|message| {
                     render_persisted_message(message, window, cx).into_any_element()
@@ -80,6 +125,28 @@ fn should_show_stream_bubble(snapshot: &ChatSnapshot) -> bool {
 }
 
 // ===========================================================================
+// Scroll geometry
+// ===========================================================================
+
+/// Whether the user is at (or within `BOTTOM_TOLERANCE_PX` of) the bottom of
+/// the scroll viewport. GPUI scroll offsets are negative, so "at bottom" means
+/// `offset == max_offset` (both negative); scrolling up moves `offset` toward
+/// zero.
+pub(crate) fn scroll_at_bottom(scroll: &ScrollHandle) -> bool {
+    is_near_bottom(
+        f32::from(scroll.offset().y),
+        f32::from(scroll.max_offset().height),
+        BOTTOM_TOLERANCE_PX,
+    )
+}
+
+/// Pure geometry check, extracted for tests. `offset` and `max_offset` are
+/// negative scroll coordinates; `max_offset` is `0` when the content fits.
+fn is_near_bottom(offset: f32, max_offset: f32, tolerance: f32) -> bool {
+    offset - max_offset <= tolerance
+}
+
+// ===========================================================================
 // Persisted messages
 // ===========================================================================
 
@@ -102,16 +169,26 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut App) -> impl IntoElement {
             "user-message-{}",
             message.id
         ))))
+        .group(MESSAGE_ACTIONS_GROUP)
         .w_full()
         .justify_end()
         .child(
-            div()
-                .max_w(relative(0.8))
-                .rounded_2xl()
-                .bg(muted)
-                .px_4()
-                .py_2()
-                .child(prewrap(&message.content)),
+            v_flex()
+                .items_end()
+                .gap_1()
+                .child(
+                    div()
+                        .max_w(relative(0.8))
+                        .rounded_2xl()
+                        .bg(muted)
+                        .px_4()
+                        .py_2()
+                        .child(prewrap(&message.content)),
+                )
+                .child(message_copy_button(
+                    &format!("copy-user-{}", message.id),
+                    &message.content,
+                )),
         )
 }
 
@@ -126,6 +203,7 @@ fn render_assistant_message(
             "assistant-message-{}",
             message.id
         ))))
+        .group(MESSAGE_ACTIONS_GROUP)
         .w_full()
         .gap_1()
         // Persisted activity timeline: thinking/tool steps survive reloads
@@ -161,18 +239,16 @@ fn render_assistant_message(
                 )
             },
         )
-        .child(
-            TextView::markdown(
-                ElementId::Name(SharedString::from(format!(
-                    "assistant-markdown-{}",
-                    message.id
-                ))),
-                message.content.clone(),
-                window,
-                cx,
-            )
-            .style(Default::default()),
-        )
+        .child(assistant_markdown(
+            &format!("assistant-markdown-{}", message.id),
+            message.content.clone(),
+            window,
+            cx,
+        ))
+        .child(h_flex().w_full().justify_start().child(message_copy_button(
+            &format!("copy-assistant-{}", message.id),
+            &message.content,
+        )))
 }
 
 // ===========================================================================
@@ -187,6 +263,7 @@ fn render_stream_bubble(
     let muted = cx.theme().muted;
     let danger = cx.theme().danger;
     let foreground = cx.theme().foreground;
+    let muted_foreground = cx.theme().muted_foreground;
     let thinking_text = generation
         .as_ref()
         .map(|generation| generation.thinking.clone())
@@ -201,12 +278,57 @@ fn render_stream_bubble(
         .as_ref()
         .map(|generation| generation.text.clone())
         .unwrap_or_default();
+    let streaming = generation
+        .as_ref()
+        .is_some_and(|generation| !generation.complete);
     let error = generation
         .as_ref()
         .and_then(|generation| generation.error.clone());
     let live_timeline = generation
         .as_ref()
         .and_then(|generation| generation.timeline.clone());
+
+    // Blinking streaming cursor: a keyed state per generation (`counter`)
+    // drives the blink via a timer loop that stops once the generation is no
+    // longer active, so no state leaks after streaming ends.
+    let cursor_visible = {
+        let cursor = window.use_keyed_state(
+            ElementId::Name(SharedString::from(format!(
+                "stream-cursor-{}",
+                generation
+                    .as_ref()
+                    .map_or(0, |generation| generation.counter)
+            ))),
+            cx,
+            |_, _| StreamCursorState::default(),
+        );
+        let visible = cursor.read(cx).visible;
+        if streaming && !cursor.read(cx).spawned {
+            let cursor_entity = cursor.clone();
+            cursor.update(cx, |state, _cx| state.spawned = true);
+            cx.spawn(async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(450))
+                    .await;
+                let active = this.upgrade().is_some_and(|app| {
+                    app.read_with(cx, |app, cx| app.service.read(cx).generation_active())
+                        .unwrap_or(false)
+                });
+                if !active {
+                    break;
+                }
+                let alive = cursor_entity.update(cx, |state, cx| {
+                    state.visible = !state.visible;
+                    cx.notify();
+                });
+                if alive.is_err() {
+                    break;
+                }
+            })
+            .detach();
+        }
+        visible
+    };
 
     v_flex()
         .id("stream-bubble")
@@ -244,15 +366,23 @@ fn render_stream_bubble(
                     }),
             )
         })
-        .child(
-            TextView::markdown(
-                ElementId::Name(SharedString::from("stream-markdown")),
-                text,
-                window,
-                cx,
+        .child(assistant_markdown("stream-markdown", text, window, cx))
+        .when(streaming, |el| {
+            // Thin block cursor at the end of the streamed reply. Blinks via
+            // the timer above; a static character keeps layout stable.
+            el.child(
+                h_flex()
+                    .id("stream-cursor-row")
+                    .w_full()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(muted_foreground)
+                            .opacity(if cursor_visible { 1.0 } else { 0.0 })
+                            .child("▋"),
+                    ),
             )
-            .style(Default::default()),
-        )
+        })
         .when_some(error, |el, message| {
             el.child(
                 h_flex()
@@ -288,6 +418,125 @@ fn render_stream_bubble(
                     ),
             )
         })
+}
+
+// ===========================================================================
+// Markdown + code-block copy actions
+// ===========================================================================
+
+/// A markdown `TextView` for assistant content. Fenced code blocks get a
+/// language label chip + copy button via `code_block_actions`; the code itself
+/// is syntax-highlighted by the library (tree-sitter, theme tokens) and styled
+/// with a muted background + monospace font by the `CodeBlock` node renderer.
+fn assistant_markdown(
+    key: &str,
+    content: impl Into<SharedString>,
+    window: &mut Window,
+    cx: &mut App,
+) -> TextView {
+    let element_key = key.to_string();
+    TextView::markdown(
+        ElementId::Name(SharedString::from(key.to_string())),
+        content,
+        window,
+        cx,
+    )
+    .style(Default::default())
+    .code_block_actions(move |code_block, _window, cx| {
+        let lang = code_block.lang().map(|lang| lang.to_string());
+        code_block_actions_element(lang.as_deref(), &code_block.code(), &element_key, cx)
+    })
+}
+
+/// The per-code-block overlay rendered by `TextView::markdown`: a language
+/// label plus a copy button (with a Copy → Check flash). Styled with theme
+/// tokens only.
+fn code_block_actions_element(
+    lang: Option<&str>,
+    code: &str,
+    element_key: &str,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let muted_foreground = cx.theme().muted_foreground;
+    let id = ElementId::Name(SharedString::from(format!(
+        "copy-{}-{}",
+        element_key,
+        stable_hash(code)
+    )));
+    h_flex()
+        .gap_1()
+        .items_center()
+        .px_2()
+        .py_0p5()
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted_foreground)
+                .child(code_language_label(lang)),
+        )
+        .child(Clipboard::new(id).value(code.to_string()))
+        .into_any_element()
+}
+
+/// The language label shown on a code block, defaulting to "text" for fenced
+/// blocks without a language hint (matches the TS `CodeBlock`).
+fn code_language_label(lang: Option<&str>) -> String {
+    match lang.map(str::trim).filter(|lang| !lang.is_empty()) {
+        Some(lang) => lang.to_string(),
+        None => "text".to_string(),
+    }
+}
+
+/// Deterministic content hash used to key copy buttons per code block, so the
+/// Copy → Check state never leaks between blocks.
+fn stable_hash(input: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    input.hash(&mut hasher);
+    hasher.finish()
+}
+
+// ===========================================================================
+// Hover actions
+// ===========================================================================
+
+/// A hover-revealed copy button for a whole message (matches the TS hover
+/// actions). Reveals on group hover and on keyboard focus-within so the action
+/// stays reachable without a mouse.
+fn message_copy_button(base_id: &str, text: &str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(ElementId::Name(SharedString::from(format!(
+            "{base_id}-wrap"
+        ))))
+        .opacity(0.0)
+        .group_hover(MESSAGE_ACTIONS_GROUP, |style| style.opacity(1.0))
+        .focusable()
+        .in_focus(|style| style.opacity(1.0))
+        .child(
+            Clipboard::new(ElementId::Name(SharedString::from(base_id.to_string())))
+                .value(text.to_string()),
+        )
+}
+
+// ===========================================================================
+// Misc
+// ===========================================================================
+
+/// Blink state for the streaming cursor. One instance per generation counter.
+struct StreamCursorState {
+    /// Whether the cursor block is currently shown. Starts visible so the
+    /// cursor appears immediately when streaming begins.
+    visible: bool,
+    /// Whether the blink timer loop was started for this generation.
+    spawned: bool,
+}
+
+impl Default for StreamCursorState {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            spawned: false,
+        }
+    }
 }
 
 /// The collapsible "Thinking" header. `interactive` renders the toggle afford
@@ -388,5 +637,39 @@ mod tests {
         // In-flight generations always show.
         snapshot.generation.as_mut().unwrap().complete = false;
         assert!(should_show_stream_bubble(&snapshot));
+    }
+
+    #[test]
+    fn near_bottom_geometry() {
+        // Empty list / content that fits → at bottom.
+        assert!(is_near_bottom(0.0, 0.0, 24.0));
+        // Exactly at the bottom of a long transcript.
+        assert!(is_near_bottom(-500.0, -500.0, 24.0));
+        // Within the 24px tolerance of the bottom → still "at bottom".
+        assert!(is_near_bottom(-480.0, -500.0, 24.0));
+        // Scrolled up beyond the tolerance → not at the bottom.
+        assert!(!is_near_bottom(-460.0, -500.0, 24.0));
+        // All the way at the top of a long transcript.
+        assert!(!is_near_bottom(0.0, -500.0, 24.0));
+    }
+
+    #[test]
+    fn fresh_scroll_handle_counts_as_at_bottom() {
+        assert!(scroll_at_bottom(&ScrollHandle::new()));
+    }
+
+    #[test]
+    fn code_language_label_defaults_to_text() {
+        assert_eq!(code_language_label(None), "text");
+        assert_eq!(code_language_label(Some("rust")), "rust");
+        assert_eq!(code_language_label(Some("json")), "json");
+        // Whitespace-only hints fall back to "text".
+        assert_eq!(code_language_label(Some("  ")), "text");
+    }
+
+    #[test]
+    fn copy_button_ids_are_stable_and_distinct() {
+        assert_eq!(stable_hash("fn main() {}"), stable_hash("fn main() {}"));
+        assert_ne!(stable_hash("fn main() {}"), stable_hash("let x = 1;"));
     }
 }

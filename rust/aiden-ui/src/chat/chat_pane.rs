@@ -12,6 +12,7 @@ use gpui_component::{
 };
 
 use crate::app::AppState;
+use crate::chat::message_list::scroll_at_bottom;
 use crate::services::chat_service::ChatSnapshot;
 
 impl AppState {
@@ -47,7 +48,34 @@ impl AppState {
         let no_messages = snapshot.messages.is_empty() && snapshot.generation.is_none();
 
         if !no_messages {
-            return self.message_list(window, cx).into_any_element();
+            // The transcript: stick-to-bottom scroll region plus a floating
+            // "Jump to bottom" button that appears once the user scrolls up
+            // away from the bottom (mirrors the TS `ScrollArea`).
+            let show_jump = !scroll_at_bottom(&self.message_scroll);
+            return v_flex()
+                .id("message-list-region")
+                .relative()
+                .flex_1()
+                .w_full()
+                .child(self.message_list(window, cx))
+                .when(show_jump, |el| {
+                    el.child(
+                        div().absolute().bottom_2().right_4().child(
+                            Button::new("jump-to-bottom")
+                                .small()
+                                .icon(IconName::ArrowDown)
+                                .label("Jump to bottom")
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.message_scroll.scroll_to_bottom();
+                                    // The scroll flag is consumed in the next
+                                    // prepaint; re-render afterwards so the
+                                    // button disappears once pinned.
+                                    cx.defer_in(window, |_this, _window, cx| cx.notify());
+                                })),
+                        ),
+                    )
+                })
+                .into_any_element();
         }
 
         let has_chats = !self.service.read(cx).filtered_chats().is_empty();

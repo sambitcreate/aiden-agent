@@ -14,4 +14,4 @@ mod editors;
 mod git;
 mod state;
 
-pub(crate) use state::{NotificationKind, WorkspaceEvent, WorkspaceState};
+pub(crate) use state::{NotificationKind, Overlay, WorkspaceEvent, WorkspaceState};
