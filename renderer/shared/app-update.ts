@@ -22,6 +22,9 @@ export const IDLE_APP_UPDATE_SNAPSHOT: AppUpdateSnapshot = {
   version: null,
 };
 
+const SEMANTIC_APP_UPDATE_VERSION =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+
 export function normalizeAppUpdateVersion(value: unknown): string | null {
   if (typeof value !== "string") return null;
   if (
@@ -33,7 +36,7 @@ export function normalizeAppUpdateVersion(value: unknown): string | null {
     return null;
   }
   const version = value.trim();
-  if (!version || version.length > 128) return null;
+  if (!version || version.length > 128 || !SEMANTIC_APP_UPDATE_VERSION.test(version)) return null;
   return version;
 }
 
