@@ -403,6 +403,13 @@ export const secrets = {
     });
   },
 
+  async clearAll(isCurrent: MutationGuard = () => true): Promise<void> {
+    return serialized(async () => {
+      assertMutationCurrent(isCurrent);
+      await writeMap({}, isCurrent);
+    });
+  },
+
   async migrateKeys(migrate: (map: KeyMap) => boolean): Promise<void> {
     return serialized(async () => {
       const map = await readMap();

@@ -170,4 +170,15 @@ export const mcpOAuthStore = {
       }
     });
   },
+
+  async clearAll(isCurrent: MutationGuard = () => true): Promise<void> {
+    await mutate(async () => {
+      assertMutationCurrent(isCurrent);
+      const previousMap = await readMap();
+      assertMutationCurrent(isCurrent);
+      if (Object.keys(previousMap).length > 0) {
+        await writeMap({}, previousMap, isCurrent);
+      }
+    });
+  },
 };

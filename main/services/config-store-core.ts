@@ -538,6 +538,25 @@ export function createConfigStore(
   }
 
   return {
+    /**
+     * Reset setup-owned configuration without deleting user-created work.
+     * Skills and workspaces remain; providers, MCP connections, preferences,
+     * and regenerable provider discovery data return to first-launch defaults.
+     */
+    async resetUserSetup(): Promise<void> {
+      await mutatePortable((config) => {
+        config.providers = [];
+        config.providerIdAliases = {};
+        config.mcpServers = [];
+      });
+      await mutateSettings((config) => {
+        config.settings = {};
+      });
+      await modelCache.update((config) => {
+        config.byProvider = {};
+      });
+    },
+
     async portableConfigSafeForCredentialReconciliation(): Promise<boolean> {
       return portableConfigSafeForCredentialReconciliation(true);
     },
