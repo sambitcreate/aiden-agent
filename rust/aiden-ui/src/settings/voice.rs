@@ -31,7 +31,7 @@ use gpui_component::{
 use gpui_tokio_bridge::Tokio;
 use tokio::sync::mpsc;
 
-use super::SettingsView;
+use super::{SettingsServices, SettingsView};
 
 /// The settings keys this section edits.
 pub const VOICE_PROVIDER_KEY: &str = "voiceProvider";
@@ -124,10 +124,6 @@ impl VoiceState {
             .map(str::to_string);
     }
 
-    fn services(&self, cx: &mut Context<SettingsView>) -> super::SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Load the Parakeet catalog + microphone permission on the background
     /// executor (both are quick local probes).
     pub(crate) fn load_runtime(&mut self, cx: &mut Context<SettingsView>) {
@@ -147,13 +143,18 @@ impl VoiceState {
 
     /// Switch the transcription provider (persisted; cloud providers also
     /// record the default model).
-    fn set_provider(&mut self, provider: VoiceProvider, cx: &mut Context<SettingsView>) {
+    fn set_provider(
+        &mut self,
+        provider: VoiceProvider,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         if self.busy || self.provider == provider {
             return;
         }
         self.busy = true;
         self.error = None;
-        let services = self.services(cx);
+        let services = services.clone();
         let (provider_str, model) = match default_cloud_model(provider) {
             Some(model) => (provider.as_str().to_string(), Some(model.to_string())),
             None => (provider.as_str().to_string(), None),
@@ -191,14 +192,19 @@ impl VoiceState {
     }
 
     /// Select the on-device model used for dictation.
-    fn select_local_model(&mut self, id: String, cx: &mut Context<SettingsView>) {
+    fn select_local_model(
+        &mut self,
+        id: String,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         if self.busy {
             return;
         }
         self.busy = true;
         self.error = None;
         let id_value = id.clone();
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -286,14 +292,14 @@ impl VoiceState {
     /// Delete an installed Parakeet model (background executor; the manager's
     /// delete is plain `std::fs`). A deleted model that was the dictation
     /// selection is cleared from settings so the mic prompts to pick another.
-    fn remove(&mut self, id: String, cx: &mut Context<SettingsView>) {
+    fn remove(&mut self, id: String, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         if self.busy {
             return;
         }
         self.busy = true;
         self.error = None;
         let clear_selection = self.local_voice_model.as_deref() == Some(id.as_str());
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -418,7 +424,11 @@ impl SettingsView {
                                             .disabled(state.busy)
                                             .on_click(cx.listener(
                                                 move |this, _event, _window, cx| {
-                                                    this.voice.set_provider(provider, cx);
+                                                    this.voice.set_provider(
+                                                        provider,
+                                                        &this.services,
+                                                        cx,
+                                                    );
                                                 },
                                             ))
                                     }),
@@ -561,7 +571,8 @@ impl SettingsView {
             row = row.cursor_pointer().on_click(cx.listener({
                 let id = id.clone();
                 move |this, _event, _window, cx| {
-                    this.voice.select_local_model(id.clone(), cx);
+                    this.voice
+                        .select_local_model(id.clone(), &this.services, cx);
                 }
             }));
         }
@@ -662,7 +673,7 @@ impl SettingsView {
                         .on_click(cx.listener({
                             let id = id.clone();
                             move |this, _event, _window, cx| {
-                                this.voice.remove(id.clone(), cx);
+                                this.voice.remove(id.clone(), &this.services, cx);
                             }
                         })),
                 )

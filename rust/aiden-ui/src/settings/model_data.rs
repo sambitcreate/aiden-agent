@@ -379,7 +379,7 @@ impl SettingsView {
                                         })
                                         .disabled(state.aa_busy)
                                         .on_click(cx.listener(|this, _event, _window, cx| {
-                                            this.model_data.aa_refresh(cx);
+                                            this.model_data.aa_refresh(&this.services, cx);
                                         })),
                                 )
                                 .child(
@@ -390,7 +390,7 @@ impl SettingsView {
                                         .label("Disconnect")
                                         .disabled(state.aa_busy)
                                         .on_click(cx.listener(|this, _event, _window, cx| {
-                                            this.model_data.aa_disconnect(cx);
+                                            this.model_data.aa_disconnect(&this.services, cx);
                                         })),
                                 ),
                         )
@@ -459,7 +459,7 @@ impl SettingsView {
                                 })
                                 .disabled(state.aa_busy)
                                 .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.model_data.aa_connect(cx);
+                                    this.model_data.aa_connect(&this.services, cx);
                                 })),
                         ),
                 )
@@ -485,10 +485,6 @@ impl SettingsView {
 }
 
 impl ModelDataState {
-    fn services(&self, cx: &mut Context<SettingsView>) -> super::SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Re-run `npm run models:refresh` on the background executor and report
     /// the exit status. Dev-only: the packaged app never contacts models.dev
     /// (AGENTS.md) — `npm run dist` refreshes at packaging time.
@@ -570,7 +566,7 @@ impl ModelDataState {
 
     /// Connect with the drafted key: validates + fetches the first snapshot
     /// (explicit user action — `UserInitiated::explicit` gates the network).
-    fn aa_connect(&mut self, cx: &mut Context<SettingsView>) {
+    fn aa_connect(&mut self, services: &super::SettingsServices, cx: &mut Context<SettingsView>) {
         if self.aa_busy {
             return;
         }
@@ -585,7 +581,7 @@ impl ModelDataState {
         }
         self.aa_busy = true;
         self.aa_error = None;
-        let services = self.services(cx);
+        let services = services.clone();
         let task = Tokio::spawn(cx, async move {
             run_artificial_analysis_action(
                 || async { services.aa.connect(&key, UserInitiated::explicit()).await },
@@ -621,13 +617,13 @@ impl ModelDataState {
     }
 
     /// Re-fetch with the stored key (explicit user action).
-    fn aa_refresh(&mut self, cx: &mut Context<SettingsView>) {
+    fn aa_refresh(&mut self, services: &super::SettingsServices, cx: &mut Context<SettingsView>) {
         if self.aa_busy {
             return;
         }
         self.aa_busy = true;
         self.aa_error = None;
-        let services = self.services(cx);
+        let services = services.clone();
         let task = Tokio::spawn(cx, async move {
             run_artificial_analysis_action(
                 || async { services.aa.refresh(UserInitiated::explicit()).await },
@@ -662,13 +658,17 @@ impl ModelDataState {
     }
 
     /// Remove the key + cached data (no network).
-    fn aa_disconnect(&mut self, cx: &mut Context<SettingsView>) {
+    fn aa_disconnect(
+        &mut self,
+        services: &super::SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         if self.aa_busy {
             return;
         }
         self.aa_busy = true;
         self.aa_error = None;
-        let services = self.services(cx);
+        let services = services.clone();
         let task = Tokio::spawn(cx, async move {
             run_artificial_analysis_action(
                 || async { services.aa.disconnect().await },
@@ -703,8 +703,12 @@ impl ModelDataState {
     }
 
     /// Refresh the offline connection status (boot + after any mutation).
-    pub(crate) fn load_aa_status(&mut self, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    pub(crate) fn load_aa_status(
+        &mut self,
+        services: &super::SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let task = Tokio::spawn(cx, async move { services.aa.status().await });
         cx.spawn(async move |this, cx| {
             let result = task.await;

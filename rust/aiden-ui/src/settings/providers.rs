@@ -493,6 +493,7 @@ impl SettingsView {
                                                 this.providers.use_discovered_models(
                                                     &use_id,
                                                     use_models.clone(),
+                                                    &this.services,
                                                     cx,
                                                 );
                                             }),
@@ -823,7 +824,7 @@ impl SettingsView {
                                             .xsmall()
                                             .label("Remove stored key")
                                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.providers.remove_key(cx);
+                                                this.providers.remove_key(&this.services, cx);
                                             })),
                                     ),
                                 )
@@ -852,7 +853,7 @@ impl SettingsView {
                             .label(if draft.saving { "Saving…" } else { "Save" })
                             .disabled(!can_save || draft.saving)
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.providers.save_editor(cx);
+                                this.providers.save_editor(&this.services, cx);
                             })),
                     ),
             )
@@ -898,7 +899,7 @@ impl SettingsView {
                     .danger()
                     .label("Remove")
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.providers.confirm_remove(&removing, cx);
+                        this.providers.confirm_remove(&removing, &this.services, cx);
                     })),
             )
     }
@@ -1007,13 +1008,13 @@ impl ProvidersState {
     }
 
     /// Remove the stored keychain key for the provider being edited.
-    fn remove_key(&mut self, cx: &mut Context<SettingsView>) {
+    fn remove_key(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         let Some(draft) = self.editing.as_mut() else {
             return;
         };
         let provider_id = draft.provider_id.clone();
         draft.has_key = false;
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let keys = services.keys.clone();
             cx.background_spawn(async move {
@@ -1031,7 +1032,7 @@ impl ProvidersState {
 
     /// Persist the editor draft: provider record + keychain key + default
     /// model selection + anthropic thinking level.
-    fn save_editor(&mut self, cx: &mut Context<SettingsView>) {
+    fn save_editor(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         let Some(draft) = self.editing.as_mut() else {
             return;
         };
@@ -1054,7 +1055,7 @@ impl ProvidersState {
         let thinking_level = draft.thinking_level.clone();
         draft.saving = true;
 
-        let services = self.services(cx);
+        let services = services.clone();
         let provider = StoredProvider {
             id: provider_id.clone(),
             kind,
@@ -1206,10 +1207,11 @@ impl ProvidersState {
         &mut self,
         provider_id: &str,
         models: Vec<String>,
+        services: &SettingsServices,
         cx: &mut Context<SettingsView>,
     ) {
         let provider_id = provider_id.to_string();
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let saved = cx
                 .background_spawn({
@@ -1248,9 +1250,14 @@ impl ProvidersState {
     }
 
     /// Confirm + run the remove-provider flow.
-    fn confirm_remove(&mut self, provider_id: &str, cx: &mut Context<SettingsView>) {
+    fn confirm_remove(
+        &mut self,
+        provider_id: &str,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         let provider_id = provider_id.to_string();
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let ok = cx
                 .background_spawn(async move {
@@ -1274,10 +1281,6 @@ impl ProvidersState {
             .ok();
         })
         .detach();
-    }
-
-    fn services(&self, cx: &mut Context<SettingsView>) -> SettingsServices {
-        cx.entity().read(cx).services.clone()
     }
 }
 

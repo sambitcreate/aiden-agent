@@ -13,7 +13,7 @@ use gpui::{
 };
 use gpui_component::{h_flex, switch::Switch, v_flex, ActiveTheme, Disableable as _};
 
-use super::SettingsView;
+use super::{SettingsServices, SettingsView};
 
 /// The settings key holding the computer-use flag.
 pub const COMPUTER_USE_ENABLED_KEY: &str = "computerUseEnabled";
@@ -40,19 +40,20 @@ impl ComputerUseState {
         self.enabled = computer_use_enabled_from_settings(settings);
     }
 
-    fn services(&self, cx: &mut Context<SettingsView>) -> super::SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Persist the enable flag on the background executor.
-    fn set_enabled(&mut self, enabled: bool, cx: &mut Context<SettingsView>) {
+    fn set_enabled(
+        &mut self,
+        enabled: bool,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         if self.saving {
             return;
         }
         self.saving = true;
         self.error = None;
         self.enabled = enabled;
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -148,7 +149,7 @@ impl SettingsView {
                                     .label(if state.enabled { "On" } else { "Off" })
                                     .disabled(state.saving)
                                     .on_click(cx.listener(|this, checked, _window, cx| {
-                                        this.computer_use.set_enabled(*checked, cx);
+                                        this.computer_use.set_enabled(*checked, &this.services, cx);
                                     })),
                             ),
                     )

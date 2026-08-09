@@ -276,9 +276,9 @@ impl SettingsView {
                 // keychain checks (web search), the Parakeet catalog + mic
                 // permission (voice), and the Artificial Analysis status (its
                 // cache store reads through tokio, so it runs on the bridge).
-                this.web_search.load_key_state(cx);
+                this.web_search.load_key_state(&this.services, cx);
                 this.voice.load_runtime(cx);
-                this.model_data.load_aa_status(cx);
+                this.model_data.load_aa_status(&this.services, cx);
                 cx.notify();
             })
             .ok();

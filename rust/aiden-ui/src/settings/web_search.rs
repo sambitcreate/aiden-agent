@@ -22,7 +22,7 @@ use gpui_component::{
     v_flex, ActiveTheme, Disableable as _, IconName, Sizable as _,
 };
 
-use super::SettingsView;
+use super::{SettingsServices, SettingsView};
 
 /// The settings key holding the enable flag.
 pub const EXA_ENABLED_KEY: &str = "exaEnabled";
@@ -55,13 +55,13 @@ impl WebSearchState {
         self.enabled = exa_enabled_from_settings(settings);
     }
 
-    fn services(&self, cx: &mut Context<SettingsView>) -> super::SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Read the keychain presence on the background executor.
-    pub(crate) fn load_key_state(&mut self, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    pub(crate) fn load_key_state(
+        &mut self,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let has_key = cx
                 .background_spawn(async move { services.keys.has_key(EXA_KEYCHAIN_ID).ok() })
@@ -96,7 +96,7 @@ impl WebSearchState {
 
     /// Save (or clear, when empty) the Exa key. Removing the key also
     /// disables web search (TS parity).
-    fn save_key(&mut self, cx: &mut Context<SettingsView>) {
+    fn save_key(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         if self.busy {
             return;
         }
@@ -105,7 +105,7 @@ impl WebSearchState {
         };
         let value = editor.read(cx).value().trim().to_string();
         self.busy = true;
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -152,13 +152,13 @@ impl WebSearchState {
     }
 
     /// Verify the stored key locally (presence + decryptability; no network).
-    fn test_key(&mut self, cx: &mut Context<SettingsView>) {
+    fn test_key(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         if self.busy {
             return;
         }
         self.busy = true;
         self.notice = None;
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -186,12 +186,17 @@ impl WebSearchState {
     }
 
     /// Persist the enable flag.
-    fn set_enabled(&mut self, enabled: bool, cx: &mut Context<SettingsView>) {
+    fn set_enabled(
+        &mut self,
+        enabled: bool,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         if self.busy {
             return;
         }
         self.enabled = enabled;
-        let services = self.services(cx);
+        let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -293,7 +298,7 @@ impl SettingsView {
                                     .label(if state.enabled { "On" } else { "Off" })
                                     .disabled(checking || !has_key || state.busy)
                                     .on_click(cx.listener(|this, checked, _window, cx| {
-                                        this.web_search.set_enabled(*checked, cx);
+                                        this.web_search.set_enabled(*checked, &this.services, cx);
                                     })),
                             ),
                     )
@@ -337,7 +342,7 @@ impl SettingsView {
                                             .label("Test key")
                                             .disabled(checking || !has_key || state.busy)
                                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                                this.web_search.test_key(cx);
+                                                this.web_search.test_key(&this.services, cx);
                                             })),
                                     )
                                     .child(
@@ -365,7 +370,7 @@ impl SettingsView {
                                         .label("Save")
                                         .disabled(state.busy)
                                         .on_click(cx.listener(|this, _event, _window, cx| {
-                                            this.web_search.save_key(cx);
+                                            this.web_search.save_key(&this.services, cx);
                                         })),
                                 ),
                         )

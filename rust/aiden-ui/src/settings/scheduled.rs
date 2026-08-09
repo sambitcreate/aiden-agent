@@ -368,7 +368,8 @@ impl SettingsView {
                 .checked(row.enabled)
                 .label(if row.enabled { "Enabled" } else { "Disabled" })
                 .on_click(cx.listener(move |this, checked, _window, cx| {
-                    this.scheduled.toggle_enabled(&click_id, *checked, cx);
+                    this.scheduled
+                        .toggle_enabled(&click_id, *checked, &this.services, cx);
                 }))
             })
             .child({
@@ -519,7 +520,7 @@ impl SettingsView {
                             .label(if draft.saving { "Saving…" } else { "Save" })
                             .disabled(!can_save || draft.saving)
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.scheduled.save_draft(cx);
+                                this.scheduled.save_draft(&this.services, cx);
                             })),
                     ),
             )
@@ -594,7 +595,7 @@ impl SettingsView {
                     .danger()
                     .label("Delete")
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.scheduled.confirm_remove(&removing, cx);
+                        this.scheduled.confirm_remove(&removing, &this.services, cx);
                     })),
             )
     }
@@ -656,12 +657,8 @@ impl ScheduledState {
         cx.notify();
     }
 
-    fn services(&self, cx: &mut Context<SettingsView>) -> SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Persist the new-task form as an LLM scheduled task.
-    fn save_draft(&mut self, cx: &mut Context<SettingsView>) {
+    fn save_draft(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         let Some(draft) = self.adding.as_mut() else {
             return;
         };
@@ -677,7 +674,7 @@ impl ScheduledState {
             Some(draft.workspace_id.clone())
         };
         draft.saving = true;
-        let services = self.services(cx);
+        let services = services.clone();
         let input = ScheduledTaskInput {
             id: None,
             name: name.trim().to_string(),
@@ -721,8 +718,14 @@ impl ScheduledState {
     }
 
     /// Flip the enabled state of a schedule.
-    fn toggle_enabled(&mut self, id: &str, enabled: bool, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    fn toggle_enabled(
+        &mut self,
+        id: &str,
+        enabled: bool,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let id = id.to_string();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -744,8 +747,13 @@ impl ScheduledState {
     }
 
     /// Delete a schedule.
-    fn confirm_remove(&mut self, id: &str, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    fn confirm_remove(
+        &mut self,
+        id: &str,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let id = id.to_string();
         cx.spawn(async move |this, cx| {
             let result = cx

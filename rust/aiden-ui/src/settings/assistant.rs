@@ -26,7 +26,7 @@ use gpui_component::{
     v_flex, ActiveTheme, Disableable as _, Sizable as _,
 };
 
-use super::SettingsView;
+use super::{SettingsServices, SettingsView};
 
 /// The settings key holding the whole assistant config object.
 pub const ASSISTANT_SETTINGS_KEY: &str = "assistant";
@@ -160,20 +160,21 @@ impl AssistantState {
         self.config.clone().unwrap_or_default()
     }
 
-    fn services(&self, cx: &mut Context<SettingsView>) -> super::SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Persist a full config snapshot (background write) and mirror it into
     /// local state immediately so the UI never waits on the disk write.
-    fn save(&mut self, config: AssistantConfig, cx: &mut Context<SettingsView>) {
+    fn save(
+        &mut self,
+        config: AssistantConfig,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
         if self.saving {
             return;
         }
         self.saving = true;
         self.error = None;
         self.config = Some(config.clone());
-        let services = self.services(cx);
+        let services = services.clone();
         let patch = assistant_patch(&config);
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -268,7 +269,7 @@ impl SettingsView {
                                     .on_click(cx.listener(|this, checked, _window, cx| {
                                         let mut next = this.assistant.config();
                                         next.enabled = *checked;
-                                        this.assistant.save(next, cx);
+                                        this.assistant.save(next, &this.services, cx);
                                     })),
                             ),
                     )
@@ -313,7 +314,11 @@ impl SettingsView {
                                                         move |this, _event, _window, cx| {
                                                             let mut next = this.assistant.config();
                                                             next.settings_permission = permission;
-                                                            this.assistant.save(next, cx);
+                                                            this.assistant.save(
+                                                                next,
+                                                                &this.services,
+                                                                cx,
+                                                            );
                                                         },
                                                     ))
                                             },
@@ -436,7 +441,7 @@ impl SettingsView {
                         "watchConfigChanges" => next.watch_config_changes = *is_checked,
                         _ => {}
                     }
-                    this.assistant.save(next, cx);
+                    this.assistant.save(next, &this.services, cx);
                 })),
             )
     }

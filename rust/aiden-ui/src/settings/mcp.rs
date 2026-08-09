@@ -368,7 +368,7 @@ impl SettingsView {
                 .label(if is_testing { "Connecting…" } else { "Test" })
                 .disabled(is_testing)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
-                    this.mcp.test_server(&click_id, cx);
+                    this.mcp.test_server(&click_id, &this.services, cx);
                 }))
             })
             .child({
@@ -379,7 +379,8 @@ impl SettingsView {
                 .checked(enabled)
                 .label(if enabled { "Enabled" } else { "Disabled" })
                 .on_click(cx.listener(move |this, checked, _window, cx| {
-                    this.mcp.toggle_server(&click_id, *checked, cx);
+                    this.mcp
+                        .toggle_server(&click_id, *checked, &this.services, cx);
                 }))
             })
             .child({
@@ -524,7 +525,7 @@ impl SettingsView {
                             .label(if draft.saving { "Saving…" } else { "Save" })
                             .disabled(!can_save || draft.saving)
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.mcp.save_draft(cx);
+                                this.mcp.save_draft(&this.services, cx);
                             })),
                     ),
             )
@@ -570,7 +571,7 @@ impl SettingsView {
                     .danger()
                     .label("Remove")
                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.mcp.confirm_remove(&removing, cx);
+                        this.mcp.confirm_remove(&removing, &this.services, cx);
                     })),
             )
     }
@@ -611,15 +612,17 @@ impl McpState {
         cx.notify();
     }
 
-    fn services(&self, cx: &mut Context<SettingsView>) -> SettingsServices {
-        cx.entity().read(cx).services.clone()
-    }
-
     /// Toggle a server's enabled state through the portable config.
-    fn toggle_server(&mut self, server_id: &str, enabled: bool, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    fn toggle_server(
+        &mut self,
+        server_id: &str,
+        enabled: bool,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let server_id = server_id.to_string();
-        let servers = cx.entity().read(cx).mcp.servers.clone();
+        let servers = self.servers.clone();
         let Some(row) = servers.iter().find(|row| row.id == server_id) else {
             return;
         };
@@ -645,7 +648,7 @@ impl McpState {
     }
 
     /// Persist the add form as a new stdio server.
-    fn save_draft(&mut self, cx: &mut Context<SettingsView>) {
+    fn save_draft(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
         let Some(draft) = self.adding.as_mut() else {
             return;
         };
@@ -657,7 +660,7 @@ impl McpState {
         let args = parse_args_text(&draft.args.read(cx).value());
         let env = parse_env_lines(&draft.env.read(cx).value());
         draft.saving = true;
-        let services = self.services(cx);
+        let services = services.clone();
         let record = McpServer {
             id: format!("mcp-{:x}", aiden_data::now_millis()),
             name: name.trim().to_string(),
@@ -693,8 +696,13 @@ impl McpState {
     }
 
     /// Remove a configured server.
-    fn confirm_remove(&mut self, server_id: &str, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    fn confirm_remove(
+        &mut self,
+        server_id: &str,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let server_id = server_id.to_string();
         cx.spawn(async move |this, cx| {
             let ok = cx
@@ -722,10 +730,15 @@ impl McpState {
 
     /// Test-connect a server through the MCP client manager (async on the
     /// tokio bridge; the spinner shows while pending).
-    fn test_server(&mut self, server_id: &str, cx: &mut Context<SettingsView>) {
-        let services = self.services(cx);
+    fn test_server(
+        &mut self,
+        server_id: &str,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let server_id = server_id.to_string();
-        let servers = cx.entity().read(cx).mcp.servers.clone();
+        let servers = self.servers.clone();
         let Some(row) = servers.iter().find(|row| row.id == server_id) else {
             return;
         };

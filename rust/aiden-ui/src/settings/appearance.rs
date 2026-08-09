@@ -24,7 +24,7 @@ use crate::services::appearance::{
     SETTINGS_APPEARANCE_KEY,
 };
 
-use super::SettingsView;
+use super::{SettingsServices, SettingsView};
 
 /// Parse a `#RRGGBB` token hex into an `Hsla` for swatch rendering. The hex
 /// comes from the appearance tokens (`aiden_core`), never hardcoded here.
@@ -148,7 +148,7 @@ impl SettingsView {
                                         Mode::Dark => "Dark",
                                     })
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
-                                        this.appearance.set_mode(mode, cx);
+                                        this.appearance.set_mode(mode, &this.services, cx);
                                     }))
                             }),
                         ),
@@ -225,7 +225,11 @@ impl SettingsView {
                                         };
                                     button.label(label).on_click(cx.listener(
                                         move |this, _event, _window, cx| {
-                                            this.appearance.set_reduce_motion(preference, cx);
+                                            this.appearance.set_reduce_motion(
+                                                preference,
+                                                &this.services,
+                                                cx,
+                                            );
                                         },
                                     ))
                                 }),
@@ -268,7 +272,7 @@ impl SettingsView {
             .cursor_pointer()
             .hover(|style| style.bg(theme.muted))
             .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.appearance.set_preset(preset, cx);
+                this.appearance.set_preset(preset, &this.services, cx);
             }))
             .child(
                 h_flex().gap_0p5().children(
@@ -297,8 +301,13 @@ impl SettingsView {
 
 impl AppearanceState {
     /// Switch the mode and apply + persist.
-    fn set_mode(&mut self, mode: Mode, cx: &mut Context<SettingsView>) {
-        let services = cx.entity().read(cx).services.clone();
+    fn set_mode(
+        &mut self,
+        mode: Mode,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let mut config = self.config();
         if config.mode == mode {
             return;
@@ -324,8 +333,13 @@ impl AppearanceState {
     /// Switch the reduce-motion preference (`System | On | Off`) and persist
     /// it under the `appearance` key. The pill and the main chat surface both
     /// read the persisted override (see `crate::app::motion_reduced`).
-    fn set_reduce_motion(&mut self, reduce_motion: ReduceMotion, cx: &mut Context<SettingsView>) {
-        let services = cx.entity().read(cx).services.clone();
+    fn set_reduce_motion(
+        &mut self,
+        reduce_motion: ReduceMotion,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let mut config = self.config();
         if config.reduce_motion == reduce_motion {
             return;
@@ -347,8 +361,13 @@ impl AppearanceState {
     }
 
     /// Apply a preset to the active scheme's variant and persist.
-    fn set_preset(&mut self, preset: PresetId, cx: &mut Context<SettingsView>) {
-        let services = cx.entity().read(cx).services.clone();
+    fn set_preset(
+        &mut self,
+        preset: PresetId,
+        services: &SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let services = services.clone();
         let mut config = self.config();
         let scheme = resolve_scheme(config.mode, cx.window_appearance());
         let variant = get_preset_variant(preset, scheme);
