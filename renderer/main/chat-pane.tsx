@@ -330,6 +330,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [chatId]);
 
   const messages = React.useMemo(() => chat.data?.messages ?? [], [chat.data?.messages]);
+  const latestAssistantResponse = React.useMemo(
+    () =>
+      [...messages]
+        .reverse()
+        .find((message) => message.role === "assistant" && message.content.trim())
+        ?.content,
+    [messages],
+  );
   const subagentReferences = React.useMemo(
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
@@ -337,6 +345,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const hasMessages = messages.length > 0;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+
+  const renameChat = React.useCallback(
+    async (title: string) => {
+      await chatsApi.rename(chatId, title);
+      qc.setQueryData<Chat | null>(queryKeys.chat(chatId), (current) =>
+        current ? { ...current, title } : current,
+      );
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+    },
+    [chatId, qc],
+  );
 
   React.useLayoutEffect(() => {
     if (!effectiveWorkspaceId) return;
@@ -1230,6 +1249,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 : undefined
             }
             onChangeComputerUse={changeComputerUse}
+            currentChatTitle={chat.data?.title}
+            latestAssistantResponse={latestAssistantResponse}
+            slashNavigationBlockedReason={settingsBlockedReason}
+            slashPaletteBlocked={Boolean(pending)}
+            slashActionBusy={isGenerating || isStartingGeneration}
+            onOpenSettings={(section) =>
+              void navigate({
+                to: "/settings",
+                search: section ? { section } : {},
+              })
+            }
+            onRenameChat={renameChat}
+            onOpenReview={() => environmentPanel.openReview("changes")}
             thinkingControl={
               googleThinkingSupported ? (
                 <ThinkingControl

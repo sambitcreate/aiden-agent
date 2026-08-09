@@ -641,6 +641,44 @@ textarea {
   }
 }
 
+@keyframes aiden-slash-palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aiden-slash-palette-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(3px) scale(0.985);
+  }
+}
+
+.composer-slash-palette[data-presence="visible"] {
+  opacity: 1;
+}
+
+.composer-slash-palette[data-presence="exiting"] {
+  pointer-events: none;
+}
+
+:root[data-reduce-motion="false"] .composer-slash-palette[data-presence="visible"] {
+  animation: aiden-slash-palette-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
+}
+
+:root[data-reduce-motion="false"] .composer-slash-palette[data-presence="exiting"] {
+  animation: aiden-slash-palette-out 100ms ease-in both;
+}
+
 /* One new row appends at the bottom, so shifting the whole stack up by exactly
    one row height carries the older lines with it. */
 @keyframes aiden-activity-stack-shift {

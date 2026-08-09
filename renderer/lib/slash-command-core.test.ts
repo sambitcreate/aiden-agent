@@ -5,7 +5,12 @@ import {
   consumeSlashToken,
   deriveSlashSession,
   dismissSlashSession,
+  moveSlashSelection,
+  pageSlashSelection,
   rankSlashResults,
+  slashActionCommitIsCurrent,
+  slashPalettePresenceState,
+  slashTabAcceptsSelection,
   updateSlashSessionTracker,
 } from "./slash-command-core.js";
 
@@ -120,4 +125,101 @@ test("ranking is deterministic, DOM-safe, source ordered, and capped after all 5
 test("oversized Unicode queries do not open or rank", () => {
   assert.equal(deriveSlashSession(input(`/${"😀".repeat(257)}`)), null);
   assert.throws(() => rankSlashResults("😀".repeat(257), []));
+});
+
+test("keyboard selection wraps while skipping unavailable results", () => {
+  const results = rankSlashResults("", []).results;
+  const selectable = (result: (typeof results)[number]) =>
+    result.kind === "command" && result.command.name !== "new";
+  const first = moveSlashSelection(results, undefined, 1, selectable);
+  assert.ok(first);
+  assert.notEqual(first, "slash-option-command-new");
+  const previous = moveSlashSelection(results, first, -1, selectable);
+  assert.ok(previous);
+  assert.notEqual(previous, first);
+  const selectableResults = results.filter(selectable);
+  assert.equal(
+    pageSlashSelection(results, undefined, -1, selectable),
+    selectableResults[selectableResults.length - 1]?.id,
+  );
+});
+
+test("an async action only commits against the exact unblocked draft session it started from", () => {
+  const expected = {
+    draft: "/copy",
+    epoch: 3,
+    interactionRevision: 7,
+    blocked: false,
+  };
+  assert.equal(slashActionCommitIsCurrent(expected, expected), true);
+  assert.equal(
+    slashActionCommitIsCurrent(expected, {
+      draft: "/copy later",
+      epoch: 4,
+      interactionRevision: 8,
+      blocked: false,
+    }),
+    false,
+  );
+  assert.equal(
+    slashActionCommitIsCurrent(expected, {
+      draft: "/copy",
+      epoch: 3,
+      interactionRevision: 8,
+      blocked: false,
+    }),
+    false,
+  );
+  assert.equal(
+    slashActionCommitIsCurrent(expected, {
+      ...expected,
+      blocked: true,
+    }),
+    false,
+  );
+});
+
+test("Tab never accepts a slash option while its action is pending", () => {
+  assert.equal(slashTabAcceptsSelection(1, false), true);
+  assert.equal(slashTabAcceptsSelection(1, true), false);
+  assert.equal(slashTabAcceptsSelection(2, false), false);
+});
+
+test("palette presence closes synchronously and reopens visibly", () => {
+  assert.equal(
+    slashPalettePresenceState({
+      present: false,
+      retained: true,
+      immediate: true,
+      reduceMotion: false,
+    }),
+    "hidden",
+  );
+  assert.equal(
+    slashPalettePresenceState({
+      present: false,
+      retained: true,
+      immediate: false,
+      reduceMotion: true,
+    }),
+    "hidden",
+  );
+  assert.equal(
+    slashPalettePresenceState({
+      present: false,
+      retained: true,
+      immediate: false,
+      reduceMotion: false,
+    }),
+    "exiting",
+  );
+  assert.equal(
+    slashPalettePresenceState({
+      present: true,
+      retained: true,
+      immediate: false,
+      reduceMotion: false,
+    }),
+    "visible",
+  );
 });

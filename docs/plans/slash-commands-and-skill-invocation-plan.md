@@ -1,6 +1,6 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Active — Phases 0–1 are complete; Phase 2 composer palette is next
+- **Status:** Active — Phases 0–2 are complete; Phase 3 active skill invocation is next
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
@@ -559,6 +559,20 @@ returned clean final P0/P1/P2 verdicts after the correction loops.
 the same skill or the same unavailable reason.
 
 ### Phase 2 — Composer command palette
+
+**Completed 2026-08-09.** The composer now owns a bounded, overlaid Commands
+and Skills palette backed by the safe workspace catalog and canonical command
+dispatcher. All 19 core rows implement deterministic parsing/ranking,
+availability reasons, argument validation, draft preservation, keyboard and
+pointer control, listbox semantics, responsive styling, reduced motion, and
+approval-first layering. Synchronous picker/navigation actions commit in the
+same event turn; delayed clipboard work uses an interaction/session guard so
+focus, selection, IME, dismissal, blocking, unmount, or a newer draft cannot
+consume stale text. The registered 63-test Slash Commands gate, full repository
+suite, TypeScript, ESLint, formatting/diff checks, and React Doctor pass with
+only the pre-existing `ChatPane` state-organization warning. Three independent
+high-reasoning review lanes returned clean final P0/P1/P2 verdicts after the
+correction loops.
 
 - Add pure slash parsing/ranking/session helpers.
 - Extract canonical command action/result builders.

@@ -35,6 +35,65 @@ export type SlashResult =
   | { kind: "command"; id: string; command: SlashCommandDefinition; score: number }
   | { kind: "skill"; id: string; skill: SkillCatalogEntry; score: number };
 
+export function moveSlashSelectionId(
+  ids: readonly string[],
+  currentId: string | undefined,
+  direction: 1 | -1,
+): string | undefined {
+  if (ids.length === 0) return undefined;
+  const currentIndex = currentId === undefined ? -1 : ids.indexOf(currentId);
+  if (currentIndex < 0) return direction === 1 ? ids[0] : ids[ids.length - 1];
+  return ids[(currentIndex + direction + ids.length) % ids.length];
+}
+
+export function pageSlashSelectionId(
+  ids: readonly string[],
+  currentId: string | undefined,
+  direction: 1 | -1,
+  pageSize = 8,
+): string | undefined {
+  if (ids.length === 0) return undefined;
+  const currentIndex = currentId === undefined ? -1 : ids.indexOf(currentId);
+  if (currentIndex < 0) return direction === 1 ? ids[0] : ids[ids.length - 1];
+  const nextIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + direction * pageSize));
+  return ids[nextIndex];
+}
+
+function selectableSlashResultIds(
+  results: readonly SlashResult[],
+  selectable: (result: SlashResult) => boolean,
+): string[] {
+  const ids: string[] = [];
+  for (const result of results) {
+    if (selectable(result)) ids.push(result.id);
+  }
+  return ids;
+}
+
+export function moveSlashSelection(
+  results: readonly SlashResult[],
+  currentId: string | undefined,
+  direction: 1 | -1,
+  selectable: (result: SlashResult) => boolean,
+): string | undefined {
+  return moveSlashSelectionId(selectableSlashResultIds(results, selectable), currentId, direction);
+}
+
+export function pageSlashSelection(
+  results: readonly SlashResult[],
+  currentId: string | undefined,
+  direction: 1 | -1,
+  selectable: (result: SlashResult) => boolean,
+  pageSize = 8,
+): string | undefined {
+  return pageSlashSelectionId(
+    selectableSlashResultIds(results, selectable),
+    currentId,
+    direction,
+    pageSize,
+  );
+}
+
 function firstToken(draft: string): { start: number; end: number; token: string } | null {
   const start = draft.search(/\S/u);
   if (start < 0 || draft[start] !== "/") return null;
@@ -54,6 +113,43 @@ export function updateSlashSessionTracker(
     return { epoch: prior.epoch + 1, active: true, token: parsed.token };
   }
   return { ...prior, active: true, token: parsed.token };
+}
+
+export function slashActionCommitIsCurrent(
+  expected: {
+    draft: string;
+    epoch: number;
+    interactionRevision: number;
+    blocked: boolean;
+  },
+  current: {
+    draft: string;
+    epoch: number;
+    interactionRevision: number;
+    blocked: boolean;
+  },
+): boolean {
+  return (
+    expected.draft === current.draft &&
+    expected.epoch === current.epoch &&
+    expected.interactionRevision === current.interactionRevision &&
+    expected.blocked === current.blocked
+  );
+}
+
+export function slashTabAcceptsSelection(selectableCount: number, actionPending: boolean): boolean {
+  return selectableCount === 1 && !actionPending;
+}
+
+export function slashPalettePresenceState(input: {
+  present: boolean;
+  retained: boolean;
+  immediate: boolean;
+  reduceMotion: boolean;
+}): "visible" | "exiting" | "hidden" {
+  if (input.present) return "visible";
+  if (input.immediate || input.reduceMotion || !input.retained) return "hidden";
+  return "exiting";
 }
 
 export function dismissSlashSession(tracker: SlashSessionTracker): SlashSessionTracker {

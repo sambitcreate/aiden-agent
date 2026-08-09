@@ -57,6 +57,14 @@ test("curated slash catalog freezes unique command names, aliases, and required 
     kind: "composer-control",
     control: "access",
   });
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "providers")?.action, {
+    kind: "settings",
+    section: "providers",
+  });
+  assert.deepEqual(SLASH_COMMANDS.find((command) => command.name === "theme")?.action, {
+    kind: "command",
+    commandId: "settings.search",
+  });
   assert.equal(SLASH_LIMITS.queryCharacters, 256);
   assert.equal(SLASH_LIMITS.catalogEntries, 500);
   assert.equal(SLASH_LIMITS.visibleResults, 100);
