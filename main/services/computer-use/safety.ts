@@ -126,14 +126,16 @@ function own(value: object, key: string): boolean {
 }
 
 function finiteCoordinate(value: unknown, name: string): [number, number] {
+  const hasBothValues =
+    Array.isArray(value) && value.length === 2 && own(value, "0") && own(value, "1");
+  const parts = hasBothValues ? [value[0], value[1]] : [];
   if (
-    !Array.isArray(value) ||
-    value.length !== 2 ||
-    !value.every((part) => typeof part === "number" && Number.isFinite(part) && part >= 0)
+    !hasBothValues ||
+    !parts.every((part) => typeof part === "number" && Number.isFinite(part) && part >= 0)
   ) {
     fail("invalid_coordinate", `${name} must be a two-number non-negative coordinate.`);
   }
-  return [value[0] as number, value[1] as number];
+  return [parts[0] as number, parts[1] as number];
 }
 
 function nonNegativeIndex(value: unknown, name: string): number {
