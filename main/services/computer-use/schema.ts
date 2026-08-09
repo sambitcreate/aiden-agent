@@ -33,7 +33,12 @@ const Action = Type.Union([
   Type.Literal("list_windows"),
   Type.Literal("focus_app"),
 ]);
-const Coordinate = Type.Tuple([Type.Number({ minimum: 0 }), Type.Number({ minimum: 0 })]);
+// Some OpenAI-compatible providers reject draft-07 tuple schemas because their
+// `items` value is an array. Keep tuple typing for Aiden while publishing the
+// equivalent homogeneous, fixed-length schema those providers accept.
+const Coordinate = Type.Unsafe<[number, number]>(
+  Type.Array(Type.Number({ minimum: 0 }), { minItems: 2, maxItems: 2 }),
+);
 const Modifier = Type.Union(
   [
     "cmd",

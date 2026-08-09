@@ -19,7 +19,9 @@ import { fileURLToPath } from "node:url";
 
 const modulePath = fileURLToPath(import.meta.url);
 const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
-const BRANDING_SCHEMA_VERSION = 4;
+const BRANDING_SCHEMA_VERSION = 5;
+const MICROPHONE_USAGE_DESCRIPTION =
+  "Aiden Agent uses the microphone only when you choose voice input or dictation.";
 
 function helperName(productName, suffix) {
   return `${productName} Helper${suffix}`;
@@ -161,6 +163,7 @@ export async function validateMacDevRuntime(
       CFBundleExecutable: layout.executableName,
       CFBundleIdentifier: layout.bundleIdentifier,
       CFBundleName: layout.productName,
+      NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
     },
     run,
   );
@@ -247,6 +250,12 @@ export async function brandMacDevRuntime(
   await setPlistString(mainPlist, "CFBundleIconFile", path.basename(bundledIcon), run);
   await setPlistString(mainPlist, "CFBundleIdentifier", layout.bundleIdentifier, run);
   await setPlistString(mainPlist, "CFBundleName", layout.productName, run);
+  await setPlistString(
+    mainPlist,
+    "NSMicrophoneUsageDescription",
+    MICROPHONE_USAGE_DESCRIPTION,
+    run,
+  );
   await setPlistString(mainPlist, "CFBundleShortVersionString", version, run);
   await setPlistString(mainPlist, "CFBundleVersion", version, run);
 

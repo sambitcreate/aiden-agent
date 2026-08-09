@@ -1,10 +1,12 @@
 /* global process */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { URL } from "node:url";
 import {
   AIDEN_UPDATE_FEED_URL,
   discoverMacDistributionArchives,
@@ -125,15 +127,68 @@ test("automatic-update distributions generate generic-feed metadata without chan
   ]);
 });
 
+test("release artifact configuration uses stable GitHub-safe names", async () => {
+  const packageJson = JSON.parse(
+    await readFile(new URL("../package.json", import.meta.url), "utf8"),
+  );
+  assert.equal(packageJson.build.mac.artifactName, "Aiden-Agent-${version}-${arch}-mac.${ext}");
+  assert.equal(packageJson.build.dmg.artifactName, "Aiden-Agent-Beta-${version}-${arch}.${ext}");
+});
+
+test("release assets stay draft-only until the complete update set is uploaded", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const existingReleaseGuard = workflow.indexOf('gh release view "$RELEASE_TAG"');
+  const createDraft = workflow.indexOf('gh release create "$RELEASE_TAG"');
+  const publishDraft = workflow.indexOf('gh release edit "$RELEASE_TAG"');
+
+  assert.ok(existingReleaseGuard >= 0, "release reruns must reject an existing tag or draft");
+  assert.ok(createDraft > existingReleaseGuard, "draft creation must follow the immutability guard");
+  assert.ok(publishDraft > createDraft, "publication must happen only after draft asset upload");
+
+  const upload = workflow.slice(createDraft, publishDraft);
+  assert.match(upload, /--draft\s+\\\s+-- \*\.dmg \*\.zip latest-mac\.yml SHA256SUMS/u);
+  assert.doesNotMatch(upload, /--latest/u);
+
+  const publish = workflow.slice(publishDraft);
+  assert.match(publish, /--draft=false\s+\\\s+--latest/u);
+});
+
 test("update metadata is version-bound and requires a hashed ZIP payload", async () => {
   const staging = await mkdtemp(path.join(os.tmpdir(), "aiden-update-metadata-"));
   try {
+    const zipContents = "fixture";
+    const zipDigest = createHash("sha512").update(zipContents).digest("base64");
+    await Promise.all([
+      writeFile(path.join(staging, "Aiden-Agent-Beta-1.0.9-arm64.dmg"), "fixture", "utf8"),
+      writeFile(path.join(staging, "Aiden-Agent-1.0.9-arm64-mac.zip"), zipContents, "utf8"),
+    ]);
     await writeFile(
       path.join(staging, "latest-mac.yml"),
-      "version: 1.0.9\nfiles:\n  - url: Aiden-Agent-1.0.9.zip\n    sha512: YWlkZW4=\n",
+      `version: 1.0.9\nfiles:\n  - url: Aiden-Agent-1.0.9-arm64-mac.zip\n    sha512: ${zipDigest}\npath: Aiden-Agent-1.0.9-arm64-mac.zip\nsha512: ${zipDigest}\n`,
       "utf8",
     );
-    assert.equal(await verifyMacUpdateMetadata(staging, "1.0.9"), path.join(staging, "latest-mac.yml"));
+    assert.equal(
+      await verifyMacUpdateMetadata(staging, "1.0.9"),
+      path.join(staging, "latest-mac.yml"),
+    );
+    await assert.rejects(verifyMacUpdateMetadata(staging, "1.0.10"), /does not match/u);
+    await writeFile(
+      path.join(staging, "latest-mac.yml"),
+      `version: 1.0.9\nfiles:\n  - url: Aiden Agent-1.0.9-arm64-mac.zip\n    sha512: ${zipDigest}\npath: Aiden Agent-1.0.9-arm64-mac.zip\nsha512: ${zipDigest}\n`,
+      "utf8",
+    );
+    await assert.rejects(verifyMacUpdateMetadata(staging, "1.0.9"), /exact ZIP release asset/u);
+    await writeFile(
+      path.join(staging, "latest-mac.yml"),
+      `version: 1.0.9\nfiles:\n  - url: Aiden-Agent-1.0.9-arm64-mac.zip\n    sha512: ${zipDigest}\npath: Aiden-Agent-1.0.9-arm64-mac.zip\nsha512: YWlkZW4=\n`,
+      "utf8",
+    );
+    await assert.rejects(verifyMacUpdateMetadata(staging, "1.0.9"), /digest does not match/u);
+    await writeFile(
+      path.join(staging, "latest-mac.yml"),
+      `version: 1.0.9\nreleaseName: version: 1.0.10\nfiles:\n  - url: Aiden-Agent-1.0.9-arm64-mac.zip\n    sha512: ${zipDigest}\npath: Aiden-Agent-1.0.9-arm64-mac.zip\nsha512: ${zipDigest}\n`,
+      "utf8",
+    );
     await assert.rejects(verifyMacUpdateMetadata(staging, "1.0.10"), /does not match/u);
   } finally {
     await rm(staging, { recursive: true, force: true });

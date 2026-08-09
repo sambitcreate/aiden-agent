@@ -14,6 +14,7 @@ import {
   assertComputerUseMinimumSystemVersion,
   assertDeveloperIdSignature,
   assertElectronEntitlements,
+  assertElectronHelperEntitlements,
   assertExactUniversalArchitectures,
   assertMinimalComputerUseEntitlements,
   assertMacOSArchitectureMinimum,
@@ -400,6 +401,7 @@ test("package verifier requires the normal Electron runtime entitlements", () =>
     "com.apple.security.cs.allow-jit",
     "com.apple.security.cs.allow-unsigned-executable-memory",
     "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.device.audio-input",
   ]
     .map((key) => `<key>${key}</key><true/>`)
     .join("");
@@ -408,8 +410,53 @@ test("package verifier requires the normal Electron runtime entitlements", () =>
   assert.throws(
     () =>
       assertElectronEntitlements(
+        `<plist><dict>${expected.replace(
+          "<key>com.apple.security.device.audio-input</key><true/>",
+          "<key>com.apple.security.device.audio-input</key><false/>",
+        )}</dict></plist>`,
+      ),
+    /pinned runtime set/u,
+  );
+  assert.throws(
+    () =>
+      assertElectronEntitlements(
         `<plist><dict>${expected}<key>com.apple.security.app-sandbox</key><true/></dict></plist>`,
       ),
     /pinned runtime set/,
+  );
+});
+
+test("package verifier requires inherited microphone access on Electron helpers", () => {
+  const expected = [
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.device.audio-input",
+  ]
+    .map((key) => `<key>${key}</key><true/>`)
+    .join("");
+  assert.doesNotThrow(() =>
+    assertElectronHelperEntitlements(`<plist><dict>${expected}</dict></plist>`),
+  );
+  assert.throws(
+    () => assertElectronHelperEntitlements("<plist><dict/></plist>"),
+    /pinned inherited set/u,
+  );
+  assert.throws(
+    () =>
+      assertElectronHelperEntitlements(
+        `<plist><dict>${expected.replace(
+          "<key>com.apple.security.device.audio-input</key><true/>",
+          "<key>com.apple.security.device.audio-input</key><false/>",
+        )}</dict></plist>`,
+      ),
+    /pinned inherited set/u,
+  );
+  assert.throws(
+    () =>
+      assertElectronHelperEntitlements(
+        `<plist><dict>${expected}<key>com.apple.security.automation.apple-events</key><true/></dict></plist>`,
+      ),
+    /pinned inherited set/u,
   );
 });

@@ -102,15 +102,22 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
 
   React.useEffect(() => {
     let cancelled = false;
+    let notificationRevision = 0;
     const applySnapshot = (next: AppUpdateSnapshot) => {
       if (cancelled) return;
       setSnapshot(next);
       setRestarting(false);
     };
-    const unsubscribe = appUpdatesApi.onStateChanged(applySnapshot);
+    const unsubscribe = appUpdatesApi.onStateChanged((next) => {
+      notificationRevision += 1;
+      applySnapshot(next);
+    });
+    const requestedAtRevision = notificationRevision;
     void appUpdatesApi
       .state()
-      .then(applySnapshot)
+      .then((next) => {
+        if (notificationRevision === requestedAtRevision) applySnapshot(next);
+      })
       .catch(() => undefined);
     return () => {
       cancelled = true;
@@ -201,7 +208,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
               Restarting…
             </>
           ) : (
-            "Restart now"
+            "Update and restart"
           )}
         </Button>
       </div>
