@@ -1,8 +1,13 @@
 //! Message transcript: user bubbles, assistant markdown (via gpui-component's
 //! `TextView` with per-code-block copy actions and tree-sitter highlighting),
 //! collapsible thinking blocks, the streaming assistant bubble (with a blinking
-//! cursor), hover-revealed message copy actions, and the terminal error banner
-//! with retry.
+//! cursor), hover-revealed message actions (copy + edit on user bubbles, copy +
+//! retry on assistant bubbles), and the terminal error banner with retry.
+//!
+//! User bubbles render image attachments inline (scaled to a 400 px cap);
+//! edit and retry actions call into the composer draft (`ComposerDraft`) and
+//! the chat service respectively — see `chat_pane.rs` for the send-side
+//! rebranch logic.
 //!
 //! # Markdown + code blocks
 //!
@@ -25,7 +30,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use aiden_core::{ChatMessage, ChatRole};
+use aiden_core::{Attachment, ChatMessage, ChatRole};
 use gpui::{
     div, prelude::FluentBuilder as _, px, relative, App, Context, ElementId, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, ScrollHandle, SharedString,
@@ -42,14 +47,18 @@ use gpui_component::{
 
 use crate::app::AppState;
 use crate::chat::activity_feed::timeline_feed;
+use crate::chat::composer::{attachment_image_element, composer_draft};
 use crate::services::chat_service::{ChatSnapshot, GenerationState};
 
 /// Pixels from the very bottom that still count as "at the bottom" — mirrors
 /// the TS `ScrollArea` threshold (`remaining < 24`).
 const BOTTOM_TOLERANCE_PX: f32 = 24.0;
 
-/// Group name used to reveal the per-message copy buttons on hover.
+/// Group name used to reveal the per-message action buttons on hover.
 const MESSAGE_ACTIONS_GROUP: &str = "message-actions";
+
+/// Max width for images rendered inline in user bubbles (gap 4 of the audit).
+const MAX_ATTACHMENT_WIDTH_PX: f32 = 400.0;
 
 impl AppState {
     /// The scrollable transcript. Renders persisted messages, then the live
@@ -153,7 +162,7 @@ fn is_near_bottom(offset: f32, max_offset: f32, tolerance: f32) -> bool {
 fn render_persisted_message(
     message: &ChatMessage,
     window: &mut Window,
-    cx: &mut App,
+    cx: &mut Context<AppState>,
 ) -> gpui::AnyElement {
     match message.role {
         ChatRole::User => render_user_bubble(message, cx).into_any_element(),
@@ -162,8 +171,10 @@ fn render_persisted_message(
     }
 }
 
-fn render_user_bubble(message: &ChatMessage, cx: &mut App) -> impl IntoElement {
+fn render_user_bubble(message: &ChatMessage, cx: &mut Context<AppState>) -> impl IntoElement {
     let muted = cx.theme().muted;
+    let message_id = message.id.clone();
+    let content = message.content.clone();
     h_flex()
         .id(ElementId::Name(SharedString::from(format!(
             "user-message-{}",
@@ -176,28 +187,37 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut App) -> impl IntoElement {
             v_flex()
                 .items_end()
                 .gap_1()
-                .child(
-                    div()
-                        .max_w(relative(0.8))
-                        .rounded_2xl()
-                        .bg(muted)
-                        .px_4()
-                        .py_2()
-                        .child(prewrap(&message.content)),
+                // Image attachments render inline (max 400 px), scaled down
+                // from the persisted base64 (gap 4).
+                .when_some(
+                    message
+                        .attachments
+                        .as_ref()
+                        .filter(|attachments| !attachments.is_empty()),
+                    |el, attachments| el.child(attachment_previews(attachments, cx)),
                 )
-                .child(message_copy_button(
-                    &format!("copy-user-{}", message.id),
-                    &message.content,
-                )),
+                .when(!message.content.trim().is_empty(), |el| {
+                    el.child(
+                        div()
+                            .max_w(relative(0.8))
+                            .rounded_2xl()
+                            .bg(muted)
+                            .px_4()
+                            .py_2()
+                            .child(prewrap(&message.content)),
+                    )
+                })
+                .child(user_message_actions(&message_id, &content, cx)),
         )
 }
 
 fn render_assistant_message(
     message: &ChatMessage,
     window: &mut Window,
-    cx: &mut App,
+    cx: &mut Context<AppState>,
 ) -> impl IntoElement {
     let muted = cx.theme().muted;
+    let message_id = message.id.clone();
     v_flex()
         .id(ElementId::Name(SharedString::from(format!(
             "assistant-message-{}",
@@ -245,10 +265,12 @@ fn render_assistant_message(
             window,
             cx,
         ))
-        .child(h_flex().w_full().justify_start().child(message_copy_button(
-            &format!("copy-assistant-{}", message.id),
-            &message.content,
-        )))
+        .child(
+            h_flex()
+                .w_full()
+                .justify_start()
+                .child(assistant_message_actions(&message_id, &message.content, cx)),
+        )
 }
 
 // ===========================================================================
@@ -499,10 +521,10 @@ fn stable_hash(input: &str) -> u64 {
 // Hover actions
 // ===========================================================================
 
-/// A hover-revealed copy button for a whole message (matches the TS hover
-/// actions). Reveals on group hover and on keyboard focus-within so the action
-/// stays reachable without a mouse.
-fn message_copy_button(base_id: &str, text: &str) -> gpui::Stateful<gpui::Div> {
+/// A hover-revealed row of message actions (copy + edit on user bubbles, copy +
+/// retry on assistant bubbles). Reveals on group hover and on keyboard
+/// focus-within so the actions stay reachable without a mouse.
+fn hover_reveal(base_id: &str, children: impl IntoElement) -> gpui::Stateful<gpui::Div> {
     div()
         .id(ElementId::Name(SharedString::from(format!(
             "{base_id}-wrap"
@@ -511,9 +533,130 @@ fn message_copy_button(base_id: &str, text: &str) -> gpui::Stateful<gpui::Div> {
         .group_hover(MESSAGE_ACTIONS_GROUP, |style| style.opacity(1.0))
         .focusable()
         .in_focus(|style| style.opacity(1.0))
+        .child(h_flex().gap_1().items_center().child(children))
+}
+
+/// Copy + edit actions for a user bubble. Edit loads the message text into the
+/// composer and marks it as "editing" (the send button then rebranches).
+fn user_message_actions(
+    message_id: &str,
+    content: &str,
+    cx: &mut Context<AppState>,
+) -> gpui::AnyElement {
+    let message_id = message_id.to_string();
+    let content = content.to_string();
+    // Owned copies for the move-in listener; the Clipboard consumes `content`.
+    let edit_text = content.clone();
+    let copy_id = format!("copy-user-{message_id}");
+    let edit_id = format!("edit-user-{message_id}");
+    let actions_id = format!("user-actions-{message_id}");
+    let edit = Button::new(ElementId::Name(SharedString::from(edit_id)))
+        .small()
+        .ghost()
+        .icon(IconName::Replace)
+        .tooltip("Edit message")
+        .on_click(cx.listener(move |this, _event, window, cx| {
+            this.composer_input.update(cx, |input, inner| {
+                input.set_value(edit_text.clone(), window, inner);
+            });
+            composer_draft(cx).begin_edit(message_id.clone());
+            this.composer_input
+                .update(cx, |input, inner| input.focus(window, inner));
+            cx.notify();
+        }));
+    hover_reveal(
+        &actions_id,
+        h_flex()
+            .gap_1()
+            .items_center()
+            .child(Clipboard::new(ElementId::Name(SharedString::from(copy_id))).value(content))
+            .child(edit),
+    )
+    .into_any_element()
+}
+
+/// Copy + retry actions for an assistant bubble. Retry regenerates from the
+/// last user turn (`retry_last` — the service truncates the failed assistant
+/// turn before resending).
+fn assistant_message_actions(
+    message_id: &str,
+    content: &str,
+    cx: &mut Context<AppState>,
+) -> gpui::AnyElement {
+    let message_id = message_id.to_string();
+    let content = content.to_string();
+    let retry = Button::new(ElementId::Name(SharedString::from(format!(
+        "retry-assistant-{message_id}"
+    ))))
+    .small()
+    .ghost()
+    .icon(IconName::Undo2)
+    .tooltip("Retry (regenerate from the last message)")
+    .on_click(cx.listener(|this, _event, _window, cx| {
+        this.service
+            .update(cx, |service, cx| service.retry_last(cx));
+    }));
+    hover_reveal(
+        &format!("assistant-actions-{message_id}"),
+        h_flex()
+            .gap_1()
+            .items_center()
+            .child(
+                Clipboard::new(ElementId::Name(SharedString::from(format!(
+                    "copy-assistant-{message_id}"
+                ))))
+                .value(content),
+            )
+            .child(retry),
+    )
+    .into_any_element()
+}
+
+// ===========================================================================
+// Attachment rendering (gap 4)
+// ===========================================================================
+
+/// Inline rendering of a message's attachments: images scale to at most
+/// [`MAX_ATTACHMENT_WIDTH_PX`] wide (object-fit contain); anything else
+/// (unrenderable formats, text attachments) falls back to a file chip.
+fn attachment_previews(attachments: &[Attachment], cx: &mut Context<AppState>) -> impl IntoElement {
+    h_flex()
+        .id("user-attachments")
+        .flex_wrap()
+        .justify_end()
+        .gap_2()
+        .children(attachments.iter().map(|attachment| {
+            if let Some(image) = attachment_image_element(attachment, MAX_ATTACHMENT_WIDTH_PX) {
+                image
+            } else {
+                attachment_file_chip(attachment, cx).into_any_element()
+            }
+        }))
+}
+
+/// A small file chip for attachments that can't be rendered inline.
+fn attachment_file_chip(attachment: &Attachment, cx: &mut App) -> impl IntoElement {
+    let theme = cx.theme();
+    h_flex()
+        .gap_1p5()
+        .items_center()
+        .px_2p5()
+        .py_1p5()
+        .rounded_lg()
+        .bg(theme.muted)
+        .border_1()
+        .border_color(theme.border)
         .child(
-            Clipboard::new(ElementId::Name(SharedString::from(base_id.to_string())))
-                .value(text.to_string()),
+            Icon::new(IconName::File)
+                .small()
+                .text_color(theme.muted_foreground),
+        )
+        .child(
+            div()
+                .max_w(px(192.))
+                .truncate()
+                .text_sm()
+                .child(attachment.name.clone()),
         )
 }
 

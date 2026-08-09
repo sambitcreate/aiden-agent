@@ -35,6 +35,10 @@ use aiden_mcp::McpClientManager;
 use aiden_scheduler::runtime::{
     create_scheduler, SchedulerCore, TaskExecutor, TaskRunError, TaskRunOutcome,
 };
+use aiden_subagents::run_store_dispatcher::SubagentRunStoreSelection;
+use aiden_subagents::run_store_production::{
+    ProductionSubagentRunStore, ProductionSubagentRunStoreOptions,
+};
 use async_trait::async_trait;
 
 /// The keychain service name used for provider credentials.
@@ -77,6 +81,12 @@ pub struct Stores {
     /// change. The shell's foreground watcher subscribes and refreshes
     /// providers/MCP; subscribe via [`Stores::subscribe_config_changes`].
     pub config_changed: Arc<tokio::sync::watch::Sender<u64>>,
+    /// The subagent run store (`subagent-runs` / `subagent-runs-v2` under the
+    /// machine-local root). Chat deletion reconciles it so deleting a chat also
+    /// removes its subagent runs and pending-deletion markers (parity audit
+    /// item 8). Best-effort at boot: a broken subagent store logs a warning and
+    /// yields `None` so it never blocks the chat app.
+    pub runs: Option<Arc<ProductionSubagentRunStore>>,
 }
 
 impl Stores {
@@ -138,6 +148,12 @@ impl Stores {
         let watcher = Arc::new(config_watcher);
         spawn_config_poll_thread(watcher.clone());
 
+        // The subagent run store. Its V1/V2 selection mirrors the TS
+        // `AIDEN_SUBAGENT_V2` rollout flag; the dispatcher owns migration and
+        // the V1 checkpoint so deletion stays rollback-safe. A broken store is
+        // logged, never fatal — chat deletion skips run reconciliation then.
+        let runs = open_subagent_run_store(local_root);
+
         Ok(Self {
             chat,
             config,
@@ -149,6 +165,7 @@ impl Stores {
             quit_barrier: Arc::new(aiden_mac::quit_barrier::QuitBarrier::new()),
             config_watcher: Some(watcher),
             config_changed,
+            runs,
         })
     }
 
@@ -271,6 +288,42 @@ fn chats_dir_or_local() -> PathBuf {
     aiden_data::chats_dir().unwrap_or_else(|_| aiden_data::machine_local_data_dir().join("chats"))
 }
 
+/// The subagent run-store selection (port of `subagentV2Enabled`): the V2
+/// store is used only when `AIDEN_SUBAGENT_V2` is set, otherwise the V1
+/// store — matching the TS rollout flag.
+fn subagent_run_selection() -> SubagentRunStoreSelection {
+    let environment: std::collections::HashMap<String, String> = std::env::vars().collect();
+    if ProductionSubagentRunStore::subagent_v2_enabled(&environment) {
+        SubagentRunStoreSelection::V2
+    } else {
+        SubagentRunStoreSelection::V1
+    }
+}
+
+/// Construct + initialize the production subagent run store (V1/V2 selection
+/// with migration + checkpoint coordination). Best-effort: any failure logs a
+/// warning and yields `None` so a broken subagent history store never blocks
+/// the chat app.
+fn open_subagent_run_store(local_root: PathBuf) -> Option<Arc<ProductionSubagentRunStore>> {
+    let user_data = local_root.clone();
+    let result = ProductionSubagentRunStore::create(ProductionSubagentRunStoreOptions {
+        selection: subagent_run_selection(),
+        resolve_user_data_directory: Box::new(move || user_data.clone()),
+        now: None,
+    })
+    .and_then(|mut store| {
+        store.initialize()?;
+        Ok(store)
+    });
+    match result {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            tracing::warn!("subagent run store unavailable: {error}");
+            None
+        }
+    }
+}
+
 /// The scheduler's execution seam until real chat generation lands: logs what
 /// would run and returns a success outcome so the schedule store records a
 /// run for every due task the tick loop dispatches (parity audit item 4:
@@ -323,9 +376,34 @@ impl SecretsPort for StoreSecretsPort {
     fn get_provider_key(
         &self,
         provider_id: &str,
-        _binding: &str,
+        binding: &str,
     ) -> Result<Option<String>, ConfigStoreError> {
-        self.keys.get(provider_id).map_err(Self::map_err)
+        // The binding is a JSON snapshot of the provider connection the
+        // credential was issued for (base URL, kind, needs-key posture). A
+        // stored key is usable only when that snapshot matches the caller's
+        // current connection (TS `secrets.getProviderKey`): a missing or
+        // mismatched binding means the credential belongs to a DIFFERENT
+        // provider config (e.g. the base URL changed), so the key is refused
+        // and the user must re-authenticate.
+        let stored = match self.keys.get_binding(provider_id) {
+            Ok(Some(stored)) => stored,
+            Ok(None) => return Ok(None),
+            // A legacy/unreadable binding fails closed: the key's endpoint
+            // provenance cannot be verified, so it is never handed out.
+            Err(ProviderKeysError::NeedsRotation { .. }) => return Ok(None),
+            Err(error) => return Err(Self::map_err(error)),
+        };
+        if stored != binding {
+            return Ok(None);
+        }
+        match self.keys.get(provider_id) {
+            Ok(key) => Ok(key),
+            // A legacy key blob cannot be decrypted: degrade to `None` rather
+            // than breaking provider listing; the settings surface flags the
+            // slot for re-entry via `ProviderKeysStore::status`.
+            Err(ProviderKeysError::NeedsRotation { .. }) => Ok(None),
+            Err(error) => Err(Self::map_err(error)),
+        }
     }
 
     fn delete_key(&self, provider_id: &str) -> Result<(), ConfigStoreError> {
@@ -334,15 +412,227 @@ impl SecretsPort for StoreSecretsPort {
 
     fn migrate_keys(
         &self,
-        _migrate: &dyn Fn(&mut aiden_data::secret_map::SecretKeyMap) -> bool,
+        migrate: &dyn Fn(&mut aiden_data::secret_map::SecretKeyMap) -> bool,
     ) -> Result<(), ConfigStoreError> {
-        Ok(())
+        self.keys
+            .migrate(migrate)
+            .map(|_| ())
+            .map_err(Self::map_err)
     }
 
     fn migrate_provider_keys_with_bindings(
         &self,
-        _migrations: &[aiden_data::config_store::ProviderKeyMigration],
+        migrations: &[aiden_data::config_store::ProviderKeyMigration],
     ) -> Result<bool, ConfigStoreError> {
-        Ok(true)
+        self.keys
+            .migrate_provider_keys_with_bindings(migrations)
+            .map_err(Self::map_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aiden_data::secret_map::{SecretCipher, SecretCipherError};
+    use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
+
+    /// An in-memory cipher mirroring the TS test seam (`encrypted:<value>`
+    /// bytes with a per-account vault), so `ProviderKeysStore` is testable
+    /// without touching the macOS Keychain.
+    #[derive(Default)]
+    struct MemoryCipher {
+        vault: StdMutex<HashMap<String, String>>,
+    }
+
+    impl SecretCipher for MemoryCipher {
+        fn is_encryption_available(&self) -> bool {
+            true
+        }
+        fn encrypt_string(&self, account: &str, value: &str) -> Result<Vec<u8>, SecretCipherError> {
+            self.vault
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(format!("encrypted:{value}").into_bytes())
+        }
+        fn decrypt_string(&self, account: &str, value: &[u8]) -> Result<String, SecretCipherError> {
+            let text = String::from_utf8_lossy(value);
+            if !text.starts_with("encrypted:") {
+                return Err(SecretCipherError::NeedsRotation);
+            }
+            let plaintext = text.trim_start_matches("encrypted:").to_string();
+            let vaulted = self.vault.lock().unwrap().get(account).cloned();
+            match vaulted {
+                Some(stored) if stored == plaintext => Ok(plaintext),
+                _ => Err(SecretCipherError::UnrecognizedFormat),
+            }
+        }
+    }
+
+    fn keys_with_cipher() -> (tempfile::TempDir, Arc<ProviderKeysStore>) {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let store = Arc::new(ProviderKeysStore::new(
+            dir.path().to_path_buf(),
+            "aiden-test",
+            cipher,
+        ));
+        (dir, store)
+    }
+
+    fn binding_for(id: &str, base_url: &str) -> String {
+        serde_json::json!({
+            "id": id,
+            "kind": "openai",
+            "baseUrl": base_url,
+            "needsKey": true,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn bound_key_is_returned_only_when_the_binding_matches() {
+        let (_dir, keys) = keys_with_cipher();
+        let port = StoreSecretsPort::new(keys.clone());
+        keys.set("openai", "sk-test").unwrap();
+        keys.set_binding(
+            "openai",
+            &binding_for("openai", "https://api.openai.com/v1"),
+        )
+        .unwrap();
+
+        // The key is usable against the connection it was issued for…
+        assert_eq!(
+            port.get_provider_key(
+                "openai",
+                &binding_for("openai", "https://api.openai.com/v1")
+            )
+            .unwrap()
+            .as_deref(),
+            Some("sk-test")
+        );
+        // …and refused the moment the connection snapshot differs (base URL).
+        assert_eq!(
+            port.get_provider_key("openai", &binding_for("openai", "https://other.example/v1"))
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn unbound_legacy_keys_fail_closed() {
+        let (_dir, keys) = keys_with_cipher();
+        let port = StoreSecretsPort::new(keys.clone());
+        // A key saved before binding records existed must not be handed out:
+        // its endpoint provenance cannot be verified.
+        keys.set("openai", "sk-legacy").unwrap();
+        assert_eq!(
+            port.get_provider_key(
+                "openai",
+                &binding_for("openai", "https://api.openai.com/v1")
+            )
+            .unwrap(),
+            None
+        );
+        // hasKey still reports the slot (the renderer shows "key exists" and
+        // the settings surface flags rotation), matching TS providerCredentialState.
+        assert!(port.has_key("openai").unwrap());
+    }
+
+    #[test]
+    fn migrate_keys_rehomes_alias_keys_through_the_port() {
+        let (_dir, keys) = keys_with_cipher();
+        let port = StoreSecretsPort::new(keys.clone());
+        keys.set("gemini", "sk-gemini").unwrap();
+
+        port.migrate_keys(&|map| {
+            // Mirrors the config store's alias closure: re-home the slot and
+            // drop the legacy id so the backing keychain secret moves too.
+            let Some(serde_json::Value::String(legacy)) = map.get("gemini").cloned() else {
+                return false;
+            };
+            if map.contains_key("google") {
+                return false;
+            }
+            aiden_data::secret_map::set_secret_key_entry(map, "google", legacy);
+            map.remove("gemini");
+            true
+        })
+        .unwrap();
+
+        assert!(keys.has_key("google").unwrap());
+        assert_eq!(keys.get("google").unwrap().as_deref(), Some("sk-gemini"));
+        assert!(!keys.has_key("gemini").unwrap());
+    }
+
+    #[test]
+    fn migrate_provider_keys_with_bindings_binds_rehomed_keys_through_the_port() {
+        let (_dir, keys) = keys_with_cipher();
+        let port = StoreSecretsPort::new(keys.clone());
+        keys.set("openai-legacy", "sk-openai").unwrap();
+        let binding = binding_for("openai", "https://api.openai.com/v1");
+
+        let migrated = port
+            .migrate_provider_keys_with_bindings(&[
+                aiden_data::config_store::ProviderKeyMigration {
+                    legacy_provider_id: "openai-legacy".to_string(),
+                    provider_id: "openai".to_string(),
+                    binding: binding.clone(),
+                },
+            ])
+            .unwrap();
+        assert!(migrated);
+
+        // Re-homed key is bound to the target connection snapshot and usable…
+        assert_eq!(
+            port.get_provider_key("openai", &binding)
+                .unwrap()
+                .as_deref(),
+            Some("sk-openai")
+        );
+        // …but refused against any other connection.
+        assert_eq!(
+            port.get_provider_key("openai", &binding_for("openai", "https://x.test/v1"))
+                .unwrap(),
+            None
+        );
+        assert!(!keys.has_key("openai-legacy").unwrap());
+    }
+
+    #[test]
+    fn the_subagent_run_store_reconciles_chat_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let user_data = dir.path().to_path_buf();
+        let mut store = ProductionSubagentRunStore::create(ProductionSubagentRunStoreOptions {
+            selection: SubagentRunStoreSelection::V1,
+            resolve_user_data_directory: Box::new(move || user_data.clone()),
+            now: None,
+        })
+        .unwrap();
+        store.initialize().unwrap();
+
+        assert!(store
+            .dispatcher
+            .pending_chat_deletions()
+            .unwrap()
+            .is_empty());
+        store
+            .dispatcher
+            .delete_chat("chat-00000000-0000-4000-8000-000000000001")
+            .unwrap();
+        assert_eq!(
+            store.dispatcher.pending_chat_deletions().unwrap(),
+            vec!["chat-00000000-0000-4000-8000-000000000001".to_string()]
+        );
+        store
+            .dispatcher
+            .complete_chat_deletion("chat-00000000-0000-4000-8000-000000000001")
+            .unwrap();
+        assert!(store
+            .dispatcher
+            .pending_chat_deletions()
+            .unwrap()
+            .is_empty());
     }
 }

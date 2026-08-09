@@ -261,6 +261,7 @@ dependencies = [
  "anyhow",
  "async-compat",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "futures",
  "gpui",

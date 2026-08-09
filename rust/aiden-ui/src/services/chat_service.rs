@@ -473,15 +473,57 @@ impl ChatService {
 
     pub fn delete_chat(&mut self, id: &str, cx: &mut Context<Self>) {
         let was_active = self.active_chat_id.as_deref() == Some(id);
-        if was_active {
-            self.cancel_generation(cx);
+        // Cancel any in-flight generation for the chat being deleted — even
+        // when it is not the active chat — so the provider stops billing and a
+        // stale stream watcher cannot re-append to a removed chat (TS
+        // `llmClient.cancelChat`). Partial content is NOT persisted: the chat
+        // is about to be removed with it.
+        let generating_this_chat = self
+            .generation
+            .as_ref()
+            .is_some_and(|generation| generation.chat_id == id);
+        if was_active || generating_this_chat {
+            if let Some(token) = &self.cancel_token {
+                token.store(true, Ordering::Relaxed);
+            }
+            // Bump the per-chat intent counter so the in-flight watcher stops
+            // draining immediately (its `generation_matches` check fails once
+            // `generation` is cleared below).
+            if let Some(counter) = self.generations.get_mut(id) {
+                *counter += 1;
+            }
+            self._stream_task = None;
+            self._driver = None;
+            self.generation = None;
         }
         let stores = self.stores.clone();
         let id = id.to_string();
         cx.spawn(async move |this, cx| {
             let task_id = id.clone();
-            cx.background_spawn(async move { stores.chat.remove(&task_id).ok() })
-                .await;
+            // Cross-store deletion mirroring TS `chats:remove`: subagent runs
+            // first (the run store preflights, removes the chat's runs, and
+            // tombstones a pending-deletion marker), then the chat record,
+            // then — once both stores are durable — clear the marker. Failures
+            // are logged (the service has no per-delete error surface); the
+            // pending marker machinery keeps a crash-interrupted delete
+            // recoverable at the next startup reconciliation.
+            cx.background_spawn(async move {
+                if let Some(runs) = &stores.runs {
+                    if let Err(error) = runs.dispatcher.delete_chat(&task_id) {
+                        tracing::warn!(
+                            "could not delete subagent history for chat {task_id}: {error}"
+                        );
+                    }
+                }
+                let removed = stores.chat.remove(&task_id).ok();
+                if let Some(runs) = &stores.runs {
+                    if let Err(error) = runs.dispatcher.complete_chat_deletion(&task_id) {
+                        tracing::warn!("could not complete chat deletion for {task_id}: {error}");
+                    }
+                }
+                removed
+            })
+            .await;
             this.update(cx, |this, cx| {
                 this.chat_list.retain(|meta| meta.id != id);
                 if this.active_chat_id.as_deref() == Some(id.as_str()) {
@@ -751,7 +793,38 @@ impl ChatService {
         }
         self.persist_user_message(&chat_id, &user_message, &selection, cx);
 
-        // Build the turn snapshot (includes the message just appended).
+        self.start_generation(chat_id, selection, provider, cx);
+    }
+
+    /// Drive one generation against the CURRENT in-memory history of `chat_id`
+    /// (which must end with a user message). Shared by `send_message` (appends
+    /// the user turn first) and `retry_last` (retracts the failed assistant
+    /// turn first, then re-sends the existing last user turn).
+    fn start_generation(
+        &mut self,
+        chat_id: String,
+        selection: ModelSelection,
+        provider: ConfiguredProvider,
+        cx: &mut Context<Self>,
+    ) {
+        let counter = self.bump_generation(&chat_id);
+        self.active_error = None;
+        self.generation = Some(GenerationState {
+            chat_id: chat_id.clone(),
+            counter,
+            text: String::new(),
+            thinking: String::new(),
+            thinking_active: false,
+            thinking_expanded: false,
+            complete: false,
+            error: None,
+            model: Some(selection.model.clone()),
+            timeline: None,
+        });
+        cx.notify();
+
+        // Build the turn snapshot from the (possibly just-appended / just
+        // truncated) history.
         let history = self
             .active_chat
             .as_ref()
@@ -807,20 +880,66 @@ impl ChatService {
         self._driver = Some(driver);
     }
 
-    /// Re-send the last user message (error-banner retry).
+    /// Re-send the last user message (error-banner retry). The failed assistant
+    /// turn is retracted from the transcript BEFORE the re-send — in memory
+    /// immediately, on disk before the generation starts — and the retry does
+    /// NOT append a duplicate user message: the existing last user turn is
+    /// replayed as-is, so the transcript never accumulates duplicate or
+    /// hanging failed turns.
     pub fn retry_last(&mut self, cx: &mut Context<Self>) {
-        let text = self
+        if self.generation_active() {
+            return;
+        }
+        let Some(chat_id) = self.active_chat_id.clone() else {
+            return;
+        };
+        let Some(selection) = self.selection.clone() else {
+            return;
+        };
+        let Some(provider) = self.selected_provider().cloned() else {
+            return;
+        };
+        if provider.needs_key && !provider.has_key {
+            return;
+        }
+
+        // The last user message becomes the final transcript entry; everything
+        // after it is the failed assistant turn being retracted.
+        let Some(keep) = retry_keep_count(
+            self.active_chat
+                .as_ref()
+                .map(|chat| chat.messages.as_slice())
+                .unwrap_or_default(),
+        ) else {
+            return;
+        };
+        let truncating = self
             .active_chat
             .as_ref()
-            .and_then(|chat| {
-                chat.messages
-                    .iter()
-                    .rev()
-                    .find(|message| message.role == ChatRole::User)
+            .is_some_and(|chat| chat.messages.len() > keep);
+        if truncating {
+            if let Some(chat) = self.active_chat.as_mut() {
+                truncate_failed_turn(&mut chat.messages);
+            }
+            // Persist the retraction FIRST (background), then start the new
+            // generation only after it landed — so the fresh assistant append
+            // can never race the retract back into the transcript.
+            let stores = self.stores.clone();
+            cx.spawn(async move |this, cx| {
+                let truncate_id = chat_id.clone();
+                let _ = cx
+                    .background_spawn(async move {
+                        stores.chat.truncate_messages(&truncate_id, keep).ok()
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.start_generation(chat_id, selection, provider, cx);
+                })
+                .ok();
             })
-            .map(|message| message.content.clone());
-        if let Some(text) = text {
-            self.send_message(&text, cx);
+            .detach();
+        } else {
+            self.start_generation(chat_id, selection, provider, cx);
         }
     }
 
@@ -1350,6 +1469,26 @@ pub fn next_chat_after_delete(remaining: &[ChatMeta]) -> Option<&ChatMeta> {
     remaining.first()
 }
 
+/// The transcript keep-count for an error-banner retry: the index after the
+/// LAST user message. Everything at or beyond it is the failed assistant turn
+/// and must be retracted before re-sending. `None` when there is no user
+/// message to replay. Pure so the retry truncation is unit-testable.
+pub fn retry_keep_count(messages: &[ChatMessage]) -> Option<usize> {
+    messages
+        .iter()
+        .rposition(|message| message.role == ChatRole::User)
+        .map(|index| index + 1)
+}
+
+/// Retract the failed assistant turn: drop every message after the last user
+/// message. Returns the new length (the keep-count), or `None` when there is
+/// no user message to keep. Pure so the retry truncation is unit-testable.
+pub fn truncate_failed_turn(messages: &mut Vec<ChatMessage>) -> Option<usize> {
+    let keep = retry_keep_count(messages)?;
+    messages.truncate(keep);
+    Some(keep)
+}
+
 /// Relative timestamp for the sidebar, mirroring the renderer's formatting.
 pub fn relative_time(updated_at: u64, now: u64) -> String {
     let seconds = now.saturating_sub(updated_at) / 1000;
@@ -1413,5 +1552,69 @@ mod tests {
 
         // An empty list means the empty pane state (no fallback, no panic).
         assert_eq!(next_chat_after_delete(&[]), None);
+    }
+
+    fn message(role: ChatRole, content: &str, created_at: u64) -> ChatMessage {
+        ChatMessage {
+            id: format!("m-{created_at}"),
+            role,
+            content: content.to_string(),
+            created_at,
+            model: None,
+            reasoning: None,
+            attachments: None,
+            timeline: None,
+            subagents: None,
+        }
+    }
+
+    #[test]
+    fn retry_keep_count_is_the_index_after_the_last_user_message() {
+        let messages = vec![
+            message(ChatRole::User, "hello", 1),
+            message(ChatRole::Assistant, "partial reply", 2),
+        ];
+        assert_eq!(retry_keep_count(&messages), Some(1));
+
+        let multi = vec![
+            message(ChatRole::User, "first", 1),
+            message(ChatRole::Assistant, "earlier reply", 2),
+            message(ChatRole::User, "second", 3),
+            message(ChatRole::Assistant, "failed turn", 4),
+        ];
+        assert_eq!(retry_keep_count(&multi), Some(3));
+
+        // No user message → nothing to replay.
+        assert_eq!(retry_keep_count(&[]), None);
+        assert_eq!(
+            retry_keep_count(&[message(ChatRole::Assistant, "orphan", 1)]),
+            None
+        );
+    }
+
+    #[test]
+    fn truncate_failed_turn_retracts_the_trailing_assistant_turn() {
+        let mut messages = vec![
+            message(ChatRole::User, "hello", 1),
+            message(ChatRole::Assistant, "partial reply", 2),
+        ];
+        assert_eq!(truncate_failed_turn(&mut messages), Some(1));
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ChatRole::User);
+        assert_eq!(messages[0].content, "hello");
+
+        // A transcript ending on the user message is left untouched.
+        let mut clean = vec![
+            message(ChatRole::User, "hello", 1),
+            message(ChatRole::Assistant, "complete reply", 2),
+            message(ChatRole::User, "follow-up", 3),
+        ];
+        assert_eq!(truncate_failed_turn(&mut clean), Some(3));
+        assert_eq!(clean.len(), 3);
+
+        // Nothing to retract when no user message exists.
+        let mut orphan = vec![message(ChatRole::Assistant, "orphan", 1)];
+        assert_eq!(truncate_failed_turn(&mut orphan), None);
+        assert_eq!(orphan.len(), 1);
     }
 }

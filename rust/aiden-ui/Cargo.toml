@@ -38,6 +38,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 async-compat.workspace = true
 async-trait = "0.1"
+base64 = "0.22"
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

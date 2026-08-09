@@ -27,11 +27,13 @@
 //! [`SecretEntryStatus::NeedsRotation`] so the UI can prompt re-entry; they
 //! are never silently deleted or overwritten with garbage.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::config_store::ProviderKeyMigration;
 use crate::{DataStore, DataStoreError};
 
 /// The key prefix for endpoint-binding entries (secret-map-core / secrets.ts).
@@ -474,14 +476,225 @@ impl ProviderKeysStore {
         }
     }
 
-    /// Remove a provider's value slot and its keychain entry.
+    /// Remove a provider's value slot, its binding record, and their keychain
+    /// entries (TS `secrets.deleteKey` removes both slots so a stale binding
+    /// can never block a freshly re-entered key).
     pub fn delete(&self, provider_id: &str) -> Result<(), ProviderKeysError> {
         let _ = self.cipher.delete_entry(&keychain_account_for(provider_id));
         let _ = self.keychain.delete(&keychain_account_for(provider_id));
+        let binding_id = binding_id_for(provider_id);
+        let _ = self
+            .cipher
+            .delete_entry(&keychain_binding_account_for(provider_id));
+        let _ = self
+            .keychain
+            .delete(&keychain_binding_account_for(provider_id));
         self.store.update(|map| {
-            delete_secret_key_entry(map, provider_id);
+            let removed_value = delete_secret_key_entry(map, provider_id);
+            let removed_binding = delete_secret_key_entry(map, &binding_id);
+            removed_value || removed_binding
         })?;
         Ok(())
+    }
+
+    /// Apply a whole-map migration, persisting only when the closure reports a
+    /// change (TS `migrateKeys`). Used to re-home keys when provider aliases
+    /// change (e.g. `gemini` → `google`).
+    ///
+    /// The keyring cipher scopes secrets by keychain account (TS safeStorage
+    /// embeds the key in the ciphertext, so TS can copy slots verbatim). A slot
+    /// the closure re-homes therefore also needs its backing keychain secret
+    /// moved: after the closure runs, any slot that is not readable under its
+    /// own account is re-homed from a removed account when the match is
+    /// unambiguous; otherwise it fails closed (stays unreadable → rotation).
+    pub fn migrate(
+        &self,
+        migrate: &dyn Fn(&mut SecretKeyMap) -> bool,
+    ) -> Result<bool, ProviderKeysError> {
+        let mut map = self.store.load()?;
+        let before: Vec<(String, Option<String>)> = map
+            .iter()
+            .map(|(key, value)| (key.clone(), value.as_str().map(str::to_string)))
+            .collect();
+        let changed = migrate(&mut map);
+        if changed {
+            let after_keys: Vec<String> = map.keys().cloned().collect();
+            let removed: Vec<(String, String)> = before
+                .into_iter()
+                .filter(|(key, _)| !after_keys.contains(key))
+                .filter_map(|(key, encoded)| encoded.map(|encoded| (key, encoded)))
+                .collect();
+            for key in &after_keys {
+                let Some(encoded) = secret_key_entry(&map, key) else {
+                    continue;
+                };
+                let Some(bytes) = crate::base64::decode(encoded) else {
+                    continue;
+                };
+                // Already readable under its own account → nothing to re-home.
+                if self
+                    .cipher
+                    .decrypt_string(&keychain_account_for(key), &bytes)
+                    .is_ok()
+                {
+                    continue;
+                }
+                // Probe the removed accounts: exactly one decryptable secret
+                // re-homes it; zero or several leave the slot untouched
+                // (fail-closed, surfaced as needs-rotation).
+                let mut rehome: Option<String> = None;
+                let mut matched = false;
+                for (removed_key, removed_encoded) in &removed {
+                    let Some(removed_bytes) = crate::base64::decode(removed_encoded) else {
+                        continue;
+                    };
+                    if let Ok(secret) = self
+                        .cipher
+                        .decrypt_string(&keychain_account_for(removed_key), &removed_bytes)
+                    {
+                        if matched {
+                            rehome = None;
+                            break;
+                        }
+                        matched = true;
+                        rehome = Some(secret);
+                    }
+                }
+                if let Some(secret) = rehome {
+                    let _ = self
+                        .cipher
+                        .encrypt_string(&keychain_account_for(key), &secret);
+                }
+            }
+            self.store.save(&map)?;
+        }
+        Ok(changed)
+    }
+
+    /// Port of TS `secrets.migrateProviderKeysWithBindings`: preflight every
+    /// alias-derived provider key, then move and bind the complete unambiguous
+    /// set in one durable publication. Converging, future-shaped, or
+    /// conflicting records leave the entire map untouched.
+    pub fn migrate_provider_keys_with_bindings(
+        &self,
+        migrations: &[ProviderKeyMigration],
+    ) -> Result<bool, ProviderKeysError> {
+        let mut map = self.store.load()?;
+
+        // Preflight: a legacy id may resolve to only one target, and a target
+        // must have exactly one binding across all of its sources.
+        let mut source_targets: HashMap<String, String> = HashMap::new();
+        // target -> (binding, sources)
+        let mut by_target: HashMap<String, (String, Vec<String>)> = HashMap::new();
+        for migration in migrations {
+            if let Some(existing) = source_targets.get(&migration.legacy_provider_id) {
+                if existing != &migration.provider_id {
+                    return Ok(false);
+                }
+            }
+            source_targets.insert(
+                migration.legacy_provider_id.clone(),
+                migration.provider_id.clone(),
+            );
+            let entry = by_target
+                .entry(migration.provider_id.clone())
+                .or_insert_with(|| (migration.binding.clone(), Vec::new()));
+            if entry.0 != migration.binding {
+                return Ok(false);
+            }
+            entry.1.push(migration.legacy_provider_id.clone());
+        }
+
+        struct PendingMove {
+            source: String,
+            target: String,
+            binding: String,
+        }
+        let mut pending: Vec<PendingMove> = Vec::new();
+        for (provider_id, (binding, sources)) in &by_target {
+            let binding_id = binding_id_for(provider_id);
+            let present_sources: Vec<&String> = sources
+                .iter()
+                .filter(|source| map.contains_key(*source))
+                .collect();
+            if present_sources.len() > 1 {
+                return Ok(false);
+            }
+            if present_sources.len() == 1 {
+                let source = present_sources[0];
+                if secret_key_entry(&map, source).is_none()
+                    || map.contains_key(provider_id)
+                    || map.contains_key(&binding_id)
+                {
+                    return Ok(false);
+                }
+                pending.push(PendingMove {
+                    source: source.clone(),
+                    target: provider_id.clone(),
+                    binding: binding.clone(),
+                });
+                continue;
+            }
+            // No legacy source is present: the target pair (if any) must exist
+            // and carry exactly this binding.
+            let has_provider = map.contains_key(provider_id);
+            let has_binding = map.contains_key(&binding_id);
+            if !has_provider && !has_binding {
+                continue;
+            }
+            if secret_key_entry(&map, provider_id).is_none()
+                || secret_key_entry(&map, &binding_id).is_none()
+            {
+                return Ok(false);
+            }
+            if self.get_binding(provider_id)? != Some(binding.clone()) {
+                return Ok(false);
+            }
+        }
+
+        for pending_move in &pending {
+            let account = keychain_binding_account_for(&pending_move.target);
+            let marker = self
+                .cipher
+                .encrypt_string(&account, &pending_move.binding)
+                .map_err(|err| ProviderKeysError::SecureStorage(err.to_string()))?;
+            let encrypted_binding = crate::base64::encode(&marker);
+            let target = SecretEntryPair {
+                value_id: pending_move.target.clone(),
+                binding_id: binding_id_for(&pending_move.target),
+            };
+            // The keyring cipher scopes secrets by keychain account (unlike TS
+            // safeStorage, which embeds the key in the ciphertext), so a moved
+            // slot must also re-home the backing keychain secret from the
+            // source account to the target account. A legacy safeStorage blob
+            // (unreadable) travels as-is and stays flagged for rotation.
+            if let Some(encoded) = secret_key_entry(&map, &pending_move.source) {
+                if let Some(bytes) = crate::base64::decode(encoded) {
+                    let source_account = keychain_account_for(&pending_move.source);
+                    if let Ok(secret) = self.cipher.decrypt_string(&source_account, &bytes) {
+                        let _ = self
+                            .cipher
+                            .encrypt_string(&keychain_account_for(&pending_move.target), &secret);
+                        let _ = self.cipher.delete_entry(&source_account);
+                        let _ = self.keychain.delete(&source_account);
+                    }
+                }
+            }
+            if !move_secret_entry_with_binding_if_vacant(
+                &mut map,
+                &pending_move.source,
+                &target,
+                encrypted_binding,
+            ) {
+                return Err(ProviderKeysError::SecureStorage(
+                    "Provider credential aliases changed after migration preflight.".into(),
+                ));
+            }
+        }
+        if !pending.is_empty() {
+            self.store.save(&map)?;
+        }
+        Ok(true)
     }
 }
 
@@ -756,5 +969,104 @@ mod tests {
             Err(ProviderKeysError::NeedsRotation { .. })
         ));
         assert!(store.has_key("legacy-provider").unwrap());
+    }
+
+    #[test]
+    fn delete_removes_the_key_and_its_binding_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store.set("anthropic", "sk-test").unwrap();
+        store
+            .set_binding(
+                "anthropic",
+                r#"{"id":"anthropic","baseUrl":"https://api.anthropic.com/v1"}"#,
+            )
+            .unwrap();
+        store.delete("anthropic").unwrap();
+        assert_eq!(store.get("anthropic").unwrap(), None);
+        assert_eq!(store.get_binding("anthropic").unwrap(), None);
+    }
+
+    #[test]
+    fn migrate_persists_only_when_the_closure_changes_the_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store.set("gemini", "sk-gemini").unwrap();
+
+        let changed = store
+            .migrate(&|keys| {
+                // Mirrors the config store's alias closure: re-home the slot
+                // and drop the legacy id so the keychain secret moves too.
+                let Some(Value::String(legacy)) = keys.get("gemini").cloned() else {
+                    return false;
+                };
+                if keys.contains_key("google") {
+                    return false;
+                }
+                set_secret_key_entry(keys, "google", legacy);
+                delete_secret_key_entry(keys, "gemini");
+                true
+            })
+            .unwrap();
+        assert!(changed);
+        assert!(store.has_key("google").unwrap());
+        assert_eq!(store.get("google").unwrap().as_deref(), Some("sk-gemini"));
+        assert!(!store.has_key("gemini").unwrap());
+
+        // A no-op migration must not write (and reports false).
+        let unchanged = store.migrate(&|_| false).unwrap();
+        assert!(!unchanged);
+    }
+
+    #[test]
+    fn migrate_provider_keys_with_bindings_rehomes_and_binds_alias_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store.set("openai-legacy", "sk-openai").unwrap();
+        let binding = r#"{"id":"openai","kind":"openai","baseUrl":"https://api.openai.com/v1","needsKey":true}"#;
+
+        let migrated = store
+            .migrate_provider_keys_with_bindings(&[ProviderKeyMigration {
+                legacy_provider_id: "openai-legacy".to_string(),
+                provider_id: "openai".to_string(),
+                binding: binding.to_string(),
+            }])
+            .unwrap();
+        assert!(migrated);
+        assert!(!store.has_key("openai-legacy").unwrap());
+        assert!(store.has_key("openai").unwrap());
+        assert_eq!(store.get("openai").unwrap().as_deref(), Some("sk-openai"));
+        assert_eq!(
+            store.get_binding("openai").unwrap().as_deref(),
+            Some(binding)
+        );
+    }
+
+    #[test]
+    fn migrate_provider_keys_with_bindings_rejects_conflicting_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store.set("legacy", "sk-key").unwrap();
+        let migrations = [
+            ProviderKeyMigration {
+                legacy_provider_id: "legacy".to_string(),
+                provider_id: "target-a".to_string(),
+                binding: r#"{"id":"target-a"}"#.to_string(),
+            },
+            ProviderKeyMigration {
+                legacy_provider_id: "legacy".to_string(),
+                provider_id: "target-b".to_string(),
+                binding: r#"{"id":"target-b"}"#.to_string(),
+            },
+        ];
+        assert!(!store
+            .migrate_provider_keys_with_bindings(&migrations)
+            .unwrap());
+        // Nothing moved: the source survives untouched.
+        assert!(store.has_key("legacy").unwrap());
     }
 }

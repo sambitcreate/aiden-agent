@@ -1415,6 +1415,25 @@ impl ChatStore {
         })
     }
 
+    /// Drop every message after the first `keep_count` entries (retaining the
+    /// head of the transcript). Used by the chat service's error-banner retry
+    /// to retract a failed assistant turn before re-sending the last user
+    /// message, so a reload never resurrects a hanging failed turn.
+    pub fn truncate_messages(&self, id: &str, keep_count: usize) -> Result<Chat, ChatStoreError> {
+        self.serialized(|inner| {
+            let mut chat = self
+                .read_chat(inner, id)?
+                .ok_or_else(|| ChatStoreError::ChatNotFound(id.to_string()))?;
+            if chat.messages.len() <= keep_count {
+                return Ok(chat);
+            }
+            chat.messages.truncate(keep_count);
+            chat.updated_at = now_millis();
+            self.write_chat_and_meta(inner, &chat)?;
+            Ok(chat)
+        })
+    }
+
     pub fn append_message(
         &self,
         id: &str,
@@ -1792,6 +1811,48 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1_000, 2_000, 3_000],
         );
+    }
+
+    #[test]
+    fn truncate_messages_retracts_the_failed_assistant_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let chat = store.create(ChatStoreInput::default()).unwrap();
+        for (role, content) in [
+            (ChatRole::User, "Summarize this."),
+            (ChatRole::Assistant, "Partial reply"),
+        ] {
+            store
+                .append_message(
+                    &chat.id,
+                    ChatMessageInput {
+                        id: None,
+                        role,
+                        content: content.to_string(),
+                        model: None,
+                        reasoning: None,
+                        attachments: None,
+                        timeline: None,
+                        subagents: None,
+                        created_at: Some(now_millis()),
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+
+        let truncated = store.truncate_messages(&chat.id, 1).unwrap();
+        assert_eq!(truncated.messages.len(), 1);
+        assert_eq!(truncated.messages[0].role, ChatRole::User);
+        assert_eq!(truncated.messages[0].content, "Summarize this.");
+
+        // A reload from disk reflects the retraction (no hanging failed turn).
+        let reloaded = store.get(&chat.id).unwrap().unwrap();
+        assert_eq!(reloaded.messages.len(), 1);
+
+        // Truncating to >= the current length is a no-op.
+        let noop = store.truncate_messages(&chat.id, 5).unwrap();
+        assert_eq!(noop.messages.len(), 1);
     }
 
     #[test]

@@ -8,9 +8,10 @@
 //! (cron humanize, shortcut capture encoding, env-line parsing) lives in each
 //! section module with unit tests.
 //!
-//! Section state lives in per-section modules (`providers`, `appearance`,
-//! `shortcuts`, `mcp`, `scheduled`, `about`), each implementing render helpers
-//! on `SettingsView`, so this file stays a thin shell + router.
+//! Section state lives in per-section modules (`providers`, `model_data`,
+//! `assistant`, `web_search`, `voice`, `computer_use`, `appearance`,
+//! `shortcuts`, `mcp`, `scheduled`, `about`), each implementing render
+//! helpers on `SettingsView`, so this file stays a thin shell + router.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,10 +29,15 @@ use gpui_component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _};
 
 mod about;
 mod appearance;
+mod assistant;
+mod computer_use;
 mod mcp;
+mod model_data;
 mod providers;
 mod scheduled;
 mod shortcuts;
+mod voice;
+mod web_search;
 
 use providers::enrich_provider_row;
 
@@ -39,6 +45,11 @@ use providers::enrich_provider_row;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Providers,
+    ModelData,
+    Assistant,
+    WebSearch,
+    Voice,
+    ComputerUse,
     Appearance,
     Shortcuts,
     Mcp,
@@ -49,6 +60,11 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub const ALL: &'static [SettingsSection] = &[
         SettingsSection::Providers,
+        SettingsSection::ModelData,
+        SettingsSection::Assistant,
+        SettingsSection::WebSearch,
+        SettingsSection::Voice,
+        SettingsSection::ComputerUse,
         SettingsSection::Appearance,
         SettingsSection::Shortcuts,
         SettingsSection::Mcp,
@@ -59,6 +75,11 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Providers => "Providers",
+            SettingsSection::ModelData => "Model data",
+            SettingsSection::Assistant => "Assistant",
+            SettingsSection::WebSearch => "Web search",
+            SettingsSection::Voice => "Voice & dictation",
+            SettingsSection::ComputerUse => "Computer use",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Shortcuts => "Keyboard shortcuts",
             SettingsSection::Mcp => "MCP servers",
@@ -70,6 +91,11 @@ impl SettingsSection {
     pub fn icon(self) -> IconName {
         match self {
             SettingsSection::Providers => IconName::Globe,
+            SettingsSection::ModelData => IconName::ChartPie,
+            SettingsSection::Assistant => IconName::Bot,
+            SettingsSection::WebSearch => IconName::Search,
+            SettingsSection::Voice => IconName::GalleryVerticalEnd,
+            SettingsSection::ComputerUse => IconName::Inspector,
             SettingsSection::Appearance => IconName::Palette,
             SettingsSection::Shortcuts => IconName::Check,
             SettingsSection::Mcp => IconName::SquareTerminal,
@@ -90,6 +116,12 @@ pub struct SettingsServices {
     pub mcp: Arc<McpClientManager>,
     /// The portable config directory (`~/.aiden`), for the About section.
     pub config_dir: PathBuf,
+    /// The Artificial Analysis runtime (keychain credential + device-local
+    /// cache + the pinned Free endpoint). Every network path requires the
+    /// explicit [`aiden_providers::artificial_analysis::UserInitiated`] token,
+    /// so the app only contacts Artificial Analysis when the user chooses
+    /// Connect & fetch or Fetch latest (see AGENTS.md).
+    pub aa: model_data::AaRuntime,
 }
 
 impl SettingsServices {
@@ -105,6 +137,7 @@ impl SettingsServices {
             schedules: stores.schedules.clone(),
             mcp: Arc::new(McpClientManager::new()),
             config_dir,
+            aa: model_data::build_aa_runtime(),
         }
     }
 }
@@ -118,6 +151,11 @@ pub struct SettingsView {
     _subscriptions: Vec<gpui::Subscription>,
 
     pub(crate) providers: providers::ProvidersState,
+    pub(crate) model_data: model_data::ModelDataState,
+    pub(crate) assistant: assistant::AssistantState,
+    pub(crate) web_search: web_search::WebSearchState,
+    pub(crate) voice: voice::VoiceState,
+    pub(crate) computer_use: computer_use::ComputerUseState,
     pub(crate) appearance: appearance::AppearanceState,
     pub(crate) shortcuts: shortcuts::ShortcutsState,
     pub(crate) mcp: mcp::McpState,
@@ -133,6 +171,11 @@ impl SettingsView {
             error: None,
             _subscriptions: Vec::new(),
             providers: providers::ProvidersState::default(),
+            model_data: model_data::ModelDataState::default(),
+            assistant: assistant::AssistantState::default(),
+            web_search: web_search::WebSearchState::default(),
+            voice: voice::VoiceState::default(),
+            computer_use: computer_use::ComputerUseState::default(),
             appearance: appearance::AppearanceState::default(),
             shortcuts: shortcuts::ShortcutsState::default(),
             mcp: mcp::McpState::default(),
@@ -157,6 +200,7 @@ impl SettingsView {
             let snapshot = cx
                 .background_spawn(async move {
                     let capabilities = crate::services::provider_kit::load_capabilities();
+                    let catalog_status = model_data::catalog_status_of(capabilities.as_deref());
                     let providers = services
                         .config
                         .list_providers()
@@ -200,12 +244,20 @@ impl SettingsView {
                         mcp_servers,
                         workspaces,
                         capabilities,
+                        catalog_status,
                     )
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let (providers, settings, schedules, mcp_servers, workspaces, capabilities) =
-                    snapshot;
+                let (
+                    providers,
+                    settings,
+                    schedules,
+                    mcp_servers,
+                    workspaces,
+                    capabilities,
+                    catalog_status,
+                ) = snapshot;
                 this.providers.providers = providers;
                 this.providers.settings = settings;
                 this.providers.capabilities = capabilities;
@@ -215,6 +267,18 @@ impl SettingsView {
                 let settings = this.providers.settings.clone();
                 this.appearance.hydrate(&settings, cx);
                 this.shortcuts.hydrate(&this.providers.settings);
+                this.model_data.catalog = Some(catalog_status);
+                this.assistant.hydrate(&settings);
+                this.web_search.hydrate(&settings);
+                this.voice.hydrate(&settings);
+                this.computer_use.hydrate(&settings);
+                // Background loads that need more than the settings map:
+                // keychain checks (web search), the Parakeet catalog + mic
+                // permission (voice), and the Artificial Analysis status (its
+                // cache store reads through tokio, so it runs on the bridge).
+                this.web_search.load_key_state(cx);
+                this.voice.load_runtime(cx);
+                this.model_data.load_aa_status(cx);
                 cx.notify();
             })
             .ok();
@@ -358,6 +422,13 @@ impl SettingsView {
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let inner = match self.active {
             SettingsSection::Providers => self.providers_section(window, cx).into_any_element(),
+            SettingsSection::ModelData => self.model_data_section(window, cx).into_any_element(),
+            SettingsSection::Assistant => self.assistant_section(window, cx).into_any_element(),
+            SettingsSection::WebSearch => self.web_search_section(window, cx).into_any_element(),
+            SettingsSection::Voice => self.voice_section(window, cx).into_any_element(),
+            SettingsSection::ComputerUse => {
+                self.computer_use_section(window, cx).into_any_element()
+            }
             SettingsSection::Appearance => self.appearance_section(window, cx).into_any_element(),
             SettingsSection::Shortcuts => self.shortcuts_section(window, cx).into_any_element(),
             SettingsSection::Mcp => self.mcp_section(window, cx).into_any_element(),
