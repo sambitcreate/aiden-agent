@@ -15,9 +15,10 @@ use aiden_agent::tool_loop_guard::{
     advance_attended_tool_error_state, recover_attended_tool_error_context, AgentContext,
 };
 use aiden_core::{
-    AssistantMessage, AssistantMessageEvent, ChatMessage, ChatRole, ContentBlock,
-    GenerationTimeline, ImageContent, Message, StopReason, TextContent, ToolCall, ToolDef,
-    ToolResultMessage, Usage, UsageCost, UserBlock, UserContent, UserMessage,
+    AgentStep, AgentStepStatus, AgentToolStep, AssistantMessage, AssistantMessageEvent,
+    ChatMessage, ChatRole, ContentBlock, GenerationTimeline, ImageContent, Message, StopReason,
+    TextContent, ToolCall, ToolDef, ToolResultMessage, Usage, UsageCost, UserBlock, UserContent,
+    UserMessage,
 };
 use aiden_data::config_store::Provider as StoredProvider;
 use aiden_data::portable_config::{ProviderKind, Workspace, WorkspacePermission};
@@ -360,6 +361,14 @@ pub struct TurnSnapshot {
 /// same-model check (`provider`/`api`/`model`) stays accurate when history is
 /// replayed into an anthropic / google / codex turn — a hardcoded
 /// "openai-completions" stamp would demote thinking blocks to plain text.
+///
+/// Persistence is a lossy projection (Gap 10): raw tool-call blocks and tool
+/// results are never written to the chat store, so an assistant entry's tool
+/// activity survives only as its renderer-safe `GenerationTimeline`. Entries
+/// with tool steps therefore expand into the text message PLUS the
+/// reconstructed tool-call/tool-result messages ([`tool_history_from_timeline`]),
+/// placed after the assistant text and before the next user message, so the
+/// provider keeps the tool evidence on reload.
 pub fn chat_history_to_messages(
     history: &[ChatMessage],
     default_model: &str,
@@ -369,7 +378,7 @@ pub fn chat_history_to_messages(
     let api = default_api.as_str().to_string();
     history
         .iter()
-        .filter_map(|entry| match entry.role {
+        .flat_map(|entry| match entry.role {
             ChatRole::User => {
                 let images: Vec<_> = entry
                     .attachments
@@ -395,36 +404,150 @@ pub fn chat_history_to_messages(
                     blocks.extend(images);
                     UserContent::Blocks(blocks)
                 };
-                Some(Message::User(UserMessage {
+                vec![Message::User(UserMessage {
                     content,
                     timestamp: entry.created_at,
-                }))
+                })]
             }
-            ChatRole::Assistant => Some(Message::Assistant(AssistantMessage {
-                content: if entry.content.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![ContentBlock::Text(TextContent {
-                        text: entry.content.clone(),
-                        text_signature: None,
-                    })]
-                },
-                api: api.clone(),
-                provider: default_provider.to_string(),
-                model: entry
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| default_model.to_string()),
-                response_model: None,
-                response_id: None,
-                usage: zero_usage(),
-                stop_reason: StopReason::Stop,
-                error_message: None,
-                timestamp: entry.created_at,
-            })),
-            ChatRole::System => None,
+            ChatRole::Assistant => {
+                let mut messages = vec![assistant_text_message(
+                    entry,
+                    &api,
+                    default_provider,
+                    default_model,
+                )];
+                messages.extend(tool_history_from_timeline(
+                    entry,
+                    &api,
+                    default_provider,
+                    default_model,
+                ));
+                messages
+            }
+            ChatRole::System => Vec::new(),
         })
         .collect()
+}
+
+/// One assistant history entry as its `Message::Assistant` text message — the
+/// visible prose, stamped with the resolved API family / provider / model so
+/// `transform_messages`'s same-model checks stay accurate when history is
+/// replayed into a different provider family.
+fn assistant_text_message(
+    entry: &ChatMessage,
+    api: &str,
+    default_provider: &str,
+    default_model: &str,
+) -> Message {
+    Message::Assistant(AssistantMessage {
+        content: if entry.content.is_empty() {
+            Vec::new()
+        } else {
+            vec![ContentBlock::Text(TextContent {
+                text: entry.content.clone(),
+                text_signature: None,
+            })]
+        },
+        api: api.to_string(),
+        provider: default_provider.to_string(),
+        model: entry
+            .model
+            .clone()
+            .unwrap_or_else(|| default_model.to_string()),
+        response_model: None,
+        response_id: None,
+        usage: zero_usage(),
+        stop_reason: StopReason::Stop,
+        error_message: None,
+        timestamp: entry.created_at,
+    })
+}
+
+/// Reconstruct the tool-call and tool-result messages for one assistant
+/// history entry from its persisted `GenerationTimeline`. The chat store is a
+/// lossy projection — raw tool-call blocks and tool results are never written
+/// (Gap 10) — so the timeline's renderer-safe tool steps are the only record
+/// of what ran. Each step replays as an `Assistant` tool-call message followed
+/// immediately by its `ToolResult`, mirroring the live transcript
+/// [`drive_stream`] builds, so the provider keeps the tool evidence across
+/// reloads. Steps appear in timeline order; thinking steps are skipped.
+///
+/// The timeline never carries raw arguments or the tool's output: `detail` is
+/// a sanitized one-line summary of the action and `target` a workspace-relative
+/// path. When a step's `detail` is absent, the reconstructed result text falls
+/// back to `[Used tool: {name}]` so the provider still knows a tool was used.
+///
+/// [`drive_stream`]: crate::services::provider_kit::drive_stream
+fn tool_history_from_timeline(
+    entry: &ChatMessage,
+    api: &str,
+    default_provider: &str,
+    default_model: &str,
+) -> Vec<Message> {
+    let Some(timeline) = entry.timeline.as_ref() else {
+        return Vec::new();
+    };
+    let model = entry
+        .model
+        .clone()
+        .unwrap_or_else(|| default_model.to_string());
+    let mut messages = Vec::new();
+    for step in timeline.steps.iter().filter_map(|step| match step {
+        AgentStep::Tool(tool) => Some(tool),
+        AgentStep::Thinking(_) => None,
+    }) {
+        let arguments = step
+            .detail
+            .as_deref()
+            .and_then(|detail| serde_json::from_str::<serde_json::Value>(detail).ok())
+            .filter(|value| value.is_object())
+            .unwrap_or_else(|| serde_json::json!({}));
+        messages.push(Message::Assistant(AssistantMessage {
+            content: vec![ContentBlock::ToolCall(ToolCall {
+                id: step.tool_call_id.clone(),
+                name: step.tool_name.clone(),
+                arguments,
+                thought_signature: None,
+            })],
+            api: api.to_string(),
+            provider: default_provider.to_string(),
+            model: model.clone(),
+            response_model: None,
+            response_id: None,
+            usage: zero_usage(),
+            stop_reason: StopReason::ToolUse,
+            error_message: None,
+            timestamp: entry.created_at,
+        }));
+        messages.push(Message::ToolResult(ToolResultMessage {
+            tool_call_id: step.tool_call_id.clone(),
+            tool_name: step.tool_name.clone(),
+            content: vec![ContentBlock::Text(TextContent {
+                text: tool_result_summary(step),
+                text_signature: None,
+            })],
+            details: None,
+            added_tool_names: None,
+            is_error: matches!(
+                step.status,
+                AgentStepStatus::Failed | AgentStepStatus::Blocked | AgentStepStatus::Cancelled
+            ),
+            timestamp: step.finished_at.unwrap_or(step.updated_at),
+        }));
+    }
+    messages
+}
+
+/// The reconstructed tool-result text for one timeline step: the sanitized
+/// action `detail` when the timeline has one, else the `[Used tool: {name}]`
+/// fallback so the provider at least knows a tool was used.
+fn tool_result_summary(step: &AgentToolStep) -> String {
+    match step.detail.as_deref() {
+        Some(detail) if !detail.trim().is_empty() => {
+            format!("[Used tool: {}] {detail}", step.tool_name)
+        }
+        _ => format!("[Used tool: {}]", step.tool_name),
+    }
 }
 
 /// Build the normalized `StreamRequest` for one turn.
@@ -1320,6 +1443,230 @@ mod tests {
             panic!();
         };
         assert_eq!(a.model, "claude-haiku-4");
+    }
+
+    /// A timeline tool step fixture: `detail` is the sanitized one-line action
+    /// summary the projector records (`None` when the tool opted out).
+    fn tool_step(
+        order: usize,
+        tool_call_id: &str,
+        tool_name: &str,
+        status: AgentStepStatus,
+        detail: Option<&str>,
+        finished_at: Option<u64>,
+    ) -> AgentStep {
+        AgentStep::Tool(AgentToolStep {
+            id: format!("tool-{}", order + 1),
+            order,
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            label: tool_name.into(),
+            status,
+            started_at: 1_700_000_000_000,
+            updated_at: 1_700_000_000_010,
+            finished_at,
+            target: None,
+            detail: detail.map(str::to_string),
+        })
+    }
+
+    fn timeline_with(steps: Vec<AgentStep>) -> GenerationTimeline {
+        GenerationTimeline {
+            version: aiden_core::GENERATION_TIMELINE_VERSION,
+            generation_id: "gen-1".into(),
+            status: aiden_core::GenerationTimelineStatus::Completed,
+            started_at: 1_700_000_000_000,
+            finished_at: Some(1_700_000_000_020),
+            steps,
+            claim_check: None,
+        }
+    }
+
+    #[test]
+    fn history_reconstructs_tool_calls_and_results_from_the_timeline() {
+        let mut assistant = user(ChatRole::Assistant, "final answer");
+        assistant.timeline = Some(timeline_with(vec![
+            tool_step(
+                0,
+                "call-1",
+                "grep",
+                AgentStepStatus::Completed,
+                Some(r#"{"pattern": "foo"}"#),
+                Some(1_700_000_000_010),
+            ),
+            tool_step(
+                1,
+                "call-2",
+                "run_command",
+                AgentStepStatus::Failed,
+                Some("lint the workspace"),
+                Some(1_700_000_000_015),
+            ),
+        ]));
+        // A following user message must stay AFTER the reconstructed tool
+        // exchange — the tool messages never bleed past their assistant entry.
+        let history = vec![
+            user(ChatRole::User, "first"),
+            assistant,
+            user(ChatRole::User, "next"),
+        ];
+        let messages = chat_history_to_messages(
+            &history,
+            "claude-sonnet-5",
+            "anthropic",
+            ApiFamily::AnthropicMessages,
+        );
+        assert_eq!(
+            messages.len(),
+            7,
+            "text + 2 tool calls + 2 results per entry"
+        );
+
+        // [0] first user, [1] assistant text, then the reconstructed tool flow.
+        assert!(matches!(&messages[0], Message::User(_)));
+        let Message::Assistant(text) = &messages[1] else {
+            panic!("expected the assistant text message");
+        };
+        assert_eq!(text.content.len(), 1);
+        assert!(matches!(
+            &text.content[0],
+            ContentBlock::Text(t) if t.text == "final answer"
+        ));
+        assert_eq!(text.stop_reason, StopReason::Stop);
+
+        // Tool call 1: id/name/arguments reconstructed from the step detail.
+        let Message::Assistant(call_1) = &messages[2] else {
+            panic!("expected the first tool-call message");
+        };
+        let ContentBlock::ToolCall(call_1) = &call_1.content[0] else {
+            panic!("expected a tool-call block");
+        };
+        assert_eq!(call_1.id, "call-1");
+        assert_eq!(call_1.name, "grep");
+        assert_eq!(call_1.arguments, serde_json::json!({ "pattern": "foo" }));
+        assert_eq!(stop_reason_of(&messages[2]), StopReason::ToolUse);
+
+        // Result 1: matches the call id, carries the detail summary, success.
+        let Message::ToolResult(result_1) = &messages[3] else {
+            panic!("expected the first tool result");
+        };
+        assert_eq!(result_1.tool_call_id, "call-1");
+        assert_eq!(result_1.tool_name, "grep");
+        assert!(!result_1.is_error);
+        assert!(matches!(
+            &result_1.content[0],
+            ContentBlock::Text(t) if t.text == "[Used tool: grep] {\"pattern\": \"foo\"}"
+        ));
+        assert_eq!(result_1.timestamp, 1_700_000_000_010);
+
+        // Tool call 2: the non-JSON detail leaves arguments empty.
+        let Message::Assistant(call_2) = &messages[4] else {
+            panic!("expected the second tool-call message");
+        };
+        let ContentBlock::ToolCall(call_2) = &call_2.content[0] else {
+            panic!("expected a tool-call block");
+        };
+        assert_eq!(call_2.id, "call-2");
+        assert_eq!(call_2.name, "run_command");
+        assert_eq!(call_2.arguments, serde_json::json!({}));
+
+        // Result 2: failed step → is_error, detail summary text.
+        let Message::ToolResult(result_2) = &messages[5] else {
+            panic!("expected the second tool result");
+        };
+        assert_eq!(result_2.tool_call_id, "call-2");
+        assert!(result_2.is_error);
+        assert!(matches!(
+            &result_2.content[0],
+            ContentBlock::Text(t) if t.text == "[Used tool: run_command] lint the workspace"
+        ));
+
+        // The next user message follows the reconstructed tool exchange.
+        assert!(matches!(&messages[6], Message::User(_)));
+    }
+
+    fn stop_reason_of(message: &Message) -> StopReason {
+        let Message::Assistant(assistant) = message else {
+            panic!("expected an assistant message");
+        };
+        assistant.stop_reason
+    }
+
+    #[test]
+    fn history_tool_steps_without_detail_fall_back_to_used_tool_summary() {
+        // A tool step with no detail (e.g. `read_file`, which never records
+        // content) must still tell the provider a tool was used.
+        let mut assistant = user(ChatRole::Assistant, "");
+        assistant.timeline = Some(timeline_with(vec![tool_step(
+            0,
+            "call-1",
+            "read_file",
+            AgentStepStatus::Completed,
+            None,
+            None,
+        )]));
+        let messages = chat_history_to_messages(
+            &[assistant],
+            "claude-sonnet-5",
+            "anthropic",
+            ApiFamily::AnthropicMessages,
+        );
+        assert_eq!(messages.len(), 3);
+        let Message::Assistant(call) = &messages[1] else {
+            panic!("expected the tool-call message");
+        };
+        let ContentBlock::ToolCall(call) = &call.content[0] else {
+            panic!("expected a tool-call block");
+        };
+        assert_eq!(call.arguments, serde_json::json!({}));
+        let Message::ToolResult(result) = &messages[2] else {
+            panic!("expected the tool result");
+        };
+        assert!(matches!(
+            &result.content[0],
+            ContentBlock::Text(t) if t.text == "[Used tool: read_file]"
+        ));
+        // No finished_at on the step → the result timestamp falls back to
+        // updated_at.
+        assert_eq!(result.timestamp, 1_700_000_000_010);
+    }
+
+    #[test]
+    fn assistant_without_a_timeline_produces_no_tool_messages() {
+        let assistant = user(ChatRole::Assistant, "plain text");
+        let messages =
+            chat_history_to_messages(&[assistant], "m", "p", ApiFamily::OpenAICompletions);
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(messages[0], Message::Assistant(_)));
+    }
+
+    #[test]
+    fn timeline_thinking_steps_do_not_produce_tool_messages() {
+        let mut assistant = user(ChatRole::Assistant, "reasoned answer");
+        assistant.timeline = Some(timeline_with(vec![
+            aiden_core::AgentStep::Thinking(aiden_core::AgentThinkingStep {
+                id: "think-1".into(),
+                order: 0,
+                started_at: 1_700_000_000_000,
+                updated_at: 1_700_000_000_005,
+                finished_at: Some(1_700_000_000_005),
+                duration_ms: Some(5),
+            }),
+            tool_step(
+                1,
+                "call-1",
+                "glob",
+                AgentStepStatus::Completed,
+                Some("*.rs"),
+                Some(1_700_000_000_010),
+            ),
+        ]));
+        let messages =
+            chat_history_to_messages(&[assistant], "m", "p", ApiFamily::OpenAICompletions);
+        // Thinking steps are skipped; only the tool step expands.
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(messages[1], Message::Assistant(_)));
+        assert!(matches!(messages[2], Message::ToolResult(_)));
     }
 
     #[test]

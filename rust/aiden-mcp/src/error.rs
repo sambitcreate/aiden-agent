@@ -76,6 +76,14 @@ pub enum McpError {
     #[error("MCP operation {0} timed out after {1}ms.")]
     Timeout(String, u64),
 
+    // --- Config lease epoch fencing (mcp-config-lease.ts) ---
+    // A config change reconnects the server and advances the manager's
+    // generation; any call/list that started before the change and returned
+    // after it is fenced off so a result from a superseded server process can
+    // never feed a new-config generation.
+    #[error("MCP server configuration changed; the result is stale.")]
+    StaleGeneration,
+
     // --- OAuth store / operation gate (mcp-oauth-operation.ts) ---
     #[error("Authorization is already in progress for this MCP server.")]
     OAuthInProgress,

@@ -20,6 +20,14 @@
 //! normalized exactly like `mcp-tool-result.ts` (text blocks joined by `\n`,
 //! `isError: true` surfaces as a thrown [`McpError::ToolFailed`]).
 //!
+//! Config-change fencing (TS `mcp-config-lease.ts`): the manager keeps a
+//! monotonically increasing [`McpClientManager::config_generation`]. Any
+//! reconnect caused by a changed server record (or a disconnect) advances it.
+//! In-flight `call_tool`/`list_tools` capture the generation before the await
+//! and compare afterwards, failing with [`McpError::StaleGeneration`] if it
+//! moved, so a stale result from a superseded server process is discarded
+//! instead of being fed to the model.
+//!
 //! SSE transport: rmcp 3.x removed the SSE *client* transport (only SSE
 //! *responses* for streamable HTTP remain), so `transport == "sse"` fails
 //! with [`McpError::SseUnsupported`]. Porting the TS `SSEClientTransport`
@@ -27,6 +35,7 @@
 //! channel — deferred.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -360,10 +369,20 @@ pub struct McpStatus {
 /// operations. [`Self::ensure_connected`] never holds the lock across the
 /// connect itself, and reconnects when the server record's fingerprint
 /// changes.
+///
+/// [`Self::generation`] is the config epoch (TS
+/// `McpConfigurationLeaseRegistry`): it advances whenever any server's record
+/// changes, and [`Self::call_tool`]/[`Self::list_tools`] fence on it so a
+/// result that was produced by a server process superseded mid-call is
+/// discarded ([`McpError::StaleGeneration`]).
 #[derive(Default)]
 pub struct McpClientManager {
     clients: tokio::sync::Mutex<HashMap<String, Arc<McpClient>>>,
     generations: tokio::sync::Mutex<HashMap<String, u64>>,
+    /// Global config epoch: bumped whenever any server reconnects because its
+    /// record changed (or disconnects), so in-flight calls can detect that
+    /// their server generation was superseded. See [`Self::config_generation`].
+    generation: AtomicU64,
     #[cfg(test)]
     connect_override: tokio::sync::Mutex<Option<ConnectOverride>>,
 }
@@ -373,6 +392,7 @@ impl std::fmt::Debug for McpClientManager {
         f.debug_struct("McpClientManager")
             .field("clients", &"..")
             .field("generations", &"..")
+            .field("generation", &self.config_generation())
             .finish()
     }
 }
@@ -396,6 +416,7 @@ impl McpClientManager {
         Self {
             clients: tokio::sync::Mutex::new(HashMap::new()),
             generations: tokio::sync::Mutex::new(HashMap::new()),
+            generation: AtomicU64::new(0),
             connect_override: tokio::sync::Mutex::new(Some(connect)),
         }
     }
@@ -451,6 +472,11 @@ impl McpClientManager {
         clients.insert(spec.server.id.clone(), client);
         drop(clients);
         self.bump_generation(&spec.server.id).await;
+        // The server's record changed, so the whole config generation moves:
+        // in-flight calls started before this reconnect now fail closed with
+        // `McpError::StaleGeneration` instead of returning a result from the
+        // superseded process.
+        self.bump_config_generation();
         tracing::info!(server = %spec.server.id, "MCP server connected");
         Ok(())
     }
@@ -461,13 +487,39 @@ impl McpClientManager {
         generations.insert(server_id.to_string(), next);
     }
 
+    /// Advance the global config epoch. Any fence started before this bump
+    /// (captured via [`Self::config_generation`]) fails on its next check.
+    fn bump_config_generation(&self) {
+        let next = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        tracing::trace!(generation = next, "MCP config generation advanced");
+    }
+
+    /// The current global config epoch (TS `McpConfigurationLeaseRegistry`
+    /// epoch). The chat driver captures it when building a request and calls
+    /// it again when the tool result arrives; any difference means a server
+    /// record changed in between, and the result belongs to a superseded
+    /// generation. The manager itself also fences [`Self::call_tool`] and
+    /// [`Self::list_tools`] with the same counter.
+    pub fn config_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
     pub async fn is_connected(&self, server_id: &str) -> bool {
         self.clients.lock().await.contains_key(server_id)
     }
 
+    /// `tools/list` for a connected server. If the config generation moved
+    /// while the listing was in flight (a reconnect superseded this server),
+    /// the tools belong to a superseded generation and are discarded with
+    /// [`McpError::StaleGeneration`].
     pub async fn list_tools(&self, server_id: &str) -> Result<Vec<McpToolInfo>, McpError> {
+        let generation = self.config_generation();
         let client = self.client_for(server_id).await?;
-        client.list_tools().await
+        let tools = client.list_tools().await;
+        if self.config_generation() != generation {
+            return Err(McpError::StaleGeneration);
+        }
+        tools
     }
 
     pub async fn list_resources(
@@ -489,6 +541,13 @@ impl McpClientManager {
     /// Call a raw remote tool through its connected client, normalized by
     /// `mcp_agent_tool_result`. The map lock is released before the await, so
     /// a slow tool on one server never blocks another server's operations.
+    ///
+    /// The call is fenced by the config epoch: the generation is captured
+    /// before dispatch and checked after the result arrives. If any server's
+    /// record changed (reconnect) during the call, the result was produced by
+    /// a superseded process and is discarded with
+    /// [`McpError::StaleGeneration`] — the chat driver surfaces that as a
+    /// tool failure rather than feeding stale data to the model.
     pub async fn call_tool(
         &self,
         server_id: &str,
@@ -496,8 +555,13 @@ impl McpClientManager {
         args: serde_json::Value,
         timeout: Duration,
     ) -> Result<McpToolTextResult, McpError> {
+        let generation = self.config_generation();
         let client = self.client_for(server_id).await?;
-        client.call_tool(tool, args, timeout).await
+        let result = client.call_tool(tool, args, timeout).await;
+        if self.config_generation() != generation {
+            return Err(McpError::StaleGeneration);
+        }
+        result
     }
 
     /// Namespaced agent tools for a connected server (TS
@@ -546,11 +610,16 @@ impl McpClientManager {
 
     /// Drop the cached client (cancels the running service and kills stdio
     /// children) and advance its generation so stale callers fail closed.
+    /// Removing a server is a config change, so the global config epoch moves
+    /// as well: in-flight calls fenced on it fail with
+    /// [`McpError::StaleGeneration`] instead of returning results from the
+    /// just-dropped process.
     pub async fn disconnect(&self, server_id: &str) {
         self.clients.lock().await.remove(server_id);
         let mut generations = self.generations.lock().await;
         let next = generations.get(server_id).copied().unwrap_or(0) + 1;
         generations.insert(server_id.to_string(), next);
+        self.bump_config_generation();
         tracing::info!(server = %server_id, "MCP server disconnected");
     }
 
@@ -1219,6 +1288,143 @@ mod tests {
             manager.cached_fingerprint("docs").await.as_deref(),
             Some(spec_fingerprint(&spec_a).as_str())
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // Config lease epoch fencing (mcp-config-lease.ts)
+    // ---------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn config_generation_advances_only_when_a_record_changes() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(McpClientManager::with_connect(counting_connect(
+            connects.clone(),
+            0,
+        )));
+
+        let spec_a = remote_spec("docs");
+        manager.ensure_connected(&spec_a).await.unwrap();
+        assert_eq!(manager.config_generation(), 1);
+
+        // An unchanged spec reuses the cached connection: no bump.
+        manager.ensure_connected(&spec_a).await.unwrap();
+        assert_eq!(manager.config_generation(), 1);
+
+        // A changed record reconnects → the config generation advances.
+        let spec_b = {
+            let mut spec = spec_a.clone();
+            spec.server.url = Some("https://docs.test/mcp/v2".into());
+            spec.remote = Some(crate::config::RemoteSpec {
+                url: "https://docs.test/mcp/v2".into(),
+                headers: Default::default(),
+            });
+            spec
+        };
+        manager.ensure_connected(&spec_b).await.unwrap();
+        assert_eq!(manager.config_generation(), 2);
+
+        // Removing a server is a config change too.
+        manager.disconnect("docs").await;
+        assert_eq!(manager.config_generation(), 3);
+        assert!(!manager.is_connected("docs").await);
+    }
+
+    #[tokio::test]
+    async fn a_slow_call_superseded_by_a_config_change_fails_as_stale() {
+        // The first connection's fixture signals when `tools/call` starts and
+        // then delays its response, so the test can reconfigure the server
+        // mid-call and still get a result back from the superseded process.
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let started = std::sync::Mutex::new(Some(started_tx));
+        let manager = Arc::new(McpClientManager::with_connect(Box::new(
+            move |spec: &McpServerSpec| {
+                let started = started.lock().unwrap().take();
+                let spec = spec.clone();
+                async move { Ok(fixture_client(&spec, 300, started).await) }.boxed()
+            },
+        )));
+
+        let spec_a = remote_spec("docs");
+        manager.ensure_connected(&spec_a).await.unwrap();
+        assert_eq!(manager.config_generation(), 1);
+
+        // Fire a tool call that will park on the slow fixture.
+        let call = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .call_tool(
+                        "docs",
+                        "echo",
+                        serde_json::json!({ "text": "x" }),
+                        Duration::from_secs(5),
+                    )
+                    .await
+            })
+        };
+        // Wait until the call is actually in flight on the old server.
+        tokio::time::timeout(Duration::from_secs(5), started_rx)
+            .await
+            .expect("the call must reach the server before the reconnect")
+            .expect("the fixture must not drop the sender");
+
+        // The server's record changes while the call is in flight → the
+        // manager reconnects and the config generation advances.
+        let spec_b = {
+            let mut spec = spec_a.clone();
+            spec.server.url = Some("https://docs.test/mcp/v2".into());
+            spec.remote = Some(crate::config::RemoteSpec {
+                url: "https://docs.test/mcp/v2".into(),
+                headers: Default::default(),
+            });
+            spec
+        };
+        manager.ensure_connected(&spec_b).await.unwrap();
+        assert_eq!(manager.config_generation(), 2);
+
+        // The old call completes against the superseded process, but its
+        // result is fenced off: the caller sees a stale-generation failure
+        // instead of a value from the previous config.
+        let err = tokio::time::timeout(Duration::from_secs(5), call)
+            .await
+            .expect("call completes")
+            .expect("task did not panic")
+            .unwrap_err();
+        assert!(matches!(err, McpError::StaleGeneration));
+    }
+
+    #[tokio::test]
+    async fn a_call_without_a_config_change_returns_its_result() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = Arc::new(McpClientManager::with_connect(counting_connect(
+            connects.clone(),
+            0,
+        )));
+        manager
+            .ensure_connected(&remote_spec("docs"))
+            .await
+            .unwrap();
+
+        // The chat driver captures the epoch before building the request; the
+        // call runs against the same generation, so its result stands.
+        let generation = manager.config_generation();
+        let result = manager
+            .call_tool(
+                "docs",
+                "echo",
+                serde_json::json!({ "text": "hello" }),
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("non-stale call succeeds");
+        assert!(result.text.contains("hello"));
+        assert_eq!(manager.config_generation(), generation);
+
+        // tools/list is fenced the same way and still succeeds.
+        let tools = manager.list_tools("docs").await.expect("list tools");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "echo");
+        assert_eq!(manager.config_generation(), generation);
     }
 
     #[tokio::test]

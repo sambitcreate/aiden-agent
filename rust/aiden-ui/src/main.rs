@@ -59,13 +59,18 @@ mod app;
 mod approvals;
 mod assistant;
 mod chat;
+#[allow(dead_code)]
 mod onboarding;
 mod panels;
 mod pill;
 mod services;
 mod settings;
 mod shell;
+#[allow(dead_code)]
+mod skills;
 mod workspace;
+#[allow(dead_code)]
+mod workspace_files;
 
 use std::cell::RefCell;
 use std::io::Write as _;
