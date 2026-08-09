@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { CuaDriverToolInfo } from "./contract.js";
 import {
   COMPUTER_USE_DISCOVERY_TIMEOUT_MS,
@@ -422,6 +423,60 @@ test("publishes the consolidated tool as sequential and preserves zero-based ind
     () => normalizeComputerUseArgs({ action: "click", element: -1 }),
     /zero-based non-negative/u,
   );
+});
+
+test("publishes provider-compatible fixed-length coordinate schemas", () => {
+  const { controller } = harness();
+  const tool = createComputerUseAgentTool(controller);
+  const parameters = JSON.parse(JSON.stringify(tool.parameters)) as {
+    properties: Record<string, Record<string, unknown>>;
+  };
+
+  for (const field of ["coordinate", "from_coordinate", "to_coordinate"]) {
+    const property = parameters.properties[field];
+    assert.ok(property);
+    assert.equal(property.type, "array");
+    assert.equal(property.minItems, 2);
+    assert.equal(property.maxItems, 2);
+    assert.equal(Array.isArray(property.items), false);
+    assert.deepEqual(property.items, { type: "number", minimum: 0 });
+  }
+
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if ("items" in record) {
+      assert.ok(record.items && typeof record.items === "object", "items must be an object schema");
+      assert.equal(
+        Array.isArray(record.items),
+        false,
+        "tool schemas must not use tuple-style items",
+      );
+    }
+    for (const nested of Object.values(record)) visit(nested);
+  };
+  visit(parameters);
+
+  const valid = validateToolArguments(tool, {
+    type: "toolCall",
+    id: "coordinate-valid",
+    name: tool.name,
+    arguments: { action: "click", coordinate: [1.5, 2.5] },
+  });
+  assert.deepEqual(valid.coordinate, [1.5, 2.5]);
+
+  for (const coordinate of [[1], [1, 2, 3], [-1, 2], [Number.NaN, 2], [Infinity, 2]]) {
+    assert.throws(
+      () =>
+        validateToolArguments(tool, {
+          type: "toolCall",
+          id: "coordinate-invalid",
+          name: tool.name,
+          arguments: { action: "click", coordinate },
+        }),
+      /Validation failed for tool "computer_use"/u,
+    );
+  }
 });
 
 test("hard-blocks normalized dangerous text and destructive shortcuts before approval", async () => {
