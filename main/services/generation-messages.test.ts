@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
-import { toPiMessages } from "./generation-messages.js";
+import { chatMessageToPiMessage, toPiMessages } from "./generation-messages.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -80,4 +80,20 @@ test("matches Pi's installed tool-result image serialization gate", () => {
   const textModel = { ...model, input: ["text"] as ("text" | "image")[] };
   const text = transformMessages([toolResult], textModel);
   assert.equal(JSON.stringify(text).includes("TOOL_IMAGE_SENTINEL"), false);
+});
+
+test("journal rehydration preserves the authoritative chat timestamp", () => {
+  const message = chatMessageToPiMessage(
+    {
+      id: "message-1",
+      role: "assistant",
+      content: "Persisted response",
+      createdAt: 123_456,
+    },
+    model,
+    false,
+  );
+
+  assert.equal(message.role, "assistant");
+  assert.equal(message.timestamp, 123_456);
 });

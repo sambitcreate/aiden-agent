@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
+  adaptSubagentRunSnapshotV2ToV1,
   MAX_SUBAGENT_ACTIVITY_CHARS,
   MAX_SUBAGENT_ERROR_CHARS,
   MAX_SUBAGENT_LATEST_TEXT_CHARS,
@@ -9,7 +10,9 @@ import {
   MAX_SUBAGENT_WARNING_CHARS,
   SUBAGENT_RUN_SNAPSHOT_VERSION,
   parseSubagentRunSnapshotV1,
+  parseSubagentRunSnapshotV2,
   type SubagentRunSnapshotV1,
+  type SubagentRunSnapshotV2,
   type SubagentRunState,
   type SubagentMilestoneKind,
 } from "../../../renderer/shared/subagent-runs.js";
@@ -30,7 +33,10 @@ export interface SubagentRunProjectorInput {
   chatId: string;
   workspaceId: string;
   modelId: string;
+  /** Synchronous authority/admission seam that runs before a new run is published. */
+  prepareSnapshot?: (snapshot: SubagentRunSnapshotV1) => void;
   onSnapshot?: (snapshot: SubagentRunSnapshotV1) => void | Promise<void>;
+  onControlSnapshot?: (snapshot: SubagentRunSnapshotV2) => void | Promise<void>;
   now?: () => number;
 }
 
@@ -242,6 +248,49 @@ export class SubagentEventProjector {
     );
   }
 
+  /**
+   * Apply the only foreground control transition that can arrive outside the
+   * child telemetry stream. The private V2 record stays canonical while the
+   * internal renderer projection becomes terminal synchronously, fencing every
+   * late starting/running/finish callback before durability is acknowledged.
+   */
+  applyControlSnapshot(value: SubagentRunSnapshotV2): SubagentRunSnapshotV1 {
+    const control = parseSubagentRunSnapshotV2(value);
+    if (!control || control.state !== "stopped") {
+      throw new Error("Invalid subagent terminal control snapshot.");
+    }
+    const current = this.require(control.runId);
+    if (
+      current.finishedAt !== undefined ||
+      control.revision <= current.revision ||
+      control.groupId !== current.groupId ||
+      control.generationId !== current.generationId ||
+      control.childId !== current.childId ||
+      control.chatId !== current.chatId ||
+      control.workspaceId !== current.workspaceId ||
+      control.role !== current.role ||
+      control.label !== current.label ||
+      control.taskPreview !== current.taskPreview ||
+      control.startedAt !== current.startedAt ||
+      control.modelId !== current.modelId ||
+      control.updatedAt < current.updatedAt ||
+      control.turns < current.turns ||
+      control.tools < current.tools ||
+      control.tokens < current.tokens
+    ) {
+      throw new Error("Subagent control snapshot changed immutable run identity or moved backward.");
+    }
+    const projected = adaptSubagentRunSnapshotV2ToV1(control);
+    if (!projected || projected.finishedAt === undefined) {
+      throw new Error("Subagent control snapshot could not be projected safely.");
+    }
+    this.records.set(projected.runId, projected);
+    this.enqueuePersistence(() =>
+      Promise.resolve(this.input.onControlSnapshot?.(structuredClone(control))),
+    );
+    return structuredClone(projected);
+  }
+
   snapshot(): SubagentRunSnapshotV1[] {
     return [...this.records.values()]
       .sort(
@@ -309,9 +358,17 @@ export class SubagentEventProjector {
   private publish(candidate: SubagentRunSnapshotV1, durable = true): void {
     const snapshot = parseSubagentRunSnapshotV1(candidate);
     if (!snapshot) throw new Error("Invalid renderer-safe subagent snapshot.");
+    if (!this.records.has(snapshot.runId)) {
+      this.input.prepareSnapshot?.(structuredClone(snapshot));
+    }
     this.records.set(snapshot.runId, snapshot);
     if (!durable || !this.input.onSnapshot) return;
-    const operation = () => Promise.resolve(this.input.onSnapshot?.(structuredClone(snapshot)));
+    this.enqueuePersistence(() =>
+      Promise.resolve(this.input.onSnapshot?.(structuredClone(snapshot))),
+    );
+  }
+
+  private enqueuePersistence(operation: () => Promise<void>): void {
     const result = this.persistenceTail.then(operation, operation);
     this.persistenceTail = result.then(
       () => undefined,

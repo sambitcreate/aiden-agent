@@ -11,6 +11,7 @@ import { subagentRunStore } from "../services/subagents/subagent-run-store.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import type { Attachment, ChatRole } from "../services/types.js";
+import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -132,6 +133,12 @@ export function registerChatHistoryHandlers(): void {
       } catch (error) {
         logger.error("subagents", "Could not delete private subagent history.", error);
         throw new Error("Aiden could not delete this chat's subagent history.");
+      }
+      try {
+        await piCompactionSessionStore.deleteChat(chatId);
+      } catch (error) {
+        logger.error("pi", "Could not delete the private compaction journal.", error);
+        throw new Error("Aiden could not delete this chat's compaction history.");
       }
       // remove() also reconciles an index entry whose payload is already
       // missing or corrupt, while propagating real filesystem failures.

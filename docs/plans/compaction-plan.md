@@ -1,5 +1,13 @@
 # Best overall approach
 
+# Aiden delivery status — 2026-08-06
+
+Aiden now ships the Pi-native baseline described by this research plan. The implementation is pinned to the installed `@earendil-works/pi-agent-core@0.80.10` behavior and delegates summary prompting, cut points, retained-tail reconstruction, split turns, repeated-summary updates, and tool-pair safety to Pi core.
+
+The delivered boundary includes append-only private chat journals, pre-prompt and post-response checks, proactive threshold compaction, one compact-and-retry attempt for context overflow, failure-safe checkpoint commits, child-agent parity, bounded renderer activity, and journal removal with chat deletion. The pre-existing deterministic `generation-context` transform remains as an emergency request-safety layer for pathological payloads and static prompt/tool overhead.
+
+The broader plan intentionally remains Partial. Durable cross-task memory, independent summary-quality validation and repair, provider-native compaction, replay benchmarks, rollout telemetry, and per-model policy tuning remain follow-on work rather than being implied by the Pi parity delivery.
+
 I treated **“Py” as Pi**, and I also included **PydanticAI**, because its newer tiered-compaction design captures many of the best ideas in one framework.
 
 The strongest approach is **not** “summarize the entire conversation when the window is full.” The better architecture is a **layered, transactional context-management pipeline**:

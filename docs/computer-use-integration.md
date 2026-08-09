@@ -158,7 +158,10 @@ Use unavailable.
 2. **Agent adapter:** the consolidated Hermes-compatible schema; capture and
    all action mappings; image/structured result normalization; capability and
    stale-element-token handling; action-aware approvals; model capability
-   gating; cancellation and exact-target `capture_after`.
+   gating; cancellation and exact-target `capture_after`. Coordinate fields use
+   homogeneous numeric arrays bounded to exactly two items so OpenAI-compatible
+   providers receive object-valued JSON Schema `items`; runtime validation still
+   independently requires two finite nonnegative values.
 3. **Product surface:** persisted global enablement and per-chat activation;
    readiness/doctor/permission IPC; Settings and composer controls; accessible
    allow-once approval details; lifecycle cleanup.

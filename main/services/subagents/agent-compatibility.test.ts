@@ -16,17 +16,28 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import { appendPiMessages } from "../pi-compaction-session-store.js";
+import { SubagentApprovalLedgerV2 } from "./approval-v2.js";
+import { createSubagentAuthorityV2 } from "./authority-v2.js";
 import {
   SubagentRuntimeRegistry,
   type SubagentRuntimeAuthority,
   type SubagentRuntimeChild,
 } from "./child-agent-runtime.js";
+import { SubagentConcurrencyGate } from "./concurrency-gate.js";
 import {
   assertSubagentHistoryEnabled,
   registerSubagentTool,
+  subagentChildMcpEnabled,
+  subagentChildMcpMutationsEnabled,
+  subagentChildDelegationEnabled,
+  subagentChildShellEnabled,
+  subagentChildWriteEnabled,
+  subagentChildWebEnabled,
   SUBAGENT_HISTORY_DISABLED_ERROR,
   subagentsEnabled,
 } from "./feature-flag.js";
+import { createSubagentOutboundApprovalBrokerV2 } from "./outbound-approval-v2.js";
 
 const EMPTY_USAGE = {
   input: 0,
@@ -125,6 +136,7 @@ function child(
     authority,
     groupId: "compatibility",
     runtime,
+    thinkingLevel: "high",
     systemPrompt: "Complete one bounded child task.",
     tools,
   });
@@ -143,13 +155,19 @@ test("subagents default on after rollout and explicit rollback never constructs 
       label: "Subagent",
       description: "Delegate bounded work.",
       parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text" as const, text: "ok" }], details: null }),
+      execute: async () => ({
+        content: [{ type: "text" as const, text: "ok" }],
+        details: null,
+      }),
     };
   };
   registerSubagentTool(tools, createTool, { AIDEN_SUBAGENTS_ENABLED: "0" });
   assert.equal(constructions, 0);
   assert.equal(tools.length, 0);
-  assert.throws(() => registerSubagentTool(tools, undefined, {}), /construction is unavailable/);
+  assert.throws(
+    () => registerSubagentTool(tools, undefined, {}),
+    /construction is unavailable/,
+  );
   registerSubagentTool(tools, createTool, {});
   assert.equal(constructions, 1);
   assert.deepEqual(
@@ -158,16 +176,124 @@ test("subagents default on after rollout and explicit rollback never constructs 
   );
 });
 
+test("child web, MCP mutation, and write rollouts are independent, default-on, and subordinate to V2", () => {
+  const combinations = [
+    [{}, true, true, true, true],
+    [{ AIDEN_SUBAGENT_CHILD_WEB_ENABLED: "0" }, false, true, true, true],
+    [{ AIDEN_SUBAGENT_CHILD_MCP_ENABLED: "0" }, true, false, false, true],
+    [
+      { AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED: "0" },
+      true,
+      true,
+      false,
+      true,
+    ],
+    [{ AIDEN_SUBAGENT_CHILD_WRITE_ENABLED: "0" }, true, true, true, false],
+    [
+      {
+        AIDEN_SUBAGENT_CHILD_WEB_ENABLED: "0",
+        AIDEN_SUBAGENT_CHILD_MCP_ENABLED: "0",
+        AIDEN_SUBAGENT_CHILD_WRITE_ENABLED: "0",
+      },
+      false,
+      false,
+      false,
+      false,
+    ],
+  ] as const;
+  for (const [environment, web, mcp, mutations, write] of combinations) {
+    assert.equal(subagentChildWebEnabled(environment), web);
+    assert.equal(subagentChildMcpEnabled(environment), mcp);
+    assert.equal(subagentChildMcpMutationsEnabled(environment), mutations);
+    assert.equal(subagentChildWriteEnabled(environment), write);
+  }
+  assert.equal(
+    subagentChildMcpMutationsEnabled({
+      AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED: "1",
+    }),
+    true,
+  );
+  assert.equal(
+    subagentChildMcpMutationsEnabled({
+      AIDEN_SUBAGENT_CHILD_MCP_ENABLED: "0",
+      AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED: "1",
+    }),
+    false,
+  );
+  for (const environment of [
+    { AIDEN_SUBAGENTS_ENABLED: "0" },
+    { AIDEN_SUBAGENTS_V2_ENABLED: "0" },
+  ]) {
+    assert.equal(subagentChildWebEnabled(environment), false);
+    assert.equal(subagentChildMcpEnabled(environment), false);
+    assert.equal(subagentChildWriteEnabled(environment), false);
+    assert.equal(
+      subagentChildMcpMutationsEnabled({
+        ...environment,
+        AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED: "1",
+      }),
+      false,
+    );
+  }
+});
+
+test("child shell rollout is default-on, independently reversible, and subordinate to V2", () => {
+  assert.equal(subagentChildShellEnabled({}), true);
+  assert.equal(
+    subagentChildShellEnabled({ AIDEN_SUBAGENT_CHILD_SHELL_ENABLED: "0" }),
+    false,
+  );
+  assert.equal(
+    subagentChildShellEnabled({ AIDEN_SUBAGENTS_V2_ENABLED: "0" }),
+    false,
+  );
+});
+
+test("child delegation rollout is default-on, exact-zero reversible, and subordinate to V2", () => {
+  assert.equal(subagentChildDelegationEnabled({}), true);
+  assert.equal(
+    subagentChildDelegationEnabled({
+      AIDEN_SUBAGENT_CHILD_DELEGATION_ENABLED: "0",
+    }),
+    false,
+  );
+  assert.equal(
+    subagentChildDelegationEnabled({
+      AIDEN_SUBAGENT_CHILD_DELEGATION_ENABLED: " 0 ",
+    }),
+    false,
+  );
+  assert.equal(
+    subagentChildDelegationEnabled({
+      AIDEN_SUBAGENT_CHILD_DELEGATION_ENABLED: "false",
+    }),
+    true,
+  );
+  assert.equal(
+    subagentChildDelegationEnabled({ AIDEN_SUBAGENTS_V2_ENABLED: "0" }),
+    false,
+  );
+  assert.equal(
+    subagentChildDelegationEnabled({ AIDEN_SUBAGENTS_ENABLED: "0" }),
+    false,
+  );
+});
+
 test("disabled history requests fail with a stable error before any read can begin", () => {
   assert.throws(
     () => assertSubagentHistoryEnabled({ AIDEN_SUBAGENTS_ENABLED: "0" }),
-    (error: unknown) => error instanceof Error && error.message === SUBAGENT_HISTORY_DISABLED_ERROR,
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === SUBAGENT_HISTORY_DISABLED_ERROR,
   );
   assert.doesNotThrow(() => assertSubagentHistoryEnabled({}));
 });
 
 test("production tool assembly reaches the feature-gated lazy factory", async () => {
-  const source = await readFile(new URL("../tools.ts", import.meta.url), "utf-8");
+  const source = await readFile(
+    new URL("../tools.ts", import.meta.url),
+    "utf-8",
+  );
   const builderStart = source.indexOf("export async function buildAgentTools");
   const registrationStart = source.indexOf(
     "registerSubagentTool(tools, ctx.createSubagentTool);",
@@ -181,20 +307,68 @@ test("production tool assembly reaches the feature-gated lazy factory", async ()
 });
 
 test("production generation carries parent read-tool exclusions into child capability assembly", async () => {
-  const [generationSource, childSource, chatHandlerSource] = await Promise.all([
+  const [
+    generationSource,
+    childRuntimeSource,
+    assemblySource,
+    chatHandlerSource,
+  ] = await Promise.all([
     readFile(new URL("../llm-client.ts", import.meta.url), "utf-8"),
     readFile(new URL("./subagent-child-runtime.ts", import.meta.url), "utf-8"),
+    readFile(new URL("./subagent-tool-assembly.ts", import.meta.url), "utf-8"),
     readFile(new URL("../../handlers/chat.ts", import.meta.url), "utf-8"),
   ]);
   assert.match(
     generationSource,
-    /inheritedCeiling: inheritedSubagentReadToolCeiling\(options\.excludeToolNames\)/,
+    /inheritedCeiling:\s*inheritedSubagentReadToolCeiling\(\s*options\.excludeToolNames,?\s*\)/u,
   );
   assert.match(
-    childSource,
-    /capabilityProfile:\s*\{\s*kind: "subagent",\s*role,\s*inheritedCeiling,/,
+    childRuntimeSource,
+    /buildProductionSubagentChildTools\(\s*\{[\s\S]*\.\.\.toolInput,[\s\S]*signal: input\.signal,[\s\S]*mcpMutationsEnabled/u,
   );
-  assert.match(chatHandlerSource, /allowSubagents: true,\s*usageSource: "chat",/);
+  assert.match(
+    assemblySource,
+    /capabilityProfile:\s*\{\s*kind: "subagent",\s*role: input\.role,\s*inheritedCeiling: input\.inheritedCeiling,/,
+  );
+  assert.match(
+    chatHandlerSource,
+    /allowSubagents: true,\s*usageSource: "chat",/,
+  );
+});
+
+test("production V2 control registration is reachable only through the canonical store selection", async () => {
+  const source = await readFile(
+    new URL("../llm-client.ts", import.meta.url),
+    "utf-8",
+  );
+  assert.match(
+    source,
+    /control:\s*subagentRunStore\.selection === "v2"\s*\? subagentControlMainV2\s*: undefined/u,
+  );
+  assert.match(source, /prepareRun: subagentPersistence\?\.prepareRun/u);
+  assert.match(source, /applyControlSnapshot: \(snapshot\) =>/u);
+  assert.match(source, /settleControlSnapshots: \(\) =>/u);
+  assert.match(source, /onControlSnapshot: async \(snapshot\) =>/u);
+});
+
+test("production V1 rollback rejects fork before reading persisted conversation", async () => {
+  const source = await readFile(
+    new URL("../llm-client.ts", import.meta.url),
+    "utf-8",
+  );
+  const loader = source.indexOf("loadPersistedChatForFork: async");
+  const rollbackGuard = source.indexOf(
+    'subagentRunStore.selection !== "v2"',
+    loader,
+  );
+  const chatRead = source.indexOf("chatStore.get(params.chatId)", loader);
+  assert.ok(loader >= 0);
+  assert.ok(rollbackGuard > loader);
+  assert.ok(chatRead > rollbackGuard);
+  assert.match(
+    source.slice(rollbackGuard, chatRead),
+    /Forked subagent context is unavailable during V1 rollback/u,
+  );
 });
 
 test("Aiden child factory shares its resolved transport while generating isolated sessions", async () => {
@@ -226,10 +400,14 @@ test("Aiden child factory shares its resolved transport while generating isolate
         return fauxAssistantMessage("complete");
       }),
     );
-    const runtime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple, {
-      apiKey: "resolved-secret",
-      headers: { Authorization: null, "X-Resolved": "yes" },
-    });
+    const runtime = runtimeFrom(
+      core.getModel() as Model<Api>,
+      core.streamSimple,
+      {
+        apiKey: "resolved-secret",
+        headers: { Authorization: null, "X-Resolved": "yes" },
+      },
+    );
     const originalStream = runtime.streams.streamSimple;
     runtime.streams.streamSimple = (model, context, options) =>
       originalStream(model, context, {
@@ -238,9 +416,14 @@ test("Aiden child factory shares its resolved transport while generating isolate
       });
     const registry = new SubagentRuntimeRegistry();
     const children = Array.from({ length: 3 }, () => child(registry, runtime));
+    assert.ok(
+      children.every((entry) => entry.agent.state.thinkingLevel === "high"),
+    );
     assert.equal(new Set(children.map((entry) => entry.childId)).size, 3);
     assert.equal(new Set(children.map((entry) => entry.sessionId)).size, 3);
-    const prompts = children.map((entry) => entry.prompt("Inspect one independent concern."));
+    const prompts = children.map((entry) =>
+      entry.prompt("Inspect one independent concern."),
+    );
     await allStarted.promise;
     assert.equal(core.state.callCount, 2);
     release.resolve();
@@ -250,6 +433,302 @@ test("Aiden child factory shares its resolved transport while generating isolate
     assert.equal(sessions.size, 3);
     assert.equal(registry.activeCount, 0);
   });
+});
+
+test("real Agent approval hook authorizes and consumes one exact outbound effect", async () => {
+  const core = createFauxCore({
+    provider: "aiden-compat-approval",
+    models: [{ id: "compat-approval" }],
+  });
+  core.setResponses([
+    fauxAssistantMessage(
+      fauxToolCall("approved_effect", { query: "exact approved query" }),
+      {
+        stopReason: "toolUse",
+      },
+    ),
+    fauxAssistantMessage("done"),
+  ]);
+  const authority = createSubagentAuthorityV2({
+    grantId: "grant-approval",
+    treeRootId: "tree-approval",
+    runId: "run-approval",
+    depth: 1,
+    authorityRevision: 1,
+    generationId: "generation-approval",
+    chatId: "chat-approval",
+    workspaceId: "workspace-approval",
+    workspaceRevision: "workspace-revision-approval",
+    ownerDocumentId: "document-approval",
+    providerFingerprint: "provider-approval",
+    modelFingerprint: "model-approval",
+    contextRevision: "context-approval",
+    execution: "foreground",
+    context: "fresh",
+    thinkingLevel: "high",
+    capabilities: {
+      workspaceRead: true,
+      workspaceWrite: false,
+      shell: false,
+      web: true,
+      delegation: false,
+      mcp: [],
+    },
+    budgets: {
+      deadlineMs: 10_000,
+      maxTurns: 4,
+      maxToolCalls: 4,
+      maxOutputChars: 4_000,
+      maxTokens: 4_000,
+      maxLaunches: 1,
+      maxDepth: 1,
+      maxActive: 1,
+      maxQueued: 1,
+      maxNetworkOperations: 1,
+    },
+    expiresAt: 10_000,
+  });
+  const ledger = new SubagentApprovalLedgerV2(
+    () => 1_000,
+    () => "approval-agent-integration",
+  );
+  const prompts: string[] = [];
+  const broker = createSubagentOutboundApprovalBrokerV2({
+    authority,
+    childId: "child-approval",
+    tools: [{ toolName: "approved_effect", kind: "web" }],
+    ledger,
+    currentAuthority: () => authority,
+    requestApproval: async (prompt) => {
+      prompts.push(prompt.summary);
+      return true;
+    },
+    now: () => 1_000,
+  });
+  const effects: unknown[] = [];
+  const approvedEffect: AgentTool = {
+    name: "approved_effect",
+    label: "Approved effect",
+    description: "Exercises the real child Agent approval-to-effect path.",
+    parameters: Type.Object({ query: Type.String() }),
+    execute: async (toolCallId, args) => {
+      broker.consume({
+        toolCallId,
+        toolName: "approved_effect",
+        arguments: args,
+      });
+      effects.push(args);
+      return {
+        content: [{ type: "text", text: "effect complete" }],
+        details: null,
+      };
+    },
+  };
+  const registry = new SubagentRuntimeRegistry();
+  const runningChild = registry.create({
+    authority,
+    groupId: "approval-integration",
+    childId: "child-approval",
+    runtime: runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+    thinkingLevel: "high",
+    systemPrompt: "Exercise one approved effect.",
+    tools: [approvedEffect],
+    beforeToolCall: broker.beforeToolCall,
+  });
+
+  await runningChild.prompt("Run the approved effect once.");
+
+  assert.equal(core.state.callCount, 2);
+  assert.deepEqual(prompts, [
+    'Search the public web\nQuery: "exact approved query"\nResults: 5',
+  ]);
+  assert.deepEqual(effects, [{ query: "exact approved query" }]);
+  assert.equal(ledger.pendingCount, 0);
+  assert.equal(registry.activeCount, 0);
+});
+
+test("child context compaction bounds oversized tool output before the next provider call", async () => {
+  const core = createFauxCore({
+    provider: "aiden-compat-context",
+    models: [{ id: "compat-context", contextWindow: 8_192 }],
+  });
+  let secondContext = "";
+  let continuationContext = "";
+  core.setResponses([
+    fauxAssistantMessage(fauxToolCall("oversized_read", {}), {
+      stopReason: "toolUse",
+    }),
+    async (context) => {
+      secondContext = JSON.stringify(context);
+      return fauxAssistantMessage("bounded");
+    },
+    fauxAssistantMessage("semantic history checkpoint"),
+    fauxAssistantMessage("semantic turn-prefix checkpoint"),
+    async (context) => {
+      continuationContext = JSON.stringify(context);
+      return fauxAssistantMessage("continued from checkpoint");
+    },
+  ]);
+  const oversizedRead: AgentTool = {
+    name: "oversized_read",
+    label: "Oversized read",
+    description: "Returns a deliberately oversized compatibility payload.",
+    parameters: Type.Object({}),
+    execute: async () => ({
+      content: [{ type: "text", text: `START-${"x".repeat(200_000)}-END` }],
+      details: null,
+    }),
+  };
+  const registry = new SubagentRuntimeRegistry();
+  const runningChild = child(
+    registry,
+    runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+    [oversizedRead],
+  );
+
+  await runningChild.prompt("Read the oversized payload, then conclude.");
+  await runningChild.agent.prompt("Continue from the compacted checkpoint.");
+
+  assert.equal(core.state.callCount, 5);
+  assert.match(
+    secondContext,
+    /context window|characters compacted|payload omitted/u,
+  );
+  assert.ok(secondContext.length < 100_000);
+  assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
+  assert.match(continuationContext, /conversation history.*compacted.*summary/isu);
+  assert.match(continuationContext, /semantic history checkpoint/u);
+  assert.equal(registry.activeCount, 0);
+});
+
+test("child completion survives a Pi journal append failure", async () => {
+  const core = createFauxCore({
+    provider: "aiden-compat-journal-resilience",
+    models: [{ id: "compat-journal-resilience", contextWindow: 8_192 }],
+  });
+  core.setResponses([fauxAssistantMessage("completed despite journal failure")]);
+  const journalErrors: unknown[] = [];
+  let failedAssistantBatch = false;
+  const registry = new SubagentRuntimeRegistry(undefined, undefined, {
+    appendPiMessages: async (session, messages, visibleChatMessageId) => {
+      if (
+        !failedAssistantBatch &&
+        messages.some((message) => message.role === "assistant")
+      ) {
+        failedAssistantBatch = true;
+        throw new Error("injected child journal failure");
+      }
+      await appendPiMessages(session, messages, visibleChatMessageId);
+    },
+    onPiJournalError: (error) => journalErrors.push(error),
+  });
+  const runningChild = child(
+    registry,
+    runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+  );
+
+  await assert.doesNotReject(
+    runningChild.prompt("Complete even if the in-memory journal cannot append."),
+  );
+
+  assert.equal(core.state.callCount, 1);
+  assert.equal(failedAssistantBatch, true);
+  assert.equal(journalErrors.length, 1);
+  assert.match(
+    JSON.stringify(runningChild.agent.state.messages),
+    /completed despite journal failure/u,
+  );
+  assert.equal(registry.activeCount, 0);
+});
+
+test("forked initial context is compacted before the first provider request", async () => {
+  const core = createFauxCore({
+    provider: "aiden-compat-initial-fork",
+    models: [{ id: "compat-initial-fork", contextWindow: 8_192 }],
+  });
+  let firstContext = "";
+  core.setResponses([
+    async (context) => {
+      firstContext = JSON.stringify(context);
+      return fauxAssistantMessage("bounded");
+    },
+    fauxAssistantMessage("semantic checkpoint"),
+  ]);
+  const registry = new SubagentRuntimeRegistry();
+  const modelRuntime = runtimeFrom(
+    core.getModel() as Model<Api>,
+    core.streamSimple,
+  );
+  const runningChild = registry.create({
+    authority: {
+      generationId: "compatibility-generation",
+      chatId: "compatibility-chat",
+      workspaceId: "compatibility-workspace",
+    },
+    groupId: "compatibility-fork",
+    runtime: modelRuntime,
+    thinkingLevel: "high",
+    systemPrompt: "Complete one bounded child task.",
+    tools: [],
+    initialMessages: [
+      {
+        role: "user",
+        content: `FORK-START-${"x".repeat(200_000)}-FORK-END`,
+        timestamp: 1,
+      },
+    ],
+  });
+
+  await runningChild.prompt("Conclude from the forked conversation.");
+
+  assert.equal(core.state.callCount, 2);
+  assert.doesNotMatch(firstContext, /FORK-START|FORK-END/u);
+  assert.match(firstContext, /Conclude from the forked conversation/u);
+  assert.ok(firstContext.length < 100_000);
+  assert.equal(registry.activeCount, 0);
+});
+
+test("runtime registry rejects app-wide child overflow before allocating another Agent", async () => {
+  const core = createFauxCore({
+    provider: "aiden-compat-registry-cap",
+    models: [{ id: "compat-registry-cap" }],
+  });
+  const runtime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple);
+  const registry = new SubagentRuntimeRegistry(undefined, 2);
+  const first = child(registry, runtime);
+  const second = child(registry, runtime);
+
+  assert.equal(registry.activeCount, 2);
+  assert.throws(
+    () => child(registry, runtime),
+    /app-wide subagent runtime limit/u,
+  );
+  assert.equal(registry.activeCount, 2);
+
+  first.cancel();
+  second.cancel();
+  assert.equal(await registry.shutdown(100), true);
+  assert.equal(registry.activeCount, 0);
+});
+
+test("concurrency gate rejects queue overflow and releases the admitted waiter", async () => {
+  const gate = new SubagentConcurrencyGate({ hosted: 1, local: 1 }, 1);
+  const releaseActive = await gate.acquire("hosted");
+  const queued = gate.acquire("hosted");
+
+  assert.equal(gate.activeCount, 1);
+  assert.equal(gate.queuedCount, 1);
+  await assert.rejects(
+    gate.acquire("hosted"),
+    /app-wide subagent queue limit/u,
+  );
+
+  releaseActive();
+  const releaseQueued = await queued;
+  assert.equal(gate.activeCount, 1);
+  assert.equal(gate.queuedCount, 0);
+  releaseQueued();
+  assert.equal(gate.activeCount, 0);
 });
 
 test("provider response marks a child only after Pi crosses the actual request boundary", async () => {
@@ -279,7 +758,12 @@ test("provider response marks a child only after Pi crosses the actual request b
       queueMicrotask(() => {
         stream.push({ type: "start", partial: { ...partial, content: [] } });
         stream.push({ type: "text_start", contentIndex: 0, partial });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "partial", partial });
+        stream.push({
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "partial",
+          partial,
+        });
         deltaReached.resolve();
       });
       const onAbort = () => {
@@ -303,8 +787,13 @@ test("provider response marks a child only after Pi crosses the actual request b
     await prompt;
 
     const terminal =
-      runningChild.agent.state.messages[runningChild.agent.state.messages.length - 1];
-    assert.equal(terminal?.role === "assistant" ? terminal.stopReason : undefined, "aborted");
+      runningChild.agent.state.messages[
+        runningChild.agent.state.messages.length - 1
+      ];
+    assert.equal(
+      terminal?.role === "assistant" ? terminal.stopReason : undefined,
+      "aborted",
+    );
     assert.equal(abortListeners, 0);
     assert.equal(runningChild.agent.signal, undefined);
     assert.equal(registry.activeCount, 0);
@@ -332,7 +821,10 @@ test("tool abort settles a genuinely running signal-aware tool", async () => {
           abortListeners += 1;
           signal?.addEventListener("abort", onAbort, { once: true });
         });
-        return { content: [{ type: "text", text: "unexpected" }], details: null };
+        return {
+          content: [{ type: "text", text: "unexpected" }],
+          details: null,
+        };
       },
     };
     const core = createFauxCore({
@@ -340,9 +832,14 @@ test("tool abort settles a genuinely running signal-aware tool", async () => {
       models: [{ id: "compat-tool-abort" }],
     });
     core.setResponses([
-      fauxAssistantMessage(fauxToolCall("blocking_read", {}), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("blocking_read", {}), {
+        stopReason: "toolUse",
+      }),
     ]);
-    const runtime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple);
+    const runtime = runtimeFrom(
+      core.getModel() as Model<Api>,
+      core.streamSimple,
+    );
     const registry = new SubagentRuntimeRegistry();
     const runningChild = child(registry, runtime, [blockingTool]);
     const prompt = runningChild.prompt("Use the blocking read.");
@@ -387,12 +884,17 @@ test("runtime registry enforces local concurrency at one", async () => {
         return fauxAssistantMessage("second");
       },
     ]);
-    const runtime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple, {
-      deployment: "local",
-    });
+    const runtime = runtimeFrom(
+      core.getModel() as Model<Api>,
+      core.streamSimple,
+      {
+        deployment: "local",
+      },
+    );
     const recordedConcurrency: number[] = [];
     const registry = new SubagentRuntimeRegistry({
-      started: (activeConcurrency) => recordedConcurrency.push(activeConcurrency),
+      started: (activeConcurrency) =>
+        recordedConcurrency.push(activeConcurrency),
       terminal: () => {},
       cleanupFailed: () => {},
     });
@@ -407,6 +909,56 @@ test("runtime registry enforces local concurrency at one", async () => {
 
     assert.equal(peak, 1);
     assert.deepEqual(recordedConcurrency, [1, 1]);
+    assert.equal(registry.activeCount, 0);
+  });
+});
+
+test("depth-1 child yields the real local inference lease while awaiting a depth-2 child", async () => {
+  await within("local nested inference lease yield", async () => {
+    const core = createFauxCore({
+      provider: "aiden-compat-local-nested",
+      models: [{ id: "compat-local-nested" }],
+    });
+    core.setResponses([
+      fauxAssistantMessage(fauxToolCall("delegate_nested", {}), {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("nested complete"),
+      fauxAssistantMessage("parent complete"),
+    ]);
+    const runtime = runtimeFrom(
+      core.getModel() as Model<Api>,
+      core.streamSimple,
+      {
+        deployment: "local",
+      },
+    );
+    const registry = new SubagentRuntimeRegistry();
+    const nested = child(registry, runtime);
+    let parent: SubagentRuntimeChild | undefined;
+    const nestedTool: AgentTool = {
+      name: "delegate_nested",
+      label: "Delegate nested",
+      description:
+        "Wait for one nested local child without retaining inference capacity.",
+      parameters: Type.Object({}),
+      execute: async () => {
+        const yieldInference = parent?.withoutInferenceLease;
+        assert.ok(yieldInference);
+        await yieldInference(() =>
+          nested.prompt("Complete the nested local task."),
+        );
+        return {
+          content: [{ type: "text", text: "nested result accepted" }],
+          details: null,
+        };
+      },
+    };
+    parent = child(registry, runtime, [nestedTool]);
+
+    await parent.prompt("Delegate once, then conclude.");
+
+    assert.equal(core.state.callCount, 3);
     assert.equal(registry.activeCount, 0);
   });
 });
@@ -427,12 +979,17 @@ test("cancelling a queued child cannot start provider work later", async () => {
       },
       fauxAssistantMessage("cancelled child must not reach this response"),
     ]);
-    const runtime = runtimeFrom(core.getModel() as Model<Api>, core.streamSimple, {
-      deployment: "local",
-    });
+    const runtime = runtimeFrom(
+      core.getModel() as Model<Api>,
+      core.streamSimple,
+      {
+        deployment: "local",
+      },
+    );
     const recordedConcurrency: number[] = [];
     const registry = new SubagentRuntimeRegistry({
-      started: (activeConcurrency) => recordedConcurrency.push(activeConcurrency),
+      started: (activeConcurrency) =>
+        recordedConcurrency.push(activeConcurrency),
       terminal: () => {},
       cleanupFailed: () => {},
     });
@@ -459,10 +1016,16 @@ test("cancelling a child before prompt prevents all provider work", async () => 
   });
   core.setResponses([fauxAssistantMessage("must not run")]);
   const registry = new SubagentRuntimeRegistry();
-  const cancelled = child(registry, runtimeFrom(core.getModel() as Model<Api>, core.streamSimple));
+  const cancelled = child(
+    registry,
+    runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+  );
   cancelled.cancel();
 
-  await assert.rejects(cancelled.prompt("Never start."), /Subagent task cancelled/);
+  await assert.rejects(
+    cancelled.prompt("Never start."),
+    /Subagent task cancelled/,
+  );
   assert.equal(core.state.callCount, 0);
   assert.equal(registry.activeCount, 0);
 });
@@ -559,11 +1122,17 @@ test("shutdown timeout preserves ownership until non-cooperative work actually s
     };
     const started = deferred();
     const release = deferred();
-    const streamSimple: ResolvedModelRuntime["streams"]["streamSimple"] = (requestModel) => {
+    const streamSimple: ResolvedModelRuntime["streams"]["streamSimple"] = (
+      requestModel,
+    ) => {
       const stream = createAssistantMessageEventStream();
       started.resolve();
       void release.promise.then(() => {
-        const completed = providerMessage(requestModel, "stop", "late completion");
+        const completed = providerMessage(
+          requestModel,
+          "stop",
+          "late completion",
+        );
         stream.push({ type: "done", reason: "stop", message: completed });
         stream.end(completed);
       });
@@ -581,15 +1150,24 @@ test("shutdown timeout preserves ownership until non-cooperative work actually s
     const prompt = runningChild.prompt("Ignore abort temporarily.");
     await started.promise;
 
-    assert.equal(registry.hasGenerationChildren("compatibility-generation"), true);
+    assert.equal(
+      registry.hasGenerationChildren("compatibility-generation"),
+      true,
+    );
     assert.equal(registry.hasChatChildren("compatibility-chat"), true);
-    assert.equal(registry.hasWorkspaceChildren("compatibility-workspace"), true);
+    assert.equal(
+      registry.hasWorkspaceChildren("compatibility-workspace"),
+      true,
+    );
     registry.abortWorkspace("another-workspace");
     assert.equal(runningChild.agent.state.isStreaming, true);
     registry.abortWorkspace("compatibility-workspace");
     registry.abortChat("compatibility-chat");
     assert.equal(registry.activeCount, 1);
-    assert.equal(registry.hasWorkspaceChildren("compatibility-workspace"), true);
+    assert.equal(
+      registry.hasWorkspaceChildren("compatibility-workspace"),
+      true,
+    );
 
     assert.equal(await registry.shutdown(10), false);
     assert.equal(cleanupFailures, 1);
@@ -603,7 +1181,10 @@ test("shutdown timeout preserves ownership until non-cooperative work actually s
 });
 
 test("main-process shutdown continues to application quit after the subagent deadline", async () => {
-  const source = await readFile(new URL("../../index.ts", import.meta.url), "utf-8");
+  const source = await readFile(
+    new URL("../../index.ts", import.meta.url),
+    "utf-8",
+  );
   const parentAbortStart = source.indexOf(
     "llmClient.abortAll();",
     source.indexOf("async function shutdownAndQuit"),
@@ -611,7 +1192,10 @@ test("main-process shutdown continues to application quit after the subagent dea
   const settlementStart = source.indexOf(
     "const subagentsSettled = await subagentRuntimeRegistry.shutdown();",
   );
-  const parentSettlementStart = source.indexOf("await llmClient.shutdown();", parentAbortStart);
+  const parentSettlementStart = source.indexOf(
+    "await llmClient.shutdown();",
+    parentAbortStart,
+  );
   const cleanupStart = source.indexOf("cleanupApplication();", settlementStart);
   const receiptFinalizationStart = source.indexOf(
     "await tryFinalizeSubagentPackagedSoakQuitReceipt(",
@@ -619,7 +1203,10 @@ test("main-process shutdown continues to application quit after the subagent dea
   );
   const forceQuitStart = source.indexOf("forceAppQuit = true;", cleanupStart);
   const appQuitStart = source.indexOf("app.quit();", forceQuitStart);
-  const failureExitStart = source.indexOf("app.exit(1);", receiptFinalizationStart);
+  const failureExitStart = source.indexOf(
+    "app.exit(1);",
+    receiptFinalizationStart,
+  );
 
   assert.ok(parentAbortStart >= 0);
   assert.ok(parentSettlementStart > parentAbortStart);
@@ -644,13 +1231,17 @@ test("main-process shutdown continues to application quit after the subagent dea
 });
 
 test("all shutdown paths abort parent generations before the child registry", async () => {
-  const source = await readFile(new URL("../../index.ts", import.meta.url), "utf-8");
+  const source = await readFile(
+    new URL("../../index.ts", import.meta.url),
+    "utf-8",
+  );
   const cleanupStart = source.indexOf("function cleanupApplication");
   const cleanupEnd = source.indexOf("\n}", cleanupStart);
   const cleanup = source.slice(cleanupStart, cleanupEnd);
 
   assert.ok(cleanup.indexOf("llmClient.abortAll()") >= 0);
   assert.ok(
-    cleanup.indexOf("subagentRuntimeRegistry.abortAll()") > cleanup.indexOf("llmClient.abortAll()"),
+    cleanup.indexOf("subagentRuntimeRegistry.abortAll()") >
+      cleanup.indexOf("llmClient.abortAll()"),
   );
 });

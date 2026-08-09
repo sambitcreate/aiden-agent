@@ -63,10 +63,14 @@ async function bootstrap(): Promise<void> {
   }
 
   const root = ReactDOM.createRoot(rootElement!);
+  const refreshAppCapabilities = async () => {
+    const appInfo = await appApi.getInfo();
+    return parseAppCapabilities(appInfo.capabilities);
+  };
   root.render(
     <React.StrictMode>
       <QueryClientProvider client={queryClient}>
-        <AppCapabilitiesProvider capabilities={appCapabilities}>
+        <AppCapabilitiesProvider capabilities={appCapabilities} refresh={refreshAppCapabilities}>
           <TooltipProvider>
             <RouterProvider router={router} />
           </TooltipProvider>

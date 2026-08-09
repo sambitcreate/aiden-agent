@@ -184,6 +184,14 @@ test("branding mutates and validates the complete cached app layout", async (t) 
     assert.equal(await plistValue(helperPlist, "CFBundleName"), helper.destinationName);
   }
 
+  assert.equal(
+    await plistValue(
+      path.join(appPath, "Contents", "Info.plist"),
+      "NSMicrophoneUsageDescription",
+    ),
+    "Aiden Agent uses the microphone only when you choose voice input or dictation.",
+  );
+
   await assert.rejects(
     validateMacDevRuntime(appPath, {
       inspectArchitectures: async () => ["arm64"],

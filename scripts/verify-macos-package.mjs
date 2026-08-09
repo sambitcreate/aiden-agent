@@ -66,7 +66,10 @@ const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
 );
 const WORKTREE_REMOVER_EXECUTABLE = "aiden-worktree-remover";
 const SUBAGENT_RUN_STORE_EXECUTABLE = "aiden-subagent-run-store";
+const SUBAGENT_FILE_MUTATOR_EXECUTABLE = "aiden-subagent-file-mutator";
+const SUBAGENT_SHELL_RUNNER_EXECUTABLE = "aiden-subagent-shell-runner";
 const REQUIRED_UNIVERSAL_ARCHITECTURES = Object.freeze(["arm64", "x86_64"]);
+const ELECTRON_HELPER_SUFFIXES = Object.freeze(["", " (GPU)", " (Plugin)", " (Renderer)"]);
 
 async function run(command, args) {
   return executeFile(command, args, {
@@ -214,9 +217,7 @@ export function assertExactUniversalArchitectures(architectureDisplay, target = 
   if (
     architectures.length !== REQUIRED_UNIVERSAL_ARCHITECTURES.length ||
     architectureSet.size !== REQUIRED_UNIVERSAL_ARCHITECTURES.length ||
-    REQUIRED_UNIVERSAL_ARCHITECTURES.some(
-      (architecture) => !architectureSet.has(architecture),
-    )
+    REQUIRED_UNIVERSAL_ARCHITECTURES.some((architecture) => !architectureSet.has(architecture))
   ) {
     throw new Error(
       `${target} must contain exactly the arm64 and x86_64 architectures: ${architectures.join(",") || "(none)"}`,
@@ -321,19 +322,47 @@ export function assertMinimalComputerUseEntitlements(entitlements) {
   }
 }
 
-export function assertElectronEntitlements(entitlements) {
-  const expected = [
-    "com.apple.security.automation.apple-events",
-    "com.apple.security.cs.allow-jit",
-    "com.apple.security.cs.allow-unsigned-executable-memory",
-    "com.apple.security.cs.disable-library-validation",
-  ].sort();
-  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1]).sort();
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      `Electron executable entitlements differ from the pinned runtime set: ${actual.join(", ")}`,
-    );
+function assertExactTrueEntitlements(entitlements, expectedKeys, description) {
+  const expected = [...expectedKeys].sort();
+  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)]
+    .map((match) => match[1])
+    .sort();
+  const enabled = [...entitlements.matchAll(/<key>([^<]+)<\/key>\s*<true\s*\/>/g)]
+    .map((match) => match[1])
+    .sort();
+  if (
+    JSON.stringify(actual) !== JSON.stringify(expected) ||
+    JSON.stringify(enabled) !== JSON.stringify(expected)
+  ) {
+    throw new Error(`${description}: ${actual.join(", ")}`);
   }
+}
+
+export function assertElectronEntitlements(entitlements) {
+  assertExactTrueEntitlements(
+    entitlements,
+    [
+      "com.apple.security.automation.apple-events",
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+      "com.apple.security.device.audio-input",
+    ],
+    "Electron executable entitlements differ from the pinned runtime set",
+  );
+}
+
+export function assertElectronHelperEntitlements(entitlements) {
+  assertExactTrueEntitlements(
+    entitlements,
+    [
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+      "com.apple.security.device.audio-input",
+    ],
+    "Electron helper entitlements differ from the pinned inherited set",
+  );
 }
 
 async function readInfoPlistValue(infoPlist, key) {
@@ -407,6 +436,29 @@ export async function verifyMacPackage(appPath) {
     "Helpers",
     SUBAGENT_RUN_STORE_EXECUTABLE,
   );
+  const subagentFileMutator = path.join(
+    paths.app,
+    "Contents",
+    "Helpers",
+    SUBAGENT_FILE_MUTATOR_EXECUTABLE,
+  );
+  const subagentShellRunner = path.join(
+    paths.app,
+    "Contents",
+    "Helpers",
+    SUBAGENT_SHELL_RUNNER_EXECUTABLE,
+  );
+  const electronHelpers = ELECTRON_HELPER_SUFFIXES.map((suffix) =>
+    path.join(
+      paths.app,
+      "Contents",
+      "Frameworks",
+      `Aiden Agent Helper${suffix}.app`,
+      "Contents",
+      "MacOS",
+      `Aiden Agent Helper${suffix}`,
+    ),
+  );
   for (const file of [
     paths.broker,
     paths.driver,
@@ -416,8 +468,11 @@ export async function verifyMacPackage(appPath) {
     paths.outerProvenance,
     paths.outerLicenseNotice,
     paths.electronExecutable,
+    ...electronHelpers,
     worktreeRemover,
     subagentRunStore,
+    subagentFileMutator,
+    subagentShellRunner,
     appAsar,
   ]) {
     await assertRegularFile(file);
@@ -428,6 +483,8 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
   assertComputerUseExecutableMode((await lstat(worktreeRemover)).mode, worktreeRemover);
   assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
+  assertComputerUseExecutableMode((await lstat(subagentFileMutator)).mode, subagentFileMutator);
+  assertComputerUseExecutableMode((await lstat(subagentShellRunner)).mode, subagentShellRunner);
   if (
     (await readInfoPlistValue(paths.helperInfoPlist, "CFBundleIdentifier")) !==
     AIDEN_COMPUTER_USE_BUNDLE_ID
@@ -473,6 +530,14 @@ export async function verifyMacPackage(appPath) {
     identifier: SUBAGENT_RUN_STORE_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
+  await verifySignature(subagentFileMutator, {
+    identifier: SUBAGENT_FILE_MUTATOR_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
+  await verifySignature(subagentShellRunner, {
+    identifier: SUBAGENT_SHELL_RUNNER_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
   const codeDisplays = new Map(
     await Promise.all(
       [
@@ -481,8 +546,11 @@ export async function verifyMacPackage(appPath) {
         paths.broker,
         paths.driver,
         paths.electronExecutable,
+        ...electronHelpers,
         worktreeRemover,
         subagentRunStore,
+        subagentFileMutator,
+        subagentShellRunner,
       ].map(async (target) => [target, await readCodeDisplay(target)]),
     ),
   );
@@ -498,6 +566,8 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseMachOMinimum(`${brokerBuild}\n${brokerBuildErrors}`);
   await verifyUniversalMacOSHelper(worktreeRemover, "Managed worktree remover");
   await verifyUniversalMacOSHelper(subagentRunStore, "Private subagent run store");
+  await verifyUniversalMacOSHelper(subagentFileMutator, "Subagent file mutator");
+  await verifyUniversalMacOSHelper(subagentShellRunner, "Subagent shell runner");
 
   const driverHash = await sha256(paths.driver);
   if (driverHash !== CUA_DRIVER_SHA256) {
@@ -514,7 +584,11 @@ export async function verifyMacPackage(appPath) {
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));
   assertMinimalComputerUseEntitlements(await readEntitlements(worktreeRemover));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
+  assertMinimalComputerUseEntitlements(await readEntitlements(subagentFileMutator));
   assertElectronEntitlements(await readEntitlements(paths.electronExecutable));
+  for (const electronHelper of electronHelpers) {
+    assertElectronHelperEntitlements(await readEntitlements(electronHelper));
+  }
   await verifyAidenFuses(paths.app);
   console.log(`Verified hardened macOS package: ${paths.app}`);
 }

@@ -98,7 +98,7 @@ jobs:
           set -euo pipefail
           test -n "$GH_TOKEN"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists; refusing to replace published update assets." >&2
+            echo "Release or draft $RELEASE_TAG already exists; refusing to replace update assets." >&2
             exit 1
           fi
           cd release/distribution
@@ -109,5 +109,9 @@ jobs:
             --title "Aiden Agent $RELEASE_VERSION" \
             --notes "Aiden Agent beta release. Changes since the previous release:" \
             --generate-notes \
-            --latest \
+            --draft \
             -- *.dmg *.zip latest-mac.yml SHA256SUMS
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest

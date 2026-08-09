@@ -19,6 +19,7 @@ import { secrets } from "./secrets.js";
 import { readRegularUtf8File } from "./regular-file-read.js";
 import { mutatePortableConfigAndSync } from "./portable-credential-snapshot.js";
 import type { McpServer } from "./types.js";
+import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 
 const FILE = "pending-mcp-credential-cleanup.json";
 let cleanupTail: Promise<void> = Promise.resolve();
@@ -251,6 +252,10 @@ export function reconcileExternalMcpCredentialChanges(
       const previousSnapshot = mcpCredentialConnectionSnapshot(before);
       const targetSnapshot = after ? mcpCredentialConnectionSnapshot(after) : null;
       const credentialChanged = !sameMcpCredentialConnection(previousSnapshot, targetSnapshot);
+      // The DataStore cache-publication hook invalidates before the new
+      // snapshot becomes visible. Repeat at reconciliation admission so a
+      // lease acquired during the publication/reconciliation gap is fenced.
+      mcpConfigurationLeases.invalidate(before.id);
       const release = suspendMcpOAuthOperations(before.id);
       try {
         await disconnect(before.id);

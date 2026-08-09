@@ -4,7 +4,15 @@ import test from "node:test";
 import { DOMImplementation } from "@xmldom/xmldom";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { SubagentMessageReferenceV1, SubagentRunSnapshotV1 } from "../shared/subagent-runs.js";
+import type {
+  SubagentMessageReferenceV1,
+  SubagentRunSnapshotV1,
+  SubagentRunSnapshotV2,
+} from "../shared/subagent-runs.js";
+import type {
+  SubagentMcpMutationApprovalDetails,
+  SubagentWorkspaceWriteApprovalDetails,
+} from "../shared/assistant.js";
 import { mergeSubagentSnapshots, type SubagentRunView } from "../lib/subagent-view-state.js";
 import {
   ENVIRONMENT_COMPACT_MODAL_FOCUSABLE_SELECTOR,
@@ -46,6 +54,13 @@ import {
   type SubagentDetailAnnouncementRequest,
 } from "./subagent-live-announcer.js";
 import { groupSubagentRuns, SubagentRoster } from "./subagent-roster.js";
+import { SubagentDetail } from "./subagent-detail.js";
+import { SubagentsPanel } from "./subagents-panel.js";
+import { SubagentWorkspaceWriteApproval } from "./subagent-workspace-write-approval.js";
+import {
+  SubagentMcpMutationApproval,
+  subagentMcpMutationAllowLabel,
+} from "./subagent-mcp-mutation-approval.js";
 
 function run(runId: string, extra: Partial<SubagentRunSnapshotV1> = {}): SubagentRunSnapshotV1 {
   return {
@@ -73,6 +88,18 @@ function run(runId: string, extra: Partial<SubagentRunSnapshotV1> = {}): Subagen
   };
 }
 
+function v2Run(extra: Partial<SubagentRunSnapshotV2> = {}): SubagentRunSnapshotV2 {
+  return {
+    ...run("v2-run"),
+    version: 2,
+    depth: 1,
+    execution: "foreground",
+    context: "fresh",
+    authorityRevision: 3,
+    ...extra,
+  };
+}
+
 function reference(runIds: string[]): SubagentMessageReferenceV1 {
   return {
     version: 1,
@@ -86,7 +113,7 @@ function reference(runIds: string[]): SubagentMessageReferenceV1 {
   };
 }
 
-function view(snapshot: SubagentRunSnapshotV1): SubagentRunView {
+function view(snapshot: SubagentRunSnapshotV1 | SubagentRunSnapshotV2): SubagentRunView {
   return {
     runId: snapshot.runId,
     generationId: snapshot.generationId,
@@ -132,11 +159,18 @@ function installMountedDom(): MountedDom {
   body.appendChild(outside);
   document.documentElement.appendChild(body);
 
-  const elementPrototype = Object.getPrototypeOf(
-    document.createElement("div"),
-  ) as HTMLElement & Record<string, unknown>;
+  const elementPrototype = Object.getPrototypeOf(document.createElement("div")) as HTMLElement &
+    Record<string, unknown>;
   elementPrototype.addEventListener = () => undefined;
   elementPrototype.removeEventListener = () => undefined;
+  elementPrototype.getContext = () =>
+    new Proxy(
+      {},
+      {
+        get: () => () => undefined,
+        set: () => true,
+      },
+    );
   if (!elementPrototype.contains) {
     elementPrototype.contains = function contains(target: Node | null) {
       let current = target;
@@ -158,18 +192,13 @@ function installMountedDom(): MountedDom {
           element.hasAttribute("data-subagent-run-id") &&
           element.getAttribute("aria-current") === "true"
         );
-      return (
-        selector === "[data-subagent-run-id]" &&
-        element.hasAttribute("data-subagent-run-id")
-      );
+      return selector === "[data-subagent-run-id]" && element.hasAttribute("data-subagent-run-id");
     };
     const queue = this.childNodes ? Array.from(this.childNodes) : [];
     while (queue.length > 0) {
       const candidate = queue.shift();
-      if (candidate?.nodeType === 1 && matches(candidate as Element))
-        return candidate;
-      if (candidate?.childNodes)
-        queue.push(...Array.from(candidate.childNodes));
+      if (candidate?.nodeType === 1 && matches(candidate as Element)) return candidate;
+      if (candidate?.childNodes) queue.push(...Array.from(candidate.childNodes));
     }
     return null;
   };
@@ -199,9 +228,7 @@ function installMountedDom(): MountedDom {
     get() {
       return {
         subagentRunId:
-          (this as unknown as Element).getAttribute(
-            "data-subagent-run-id",
-          ) ?? undefined,
+          (this as unknown as Element).getAttribute("data-subagent-run-id") ?? undefined,
       };
     },
   });
@@ -226,6 +253,15 @@ function installMountedDom(): MountedDom {
     removeEventListener: () => undefined,
     setTimeout,
     clearTimeout,
+    setInterval,
+    clearInterval,
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => undefined,
+    matchMedia: () => ({
+      matches: true,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }),
   };
   Object.defineProperty(document, "defaultView", {
     configurable: true,
@@ -238,12 +274,14 @@ function installMountedDom(): MountedDom {
     "Node",
     "Element",
     "HTMLElement",
+    "matchMedia",
+    "requestAnimationFrame",
+    "cancelAnimationFrame",
   ] as const;
   const previous = new Map<PropertyKey, PropertyDescriptor | undefined>(
     globals.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
   );
-  const elementConstructor = Object.getPrototypeOf(document.documentElement)
-    .constructor;
+  const elementConstructor = Object.getPrototypeOf(document.documentElement).constructor;
   Object.defineProperties(globalThis, {
     window: { configurable: true, value: window },
     document: { configurable: true, value: document },
@@ -254,6 +292,9 @@ function installMountedDom(): MountedDom {
     Node: { configurable: true, value: elementConstructor },
     Element: { configurable: true, value: elementConstructor },
     HTMLElement: { configurable: true, value: elementConstructor },
+    matchMedia: { configurable: true, value: window.matchMedia },
+    requestAnimationFrame: { configurable: true, value: window.requestAnimationFrame },
+    cancelAnimationFrame: { configurable: true, value: window.cancelAnimationFrame },
   });
 
   return {
@@ -270,10 +311,7 @@ function installMountedDom(): MountedDom {
   };
 }
 
-function mountedElementsWithAttribute(
-  document: Document,
-  attribute: string,
-): HTMLElement[] {
+function mountedElementsWithAttribute(document: Document, attribute: string): HTMLElement[] {
   return Array.from(document.getElementsByTagName("*")).filter(
     (element): element is HTMLElement =>
       element instanceof HTMLElement && element.hasAttribute(attribute),
@@ -296,9 +334,7 @@ function MountedSelectionRepairHarness({
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const restoreRunIdRef = React.useRef<string | null>(requestedRunId);
   const previousCompactRef = React.useRef(compact);
-  const selectedRunId = runIds.includes(requestedRunId)
-    ? requestedRunId
-    : (runIds[0] ?? null);
+  const selectedRunId = runIds.includes(requestedRunId) ? requestedRunId : (runIds[0] ?? null);
   useSubagentSelectionRestoreRunRepair(
     restoreRunIdRef,
     selectedRunId,
@@ -309,13 +345,12 @@ function MountedSelectionRepairHarness({
     const breakpointChanged = previousCompactRef.current !== compact;
     previousCompactRef.current = compact;
     const returningFromDetail = compact && compactView === "roster";
-    const breakpointReturnsToRoster =
-      breakpointChanged && focusedSurface === "back";
+    const breakpointReturnsToRoster = breakpointChanged && focusedSurface === "back";
     if (!returningFromDetail && !breakpointReturnsToRoster) return;
     focusSubagentRosterRun(
-      Array.from(
-        rootRef.current?.getElementsByTagName("button") ?? [],
-      ).filter((button) => button.hasAttribute("data-subagent-run-id")),
+      Array.from(rootRef.current?.getElementsByTagName("button") ?? []).filter((button) =>
+        button.hasAttribute("data-subagent-run-id"),
+      ),
       restoreRunIdRef.current,
     );
   }, [compact, compactView, focusedSurface, runIds]);
@@ -430,8 +465,230 @@ test("streaming chips render ordered live snapshots before a message reference e
   );
 
   assert.match(markup, /aria-label="2 subagents"/u);
+  assert.match(markup, /role="group"/u);
   assert.ok(markup.indexOf("First scout") < markup.indexOf("Second scout"));
   assert.equal(renderToStaticMarkup(<SubagentChips runs={[]} onOpen={() => undefined} />), "");
+});
+
+test("V2 detail exposes context but gates controls on production callbacks", () => {
+  const fresh = v2Run();
+  const unavailable = renderToStaticMarkup(<SubagentDetail run={fresh} />);
+  assert.match(unavailable, /Fresh context/u);
+  assert.doesNotMatch(unavailable, /data-subagent-controls/u);
+
+  const stoppable = renderToStaticMarkup(<SubagentDetail run={fresh} onStop={() => undefined} />);
+  assert.match(stoppable, /data-subagent-controls="true"/u);
+  assert.match(stoppable, /aria-label="Stop subtree Code scout"/u);
+  assert.doesNotMatch(stoppable, /aria-label="Retry Code scout"/u);
+
+  const forked = v2Run({
+    state: "completed",
+    context: "fork",
+    activity: undefined,
+    finishedAt: 2_000,
+    terminalMarkdown: "Done.",
+  });
+  const retryable = renderToStaticMarkup(<SubagentDetail run={forked} />);
+  assert.match(retryable, /Forked conversation/u);
+  assert.doesNotMatch(retryable, /aria-label="Retry Code scout"/u);
+
+  const legacy = renderToStaticMarkup(
+    <SubagentDetail run={run("legacy")} onStop={() => undefined} />,
+  );
+  assert.doesNotMatch(legacy, /data-subagent-context/u);
+  assert.doesNotMatch(legacy, /data-subagent-controls/u);
+});
+
+test("detail renders bounded effect kind, state, and explicit unknown guidance", () => {
+  const html = renderToStaticMarkup(
+    <SubagentDetail
+      run={v2Run()}
+      effectActivity={[
+        {
+          version: 1,
+          kind: "mcp_mutation",
+          state: "unknown",
+          label: "Remote change outcome unknown. Check the remote system before retrying.",
+          updatedAt: 2_100,
+        },
+      ]}
+    />,
+  );
+  assert.match(html, /External effects/u);
+  assert.match(html, /data-subagent-effect-kind="mcp_mutation"/u);
+  assert.match(html, /data-subagent-effect-state="unknown"/u);
+  assert.match(html, /Check the remote system before retrying/u);
+  assert.match(html, /State: unknown/u);
+  assert.doesNotMatch(html, /terminalDigest|authorityDigest|argumentDigest/u);
+});
+
+test("workspace-write approvals render exact bounded safety facts and stay wired to deny-first controls", () => {
+  const details: SubagentWorkspaceWriteApprovalDetails = {
+    kind: "subagent-workspace-write",
+    operation: "edit",
+    childLabel: "Correct parser",
+    path: "renderer/shared/assistant.ts",
+    workspaceLabel: "Aiden",
+    worktreeLabel: "feature/approval-ui",
+    isManagedWorktree: true,
+    preDigestPrefix: "0123456789ab",
+    postDigestPrefix: "abcdef012345",
+    beforeBytes: 1_024,
+    afterBytes: 2_048,
+    diffPreview: "- old parser\n+ strict parser",
+    diffTruncated: true,
+    commandWillRun: false,
+    refuseIfChanged: true,
+  };
+  const markup = renderToStaticMarkup(
+    <SubagentWorkspaceWriteApproval details={details} descriptionId="approval-description" />,
+  );
+
+  assert.match(markup, /data-subagent-write-approval="true"/u);
+  assert.match(markup, /id="approval-description"/u);
+  assert.match(markup, />Edit file</u);
+  assert.match(markup, /renderer\/shared\/assistant\.ts/u);
+  assert.match(markup, />Aiden</u);
+  assert.match(markup, />feature\/approval-ui</u);
+  assert.match(markup, /0123456789ab · 1\.0 KB/u);
+  assert.match(markup, /abcdef012345 · 2\.0 KB/u);
+  assert.match(markup, /Change preview · truncated/u);
+  assert.match(markup, /- old parser[\s\S]*\+ strict parser/u);
+  assert.match(markup, /No command will run\./u);
+  assert.match(markup, /refuse this change if the workspace or file has drifted/u);
+
+  const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
+  const approvalCard = chatPaneSource.slice(
+    chatPaneSource.indexOf("present={Boolean(pending)}"),
+    chatPaneSource.indexOf("<Composer", chatPaneSource.indexOf("present={Boolean(pending)}")),
+  );
+  assert.match(chatPaneSource, /isSubagentWorkspaceWriteApprovalDetails\(pending\.details\)/u);
+  assert.match(chatPaneSource, /pendingWorkspaceWriteClaim/u);
+  assert.match(chatPaneSource, /Invalid privileged approval blocked/u);
+  assert.match(chatPaneSource, /invalidPendingPrivilegedApproval \? null/u);
+  assert.match(chatPaneSource, /decidingApprovalRef\.current/u);
+  assert.match(chatPaneSource, /if \(decidingApprovalRef\.current\) return/u);
+  assert.match(approvalCard, /SubagentWorkspaceWriteApproval/u);
+  assert.ok(
+    approvalCard.indexOf("ref={approvalDenyRef}") < approvalCard.indexOf("Allow once"),
+    "Deny remains the first and default-focused approval action",
+  );
+  assert.doesNotMatch(approvalCard, /Always allow|Allow all/u);
+});
+
+test("mutation approvals expose fixed risk copy, prior-unknown semantics, and deny-first controls", () => {
+  const details: SubagentMcpMutationApprovalDetails = {
+    kind: "subagent-mcp-mutation",
+    childLabel: "Publisher",
+    serverId: "docs",
+    toolName: "publish",
+    connectionDigestPrefix: "aaaaaaaaaaaa",
+    schemaDigestPrefix: "bbbbbbbbbbbb",
+    profileDigestPrefix: "cccccccccccc",
+    argumentDigestPrefix: "dddddddddddd",
+    classification: "unproven_mutating",
+    destructive: "unknown",
+    idempotency: "not_declared",
+    openWorld: "unknown",
+    taskSupport: "optional",
+    timeoutMs: 30_000,
+    canonicalArguments: '{"title":"Launch"}',
+    priorUnknownEffect: true,
+    automaticRetry: false,
+    rollbackAvailable: false,
+  };
+  const markup = renderToStaticMarkup(
+    <SubagentMcpMutationApproval details={details} descriptionId="mutation-approval-description" />,
+  );
+  assert.match(markup, /data-subagent-mcp-mutation-approval="true"/u);
+  assert.match(markup, /Complete canonical MCP mutation arguments/u);
+  assert.match(markup, /Mutation cannot be ruled out/u);
+  assert.match(markup, /configured server controls the effect/u);
+  assert.match(markup, /Data outside Aiden may change/u);
+  assert.match(markup, /Rollback is unavailable/u);
+  assert.match(markup, /outcome unknown/u);
+  assert.match(markup, /Automatic retry is disabled/u);
+  assert.match(markup, /prior call to this target has an unknown outcome/u);
+  assert.equal(subagentMcpMutationAllowLabel(details), "Allow once after unknown outcome");
+
+  const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
+  const approvalCard = chatPaneSource.slice(
+    chatPaneSource.indexOf("present={Boolean(pending)}"),
+    chatPaneSource.indexOf("<Composer", chatPaneSource.indexOf("present={Boolean(pending)}")),
+  );
+  assert.match(chatPaneSource, /isSubagentMcpMutationApprovalDetails\(pending\.details\)/u);
+  assert.match(chatPaneSource, /invalidPendingMcpMutation/u);
+  assert.match(approvalCard, /SubagentMcpMutationApproval/u);
+  assert.ok(
+    approvalCard.indexOf("ref={approvalDenyRef}") <
+      approvalCard.indexOf("subagentMcpMutationAllowLabel"),
+    "Deny remains first and receives initial focus for mutation approvals",
+  );
+});
+
+test("mounted mutation approval exposes VoiceOver relationships and starts focus on Deny", async () => {
+  const release = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(mounted.container);
+  const details: SubagentMcpMutationApprovalDetails = {
+    kind: "subagent-mcp-mutation",
+    childLabel: "Publisher",
+    serverId: "docs",
+    toolName: "publish",
+    connectionDigestPrefix: "aaaaaaaaaaaa",
+    schemaDigestPrefix: "bbbbbbbbbbbb",
+    profileDigestPrefix: "cccccccccccc",
+    argumentDigestPrefix: "dddddddddddd",
+    classification: "declared_mutating",
+    destructive: "destructive",
+    idempotency: "not_declared",
+    openWorld: "open",
+    taskSupport: "forbidden",
+    timeoutMs: 30_000,
+    canonicalArguments: '{"title":"Launch"}',
+    priorUnknownEffect: false,
+    automaticRetry: false,
+    rollbackAvailable: false,
+  };
+
+  function Harness() {
+    const denyRef = React.useRef<HTMLButtonElement | null>(null);
+    React.useLayoutEffect(() => denyRef.current?.focus(), []);
+    return (
+      <section aria-labelledby="mutation-title" aria-describedby="mutation-description">
+        <p id="mutation-title">Publisher wants to call docs:publish</p>
+        <SubagentMcpMutationApproval details={details} descriptionId="mutation-description" />
+        <button ref={denyRef} type="button">
+          Deny
+        </button>
+        <button type="button" aria-label="Allow docs publish once">
+          Allow once
+        </button>
+      </section>
+    );
+  }
+
+  try {
+    flushSync(() => root.render(<Harness />));
+    const section = mounted.container.getElementsByTagName("section")[0] as HTMLElement;
+    const buttons = Array.from(mounted.container.getElementsByTagName("button"));
+    const argumentRegion = mounted.container.getElementsByTagName("pre")[0] as HTMLElement;
+    assert.equal(section.getAttribute("aria-labelledby"), "mutation-title");
+    assert.equal(section.getAttribute("aria-describedby"), "mutation-description");
+    assert.equal(
+      argumentRegion.getAttribute("aria-label"),
+      "Complete canonical MCP mutation arguments",
+    );
+    assert.equal(buttons[0]?.textContent, "Deny");
+    assert.equal(mounted.document.activeElement, buttons[0]);
+    assert.equal(buttons[1]?.getAttribute("aria-label"), "Allow docs publish once");
+  } finally {
+    flushSync(() => root.unmount());
+    mounted.restore();
+    release();
+  }
 });
 
 test("subagents reuse Aiden's activity orb states and freeze terminal motion", () => {
@@ -487,16 +744,144 @@ test("the roster separates active and terminal runs without color-only status", 
   );
   assert.match(markup, />Active · 1</u);
   assert.match(markup, />Done · 1</u);
-  assert.match(markup, /aria-label="Code scout, scout, Working"/u);
+  assert.match(markup, /aria-label="Code scout, scout, Active"/u);
   assert.match(markup, /aria-label="Final reviewer, reviewer, Finished"/u);
   assert.match(markup, /aria-current="true"/u);
 
   const rosterSource = readFileSync(new URL("./subagent-roster.tsx", import.meta.url), "utf8");
-  assert.ok(
-    rosterSource.indexOf("const headingId = React.useId();") <
-      rosterSource.indexOf("if (runs.length === 0) return null;"),
-    "RosterGroup must call hooks before its empty-state return.",
+  assert.match(rosterSource, /role="tree"/u);
+  assert.match(rosterSource, /role="treeitem"/u);
+  assert.match(rosterSource, /aria-level=\{node\.level\}/u);
+  assert.match(rosterSource, /aria-posinset=\{node\.position\}/u);
+  assert.match(rosterSource, /aria-setsize=\{node\.setSize\}/u);
+  assert.match(rosterSource, /treeRef\.current\?\.querySelector/u);
+  assert.doesNotMatch(rosterSource, /document\.querySelector/u);
+});
+
+test("the roster renders strict V2 nesting as an expanded semantic tree with roving focus", () => {
+  const parent = v2Run({
+    runId: "parent",
+    childId: "child-parent",
+    label: "Parent planner",
+    role: "planner",
+    state: "completed",
+    finishedAt: 3_000,
+  });
+  const child = v2Run({
+    runId: "nested",
+    childId: "child-nested",
+    groupId: "parent:nested-1",
+    label: "Nested scout",
+    parentRunId: "parent",
+    depth: 2,
+    state: "running",
+    activity: "Inspecting nested evidence",
+    finishedAt: undefined,
+  });
+  const markup = renderToStaticMarkup(
+    <SubagentRoster
+      runs={[view(parent), view(child)]}
+      selectedRunId="nested"
+      onSelect={() => undefined}
+    />,
   );
+  assert.match(markup, /role="tree"/u);
+  assert.match(markup, /role="treeitem" aria-level="1"[^>]*data-subagent-treeitem="parent"/u);
+  assert.match(markup, /role="treeitem" aria-level="2"[^>]*data-subagent-treeitem="nested"/u);
+  assert.match(markup, /aria-expanded="true"/u);
+  assert.match(markup, /role="group" aria-label="Children of Parent planner"/u);
+  assert.match(markup, /Parent planner, planner, Active/u);
+  assert.match(markup, /data-subagent-run-id="nested" tabindex="0"/u);
+  assert.match(markup, /data-subagent-run-id="parent" tabindex="-1"/u);
+});
+
+test("depth-2 stop is node-only while depth-1 stop is explicitly cascading", () => {
+  const nested = v2Run({
+    runId: "nested",
+    childId: "child-nested",
+    parentRunId: "parent",
+    depth: 2,
+  });
+  const rootMarkup = renderToStaticMarkup(<SubagentDetail run={v2Run()} onStop={() => undefined} />);
+  const nestedMarkup = renderToStaticMarkup(<SubagentDetail run={nested} onStop={() => undefined} />);
+  assert.match(rootMarkup, /aria-label="Stop subtree Code scout"/u);
+  assert.match(nestedMarkup, /aria-label="Stop subagent Code scout"/u);
+  assert.doesNotMatch(rootMarkup + nestedMarkup, /aria-label="Retry Code scout"/u);
+});
+
+test("mounted narrow tree keeps the selected semantic treeitem focused across live revisions", async () => {
+  const releaseMountedDomTest = await acquireMountedDomTest();
+  const mounted = installMountedDom();
+  const { createRoot } = await import("react-dom/client");
+  const { flushSync } = await import("react-dom");
+  const root = createRoot(mounted.container);
+  const snapshots = (revision: number) => {
+    const parent = v2Run({
+      runId: "mounted-parent",
+      childId: "child-mounted-parent",
+      label: "Mounted parent",
+      state: "completed",
+      finishedAt: 3_000,
+      revision,
+    });
+    const child = v2Run({
+      runId: "mounted-child",
+      childId: "child-mounted-child",
+      groupId: "mounted-parent:nested-1",
+      label: "Mounted child",
+      parentRunId: "mounted-parent",
+      depth: 2,
+      state: "running",
+      finishedAt: undefined,
+      revision,
+    });
+    return [view(parent), view(child)];
+  };
+  const render = (revision: number) =>
+    flushSync(() => {
+      root.render(
+        <SubagentsPanel
+          chatId="chat-1"
+          workspaceId="workspace-1"
+          runs={snapshots(revision)}
+          selectedRunId="mounted-child"
+          compact
+        />,
+      );
+    });
+
+  try {
+    render(1);
+    const panel = Array.from(mounted.container.getElementsByTagName("div")).find(
+      (element) => element.getAttribute("data-subagents-layout") === "compact",
+    );
+    assert.ok(panel, "compact panel mounts inside the owner focus boundary");
+    const tree = Array.from(mounted.container.getElementsByTagName("div")).find(
+      (element) => element.getAttribute("role") === "tree",
+    );
+    assert.equal(tree?.getAttribute("aria-label"), "Subagent run hierarchy");
+    const treeitems = Array.from(mounted.container.getElementsByTagName("button")).filter(
+      (element) => element.getAttribute("role") === "treeitem",
+    ) as HTMLElement[];
+    assert.equal(treeitems.length, 2);
+    assert.deepEqual(treeitems.map((element) => element.getAttribute("aria-level")), ["1", "2"]);
+    const child = treeitems.find(
+      (element) => element.getAttribute("data-subagent-run-id") === "mounted-child",
+    )!;
+    assert.equal(child.getAttribute("tabindex"), "0");
+    child.focus();
+    render(2);
+    assert.equal(
+      mounted.document.activeElement?.getAttribute("data-subagent-run-id"),
+      "mounted-child",
+      "a live revision preserves the selected treeitem node and focus",
+    );
+  } finally {
+    flushSync(() => root.unmount());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    mounted.restore();
+    releaseMountedDomTest();
+  }
 });
 
 test("saved detail revisits stay loading until a request succeeds or fails", () => {
@@ -657,11 +1042,7 @@ test("a promoted selected detail remains loaded during persistence handoff", () 
   };
 
   assert.equal(
-    subagentDetailPresentation(
-      promoted.runId === "saved",
-      promoted.snapshot !== undefined,
-      false,
-    ),
+    subagentDetailPresentation(promoted.runId === "saved", promoted.snapshot !== undefined, false),
     "loaded",
   );
 });
@@ -721,18 +1102,9 @@ test("terminal live summaries name success, failure, timeout, interruption, and 
     subagentSnapshotLiveSummary([completed]),
     "0 active subagents; 1 completed successfully.",
   );
-  assert.equal(
-    subagentSnapshotLiveSummary([failed]),
-    "0 active subagents; 1 failed.",
-  );
-  assert.equal(
-    subagentSnapshotLiveSummary([timedOut]),
-    "0 active subagents; 1 timed out.",
-  );
-  assert.equal(
-    subagentSnapshotLiveSummary([interrupted]),
-    "0 active subagents; 1 interrupted.",
-  );
+  assert.equal(subagentSnapshotLiveSummary([failed]), "0 active subagents; 1 failed.");
+  assert.equal(subagentSnapshotLiveSummary([timedOut]), "0 active subagents; 1 timed out.");
+  assert.equal(subagentSnapshotLiveSummary([interrupted]), "0 active subagents; 1 interrupted.");
   const mixed = subagentSnapshotLiveSummary([completed, failed, timedOut, interrupted]);
   assert.equal(
     mixed,
@@ -1011,9 +1383,7 @@ test("mounted compact selection repair restores Back and breakpoint focus to the
 
   try {
     renderHarness(["A", "B"], true, "detail", "detail");
-    const detail = mounted.container.querySelector(
-      "[data-subagent-detail-heading]",
-    ) as HTMLElement;
+    const detail = mounted.container.querySelector("[data-subagent-detail-heading]") as HTMLElement;
     detail.focus();
 
     renderHarness(["B"], true, "detail", "detail");
@@ -1030,9 +1400,9 @@ test("mounted compact selection repair restores Back and breakpoint focus to the
     );
 
     renderHarness(["A", "B"], true, "detail", "back");
-    const back = Array.from(
-      mounted.container.getElementsByTagName("button"),
-    ).find((button) => button.hasAttribute("data-subagent-back")) as HTMLElement;
+    const back = Array.from(mounted.container.getElementsByTagName("button")).find((button) =>
+      button.hasAttribute("data-subagent-back"),
+    ) as HTMLElement;
     back.focus();
     renderHarness(["B"], false, "detail", "back");
     assert.equal(
@@ -1185,10 +1555,7 @@ test("mounted live announcer stays singular and active in compact and inline sur
     renderHarness(true, null);
     await new Promise((resolve) => setTimeout(resolve, 150));
     flushSync(() => undefined);
-    let regions = mountedElementsWithAttribute(
-      mounted.document,
-      "data-subagent-live-announcer",
-    );
+    let regions = mountedElementsWithAttribute(mounted.document, "data-subagent-live-announcer");
     assert.equal(regions.length, 1);
     let ancestor: HTMLElement | null = regions[0];
     let modalAncestor: HTMLElement | null = null;
@@ -1196,16 +1563,10 @@ test("mounted live announcer stays singular and active in compact and inline sur
       assert.notEqual(ancestor.getAttribute("aria-hidden"), "true");
       assert.equal(ancestor.hasAttribute("inert"), false);
       if (ancestor.getAttribute("role") === "dialog") modalAncestor = ancestor;
-      ancestor =
-        ancestor.parentNode instanceof HTMLElement
-          ? ancestor.parentNode
-          : null;
+      ancestor = ancestor.parentNode instanceof HTMLElement ? ancestor.parentNode : null;
     }
     assert.ok(modalAncestor, "the sole compact region is inside the active modal subtree");
-    assert.match(
-      regions[0].textContent ?? "",
-      /0 active subagents; 1 completed successfully\./u,
-    );
+    assert.match(regions[0].textContent ?? "", /0 active subagents; 1 completed successfully\./u);
 
     renderHarness(true, {
       id: 1,
@@ -1214,15 +1575,9 @@ test("mounted live announcer stays singular and active in compact and inline sur
     });
     await new Promise((resolve) => setTimeout(resolve, 150));
     flushSync(() => undefined);
-    regions = mountedElementsWithAttribute(
-      mounted.document,
-      "data-subagent-live-announcer",
-    );
+    regions = mountedElementsWithAttribute(mounted.document, "data-subagent-live-announcer");
     assert.equal(regions.length, 1);
-    assert.equal(
-      regions[0].textContent,
-      "Saved activity loaded for Code scout. Review complete.",
-    );
+    assert.equal(regions[0].textContent, "Saved activity loaded for Code scout. Review complete.");
 
     renderHarness(false, {
       id: 2,
@@ -1231,20 +1586,14 @@ test("mounted live announcer stays singular and active in compact and inline sur
     });
     await new Promise((resolve) => setTimeout(resolve, 150));
     flushSync(() => undefined);
-    regions = mountedElementsWithAttribute(
-      mounted.document,
-      "data-subagent-live-announcer",
-    );
+    regions = mountedElementsWithAttribute(mounted.document, "data-subagent-live-announcer");
     assert.equal(regions.length, 1);
     assert.ok(
       regions[0].parentNode instanceof HTMLElement &&
         regions[0].parentNode.hasAttribute("data-environment-inline"),
       "the same region moves into the active inline Environment subtree",
     );
-    assert.equal(
-      regions[0].textContent,
-      "Loading saved activity for Code scout.",
-    );
+    assert.equal(regions[0].textContent, "Loading saved activity for Code scout.");
   } finally {
     flushSync(() => root.unmount());
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1277,20 +1626,12 @@ test("mounted owner replacement recovers focused detail without stealing outside
                 No subagents yet
               </h2>
             ) : destination === "compact" ? (
-              <button
-                type="button"
-                data-subagent-run-id="compact-run"
-                aria-current="true"
-              >
+              <button type="button" data-subagent-run-id="compact-run" aria-current="true">
                 Compact run
               </button>
             ) : destination === "wide" ? (
               <>
-                <button
-                  type="button"
-                  data-subagent-run-id="wide-run"
-                  aria-current="true"
-                >
+                <button type="button" data-subagent-run-id="wide-run" aria-current="true">
                   Wide run
                 </button>
                 <h2 tabIndex={-1} data-subagent-detail-heading="true">
@@ -1390,14 +1731,18 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(detailSource, /data-subagent-detail-heading="true"/u);
   assert.match(detailSource, /subagentMilestoneAggregate\(run\)/u);
   assert.match(detailSource, /run\.milestones\.map/u);
+  assert.match(detailSource, /Model:/u);
+  assert.match(detailSource, /run\.modelId/u);
   assert.match(detailSource, /Tool arguments, results, commands, and paths stay/u);
 
   assert.match(panelSource, /chatId: string \| null/u);
   assert.match(panelSource, /workspaceId: string \| null/u);
-  assert.match(panelSource, /selectedRunSnapshot\?: SubagentRunSnapshotV1 \| null/u);
+  assert.match(panelSource, /selectedRunSnapshot\?: SubagentRunSnapshot \| null/u);
   assert.match(panelSource, /detailLoading\?: boolean/u);
   assert.match(panelSource, /detailError\?: string \| null/u);
   assert.match(panelSource, /onRetryDetail\?: \(runId: string\) => void/u);
+  assert.match(panelSource, /onStopRun\?: \(run: SubagentRunSnapshot\)/u);
+  assert.doesNotMatch(panelSource, /onRetryRun\?: \(run: SubagentRunSnapshot\)/u);
   assert.match(
     panelSource,
     /onDetailAnnouncement\?: \(ownerKey: string, message: string\) => void/u,
@@ -1432,10 +1777,7 @@ test("detail and panel preserve bounded rendering and navigation contracts", () 
   assert.match(panelSource, /<SubagentOwnerFocusBoundary/u);
   assert.match(panelSource, /<OwnedSubagentsPanel key=\{ownerKey\}/u);
   assert.match(panelSource, /data-subagent-empty-heading="true"/u);
-  assert.match(
-    panelSource,
-    /ownerReplacementFallbackFocusTarget\?: \(\) => HTMLElement \| null/u,
-  );
+  assert.match(panelSource, /ownerReplacementFallbackFocusTarget\?: \(\) => HTMLElement \| null/u);
   assert.doesNotMatch(panelSource, /initialCompactView/u);
   assert.match(
     panelSource,

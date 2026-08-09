@@ -10,10 +10,15 @@ import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { logger } from "../platform.js";
 import { oauthProviderFor } from "./mcp-oauth.js";
-import { assertMcpPresetServer, createNoRedirectFetch, presetSecretId } from "./mcp-presets.js";
+import {
+  assertMcpPresetServer,
+  createNoRedirectFetch,
+  presetSecretId,
+} from "./mcp-presets.js";
 import { secrets } from "./secrets.js";
 import type { McpServer } from "./types.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
+import { configStore } from "./config-store.js";
 import {
   mcpCredentialConnectionSnapshot,
   mcpRuntimeConnectionSnapshot,
@@ -26,7 +31,25 @@ import {
   GenerationBoundConnectionAttempts,
   GenerationBoundConnectionCache,
 } from "./generation-bound-connection-cache.js";
-import { assertUniqueMcpAgentToolNames, mcpAgentToolName } from "./mcp-tool-identity.js";
+import {
+  assertUniqueMcpAgentToolNames,
+  mcpAgentToolName,
+} from "./mcp-tool-identity.js";
+import {
+  withIsolatedSubagentMcpClientCore,
+  type IsolatedSubagentMcpSdkClient,
+} from "./subagents/subagent-mcp-client-core.js";
+import { createBoundedSubagentMcpFetch } from "./subagents/subagent-mcp-bounded-fetch.js";
+import { resolveProductionSubagentMcpCredentialBoundary } from "./subagents/subagent-mcp-credential-production.js";
+import {
+  createSubagentMcpOAuthTokenObserver,
+  type SubagentMcpCredentialRedactor,
+} from "./subagents/subagent-mcp-credential-core.js";
+import type {
+  SubagentMcpClientPort,
+  SubagentMcpReadHost,
+} from "./subagents/subagent-mcp-read.js";
+import { mcpConfigurationLeases } from "./mcp-config-lease.js";
 
 interface Transport {
   close?: () => Promise<void>;
@@ -41,7 +64,8 @@ async function resolveAuth(
   server: McpServer,
   isCurrent: () => boolean = () => true,
 ): Promise<McpServer> {
-  if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+  if (!isCurrent())
+    throw new Error("The renderer document is no longer active.");
   const preset = assertMcpPresetServer(server);
   if (!preset || preset.auth.kind !== "apiKey") return server;
   await reconcilePendingMcpCredentialCleanup();
@@ -49,39 +73,72 @@ async function resolveAuth(
     presetSecretId(server.id),
     JSON.stringify(mcpCredentialConnectionSnapshot(server)),
   );
-  if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-  if (!key) throw new Error(`${preset.name} needs an API key — add one in Settings → MCP Servers.`);
-  return { ...server, headers: { ...server.headers, [preset.auth.headerName]: key } };
+  if (!isCurrent())
+    throw new Error("The renderer document is no longer active.");
+  if (!key)
+    throw new Error(
+      `${preset.name} needs an API key — add one in Settings → MCP Servers.`,
+    );
+  return {
+    ...server,
+    headers: { ...server.headers, [preset.auth.headerName]: key },
+  };
 }
 
-function makeTransport(server: McpServer, isCurrent: () => boolean = () => true): Transport {
+function makeTransport(
+  server: McpServer,
+  isCurrent: () => boolean = () => true,
+  options: {
+    forceNoRedirect?: boolean;
+    registerCredentialRedactor?: (
+      redactor: SubagentMcpCredentialRedactor,
+    ) => void;
+  } = {},
+): Transport {
   if (server.transport === "stdio") {
-    if (!server.command) throw new Error("This MCP server needs a command to run.");
+    if (!server.command)
+      throw new Error("This MCP server needs a command to run.");
     return new StdioClientTransport({
       command: server.command,
       args: server.args ?? [],
-      env: { ...(process.env as Record<string, string>), ...(server.env ?? {}) },
+      env: {
+        ...(process.env as Record<string, string>),
+        ...(server.env ?? {}),
+      },
     });
   }
   if (!server.url) throw new Error("This MCP server needs a URL.");
   const preset = assertMcpPresetServer(server);
   const url = new URL(server.url);
   const requestInit = server.headers ? { headers: server.headers } : undefined;
-  const presetFetch = preset?.auth.kind === "apiKey" ? createNoRedirectFetch() : undefined;
+  const guardedFetch = options.forceNoRedirect
+    ? createBoundedSubagentMcpFetch()
+    : preset?.auth.kind === "apiKey"
+      ? createNoRedirectFetch()
+      : undefined;
   // OAuth-authenticated servers attach a (non-interactive) provider that supplies
   // stored tokens; if none/expired, the connection fails rather than opening a browser.
-  const authProvider = server.oauth ? oauthProviderFor(server, isCurrent) : undefined;
+  const observeOAuthTokens = options.registerCredentialRedactor
+    ? createSubagentMcpOAuthTokenObserver(options.registerCredentialRedactor)
+    : undefined;
+  const authProvider = server.oauth
+    ? oauthProviderFor(server, isCurrent, (tokens) =>
+        observeOAuthTokens?.(
+          tokens as unknown as Readonly<Record<string, unknown>>,
+        ),
+      )
+    : undefined;
   if (server.transport === "sse") {
     return new SSEClientTransport(url, {
       requestInit,
       authProvider,
-      fetch: presetFetch,
+      fetch: guardedFetch,
     });
   }
   return new StreamableHTTPClientTransport(url, {
     requestInit,
     authProvider,
-    fetch: presetFetch,
+    fetch: guardedFetch,
   });
 }
 
@@ -91,14 +148,81 @@ interface McpToolInfo {
   inputSchema?: unknown;
 }
 
+function subagentMcpAbortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("MCP read cancelled.");
+}
+
+/**
+ * Main-process credential/transport proxy for the read-only subagent lane.
+ * A fresh client is closed after each bounded operation so no authenticated
+ * client or credential-bearing transport crosses into child-owned state.
+ */
+export async function withIsolatedSubagentMcpClient<T>(
+  server: McpServer,
+  signal: AbortSignal,
+  operation: (client: SubagentMcpClientPort) => Promise<T>,
+): Promise<T> {
+  const configurationLease = mcpConfigurationLeases.acquire(server.id);
+  configurationLease.assertCurrent();
+  const operationSignal = AbortSignal.any([signal, configurationLease.signal]);
+  return withIsolatedSubagentMcpClientCore({
+    server,
+    signal: operationSignal,
+    configurationLease,
+    operation,
+    dependencies: {
+      createClient: () =>
+        new Client(
+          { name: "aiden-subagent-mcp-read", version: "1.0.0" },
+          { capabilities: {} },
+        ) as unknown as IsolatedSubagentMcpSdkClient,
+      resolveAuth,
+      resolveCredentialBoundary: resolveProductionSubagentMcpCredentialBoundary,
+      makeTransport,
+      withConfigured: (expected, configuredOperation, isCurrent) =>
+        withConfiguredMcp(
+          expected.id,
+          mcpRuntimeConnectionSnapshot(expected),
+          configuredOperation,
+          isCurrent,
+        ),
+    },
+  });
+}
+
+/** Main-owned resolver plus isolated credential proxy for subagent MCP reads. */
+export const productionSubagentMcpReadHost: SubagentMcpReadHost = Object.freeze(
+  {
+    resolveServer: async (serverId: string, signal: AbortSignal) => {
+      if (signal.aborted) throw subagentMcpAbortReason(signal);
+      const server = (await configStore.listMcpServers()).find(
+        ({ id }) => id === serverId,
+      );
+      if (signal.aborted) throw subagentMcpAbortReason(signal);
+      return server === undefined ? undefined : structuredClone(server);
+    },
+    withClient: withIsolatedSubagentMcpClient,
+  },
+);
+
 class McpManager {
   private readonly clients = new GenerationBoundConnectionCache<Client>();
-  private readonly statusClients = new GenerationBoundConnectionAttempts<Client>();
+  private readonly statusClients =
+    new GenerationBoundConnectionAttempts<Client>();
 
-  private async ensureConnected(server: McpServer, generation: number): Promise<Client> {
+  private async ensureConnected(
+    server: McpServer,
+    generation: number,
+  ): Promise<Client> {
     return this.clients.getOrConnect(
       server.id,
-      () => new Client({ name: "aiden-agent", version: "1.0.0" }, { capabilities: {} }),
+      () =>
+        new Client(
+          { name: "aiden-agent", version: "1.0.0" },
+          { capabilities: {} },
+        ),
       async (client, connectionIsCurrent) => {
         // The MCP SDK transports satisfy the client's transport interface.
         await client.connect(
@@ -114,11 +238,17 @@ class McpManager {
   }
 
   async disconnect(id: string): Promise<void> {
-    await Promise.all([this.clients.disconnect(id), this.statusClients.disconnect(id)]);
+    await Promise.all([
+      this.clients.disconnect(id),
+      this.statusClients.disconnect(id),
+    ]);
   }
 
   async closeAll(): Promise<void> {
-    for (const id of new Set([...this.clients.ids(), ...this.statusClients.ids()])) {
+    for (const id of new Set([
+      ...this.clients.ids(),
+      ...this.statusClients.ids(),
+    ])) {
       await this.disconnect(id);
     }
   }
@@ -128,22 +258,39 @@ class McpManager {
     server: McpServer,
     isCurrent: () => boolean = () => true,
     expectedGeneration: number = this.statusGeneration(server.id),
-  ): Promise<{ connected: boolean; toolCount: number; tools: string[]; error?: string }> {
+  ): Promise<{
+    connected: boolean;
+    toolCount: number;
+    tools: string[];
+    error?: string;
+  }> {
     try {
       return await this.statusClients.run(
         server.id,
         expectedGeneration,
-        () => new Client({ name: "aiden-agent-test", version: "1.0.0" }, { capabilities: {} }),
+        () =>
+          new Client(
+            { name: "aiden-agent-test", version: "1.0.0" },
+            { capabilities: {} },
+          ),
         async (client, connectionIsCurrent) => {
           const active = () => isCurrent() && connectionIsCurrent();
-          await client.connect(makeTransport(await resolveAuth(server, active), active) as never);
+          await client.connect(
+            makeTransport(await resolveAuth(server, active), active) as never,
+          );
         },
         async (client, connectionIsCurrent) => {
           if (!isCurrent() || !connectionIsCurrent()) {
             throw new Error("The MCP connection was superseded.");
           }
-          const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-          return { connected: true, toolCount: tools.length, tools: tools.map((t) => t.name) };
+          const { tools } = (await client.listTools()) as {
+            tools: McpToolInfo[];
+          };
+          return {
+            connected: true,
+            toolCount: tools.length,
+            tools: tools.map((t) => t.name),
+          };
         },
         async (client) => client.close(),
       );
@@ -158,27 +305,33 @@ class McpManager {
   }
 
   /** Build pi agent tools for a connected server. Tool names are prefixed with the server name. */
-  async agentToolsFor(server: McpServer, generation: number): Promise<AgentTool[]> {
+  async agentToolsFor(
+    server: McpServer,
+    generation: number,
+  ): Promise<AgentTool[]> {
     const client = await this.ensureConnected(server, generation);
     const { tools } = (await client.listTools()) as { tools: McpToolInfo[] };
-    return tools.map(
-      (t): AgentTool => ({
-        name: mcpAgentToolName(server, t.name),
-        label: t.name,
-        description: t.description ?? t.name,
-        // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
-        parameters: Type.Unsafe((t.inputSchema as object) ?? { type: "object", properties: {} }),
-        execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
-          return executeMcpAgentTool(() =>
-            client.callTool(
-              { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
-              undefined,
-              { signal },
-            ),
-          );
-        },
-      }),
-    );
+    return tools.map((t): AgentTool => ({
+      name: mcpAgentToolName(server, t.name),
+      label: t.name,
+      description: t.description ?? t.name,
+      // MCP inputSchema is raw JSON Schema; wrap it as a typebox schema.
+      parameters: Type.Unsafe(
+        (t.inputSchema as object) ?? { type: "object", properties: {} },
+      ),
+      execute: async (_id, args, signal): Promise<AgentToolResult<null>> => {
+        return executeMcpAgentTool(() =>
+          client.callTool(
+            {
+              name: t.name,
+              arguments: (args ?? {}) as Record<string, unknown>,
+            },
+            undefined,
+            { signal },
+          ),
+        );
+      },
+    }));
   }
 
   connectionGeneration(id: string): number {

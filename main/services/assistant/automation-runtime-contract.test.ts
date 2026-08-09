@@ -31,7 +31,10 @@ test("project automations receive only folder-scoped coding tools and reject MCP
   assert.match(execution, /const allowMcpTools =/u);
   assert.match(execution, /mcpServerIds,/u);
   assert.match(execution, /providerFingerprint: task\.providerFingerprint/u);
-  assert.match(client, /assertScheduledProviderFingerprint\(runtime\.provider/u);
+  assert.match(
+    client,
+    /assertScheduledProviderFingerprint\(\s*runtime\.provider,\s*options\.providerFingerprint/u,
+  );
   assert.match(execution, /allowComputerUse: false/u);
   assert.match(execution, /allowSubagents: false/u);
 });

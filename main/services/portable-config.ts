@@ -5,8 +5,28 @@
 
 import { createPortableConfigStores } from "./portable-config-core.js";
 import { aidenConfigDir } from "./aiden-config-dir.js";
+import { invalidateChangedMcpConfigurationLeases } from "./mcp-config-lease.js";
 
-export const configStores = createPortableConfigStores(() => aidenConfigDir());
+export const configStores = createPortableConfigStores(
+  () => aidenConfigDir(),
+  undefined,
+  {
+    beforePortableExternalCacheCommit: (previous, next) => {
+      if (!previous) return;
+      invalidateChangedMcpConfigurationLeases(
+        previous.mcpServers,
+        next.mcpServers,
+      );
+    },
+    beforePortableWritePublish: (previous, next) => {
+      if (!previous) return;
+      invalidateChangedMcpConfigurationLeases(
+        previous.mcpServers,
+        next.mcpServers,
+      );
+    },
+  },
+);
 
 /**
  * Re-read the portable file from disk. Resolves true when its contents changed,

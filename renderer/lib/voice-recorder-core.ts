@@ -13,6 +13,35 @@ export interface TranscribeOptions {
   localModel?: string;
 }
 
+export const MICROPHONE_PERMISSION_OFF_MESSAGE =
+  "Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone, then restart Aiden.";
+
+export function microphoneCaptureErrorMessage(error: unknown): string {
+  let name = "";
+  try {
+    const candidate =
+      typeof error === "object" && error !== null
+        ? (error as { name?: unknown }).name
+        : undefined;
+    if (typeof candidate === "string") name = candidate;
+  } catch {
+    // A hostile or cross-realm error object must not break recovery messaging.
+  }
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return MICROPHONE_PERMISSION_OFF_MESSAGE;
+    case "NotFoundError":
+      return "No microphone was found. Connect or enable an input device, then try again.";
+    case "NotReadableError":
+      return "Aiden could not read from the microphone. Close other apps using it, check the selected input device, and try again.";
+    case "AbortError":
+      return "Microphone capture was interrupted. Try again.";
+    default:
+      return "Aiden could not start microphone capture. Check the input device and microphone permission, then try again.";
+  }
+}
+
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -26,7 +55,11 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 function float32ToBase64(samples: Float32Array): string {
-  const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
+  const bytes = new Uint8Array(
+    samples.buffer,
+    samples.byteOffset,
+    samples.byteLength,
+  );
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
@@ -59,7 +92,8 @@ async function blobToPcm16k(blob: Blob): Promise<string> {
 
 /** Native mic-permission gate; resolves true when capture may start. */
 export async function ensureMicrophoneAccess(): Promise<boolean> {
-  const status = await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
+  const status =
+    await window.aidenAPI.systemPreferences.getMediaAccessStatus("microphone");
   if (status === "denied" || status === "restricted") return false;
   if (status === "not-determined") {
     return window.aidenAPI.systemPreferences.askForMediaAccess("microphone");
@@ -71,10 +105,15 @@ export async function ensureMicrophoneAccess(): Promise<boolean> {
  * Transcribe a recorded blob through the selected provider.
  * Resolves the trimmed transcript ("" when no speech was detected).
  */
-export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Promise<string> {
+export async function transcribeBlob(
+  blob: Blob,
+  options: TranscribeOptions,
+): Promise<string> {
   if (options.provider === "local") {
     if (!options.localModel) {
-      throw new Error("Download and select an on-device model in Settings → Voice.");
+      throw new Error(
+        "Download and select an on-device model in Settings → Voice.",
+      );
     }
     const pcm = await blobToPcm16k(blob);
     return (await voiceApi.transcribeLocal(pcm, options.localModel)).trim();

@@ -209,6 +209,46 @@ test("normalizeComputerUseArgs click family: exclusive target + button pinning",
   );
 });
 
+test("normalizeComputerUseArgs rejects adversarial coordinate values on every coordinate path", () => {
+  const sparse = new Array<number>(2);
+  const missingSecond = [1, 2];
+  delete missingSecond[1];
+  const values: unknown[] = [
+    sparse,
+    missingSecond,
+    [1],
+    [1, 2, 3],
+    [-1, 2],
+    [Number.NaN, 2],
+    [Number.POSITIVE_INFINITY, 2],
+    [1, "2"],
+    null,
+  ];
+
+  for (const coordinate of values) {
+    assertSafetyError("invalid_coordinate", () =>
+      normalizeComputerUseArgs({ action: "click", coordinate } as never),
+    );
+    assertSafetyError("invalid_coordinate", () =>
+      normalizeComputerUseArgs({
+        action: "drag",
+        from_coordinate: coordinate,
+        to_coordinate: [3, 4],
+      } as never),
+    );
+    assertSafetyError("invalid_coordinate", () =>
+      normalizeComputerUseArgs({
+        action: "drag",
+        from_coordinate: [1, 2],
+        to_coordinate: coordinate,
+      } as never),
+    );
+    assertSafetyError("invalid_coordinate", () =>
+      normalizeComputerUseArgs({ action: "scroll", direction: "down", coordinate } as never),
+    );
+  }
+});
+
 test("normalizeComputerUseArgs modifiers canonicalization on click", () => {
   // Aliases resolved + sorted by MODIFIER_ORDER = [ctrl, option, shift, cmd, ...].
   // Input order cmd+shift+alt canonicalizes to [option, shift, cmd].

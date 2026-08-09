@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { TextDecoder } from "node:util";
+import { isDeepStrictEqual, TextDecoder } from "node:util";
 import {
   isSafeSubagentIdentifier,
   parseSubagentRunSnapshotV1,
@@ -30,7 +30,7 @@ const STRICT_UTF8_DECODER = new TextDecoder("utf-8", {
   ignoreBOM: true,
 });
 
-interface SubagentRunDatabaseV1 {
+export interface SubagentRunDatabaseV1 {
   version: typeof STORE_VERSION;
   runs: SubagentRunSnapshotV1[];
   pendingChatDeletions: string[];
@@ -208,7 +208,7 @@ function normalizedPendingChatDeletions(value: unknown): string[] {
  * object key. Scan the bounded persisted document first so no duplicate can
  * hide recovery authority before normalization sees it.
  */
-function assertUniqueJsonObjectKeys(serialized: string): void {
+export function assertUniqueJsonObjectKeys(serialized: string): void {
   let offset = 0;
   let objectKeys = 0;
 
@@ -442,6 +442,65 @@ function parseDatabase(value: unknown, maxRuns: number): SubagentRunDatabaseV1 {
     version: STORE_VERSION,
     runs: boundedRuns([...byRunId.values()], maxRuns, pendingChatDeletions),
     pendingChatDeletions,
+  };
+}
+
+/**
+ * Strict, lossless V1 reader for parallel V2 migration. Unlike normal replay,
+ * this never drops, deduplicates, reorders, reconciles, or normalizes evidence.
+ */
+export function parseSubagentRunDatabaseV1ForMigration(serialized: string): SubagentRunDatabaseV1 {
+  if (Buffer.byteLength(serialized, "utf8") > MAX_SUBAGENT_RUN_STORE_BYTES) {
+    throw new Error("Subagent V1 migration source is oversized.");
+  }
+  assertUniqueJsonObjectKeys(serialized);
+  const parsed = JSON.parse(serialized) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid subagent V1 migration source.");
+  }
+  const candidate = parsed as Record<string, unknown>;
+  const keys = Object.keys(candidate);
+  const currentSchema =
+    keys.length === 3 &&
+    keys.includes("version") &&
+    keys.includes("runs") &&
+    keys.includes("pendingChatDeletions");
+  const legacySchema = keys.length === 2 && keys.includes("version") && keys.includes("runs");
+  if (
+    (!currentSchema && !legacySchema) ||
+    candidate.version !== STORE_VERSION ||
+    !Array.isArray(candidate.runs) ||
+    candidate.runs.length > MAX_STORED_SUBAGENT_RUNS
+  ) {
+    throw new Error("Invalid subagent V1 migration source schema.");
+  }
+  const runs = candidate.runs.map((raw) => {
+    const snapshot = strictSnapshot(raw);
+    if (!isDeepStrictEqual(raw, snapshot)) {
+      throw new Error("Subagent V1 migration would normalize a run.");
+    }
+    return snapshot;
+  });
+  if (new Set(runs.map(({ runId }) => runId)).size !== runs.length) {
+    throw new Error("Subagent V1 migration source has duplicate runs.");
+  }
+  const pendingChatDeletions = currentSchema ? candidate.pendingChatDeletions : [];
+  if (
+    !Array.isArray(pendingChatDeletions) ||
+    pendingChatDeletions.length > MAX_SUBAGENT_CHAT_TOMBSTONES ||
+    pendingChatDeletions.some((chatId) => !safeLookupId(chatId as string)) ||
+    new Set(pendingChatDeletions).size !== pendingChatDeletions.length
+  ) {
+    throw new Error("Invalid subagent V1 migration deletion state.");
+  }
+  const deletedChats = new Set(pendingChatDeletions as string[]);
+  if (runs.some(({ chatId }) => deletedChats.has(chatId))) {
+    throw new Error("Subagent V1 migration source contains deletion-owned runs.");
+  }
+  return {
+    version: STORE_VERSION,
+    runs,
+    pendingChatDeletions: [...(pendingChatDeletions as string[])],
   };
 }
 

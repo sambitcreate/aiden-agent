@@ -1,5 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent, AgentTool } from "@earendil-works/pi-agent-core";
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentTool,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+  ThinkingLevel,
+} from "@earendil-works/pi-agent-core";
 import { performance } from "node:perf_hooks";
 import {
   terminalAssistantTextFallback,
@@ -10,17 +17,47 @@ import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { WorkspacePermission } from "../types.js";
 import {
   MAX_SUBAGENT_SUMMARY_CHARS,
+  parseSubagentToolRequest,
   type SubagentTaskRequest,
   type SubagentTaskResult,
 } from "./contracts.js";
-import { subagentRoleSystemPrompt, subagentTaskPrompt } from "./role-catalog.js";
+import {
+  subagentRoleSystemPrompt,
+  subagentTaskPrompt,
+} from "./role-catalog.js";
 import {
   subagentRuntimeRegistry,
   type SubagentRuntimeAuthority,
   type SubagentRuntimeChild,
 } from "./child-agent-runtime.js";
 import type { SubagentReadToolName } from "./capability-profile.js";
+import {
+  captureLiveSubagentContext,
+  type SubagentContextCapture,
+  type SubagentContextMode,
+} from "./forked-context.js";
 import { sanitizeSubagentText } from "./safe-text.js";
+import type { SubagentAuthorityV2 } from "./authority-v2.js";
+import { createSubagentTool } from "./subagent-tool.js";
+import type { SubagentSupervisor } from "./subagent-supervisor.js";
+import {
+  projectRequestableSubagentMcpInventoryV2,
+  projectRequestableSubagentMcpMutationInventoryV2,
+} from "./request-capabilities-v2.js";
+import type { SubagentOutboundToolBindingV2 } from "./outbound-approval-v2.js";
+import type { SubagentOutboundApprovalGateV2 } from "./outbound-approval-v2.js";
+import type {
+  SubagentWorkspaceWriteApprovalGateV2,
+  SubagentWorkspaceWriteToolBindingV2,
+} from "./subagent-workspace-write.js";
+import type {
+  SubagentMcpMutationBindingV2,
+  SubagentMcpMutationGateV2,
+} from "./subagent-mcp-mutation.js";
+import type {
+  SubagentShellGateV2,
+  SubagentShellToolBindingV2,
+} from "./subagent-shell.js";
 
 export const DEFAULT_SUBAGENT_CHILD_DEADLINE_MS = 10 * 60_000;
 export const DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS = 5_000;
@@ -44,8 +81,14 @@ export interface SubagentChildRunnerDependencies {
     groupId: string;
     childId?: string;
     runtime: ResolvedModelRuntime;
+    thinkingLevel: ThinkingLevel;
     systemPrompt: string;
     tools: AgentTool[];
+    initialMessages: AgentMessage[];
+    beforeToolCall?: (
+      context: BeforeToolCallContext,
+      signal?: AbortSignal,
+    ) => Promise<BeforeToolCallResult | undefined>;
     onStarting?: () => void;
   }) => SubagentRuntimeChild;
   buildTools?: (input: {
@@ -53,8 +96,23 @@ export interface SubagentChildRunnerDependencies {
     permission: WorkspacePermission;
     role: string;
     inheritedCeiling: readonly SubagentReadToolName[];
-  }) => Promise<AgentTool[]>;
-  recordUsage?: (message: AssistantMessage, runtime: ResolvedModelRuntime) => Promise<void>;
+    authority?: SubagentAuthorityV2;
+    currentAuthority?: () => SubagentAuthorityV2 | undefined;
+    consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
+    signal?: AbortSignal;
+  }) => Promise<AgentTool[] | SubagentChildToolAssembly>;
+  recordUsage?: (
+    message: AssistantMessage,
+    runtime: ResolvedModelRuntime,
+  ) => Promise<void>;
+}
+
+export interface SubagentChildToolAssembly {
+  tools: AgentTool[];
+  outboundApprovalBindings: SubagentOutboundToolBindingV2[];
+  workspaceWriteApprovalBindings: SubagentWorkspaceWriteToolBindingV2[];
+  mcpMutationApprovalBindings: SubagentMcpMutationBindingV2[];
+  shellApprovalBindings: SubagentShellToolBindingV2[];
 }
 
 export interface RunSubagentChildInput {
@@ -63,9 +121,41 @@ export interface RunSubagentChildInput {
   childId?: string;
   groupId: string;
   runtime: ResolvedModelRuntime;
+  thinkingLevel: ThinkingLevel;
   workspaceRoot: string;
   permission: WorkspacePermission;
   inheritedCeiling: readonly SubagentReadToolName[];
+  /** Exact private V2 ceiling; absent only on the V1 rollback path. */
+  v2Authority?: SubagentAuthorityV2;
+  currentV2Authority?: () => SubagentAuthorityV2 | undefined;
+  consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
+  prepareOutboundApproval?: (
+    bindings: readonly SubagentOutboundToolBindingV2[],
+  ) => SubagentOutboundApprovalGateV2;
+  prepareWorkspaceWriteApproval?: (
+    bindings: readonly SubagentWorkspaceWriteToolBindingV2[],
+    runSignal?: AbortSignal,
+  ) => SubagentWorkspaceWriteApprovalGateV2;
+  prepareMcpMutationApproval?: (
+    bindings: readonly SubagentMcpMutationBindingV2[],
+    runSignal?: AbortSignal,
+  ) => SubagentMcpMutationGateV2;
+  prepareShellApproval?: (
+    bindings: readonly SubagentShellToolBindingV2[],
+    runSignal?: AbortSignal,
+  ) => SubagentShellGateV2;
+  /** Main-owned depth-2 execution seam. Absent for V1, depth-2, rollback, or denied authority. */
+  executeNested?: (
+    params: unknown,
+    signal?: AbortSignal,
+    forkContext?: SubagentContextCapture,
+  ) => Promise<string>;
+  /** Private context binding and a transcript allocated only for this child. */
+  context: {
+    mode: SubagentContextMode;
+    revisionHash: string;
+    messages: AgentMessage[];
+  };
   request: SubagentTaskRequest;
   signal?: AbortSignal;
   /** Reports a bounded cancellation/teardown deadline miss without runtime context. */
@@ -86,8 +176,10 @@ export interface RunSubagentChildInput {
 function truncateSummary(text: string): string {
   text = sanitizeSubagentText(text);
   if (text.length <= MAX_SUBAGENT_SUMMARY_CHARS) return text;
-  const marker = "\n\n… [child summary truncated]";
-  return `${text.slice(0, MAX_SUBAGENT_SUMMARY_CHARS - marker.length)}${marker}`;
+  const marker = "\n\n… [middle of child summary truncated] …\n\n";
+  const available = MAX_SUBAGENT_SUMMARY_CHARS - marker.length;
+  const head = Math.min(2_000, Math.floor(available / 2));
+  return `${text.slice(0, head)}${marker}${text.slice(-(available - head))}`;
 }
 
 function safeFailure(
@@ -105,7 +197,9 @@ function safeFailure(
 
 function throwIfParentAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
-  throw signal.reason instanceof Error ? signal.reason : new Error("Parent generation cancelled.");
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error("Parent generation cancelled.");
 }
 
 function timedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
@@ -121,7 +215,10 @@ function timedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
   };
 }
 
-async function boundedDrain(promise: Promise<unknown>, graceMs: number): Promise<boolean> {
+async function boundedDrain(
+  promise: Promise<unknown>,
+  graceMs: number,
+): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -156,18 +253,22 @@ function assistantMessage(event: AgentEvent): AssistantMessage | null {
   return null;
 }
 
-export async function runSubagentChild(input: RunSubagentChildInput): Promise<SubagentTaskResult> {
+export async function runSubagentChild(
+  input: RunSubagentChildInput,
+): Promise<SubagentTaskResult> {
   throwIfParentAborted(input.signal);
   const now = input.now ?? (() => performance.now());
   const startedAt = now();
   const policy = {
     deadlineMs: input.policy?.deadlineMs ?? DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
     cancellationGraceMs:
-      input.policy?.cancellationGraceMs ?? DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
+      input.policy?.cancellationGraceMs ??
+      DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
     maxTurns: input.policy?.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
     maxToolCalls: input.policy?.maxToolCalls ?? MAX_SUBAGENT_CHILD_TOOL_CALLS,
     maxEvents: input.policy?.maxEvents ?? MAX_SUBAGENT_CHILD_EVENTS,
-    maxOutputChars: input.policy?.maxOutputChars ?? MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
+    maxOutputChars:
+      input.policy?.maxOutputChars ?? MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
   };
   if (
     !Number.isFinite(policy.deadlineMs) ||
@@ -195,10 +296,14 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
   }
 
   const buildTools = input.dependencies?.buildTools;
-  if (!buildTools) throw new Error("Subagent child tool construction is unavailable.");
+  if (!buildTools)
+    throw new Error("Subagent child tool construction is unavailable.");
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let removeParentAbort = () => {};
   let unsubscribe = () => {};
+  let workspaceWriteApproval: SubagentWorkspaceWriteApprovalGateV2 | undefined;
+  let mcpMutationApproval: SubagentMcpMutationGateV2 | undefined;
+  let shellApproval: SubagentShellGateV2 | undefined;
   const deadline = new Promise<{ kind: "timed_out" }>((resolve) => {
     deadlineTimer = setTimeout(
       () => resolve({ kind: "timed_out" }),
@@ -211,7 +316,8 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     if (input.signal.aborted) abort();
     else {
       input.signal.addEventListener("abort", abort, { once: true });
-      removeParentAbort = () => input.signal?.removeEventListener("abort", abort);
+      removeParentAbort = () =>
+        input.signal?.removeEventListener("abort", abort);
     }
   });
   const deadlineElapsed = () => {
@@ -227,13 +333,21 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           permission: input.permission,
           role: input.request.role,
           inheritedCeiling: input.inheritedCeiling,
+          authority: input.v2Authority,
+          currentAuthority: input.currentV2Authority,
+          consumeNetworkOperation: input.consumeNetworkOperation,
+          signal: input.signal,
         }),
       )
       .then(
         (tools) => ({ kind: "tools" as const, tools }),
         (error: unknown) => ({ kind: "failed" as const, error }),
       );
-    const constructionOutcome = await Promise.race([toolConstruction, deadline, parentAbort]);
+    const constructionOutcome = await Promise.race([
+      toolConstruction,
+      deadline,
+      parentAbort,
+    ]);
     if (constructionOutcome.kind === "parent_aborted") {
       if (!(await boundedDrain(toolConstruction, policy.cancellationGraceMs))) {
         reportCleanupFailure(input);
@@ -254,14 +368,230 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
 
     throwIfParentAborted(input.signal);
     const createChild =
-      input.dependencies?.createChild ?? ((spec) => subagentRuntimeRegistry.create(spec));
-    const child = createChild({
+      input.dependencies?.createChild ??
+      ((spec) => subagentRuntimeRegistry.create(spec));
+    const assembly = Array.isArray(constructionOutcome.tools)
+      ? {
+          tools: constructionOutcome.tools,
+          outboundApprovalBindings: [],
+          workspaceWriteApprovalBindings: [],
+          mcpMutationApprovalBindings: [],
+          shellApprovalBindings: [],
+        }
+      : constructionOutcome.tools;
+    const outboundApproval =
+      assembly.outboundApprovalBindings.length > 0
+        ? input.prepareOutboundApproval?.(assembly.outboundApprovalBindings)
+        : undefined;
+    if (assembly.outboundApprovalBindings.length > 0 && !outboundApproval) {
+      throw new Error("Subagent outbound approval is unavailable.");
+    }
+    workspaceWriteApproval =
+      assembly.workspaceWriteApprovalBindings.length > 0
+        ? input.prepareWorkspaceWriteApproval?.(
+            assembly.workspaceWriteApprovalBindings,
+            input.signal,
+          )
+        : undefined;
+    if (
+      assembly.workspaceWriteApprovalBindings.length > 0 &&
+      !workspaceWriteApproval
+    ) {
+      throw new Error("Subagent workspace-write approval is unavailable.");
+    }
+    mcpMutationApproval =
+      assembly.mcpMutationApprovalBindings.length > 0
+        ? input.prepareMcpMutationApproval?.(
+            assembly.mcpMutationApprovalBindings,
+            input.signal,
+          )
+        : undefined;
+    if (
+      assembly.mcpMutationApprovalBindings.length > 0 &&
+      !mcpMutationApproval
+    ) {
+      throw new Error("Subagent MCP mutation approval is unavailable.");
+    }
+    shellApproval =
+      assembly.shellApprovalBindings.length > 0
+        ? input.prepareShellApproval?.(
+            assembly.shellApprovalBindings,
+            input.signal,
+          )
+        : undefined;
+    if (assembly.shellApprovalBindings.length > 0 && !shellApproval) {
+      throw new Error("Subagent shell approval is unavailable.");
+    }
+    const outboundToolNames = new Set(
+      assembly.outboundApprovalBindings.map(({ toolName }) => toolName),
+    );
+    const workspaceWriteToolNames = new Set<string>(
+      assembly.workspaceWriteApprovalBindings.map(({ toolName }) => toolName),
+    );
+    const mutationToolNames = new Set(
+      assembly.mcpMutationApprovalBindings.map(
+        ({ childAgentToolName }) => childAgentToolName,
+      ),
+    );
+    const shellToolNames = new Set<string>(
+      assembly.shellApprovalBindings.map(({ toolName }) => toolName),
+    );
+    if (
+      [...workspaceWriteToolNames].some(
+        (toolName) =>
+          outboundToolNames.has(toolName) || mutationToolNames.has(toolName),
+      ) ||
+      [...mutationToolNames].some((toolName) => outboundToolNames.has(toolName))
+    ) {
+      throw new Error("Subagent approval tool bindings overlap.");
+    }
+    const childTools = assembly.tools.map((tool) => {
+      if (workspaceWriteToolNames.has(tool.name) && workspaceWriteApproval) {
+        return {
+          ...tool,
+          execute: (toolCallId: string, args: unknown, signal?: AbortSignal) =>
+            workspaceWriteApproval!.execute({
+              toolCallId,
+              toolName: tool.name,
+              arguments: args,
+              signal,
+            }),
+        };
+      }
+      if (mutationToolNames.has(tool.name) && mcpMutationApproval) {
+        return {
+          ...tool,
+          execute: (toolCallId: string, args: unknown, signal?: AbortSignal) =>
+            mcpMutationApproval!.execute({
+              toolCallId,
+              toolName: tool.name,
+              arguments: args,
+              signal,
+            }),
+        };
+      }
+      if (shellToolNames.has(tool.name) && shellApproval) {
+        return {
+          ...tool,
+          execute: (toolCallId: string, args: unknown, signal?: AbortSignal) =>
+            shellApproval!.execute({
+              toolCallId,
+              toolName: "run_command",
+              arguments: args,
+              signal,
+            }),
+        };
+      }
+      if (!outboundToolNames.has(tool.name) || !outboundApproval) return tool;
+      const execute = tool.execute.bind(tool);
+      return {
+        ...tool,
+        execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => {
+          outboundApproval.consume({
+            toolCallId,
+            toolName: tool.name,
+            arguments: args,
+          });
+          return execute(toolCallId, args, signal);
+        },
+      };
+    });
+    let child: SubagentRuntimeChild | undefined;
+    if (input.executeNested) {
+      const authority = input.v2Authority;
+      if (
+        !authority ||
+        authority.depth !== 1 ||
+        authority.execution !== "foreground" ||
+        authority.capabilities.delegation !== true
+      ) {
+        throw new Error("Nested delegation authority is unavailable.");
+      }
+      childTools.push(
+        createSubagentTool(
+          {
+            execute: (params: unknown, signal?: AbortSignal) => {
+              const request = parseSubagentToolRequest(params);
+              const yieldInference = child?.withoutInferenceLease;
+              if (!yieldInference) {
+                throw new Error(
+                  "Nested delegation cannot release parent inference capacity.",
+                );
+              }
+              const forkContext =
+                request.context === "fork"
+                  ? captureLiveSubagentContext({
+                      chatId: input.authority.chatId,
+                      parentRunId: authority.runId,
+                      // This is the sole live-state read. Capture completes
+                      // synchronously before the inference lease is yielded.
+                      messages: child!.agent.state.messages,
+                      descendantContextWindow:
+                        input.runtime.model.contextWindow ?? 1_000_000,
+                    })
+                  : undefined;
+              return yieldInference(() =>
+                input.executeNested!(params, signal, forkContext),
+              );
+            },
+          } as SubagentSupervisor,
+          projectRequestableSubagentMcpInventoryV2(authority.capabilities.mcp),
+          authority.capabilities.workspaceWrite,
+          projectRequestableSubagentMcpMutationInventoryV2(
+            authority.capabilities.mcp,
+          ),
+          authority.capabilities.shell,
+          false,
+        ),
+      );
+    }
+    child = createChild({
       authority: input.authority,
       groupId: input.groupId,
       childId: input.childId,
       runtime: input.runtime,
-      systemPrompt: subagentRoleSystemPrompt(input.request.role),
-      tools: constructionOutcome.tools,
+      thinkingLevel: input.thinkingLevel,
+      systemPrompt: subagentRoleSystemPrompt(input.request.role, {
+        contextMode: input.context.mode,
+        workspaceRead:
+          input.v2Authority?.capabilities.workspaceRead ??
+          (input.permission !== "none" && input.inheritedCeiling.length > 0),
+        workspaceWrite: input.v2Authority?.capabilities.workspaceWrite === true,
+        shell: input.v2Authority?.capabilities.shell === true,
+        mcpRead:
+          input.v2Authority?.capabilities.mcp.some((scope) =>
+            scope.tools.some((tool) => tool.effect === "read"),
+          ) === true,
+        mcpMutation:
+          input.v2Authority?.capabilities.mcp.some((scope) =>
+            scope.tools.some((tool) => tool.effect === "mutating"),
+          ) === true,
+        delegation: input.executeNested !== undefined,
+      }),
+      tools: childTools,
+      beforeToolCall:
+        outboundApproval ||
+        workspaceWriteApproval ||
+        mcpMutationApproval ||
+        shellApproval
+          ? async (context, signal) => {
+              const workspaceResult =
+                await workspaceWriteApproval?.beforeToolCall(context, signal);
+              if (workspaceResult !== undefined) return workspaceResult;
+              const mutationResult = await mcpMutationApproval?.beforeToolCall(
+                context,
+                signal,
+              );
+              if (mutationResult !== undefined) return mutationResult;
+              const shellResult = await shellApproval?.beforeToolCall(
+                context,
+                signal,
+              );
+              if (shellResult !== undefined) return shellResult;
+              return outboundApproval?.beforeToolCall(context, signal);
+            }
+          : undefined,
+      initialMessages: input.context.messages,
       onStarting: () => input.telemetry?.starting(),
     });
     if (deadlineElapsed()) {
@@ -278,7 +608,9 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     }
     const recordUsage = input.dependencies?.recordUsage ?? (async () => {});
 
-    let output = "";
+    let currentTurnOutput = "";
+    let terminalOutput = "";
+    let observedOutputChars = 0;
     let turns = 0;
     let toolCalls = 0;
     let lifecycleEvents = 0;
@@ -300,20 +632,30 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           return;
         }
       }
-      if (event.type === "message_start" && event.message.role === "assistant") {
+      if (
+        event.type === "message_start" &&
+        event.message.role === "assistant"
+      ) {
         currentTurnHadTextDelta = false;
+        currentTurnOutput = "";
       } else if (event.type === "message_update") {
         const update = event.assistantMessageEvent;
         if (update.type === "text_delta") {
           input.telemetry?.textDelta(update.delta);
           currentTurnHadTextDelta = true;
-          const remaining = policy.maxOutputChars - output.length;
-          if (remaining > 0) output += update.delta.slice(0, remaining);
-          if (update.delta.length > remaining) {
+          observedOutputChars += update.delta.length;
+          const remaining = policy.maxOutputChars - currentTurnOutput.length;
+          if (remaining > 0)
+            currentTurnOutput += update.delta.slice(0, remaining);
+          if (
+            observedOutputChars > policy.maxOutputChars ||
+            update.delta.length > remaining
+          ) {
             stopForLimit("The child reached its output limit.");
           }
         } else if (update.type === "error" && update.reason === "error") {
-          terminalError = update.error.errorMessage?.trim() || "The child model failed.";
+          terminalError =
+            update.error.errorMessage?.trim() || "The child model failed.";
         }
       } else if (event.type === "turn_start") {
         if (turns >= policy.maxTurns) {
@@ -331,7 +673,10 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         }
         toolCalls += 1;
         input.telemetry?.toolStarted(event.toolName);
-      } else if (event.type === "message_end" && event.message.role === "assistant") {
+      } else if (
+        event.type === "message_end" &&
+        event.message.role === "assistant"
+      ) {
         const message = assistantMessage(event);
         if (message) {
           input.telemetry?.usage(message);
@@ -339,14 +684,22 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
           const error = terminalGenerationError(message);
           if (error) terminalError = error;
           if (terminalGenerationWasAborted(message)) terminalAborted = true;
-          const fallback = terminalAssistantTextFallback(message, currentTurnHadTextDelta);
+          const fallback = terminalAssistantTextFallback(
+            message,
+            currentTurnHadTextDelta,
+          );
           if (fallback) {
-            const remaining = policy.maxOutputChars - output.length;
-            output += fallback.slice(0, Math.max(0, remaining));
-            if (fallback.length > remaining) {
+            observedOutputChars += fallback.length;
+            const remaining = policy.maxOutputChars - currentTurnOutput.length;
+            currentTurnOutput += fallback.slice(0, Math.max(0, remaining));
+            if (
+              observedOutputChars > policy.maxOutputChars ||
+              fallback.length > remaining
+            ) {
               stopForLimit("The child reached its output limit.");
             }
           }
+          terminalOutput = currentTurnOutput;
         }
       }
     });
@@ -396,11 +749,53 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       role: input.request.role,
       label: input.request.label,
       status: "completed",
-      summary: truncateSummary(output.trim() || "[No textual result.]"),
+      summary: truncateSummary(terminalOutput.trim() || "[No textual result.]"),
     };
   } finally {
     clearTimeout(deadlineTimer);
     removeParentAbort();
     unsubscribe();
+    if (workspaceWriteApproval) {
+      let shutdownFailed = false;
+      const shutdown = Promise.resolve()
+        .then(() => workspaceWriteApproval!.shutdown())
+        .catch(() => {
+          shutdownFailed = true;
+        });
+      if (
+        !(await boundedDrain(shutdown, policy.cancellationGraceMs)) ||
+        shutdownFailed
+      ) {
+        reportCleanupFailure(input);
+      }
+    }
+    if (mcpMutationApproval) {
+      let shutdownFailed = false;
+      const shutdown = Promise.resolve()
+        .then(() => mcpMutationApproval!.shutdown())
+        .catch(() => {
+          shutdownFailed = true;
+        });
+      if (
+        !(await boundedDrain(shutdown, policy.cancellationGraceMs)) ||
+        shutdownFailed
+      ) {
+        reportCleanupFailure(input);
+      }
+    }
+    if (shellApproval) {
+      let shutdownFailed = false;
+      const shutdown = Promise.resolve()
+        .then(() => shellApproval!.shutdown())
+        .catch(() => {
+          shutdownFailed = true;
+        });
+      if (
+        !(await boundedDrain(shutdown, policy.cancellationGraceMs)) ||
+        shutdownFailed
+      ) {
+        reportCleanupFailure(input);
+      }
+    }
   }
 }

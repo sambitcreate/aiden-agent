@@ -59,6 +59,39 @@ test("a save round-trips through disk unchanged", async (t) => {
   assert.deepEqual(await stores.portable.load(), populated);
 });
 
+test("portable publication fences observe the previous and next MCP configuration", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-roundtrip-fence-"));
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const observations: Array<{ source: "app" | "external"; previous: PortableConfigShape | null; next: PortableConfigShape }> = [];
+  const stores = createPortableConfigStores(
+    () => path.join(base, "dot-aiden"),
+    () => path.join(base, "userData"),
+    {
+      beforePortableWritePublish: (previous, next) => observations.push({ source: "app", previous, next }),
+      beforePortableExternalCacheCommit: (previous, next) => observations.push({ source: "external", previous, next }),
+    },
+  );
+  await stores.ensureMigrated();
+  const initial = await stores.portable.load();
+  await stores.portable.save(populated);
+  const externallyEdited = { ...populated, mcpServers: [] };
+  await fs.writeFile(
+    path.join(base, "dot-aiden", PORTABLE_CONFIG_FILENAME),
+    `${JSON.stringify(externallyEdited, null, 2)}\n`,
+    "utf-8",
+  );
+  await stores.portable.reload();
+
+  const changedMcpObservations = observations.filter(({ previous, next }) =>
+    previous !== null &&
+    JSON.stringify(previous.mcpServers) !== JSON.stringify(next.mcpServers)
+  );
+  assert.deepEqual(changedMcpObservations, [
+    { source: "app", previous: initial, next: populated },
+    { source: "external", previous: populated, next: externallyEdited },
+  ]);
+});
+
 test("the file is written pretty-printed so it can be edited by hand", async (t) => {
   const { stores, file } = await portableStore(t);
   await stores.portable.save(populated);

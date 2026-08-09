@@ -73,8 +73,26 @@ test("update-ready banner offers Later and a guarded restart action", () => {
   assert.match(banner, /Aiden Agent \{displayedVersion\}/u);
   assert.match(banner, /Restart to finish installing\./u);
   assert.match(banner, />\s*Later\s*</u);
+  assert.match(banner, /Update and restart/u);
   assert.match(banner, /appUpdatesApi\.restart\(\)/u);
   assert.match(banner, /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u);
+});
+
+test("a stale initial update-state response cannot overwrite a newer notification", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const banner = between(
+    sidebar,
+    "function UpdateReadyBanner",
+    "\n}\n\nfunction GeneratedTitleReveal",
+  );
+
+  assert.match(banner, /let notificationRevision = 0;/u);
+  assert.match(banner, /notificationRevision \+= 1;\s+applySnapshot\(next\);/u);
+  assert.match(banner, /const requestedAtRevision = notificationRevision;/u);
+  assert.match(
+    banner,
+    /if \(notificationRevision === requestedAtRevision\) applySnapshot\(next\);/u,
+  );
 });
 
 test("update-ready banner uses the Aiden mark and shared compact-surface motion", () => {

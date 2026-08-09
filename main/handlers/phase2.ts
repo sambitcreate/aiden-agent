@@ -36,6 +36,7 @@ import { asString } from "./voice-codec.js";
 import { parseSkill, parseMcpServer } from "./phase2-parse.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { mutatePortableConfigAndSync } from "../services/portable-credential-snapshot.js";
+import { withMcpConfigurationPublication } from "../services/mcp-config-lease.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { asString, parseSkill, parseMcpServer };
@@ -104,14 +105,16 @@ export function registerPhase2Handlers(): void {
         replaceMcpCredentialAfterDisconnect(
           () => mcpManager.disconnect(id),
           async () => {
-            if (value)
-              await secrets.setProviderKey(
-                presetSecretId(id),
-                value,
-                JSON.stringify(mcpCredentialConnectionSnapshot(configured)),
-                isCurrent,
-              );
-            else await secrets.deleteKey(presetSecretId(id), isCurrent);
+            await withMcpConfigurationPublication(id, async () => {
+              if (value)
+                await secrets.setProviderKey(
+                  presetSecretId(id),
+                  value,
+                  JSON.stringify(mcpCredentialConnectionSnapshot(configured)),
+                  isCurrent,
+                );
+              else await secrets.deleteKey(presetSecretId(id), isCurrent);
+            });
           },
         ),
       isCurrent,
@@ -131,7 +134,9 @@ export function registerPhase2Handlers(): void {
       (current) => pendingMcpCredentialCleanupForSave(current, parsed),
       async () => {
         await mcpManager.disconnect(parsed.id);
-        return configStore.saveMcpServer(parsed, isCurrent);
+        return withMcpConfigurationPublication(parsed.id, () =>
+          configStore.saveMcpServer(parsed, isCurrent),
+        );
       },
       isCurrent,
     );
@@ -148,7 +153,9 @@ export function registerPhase2Handlers(): void {
       (current) => pendingMcpCredentialCleanupForRemove(current, serverId),
       async () => {
         await mcpManager.disconnect(serverId);
-        await configStore.removeMcpServer(serverId, isCurrent);
+        await withMcpConfigurationPublication(serverId, () =>
+          configStore.removeMcpServer(serverId, isCurrent),
+        );
       },
       isCurrent,
     );

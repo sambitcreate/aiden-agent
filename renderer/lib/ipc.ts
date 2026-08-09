@@ -64,7 +64,17 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import type { ToolApprovalDetails } from "../shared/assistant";
-import { parseSubagentRunSnapshotV1, type SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import {
+  parseSubagentHistoryDetailV1,
+  parseSubagentRunSnapshot,
+  type SubagentHistoryDetailV1,
+  type SubagentRunSnapshot,
+} from "../shared/subagent-runs";
+import {
+  parseSubagentManagementResultV2,
+  type SubagentManagementRequestV2,
+  type SubagentManagementResultV2,
+} from "../shared/subagent-management-v2";
 import type { KeybindingMutation, KeybindingSnapshot } from "../shared/keybindings";
 import {
   parseAppUpdateSnapshot,
@@ -457,8 +467,30 @@ export const chatsApi = {
 };
 
 export const subagentsApi = {
-  get: async (chatId: string, runId: string) =>
-    parseSubagentRunSnapshotV1(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
+  get: async (chatId: string, runId: string): Promise<SubagentHistoryDetailV1 | null> =>
+    parseSubagentHistoryDetailV1(await invoke<unknown>("subagents:get", chatId, runId)) ?? null,
+  manage: async (
+    chatId: string,
+    request: SubagentManagementRequestV2,
+  ): Promise<SubagentManagementResultV2> => {
+    const result = parseSubagentManagementResultV2(
+      await invoke<unknown>("subagents:manage", chatId, request),
+    );
+    if (!result || result.action !== request.action) {
+      throw new Error("Aiden returned an invalid subagent control response.");
+    }
+    return result;
+  },
+  status: (chatId: string, runId: string) =>
+    subagentsApi.manage(chatId, { version: 2, action: "status", runId }),
+  wait: (chatId: string, runId: string, timeoutMs: number) =>
+    subagentsApi.manage(chatId, { version: 2, action: "wait", runId, timeoutMs }),
+  stop: (chatId: string, runId: string) =>
+    subagentsApi.manage(chatId, { version: 2, action: "stop", runId }),
+  retry: (chatId: string, runId: string) =>
+    subagentsApi.manage(chatId, { version: 2, action: "retry", runId }),
+  steer: (chatId: string, runId: string, instruction: string) =>
+    subagentsApi.manage(chatId, { version: 2, action: "steer", runId, instruction }),
 };
 
 // ── Streaming generation ──────────────────────────────────────────────
@@ -535,7 +567,7 @@ export interface StreamCallbacks {
     reasoning?: string,
   ) => void;
   onTimeline?: (timeline: GenerationTimeline) => void;
-  onSubagents?: (snapshot: SubagentRunSnapshotV1) => void;
+  onSubagents?: (snapshot: SubagentRunSnapshot) => void;
   onTool?: (phase: ToolPhase, toolName: string) => void;
   onApproval?: (prompt: ApprovalPrompt) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
@@ -603,7 +635,7 @@ export function startGeneration(
     unsubs.push(
       onNotification<ChatSubagents>("chat:subagents", (p) => {
         if (p.streamId !== streamId) return;
-        const snapshot = parseSubagentRunSnapshotV1(p.snapshot);
+        const snapshot = parseSubagentRunSnapshot(p.snapshot);
         if (snapshot?.generationId === streamId) callbacks.onSubagents?.(snapshot);
       }),
     );
