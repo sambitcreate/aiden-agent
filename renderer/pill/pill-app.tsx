@@ -8,7 +8,12 @@ import * as React from "react";
 import { Check, ClipboardCopy, Loader2, X } from "lucide-react";
 import { dictationApi, onNotification, settingsApi } from "../lib/ipc";
 import type { DictationStatePayload } from "../shared/dictation";
-import { ensureMicrophoneAccess, transcribeBlob } from "../lib/voice-recorder-core";
+import {
+  ensureMicrophoneAccess,
+  microphoneCaptureErrorMessage,
+  MICROPHONE_PERMISSION_OFF_MESSAGE,
+  transcribeBlob,
+} from "../lib/voice-recorder-core";
 import {
   DictationOperationGate,
   withDictationTimeout,
@@ -95,22 +100,27 @@ export function PillApp() {
     const token = operationGateRef.current.beginStart();
     if (token === null) return;
     setPhase("idle");
+    let pendingStream: MediaStream | null = null;
+    let pendingAudioContext: AudioContext | null = null;
     try {
-      if (!(await ensureMicrophoneAccess())) {
+      const allowed = await ensureMicrophoneAccess();
+      if (!operationGateRef.current.isCurrent(token)) return;
+      if (!allowed) {
         operationGateRef.current.finishStart(token);
-        void dictationApi.reportError(
-          "Microphone access is off. Enable it in System Settings → Privacy & Security → Microphone.",
-        );
+        void dictationApi.reportError(MICROPHONE_PERMISSION_OFF_MESSAGE);
         return;
       }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      pendingStream = stream;
       if (!operationGateRef.current.isCurrent(token)) {
         stream.getTracks().forEach((track) => track.stop());
+        pendingStream = null;
         return;
       }
       const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
       const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       const audioContext = new AudioContext();
+      pendingAudioContext = audioContext;
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       audioContext.createMediaStreamSource(stream).connect(analyser);
@@ -149,20 +159,22 @@ export function PillApp() {
         })();
       };
       recordingRef.current = active;
+      pendingStream = null;
+      pendingAudioContext = null;
       operationGateRef.current.finishStart(token);
       recorder.start();
       setElapsed(0);
       setPhase("recording");
       startWaveform(analyser);
       timerRef.current = setInterval(() => setElapsed((value) => value + 1), 1_000);
-    } catch {
+    } catch (error) {
       if (!operationGateRef.current.isCurrent(token)) return;
       operationGateRef.current.finishStart(token);
       const active = recordingRef.current;
       if (active) releaseRecording(active);
-      void dictationApi.reportError(
-        "Microphone access is needed for dictation. Allow it in System Settings → Privacy & Security → Microphone.",
-      );
+      pendingStream?.getTracks().forEach((track) => track.stop());
+      if (pendingAudioContext) void pendingAudioContext.close().catch(() => {});
+      void dictationApi.reportError(microphoneCaptureErrorMessage(error));
     }
   }, [releaseRecording, startWaveform]);
 
@@ -222,6 +234,20 @@ export function PillApp() {
       unsubscribe();
     };
   }, [discardRecording, startRecording, stopRecording, stopWaveform]);
+
+  React.useEffect(
+    () => () => {
+      operationGateRef.current.cancel();
+      const active = recordingRef.current;
+      if (!active) return;
+      active.cancelled = true;
+      active.recorder.ondataavailable = null;
+      active.recorder.onstop = null;
+      if (active.recorder.state !== "inactive") active.recorder.stop();
+      releaseRecording(active);
+    },
+    [releaseRecording],
+  );
 
   return (
     <div className="flex h-full w-full items-center justify-center" role="status" aria-live="polite">
