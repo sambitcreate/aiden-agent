@@ -29,4 +29,7 @@ test("fails closed for malformed or non-ready update snapshots", () => {
     parseAppUpdateSnapshot({ status: "downloading", version: "0.27.25" }),
     IDLE_APP_UPDATE_SNAPSHOT,
   );
+  assert.equal(normalizeAppUpdateVersion("Aiden Agent 0.27.25"), null);
+  assert.equal(normalizeAppUpdateVersion("0.27.025"), null);
+  assert.equal(normalizeAppUpdateVersion("0.27.25\u202e"), null);
 });
