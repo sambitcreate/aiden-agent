@@ -14,6 +14,8 @@
 import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
+import { constants as fsConstants } from "node:fs";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import type { DiscoveredSkill } from "./types.js";
 
@@ -66,8 +68,55 @@ async function dirExists(dirPath: string): Promise<boolean> {
   }
 }
 
+function isContainedPath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
+}
+
+async function assertNoSymlinkSegments(root: string, candidate: string): Promise<void> {
+  const relative = path.relative(root, candidate);
+  if (!isContainedPath(root, candidate) || !relative) throw new Error("Invalid skill path.");
+  let current = root;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    const stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) throw new Error("Skill paths cannot contain symbolic links.");
+  }
+}
+
+async function readBoundedSkillFile(skillRoot: string, skillMd: string): Promise<string> {
+  const realRoot = await fs.realpath(skillRoot);
+  await assertNoSymlinkSegments(realRoot, skillMd);
+  const realSkillMd = await fs.realpath(skillMd);
+  if (!isContainedPath(realRoot, realSkillMd)) throw new Error("Skill path escapes its root.");
+  const handle = await fs.open(realSkillMd, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("Skill instructions must be a regular file.");
+    const buffer = Buffer.alloc(SLASH_LIMITS.instructionBytes + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.byteLength - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > SLASH_LIMITS.instructionBytes) {
+      throw new Error("Skill instructions exceed Aiden's safety limit.");
+    }
+    return buffer.toString("utf8", 0, offset);
+  } finally {
+    await handle.close();
+  }
+}
+
 async function scanPatterns(config: ScanConfig): Promise<DiscoveredSkill[]> {
   if (!(await dirExists(config.root))) return [];
+  const rootStat = await fs.lstat(config.root).catch(() => null);
+  if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) return [];
+  const realRoot = await fs.realpath(config.root);
 
   const seenPaths = new Set<string>();
   const skills: DiscoveredSkill[] = [];
@@ -75,13 +124,13 @@ async function scanPatterns(config: ScanConfig): Promise<DiscoveredSkill[]> {
   for (const pattern of config.patterns) {
     const matches = fs.glob(pattern, { cwd: config.root });
     for await (const relative of matches) {
-      const skillMd = path.resolve(config.root, relative);
+      const skillMd = path.resolve(realRoot, relative);
       if (seenPaths.has(skillMd)) continue;
       seenPaths.add(skillMd);
 
       let raw: string;
       try {
-        raw = await fs.readFile(skillMd, "utf-8");
+        raw = await readBoundedSkillFile(realRoot, skillMd);
       } catch {
         continue;
       }

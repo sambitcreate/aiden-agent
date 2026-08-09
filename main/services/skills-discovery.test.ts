@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { discoverSkills } from "./skills-discovery.js";
 
 async function writeSkill(dir: string, name: string, body: string) {
@@ -132,6 +133,44 @@ test("skips skills without instructions", async (t) => {
 
   const skills = await discoverSkills(undefined, home);
   assert.equal(skills.length, 0);
+});
+
+test("skips an oversized skill without reading beyond the bounded contract", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+
+  await writeSkill(
+    path.join(home, ".agents", "skills"),
+    "oversized",
+    `---\nname: oversized\n---\n${"x".repeat(SLASH_LIMITS.instructionBytes + 1)}`,
+  );
+
+  assert.deepEqual(await discoverSkills(undefined, home), []);
+});
+
+test("rejects skill files and directories that escape through symbolic links", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-home-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-skills-outside-"));
+  t.after(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  const fileTarget = path.join(outside, "private.md");
+  await fs.writeFile(fileTarget, "CANARY_PRIVATE_KEY_MATERIAL", "utf8");
+  const fileSkill = path.join(home, ".agents", "skills", "file-link");
+  await fs.mkdir(fileSkill, { recursive: true });
+  await fs.symlink(fileTarget, path.join(fileSkill, "SKILL.md"));
+
+  const directoryTarget = path.join(outside, "directory-link");
+  await writeSkill(
+    path.join(directoryTarget, "skills"),
+    "nested",
+    "---\nname: escaped\n---\nPRIVATE_DIRECTORY",
+  );
+  await fs.symlink(directoryTarget, path.join(home, ".claude"));
+
+  assert.deepEqual(await discoverSkills(undefined, home), []);
 });
 
 test("caches repeated discovery for the same roots", async (t) => {

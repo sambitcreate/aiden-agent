@@ -1,7 +1,7 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Planned — source and UI audit complete; implementation has not
-  started
+- **Status:** Active — Phase 0 contracts are complete; Phase 1 skill-resolution
+  unification is next
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
@@ -511,6 +511,14 @@ becomes available.
 ## Delivery phases
 
 ### Phase 0 — Freeze the contract
+
+**Completed 2026-08-09.** The curated catalog, canonical action and availability
+keys, parser/ranker/session reducer, exact skill DTOs, deterministic collision
+policy, workspace/revision-bound opaque invocation identity, and centralized
+bounds are implemented. Skill discovery now performs bounded, regular-file,
+symlink-safe reads. The registered 29-test focused gate, command-system suite,
+TypeScript, ESLint, and diff checks pass. Three independent high-reasoning
+review lanes returned clean final P0/P1/P2 verdicts after the correction loops.
 
 - Finalize the curated command list, aliases, icons, copy, and action kinds.
 - Define the pure trigger/parser/ranker/session-state contract.
