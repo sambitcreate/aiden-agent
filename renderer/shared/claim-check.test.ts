@@ -37,6 +37,13 @@ test("flags a success claim after a failed mutating tool", () => {
     detectUnverifiedSuccessClaim("The task is completed.", timeline("github__merge_pr", "failed")),
     { kind: "unverified_success", stepIds: ["tool-1"] },
   );
+  assert.deepEqual(
+    detectUnverifiedSuccessClaim(
+      "Done — I updated the automation.",
+      timeline("edit_automation", "failed"),
+    ),
+    { kind: "unverified_success", stepIds: ["tool-1"] },
+  );
 });
 
 test("keeps completed and read-only failures quiet", () => {

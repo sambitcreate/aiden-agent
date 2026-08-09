@@ -19,3 +19,25 @@ export function subagentsAllowedForGeneration(input: SubagentEligibilityInput): 
     input.permission !== "none"
   );
 }
+
+export interface SubagentWorkspaceWriteEligibilityInput {
+  subagentsAllowed: boolean;
+  childWriteRollout: boolean;
+  v2StoreSelected: boolean;
+  workspacePermission?: WorkspacePermission;
+  generationPermission: WorkspacePermission | "read-only";
+}
+
+/** A parent generation ceiling can narrow, but never widen, stored workspace authority. */
+export function subagentWorkspaceWriteAllowedForGeneration(
+  input: SubagentWorkspaceWriteEligibilityInput,
+): boolean {
+  return (
+    input.subagentsAllowed &&
+    input.childWriteRollout &&
+    input.v2StoreSelected &&
+    (input.workspacePermission === "ask" || input.workspacePermission === "full") &&
+    (input.generationPermission === "ask" || input.generationPermission === "full")
+  );
+}
+import type { WorkspacePermission } from "../types.js";

@@ -9,6 +9,11 @@ import { providerRegistry } from "./provider-registry.js";
 import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
 import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
+import {
+  assertAssistantScheduleExecutionBoundary,
+  isSilentAssistantScheduleResponse,
+  scheduledTaskGenerationMode,
+} from "./schedule-guard.js";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -205,6 +210,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     output: string;
     error?: string;
   }> {
+    assertAssistantScheduleExecutionBoundary(task);
     const workspace = task.workspaceId
       ? await configStore.getWorkspace(task.workspaceId)
       : undefined;
@@ -223,7 +229,18 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
+    const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
+    if (task.permission === "read-only") {
+      for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
+    }
     const streamId = `scheduled-${task.id}-${Date.now().toString(36)}`;
+    const legacyAllMcp =
+      task.mcpServerIds === undefined &&
+      task.executionProfile === undefined &&
+      task.permission === "full";
+    const mcpServerIds = task.mcpServerIds ?? (legacyAllMcp ? undefined : []);
+    const allowMcpTools =
+      task.permission === "full" && (legacyAllMcp || (mcpServerIds?.length ?? 0) > 0);
     const background = createBackgroundOwner(streamId);
     const turn = llmClient.beginChatTurn(chatId, streamId, background.owner.documentId);
     if (!turn) {
@@ -237,10 +254,6 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
         { providerId, model },
       );
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
-      const excluded = new Set<string>([SCHEDULE_TOOL_NAME]);
-      if (task.permission === "read-only") {
-        for (const name of APPROVAL_TOOL_NAMES) excluded.add(name);
-      }
       const started = await llmClient.start(
         streamId,
         {
@@ -248,6 +261,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           workspaceId: task.workspaceId,
           providerId,
           model,
+          mode: scheduledTaskGenerationMode(task),
           messages: [{ role: "user", content: prompt }],
         },
         background.owner,
@@ -255,7 +269,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           permission: task.permission,
           excludeToolNames: excluded,
           allowComputerUse: false,
-          allowMcpTools: task.permission === "full",
+          allowMcpTools,
+          mcpServerIds,
+          mcpServerBindings: task.mcpServerBindings,
+          providerFingerprint: task.providerFingerprint,
           allowSubagents: false,
           usageSource: "scheduled",
           turnId: streamId,
@@ -276,6 +293,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           output: terminal.content ?? "",
           error,
         };
+      }
+      if (isSilentAssistantScheduleResponse(task, terminal.content)) {
+        return { result: "silent", output: "" };
       }
       return { result: "success", output: terminal.content };
     } finally {
@@ -298,6 +318,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       let output = "";
       let error: string | undefined;
       try {
+        assertAssistantScheduleExecutionBoundary(task);
         chatId = await ensureChat(task);
         const execution =
           task.mode === "script"

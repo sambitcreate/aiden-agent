@@ -92,13 +92,18 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
   );
 });
 
-export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  function Textarea({ className, ...props }, ref) {
+type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  density?: "default" | "compact";
+};
+
+export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
+  function Textarea({ className, density = "default", ...props }, ref) {
     return (
       <textarea
         ref={ref}
         className={cn(
-          "field-sizing-content min-h-16 w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+          "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+          density === "compact" ? "min-h-7" : "min-h-16",
           className,
         )}
         {...props}

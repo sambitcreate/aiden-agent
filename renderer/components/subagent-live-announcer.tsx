@@ -5,7 +5,7 @@ import {
   subagentSnapshotLiveSummary,
   subagentSnapshotLiveSummaryIsTerminal,
 } from "../lib/subagent-panel-state";
-import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 
 export interface SubagentDetailAnnouncementRequest {
   id: number;
@@ -20,7 +20,7 @@ export function SubagentLiveAnnouncer({
   portalHost,
 }: {
   ownerKey: string;
-  runs: readonly SubagentRunSnapshotV1[];
+  runs: readonly SubagentRunSnapshot[];
   detailRequest: SubagentDetailAnnouncementRequest | null;
   portalHost: HTMLElement | null;
 }) {

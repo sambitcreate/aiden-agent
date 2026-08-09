@@ -35,6 +35,8 @@ function testStore(now = 1_800_000_000_000) {
   );
 }
 
+const ASSISTANT_PROVIDER_FINGERPRINT = "b".repeat(64);
+
 test("cron helpers validate timezone and return ordered future runs", () => {
   const from = new Date("2026-07-23T12:00:01.000Z");
   const first = nextScheduledRun("0 9 * * 1-5", "America/New_York", from);
@@ -95,6 +97,167 @@ test("task store validates, updates, pauses, and retains runtime fields", async 
   );
 });
 
+test("task revisions advance monotonically when the clock does not", async () => {
+  const store = testStore(1_000);
+  const created = await store.save({
+    name: "Revision test",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize changes.",
+  });
+  const first = await store.save({
+    id: created.id,
+    name: "First edit",
+    mode: created.mode,
+    cron: created.cron,
+    timezone: created.timezone,
+    prompt: created.prompt,
+    permission: created.permission,
+  });
+  const second = await store.save({
+    id: created.id,
+    name: "Second edit",
+    mode: created.mode,
+    cron: created.cron,
+    timezone: created.timezone,
+    prompt: created.prompt,
+    permission: created.permission,
+  });
+  const withChat = await store.updateRuntime(created.id, { chatId: "chat-1" });
+  await store.clearChatId(created.id, "chat-1");
+  const withoutChat = await store.get(created.id);
+  assert.equal(created.updatedAt, 1_000);
+  assert.equal(first.updatedAt, 1_001);
+  assert.equal(second.updatedAt, 1_002);
+  assert.equal(withChat.updatedAt, 1_003);
+  assert.equal(withoutChat?.updatedAt, 1_004);
+});
+
+test("Assistant execution profile persists while allowing project-bound Full access only", async () => {
+  const store = testStore();
+  const created = await store.save({
+    name: "Ask Aiden brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize Aiden notifications.",
+    permission: "read-only",
+    executionProfile: "assistant",
+    providerId: "provider-1",
+    model: "model-1",
+    providerFingerprint: ASSISTANT_PROVIDER_FINGERPRINT,
+  });
+  assert.equal(created.executionProfile, "assistant");
+
+  const updated = await store.save({
+    id: created.id,
+    name: "Updated Ask Aiden brief",
+    mode: "llm",
+    cron: "0 10 * * *",
+    timezone: "UTC",
+    prompt: "Summarize only important Aiden notifications.",
+    permission: "read-only",
+    providerId: "replacement-provider",
+    model: "replacement-model",
+    providerFingerprint: "c".repeat(64),
+  });
+  assert.equal(updated.executionProfile, "assistant");
+  assert.equal(updated.providerId, "provider-1");
+  assert.equal(updated.model, "model-1");
+  assert.equal(updated.providerFingerprint, ASSISTANT_PROVIDER_FINGERPRINT);
+
+  await assert.rejects(
+    store.save({
+      id: created.id,
+      name: updated.name,
+      mode: "llm",
+      cron: updated.cron,
+      timezone: updated.timezone,
+      prompt: updated.prompt,
+      permission: "full",
+    }),
+    /Full access requires a project/iu,
+  );
+  const projectTask = await store.save({
+    id: created.id,
+    name: updated.name,
+    mode: "llm",
+    cron: updated.cron,
+    timezone: updated.timezone,
+    workspaceId: "workspace-1",
+    prompt: updated.prompt,
+    permission: "read-only",
+  });
+  assert.equal(projectTask.executionProfile, "assistant");
+  assert.equal(projectTask.workspaceId, "workspace-1");
+
+  const fullTask = await store.save({
+    id: created.id,
+    name: updated.name,
+    mode: "llm",
+    cron: updated.cron,
+    timezone: updated.timezone,
+    workspaceId: "workspace-1",
+    prompt: "Update the project report.",
+    permission: "full",
+  });
+  assert.equal(fullTask.executionProfile, "assistant");
+  assert.equal(fullTask.permission, "full");
+
+  const globalMcpTask = await store.save({
+    id: created.id,
+    name: updated.name,
+    mode: "llm",
+    cron: updated.cron,
+    timezone: updated.timezone,
+    prompt: "Email the morning briefing.",
+    permission: "full",
+    mcpServerIds: ["gmail"],
+    mcpServerBindings: [{ id: "gmail", fingerprint: "a".repeat(64) }],
+  });
+  assert.equal(globalMcpTask.workspaceId, undefined);
+  assert.deepEqual(globalMcpTask.mcpServerIds, ["gmail"]);
+});
+
+test("MCP-enabled tasks persist exact scope and require Full Ask Aiden access", async () => {
+  const store = testStore();
+  const task = await store.save({
+    name: "Inbox brief",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize the inbox.",
+    permission: "full",
+    mcpServerIds: ["gmail", "gmail"],
+  });
+  assert.deepEqual(task.mcpServerIds, ["gmail"]);
+  await assert.rejects(
+    store.save({
+      name: "Read-only connector",
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize the inbox.",
+      permission: "read-only",
+      mcpServerIds: ["gmail"],
+    }),
+    /require Full permission/iu,
+  );
+  await assert.rejects(
+    store.save({
+      name: "Script connector",
+      mode: "script",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      script: "brief.sh",
+      permission: "full",
+      mcpServerIds: ["gmail"],
+    }),
+    /Only Ask Aiden tasks/iu,
+  );
+});
+
 test("run history is capped at the newest 50 entries per task", async () => {
   const store = testStore();
   const task = await store.save({
@@ -120,6 +283,32 @@ test("run history is capped at the newest 50 entries per task", async () => {
   assert.equal(runs[0]?.id, "run-54");
   assert.equal(runs[runs.length - 1]?.id, "run-5");
   assert.equal((await store.get(task.id))?.lastRunAt, 55);
+});
+
+test("store methods remain safe when called without an object receiver", async () => {
+  const store = testStore();
+  const task = await store.save({
+    name: "Detached methods",
+    mode: "llm",
+    cron: "0 9 * * *",
+    timezone: "UTC",
+    prompt: "Summarize changes.",
+  });
+  const { ensureChatId, recordRun } = store;
+
+  assert.equal(await ensureChatId(task.id, async () => ({ id: "chat-detached" })), "chat-detached");
+  await recordRun({
+    taskId: task.id,
+    startedAt: 10,
+    finishedAt: 20,
+    result: "success",
+    output: "Done",
+  });
+
+  const updated = await store.get(task.id);
+  assert.equal(updated?.chatId, "chat-detached");
+  assert.equal(updated?.lastRunAt, 20);
+  assert.equal(updated?.lastResult, "success");
 });
 
 test("script names reject traversal and path separators", () => {
@@ -167,6 +356,72 @@ test("stored invalid schedules are quarantined instead of aborting startup", asy
   assert.match(task?.lastError ?? "", /needs attention/iu);
 });
 
+test("stored project-plus-MCP schedules are quarantined until their scope is split", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "mixed-task",
+      name: "Mixed task",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      workspaceId: "workspace-1",
+      prompt: "Read external data and update the project.",
+      permission: "full",
+      mcpServerIds: ["gmail"],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const task = await store.get("mixed-task");
+  assert.equal(task?.enabled, false);
+  assert.match(task?.lastError ?? "", /either one project or MCP servers/iu);
+});
+
+test("a quarantined Assistant-profile task cannot be re-enabled with elevated capabilities", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "corrupt-assistant",
+      name: "Corrupt Assistant task",
+      enabled: true,
+      mode: "script",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      script: "report.sh",
+      permission: "full",
+      executionProfile: "assistant",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  assert.equal((await store.get("corrupt-assistant"))?.enabled, false);
+  await assert.rejects(store.setEnabled("corrupt-assistant", true), /provider\/model-pinned/iu);
+});
+
+test("stored Assistant tasks without an approved provider binding are quarantined", async () => {
+  const tasks = new MemoryPersistence<unknown[]>([
+    {
+      id: "unpinned-assistant",
+      name: "Unpinned Assistant task",
+      enabled: true,
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize changes.",
+      permission: "read-only",
+      executionProfile: "assistant",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ]);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const task = await store.get("unpinned-assistant");
+  assert.equal(task?.enabled, false);
+  assert.match(task?.lastError ?? "", /provider\/model-pinned/iu);
+});
+
 test("loads legacy Gemini scheduled tasks through the native Google provider", async () => {
   const tasks = new MemoryPersistence<unknown[]>([
     {
@@ -207,10 +462,13 @@ test("persists protected custom aliases for historical and newly saved schedules
   ]);
   const alias = async (providerId: string | undefined) =>
     providerId === "openai" ? "custom:openai-legacy" : providerId;
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]), Date.now, alias);
+  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]), () => 1, alias);
 
-  assert.equal((await store.list())[0]?.providerId, "custom:openai-legacy");
+  const migrated = (await store.list())[0];
+  assert.equal(migrated?.providerId, "custom:openai-legacy");
+  assert.equal(migrated?.updatedAt, 2);
   assert.equal((tasks.snapshot()[0] as { providerId?: string }).providerId, "custom:openai-legacy");
+  assert.equal((tasks.snapshot()[0] as { updatedAt?: number }).updatedAt, 2);
 
   const created = await store.save({
     name: "Another work task",

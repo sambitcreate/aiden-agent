@@ -1,11 +1,15 @@
 import * as React from "react";
-import { ArrowDownToLine, ChevronRight } from "lucide-react";
+import { ArrowDownToLine, ChevronRight, Square } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import {
   subagentDetailGrowthAction,
   subagentDetailIsAwayFromLatest,
 } from "../lib/subagent-panel-state";
-import type { SubagentMilestoneKind, SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type {
+  SubagentEffectActivityV1,
+  SubagentMilestoneKind,
+  SubagentRunSnapshot,
+} from "../shared/subagent-runs";
 import { Markdown } from "./markdown";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { Button, Callout, ErrorBoundary, Text } from "./ui";
@@ -21,7 +25,7 @@ export function formatSubagentElapsed(startedAt: number, endedAt: number): strin
   return `${hours}h ${minutes}m`;
 }
 
-export function subagentToolAggregate(run: SubagentRunSnapshotV1): string {
+export function subagentToolAggregate(run: SubagentRunSnapshot): string {
   const toolLabel = run.tools === 1 ? "tool use" : "tool uses";
   const turnLabel = run.turns === 1 ? "turn" : "turns";
   return `${run.tools} ${toolLabel} · ${run.turns} ${turnLabel}`;
@@ -40,7 +44,7 @@ export function subagentMilestoneLabel(milestone: SubagentMilestoneKind): string
   return SUBAGENT_MILESTONE_LABELS[milestone];
 }
 
-export function subagentMilestoneAggregate(run: SubagentRunSnapshotV1): string {
+export function subagentMilestoneAggregate(run: SubagentRunSnapshot): string {
   const count = run.milestones?.length ?? 0;
   return `${count} activity milestone${count === 1 ? "" : "s"}`;
 }
@@ -59,20 +63,49 @@ function UnrenderableSubagentUpdate({ content }: { content: string }) {
 }
 
 export interface SubagentDetailProps {
-  run: SubagentRunSnapshotV1;
+  run: SubagentRunSnapshot;
+  effectActivity?: readonly SubagentEffectActivityV1[];
+  onStop?: (run: SubagentRunSnapshot) => Promise<void> | void;
   now?: number;
   className?: string;
 }
 
 export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetailProps>(
-  function SubagentDetail({ run, now = Date.now(), className }, headingRef) {
+  function SubagentDetail(
+    { run, effectActivity = [], onStop, now = Date.now(), className },
+    headingRef,
+  ) {
     const scrollRef = React.useRef<HTMLDivElement | null>(null);
     const userNavigatedRef = React.useRef(false);
     const followGrowthRef = React.useRef(false);
     const previousRunRef = React.useRef<{ runId: string; revision: number } | null>(null);
     const [awayFromLatest, setAwayFromLatest] = React.useState(false);
+    const [controlPending, setControlPending] = React.useState<"stop" | null>(null);
+    const [controlError, setControlError] = React.useState<string | null>(null);
     const endedAt = run.finishedAt ?? now;
     const state = subagentStateLabel(run.state);
+    const active =
+      run.state === "queued" ||
+      run.state === "starting" ||
+      run.state === "running" ||
+      run.state === "needs_attention";
+    const canStop = run.version === 2 && run.execution === "foreground" && active && onStop;
+    const stopLabel = run.version === 2 && run.depth === 1 ? "Stop subtree" : "Stop subagent";
+    const invokeControl = async () => {
+      if (controlPending) return;
+      if (!onStop) return;
+      setControlPending("stop");
+      setControlError(null);
+      try {
+        await onStop(run);
+      } catch (error) {
+        setControlError(
+          error instanceof Error ? error.message : "Aiden could not stop this subagent.",
+        );
+      } finally {
+        setControlPending(null);
+      }
+    };
     const updateScrollPosition = React.useCallback(() => {
       const element = scrollRef.current;
       if (!element) return;
@@ -176,8 +209,53 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 <Text as="p" variant="small" color="secondary" className="mt-0.5">
                   {run.role} · {state} · {formatSubagentElapsed(run.startedAt, endedAt)}
                 </Text>
+                <Text as="p" variant="small" color="tertiary" className="mt-0.5 break-words">
+                  Model: {run.modelId}
+                </Text>
+                {run.version === 2 ? (
+                  <Text
+                    as="p"
+                    variant="small"
+                    color="tertiary"
+                    className="mt-0.5 break-words"
+                    data-subagent-context={run.context}
+                  >
+                    {run.context === "fresh" ? "Fresh context" : "Forked conversation"}
+                  </Text>
+                ) : null}
               </span>
             </header>
+
+            {canStop ? (
+              <div
+                className="flex min-w-0 flex-wrap items-center gap-2"
+                data-subagent-controls="true"
+              >
+                <Button
+                  variant="muted"
+                  size="small"
+                  radius="rounded"
+                  disabled={controlPending !== null}
+                  aria-label={`${stopLabel} ${run.label}`}
+                  onClick={() => void invokeControl()}
+                  className="motion-reduce:transition-none"
+                >
+                  <Square aria-hidden="true" className="size-3" />
+                  {controlPending === "stop" ? "Stopping…" : stopLabel}
+                </Button>
+              </div>
+            ) : null}
+
+            {controlError ? (
+              <Callout color="red" role="alert" data-subagent-control-error="true">
+                <Text variant="small-strong" color="red">
+                  Subagent action failed
+                </Text>
+                <Text as="p" variant="small" color="secondary">
+                  {controlError} Try again if the run is still available.
+                </Text>
+              </Callout>
+            ) : null}
 
             <section aria-labelledby={`subagent-task-${run.runId}`}>
               <Text
@@ -206,6 +284,39 @@ export const SubagentDetail = React.forwardRef<HTMLHeadingElement, SubagentDetai
                 {run.activity ?? state}
               </Text>
             </section>
+
+            {effectActivity.length > 0 ? (
+              <section
+                aria-labelledby={`subagent-effects-${run.runId}`}
+                data-subagent-effect-activity="true"
+              >
+                <Text
+                  as="h3"
+                  id={`subagent-effects-${run.runId}`}
+                  variant="small-strong"
+                  color="tertiary"
+                >
+                  External effects
+                </Text>
+                <ol className="mt-1 space-y-2">
+                  {effectActivity.map((effect, index) => (
+                    <li
+                      key={`${effect.updatedAt}:${effect.kind}:${effect.state}:${index}`}
+                      data-subagent-effect-kind={effect.kind}
+                      data-subagent-effect-state={effect.state}
+                      className="rounded-card bg-well px-3 py-2"
+                    >
+                      <Text as="p" variant="small-strong">
+                        {effect.label}
+                      </Text>
+                      <Text as="p" variant="small" color="secondary">
+                        {effect.kind === "shell" ? "Command" : "Remote change"} · State: {effect.state.replace(/_/gu, " ")}
+                      </Text>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
 
             <details className="group/milestones rounded-card bg-well">
               <summary className="flex cursor-default list-none items-center gap-2 rounded-card px-3 py-2 outline-none transition-colors hover:bg-list-hover focus-visible:bg-list-selection focus-visible:outline-none motion-reduce:transition-none">

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startGeneration, type StreamCallbacks } from "./ipc.js";
+import { startGeneration, subagentsApi, type StreamCallbacks } from "./ipc.js";
 import {
   isDetachedLifecycleChatDraining,
   subscribeDetachedTerminalChats,
@@ -96,6 +96,24 @@ test("lifecycle cancellation releases every stream subscription immediately", as
   }
 });
 
+test("subagent management sends no renderer-constructed authority tuple", async () => {
+  const { bridge, restore } = installFakeBridge();
+  try {
+    await assert.rejects(
+      subagentsApi.stop("chat-1", "run-1"),
+      /invalid subagent control response/u,
+    );
+    const request = bridge.invokes.find(({ channel }) => channel === "subagents:manage");
+    assert.deepEqual(request, {
+      channel: "subagents:manage",
+      args: ["chat-1", { version: 2, action: "stop", runId: "run-1" }],
+    });
+    assert.doesNotMatch(JSON.stringify(request), /authorityRevision|ownerDocumentId|workspaceId/u);
+  } finally {
+    restore();
+  }
+});
+
 test("user Stop retains terminal delivery before releasing subscriptions", () => {
   const { bridge, restore } = installFakeBridge();
   try {
@@ -157,6 +175,72 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
     assert.equal(bridge.listeners.get("chat:subagents")?.size, 1);
     enabled.cancel("lifecycle");
     assert.equal(bridge.listeners.get("chat:subagents")?.size, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("approval details are forwarded only to their owning stream", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-approval",
+        workspaceId: "assistant",
+        providerId: "provider-1",
+        model: "model-1",
+        mode: "assistant",
+        messages: [],
+      },
+      {
+        ...callbacks(),
+        onApproval: (prompt) => received.push(prompt),
+      },
+      "turn-approval",
+    );
+    const payload = {
+      streamId: handle.streamId,
+      approvalId: "approval-1",
+      toolCallId: "tool-1",
+      toolName: "schedule_task",
+      summary: "Create Morning brief",
+      details: {
+        kind: "assistant-automation",
+        action: "create",
+        name: "Morning brief",
+        prompt: "Summarize updates.",
+        cron: "0 9 * * *",
+        timezone: "UTC",
+        nextRunAt: 1_800_000_000_000,
+        notify: true,
+        mode: "llm",
+        permission: "read-only",
+        workspaceId: null,
+        workspaceName: null,
+        mcpServerIds: [],
+        mcpServerNames: [],
+        providerId: "local-provider",
+        providerName: "Local Provider",
+        model: "local-model",
+        modelName: "Local Model",
+        schedulerEnabled: true,
+      },
+    };
+    for (const handler of bridge.listeners.get("chat:approval") ?? []) {
+      handler({ ...payload, streamId: "another-stream" });
+      handler(payload);
+    }
+    assert.deepEqual(received, [
+      {
+        approvalId: payload.approvalId,
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        summary: payload.summary,
+        details: payload.details,
+      },
+    ]);
+    handle.cancel("lifecycle");
   } finally {
     restore();
   }

@@ -17,6 +17,7 @@ import {
   MAX_SUBAGENT_CHAT_TOMBSTONES,
   MAX_SUBAGENT_RUN_STORE_BYTES,
   createSubagentRunStore,
+  parseSubagentRunDatabaseV1ForMigration,
 } from "./subagent-run-store-core.js";
 import type {
   SubagentRunStoreGeneration,
@@ -55,6 +56,42 @@ function snapshot(overrides: Partial<SubagentRunSnapshotV1> = {}): SubagentRunSn
     ...overrides,
   };
 }
+
+test("lossless V1 migration accepts only exact non-normalizing evidence", () => {
+  const run = snapshot();
+  const current = { version: 1, runs: [run], pendingChatDeletions: [] };
+  assert.deepEqual(parseSubagentRunDatabaseV1ForMigration(JSON.stringify(current)), current);
+  assert.deepEqual(
+    parseSubagentRunDatabaseV1ForMigration(JSON.stringify({ version: 1, runs: [run] })),
+    current,
+  );
+  assert.throws(
+    () =>
+      parseSubagentRunDatabaseV1ForMigration(
+        JSON.stringify({ version: 1, runs: [{ ...run, unknown: true }], pendingChatDeletions: [] }),
+      ),
+    /Invalid|normalize/u,
+  );
+  assert.throws(
+    () =>
+      parseSubagentRunDatabaseV1ForMigration(
+        JSON.stringify({ version: 1, runs: [run, run], pendingChatDeletions: [] }),
+      ),
+    /duplicate runs/u,
+  );
+  assert.throws(
+    () =>
+      parseSubagentRunDatabaseV1ForMigration(
+        JSON.stringify({ version: 1, runs: [run], pendingChatDeletions: [run.chatId] }),
+      ),
+    /deletion-owned/u,
+  );
+  assert.throws(() =>
+    parseSubagentRunDatabaseV1ForMigration(
+      '{"version":1,"version":1,"runs":[],"pendingChatDeletions":[]}',
+    ),
+  );
+});
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

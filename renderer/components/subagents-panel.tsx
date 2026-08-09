@@ -20,7 +20,10 @@ import {
   type SubagentPanelFocusSurface,
   type SubagentDetailAnnouncementState,
 } from "../lib/subagent-panel-state";
-import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type {
+  SubagentEffectActivityV1,
+  SubagentRunSnapshot,
+} from "../shared/subagent-runs";
 import { SubagentOrb, subagentStateLabel } from "./subagent-chips";
 import { SubagentDetail } from "./subagent-detail";
 import {
@@ -41,13 +44,15 @@ export interface SubagentsPanelProps {
   chatId: string | null;
   workspaceId: string | null;
   runs: readonly SubagentRunView[];
-  selectedRunSnapshot?: SubagentRunSnapshotV1 | null;
+  selectedRunSnapshot?: SubagentRunSnapshot | null;
   detailLoading?: boolean;
   detailError?: string | null;
+  effectActivity?: readonly SubagentEffectActivityV1[];
   selectedRunId?: string | null;
   defaultSelectedRunId?: string | null;
   onSelectedRunChange?: (runId: string) => void;
   onRetryDetail?: (runId: string) => void;
+  onStopRun?: (run: SubagentRunSnapshot) => Promise<void> | void;
   onDetailAnnouncement?: (ownerKey: string, message: string) => void;
   detailRequestVersion?: number;
   active?: boolean;
@@ -58,8 +63,8 @@ export interface SubagentsPanelProps {
 
 function matchingDetailSnapshot(
   selectedRun: SubagentRunView | null,
-  selectedRunSnapshot: SubagentRunSnapshotV1 | null | undefined,
-): SubagentRunSnapshotV1 | null {
+  selectedRunSnapshot: SubagentRunSnapshot | null | undefined,
+): SubagentRunSnapshot | null {
   if (!selectedRun) return null;
   const loaded =
     selectedRunSnapshot?.runId === selectedRun.runId &&
@@ -143,10 +148,12 @@ function OwnedSubagentsPanel({
   selectedRunSnapshot,
   detailLoading = false,
   detailError = null,
+  effectActivity = [],
   selectedRunId,
   defaultSelectedRunId,
   onSelectedRunChange,
   onRetryDetail,
+  onStopRun,
   onDetailAnnouncement,
   detailRequestVersion = 0,
   active = true,
@@ -348,7 +355,14 @@ function OwnedSubagentsPanel({
       }}
     >
       {detailSnapshot ? (
-        <SubagentDetail ref={detailHeadingRef} run={detailSnapshot} now={now} />
+        <SubagentDetail
+          key={detailSnapshot.runId}
+          ref={detailHeadingRef}
+          run={detailSnapshot}
+          effectActivity={effectActivity}
+          onStop={onStopRun}
+          now={now}
+        />
       ) : (
         <SubagentDetailPending
           ref={detailHeadingRef}

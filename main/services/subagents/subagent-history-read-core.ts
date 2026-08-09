@@ -1,6 +1,8 @@
 import {
   isSafeSubagentIdentifier,
-  type SubagentRunSnapshotV1,
+  type SubagentEffectActivityV1,
+  type SubagentHistoryDetailV1,
+  type SubagentRunSnapshot,
 } from "../../../renderer/shared/subagent-runs.js";
 import type { RendererDocumentOwner } from "../renderer-document-owner.js";
 import {
@@ -21,9 +23,34 @@ interface HistoricalChat {
   }>;
 }
 
-export interface SubagentHistoryReadDependencies {
+export async function readSubagentHistoryDetailForOwner<
+  Snapshot extends SubagentRunSnapshot,
+>(
+  owner: RendererDocumentOwner,
+  chatId: string,
+  runId: string,
+  dependencies: SubagentHistoryReadDependencies<Snapshot> & {
+    getEffectActivity(runId: string, chatId: string): Promise<SubagentEffectActivityV1[]>;
+  },
+): Promise<SubagentHistoryDetailV1 | null> {
+  const removeOwnerInvalidation = owner.onInvalidated(() => undefined);
+  try {
+    const snapshot = await readSubagentHistoryForOwner(owner, chatId, runId, dependencies);
+    requireActiveOwner(owner);
+    if (!snapshot) return null;
+    const effects = await dependencies.getEffectActivity(runId, chatId);
+    requireActiveOwner(owner);
+    return { version: 1, snapshot, effects };
+  } finally {
+    removeOwnerInvalidation();
+  }
+}
+
+export interface SubagentHistoryReadDependencies<
+  Snapshot extends SubagentRunSnapshot = SubagentRunSnapshot,
+> {
   getChat(chatId: string): Promise<HistoricalChat | null>;
-  getSnapshot(runId: string): Promise<SubagentRunSnapshotV1 | null>;
+  getSnapshot(runId: string): Promise<Snapshot | null>;
 }
 
 /** Validate both renderer-controlled lookup keys before any private-store access. */
@@ -44,12 +71,14 @@ function requireActiveOwner(owner: RendererDocumentOwner): void {
 }
 
 /** Keep the exact invoking document authoritative across both asynchronous reads. */
-export async function readSubagentHistoryForOwner(
+export async function readSubagentHistoryForOwner<
+  Snapshot extends SubagentRunSnapshot,
+>(
   owner: RendererDocumentOwner,
   chatId: string,
   runId: string,
-  dependencies: SubagentHistoryReadDependencies,
-): Promise<SubagentRunSnapshotV1 | null> {
+  dependencies: SubagentHistoryReadDependencies<Snapshot>,
+): Promise<Snapshot | null> {
   const removeOwnerInvalidation = owner.onInvalidated(() => undefined);
   try {
     const chat = await dependencies.getChat(chatId);

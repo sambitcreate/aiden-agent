@@ -23,3 +23,25 @@ test("composer focus tints the whole shell, not only the textarea", () => {
     /:root :where\(\*\):focus,\s*:root :where\(\*\):focus-visible\s*\{\s*outline: none !important;\s*\}/u,
   );
 });
+
+test("chat surfaces share the responsive centered chat-column contract", () => {
+  const composer = source("./composer.tsx");
+  const messages = source("./message-list.tsx");
+  const chatPane = source("../main/chat-pane.tsx");
+  const styles = source("../styles.css");
+
+  for (const surface of [composer, messages, chatPane]) {
+    assert.match(surface, /aiden-dock-inset chat-content-column/u);
+    assert.doesNotMatch(surface, /max-w-3xl/u);
+  }
+
+  assert.match(styles, /--chat-content-max-width:\s*52rem;/u);
+  assert.match(
+    styles,
+    /\.chat-content-column\s*\{[\s\S]*width:\s*100%;[\s\S]*max-width:\s*var\(--chat-content-max-width\);[\s\S]*margin-inline:\s*auto;/u,
+  );
+  assert.match(
+    styles,
+    /\.aiden-dock-inset\s*\{\s*padding-inline:\s*var\(--aiden-dock-gutter\);\s*\}/u,
+  );
+});

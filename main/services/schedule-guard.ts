@@ -1,3 +1,124 @@
+import type { ScheduledTask } from "./types.js";
+
+export const ASSISTANT_SCHEDULE_EXECUTION_PROFILE = "assistant" as const;
+
+type ScheduledTaskExecutionBoundary = Pick<
+  ScheduledTask,
+  | "executionProfile"
+  | "mode"
+  | "permission"
+  | "script"
+  | "workspaceId"
+  | "mcpServerIds"
+  | "mcpServerBindings"
+  | "providerId"
+  | "model"
+  | "providerFingerprint"
+>;
+
+export const SCHEDULED_TASK_MCP_SERVER_LIMIT = 16;
+export const SCHEDULED_TASK_MCP_SERVER_ID_LIMIT = 160;
+
+function hasUnsafeMcpIdentityCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Normalize the exact MCP identities persisted on a scheduled task. */
+export function validateScheduledMcpServerIds(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > SCHEDULED_TASK_MCP_SERVER_LIMIT) {
+    throw new Error(
+      `Scheduled tasks may use at most ${SCHEDULED_TASK_MCP_SERVER_LIMIT} MCP servers.`,
+    );
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (typeof candidate !== "string") {
+      throw new Error("Scheduled task MCP server IDs must be strings.");
+    }
+    const id = candidate.trim();
+    if (
+      !id ||
+      id.length > SCHEDULED_TASK_MCP_SERVER_ID_LIMIT ||
+      hasUnsafeMcpIdentityCharacter(id)
+    ) {
+      throw new Error("Scheduled task MCP server ID is invalid.");
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      result.push(id);
+    }
+  }
+  return result;
+}
+
+/**
+ * Assistant-created tasks remain LLM-only after persistence and UI edits.
+ * Full access is valid only when the approval was bound to a concrete project
+ * or at least one exact MCP server.
+ */
+export function assertAssistantScheduleExecutionBoundary(
+  task: ScheduledTaskExecutionBoundary,
+): void {
+  const mcpServerIds = task.mcpServerIds ?? [];
+  const hasMcpAccess = mcpServerIds.length > 0;
+  if (task.workspaceId !== undefined && hasMcpAccess) {
+    throw new Error(
+      "Scheduled tasks must choose either one project or MCP servers, not both. Split local project work and external-service access into separate tasks.",
+    );
+  }
+  if (task.executionProfile !== ASSISTANT_SCHEDULE_EXECUTION_PROFILE) return;
+  const hasExactMcpBindings =
+    !hasMcpAccess ||
+    (task.mcpServerBindings?.length === mcpServerIds.length &&
+      mcpServerIds.every((id, index) => task.mcpServerBindings?.[index]?.id === id));
+  const hasPinnedRuntime = Boolean(
+    task.providerId?.trim() &&
+    task.model?.trim() &&
+    /^[a-f0-9]{64}$/u.test(task.providerFingerprint ?? ""),
+  );
+  if (
+    task.mode !== "llm" ||
+    task.script !== undefined ||
+    (task.permission === "full" && task.workspaceId === undefined && !hasMcpAccess) ||
+    (hasMcpAccess && task.permission !== "full") ||
+    !hasExactMcpBindings ||
+    !hasPinnedRuntime
+  ) {
+    throw new Error(
+      "Aiden-created automations must remain provider/model-pinned LLM tasks, choose either one project or exactly bound approved MCP servers, and Full access requires a project or exactly bound approved MCP server.",
+    );
+  }
+}
+
+export function scheduledTaskGenerationMode(
+  task: Pick<ScheduledTask, "executionProfile" | "workspaceId">,
+): "assistant-unattended" | "assistant-automation" | undefined {
+  if (task.executionProfile !== ASSISTANT_SCHEDULE_EXECUTION_PROFILE) return undefined;
+  return task.workspaceId ? "assistant-automation" : "assistant-unattended";
+}
+
+export function isSilentAssistantScheduleResponse(
+  task: Pick<ScheduledTask, "executionProfile">,
+  content: string,
+): boolean {
+  return (
+    task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE && content.trim() === "[SILENT]"
+  );
+}
+
 const STRICT_THREAT_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [
     /ignore\s+(?:\w+\s+)*(?:previous|all|above|prior)\s+(?:\w+\s+)*instructions/iu,

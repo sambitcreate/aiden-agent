@@ -1,11 +1,11 @@
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
-import { Callout, ErrorBoundary, Text } from "./ui";
+import { Callout, Text } from "./ui";
 import { AidenOrb } from "./aiden-orb";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
-import { MessageBubble } from "./message-bubble";
+import { SafeMessageBubble } from "./message-bubble";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
 import type { ChatMessage } from "../lib/types";
@@ -17,7 +17,7 @@ import {
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
 import type { GenerationTimeline } from "../shared/generation-timeline";
-import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -28,7 +28,7 @@ interface MessageListProps {
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
-  liveSubagents: readonly SubagentRunSnapshotV1[];
+  liveSubagents: readonly SubagentRunSnapshot[];
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Current active generation phase, derived from real stream/tool state. */
@@ -108,7 +108,7 @@ export function MessageList({
   return (
     <div
       ref={transcriptRef}
-      className="aiden-dock-inset mx-auto flex w-full max-w-3xl flex-col gap-5 py-6"
+      className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
       data-subagent-chip-focus-scope="true"
     >
       {messages.map((m) => (
@@ -120,12 +120,7 @@ export function MessageList({
             <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
           ) : null}
           {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
-          <ErrorBoundary
-            fallback={<UnrenderableMessage content={m.content} />}
-            resetKey={m.content}
-          >
-            <MessageBubble role={m.role} content={m.content} attachments={m.attachments} />
-          </ErrorBoundary>
+          <SafeMessageBubble role={m.role} content={m.content} attachments={m.attachments} />
         </div>
       ))}
 
@@ -143,18 +138,13 @@ export function MessageList({
             />
           ) : null}
           {streamingText ? (
-            <ErrorBoundary
-              fallback={<UnrenderableMessage content={streamingText} />}
-              resetKey={streamingText}
-            >
-              <MessageBubble
-                role="assistant"
-                content={streamingText}
-                streaming
-                streamComplete={streamComplete}
-                onStreamHandoffComplete={onStreamHandoffComplete}
-              />
-            </ErrorBoundary>
+            <SafeMessageBubble
+              role="assistant"
+              content={streamingText}
+              streaming
+              streamComplete={streamComplete}
+              onStreamHandoffComplete={onStreamHandoffComplete}
+            />
           ) : null}
         </div>
       ) : null}
@@ -174,21 +164,6 @@ export function MessageList({
         ) : null}
       </EventPresence>
     </div>
-  );
-}
-
-// Markdown, KaTeX, and highlighting all run over untrusted model output. If one
-// message throws, keep the rest of the transcript alive and show its raw text.
-function UnrenderableMessage({ content }: { content: string }) {
-  return (
-    <Callout color="red">
-      <Text variant="small-strong" color="red">
-        This message could not be formatted
-      </Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block whitespace-pre-wrap">
-        {content}
-      </Text>
-    </Callout>
   );
 }
 

@@ -3,7 +3,11 @@
 // the chat pane, so it survives route changes and follows the window's size.
 
 import * as React from "react";
-import { assistantPreviewText } from "../../lib/assistant-dock";
+import {
+  assistantAutomationDraft,
+  assistantPreviewText,
+  onAssistantAutomationComposerRequested,
+} from "../../lib/assistant-dock";
 import { AssistantBubble } from "./assistant-bubble";
 import { AssistantPanel } from "./assistant-panel";
 import { useAssistantChat } from "./use-assistant-chat";
@@ -50,6 +54,15 @@ export function AssistantDock({
     setOpen(false);
   }, []);
   useCommandHandler("assistant.open", openPanel, !interactionBlocked);
+  React.useEffect(
+    () =>
+      onAssistantAutomationComposerRequested(() => {
+        if (interactionBlocked) return;
+        setDraft(assistantAutomationDraft);
+        openPanel();
+      }),
+    [interactionBlocked, openPanel],
+  );
 
   // Keep the panel mounted through its exit animation, exactly as the
   // environment summary card does, so minimizing settles instead of vanishing.

@@ -26,6 +26,8 @@ function harness() {
   );
   const broadcasts: Array<Record<string, unknown>> = [];
   const pending = new Map<string, (run: ScheduledRun) => void>();
+  const deferredCancellations = new Set<string>();
+  let deferCancellations = false;
   let cancelAllCalls = 0;
   const execution = {
     run: (task: ScheduledTask) =>
@@ -34,6 +36,10 @@ function harness() {
       }),
     cancel: (taskId: string) => {
       const resolve = pending.get(taskId);
+      if (resolve && deferCancellations) {
+        deferredCancellations.add(taskId);
+        return true;
+      }
       resolve?.({
         id: `run-${taskId}`,
         taskId,
@@ -76,6 +82,23 @@ function harness() {
     broadcasts,
     cancelAllCalls: () => cancelAllCalls,
     hasPending: (taskId: string) => pending.has(taskId),
+    holdCancellations: () => void (deferCancellations = true),
+    hasDeferredCancellation: (taskId: string) => deferredCancellations.has(taskId),
+    releaseCancellation: (taskId: string) => {
+      const resolve = pending.get(taskId);
+      resolve?.({
+        id: `run-${taskId}`,
+        taskId,
+        startedAt: 1,
+        finishedAt: 2,
+        result: "blocked",
+        output: "",
+        error: "cancelled",
+      });
+      pending.delete(taskId);
+      deferredCancellations.delete(taskId);
+      deferCancellations = false;
+    },
   };
 }
 
@@ -207,5 +230,151 @@ test("concurrent lifecycle mutations serialize per task", async () => {
   const latest = await testbed.store.get(task.id);
   assert.equal(latest?.enabled, true);
   assert.ok(latest?.nextRunAt);
+  testbed.service.stop();
+});
+
+test("revision-checked saves update one task and reject stale overwrites", async () => {
+  const testbed = harness();
+  const task = await addTask(testbed.store);
+  const edited = await testbed.service.save(
+    {
+      id: task.id,
+      name: task.name,
+      enabled: task.enabled,
+      mode: task.mode,
+      cron: task.cron,
+      timezone: "America/New_York",
+      prompt: task.prompt,
+      permission: task.permission,
+      notify: task.notify,
+    },
+    { expectedUpdatedAt: task.updatedAt },
+  );
+  assert.equal(edited.id, task.id);
+  assert.equal(edited.timezone, "America/New_York");
+  assert.equal((await testbed.store.list()).length, 1);
+
+  await assert.rejects(
+    testbed.service.save(
+      {
+        id: task.id,
+        name: task.name,
+        enabled: task.enabled,
+        mode: task.mode,
+        cron: "0 10 * * *",
+        timezone: task.timezone,
+        prompt: task.prompt,
+        permission: task.permission,
+        notify: task.notify,
+      },
+      { expectedUpdatedAt: task.updatedAt },
+    ),
+    /changed before the edit was saved/iu,
+  );
+  assert.equal((await testbed.store.get(task.id))?.cron, "0 9 * * *");
+});
+
+test("cancellation after persistence compensates before scheduling the task", async () => {
+  const testbed = harness();
+  const originalSave = testbed.store.saveWithRollback.bind(testbed.store);
+  let entered!: () => void;
+  const saveEntered = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const saveReleased = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  Object.defineProperty(testbed.store, "saveWithRollback", {
+    configurable: true,
+    value: async (...args: Parameters<typeof originalSave>) => {
+      const saved = await originalSave(...args);
+      entered();
+      await saveReleased;
+      return saved;
+    },
+  });
+  const controller = new AbortController();
+  const saving = testbed.service.save(
+    {
+      name: "Cancelled task",
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize changes.",
+    },
+    { signal: controller.signal },
+  );
+  await saveEntered;
+  controller.abort();
+  release();
+  await assert.rejects(saving, /cancelled/iu);
+  assert.deepEqual(await testbed.store.list(), []);
+  assert.deepEqual(testbed.broadcasts, []);
+});
+
+test("cancellation while an edited task run settles leaves the prior task scheduled", async () => {
+  const testbed = harness();
+  const task = await addTask(testbed.store);
+  await testbed.service.start();
+  const run = testbed.service.runNow(task.id);
+  while (!testbed.hasPending(task.id)) await new Promise((resolve) => setImmediate(resolve));
+  testbed.holdCancellations();
+  const controller = new AbortController();
+  const saving = testbed.service.save(
+    {
+      ...task,
+      name: "Unapproved replacement",
+    },
+    { expectedUpdatedAt: task.updatedAt, signal: controller.signal },
+  );
+  while (!testbed.hasDeferredCancellation(task.id)) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  controller.abort();
+  testbed.releaseCancellation(task.id);
+  await assert.rejects(saving, /cancelled/iu);
+  assert.equal((await run).result, "blocked");
+  assert.equal((await testbed.store.get(task.id))?.name, task.name);
+  testbed.service.stop();
+});
+
+test("cancellation while a saved task is being scheduled rolls back persistence and its job", async () => {
+  const testbed = harness();
+  await testbed.service.start();
+  const originalUpdateRuntime = testbed.store.updateRuntime.bind(testbed.store);
+  let entered!: () => void;
+  const updateEntered = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const updateReleased = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  Object.defineProperty(testbed.store, "updateRuntime", {
+    configurable: true,
+    value: async (...args: Parameters<typeof originalUpdateRuntime>) => {
+      entered();
+      await updateReleased;
+      return originalUpdateRuntime(...args);
+    },
+  });
+  const controller = new AbortController();
+  const saving = testbed.service.save(
+    {
+      name: "Cancelled during scheduling",
+      mode: "llm",
+      cron: "0 9 * * *",
+      timezone: "UTC",
+      prompt: "Summarize changes.",
+    },
+    { signal: controller.signal },
+  );
+  await updateEntered;
+  controller.abort();
+  release();
+  await assert.rejects(saving, /cancelled/iu);
+  assert.deepEqual(await testbed.store.list(), []);
+  assert.deepEqual(testbed.broadcasts, []);
   testbed.service.stop();
 });

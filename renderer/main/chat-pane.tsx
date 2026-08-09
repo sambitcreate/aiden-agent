@@ -16,6 +16,15 @@ import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { ThinkingControl } from "../components/thinking-control";
 import {
+  SubagentWorkspaceWriteApproval,
+  subagentWorkspaceWriteOperationLabel,
+} from "../components/subagent-workspace-write-approval";
+import {
+  SubagentMcpMutationApproval,
+  subagentMcpMutationAllowLabel,
+} from "../components/subagent-mcp-mutation-approval";
+import { SubagentShellApproval } from "../components/subagent-shell-approval";
+import {
   chatsApi,
   createChatTurnId,
   settingsApi,
@@ -66,7 +75,7 @@ import {
   normalizeAnthropicThinkingLevel,
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
-import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type { SubagentRunSnapshot } from "../shared/subagent-runs";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
@@ -74,6 +83,11 @@ import {
   isDetachedLifecycleChatDraining,
   subscribeDetachedLifecycleStreams,
 } from "../lib/chat-terminal-sync";
+import {
+  isSubagentMcpMutationApprovalDetails,
+  isSubagentShellApprovalDetails,
+  isSubagentWorkspaceWriteApprovalDetails,
+} from "../shared/assistant";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -248,12 +262,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [generationTimeline, setGenerationTimeline] = React.useState<GenerationTimeline | null>(
     null,
   );
-  const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshotV1[]>([]);
+  const [liveSubagents, setLiveSubagents] = React.useState<SubagentRunSnapshot[]>([]);
   const [error, setError] = React.useState<string | null>(null);
   const [approvals, setApprovals] = React.useState<ApprovalPrompt[]>([]);
   const [computerUseSaving, setComputerUseSaving] = React.useState(false);
   const [thinkingSaving, setThinkingSaving] = React.useState(false);
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
+  const decidingApprovalRef = React.useRef<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
   const generationIntentRef = React.useRef(0);
   const mountedRef = React.useRef(true);
@@ -310,6 +325,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setLiveSubagents([]);
     setError(null);
     setApprovals([]);
+    decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
   }, [chatId]);
 
@@ -442,7 +458,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           },
           ...(environmentPanel.subagentsEnabled
             ? {
-                onSubagents: (snapshot: SubagentRunSnapshotV1) => {
+                onSubagents: (snapshot: SubagentRunSnapshot) => {
                   if (
                     !mountedRef.current ||
                     generationIntentRef.current !== generationIntent ||
@@ -662,6 +678,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationTimelineRef.current = null;
     setLiveSubagents([]);
     setApprovals([]);
+    decidingApprovalRef.current = null;
     setDecidingApprovalId(null);
   }, []);
 
@@ -672,8 +689,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const decideApproval = React.useCallback(
     async (prompt: ApprovalPrompt, decision: "allow" | "deny") => {
-      if (decidingApprovalId) return;
+      if (decidingApprovalRef.current) return;
       const decisionChatId = chatId;
+      decidingApprovalRef.current = prompt.approvalId;
       setDecidingApprovalId(prompt.approvalId);
       try {
         await chatsApi.approve(prompt.approvalId, decision);
@@ -689,10 +707,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             : "Couldn't send that approval decision.",
         );
       } finally {
-        if (chatIdRef.current === decisionChatId) setDecidingApprovalId(null);
+        if (decidingApprovalRef.current === prompt.approvalId) {
+          decidingApprovalRef.current = null;
+          if (chatIdRef.current === decisionChatId) setDecidingApprovalId(null);
+        }
       }
     },
-    [chatId, decidingApprovalId],
+    [chatId],
   );
 
   const openFolder = React.useCallback(() => {
@@ -932,6 +953,36 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [createGitWorktree, environmentPanel.setCreateWorktreeHandler]);
 
   const pending = approvals[0];
+  const pendingDetails = pending?.details as unknown;
+  const pendingWorkspaceWriteClaim =
+    typeof pendingDetails === "object" &&
+    pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-workspace-write";
+  const pendingWorkspaceWrite =
+    pending && isSubagentWorkspaceWriteApprovalDetails(pending.details)
+      ? pending.details
+      : undefined;
+  const invalidPendingWorkspaceWrite =
+    pendingWorkspaceWriteClaim && pendingWorkspaceWrite === undefined;
+  const pendingMcpMutationClaim =
+    typeof pendingDetails === "object" &&
+    pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-mcp-mutation";
+  const pendingMcpMutation =
+    pending && isSubagentMcpMutationApprovalDetails(pending.details) ? pending.details : undefined;
+  const invalidPendingMcpMutation = pendingMcpMutationClaim && pendingMcpMutation === undefined;
+  const pendingShellClaim =
+    typeof pendingDetails === "object" &&
+    pendingDetails !== null &&
+    !Array.isArray(pendingDetails) &&
+    (pendingDetails as Record<string, unknown>).kind === "subagent-shell";
+  const pendingShell =
+    pending && isSubagentShellApprovalDetails(pending.details) ? pending.details : undefined;
+  const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
+  const invalidPendingPrivilegedApproval =
+    invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
   const activeStep = latestActiveAgentStep(generationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -1014,12 +1065,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
         <>
           <EventPresence
             present={Boolean(pending)}
-            className="aiden-dock-inset mx-auto w-full max-w-3xl pb-2"
+            className="aiden-dock-inset chat-content-column pb-2"
           >
             {pending ? (
               <div>
                 <p className="sr-only" role="status">
-                  Approval needed for {toolLabel(pending.toolName)}
+                  {invalidPendingPrivilegedApproval
+                    ? "Invalid privileged approval blocked"
+                    : `Approval needed for ${pendingWorkspaceWrite?.childLabel ?? pendingMcpMutation?.childLabel ?? pendingShell?.childLabel ?? toolLabel(pending.toolName)}`}
                 </p>
                 <section
                   ref={approvalCardRef}
@@ -1037,21 +1090,66 @@ export function ChatPane({ chatId }: { chatId: string }) {
                         as="p"
                         id={`approval-title-${pending.approvalId}`}
                       >
-                        {toolLabel(pending.toolName)} needs approval
+                        {invalidPendingPrivilegedApproval
+                          ? "Invalid privileged approval blocked"
+                          : pendingWorkspaceWrite
+                            ? `${pendingWorkspaceWrite.childLabel} wants to ${subagentWorkspaceWriteOperationLabel(
+                                pendingWorkspaceWrite.operation,
+                              ).toLocaleLowerCase("en-US")}`
+                            : pendingMcpMutation
+                              ? `${pendingMcpMutation.childLabel} wants to call ${pendingMcpMutation.serverId}:${pendingMcpMutation.toolName}`
+                              : pendingShell
+                                ? `${pendingShell.childLabel} wants to run a full-host command`
+                                : `${toolLabel(pending.toolName)} needs approval`}
                       </Text>
                       <Text variant="small" color="secondary" as="p" className="mt-0.5">
-                        Review this one action before Aiden continues.
+                        {invalidPendingPrivilegedApproval
+                          ? "This malformed privileged action cannot be allowed. Deny it to continue."
+                          : pendingWorkspaceWrite
+                            ? "Review this one exact file change before Aiden continues."
+                            : pendingMcpMutation
+                              ? "Review this one exact external mutation before Aiden continues."
+                              : pendingShell
+                                ? "Review this one exact full-host command before Aiden continues."
+                                : "Review this one action before Aiden continues."}
                       </Text>
                     </div>
                   </div>
-                  <Text
-                    variant="small"
-                    as="p"
-                    id={`approval-summary-${pending.approvalId}`}
-                    className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
-                  >
-                    {pending.summary}
-                  </Text>
+                  {invalidPendingPrivilegedApproval ? (
+                    <Text
+                      variant="small"
+                      as="p"
+                      id={`approval-summary-${pending.approvalId}`}
+                      className="mt-2.5 rounded-control bg-well px-3 py-2"
+                    >
+                      Aiden could not verify the exact target, arguments, or safety profile for this
+                      request.
+                    </Text>
+                  ) : pendingWorkspaceWrite ? (
+                    <SubagentWorkspaceWriteApproval
+                      details={pendingWorkspaceWrite}
+                      descriptionId={`approval-summary-${pending.approvalId}`}
+                    />
+                  ) : pendingMcpMutation ? (
+                    <SubagentMcpMutationApproval
+                      details={pendingMcpMutation}
+                      descriptionId={`approval-summary-${pending.approvalId}`}
+                    />
+                  ) : pendingShell ? (
+                    <SubagentShellApproval
+                      details={pendingShell}
+                      descriptionId={`approval-summary-${pending.approvalId}`}
+                    />
+                  ) : (
+                    <Text
+                      variant="small"
+                      as="p"
+                      id={`approval-summary-${pending.approvalId}`}
+                      className="mt-2.5 max-h-24 select-text overflow-y-auto rounded-control bg-well px-3 py-2 font-mono break-words"
+                    >
+                      {pending.summary}
+                    </Text>
+                  )}
                   <div className="mt-2.5 flex justify-end gap-2">
                     <Button
                       ref={approvalDenyRef}
@@ -1062,14 +1160,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     >
                       Deny
                     </Button>
-                    <Button
-                      variant="accent"
-                      size="small"
-                      disabled={decidingApprovalId === pending.approvalId}
-                      onClick={() => void decideApproval(pending, "allow")}
-                    >
-                      {decidingApprovalId === pending.approvalId ? "Sending…" : "Allow once"}
-                    </Button>
+                    {invalidPendingPrivilegedApproval ? null : (
+                      <Button
+                        variant="accent"
+                        size="small"
+                        disabled={decidingApprovalId === pending.approvalId}
+                        onClick={() => void decideApproval(pending, "allow")}
+                      >
+                        {decidingApprovalId === pending.approvalId
+                          ? "Sending…"
+                          : pendingMcpMutation
+                            ? subagentMcpMutationAllowLabel(pendingMcpMutation)
+                            : "Allow once"}
+                      </Button>
+                    )}
                   </div>
                 </section>
               </div>

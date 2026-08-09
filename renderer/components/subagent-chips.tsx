@@ -2,15 +2,20 @@ import * as React from "react";
 import { type OrbSize, type OrbState } from "thinking-orbs";
 import { subagentRunProgressLabel } from "../lib/subagent-panel-state";
 import { cn } from "../lib/ui-utils";
-import type { SubagentRunViewRole, SubagentRunViewState } from "../lib/subagent-view-state";
+import type {
+  SubagentRunViewRole,
+  SubagentRunViewState,
+} from "../lib/subagent-view-state";
 import {
   type SubagentMessageReferenceV1,
-  type SubagentRunSnapshotV1,
+  type SubagentRunSnapshot,
 } from "../shared/subagent-runs";
 import { AidenOrb } from "./aiden-orb";
 import { Button } from "./ui";
 
-function fallbackOrbStateForRole(role: SubagentRunViewRole | undefined): OrbState {
+function fallbackOrbStateForRole(
+  role: SubagentRunViewRole | undefined,
+): OrbState {
   if (role === "scout") return "searching";
   if (role === "planner") return "solving";
   return "working";
@@ -22,13 +27,16 @@ export function subagentOrbState(
   activity?: string,
 ): OrbState {
   if (state === "queued" || state === "starting") return "shaping";
-  if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? "")) return "searching";
+  if (/^(?:Reading|Listing|Matching|Searching)\b/u.test(activity ?? ""))
+    return "searching";
   if (activity === "Reviewing workspace context") return "solving";
   if (activity === "Writing a bounded report") return "composing";
   return fallbackOrbStateForRole(role);
 }
 
-export function subagentStateLabel(state: SubagentRunViewState | "finished"): string {
+export function subagentStateLabel(
+  state: SubagentRunViewState | "finished",
+): string {
   if (state === "queued") return "Queued";
   if (state === "starting") return "Starting";
   if (state === "running") return "Working";
@@ -36,6 +44,9 @@ export function subagentStateLabel(state: SubagentRunViewState | "finished"): st
   if (state === "failed") return "Failed";
   if (state === "timed_out") return "Timed out";
   if (state === "interrupted") return "Interrupted";
+  if (state === "needs_attention") return "Needs attention";
+  if (state === "stopped") return "Stopped";
+  if (state === "unknown") return "Outcome unknown";
   return "Finished";
 }
 
@@ -54,8 +65,18 @@ export interface SubagentOrbProps {
   className?: string;
 }
 
-export function SubagentOrb({ role, state, activity, size = 20, className }: SubagentOrbProps) {
-  const active = state === "queued" || state === "starting" || state === "running";
+export function SubagentOrb({
+  role,
+  state,
+  activity,
+  size = 20,
+  className,
+}: SubagentOrbProps) {
+  const active =
+    state === "queued" ||
+    state === "starting" ||
+    state === "running" ||
+    state === "needs_attention";
 
   return (
     <AidenOrb
@@ -70,12 +91,17 @@ export function SubagentOrb({ role, state, activity, size = 20, className }: Sub
 
 export interface SubagentChipsProps {
   reference?: SubagentMessageReferenceV1;
-  runs?: readonly SubagentRunSnapshotV1[];
+  runs?: readonly SubagentRunSnapshot[];
   onOpen: (runId: string, trigger: HTMLButtonElement) => void;
   className?: string;
 }
 
-export function SubagentChips({ reference, runs = [], onOpen, className }: SubagentChipsProps) {
+export function SubagentChips({
+  reference,
+  runs = [],
+  onOpen,
+  className,
+}: SubagentChipsProps) {
   const snapshotsById = React.useMemo(
     () => new Map(runs.map((run) => [run.runId, run] as const)),
     [runs],
@@ -86,13 +112,17 @@ export function SubagentChips({ reference, runs = [], onOpen, className }: Subag
   return (
     <div
       className={cn("flex min-w-0 flex-wrap gap-1.5", className)}
+      role="group"
       aria-label={`${runIds.length} subagent${runIds.length === 1 ? "" : "s"}`}
     >
       {runIds.map((runId, index) => {
         const run = snapshotsById.get(runId);
         const referencedItem =
-          reference?.items?.[index]?.runId === runId ? reference.items[index] : undefined;
-        const label = run?.label ?? referencedItem?.label ?? `Subagent ${index + 1}`;
+          reference?.items?.[index]?.runId === runId
+            ? reference.items[index]
+            : undefined;
+        const label =
+          run?.label ?? referencedItem?.label ?? `Subagent ${index + 1}`;
         const role = run?.role ?? referencedItem?.role;
         const state = run?.state ?? referencedItem?.state ?? "finished";
         const status = subagentStatusLabel(state, run?.activity);
@@ -114,6 +144,7 @@ export function SubagentChips({ reference, runs = [], onOpen, className }: Subag
                 "max-w-48 min-w-0 truncate text-mini font-normal text-tertiary",
                 state === "failed" && "text-red",
                 state === "timed_out" && "text-support-warning",
+                state === "needs_attention" && "text-support-warning",
               )}
             >
               {status}

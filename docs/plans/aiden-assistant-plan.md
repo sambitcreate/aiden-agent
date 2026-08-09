@@ -1,9 +1,13 @@
 # Aiden — Proactive In-App Assistant Plan
 
-Status: Phase 1 and the enforceable Settings foundation are implemented; settings tools
-and proactivity remain planned. Phase 1 was redesigned as an in-window dock (see
-"Assistant dock"). The Settings foundation was reconciled with the canonical command
-system on 2026-07-26.
+Status: Phase 1, the enforceable Settings foundation, main-chat Markdown parity, and
+approval-gated global/project/MCP automation creation and editing are implemented; settings
+tools and proactivity remain planned. Phase 1 was redesigned as an in-window dock (see
+"Assistant dock"). The Settings foundation was reconciled with the canonical command system
+on 2026-07-26; Markdown/automation access was added on 2026-07-30.
+The automation boundary was hardened on 2026-08-04 with fingerprint-bound provider and MCP
+connections, exact model pins, monotonic revisions, cancellation compensation, and mutually
+exclusive project/MCP scopes for every scheduled task.
 Spec date 2026-07-23; implementation plan 2026-07-25; dock revision 2026-07-25;
 Settings/shortcut revision 2026-07-26.
 
@@ -27,7 +31,7 @@ untouched projects, and configuration drift.
 **Current architecture:** Phase 1 mounts `AssistantDock` in the main renderer's `RootView`
 and reuses the existing chat IPC surface with a reserved assistant workspace. The global
 hotkey focuses the main window and opens the dock; there is no assistant `BrowserWindow` or
-assistant-specific preload. Future unattended proactive runs reuse the *background owner*
+assistant-specific preload. Future unattended proactive runs reuse the _background owner_
 pattern that Scheduled Tasks established, so no renderer is required. The proactive engine
 remains split into pure decision cores and thin Electron shells, following
 `schedule-service-core.ts` / `schedule-service.ts`.
@@ -44,8 +48,8 @@ Tailwind + semantic tokens in `renderer/styles.css`.
 - API key material stays out of the assistant's reach: assistant tools never import
   `main/services/secrets.ts`.
 - Every new broadcast channel must be added to `NOTIFICATION_CHANNEL_VALUES` in
-  `renderer/preload-channels.ts`. `main/handlers/ipc-contract.test.ts` asserts *exact set
-  equality* between live broadcast sites and that list, so a missed entry fails CI.
+  `renderer/preload-channels.ts`. `main/handlers/ipc-contract.test.ts` asserts _exact set
+  equality_ between live broadcast sites and that list, so a missed entry fails CI.
 - Adding `"assistant:"` to `INVOKE_PREFIXES` fails the "every INVOKE_PREFIX has at least
   one live handler" test until a handler exists. Prefix and first handler land together.
 - Every new test file is registered in a `package.json` test script (per `CLAUDE.md`).
@@ -58,8 +62,8 @@ Tailwind + semantic tokens in `renderer/styles.css`.
 
 ## Vision
 
-"Aiden" is a compact assistant dock inside the main window. It is an assistant *about the
-app and the user's work*, not a general coding chat:
+"Aiden" is a compact assistant dock inside the main window. It is an assistant _about the
+app and the user's work_, not a general coding chat:
 
 - Chat with the user about the app — answer questions, explain settings.
 - Read and change app settings/config via tools (with approval for mutations).
@@ -80,7 +84,7 @@ These were the plan's four open questions. They are settled; the task list assum
 
 1. **Model policy — an explicit pin is required for proactivity.** Interactive chat in the
    Aiden dock follows the app-wide provider/model selection like every other chat. The ticker
-   refuses to run at all until `assistant.providerId` *and* `assistant.model` are set, and
+   refuses to run at all until `assistant.providerId` _and_ `assistant.model` are set, and
    surfaces "needs a model" in the settings health row. A background loop must never
    silently inherit whichever expensive model the user just switched to.
 2. **No real-time file watching.** The git poll is the honest version of "notable file
@@ -117,7 +121,7 @@ points; the task list reflects the corrected reality.
    `schedule:settings` (`main/handlers/scheduled-tasks.ts:70`). Aiden follows that
    precedent with `assistant:get-config` / `assistant:set-config` and its own parser
    module. `AppSettings` gains an `assistant?: AssistantConfig` field in **both**
-   `main/services/types.ts` *and* the renderer mirror `renderer/lib/types.ts:634`.
+   `main/services/types.ts` _and_ the renderer mirror `renderer/lib/types.ts:634`.
 
 Two further findings that shaped the design:
 
@@ -159,6 +163,18 @@ to live with the work rather than float beside it, so it was rebuilt as a docked
   edge instead of leaving a ring of empty pixels.
 - Mounted in `RootView`, so it is present on every route and survives navigation.
 - Empty state offers three suggested prompts; a "Recent" list surfaces earlier threads.
+- Assistant replies use the same safe GFM/math/code renderer and streaming handoff as the
+  main chat. A formatting failure is isolated to the individual message with raw-text
+  fallback.
+- An attended Assistant run may list eligible projects, enabled MCP server identities, and
+  automations or propose one LLM automation. Project tasks may be read-only or Full;
+  external-service tasks bind exact MCP server configurations and always use Full. Project and
+  MCP scopes are mutually exclusive; combined workflows must be split into separate automations.
+  Creation pauses on
+  an inline check/cross card that names the exact project, MCP servers, and permission.
+  Saved tasks retain a main-owned Assistant execution profile so later runs cannot inherit
+  unapproved Scheduled Tasks capabilities or newly added connectors. The selected provider and
+  model are also pinned at approval and shown on the card.
 - No attachments, no Computer Use, no model picker in v1.
 - Entry points: the ⌘⌥A global hotkey (focuses the main window, then dispatches
   `app:command` with `assistant.open`) and, from Phase 3, clicking a nudge notification.
@@ -178,7 +194,9 @@ enforceable behavior:
 - global `assistant.open` status and a deep link to the canonical Keyboard Shortcuts
   editor;
 - the fact that interactive Aiden follows the composer's current model;
-- device-local conversation history and the current chat-only access boundary;
+- device-local conversation history and the constrained automation access boundary;
+- the Scheduled Tasks settings surface provides an explicit default MCP-access switch for
+  new Full tasks, while every saved task persists the exact selected server IDs;
 - an explicit "Not active" status for background suggestions.
 
 It does not expose the future proactivity fields below. Those contracts are parsed and
@@ -337,26 +355,74 @@ Reused by the assistant window: `chat:start` / `chat:cancel` / `chat:approve`,
 
 Registered in `buildAgentTools` (`main/services/tools.ts`) behind `ctx.mode === "assistant"`.
 Assistant mode passes no `workspaceRoot`, so the folder-scoped coding tools are already
-withheld by the existing guard at `tools.ts:169`. Scheduling tools, MCP tools, and
-Computer Use are withheld explicitly.
+withheld. The current attended allowlist contains five scoped tools:
+
+- `list_projects` returns only eligible folder-backed project names and ids, never paths,
+  file contents, or repository status.
+- `list_mcp_servers` returns only enabled server names and exact ids, never endpoints,
+  credentials, tool schemas, or remote server instructions. Its host-owned status and next-step
+  instruction explicitly route server ids to `mcpServerIds` and make an empty inventory
+  authoritative.
+- `list_scheduled_tasks` returns redacted schedule metadata without prompts or scripts,
+  including an exact id, editability flag, and `updatedAt` revision for safe edits.
+- `schedule_task` accepts name, cron, timezone, prompt, notification preference,
+  optional project id, and read-only/Full permission. Main forces LLM mode, defaults to a
+  global read-only task, and requires a valid folder-backed project for Full access. It
+  normalizes and validates the arguments once before approval (including the default device
+  timezone), publishes that exact project and permission through an owner-bound approval,
+  then saves the same canonical fields only after Allow.
+  The persisted, renderer-unforgeable Assistant execution profile survives safe Scheduled
+  Tasks edits. Global tasks route through `"assistant-unattended"`; project tasks route
+  through `"assistant-automation"` and receive only folder-scoped coding tools, with
+  mutating tools withheld for read-only tasks.
+- `edit_automation` accepts one exact editable task id and `updatedAt` revision plus a sparse
+  patch. Main merges omitted fields from the stored Aiden-created LLM task, shows the complete
+  resulting automation for approval, and saves it in place only if its revision is still
+  current. Concurrent changes fail closed and require a fresh list rather than creating a
+  duplicate or overwriting newer state.
+- The dock queues approval prompts, defaults keyboard focus to Decline, keeps the prompt
+  while minimized, and pipes Allow/Deny through `chat:approve` so the original agent run
+  continues. A denial asks what the user wants to do instead. Unexpected tool approvals are
+  denied fail-closed.
+- The system prompt includes literal call contracts and complete examples for every attended
+  tool, including the required `cron` field. It also includes a host-read snapshot of enabled
+  MCP identities, delimited as untrusted label data, so the model knows which exact servers
+  exist without inferring them. If a provider puts an exact enabled server id in the project
+  field, main moves it to the MCP scope only when no project owns that id, forces Full access,
+  and shows the corrected server on the approval card. Empty MCP inventory is explicitly
+  authoritative. Repeated malformed tool calls get one correction attempt, then one tool-free
+  recovery turn instead of surfacing a generic interrupted response.
+
+The following broader Assistant tools remain planned:
 
 - `get_settings` — redacted `configStore.getSettings()`; never returns secrets.
 - `set_setting` — patch through `configStore.setSettings`, restricted by a shared pure
   field whitelist, routed through `ToolApprovalCoordinator` so `"ask"` mode prompts.
-- `list_projects` — workspaces with `updatedAt` plus a `gitInfo` summary. Project names are
-  never injected into the base system prompt; they are disclosed only when the user asks
-  for project context and this tool is available.
+- richer project status — extend the identity-only `list_projects` result with `updatedAt`
+  and a `gitInfo` summary only when the broader project-status feature ships. Project names
+  are never injected into the base system prompt.
 - `get_project_status` — deeper `gitInfo` for one workspace.
 
-Out of scope for v1: provider keys, MCP servers, skills, arbitrary shell, Computer Use, and
-the `remember` memory tool (deferred). Nudge dismissal and snoozing are IPC handlers driven
-by the settings UI rather than model tools, so a proactive run cannot silence itself.
+Out of scope for v1: provider keys, MCP servers, skills, direct dock shell access, Computer
+Use, and the `remember` memory tool (deferred). Approved Full project automations may run
+folder-scoped commands when their timer fires. Nudge dismissal and snoozing are IPC handlers
+driven by the settings UI rather than model tools, so a proactive run cannot silence itself.
 
 ### Safety rails
 
-- Assistant-initiated runs cannot create schedules or change the ticker's cadence.
-- `"assistant-unattended"` is only reachable in-process from `decide.ts`; `parseParams`
-  accepts `"assistant"` only, so a renderer can never request the unattended prompt.
+- Attended Assistant runs can only list eligible project/MCP identities, list schedules,
+  create the constrained LLM automation above, or edit one exact Aiden-created LLM
+  automation after approval. They cannot pause, resume, remove, run-now, or run arbitrary
+  scripts. Full permission requires an approval naming either the exact project or the exact
+  fingerprint-bound MCP scope and unattended mutation risk; one automation cannot receive both.
+- `"assistant-unattended"` receives no scheduling tool and cannot create automations.
+- `"assistant-automation"` receives only project coding tools: no scheduling, connectors,
+  Computer Use, skills, or subagents.
+- Both unattended modes are only reachable in-process; `parseParams` accepts `"assistant"`
+  only, so a renderer can never request background capabilities or forge the protected
+  schedule profile.
+- An exact unattended `[SILENT]` response is stored as a silent run and suppresses the
+  completion notification.
 - Settings mutations always respect `settingsPermission`; provider removal and key material
   are outside the whitelist entirely.
 - Decision-call failures record `lastError` and surface once, then back off. No silent
@@ -376,12 +442,14 @@ by the settings UI rather than model tools, so a proactive run cannot silence it
 ### Task 1: Generic trusted-sender check
 
 **Files:**
+
 - Create: `main/windows/window-sender.ts`
 - Create: `main/windows/window-sender.test.ts`
 - Modify: `main/windows/pill-window-security.ts`
 - Modify: `package.json` (register the new test in `test`)
 
 **Interfaces:**
+
 - Produces: `WindowSenderIdentity { webContentsId: number; frameUrl: string; isMainFrame: boolean }`
   and `isTrustedWindowSender(expectedWebContentsId: number | null, expectedUrl: string, actual: WindowSenderIdentity): boolean`.
 - `pill-window-security.ts` keeps exporting `PillSenderIdentity` and `isTrustedPillSender`
@@ -502,6 +570,7 @@ git commit -m "refactor(windows): extract the generic trusted-sender check"
 ### Task 2: Assistant preload channel allowlist
 
 **Files:**
+
 - Create: `renderer/preload-assistant-channels.ts`
 - Create: `renderer/preload-assistant-channels.test.ts`
 - Create: `renderer/shared/assistant.ts`
@@ -509,6 +578,7 @@ git commit -m "refactor(windows): extract the generic trusted-sender check"
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces: `ASSISTANT_INVOKE_CHANNELS: Set<string>`,
   `ASSISTANT_NOTIFICATION_CHANNELS: Set<string>`, and `ASSISTANT_WORKSPACE_ID = "assistant"`
   plus `ASSISTANT_SUGGESTED_PROMPTS` from `renderer/shared/assistant.ts`.
@@ -699,6 +769,7 @@ git commit -m "feat(assistant): add the assistant window's preload channel allow
 ### Task 3: Build plumbing and renderer shell
 
 **Files:**
+
 - Create: `assistant.html`
 - Create: `renderer/preload-assistant.ts`
 - Create: `renderer/assistant/main.tsx`
@@ -708,6 +779,7 @@ git commit -m "feat(assistant): add the assistant window's preload channel allow
 - Modify: `main/windows/window-paths.ts:11-13`
 
 **Interfaces:**
+
 - Consumes: `ASSISTANT_INVOKE_CHANNELS`, `ASSISTANT_NOTIFICATION_CHANNELS` (Task 2).
 - Produces: `getAssistantPreloadPath(): string`; a `window.aidenAPI.ipc` bridge inside the
   assistant window with the same `{ invoke, onNotification }` shape the main and pill
@@ -876,6 +948,7 @@ git commit -m "feat(assistant): add the assistant window build plumbing and rend
 ### Task 4: Assistant window module, handlers, and hotkey
 
 **Files:**
+
 - Create: `main/windows/assistant-window.ts`
 - Create: `main/handlers/assistant.ts`
 - Modify: `main/handlers/index.ts:22,59`
@@ -886,6 +959,7 @@ git commit -m "feat(assistant): add the assistant window build plumbing and rend
 - Modify: `main/index.ts`
 
 **Interfaces:**
+
 - Consumes: `isTrustedWindowSender` (Task 1), `getAssistantPreloadPath` (Task 3).
 - Produces: `showAssistantWindow(): Promise<BrowserWindow>`, `hideAssistantWindow(): void`,
   `toggleAssistantWindow(): Promise<void>`, `destroyAssistantWindow(): void`,
@@ -1090,22 +1164,22 @@ callback with `initAssistantShortcut(trigger)`, a `registeredAssistant` slot, an
 block at the end of `applyShortcutFromSettings()`:
 
 ```ts
-  // ── Assistant shortcut ──────────────────────────────────────────────
-  if (registeredAssistant) {
-    globalShortcut.unregister(registeredAssistant);
-    registeredAssistant = null;
-  }
-  const assistantEnabled = settings.assistant?.hotkeyEnabled !== false;
-  const assistantAccel = settings.assistant?.hotkeyAccelerator || DEFAULT_ASSISTANT_ACCELERATOR;
-  // Skip collisions with the already-registered focus and dictation hotkeys.
-  if (
-    assistantEnabled &&
-    onAssistant &&
-    assistantAccel !== registered &&
-    assistantAccel !== registeredDictation
-  ) {
-    if (await register(assistantAccel, onAssistant)) registeredAssistant = assistantAccel;
-  }
+// ── Assistant shortcut ──────────────────────────────────────────────
+if (registeredAssistant) {
+  globalShortcut.unregister(registeredAssistant);
+  registeredAssistant = null;
+}
+const assistantEnabled = settings.assistant?.hotkeyEnabled !== false;
+const assistantAccel = settings.assistant?.hotkeyAccelerator || DEFAULT_ASSISTANT_ACCELERATOR;
+// Skip collisions with the already-registered focus and dictation hotkeys.
+if (
+  assistantEnabled &&
+  onAssistant &&
+  assistantAccel !== registered &&
+  assistantAccel !== registeredDictation
+) {
+  if (await register(assistantAccel, onAssistant)) registeredAssistant = assistantAccel;
+}
 ```
 
 Also clear `registeredAssistant` in `disposeShortcut()`.
@@ -1117,9 +1191,9 @@ Import `initAssistantShortcut` from `./services/shortcut.js` and `destroyAssista
 `initShortcut(...)` call (`main/index.ts:594`):
 
 ```ts
-      initAssistantShortcut(() => {
-        void showAssistantWindow();
-      });
+initAssistantShortcut(() => {
+  void showAssistantWindow();
+});
 ```
 
 Add `destroyAssistantWindow();` to `cleanupApplication()` next to `disposeDictation();`.
@@ -1161,6 +1235,7 @@ git commit -m "feat(assistant): open the Aiden window from a global hotkey"
 ### Task 5: Assistant-mode system prompt
 
 **Files:**
+
 - Create: `main/services/assistant/system-prompt.ts`
 - Create: `main/services/assistant/system-prompt.test.ts`
 - Modify: `main/services/types.ts` (`ChatStartParams.mode`)
@@ -1170,6 +1245,7 @@ git commit -m "feat(assistant): open the Aiden window from a global hotkey"
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces: `buildAssistantSystemPrompt(input: AssistantPromptInput): string` where
 
 ```ts
@@ -1336,7 +1412,7 @@ Mirror the field on `renderer/lib/types.ts`'s `ChatStartParams`, but as
 In `main/handlers/chat-params.ts`, inside `parseParams` before the return:
 
 ```ts
-  if (p.mode !== undefined && p.mode !== "assistant") throw new Error("Invalid chat mode.");
+if (p.mode !== undefined && p.mode !== "assistant") throw new Error("Invalid chat mode.");
 ```
 
 and add `...(p.mode === "assistant" ? { mode: "assistant" as const } : {}),` to the returned
@@ -1351,10 +1427,7 @@ test("accepts the assistant mode and rejects the unattended mode from a renderer
   const base = { chatId: "c1", providerId: "p", model: "m", messages: [] };
   assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");
   assert.equal(parseParams(base).mode, undefined);
-  assert.throws(
-    () => parseParams({ ...base, mode: "assistant-unattended" }),
-    /Invalid chat mode/u,
-  );
+  assert.throws(() => parseParams({ ...base, mode: "assistant-unattended" }), /Invalid chat mode/u);
 });
 ```
 
@@ -1364,17 +1437,15 @@ At the `buildSystemPrompt` call site (`main/services/llm-client.ts:518`), replac
 assignment with:
 
 ```ts
-      const systemPrompt =
-        params.mode === "assistant" || params.mode === "assistant-unattended"
-          ? buildAssistantSystemPrompt({
-              workspaceNames: (await configStore.listWorkspaces()).map(
-                (workspace) => workspace.name,
-              ),
-              settingsSections: SETTINGS_SECTIONS,
-              settingsPermission: settings.assistant?.settingsPermission ?? "ask",
-              unattended: params.mode === "assistant-unattended",
-            })
-          : await buildSystemPrompt(folderPath, git.branch, permission);
+const systemPrompt =
+  params.mode === "assistant" || params.mode === "assistant-unattended"
+    ? buildAssistantSystemPrompt({
+        workspaceNames: (await configStore.listWorkspaces()).map((workspace) => workspace.name),
+        settingsSections: SETTINGS_SECTIONS,
+        settingsPermission: settings.assistant?.settingsPermission ?? "ask",
+        unattended: params.mode === "assistant-unattended",
+      })
+    : await buildSystemPrompt(folderPath, git.branch, permission);
 ```
 
 Import `buildAssistantSystemPrompt` from `./assistant/system-prompt.js` and
@@ -1403,6 +1474,7 @@ git commit -m "feat(assistant): add the assistant-mode system prompt"
 ### Task 6: Assistant chat UI
 
 **Files:**
+
 - Modify: `renderer/assistant/assistant-app.tsx`
 - Create: `renderer/assistant/assistant-thread.tsx`
 - Create: `renderer/assistant/assistant-recent.tsx`
@@ -1411,6 +1483,7 @@ git commit -m "feat(assistant): add the assistant-mode system prompt"
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: `ASSISTANT_WORKSPACE_ID`, `ASSISTANT_SUGGESTED_PROMPTS` (Task 2);
   `mode: "assistant"` on `ChatStartParams` (Task 5); `startGeneration`, `chatsApi`,
   `settingsApi`, `onNotification` from `renderer/lib/ipc.ts`.
@@ -1501,9 +1574,8 @@ Expected: PASS.
 - [ ] **Step 6: Build the three components**
 
 - `assistant-thread.tsx` — scrolling transcript, auto-scrolled to the bottom while
-  streaming. Reuse the main window's Markdown renderer if it imports without pulling in
-  workspace state; otherwise render plain text with preserved whitespace and leave Markdown
-  to the deferred list.
+  streaming. Reuse the main window's safe message renderer and its Markdown streaming
+  handoff so persisted and in-progress replies match the main chat.
 - `assistant-recent.tsx` — the `threads` list, newest first, each row calling
   `openThread(id)`. Shown when the active thread is empty.
 - `assistant-app.tsx` — header (drag region, "Aiden", close), transcript or empty state with
@@ -1557,12 +1629,14 @@ would make Settings lie. Task 9 onward remains planned.
 ### Task 7: `AssistantConfig` parsing and IPC
 
 **Files:**
+
 - Create: `main/handlers/assistant-parse.ts`
 - Create: `main/handlers/assistant-parse.test.ts`
 - Modify: `main/handlers/assistant.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: `AssistantConfig` (Task 4).
 - Produces: `DEFAULT_ASSISTANT_CONFIG: AssistantConfig`,
   `assistantConfigFrom(settings: AppSettings): AssistantConfig`,
@@ -1782,18 +1856,18 @@ In `main/handlers/assistant.ts`, importing `configStore`, the two parse function
 `applyShortcutFromSettings`:
 
 ```ts
-  ipcMain.handle("assistant:get-config", async () =>
-    assistantConfigFrom(await configStore.getSettings()),
-  );
+ipcMain.handle("assistant:get-config", async () =>
+  assistantConfigFrom(await configStore.getSettings()),
+);
 
-  ipcMain.handle("assistant:set-config", async (_event, patch: unknown) => {
-    const current = assistantConfigFrom(await configStore.getSettings());
-    const assistant = parseAssistantConfigPatch(current, patch);
-    await configStore.setSettings({ assistant });
-    // The hotkey may have moved or been switched off.
-    await applyShortcutFromSettings();
-    return assistant;
-  });
+ipcMain.handle("assistant:set-config", async (_event, patch: unknown) => {
+  const current = assistantConfigFrom(await configStore.getSettings());
+  const assistant = parseAssistantConfigPatch(current, patch);
+  await configStore.setSettings({ assistant });
+  // The hotkey may have moved or been switched off.
+  await applyShortcutFromSettings();
+  return assistant;
+});
 ```
 
 Task 19 adds an `assistantTicker.restart()` call to this handler; leave a comment marking
@@ -1817,12 +1891,14 @@ git commit -m "feat(assistant): add AssistantConfig parsing and its IPC surface"
 ### Task 8: Aiden settings section
 
 **Files:**
+
 - Modify: `renderer/lib/settings-section.ts`
 - Modify: `renderer/lib/settings-section.test.ts`
 - Modify: `renderer/main/settings-view.tsx`
 - Create: `renderer/components/settings/assistant-settings.tsx`
 
 **Interfaces:**
+
 - Consumes: `assistant:get-config` / `assistant:set-config` (Task 7).
 - Produces: an `"assistant"` `SettingsSection` id and an `AssistantSettings` component.
 
@@ -1911,12 +1987,14 @@ git commit -m "feat(assistant): add the Aiden settings section"
 ### Task 9: Settings tools
 
 **Files:**
+
 - Create: `main/services/assistant/settings-field-policy.ts`
 - Create: `main/services/assistant/settings-field-policy.test.ts`
 - Create: `main/services/assistant/settings-tools.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces: `ASSISTANT_MUTABLE_SETTING_FIELDS: ReadonlySet<string>`,
   `redactSettingsForAssistant(settings: AppSettings): Record<string, unknown>`,
   `assistantSettingPatch(field: string, value: unknown): Partial<AppSettings>`,
@@ -2054,11 +2132,13 @@ git commit -m "feat(assistant): add the settings read and write tools"
 ### Task 10: Project status tools
 
 **Files:**
+
 - Create: `main/services/assistant/project-tools.ts`
 - Create: `main/services/assistant/project-tools.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces: `summarizeProject(workspace: Workspace, git: GitInfo, now: number): ProjectSummary`
   and `buildAssistantProjectTools(deps: AssistantProjectToolDeps): AgentTool[]` where
 
@@ -2193,10 +2273,12 @@ git commit -m "feat(assistant): add the project listing and status tools"
 ### Task 11: Wire assistant tools into generation
 
 **Files:**
+
 - Modify: `main/services/tools.ts:138-208`
 - Modify: `main/services/llm-client.ts` (tool-context construction, `beforeToolCall`)
 
 **Interfaces:**
+
 - Consumes: `buildAssistantSettingsTools` and `ASSISTANT_SET_SETTING_TOOL_NAME` (Task 9),
   `buildAssistantProjectTools` (Task 10).
 - Produces: `ToolContext.mode?: "assistant"`.
@@ -2219,23 +2301,23 @@ Immediately after `const settings = await configStore.getSettings();` in `buildA
 return the assistant set early:
 
 ```ts
-  if (ctx.mode === "assistant") {
-    // No folder tools (no workspaceRoot is passed), no scheduling tools (an
-    // assistant run must not create schedules), and no MCP tools (unknown
-    // mutation semantics in a window with no approval affordance for them).
-    return [
-      ...buildAssistantSettingsTools({
-        getSettings: () => configStore.getSettings(),
-        setSettings: (patch) => configStore.setSettings(patch),
-      }),
-      ...buildAssistantProjectTools({
-        listWorkspaces: () => configStore.listWorkspaces(),
-        getWorkspace: (id) => configStore.getWorkspace(id),
-        gitInfo,
-        now: Date.now,
-      }),
-    ];
-  }
+if (ctx.mode === "assistant") {
+  // No folder tools (no workspaceRoot is passed), no scheduling tools (an
+  // assistant run must not create schedules), and no MCP tools (unknown
+  // mutation semantics in a window with no approval affordance for them).
+  return [
+    ...buildAssistantSettingsTools({
+      getSettings: () => configStore.getSettings(),
+      setSettings: (patch) => configStore.setSettings(patch),
+    }),
+    ...buildAssistantProjectTools({
+      listWorkspaces: () => configStore.listWorkspaces(),
+      getWorkspace: (id) => configStore.getWorkspace(id),
+      gitInfo,
+      now: Date.now,
+    }),
+  ];
+}
 ```
 
 Import `gitInfo` from `./git.js` and the two builders.
@@ -2309,11 +2391,13 @@ approvals, and report real project status. Stop here for review.
 ### Task 12: Strict `[SILENT]` parser
 
 **Files:**
+
 - Create: `main/services/assistant/silent-parser.ts`
 - Create: `main/services/assistant/silent-parser.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces: `isSilentResponse(response: string): boolean`.
 
 - [ ] **Step 1: Write the failing test**
@@ -2402,11 +2486,13 @@ git commit -m "feat(assistant): add the strict [SILENT] response parser"
 ### Task 13: Nudge policy
 
 **Files:**
+
 - Create: `main/services/assistant/nudge-policy.ts`
 - Create: `main/services/assistant/nudge-policy.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -2528,11 +2614,19 @@ test("a snoozed candidate returns once the snooze expires", () => {
     body: "b",
   };
   assert.deepEqual(
-    filterCandidates([candidate], [record({ status: "snoozed", snoozeUntil: now + MINUTE })], clock),
+    filterCandidates(
+      [candidate],
+      [record({ status: "snoozed", snoozeUntil: now + MINUTE })],
+      clock,
+    ),
     [],
   );
   assert.deepEqual(
-    filterCandidates([candidate], [record({ status: "snoozed", snoozeUntil: now - MINUTE })], clock),
+    filterCandidates(
+      [candidate],
+      [record({ status: "snoozed", snoozeUntil: now - MINUTE })],
+      clock,
+    ),
     [candidate],
   );
 });
@@ -2629,11 +2723,13 @@ git commit -m "feat(assistant): add nudge latching, quiet hours, and cap policy"
 ### Task 14: Assistant state store
 
 **Files:**
+
 - Create: `main/services/assistant/assistant-store.ts`
 - Create: `main/services/assistant/assistant-store.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: `DataStore` (`main/services/data-store.ts`), `NudgeRecord`, `AssistantState`,
   `MAX_PENDING_NUDGES` (Task 13).
 - Produces: `normalizeAssistantState(value: unknown): AssistantState`,
@@ -2706,11 +2802,13 @@ git commit -m "feat(assistant): add the assistant nudge and health store"
 ### Task 15: Signal collectors
 
 **Files:**
+
 - Create: `main/services/assistant/signals.ts`
 - Create: `main/services/assistant/signals.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: `NudgeCandidate` (Task 13), `ProjectSummary` and `summarizeProject` (Task 10).
 - Produces:
 
@@ -2792,11 +2890,13 @@ git commit -m "feat(assistant): add the mechanical nudge signal collectors"
 ### Task 16: Usage attribution and idle gating
 
 **Files:**
+
 - Modify: `main/services/usage-store-core.ts:8,67`
 - Modify: `main/services/usage-store-core.test.ts`
 - Modify: `main/services/llm-client.ts` (add `hasActiveGenerations`)
 
 **Interfaces:**
+
 - Produces: `UsageRequestSource` gains `"assistant"`;
   `llmClient.hasActiveGenerations(): boolean`.
 
@@ -2854,12 +2954,14 @@ git commit -m "feat(assistant): attribute assistant usage and expose an idle gat
 ### Task 17: Decision call
 
 **Files:**
+
 - Create: `main/services/assistant/decide-parse.ts`
 - Create: `main/services/assistant/decide-parse.test.ts`
 - Create: `main/services/assistant/decide.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: `isSilentResponse` (Task 12), `NudgeCandidate` (Task 13),
   `"assistant-unattended"` mode (Task 5), `"assistant"` usage source (Task 16),
   `ASSISTANT_WORKSPACE_ID` (Task 2).
@@ -2894,7 +2996,7 @@ export function decideNudges(
 
 `main/services/assistant/decide-parse.test.ts`:
 
-```ts
+````ts
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildDecisionPrompt, parseUrgencyVerdicts } from "./decide-parse.js";
@@ -2966,7 +3068,7 @@ test("falls back to the candidate's own title and body when the model omits them
   assert.equal(verdicts[0]?.title, "Uncommitted work");
   assert.equal(verdicts[0]?.body, "12 files");
 });
-```
+````
 
 - [ ] **Step 2: Run it and confirm it fails**
 
@@ -3051,11 +3153,13 @@ git commit -m "feat(assistant): add the urgency decision call and its parser"
 ### Task 18: Delivery
 
 **Files:**
+
 - Create: `main/services/assistant/deliver.ts`
 - Create: `main/services/assistant/nudge-notification.test.ts`
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: `assistantStore` (Task 14), `showAssistantWindow` (Task 4),
   `ASSISTANT_WORKSPACE_ID` (Task 2).
 - Produces:
@@ -3137,6 +3241,7 @@ git commit -m "feat(assistant): deliver nudges as notifications and thread messa
 ### Task 19: Ticker, state IPC, and health surface
 
 **Files:**
+
 - Create: `main/services/assistant/ticker-core.ts`
 - Create: `main/services/assistant/ticker-core.test.ts`
 - Create: `main/services/assistant/ticker.ts`
@@ -3146,6 +3251,7 @@ git commit -m "feat(assistant): deliver nudges as notifications and thread messa
 - Modify: `package.json`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 12–18.
 - Produces:
 
@@ -3350,6 +3456,7 @@ git commit -m "feat(assistant): add the proactive ticker, state IPC, and health 
 ### Task 20: Test grouping and documentation
 
 **Files:**
+
 - Modify: `package.json` (add `test:assistant`)
 - Modify: `docs/plans/README.md`
 - Modify: `docs/plans/aiden-assistant-plan.md` (the `Status:` line)

@@ -9,11 +9,13 @@
 // hook and waits for the user to Allow or Deny in the UI.
 
 import { Agent } from "@earendil-works/pi-agent-core";
+import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, skillToolKey } from "./tools.js";
 import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
 import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
+import { secrets } from "./secrets.js";
 import { chatStore } from "./chat-store.js";
 import { discoverSkills } from "./skills-discovery.js";
 import {
@@ -50,8 +52,15 @@ import type {
 import type { ComputerUseArgs } from "./computer-use/schema.js";
 import { COMPUTER_USE_TOOL_NAME } from "./computer-use/tool.js";
 import {
+  EDIT_AUTOMATION_TOOL_NAME,
   SCHEDULE_TOOL_NAME,
+  attachAssistantScheduleMcpApproval,
+  prepareAssistantEditAutomationProposal,
+  repairAssistantScheduleMcpTarget,
+  resolveAssistantScheduleMcpServers,
+  resolveAssistantScheduleProject,
   scheduleToolRequiresApproval,
+  summarizeEditAutomationToolCall,
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
@@ -63,7 +72,10 @@ import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "./generation-context.js";
-import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
+import {
+  buildGeminiWorkspaceSnapshot,
+  GeminiContextCache,
+} from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
@@ -76,25 +88,62 @@ import {
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import { startLocalModelLoadMonitor, type LocalModelLoadMonitor } from "./local-runtime-status.js";
+import {
+  startLocalModelLoadMonitor,
+  type LocalModelLoadMonitor,
+} from "./local-runtime-status.js";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
-import { buildAssistantSystemPrompt } from "./assistant/system-prompt.js";
+import {
+  buildAssistantSystemPrompt,
+  withUnattendedAssistantContract,
+} from "./assistant/system-prompt.js";
+import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
+import {
+  assertScheduledProviderFingerprint,
+  scheduledProviderFingerprint,
+} from "./schedule-provider-binding.js";
+import {
+  advanceAttendedToolErrorState,
+  recoverAttendedToolErrorContext,
+} from "./assistant/tool-loop-guard.js";
+import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
-import { subagentsAllowedForGeneration } from "./subagents/eligibility.js";
+import {
+  subagentsAllowedForGeneration,
+  subagentWorkspaceWriteAllowedForGeneration,
+} from "./subagents/eligibility.js";
+import {
+  subagentChildMcpEnabled,
+  subagentChildMcpMutationsEnabled,
+  subagentChildDelegationEnabled,
+  subagentChildShellEnabled,
+  subagentChildWriteEnabled,
+  subagentChildWebEnabled,
+} from "./subagents/feature-flag.js";
 import { inheritedSubagentReadToolCeiling } from "./subagents/capability-profile.js";
 import { SUBAGENT_PARENT_SECURITY_GUIDANCE } from "./subagents/role-catalog.js";
 import { SubagentEventProjector } from "./subagents/subagent-event-projector.js";
 import { subagentRunStore } from "./subagents/subagent-run-store.js";
+import { createForegroundSubagentPersistenceV2 } from "./subagents/subagent-foreground-persistence-v2.js";
 import { subagentHealthMetrics } from "./subagents/subagent-health-metrics.js";
 import { subagentRuntimeRegistry } from "./subagents/child-agent-runtime.js";
+import { subagentControlMainV2 } from "./subagents/subagent-control-main.js";
+import { resolveProductionSubagentMcpInventory } from "./subagents/subagent-mcp-inventory-production.js";
+import {
+  projectRequestableSubagentMcpInventoryV2,
+  projectRequestableSubagentMcpMutationInventoryV2,
+} from "./subagents/request-capabilities-v2.js";
+import { productionSubagentMcpMutationHost } from "./subagents/subagent-mcp-mutation-production.js";
+import { resolveSubagentShellRunnerBinary } from "./subagents/subagent-shell-runner-io.js";
 import {
   isSafeSubagentIdentifier,
   subagentMessageReference,
 } from "../../renderer/shared/subagent-runs.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { ChatDeletionGate } from "./chat-deletion-gate.js";
 import { authoritativeChatWorkspaceId } from "./chat-workspace-authority.js";
 import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
@@ -117,6 +166,12 @@ export interface GenerationExecutionOptions {
   usageSource?: UsageRequestSource;
   /** Withhold connector tools when their mutation semantics cannot be enforced. */
   allowMcpTools?: boolean;
+  /** Exact MCP server identities approved for an unattended generation. */
+  mcpServerIds?: readonly string[];
+  /** Exact main-owned MCP connection fingerprints approved for this run. */
+  mcpServerBindings?: readonly import("./types.js").ScheduledMcpServerBinding[];
+  /** Exact Assistant-approved inference connection fingerprint. */
+  providerFingerprint?: string;
   /** Internal foreground policy; scheduled/background callers explicitly disable delegation. */
   allowSubagents?: boolean;
   /** Main-owned lease token spanning user-message persistence through generation registration. */
@@ -178,8 +233,13 @@ function broadcastChatSettled(
   workspaceId: string | undefined,
   fallbackWorkspaceId: string | undefined,
 ): void {
-  const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
-  if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
+  const normalizedWorkspaceId = persistedChatWorkspaceId(
+    workspaceId ?? fallbackWorkspaceId,
+  );
+  if (
+    !isSafeSubagentIdentifier(chatId) ||
+    !isSafeSubagentIdentifier(normalizedWorkspaceId)
+  ) {
     return;
   }
   ipcMain.broadcast("chats:settled", {
@@ -192,7 +252,11 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
 
-function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
+function sendGeneration(
+  streamId: string,
+  channel: NotificationChannel,
+  payload: unknown,
+): boolean {
   const owner = ownerForStream(streamId);
   if (!owner || owner.isDestroyed()) return false;
   try {
@@ -230,7 +294,8 @@ const approvals = new ToolApprovalCoordinator((prompt) => {
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
 // miss before the outer parent shutdown deadline can release a soak receipt.
-const SHUTDOWN_GENERATION_GRACE_MS = DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS + 1_000;
+const SHUTDOWN_GENERATION_GRACE_MS =
+  DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS + 1_000;
 
 function resetGenerationAgent(agent: Agent, streamId: string): void {
   try {
@@ -242,7 +307,10 @@ function resetGenerationAgent(agent: Agent, streamId: string): void {
 
 /** Escape text interpolated into the XML-ish skill listing (skill files are untrusted input). */
 function escapeSkillXml(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function formatAvailableSkills(
@@ -274,7 +342,9 @@ function formatAvailableSkills(
     });
   }
 
-  const list = [...byTool.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const list = [...byTool.values()].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
   if (list.length === 0) return undefined;
 
   return [
@@ -285,7 +355,9 @@ function formatAvailableSkills(
       "  <skill>",
       `    <name>${escapeSkillXml(skill.name)}</name>`,
       ...(skill.description
-        ? [`    <description>${escapeSkillXml(skill.description)}</description>`]
+        ? [
+            `    <description>${escapeSkillXml(skill.description)}</description>`,
+          ]
         : []),
       `    <tool>${skill.tool}</tool>`,
       `    <location>${escapeSkillXml(skill.location)}</location>`,
@@ -300,13 +372,16 @@ async function buildSystemPrompt(
   branch: string | undefined,
   permission: GenerationPermission,
   subagentsAvailable: boolean,
+  skillsAvailable = true,
 ): Promise<string> {
   const base =
     "You are Pi, a capable AI assistant. Respond clearly and concisely, using Markdown for formatting and fenced code blocks for code.";
-  const skillsText = formatAvailableSkills(
-    await configStore.listSkills(),
-    await discoverSkills(folderPath),
-  );
+  const skillsText = skillsAvailable
+    ? formatAvailableSkills(
+        await configStore.listSkills(),
+        await discoverSkills(folderPath),
+      )
+    : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
   if (!folderPath || permission === "none") {
     return `${base} Call the available tools when they help answer the user's request.${skillsSuffix}`;
@@ -345,26 +420,47 @@ async function prepareGeneration(
   signal: AbortSignal,
   computerUseGateSnapshot: number,
   activatedComputerUse: (controller: ComputerUseController) => void,
+  ownerDocumentId: string,
   options: GenerationExecutionOptions,
 ) {
-  const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
-  const assistantMode = params.mode === "assistant" || params.mode === "assistant-unattended";
-  // Assistant mode is never folder-scoped. Resolving a caller-supplied
-  // workspaceId here would bind the Aiden persona — "you cannot run commands" —
-  // to that folder's coding tools at that folder's permission, and a "full"
-  // workspace skips approval entirely. The reserved assistant workspace exists
-  // to hold threads, not to grant access.
+  const runtime = await resolveModelRuntime(
+    params.providerId,
+    params.model,
+    signal,
+  );
+  const attendedAssistant = params.mode === "assistant";
+  const assistantPersonaMode =
+    params.mode === "assistant" || params.mode === "assistant-unattended";
+  const assistantAutomationMode = params.mode === "assistant-automation";
+  const assistantMode = assistantPersonaMode || assistantAutomationMode;
+  // The dock persona is never folder-scoped. Project automation mode is
+  // main-only and reaches this branch only after the persisted approval profile
+  // has bound the scheduled run to a workspace.
   const workspace =
-    params.workspaceId && !assistantMode
+    params.workspaceId && !assistantPersonaMode
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined;
   if (workspace) await assertManagedWorktreeAdmission(workspace);
-  const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
+  const permission: GenerationPermission =
+    options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
+  if (assistantAutomationMode || params.mode === "assistant-unattended") {
+    assertScheduledProviderFingerprint(
+      runtime.provider,
+      options.providerFingerprint,
+    );
+  }
+  const assistantModelSelection = {
+    providerId: runtime.provider.id,
+    providerName: runtime.provider.label,
+    model: model.id,
+    modelName: model.name,
+    providerFingerprint: scheduledProviderFingerprint(runtime.provider),
+  };
   const supportsImages = runtimeSupportsImages(model);
   const settings = await configStore.getSettings();
   const savedThinkingLevel =
@@ -393,14 +489,20 @@ async function prepareGeneration(
       status.enabled &&
       !status.ready
     ) {
-      throw new Error(`Computer Use is enabled for this chat but is not ready. ${status.detail}`);
+      throw new Error(
+        `Computer Use is enabled for this chat but is not ready. ${status.detail}`,
+      );
     }
-    if (computerUseGenerationGate.isCurrent(computerUseGateSnapshot) && status.ready) {
+    if (
+      computerUseGenerationGate.isCurrent(computerUseGateSnapshot) &&
+      status.ready
+    ) {
       computerUse = createComputerUseController(streamId, supportsImages);
       activatedComputerUse(computerUse);
     }
   }
-  const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
+  const toolPermission: WorkspacePermission =
+    permission === "read-only" ? "full" : permission;
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
     allowSubagents: options.allowSubagents,
@@ -410,6 +512,131 @@ async function prepareGeneration(
     folderPath,
     permission,
   });
+  const childWebRollout = subagentChildWebEnabled();
+  const childMcpRollout = subagentChildMcpEnabled();
+  const childMcpMutationsRollout = subagentChildMcpMutationsEnabled();
+  const childWriteRollout = subagentChildWriteEnabled();
+  const childShellRollout = subagentChildShellEnabled();
+  const childDelegationRollout = subagentChildDelegationEnabled();
+  const subagentWriteEnabled = subagentWorkspaceWriteAllowedForGeneration({
+    subagentsAllowed: allowSubagents,
+    childWriteRollout,
+    v2StoreSelected: subagentRunStore.selection === "v2",
+    workspacePermission: workspace?.permission,
+    generationPermission: permission,
+  });
+  const subagentWebEnabled =
+    allowSubagents &&
+    childWebRollout &&
+    settings.exaEnabled === true &&
+    Boolean(await secrets.getKey("exa"));
+  const subagentMcpInventory =
+    allowSubagents && childMcpRollout && subagentRunStore.selection === "v2"
+      ? await resolveProductionSubagentMcpInventory(signal)
+      : [];
+  const subagentShellBinary = resolveSubagentShellRunnerBinary();
+  const subagentShellEnabled =
+    allowSubagents &&
+    childShellRollout &&
+    subagentRunStore.selection === "v2" &&
+    workspace?.permission !== "none" &&
+    permission !== "none" &&
+    (await access(subagentShellBinary).then(
+      () => true,
+      () => false,
+    ));
+  const subagentDelegationEnabled =
+    allowSubagents &&
+    childDelegationRollout &&
+    subagentRunStore.selection === "v2" &&
+    workspace?.permission !== "none" &&
+    permission !== "none";
+  let subagentProjector: SubagentEventProjector | undefined;
+  const subagentPersistence =
+    allowSubagents && workspace && folderPath
+      ? createForegroundSubagentPersistenceV2({
+          store: subagentRunStore,
+          generationId: streamId,
+          chatId: params.chatId,
+          workspace,
+          runtime: { ...runtime, model },
+          thinkingLevel,
+          ownerDocumentId,
+          permission: workspace.permission,
+          writeEnabled: subagentWriteEnabled,
+          webEnabled: subagentWebEnabled,
+          mcpInventory: subagentMcpInventory,
+          mcpMutationsEnabled: childMcpMutationsRollout,
+          mcpMutationHost: productionSubagentMcpMutationHost,
+          shellEnabled: subagentShellEnabled,
+          shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
+          delegationEnabled: subagentDelegationEnabled,
+          requestApproval: (
+            descriptor,
+            approvalSignal,
+            approvalOwnerDocumentId,
+          ) =>
+            approvals.request(
+              descriptor,
+              approvalSignal,
+              approvalOwnerDocumentId,
+            ),
+          currentWorkspace: (workspaceId) =>
+            configStore.getWorkspace(workspaceId),
+          validateWorkspace: (candidate) =>
+            assertManagedWorktreeAdmission(candidate),
+          workspaceOperationRegistry,
+          control:
+            subagentRunStore.selection === "v2"
+              ? subagentControlMainV2
+              : undefined,
+          applyControlSnapshot: (snapshot) => {
+            if (!subagentProjector) {
+              throw new Error("Subagent control projector is unavailable.");
+            }
+            return subagentProjector.applyControlSnapshot(snapshot);
+          },
+          currentControlSnapshot: (runId) => {
+            const snapshot = subagentProjector
+              ?.snapshot()
+              .find((candidate) => candidate.runId === runId);
+            if (!snapshot) {
+              throw new Error(
+                "Subagent control projector state is unavailable.",
+              );
+            }
+            return snapshot;
+          },
+          settleControlSnapshots: () =>
+            subagentProjector?.flush() ??
+            Promise.reject(
+              new Error("Subagent control projector is unavailable."),
+            ),
+          onControlSnapshot: (snapshot) => {
+            sendGeneration(streamId, "chat:subagents", { streamId, snapshot });
+          },
+        })
+      : undefined;
+  if (allowSubagents && workspace && subagentPersistence) {
+    subagentProjector = new SubagentEventProjector({
+      generationId: streamId,
+      chatId: params.chatId,
+      workspaceId: workspace.id,
+      modelId: model.id,
+      prepareSnapshot: (snapshot) => subagentPersistence.prepare(snapshot),
+      onControlSnapshot: async (snapshot) => {
+        subagentPersistence.projectControlSnapshot(snapshot);
+        await subagentPersistence.flushControlPersistence();
+      },
+      onSnapshot: async (snapshot) => {
+        await subagentPersistence.upsert(snapshot);
+        sendGeneration(streamId, "chat:subagents", {
+          streamId,
+          snapshot: subagentPersistence.rendererSnapshot(snapshot),
+        });
+      },
+    });
+  }
   const subagentSupervisor =
     allowSubagents && folderPath && workspace?.id
       ? new SubagentSupervisor({
@@ -417,42 +644,82 @@ async function prepareGeneration(
           chatId: params.chatId,
           workspaceId: workspace.id,
           runtime,
+          thinkingLevel,
           workspaceRoot: folderPath,
           permission: toolPermission,
-          inheritedCeiling: inheritedSubagentReadToolCeiling(options.excludeToolNames),
+          inheritedCeiling: inheritedSubagentReadToolCeiling(
+            options.excludeToolNames,
+          ),
+          loadPersistedChatForFork: async (forkSignal) => {
+            if (subagentRunStore.selection !== "v2") {
+              throw new Error(
+                "Forked subagent context is unavailable during V1 rollback.",
+              );
+            }
+            if (forkSignal?.aborted) {
+              throw forkSignal.reason instanceof Error
+                ? forkSignal.reason
+                : new Error("Forked subagent context was cancelled.");
+            }
+            const persisted = await chatStore.get(params.chatId);
+            if (forkSignal?.aborted) {
+              throw forkSignal.reason instanceof Error
+                ? forkSignal.reason
+                : new Error("Forked subagent context was cancelled.");
+            }
+            if (
+              !persisted ||
+              persistedChatWorkspaceId(persisted.workspaceId) !== workspace.id
+            ) {
+              throw new Error(
+                "Forked subagent context no longer belongs to this workspace.",
+              );
+            }
+            return persisted;
+          },
+          prepareRun: subagentPersistence?.prepareRun,
           healthMetrics: subagentHealthMetrics,
-          projector: new SubagentEventProjector({
-            generationId: streamId,
-            chatId: params.chatId,
-            workspaceId: workspace.id,
-            modelId: model.id,
-            onSnapshot: async (snapshot) => {
-              await subagentRunStore.upsert(snapshot);
-              sendGeneration(streamId, "chat:subagents", {
-                streamId,
-                snapshot,
-              });
-            },
-          }),
+          projector: subagentProjector,
         })
       : undefined;
-  // The Aiden assistant surface has no approval affordance, so it must not be
-  // handed any tool that can pause for one. Scheduling is the live example:
-  // schedule_task blocks on ToolApprovalCoordinator, which never times out, so
-  // an unapprovable call would hang the panel with no error. Connector tools go
-  // for the same reason — their mutation semantics cannot be enforced here.
+  // Assistant modes use positive allowlists: the dock gets safe metadata plus
+  // scheduling, while an approved automation gets only its project tools and
+  // exact MCP identities. Computer Use, skills, and delegation stay out.
   const tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
       workspaceRoot: folderPath,
       permission: toolPermission,
       computerUse,
-      allowScheduling: !assistantMode && !options.excludeToolNames?.has("schedule_task"),
-      allowMcpTools: assistantMode ? false : options.allowMcpTools,
+      allowScheduling:
+        (!assistantMode || attendedAssistant) &&
+        !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME),
+      allowMcpTools: options.allowMcpTools,
+      mcpServerIds: options.mcpServerIds,
+      mcpServerBindings: options.mcpServerBindings,
       allowSubagents,
-      mode: assistantMode ? "assistant" : undefined,
+      mode: assistantPersonaMode
+        ? "assistant"
+        : assistantAutomationMode
+          ? "assistant-automation"
+          : undefined,
+      assistantModelSelection: attendedAssistant
+        ? assistantModelSelection
+        : undefined,
       createSubagentTool: subagentSupervisor
-        ? () => createSubagentTool(subagentSupervisor)
+        ? () =>
+            createSubagentTool(
+              subagentSupervisor,
+              projectRequestableSubagentMcpInventoryV2(subagentMcpInventory),
+              subagentWriteEnabled,
+              childMcpMutationsRollout
+                ? projectRequestableSubagentMcpMutationInventoryV2(
+                    subagentMcpInventory,
+                  )
+                : [],
+              subagentShellEnabled,
+              subagentDelegationEnabled,
+            )
         : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
@@ -492,7 +759,8 @@ async function prepareGeneration(
     // The Aiden system prompt reads its approval posture from settings, which
     // are already loaded here; re-reading them at the prompt site would be a
     // second disk round trip inside the generation's hot path.
-    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
+    assistantSettingsPermission:
+      settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -510,16 +778,22 @@ export const llmClient = {
       chatTurnAdmission.owns(params.chatId, turnId, owner.documentId);
     try {
       if (!ownsTurn) {
-        throw new Error("This message turn expired before generation could start.");
+        throw new Error(
+          "This message turn expired before generation could start.",
+        );
       }
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
       if (chatComputerUseMutationGate.isChanging(params.chatId)) {
-        throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
+        throw new Error(
+          "Computer Use settings are changing for this chat. Try again in a moment.",
+        );
       }
       if (chatWorkspaceMutationGate.isChanging(params.chatId)) {
-        throw new Error("This chat is changing workspaces. Try again in a moment.");
+        throw new Error(
+          "This chat is changing workspaces. Try again in a moment.",
+        );
       }
       if (initializing.has(streamId) || active.has(streamId)) {
         throw new Error("A generation with this stream id is already running.");
@@ -529,7 +803,11 @@ export const llmClient = {
       }
     } catch (error) {
       if (turnId) {
-        chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
+        chatTurnAdmission.releaseMatching(
+          params.chatId,
+          turnId,
+          owner.documentId,
+        );
       }
       throw error;
     }
@@ -546,16 +824,24 @@ export const llmClient = {
     const computerUseGateSnapshot = computerUseGenerationGate.snapshot();
     if (
       !turnId ||
-      !chatTurnAdmission.handoff(params.chatId, turnId, owner.documentId, () => {
-        initializing.set(streamId, initialization);
-      })
+      !chatTurnAdmission.handoff(
+        params.chatId,
+        turnId,
+        owner.documentId,
+        () => {
+          initializing.set(streamId, initialization);
+        },
+      )
     ) {
-      throw new Error("This message turn expired before generation could start.");
+      throw new Error(
+        "This message turn expired before generation could start.",
+      );
     }
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
       this.cancel(streamId);
     });
-    if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
+    if (initialization.controller.signal.aborted)
+      initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     try {
       const chat = await chatStore.get(params.chatId);
@@ -585,19 +871,31 @@ export const llmClient = {
         (computerUse) => {
           initialization.computerUse = computerUse;
         },
+        owner.documentId,
         options,
       );
     } catch (error) {
-      if (initialization.cancelRequested || initialization.controller.signal.aborted) {
+      if (
+        initialization.cancelRequested ||
+        initialization.controller.signal.aborted
+      ) {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(
+        params.chatId,
+        initialization.workspaceId,
+        params.workspaceId,
+      );
       throw error;
     }
     const {
@@ -614,8 +912,15 @@ export const llmClient = {
       assistantSettingsPermission,
       subagentSupervisor,
     } = setup;
+    const attendedAssistant = params.mode === "assistant";
     initialization.computerUse = computerUse;
     const { model } = runtime;
+    const approvalModelSelection = {
+      providerId: runtime.provider.id,
+      providerName: runtime.provider.label,
+      model: model.id,
+      modelName: model.name,
+    };
     const exposeReasoning = shouldExposeReasoning(params.providerId);
 
     if (isLocalProviderDeployment(runtime.provider)) {
@@ -645,6 +950,7 @@ export const llmClient = {
     }
 
     const deniedToolCalls = new Set<string>();
+    let consecutiveAttendedToolErrorTurns = 0;
     const timeline = new GenerationTimelineProjector(streamId, (snapshot) => {
       sendGeneration(streamId, "chat:timeline", {
         streamId,
@@ -654,14 +960,23 @@ export const llmClient = {
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
-      initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
+      initialization.cancelRequested ||
+      active.get(streamId)?.cancelRequested === true;
     const persistAssistant = async (
       content: string,
       reasoning: string,
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
     ) => {
-      const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
-      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0 && !subagents) {
+      const subagents = subagentMessageReference(
+        streamId,
+        subagentSupervisor?.snapshots() ?? [],
+      );
+      if (
+        !content.trim() &&
+        !reasoning.trim() &&
+        finalTimeline.steps.length === 0 &&
+        !subagents
+      ) {
         return { chat: undefined, error: undefined };
       }
       try {
@@ -686,7 +1001,11 @@ export const llmClient = {
         );
         return { chat, error: undefined };
       } catch (error) {
-        logger.error("pi", `Could not persist response for stream ${streamId}`, error);
+        logger.error(
+          "pi",
+          `Could not persist response for stream ${streamId}`,
+          error,
+        );
         return {
           chat: undefined,
           error: "local storage failed",
@@ -701,20 +1020,52 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let candidate: Agent | null = null;
     try {
+      const assistantMcpInventory =
+        params.mode === "assistant"
+          ? await configStore
+              .listMcpServers()
+              .then((servers) => assistantMcpServerInventory(servers))
+              .catch(() => ({
+                servers: [],
+                totalEnabledServers: 0,
+                omittedInvalidIdentities: 0,
+                truncated: false,
+              }))
+          : {
+              servers: [],
+              totalEnabledServers: 0,
+              omittedInvalidIdentities: 0,
+              truncated: false,
+            };
       const systemPrompt =
         params.mode === "assistant" || params.mode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
               availableTools: tools.map((tool) => tool.name),
+              mcpServers: assistantMcpInventory.servers,
+              mcpServerTotal: assistantMcpInventory.totalEnabledServers,
+              mcpInventoryTruncated: assistantMcpInventory.truncated,
+              mcpOmittedInvalidIdentities:
+                assistantMcpInventory.omittedInvalidIdentities,
               unattended: params.mode === "assistant-unattended",
             })
-          : await buildSystemPrompt(
-              folderPath,
-              git.branch,
-              permission,
-              tools.some((tool) => tool.name === "subagent"),
-            );
+          : params.mode === "assistant-automation"
+            ? withUnattendedAssistantContract(
+                await buildSystemPrompt(
+                  folderPath,
+                  git.branch,
+                  permission,
+                  false,
+                  false,
+                ),
+              )
+            : await buildSystemPrompt(
+                folderPath,
+                git.branch,
+                permission,
+                tools.some((tool) => tool.name === "subagent"),
+              );
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -741,17 +1092,21 @@ export const llmClient = {
             tools,
           },
           (result) => {
-            logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
-              model: model.id,
-              estimatedTokensBefore: result.estimatedTokensBefore,
-              estimatedTokensAfter: result.estimatedTokensAfter,
-              inputBudgetTokens: result.inputBudgetTokens,
-              truncatedToolResults: result.truncatedToolResults,
-              compactedToolResults: result.compactedToolResults,
-              removedHistoryMessages: result.removedHistoryMessages,
-              removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-              usedContextFallback: result.usedContextFallback,
-            });
+            logger.info(
+              "pi",
+              `Compacted generation context for stream ${streamId}.`,
+              {
+                model: model.id,
+                estimatedTokensBefore: result.estimatedTokensBefore,
+                estimatedTokensAfter: result.estimatedTokensAfter,
+                inputBudgetTokens: result.inputBudgetTokens,
+                truncatedToolResults: result.truncatedToolResults,
+                compactedToolResults: result.compactedToolResults,
+                removedHistoryMessages: result.removedHistoryMessages,
+                removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+                usedContextFallback: result.usedContextFallback,
+              },
+            );
           },
         ),
         initialState: {
@@ -761,11 +1116,37 @@ export const llmClient = {
           tools,
           messages: toPiMessages(params, model, supportsImages),
         },
+        prepareNextTurnWithContext: async ({ toolResults, context }) => {
+          if (!attendedAssistant) return undefined;
+          const state = advanceAttendedToolErrorState(
+            consecutiveAttendedToolErrorTurns,
+            toolResults,
+          );
+          consecutiveAttendedToolErrorTurns = state.consecutiveErrorTurns;
+          if (state.shouldStop) {
+            logger.warn(
+              "pi",
+              `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
+            );
+            return {
+              context: recoverAttendedToolErrorContext(context),
+            };
+          }
+          return undefined;
+        },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
-          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
+          timeline.toolStarted(
+            context.toolCall.id,
+            context.toolCall.name,
+            context.args,
+          );
           let summary: string;
+          let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
+          let attendedScheduleApproval = false;
+          let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] =
+            [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
               deniedToolCalls.add(context.toolCall.id);
@@ -792,44 +1173,113 @@ export const llmClient = {
               return {
                 block: true,
                 reason:
-                  error instanceof Error ? error.message : "Computer Use rejected this action.",
+                  error instanceof Error
+                    ? error.message
+                    : "Computer Use rejected this action.",
               };
             }
           } else {
-            const scheduleApproval =
+            const createScheduleApproval =
               context.toolCall.name === SCHEDULE_TOOL_NAME &&
               scheduleToolRequiresApproval(context.args);
+            const editScheduleApproval =
+              context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
+            const scheduleApproval =
+              createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
-              permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+              permission === "ask" &&
+              APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            attendedScheduleApproval = scheduleApproval && attendedAssistant;
             if (!scheduleApproval && !workspaceApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
-            summary = scheduleApproval
-              ? summarizeScheduleToolCall(context.args)
-              : summarizeToolCall(context.toolCall.name, context.args);
+            if (scheduleApproval && attendedAssistant) {
+              try {
+                const proposal = editScheduleApproval
+                  ? await prepareAssistantEditAutomationProposal(context.args)
+                  : await repairAssistantScheduleMcpTarget(context.args);
+                if (createScheduleApproval) {
+                  const canonicalArgs = context.args as Record<string, unknown>;
+                  canonicalArgs.workspaceId = proposal.input.workspaceId;
+                  canonicalArgs.permission = proposal.input.permission;
+                  canonicalArgs.mcpServerIds = proposal.input.mcpServerIds;
+                }
+                const [project, mcpResolution, liveSettings] =
+                  await Promise.all([
+                    resolveAssistantScheduleProject(proposal),
+                    resolveAssistantScheduleMcpServers(proposal),
+                    configStore.getSettings(),
+                  ]);
+                if (signal?.aborted) {
+                  throw new Error("Automation change was cancelled.");
+                }
+                const { mcpServerBindings, ...mcpServers } = mcpResolution;
+                approvedScheduleMcpBindings = mcpServerBindings;
+                approvalDetails = {
+                  ...proposal.details,
+                  ...project,
+                  ...mcpServers,
+                  ...approvalModelSelection,
+                  // Consent reflects the current scheduler state at the point
+                  // the prompt is published, not the generation-start snapshot.
+                  schedulerEnabled:
+                    liveSettings.scheduledTasksEnabled !== false,
+                };
+              } catch (error) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+                return {
+                  block: true,
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "Aiden rejected this automation change.",
+                };
+              }
+            }
+            summary = editScheduleApproval
+              ? summarizeEditAutomationToolCall(context.args)
+              : scheduleApproval
+                ? summarizeScheduleToolCall(context.args)
+                : summarizeToolCall(context.toolCall.name, context.args);
           }
           timeline.toolAwaitingApproval(context.toolCall.id);
           const allowed = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-              if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+              if (!toolCallId)
+                throw new Error("The tool approval step was not initialized.");
               return {
                 streamId,
                 toolCallId,
                 toolName: context.toolCall.name,
                 summary,
+                details: approvalDetails,
               };
             })(),
             signal,
             owner.documentId,
           );
-          if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
+          if (!allowed && !signal?.aborted)
+            deniedToolCalls.add(context.toolCall.id);
+          if (allowed && attendedScheduleApproval) {
+            attachAssistantScheduleMcpApproval(
+              context.args,
+              approvedScheduleMcpBindings,
+            );
+          }
           if (allowed) timeline.toolRunning(context.toolCall.id);
-          else if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
-          if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
+          else if (!signal?.aborted)
+            timeline.toolFinished(context.toolCall.id, "blocked");
+          if (
+            allowed &&
+            computerUse &&
+            context.toolCall.name === COMPUTER_USE_TOOL_NAME
+          ) {
             try {
-              if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
+              if (!computerUseApproval)
+                throw new Error("Computer Use approval was not prepared.");
               computerUse.authorize(
                 context.toolCall.id,
                 context.args as ComputerUseArgs,
@@ -840,11 +1290,21 @@ export const llmClient = {
               timeline.toolFinished(context.toolCall.id, "blocked");
               return {
                 block: true,
-                reason: error instanceof Error ? error.message : "Computer Use approval expired.",
+                reason:
+                  error instanceof Error
+                    ? error.message
+                    : "Computer Use approval expired.",
               };
             }
           }
-          return allowed ? undefined : { block: true, reason: "The user denied this action." };
+          return allowed
+            ? undefined
+            : {
+                block: true,
+                reason: attendedScheduleApproval
+                  ? 'The user declined this automation. Do not retry it. Reply briefly, "Okay—what else should we do?" and wait for their direction.'
+                  : "The user denied this action.",
+              };
         },
       });
 
@@ -876,7 +1336,9 @@ export const llmClient = {
               });
             } else if (e.type === "thinking_delta" && exposeReasoning) {
               const separator =
-                !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
+                !currentAssistantTurnHadReasoningDelta && reasoning.trim()
+                  ? "\n\n"
+                  : "";
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
               currentAssistantTurnHadReasoningDelta = true;
@@ -917,7 +1379,8 @@ export const llmClient = {
                   event.message,
                   currentAssistantTurnHadReasoningDelta,
                 );
-                if (fallback) reasoning += `${reasoning.trim() ? "\n\n" : ""}${fallback}`;
+                if (fallback)
+                  reasoning += `${reasoning.trim() ? "\n\n" : ""}${fallback}`;
               }
             }
             break;
@@ -935,6 +1398,28 @@ export const llmClient = {
             break;
           case "tool_execution_end": {
             const denied = deniedToolCalls.delete(event.toolCallId);
+            if (
+              attendedAssistant &&
+              event.isError &&
+              (event.toolName === SCHEDULE_TOOL_NAME ||
+                event.toolName === EDIT_AUTOMATION_TOOL_NAME) &&
+              Array.isArray(event.result?.content)
+            ) {
+              const reason = event.result.content.find(
+                (item: { type?: unknown; text?: unknown }) =>
+                  item.type === "text" && typeof item.text === "string",
+              )?.text;
+              logger.warn(
+                "pi",
+                `Attended schedule proposal failed for stream ${streamId}.`,
+                {
+                  reason:
+                    typeof reason === "string"
+                      ? reason.slice(0, 320)
+                      : "Unknown error.",
+                },
+              );
+            }
             timeline.toolFinished(
               event.toolCallId,
               generationCancelRequested()
@@ -960,16 +1445,27 @@ export const llmClient = {
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
-      if (initialization.cancelRequested || initialization.controller.signal.aborted) {
+      if (
+        initialization.cancelRequested ||
+        initialization.controller.signal.aborted
+      ) {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(
+          params.chatId,
+          initialization.workspaceId,
+          params.workspaceId,
+        );
         return false;
       }
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(
+        params.chatId,
+        initialization.workspaceId,
+        params.workspaceId,
+      );
       throw error;
     }
     const agent = candidate;
@@ -977,7 +1473,11 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(
+        params.chatId,
+        initialization.workspaceId,
+        params.workspaceId,
+      );
       throw new Error("Could not initialize the generation agent.");
     }
 
@@ -1005,7 +1505,11 @@ export const llmClient = {
       sendGeneration(streamId, "chat:done", { streamId, content: "" });
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      broadcastChatSettled(
+        params.chatId,
+        activeGeneration.workspaceId,
+        params.workspaceId,
+      );
       return false;
     }
 
@@ -1020,8 +1524,15 @@ export const llmClient = {
             agent.state.errorMessage?.trim() ??
             null);
         if (finalError) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
-          const persisted = await persistAssistant(full, reasoning, finalTimeline);
+          const finalTimeline = attachClaimCheck(
+            timeline.finish("failed"),
+            full,
+          );
+          const persisted = await persistAssistant(
+            full,
+            reasoning,
+            finalTimeline,
+          );
           sendGeneration(streamId, "chat:error", {
             streamId,
             message: persisted.error
@@ -1033,8 +1544,15 @@ export const llmClient = {
             chat: persisted.chat,
           });
         } else if (!full.trim() && !wasCancelled) {
-          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
-          const persisted = await persistAssistant(full, reasoning, finalTimeline);
+          const finalTimeline = attachClaimCheck(
+            timeline.finish("failed"),
+            full,
+          );
+          const persisted = await persistAssistant(
+            full,
+            reasoning,
+            finalTimeline,
+          );
           sendGeneration(streamId, "chat:error", {
             streamId,
             message: persisted.error
@@ -1050,7 +1568,11 @@ export const llmClient = {
             timeline.finish(wasCancelled ? "cancelled" : "completed"),
             full,
           );
-          const persisted = await persistAssistant(full, reasoning, finalTimeline);
+          const persisted = await persistAssistant(
+            full,
+            reasoning,
+            finalTimeline,
+          );
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", {
               streamId,
@@ -1073,7 +1595,11 @@ export const llmClient = {
         const message = error instanceof Error ? error.message : String(error);
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
-        const persisted = await persistAssistant(full, reasoning, finalTimeline);
+        const persisted = await persistAssistant(
+          full,
+          reasoning,
+          finalTimeline,
+        );
         sendGeneration(streamId, "chat:error", {
           streamId,
           message: persisted.error
@@ -1092,7 +1618,11 @@ export const llmClient = {
         } finally {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
-          broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          broadcastChatSettled(
+            params.chatId,
+            activeGeneration.workspaceId,
+            params.workspaceId,
+          );
         }
       }
     })();
@@ -1102,7 +1632,11 @@ export const llmClient = {
   },
 
   /** Resolve a pending tool-approval request from the UI. */
-  approve(approvalId: string, decision: ApprovalDecision, ownerDocumentId?: string): boolean {
+  approve(
+    approvalId: string,
+    decision: ApprovalDecision,
+    ownerDocumentId?: string,
+  ): boolean {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
   },
 
@@ -1110,12 +1644,17 @@ export const llmClient = {
     const initialization = initializing.get(streamId);
     const generation = active.get(streamId);
     const owner = initialization?.owner ?? generation?.owner;
-    if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
+    if (
+      !owner ||
+      (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)
+    ) {
       return false;
     }
     if (initialization) {
       initialization.cancelRequested = true;
-      initialization.controller.abort(new Error("Chat initialization cancelled."));
+      initialization.controller.abort(
+        new Error("Chat initialization cancelled."),
+      );
       endLoadMonitor(initialization, streamId, false);
       void initialization.computerUse?.close();
     }
@@ -1131,17 +1670,25 @@ export const llmClient = {
   },
 
   isChatBusy(chatId: string): boolean {
-    return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
+    return (
+      chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId)
+    );
   },
 
   /** Detect only orphaned renderer ownership; normal visible generations never delay reads. */
   isChatOwnedByInactiveRenderer(chatId: string): boolean {
     return (
       [...initializing.values()].some(
-        (entry) => entry.chatId === chatId && entry.owner.id !== 0 && entry.owner.isDestroyed(),
+        (entry) =>
+          entry.chatId === chatId &&
+          entry.owner.id !== 0 &&
+          entry.owner.isDestroyed(),
       ) ||
       [...active.values()].some(
-        (entry) => entry.chatId === chatId && entry.owner.id !== 0 && entry.owner.isDestroyed(),
+        (entry) =>
+          entry.chatId === chatId &&
+          entry.owner.id !== 0 &&
+          entry.owner.isDestroyed(),
       )
     );
   },
@@ -1155,7 +1702,9 @@ export const llmClient = {
       const completions = [...active.values()]
         .filter((entry) => entry.chatId === chatId && entry.completion)
         .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+      const pause = new Promise<void>((resolve) =>
+        setTimeout(resolve, Math.min(25, remaining)),
+      );
       if (completions.length > 0) {
         await Promise.race([Promise.allSettled(completions), pause]);
       } else {
@@ -1183,7 +1732,9 @@ export const llmClient = {
       const completions = [...active.values()]
         .filter((entry) => entry.chatId === chatId && entry.completion)
         .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+      const pause = new Promise<void>((resolve) =>
+        setTimeout(resolve, Math.min(25, remaining)),
+      );
       if (completions.length > 0) {
         await Promise.race([Promise.allSettled(completions), pause]);
       } else {
@@ -1198,7 +1749,10 @@ export const llmClient = {
   },
 
   beginComputerUseSettingChange(chatId: string): (() => void) | null {
-    return chatComputerUseMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
+    return chatComputerUseMutationGate.tryBegin(
+      chatId,
+      this.isChatBusy(chatId),
+    );
   },
 
   beginChatWorkspaceChange(chatId: string): (() => void) | null {
@@ -1207,7 +1761,11 @@ export const llmClient = {
   },
 
   /** Claim one append-to-generation turn before its first persistence await. */
-  beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null {
+  beginChatTurn(
+    chatId: string,
+    turnId: string,
+    ownerId: string,
+  ): ChatTurnLease | null {
     if (
       !turnId ||
       !ownerId ||
@@ -1217,7 +1775,12 @@ export const llmClient = {
     ) {
       return null;
     }
-    return chatTurnAdmission.tryBegin(chatId, turnId, ownerId, chatHasGenerationOwnership(chatId));
+    return chatTurnAdmission.tryBegin(
+      chatId,
+      turnId,
+      ownerId,
+      chatHasGenerationOwnership(chatId),
+    );
   },
 
   abandonChatTurn(chatId: string, turnId: string, ownerId: string): boolean {
@@ -1250,7 +1813,8 @@ export const llmClient = {
       },
       hasChildren: (targetWorkspaceId) =>
         subagentRuntimeRegistry.hasWorkspaceChildren(targetWorkspaceId),
-      timeoutMessage: "Aiden could not stop this workspace before changing its access.",
+      timeoutMessage:
+        "Aiden could not stop this workspace before changing its access.",
       timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
     });
     await geminiContextCache.invalidateWorkspace(workspaceId);
@@ -1273,7 +1837,12 @@ export const llmClient = {
         completion: entry.completion,
       })),
       Math.max(0, deadline - Date.now()),
-      (error) => logger.warn("pi", "Could not clear one generation during shutdown.", error),
+      (error) =>
+        logger.warn(
+          "pi",
+          "Could not clear one generation during shutdown.",
+          error,
+        ),
     );
     // A parent can still be preparing when shutdown begins. Its controller was
     // aborted above, but do not report a clean lifecycle until it leaves the

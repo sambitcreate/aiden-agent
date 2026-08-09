@@ -109,6 +109,7 @@ function consequentialStepKind(step: AgentToolStep): ConsequentialStepKind | und
     case "computer_use":
       return "computer";
     case "schedule_task":
+    case "edit_automation":
       return "schedule";
     default:
       return step.toolName.includes("__") ? "connector" : undefined;

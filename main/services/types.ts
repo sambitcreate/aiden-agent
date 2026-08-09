@@ -256,7 +256,13 @@ export interface Chat extends ChatMeta {
 
 export type ScheduledTaskMode = "llm" | "script";
 export type ScheduledTaskPermission = "read-only" | "full";
+export type ScheduledTaskExecutionProfile = "assistant";
 export type ScheduledRunResult = "success" | "error" | "silent" | "blocked";
+
+export interface ScheduledMcpServerBinding {
+  id: string;
+  fingerprint: string;
+}
 
 export interface ScheduledTask {
   id: string;
@@ -270,9 +276,21 @@ export interface ScheduledTask {
   workspaceId?: string;
   providerId?: string;
   model?: string;
+  /** Main-owned provider-connection fingerprint. Renderer mutations cannot set this field. */
+  providerFingerprint?: string;
   prompt?: string;
   script?: string;
   permission: ScheduledTaskPermission;
+  /**
+   * Exact configured MCP server identities approved for unattended use.
+   * Undefined is retained only for legacy non-Assistant Full tasks that
+   * historically inherited every enabled MCP server.
+   */
+  mcpServerIds?: string[];
+  /** Main-owned immutable connection fingerprints for Assistant-approved MCP scope. */
+  mcpServerBindings?: ScheduledMcpServerBinding[];
+  /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
+  executionProfile?: ScheduledTaskExecutionProfile;
   chatId?: string;
   notify: boolean;
   lastResult?: ScheduledRunResult;
@@ -302,9 +320,17 @@ export interface ScheduledTaskInput {
   workspaceId?: string;
   providerId?: string;
   model?: string;
+  /** Main-owned provider-connection fingerprint. Renderer mutations cannot set this field. */
+  providerFingerprint?: string;
   prompt?: string;
   script?: string;
   permission?: ScheduledTaskPermission;
+  /** Exact configured MCP servers this task may invoke unattended. */
+  mcpServerIds?: string[];
+  /** Main-owned immutable connection fingerprints. Renderer mutations cannot set this field. */
+  mcpServerBindings?: ScheduledMcpServerBinding[];
+  /** Main-owned runtime profile. Renderer task mutations cannot set this field. */
+  executionProfile?: ScheduledTaskExecutionProfile;
   notify?: boolean;
 }
 
@@ -312,6 +338,7 @@ export interface ScheduledTaskSettings {
   enabled: boolean;
   defaultMode: ScheduledTaskMode;
   defaultPermission: ScheduledTaskPermission;
+  defaultMcpEnabled: boolean;
   defaultNotify: boolean;
   defaultTimezone: string;
 }
@@ -451,6 +478,7 @@ export interface AppSettings {
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;
   scheduledDefaultPermission?: ScheduledTaskPermission;
+  scheduledDefaultMcpEnabled?: boolean;
   scheduledDefaultNotify?: boolean;
   scheduledDefaultTimezone?: string;
   /** Aiden assistant window, hotkey, and proactivity settings. */
@@ -557,10 +585,11 @@ export interface ChatStartParams {
   model: string;
   /**
    * Selects the system prompt and tool set. Absent means the normal workspace
-   * chat. "assistant-unattended" is main-only: parseParams never produces it, so
-   * a renderer cannot request the [SILENT] prompt.
+   * chat. The unattended Assistant modes are main-only: parseParams never
+   * produces them, so a renderer cannot request background capabilities or the
+   * [SILENT] prompt.
    */
-  mode?: "assistant" | "assistant-unattended";
+  mode?: "assistant" | "assistant-unattended" | "assistant-automation";
   /** Small main-validated enum; provider/model support is enforced at runtime. */
   thinkingLevel?: GenerationThinkingLevel;
   messages: Array<{

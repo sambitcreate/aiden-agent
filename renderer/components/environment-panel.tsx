@@ -39,7 +39,10 @@ import {
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { subagentsApi } from "../lib/ipc";
-import type { SubagentRunSnapshotV1 } from "../shared/subagent-runs";
+import type {
+  SubagentEffectActivityV1,
+  SubagentRunSnapshot,
+} from "../shared/subagent-runs";
 import {
   buildSubagentRunViews,
   captureSubagentDetailRequest,
@@ -81,9 +84,9 @@ interface EnvironmentSubagentContext {
   chatId: string | null;
   workspaceId: string | null;
   references: SubagentReferenceMessage[];
-  liveSnapshots: SubagentRunSnapshotV1[];
-  handoffSnapshots: SubagentRunSnapshotV1[];
-  loadedSnapshots: SubagentRunSnapshotV1[];
+  liveSnapshots: SubagentRunSnapshot[];
+  handoffSnapshots: SubagentRunSnapshot[];
+  loadedSnapshots: SubagentRunSnapshot[];
 }
 
 interface EnvironmentFileRequest {
@@ -113,18 +116,20 @@ interface EnvironmentPanelContextValue {
   subagentFocusDetailVersion: number;
   subagentDetailLoading: boolean;
   subagentDetailError: string | null;
+  subagentDetailEffects: SubagentEffectActivityV1[];
   announceSubagentDetail: (ownerKey: string, message: string) => void;
   setSubagentAnnouncerHost: (host: HTMLElement | null) => void;
   syncSubagents: (
     chatId: string,
     workspaceId: string,
     references: SubagentReferenceMessage[],
-    liveSnapshots: SubagentRunSnapshotV1[],
+    liveSnapshots: SubagentRunSnapshot[],
   ) => void;
   releaseSubagents: (chatId: string, workspaceId: string) => void;
   openSubagent: (runId: string, returnTarget?: HTMLElement | null) => void;
   selectSubagent: (runId: string | null) => void;
   retrySubagentDetail: () => void;
+  stopSubagent: (run: SubagentRunSnapshot) => Promise<void>;
   editorState: FilesEditorState;
   agentBusy: boolean;
   gitOperationBusy: boolean;
@@ -185,6 +190,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [subagentFocusDetailVersion, setSubagentFocusDetailVersion] = React.useState(0);
   const [subagentDetailLoading, setSubagentDetailLoading] = React.useState(false);
   const [subagentDetailError, setSubagentDetailError] = React.useState<string | null>(null);
+  const [subagentEffectDetail, setSubagentEffectDetail] = React.useState<{
+    ownerKey: string;
+    runId: string;
+    effects: SubagentEffectActivityV1[];
+  } | null>(null);
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
@@ -317,7 +327,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       chatId: string,
       workspaceId: string,
       references: SubagentReferenceMessage[],
-      liveSnapshots: SubagentRunSnapshotV1[],
+      liveSnapshots: SubagentRunSnapshot[],
     ) => {
       if (!subagentsEnabled) return;
       const ownedLiveSnapshots = mergeSubagentSnapshots([], liveSnapshots, {
@@ -408,6 +418,39 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     setSubagentDetailRequestVersion((version) => version + 1);
   }, [selectedSubagentRunId, subagentsEnabled]);
 
+  const stopSubagent = React.useCallback(
+    async (run: SubagentRunSnapshot) => {
+      const chatId = subagentChatIdRef.current;
+      const workspaceId = subagentWorkspaceIdRef.current;
+      if (
+        !subagentsEnabled ||
+        run.version !== 2 ||
+        run.execution !== "foreground" ||
+        !chatId ||
+        !workspaceId ||
+        run.chatId !== chatId ||
+        run.workspaceId !== workspaceId
+      ) {
+        throw new Error("This subagent is no longer available to stop.");
+      }
+      const result = await subagentsApi.stop(chatId, run.runId);
+      if (result.action !== "stop") {
+        throw new Error("Aiden returned an invalid Stop result.");
+      }
+      setSubagents((current) => {
+        if (current.chatId !== chatId || current.workspaceId !== workspaceId) return current;
+        return {
+          ...current,
+          liveSnapshots: mergeSubagentSnapshots(current.liveSnapshots, [result.snapshot], {
+            chatId,
+            workspaceId,
+          }),
+        };
+      });
+    },
+    [subagentsEnabled],
+  );
+
   const announceSubagentDetail = React.useCallback(
     (ownerKey: string, message: string) => {
       if (
@@ -452,7 +495,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     if (!chatId || !workspaceId || !runId || !selectedSubagentGenerationId) return;
     if (selectedSubagentSnapshotRevision !== undefined) {
       setSubagentDetailLoading(false);
-      return;
     }
     const request = captureSubagentDetailRequest(
       chatId,
@@ -463,19 +505,24 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       workspaceId,
     );
     subagentDetailRequestRef.current = request;
-    setSubagentDetailLoading(true);
+    setSubagentDetailLoading(selectedSubagentSnapshotRevision === undefined);
     setSubagentDetailError(null);
     void subagentsApi
       .get(chatId, runId)
-      .then((snapshot) => {
+      .then((detail) => {
         const safeSnapshot = resolveSubagentDetailResult(
           request,
           subagentDetailRequestRef.current,
           subagentChatIdRef.current ?? "",
           selectedSubagentRunId ?? undefined,
-          snapshot,
+          detail?.snapshot,
         );
         if (!safeSnapshot) return;
+        setSubagentEffectDetail({
+          ownerKey: subagentPanelOwnerKey(chatId, workspaceId),
+          runId,
+          effects: detail?.effects ?? [],
+        });
         setSubagents((current) => {
           if (current.chatId !== chatId || current.workspaceId !== workspaceId) return current;
           const existing = current.loadedSnapshots.find((entry) => entry.runId === runId);
@@ -611,6 +658,12 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       subagentFocusDetailVersion,
       subagentDetailLoading: displayedSubagentSelection.loading,
       subagentDetailError,
+      subagentDetailEffects:
+        subagentEffectDetail?.ownerKey ===
+          subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId) &&
+        subagentEffectDetail.runId === displayedSubagentSelection.runId
+          ? subagentEffectDetail.effects
+          : [],
       announceSubagentDetail,
       setSubagentAnnouncerHost,
       syncSubagents,
@@ -618,6 +671,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       openSubagent,
       selectSubagent,
       retrySubagentDetail,
+      stopSubagent,
       editorState: activeEditorState,
       agentBusy,
       gitOperationBusy,
@@ -649,6 +703,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       releaseSubagents,
       reviewMode,
       retrySubagentDetail,
+      stopSubagent,
       selectSubagent,
       selectedSubagentRunId,
       displayedSubagentSelection.loading,
@@ -660,6 +715,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       setTab,
       show,
       subagentDetailError,
+      subagentEffectDetail,
       subagentDetailLoading,
       subagents,
       subagentCounts,
@@ -1011,8 +1067,10 @@ function EnvironmentPanelSurface({
               }
               detailLoading={panel.subagentDetailLoading}
               detailError={panel.subagentDetailError}
+              effectActivity={panel.subagentDetailEffects}
               onSelectedRunChange={panel.selectSubagent}
               onRetryDetail={panel.retrySubagentDetail}
+              onStopRun={panel.stopSubagent}
               onDetailAnnouncement={panel.announceSubagentDetail}
               detailRequestVersion={panel.subagentFocusDetailVersion}
               compact={width < 620}

@@ -18,6 +18,7 @@ import {
 } from "./ui";
 import { scheduleApi } from "../lib/ipc";
 import type {
+  McpServer,
   ScheduledTaskInput,
   ScheduledTaskMode,
   ScheduledTaskPermission,
@@ -38,6 +39,9 @@ export function ScheduledTaskEditor({
   open,
   initial,
   workspaces,
+  mcpServers,
+  mcpServersUnavailable = false,
+  assistantOwned = false,
   busy,
   onOpenChange,
   onSave,
@@ -45,6 +49,9 @@ export function ScheduledTaskEditor({
   open: boolean;
   initial: ScheduledTaskInput;
   workspaces: Workspace[];
+  mcpServers: McpServer[];
+  mcpServersUnavailable?: boolean;
+  assistantOwned?: boolean;
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSave: (task: ScheduledTaskInput) => Promise<void>;
@@ -59,6 +66,7 @@ export function ScheduledTaskEditor({
       setDraft({
         ...initial,
         permission: initial.mode === "script" ? "full" : initial.permission,
+        mcpServerIds: initial.mode === "llm" ? (initial.mcpServerIds ?? []) : [],
       });
     }
   }, [initial, open]);
@@ -111,17 +119,54 @@ export function ScheduledTaskEditor({
       ...current,
       mode,
       permission: mode === "script" ? "full" : current.permission,
+      mcpServerIds: mode === "script" ? [] : current.mcpServerIds,
     }));
   };
   const setPermission = (permission: ScheduledTaskPermission) => {
-    setDraft((current) => ({ ...current, permission }));
+    setDraft((current) => ({
+      ...current,
+      permission,
+      mcpServerIds: permission === "read-only" ? [] : current.mcpServerIds,
+    }));
+  };
+  const selectedMcpIds = draft.mcpServerIds ?? [];
+  const enabledMcpIds = new Set(
+    mcpServers.filter((server) => server.enabled).map((server) => server.id),
+  );
+  const unavailableMcpIds = selectedMcpIds.filter((id) => !enabledMcpIds.has(id));
+  const visibleMcpServers = [
+    ...mcpServers.filter((server) => server.enabled || selectedMcpIds.includes(server.id)),
+    ...unavailableMcpIds
+      .filter((id) => !mcpServers.some((server) => server.id === id))
+      .map((id) => ({ id, name: "Unavailable MCP server", enabled: false })),
+  ];
+  const toggleMcpServer = (id: string, enabled: boolean) => {
+    setDraft((current) => {
+      const ids = new Set(current.mcpServerIds ?? []);
+      if (enabled) ids.add(id);
+      else ids.delete(id);
+      return {
+        ...current,
+        permission: enabled ? "full" : current.permission,
+        workspaceId: enabled ? undefined : current.workspaceId,
+        mcpServerIds: [...ids],
+      };
+    });
   };
   const valid =
     draft.name.trim() &&
     draft.cron.trim() &&
     draft.timezone?.trim() &&
     (draft.mode === "llm" ? draft.prompt?.trim() : draft.script?.trim()) &&
-    !previewError;
+    !previewError &&
+    selectedMcpIds.length <= 16 &&
+    !(draft.workspaceId && selectedMcpIds.length > 0) &&
+    (!selectedMcpIds.length || (!mcpServersUnavailable && unavailableMcpIds.length === 0)) &&
+    (!assistantOwned ||
+      (draft.mode === "llm" &&
+        draft.workspaceId === initial.workspaceId &&
+        draft.permission === initial.permission &&
+        JSON.stringify(selectedMcpIds) === JSON.stringify(initial.mcpServerIds ?? [])));
 
   return (
     <Dialog
@@ -148,26 +193,30 @@ export function ScheduledTaskEditor({
           label="Mode"
           description="Ask Aiden with a prompt or run a local script without a model."
         >
-          <div className="grid grid-cols-2 rounded-control bg-control p-0.5">
-            <Button
-              size="small"
-              variant={draft.mode === "llm" ? "filled" : "transparent"}
-              radius="rounded"
-              aria-pressed={draft.mode === "llm"}
-              onClick={() => setMode("llm")}
-            >
-              Ask Aiden
-            </Button>
-            <Button
-              size="small"
-              variant={draft.mode === "script" ? "filled" : "transparent"}
-              radius="rounded"
-              aria-pressed={draft.mode === "script"}
-              onClick={() => setMode("script")}
-            >
-              Run script
-            </Button>
-          </div>
+          {assistantOwned ? (
+            <Text variant="small-strong">Ask Aiden · locked by the approved automation</Text>
+          ) : (
+            <div className="grid grid-cols-2 rounded-control bg-control p-0.5">
+              <Button
+                size="small"
+                variant={draft.mode === "llm" ? "filled" : "transparent"}
+                radius="rounded"
+                aria-pressed={draft.mode === "llm"}
+                onClick={() => setMode("llm")}
+              >
+                Ask Aiden
+              </Button>
+              <Button
+                size="small"
+                variant={draft.mode === "script" ? "filled" : "transparent"}
+                radius="rounded"
+                aria-pressed={draft.mode === "script"}
+                onClick={() => setMode("script")}
+              >
+                Run script
+              </Button>
+            </div>
+          )}
         </Field>
         {draft.mode === "llm" ? (
           <Field
@@ -250,11 +299,13 @@ export function ScheduledTaskEditor({
           description="Paths are always re-resolved by Aiden when the task runs."
         >
           <Select
+            disabled={assistantOwned}
             value={draft.workspaceId ?? "__none__"}
             onValueChange={(workspaceId) =>
               setDraft((current) => ({
                 ...current,
                 workspaceId: workspaceId === "__none__" ? undefined : workspaceId,
+                mcpServerIds: workspaceId === "__none__" ? current.mcpServerIds : [],
               }))
             }
           >
@@ -277,6 +328,7 @@ export function ScheduledTaskEditor({
             description="Read-only can inspect context. Full can edit files and run commands without asking."
           >
             <Select
+              disabled={assistantOwned}
               value={draft.permission ?? "read-only"}
               onValueChange={(value) => setPermission(value === "full" ? "full" : "read-only")}
             >
@@ -297,6 +349,74 @@ export function ScheduledTaskEditor({
             <Text variant="small-strong">Full</Text>
           </Field>
         )}
+        {draft.mode === "llm" ? (
+          <Field
+            label="MCP tools"
+            description="Choose the exact connected servers this automation may call unattended. MCP access requires Full permission."
+            orientation="vertical"
+          >
+            {mcpServersUnavailable ? (
+              <Callout color="red">
+                <Text variant="small" color="secondary">
+                  MCP servers could not be loaded. Retry from Settings before granting connector
+                  access.
+                </Text>
+              </Callout>
+            ) : visibleMcpServers.length === 0 ? (
+              <Text variant="small" color="tertiary">
+                No MCP servers are enabled. Connect one in Settings → MCP Servers.
+              </Text>
+            ) : (
+              <ul className="max-h-48 divide-y divide-separator overflow-y-auto rounded-control bg-background">
+                {visibleMcpServers.map((server) => {
+                  const selected = selectedMcpIds.includes(server.id);
+                  return (
+                    <li className="flex min-h-11 items-center gap-3 px-3 py-2" key={server.id}>
+                      <span className="min-w-0 flex-1">
+                        <Text variant="small-strong" truncate>
+                          {server.name}
+                        </Text>
+                        {!server.enabled ? (
+                          <Text variant="small" color="red" className="mt-0.5 block">
+                            Disabled or removed
+                          </Text>
+                        ) : null}
+                      </span>
+                      <Switch
+                        checked={selected}
+                        onCheckedChange={(checked) => toggleMcpServer(server.id, checked)}
+                        disabled={assistantOwned || (!server.enabled && !selected)}
+                        aria-label={`${selected ? "Remove" : "Allow"} ${server.name} for this scheduled task`}
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Field>
+        ) : null}
+        {assistantOwned ? (
+          <Callout>
+            <Text variant="small" color="secondary">
+              Project, permission, and connector scope were approved with Aiden Assistant. Edit
+              those fields through Aiden so the complete final scope can be confirmed again.
+            </Text>
+          </Callout>
+        ) : null}
+        {!assistantOwned && draft.workspaceId && selectedMcpIds.length > 0 ? (
+          <Callout color="red">
+            <Text variant="small" color="secondary">
+              Choose either a workspace or MCP servers. Split combined work into separate tasks.
+            </Text>
+          </Callout>
+        ) : null}
+        {selectedMcpIds.length > 16 ? (
+          <Callout color="red">
+            <Text variant="small" color="secondary">
+              Choose at most 16 MCP servers for one scheduled task.
+            </Text>
+          </Callout>
+        ) : null}
         {draft.permission === "full" ? (
           <div className="px-4 pb-4">
             <Callout className="flex-row gap-2" color="red">
@@ -304,7 +424,11 @@ export function ScheduledTaskEditor({
               <Text variant="small" color="secondary">
                 {draft.mode === "script"
                   ? "Scripts run unattended with Full access. Only select a script you trust."
-                  : "Full tasks run edits and commands unattended. Use it only for a prompt you trust."}
+                  : selectedMcpIds.length > 0
+                    ? `This task may call ${selectedMcpIds.length} selected MCP ${
+                        selectedMcpIds.length === 1 ? "server" : "servers"
+                      } unattended. MCP tools may read or change external data.`
+                    : "Full tasks run edits and commands unattended. Use it only for a prompt you trust."}
               </Text>
             </Callout>
           </div>

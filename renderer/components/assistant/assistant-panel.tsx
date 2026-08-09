@@ -1,8 +1,10 @@
 import * as React from "react";
 import { ArrowUp, Minus, Plus, Square } from "lucide-react";
 import { ASSISTANT_SUGGESTED_PROMPTS } from "../../shared/assistant";
+import { AssistantAutomationApproval } from "./assistant-automation-approval";
 import { AssistantRecent } from "./assistant-recent";
 import { AssistantThread } from "./assistant-thread";
+import { Button, Textarea } from "../ui";
 import {
   canSendAssistantMessage,
   type AssistantChat,
@@ -18,6 +20,7 @@ const READINESS_TEXT: Record<Exclude<AssistantReadiness, "ready">, string> = {
   loading: "Loading your providers…",
   "conversation-loading": "Opening conversation…",
   stopping: "Stopping response…",
+  rendering: "Finishing response…",
   "turn-saving": "Saving conversation…",
   unavailable: "Aiden could not load your providers. Try again in a moment.",
   unset: "Choose a provider and model in the main composer before chatting here.",
@@ -111,54 +114,74 @@ export function AssistantPanel({
           ) : null}
         </div>
       ) : (
-        <AssistantThread messages={chat.messages} streaming={chat.streaming} error={chat.error} />
+        <AssistantThread
+          messages={chat.messages}
+          streaming={chat.streaming}
+          streamComplete={chat.streamComplete}
+          onStreamHandoffComplete={chat.finishStreamHandoff}
+          error={chat.error}
+        />
       )}
 
       <div className="shrink-0 p-2.5">
+        {chat.approvals[0] ? (
+          <div className="pb-2">
+            <AssistantAutomationApproval
+              prompt={chat.approvals[0]}
+              deciding={
+                chat.readiness === "stopping" ||
+                chat.decidingApprovalId === chat.approvals[0].approvalId
+              }
+              onDecision={(decision) => void chat.decideApproval(chat.approvals[0]!, decision)}
+            />
+          </div>
+        ) : null}
         {chat.readiness === "ready" ? null : (
           <p className="px-1 pb-2 text-xs text-tertiary">{READINESS_TEXT[chat.readiness]}</p>
         )}
         <div className="flex items-end gap-1.5 rounded-2xl bg-background p-2 outline outline-1 outline-field/80">
-          <textarea
+          <Textarea
             ref={inputRef}
+            density="compact"
             rows={1}
+            wrap="soft"
             value={draft}
             disabled={!chat.ready}
             placeholder="Ask about Aiden"
             aria-label="Message Aiden"
-            className="max-h-32 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-primary outline-none placeholder:text-tertiary"
+            className="min-w-0 max-h-32 flex-1 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none hover:border-transparent focus:border-transparent focus:bg-transparent"
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing
-              ) {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
               }
             }}
           />
           {chat.streaming ? (
-            <button
-              type="button"
+            <Button
+              variant="filled"
+              size="small"
+              iconOnly
+              className="rounded-full"
               aria-label={chat.readiness === "stopping" ? "Stopping" : "Stop"}
               disabled={chat.readiness === "stopping"}
-              className="rounded-full bg-control p-1.5 text-primary transition-colors duration-150 ease-out hover:bg-control-hover"
               onClick={chat.stop}
             >
-              <Square className="size-3.5" />
-            </button>
+              <Square className="fill-current" />
+            </Button>
           ) : (
-            <button
-              type="button"
-              aria-label="Send"
+            <Button
+              variant="accent"
+              size="small"
+              iconOnly
+              className="rounded-full"
+              aria-label="Send message"
               disabled={!canSend}
-              className="rounded-full bg-accent p-1.5 text-accent-foreground transition-colors duration-150 ease-out hover:bg-accent-hover disabled:opacity-40"
               onClick={submit}
             >
-              <ArrowUp className="size-3.5" />
-            </button>
+              <ArrowUp />
+            </Button>
           )}
         </div>
       </div>

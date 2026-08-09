@@ -3,6 +3,23 @@
 
 const PREVIEW_MAX_CHARS = 80;
 const BADGE_MAX = 9;
+const ASSISTANT_AUTOMATION_COMPOSE_EVENT = "aiden:assistant-create-automation";
+
+export const ASSISTANT_AUTOMATION_DRAFT = "Create an automation that ";
+
+/** Preserve anything the user was already composing when another surface opens Aiden. */
+export function assistantAutomationDraft(currentDraft: string): string {
+  return currentDraft.trim() ? currentDraft : ASSISTANT_AUTOMATION_DRAFT;
+}
+
+export function requestAssistantAutomationComposer(): void {
+  window.dispatchEvent(new Event(ASSISTANT_AUTOMATION_COMPOSE_EVENT));
+}
+
+export function onAssistantAutomationComposerRequested(handler: () => void): () => void {
+  window.addEventListener(ASSISTANT_AUTOMATION_COMPOSE_EVENT, handler);
+  return () => window.removeEventListener(ASSISTANT_AUTOMATION_COMPOSE_EVENT, handler);
+}
 
 /** Badge text for unread Aiden messages, or null when there is nothing to show. */
 export function unreadBadgeLabel(unread: number): string | null {

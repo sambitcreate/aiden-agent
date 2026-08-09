@@ -18,3 +18,20 @@ test("unknown future scheduler enum values are never projected back as undefined
     { scheduledTasksEnabled: false },
   );
 });
+
+test("default MCP access is accepted only as an explicit boolean", () => {
+  assert.deepEqual(
+    scheduledSettingsPatch(
+      { defaultMcpEnabled: true, defaultNotify: false },
+      (timezone) => timezone,
+    ),
+    {
+      scheduledDefaultMcpEnabled: true,
+      scheduledDefaultNotify: false,
+    },
+  );
+  assert.deepEqual(
+    scheduledSettingsPatch({ defaultMcpEnabled: "true" }, (timezone) => timezone),
+    {},
+  );
+});

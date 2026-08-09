@@ -1,14 +1,14 @@
 // A single chat message. User messages are right-aligned bubbles; assistant
 // messages render markdown full-width, native-transcript style.
 
-import { Text } from "./ui";
+import { Callout, ErrorBoundary, Text } from "./ui";
 import { FileText } from "lucide-react";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import type { Attachment, ChatMessage } from "../lib/types";
 
-interface MessageBubbleProps {
+export interface MessageBubbleProps {
   role: ChatMessage["role"];
   content: string;
   attachments?: Attachment[];
@@ -16,6 +16,18 @@ interface MessageBubbleProps {
   streaming?: boolean;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
+}
+
+/** Isolate untrusted model-formatting failures to the individual message. */
+export function SafeMessageBubble(props: MessageBubbleProps) {
+  return (
+    <ErrorBoundary
+      fallback={<UnrenderableMessage content={props.content} />}
+      resetKey={props.content}
+    >
+      <MessageBubble {...props} />
+    </ErrorBoundary>
+  );
 }
 
 export function MessageBubble({
@@ -95,5 +107,20 @@ export function MessageBubble({
         ) : null}
       </div>
     </div>
+  );
+}
+
+// Markdown, KaTeX, and highlighting all run over untrusted model output. If one
+// message throws, keep the rest of the transcript alive and show its raw text.
+function UnrenderableMessage({ content }: { content: string }) {
+  return (
+    <Callout color="red">
+      <Text variant="small-strong" color="red">
+        This message could not be formatted
+      </Text>
+      <Text variant="small" color="secondary" className="mt-0.5 block whitespace-pre-wrap">
+        {content}
+      </Text>
+    </Callout>
   );
 }

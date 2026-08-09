@@ -313,6 +313,10 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
       scheduleService.stopAndSettle(),
+      (async () => {
+        await subagentRunStore.flush();
+        await subagentRunStore.close();
+      })(),
     ]);
   } catch (error) {
     logger.error("main", "Application service shutdown did not complete cleanly.", error);

@@ -66,6 +66,8 @@ const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
 );
 const WORKTREE_REMOVER_EXECUTABLE = "aiden-worktree-remover";
 const SUBAGENT_RUN_STORE_EXECUTABLE = "aiden-subagent-run-store";
+const SUBAGENT_FILE_MUTATOR_EXECUTABLE = "aiden-subagent-file-mutator";
+const SUBAGENT_SHELL_RUNNER_EXECUTABLE = "aiden-subagent-shell-runner";
 const REQUIRED_UNIVERSAL_ARCHITECTURES = Object.freeze(["arm64", "x86_64"]);
 
 async function run(command, args) {
@@ -214,9 +216,7 @@ export function assertExactUniversalArchitectures(architectureDisplay, target = 
   if (
     architectures.length !== REQUIRED_UNIVERSAL_ARCHITECTURES.length ||
     architectureSet.size !== REQUIRED_UNIVERSAL_ARCHITECTURES.length ||
-    REQUIRED_UNIVERSAL_ARCHITECTURES.some(
-      (architecture) => !architectureSet.has(architecture),
-    )
+    REQUIRED_UNIVERSAL_ARCHITECTURES.some((architecture) => !architectureSet.has(architecture))
   ) {
     throw new Error(
       `${target} must contain exactly the arm64 and x86_64 architectures: ${architectures.join(",") || "(none)"}`,
@@ -407,6 +407,18 @@ export async function verifyMacPackage(appPath) {
     "Helpers",
     SUBAGENT_RUN_STORE_EXECUTABLE,
   );
+  const subagentFileMutator = path.join(
+    paths.app,
+    "Contents",
+    "Helpers",
+    SUBAGENT_FILE_MUTATOR_EXECUTABLE,
+  );
+  const subagentShellRunner = path.join(
+    paths.app,
+    "Contents",
+    "Helpers",
+    SUBAGENT_SHELL_RUNNER_EXECUTABLE,
+  );
   for (const file of [
     paths.broker,
     paths.driver,
@@ -418,6 +430,8 @@ export async function verifyMacPackage(appPath) {
     paths.electronExecutable,
     worktreeRemover,
     subagentRunStore,
+    subagentFileMutator,
+    subagentShellRunner,
     appAsar,
   ]) {
     await assertRegularFile(file);
@@ -428,6 +442,8 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
   assertComputerUseExecutableMode((await lstat(worktreeRemover)).mode, worktreeRemover);
   assertComputerUseExecutableMode((await lstat(subagentRunStore)).mode, subagentRunStore);
+  assertComputerUseExecutableMode((await lstat(subagentFileMutator)).mode, subagentFileMutator);
+  assertComputerUseExecutableMode((await lstat(subagentShellRunner)).mode, subagentShellRunner);
   if (
     (await readInfoPlistValue(paths.helperInfoPlist, "CFBundleIdentifier")) !==
     AIDEN_COMPUTER_USE_BUNDLE_ID
@@ -473,6 +489,14 @@ export async function verifyMacPackage(appPath) {
     identifier: SUBAGENT_RUN_STORE_EXECUTABLE,
     teamId: AIDEN_SIGNING_TEAM_ID,
   });
+  await verifySignature(subagentFileMutator, {
+    identifier: SUBAGENT_FILE_MUTATOR_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
+  await verifySignature(subagentShellRunner, {
+    identifier: SUBAGENT_SHELL_RUNNER_EXECUTABLE,
+    teamId: AIDEN_SIGNING_TEAM_ID,
+  });
   const codeDisplays = new Map(
     await Promise.all(
       [
@@ -483,6 +507,8 @@ export async function verifyMacPackage(appPath) {
         paths.electronExecutable,
         worktreeRemover,
         subagentRunStore,
+        subagentFileMutator,
+        subagentShellRunner,
       ].map(async (target) => [target, await readCodeDisplay(target)]),
     ),
   );
@@ -498,6 +524,8 @@ export async function verifyMacPackage(appPath) {
   assertComputerUseMachOMinimum(`${brokerBuild}\n${brokerBuildErrors}`);
   await verifyUniversalMacOSHelper(worktreeRemover, "Managed worktree remover");
   await verifyUniversalMacOSHelper(subagentRunStore, "Private subagent run store");
+  await verifyUniversalMacOSHelper(subagentFileMutator, "Subagent file mutator");
+  await verifyUniversalMacOSHelper(subagentShellRunner, "Subagent shell runner");
 
   const driverHash = await sha256(paths.driver);
   if (driverHash !== CUA_DRIVER_SHA256) {
@@ -514,6 +542,7 @@ export async function verifyMacPackage(appPath) {
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));
   assertMinimalComputerUseEntitlements(await readEntitlements(worktreeRemover));
   assertMinimalComputerUseEntitlements(await readEntitlements(subagentRunStore));
+  assertMinimalComputerUseEntitlements(await readEntitlements(subagentFileMutator));
   assertElectronEntitlements(await readEntitlements(paths.electronExecutable));
   await verifyAidenFuses(paths.app);
   console.log(`Verified hardened macOS package: ${paths.app}`);

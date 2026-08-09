@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 
 export interface ToolApprovalPrompt {
   streamId: string;
@@ -6,6 +7,7 @@ export interface ToolApprovalPrompt {
   toolCallId: string;
   toolName: string;
   summary: string;
+  details?: ToolApprovalDetails;
 }
 
 interface PendingApproval {

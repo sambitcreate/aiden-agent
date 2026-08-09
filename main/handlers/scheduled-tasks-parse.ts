@@ -3,6 +3,7 @@ import type {
   ScheduledTaskMode,
   ScheduledTaskPermission,
 } from "../services/types.js";
+import { validateScheduledMcpServerIds } from "../services/schedule-guard.js";
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -47,6 +48,7 @@ export function parseScheduledTaskInput(value: unknown): ScheduledTaskInput {
     prompt: optionalString(input.prompt),
     script: optionalString(input.script),
     permission,
+    mcpServerIds: validateScheduledMcpServerIds(input.mcpServerIds),
     notify: typeof input.notify === "boolean" ? input.notify : undefined,
   };
 }

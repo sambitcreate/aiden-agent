@@ -6,7 +6,7 @@ UI reference: ChatGPT/Codex "Scheduled tasks" workbench (sidebar destination, ta
 
 Source basis: current Aiden source, Hermes Agent cron subsystem (`/Users/sambitbiswas/projects/opp/hermes-agent`: `cron/jobs.py`, `cron/scheduler.py`, `cron/scheduler_provider.py`, `tools/cronjob_tools.py`), Aiden project memory and UI references, and the confirmed product decisions below.
 
-Implementation hardening amendment: read-only scheduled LLM runs withhold MCP tools because connector schemas do not currently carry enforceable read/write capability metadata. Script tasks require explicit Full permission. Interactive `schedule_task` mutations always require the live approval surface. See `.memory/SCHEDULED-TASKS.md` for the shipped architecture and review-driven amendments.
+Implementation hardening amendment: read-only scheduled LLM runs withhold MCP tools because connector schemas do not currently carry enforceable read/write capability metadata. Full LLM tasks can persist an exact approved MCP server-ID scope; MCP access never inherits connectors added later, and unavailable selected servers fail closed. Legacy Full tasks retain their historical all-enabled-server behavior until edited. Script tasks require explicit Full permission. Interactive `schedule_task` mutations always require the live approval surface. See `.memory/SCHEDULED-TASKS.md` for the shipped architecture and review-driven amendments.
 
 ## Verdict
 
