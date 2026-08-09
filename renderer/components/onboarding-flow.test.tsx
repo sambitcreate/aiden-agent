@@ -72,8 +72,22 @@ test("provider setup progressively reveals the complete live Pi catalog", () => 
   assert.match(source, /providers\.isLoading/u);
   assert.match(source, /providers\.isError/u);
   assert.match(source, /providers\.refetch\(\)/u);
-  assert.match(source, /disabled=\{!canChoose\}/u);
+  assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
   assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
+  assert.match(source, /provider\.id === "openai-codex"[\s\S]*?provider\.isBuiltin === true/u);
+  assert.match(source, /setSettingUpProvider\(chatGptProvider\)/u);
+  assert.doesNotMatch(source, /providersApi\.authStart/u);
+});
+
+test("onboarding traps focus and locks navigation during durable writes", () => {
+  assert.match(source, /<DialogPrimitive\.Root open>/u);
+  assert.match(source, /<DialogPrimitive\.Content/u);
+  assert.match(source, /onEscapeKeyDown=\{\(event\) => event\.preventDefault\(\)\}/u);
+  assert.match(source, /<DialogPrimitive\.Title className="sr-only">Set up Aiden/u);
+  assert.match(source, /if \(!canContinue \|\| savingRef\.current\) return/u);
+  assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
+  assert.match(source, /variant="transparent"[\s\S]*?disabled=\{saving\}[\s\S]*?>\s*Skip/u);
+  assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 6);
 });
 
 test("onboarding presentation stays compact and free of decorative gradients", () => {

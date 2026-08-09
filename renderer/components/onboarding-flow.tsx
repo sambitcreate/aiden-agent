@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
+import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { Button, Input, Text, toast } from "./ui";
@@ -379,6 +380,27 @@ function FeatureBentoVisual({ feature }: { feature: FeatureBento }) {
   );
 }
 
+function OnboardingDialogShell({ children }: React.PropsWithChildren) {
+  return (
+    <DialogPrimitive.Root open>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-60 bg-background" />
+        <DialogPrimitive.Content
+          onEscapeKeyDown={(event) => event.preventDefault()}
+          onPointerDownOutside={(event) => event.preventDefault()}
+          className="fixed inset-0 z-60 grid place-items-center bg-background p-4 outline-none max-[760px]:p-0"
+        >
+          <DialogPrimitive.Title className="sr-only">Set up Aiden</DialogPrimitive.Title>
+          <DialogPrimitive.Description className="sr-only">
+            Add your profile and a model connection, then review Aiden's core features.
+          </DialogPrimitive.Description>
+          {children}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
+  );
+}
+
 function makeProvider(choice: ProviderChoice, baseUrl: string): Omit<Provider, "hasKey"> | null {
   if (choice === "openai-signin") return null;
   if (choice === "openai-key") {
@@ -464,6 +486,7 @@ export function OnboardingFlow() {
   const [apiKey, setApiKey] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const savingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
 
   React.useEffect(() => {
@@ -474,14 +497,18 @@ export function OnboardingFlow() {
   const step = steps[index];
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
+  const chatGptProvider = (providers.data ?? []).find(
+    (provider) => provider.id === "openai-codex" && provider.isBuiltin === true,
+  );
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
   const canContinue =
     step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
 
   const next = async () => {
-    if (!canContinue || saving) return;
+    if (!canContinue || savingRef.current) return;
     if (step === "profile") {
+      savingRef.current = true;
       setSaving(true);
       try {
         const saved = await profileApi.setName(name);
@@ -490,6 +517,7 @@ export function OnboardingFlow() {
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't save your profile name.");
       } finally {
+        savingRef.current = false;
         setSaving(false);
       }
       return;
@@ -507,6 +535,21 @@ export function OnboardingFlow() {
         toast.error("Choose a model provider before continuing.");
         return;
       }
+      if (choice === "openai-signin") {
+        if (providers.isLoading) {
+          toast.info("Aiden is still loading the ChatGPT sign-in option. Try again in a moment.");
+          return;
+        }
+        if (!chatGptProvider) {
+          toast.error(
+            "ChatGPT sign-in is unavailable. Refresh the provider catalog or choose another option.",
+          );
+          return;
+        }
+        if (chatGptProvider.hasKey) setIndex(2);
+        else setSettingUpProvider(chatGptProvider);
+        return;
+      }
       const provider = makeProvider(choice, baseUrl.trim());
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
@@ -516,16 +559,10 @@ export function OnboardingFlow() {
         toast.error("Paste an API key or choose a sign-in/local option.");
         return;
       }
+      savingRef.current = true;
       setSaving(true);
       try {
-        if (choice === "openai-signin") {
-          await providersApi.authStart({
-            flowId: `onboarding-${Date.now()}`,
-            providerId: "openai-codex",
-            authType: "oauth",
-          });
-          toast.info("Finish ChatGPT sign-in in the auth window, then continue.");
-        } else if (provider) {
+        if (provider) {
           const saved = await providersApi.save(
             provider,
             selected.requiresKey ? apiKey.trim() : undefined,
@@ -540,6 +577,7 @@ export function OnboardingFlow() {
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't add that provider.");
       } finally {
+        savingRef.current = false;
         setSaving(false);
       }
       return;
@@ -549,8 +587,9 @@ export function OnboardingFlow() {
   };
 
   return (
-    <div className="fixed inset-0 z-60 grid place-items-center bg-background p-4 max-[760px]:p-0">
+    <OnboardingDialogShell>
       <section
+        aria-busy={saving || undefined}
         aria-label="Set up Aiden"
         className="relative grid h-[min(600px,calc(100vh-32px))] min-h-0 w-[min(860px,calc(100vw-32px))] grid-cols-[220px_minmax(0,1fr)] overflow-hidden rounded-dialog bg-popover shadow-modal max-[760px]:h-full max-[760px]:w-full max-[760px]:grid-cols-1 max-[760px]:rounded-none max-[760px]:shadow-none"
       >
@@ -609,6 +648,7 @@ export function OnboardingFlow() {
               className="no-drag"
               variant="transparent"
               size="small"
+              disabled={saving}
               onClick={() => {
                 markOnboardingComplete();
                 setOpen(false);
@@ -641,6 +681,7 @@ export function OnboardingFlow() {
                   <Input
                     autoFocus
                     className="mt-2 h-10"
+                    disabled={saving}
                     value={name}
                     maxLength={80}
                     placeholder="Your name"
@@ -677,6 +718,7 @@ export function OnboardingFlow() {
                     <button
                       key={item.id}
                       type="button"
+                      disabled={saving}
                       aria-pressed={choice === item.id}
                       className={`flex min-h-[68px] items-start gap-2.5 rounded-control border px-3 py-2.5 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "border-accent bg-accent/10" : "border-field bg-well hover:bg-control"}`}
                       onClick={() => {
@@ -713,6 +755,7 @@ export function OnboardingFlow() {
                 <button
                   data-onboarding-more-provider-trigger
                   type="button"
+                  disabled={saving}
                   aria-controls="onboarding-more-providers"
                   aria-expanded={showMoreProviders}
                   className="mt-2 flex min-h-12 w-full items-center gap-2.5 rounded-control border border-field bg-well px-3 py-2 text-left transition-[background-color,border-color] duration-150 hover:bg-control focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
@@ -779,7 +822,7 @@ export function OnboardingFlow() {
                             <button
                               key={provider.id}
                               type="button"
-                              disabled={!canChoose}
+                              disabled={!canChoose || saving}
                               aria-pressed={isSelected}
                               className={`flex min-h-14 items-center gap-2.5 rounded-control border px-2.5 py-2 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "border-accent bg-accent/10" : "border-transparent bg-transparent hover:border-field hover:bg-control"}`}
                               onClick={() => {
@@ -825,6 +868,7 @@ export function OnboardingFlow() {
                       <Input
                         className="mt-2"
                         type="password"
+                        disabled={saving}
                         value={apiKey}
                         placeholder="Paste key"
                         onChange={(event) => setApiKey(event.currentTarget.value)}
@@ -838,6 +882,7 @@ export function OnboardingFlow() {
                       </Text>
                       <Input
                         className="mt-2"
+                        disabled={saving}
                         value={baseUrl}
                         placeholder={
                           choice === "tailscale"
@@ -978,6 +1023,6 @@ export function OnboardingFlow() {
           }}
         />
       ) : null}
-    </div>
+    </OnboardingDialogShell>
   );
 }

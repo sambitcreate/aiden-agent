@@ -1,4 +1,6 @@
-export const ONBOARDING_COMPLETE_STORAGE_KEY = "aiden:onboarding:v1:complete";
+import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../shared/onboarding.js";
+
+export { ONBOARDING_COMPLETE_STORAGE_KEY } from "../shared/onboarding.js";
 
 type OnboardingStorage = Pick<Storage, "getItem" | "setItem">;
 

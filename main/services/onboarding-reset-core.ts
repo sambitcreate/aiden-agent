@@ -16,6 +16,20 @@ export class OnboardingResetError extends Error {
   }
 }
 
+/** Delete every credential even when one provider's durable write fails. */
+export async function deleteEveryCredential(
+  providerIds: readonly string[],
+  deleteCredential: (providerId: string) => Promise<void>,
+): Promise<void> {
+  const results = await Promise.allSettled(
+    providerIds.map((providerId) => deleteCredential(providerId)),
+  );
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) throw new Error("Provider credentials were not fully cleared.");
+}
+
 async function captureFailure(
   failures: unknown[],
   operation: () => Promise<unknown>,

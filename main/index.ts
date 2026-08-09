@@ -54,6 +54,7 @@ import { registerAppPathOpener } from "./services/app-navigation.js";
 import { effectiveBindings, migrateLegacyKeybindings } from "../renderer/shared/keybindings.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings } from "./services/types.js";
+import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
 import { createRendererReadinessGate } from "./services/renderer-readiness-core.js";
 import { createSupersedingTaskGate } from "./services/superseding-task-core.js";
 import { subagentRuntimeRegistry } from "./services/subagents/child-agent-runtime.js";
@@ -106,7 +107,7 @@ let closeGuard = {
   path: undefined as string | undefined,
   saving: false,
 };
-let protectedAction: "close" | "quit" | "reload" | null = null;
+let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null = null;
 let forceAppQuit = false;
 let cleanupStarted = false;
 let lifecycleCheckInFlight = false;
@@ -496,8 +497,44 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   }
 }
 
+async function clearRendererOnboardingCompletion(window: BrowserWindow): Promise<boolean> {
+  try {
+    return (
+      (await window.webContents.executeJavaScript(
+        `(() => {
+          const key = ${JSON.stringify(ONBOARDING_COMPLETE_STORAGE_KEY)};
+          const wasComplete = localStorage.getItem(key) === "true";
+          localStorage.removeItem(key);
+          return wasComplete;
+        })()`,
+        true,
+      )) === true
+    );
+  } catch (error) {
+    logger.error("main", "Could not clear the onboarding completion marker.", error);
+    throw new Error("Aiden couldn’t prepare onboarding for restart. Try again.");
+  }
+}
+
+async function restoreRendererOnboardingCompletion(
+  window: BrowserWindow,
+  wasComplete: boolean,
+): Promise<void> {
+  if (!wasComplete || window.isDestroyed()) return;
+  try {
+    await window.webContents.executeJavaScript(
+      `localStorage.setItem(${JSON.stringify(ONBOARDING_COMPLETE_STORAGE_KEY)}, "true")`,
+      true,
+    );
+  } catch (error) {
+    logger.error("main", "Could not restore the onboarding completion marker.", error);
+  }
+}
+
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return false;
+  if (lifecycleCheckInFlight || shutdownStarted || installUpdateOnQuit || window.isDestroyed()) {
+    return false;
+  }
   lifecycleCheckInFlight = true;
   let settingsPrepared = false;
   try {
@@ -526,12 +563,47 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
       return false;
     }
 
-    await resetOnboardingData();
-    await window.webContents.session.clearStorageData({ storages: ["localstorage"] });
-    protectedAction = "quit";
+    const onboardingWasComplete = await clearRendererOnboardingCompletion(window);
+    protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      await restoreRendererOnboardingCompletion(window, onboardingWasComplete);
       computerUseSettings.resumeAfterCancelledShutdown();
+      return false;
+    }
+
+    try {
+      await resetOnboardingData();
+    } catch (error) {
+      computerUseSettings.resumeAfterCancelledShutdown();
+      settingsPrepared = false;
+      protectedAction = null;
+      logger.error("main", "Onboarding reset was incomplete after the renderer closed.", error);
+      try {
+        await createMainWindow();
+      } catch (recoveryError) {
+        logger.error(
+          "main",
+          "Could not reopen Aiden after an incomplete onboarding reset.",
+          recoveryError,
+        );
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showMessageBoxSync(mainWindow, {
+          type: "error",
+          title: "Aiden couldn't finish the reset",
+          message: "Some setup data could not be cleared. Retry Reset onboarding.",
+          detail: "Aiden reopened without deleting your chats, projects, schedules, or skills.",
+          buttons: ["Keep Aiden Open"],
+          defaultId: 0,
+          noLink: true,
+        });
+      } else {
+        dialog.showErrorBox(
+          "Aiden couldn't finish the reset",
+          "Some setup data could not be cleared. Reopen Aiden and retry Reset onboarding.",
+        );
+      }
       return false;
     }
 
@@ -725,7 +797,12 @@ async function createMainWindow(): Promise<void> {
   });
   createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("close", (event) => {
-    if (protectedAction === "close" || protectedAction === "quit") return;
+    if (
+      protectedAction === "close" ||
+      protectedAction === "quit" ||
+      protectedAction === "onboarding-reset"
+    )
+      return;
     event.preventDefault();
     void requestWindowClose(createdWindow);
   });
@@ -750,7 +827,9 @@ async function createMainWindow(): Promise<void> {
     // retried against a fresh guard revision instead.
     const interruptedAction = protectedAction;
     protectedAction = null;
-    if (interruptedAction === "quit") {
+    if (interruptedAction === "onboarding-reset") {
+      setImmediate(() => void requestOnboardingReset(createdWindow));
+    } else if (interruptedAction === "quit") {
       forceAppQuit = false;
       shutdownStarted = false;
       setImmediate(() => void requestApplicationQuit(createdWindow));

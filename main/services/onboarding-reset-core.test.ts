@@ -1,10 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  deleteEveryCredential,
   OnboardingResetError,
   performOnboardingReset,
   type OnboardingResetOperations,
 } from "./onboarding-reset-core.js";
+
+test("credential cleanup attempts every provider after an individual deletion fails", async () => {
+  const deleted: string[] = [];
+  await assert.rejects(
+    deleteEveryCredential(["alpha", "beta", "gamma"], async (providerId) => {
+      deleted.push(providerId);
+      if (providerId === "beta") throw new Error("locked credential");
+    }),
+    /not fully cleared/u,
+  );
+  assert.deepEqual(new Set(deleted), new Set(["alpha", "beta", "gamma"]));
+});
 
 function operations(
   events: string[],
