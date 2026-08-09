@@ -211,6 +211,18 @@ fn main() {
                 }
             };
 
+            // Global dictation hotkey (parity audit config §12): a real
+            // OS-wide ⌘⇧D registration so the pill toggle works while another
+            // app is focused — not just inside Aiden. The port lives inside
+            // the app-lifetime listener task and is released at process exit.
+            // Without the macOS Accessibility permission the registration is
+            // refused (logged inside) and the in-app ⌘⇧D binding remains the
+            // only toggle path.
+            let global_dictation = app::register_global_dictation_hotkey(cx);
+            tracing::info!(
+                "dictation global hotkey: registered={global_dictation} (in-app ⌘⇧D always bound)"
+            );
+
             // First run: the onboarding flow owns the app until it completes;
             // its completion callback closes the onboarding window and opens
             // the main window. The marker lives in `settings.json` under the
@@ -373,6 +385,11 @@ fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::Window
             size(px(1000.0), px(700.0)),
             cx,
         ))),
+        // Parity audit UI §9: the TS renderer constrained its window
+        // (minWidth 390 / minHeight 456); the Rust port previously had no
+        // floor, so the app could be shrunk into unusability. 700×500 keeps
+        // the sidebar + composer legible at the smallest allowed size.
+        window_min_size: Some(size(px(700.0), px(500.0))),
         titlebar: Some(TitleBar::title_bar_options()),
         window_background: gpui::WindowBackgroundAppearance::Blurred,
         app_id: Some(app_id.to_string()),

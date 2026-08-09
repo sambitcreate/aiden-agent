@@ -7,10 +7,12 @@
 //! per-provider thinking-level select for Anthropic connections, and a default
 //! model persisted into `settings.json` under `modelSelection`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use aiden_data::config_store::Provider as StoredProviderRow;
 use aiden_data::portable_config::{ProviderDeployment, ProviderKind, StoredProvider};
+use aiden_providers::live_discovery;
 use aiden_providers::model_capabilities::{lookup_provider, ModelCapabilitiesCatalog};
 use gpui::{
     div, prelude::FluentBuilder as _, px, AppContext as _, Context, ElementId, Entity, FontWeight,
@@ -20,8 +22,10 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    spinner::Spinner,
     v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
 };
+use gpui_tokio_bridge::Tokio;
 
 use super::{SettingsServices, SettingsView};
 use crate::services::provider_kit::ModelSelection;
@@ -68,6 +72,27 @@ impl From<&StoredProviderRow> for ProviderRow {
     }
 }
 
+/// Live model-discovery state for one custom provider row (the Test button).
+/// Keyed by provider id in [`ProvidersState::discoveries`] so it survives the
+/// row-list refreshes that rebuild [`ProviderRow`]s.
+#[derive(Debug, Clone, Default)]
+pub struct DiscoveryState {
+    /// Whether a discovery request is in flight for this provider.
+    pub running: bool,
+    /// The last completed discovery outcome (cleared when a new Test starts).
+    pub outcome: Option<DiscoveryOutcome>,
+}
+
+/// The outcome of one Test/discovery run.
+#[derive(Debug, Clone)]
+pub enum DiscoveryOutcome {
+    /// `count` chat-capable models were found; `models` is what "Use these
+    /// models" would persist.
+    Found { count: usize, models: Vec<String> },
+    /// The discovery failed (offline server, timeout, non-JSON response, ...).
+    Failed(String),
+}
+
 /// Inline editor draft state (input entities are created when the editor
 /// opens, so no window handle needs to be threaded through `new`).
 pub struct ProviderDraft {
@@ -98,6 +123,8 @@ pub struct ProvidersState {
     pub editing: Option<ProviderDraft>,
     /// Provider id awaiting delete confirmation.
     pub removing: Option<String>,
+    /// Per-provider live model-discovery state (the custom-row Test button).
+    pub discoveries: HashMap<String, DiscoveryState>,
     pub error: Option<String>,
     pub notice: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
@@ -329,6 +356,12 @@ impl SettingsView {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let id = row.id.clone();
+        let discovery = self
+            .providers
+            .discoveries
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
         let label = row.label.clone();
         let base_url = row.base_url.clone();
         let models = row.models.len();
@@ -415,6 +448,74 @@ impl SettingsView {
                                 base_url
                             }),
                     )
+                    // Live model discovery status: a spinner while the Test
+                    // request is in flight, then the discovered count with an
+                    // opt-in "Use these models", or the failure message.
+                    .when(discovery.running, |el| {
+                        el.child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .mt_1()
+                                .child(Spinner::new().small().color(theme.accent))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Discovering models…"),
+                                ),
+                        )
+                    })
+                    .when_some(discovery.outcome.clone(), |el, outcome| match outcome {
+                        DiscoveryOutcome::Found { count, models } => {
+                            let use_id = id.clone();
+                            let use_models = models.clone();
+                            let shown: Vec<String> = models.iter().take(3).cloned().collect();
+                            el.child(
+                                h_flex()
+                                    .gap_2()
+                                    .items_center()
+                                    .mt_1()
+                                    .child(div().text_xs().text_color(theme.success).child(
+                                        format!(
+                                            "Found {count} model{}.",
+                                            if count == 1 { "" } else { "s" }
+                                        ),
+                                    ))
+                                    .child(
+                                        Button::new(ElementId::Name(SharedString::from(format!(
+                                            "provider-use-models-{use_id}"
+                                        ))))
+                                        .xsmall()
+                                        .label("Use these models")
+                                        .on_click(
+                                            cx.listener(move |this, _event, _window, cx| {
+                                                this.providers.use_discovered_models(
+                                                    &use_id,
+                                                    use_models.clone(),
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    )
+                                    .when(!shown.is_empty(), |el| {
+                                        el.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.muted_foreground)
+                                                .child(shown.join(" · ")),
+                                        )
+                                    }),
+                            )
+                        }
+                        DiscoveryOutcome::Failed(message) => el.child(
+                            div()
+                                .mt_1()
+                                .text_xs()
+                                .text_color(theme.danger)
+                                .child(format!("Test failed: {message}")),
+                        ),
+                    })
                     // Catalog-sourced models: the capability catalog enriches
                     // built-in providers beyond their preset defaults. Preset
                     // models stay unbadged; catalog additions carry a
@@ -490,6 +591,27 @@ impl SettingsView {
             } else {
                 h_flex()
                     .gap_1()
+                    .child({
+                        let click_id = id.clone();
+                        Button::new(ElementId::Name(SharedString::from(format!(
+                            "provider-test-{id}"
+                        ))))
+                        .small()
+                        .ghost()
+                        .icon(IconName::Search)
+                        .label(if discovery.running {
+                            "Testing…"
+                        } else {
+                            "Test"
+                        })
+                        .disabled(discovery.running)
+                        .tooltip("Test the connection and discover models")
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
+                                this.providers.test_discover(&click_id, cx);
+                            },
+                        ))
+                    })
                     .child({
                         let click_id = id.clone();
                         Button::new(ElementId::Name(SharedString::from(format!(
@@ -1029,6 +1151,94 @@ impl ProvidersState {
                 } else {
                     None
                 };
+                this.refresh(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Run live model discovery for a custom provider row (the Test button).
+    /// The request runs on the tokio bridge; the row shows a spinner while in
+    /// flight and the discovered count / failure message when it settles.
+    fn test_discover(&mut self, provider_id: &str, cx: &mut Context<SettingsView>) {
+        let Some(row) = self.providers.iter().find(|row| row.id == provider_id) else {
+            return;
+        };
+        let provider_id = provider_id.to_string();
+        let base_url = row.base_url.clone();
+        let runtime = live_discovery::runtime_kind_for_provider(&row.id, &base_url);
+        let state = self.discoveries.entry(provider_id.clone()).or_default();
+        state.running = true;
+        state.outcome = None;
+        let task = Tokio::spawn(cx, async move {
+            live_discovery::discover_models(&base_url, runtime).await
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                let state = this.providers.discoveries.entry(provider_id).or_default();
+                state.running = false;
+                state.outcome = Some(match result {
+                    Ok(Ok(models)) => {
+                        let count = models.len();
+                        let ids = models.into_iter().map(|model| model.id).collect();
+                        DiscoveryOutcome::Found { count, models: ids }
+                    }
+                    Ok(Err(error)) => DiscoveryOutcome::Failed(error.to_string()),
+                    Err(_join) => {
+                        DiscoveryOutcome::Failed("The model discovery was interrupted.".to_string())
+                    }
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Persist the discovered model list as the provider's configured models
+    /// (the "Use these models" button). The current record's label / URL /
+    /// key survive; only the cached model list is swapped.
+    fn use_discovered_models(
+        &mut self,
+        provider_id: &str,
+        models: Vec<String>,
+        cx: &mut Context<SettingsView>,
+    ) {
+        let provider_id = provider_id.to_string();
+        let services = self.services(cx);
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_spawn({
+                    let config = services.config.clone();
+                    let provider_id = provider_id.clone();
+                    let models = models.clone();
+                    async move {
+                        let Some(mut provider) = config.get_provider(&provider_id).ok().flatten()
+                        else {
+                            return Err("The provider record could not be read.".to_string());
+                        };
+                        provider.models = models;
+                        config
+                            .save_provider(&provider, &|| true)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if let Err(message) = saved {
+                    this.providers.error = Some(message);
+                } else {
+                    this.providers.notice = Some("Model list updated.".to_string());
+                }
+                // The discovery outcome is stale once the list is persisted.
+                if let Some(state) = this.providers.discoveries.get_mut(&provider_id) {
+                    state.outcome = None;
+                }
                 this.refresh(cx);
                 cx.notify();
             })

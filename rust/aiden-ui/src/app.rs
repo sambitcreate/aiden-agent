@@ -11,13 +11,20 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use aiden_core::appearance::Mode;
+use aiden_core::appearance::{Mode, ReduceMotion};
 use futures::FutureExt;
 use gpui::{
-    actions, div, prelude::FluentBuilder as _, px, AppContext as _, Context, Entity, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, Styled as _,
-    Subscription, Window,
+    actions, div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity,
+    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
+    Styled as _, Subscription, Window,
 };
+// macOS-only: the OS-global dictation hotkey registration (parity audit
+// config §12) and the `global-hotkey` event receiver that routes presses
+// into the pill coordinator.
+#[cfg(target_os = "macos")]
+use aiden_mac::hotkey::{GlobalHotkeyManager, MacHotkeyPort, ShortcutRegistrationPort as _};
+#[cfg(target_os = "macos")]
+use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use gpui_component::{
     h_flex,
     input::{InputEvent, InputState},
@@ -220,6 +227,56 @@ static PILL_WINDOW: std::sync::Mutex<Option<gpui::WindowHandle<PillView>>> =
 /// The wired dictation coordinator, reachable from the pill window's cancel
 /// button and the bridge task (both constructed before `AppState` finishes).
 static PILL_COORDINATOR: std::sync::OnceLock<Arc<PillCoordinator>> = std::sync::OnceLock::new();
+
+// ===========================================================================
+// Reduced motion (parity audit UI §7)
+// ===========================================================================
+
+/// Probe the macOS reduce-motion preference and cache it for the app
+/// lifetime. Reads `defaults read com.apple.universalaccess reduceMotion`,
+/// which prints `"1"` when Reduce Motion is enabled in System Settings →
+/// Accessibility → Display. Any failure (key absent, `defaults` missing)
+/// degrades to `false` — motion stays allowed — so a probe hiccup can never
+/// disable animations behind the user's back.
+pub(crate) fn system_reduced_motion() -> bool {
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let probe = || {
+            let output = std::process::Command::new("defaults")
+                .args(["read", "com.apple.universalaccess", "reduceMotion"])
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            Some(String::from_utf8_lossy(&output.stdout).contains('1'))
+        };
+        match probe() {
+            Some(reduced) => {
+                tracing::info!(reduced, "macOS reduce-motion preference");
+                reduced
+            }
+            None => {
+                tracing::debug!(
+                    "macOS reduce-motion preference unavailable — defaulting to motion allowed"
+                );
+                false
+            }
+        }
+    })
+}
+
+/// The effective reduced-motion decision for the main window: the persisted
+/// `appearance.reduceMotion` override, or the OS probe when set to `System`.
+/// This is the exact semantics of the pill's `MotionGate::allow` — kept as a
+/// pure function here so the chat surface, the pill, and settings all agree.
+pub(crate) fn motion_reduced(reduce_motion: ReduceMotion, system_reduced: bool) -> bool {
+    match reduce_motion {
+        ReduceMotion::On => true,
+        ReduceMotion::Off => false,
+        ReduceMotion::System => system_reduced,
+    }
+}
 
 /// Window commands the dictation coordinator's injected deps send; the
 /// foreground bridge task (spawned in [`AppState::new`]) performs them on the
@@ -582,8 +639,18 @@ impl AppState {
         }
         self.composer_input
             .update(cx, |input, inner| input.set_value("", window, inner));
-        self.service
-            .update(cx, |service, cx| service.send_message(&text, cx));
+
+        // Read staged attachments + edit target from the global draft.
+        let (attachments, editing_message_id) = {
+            let draft = cx.default_global::<crate::chat::composer::ComposerDraft>();
+            let atts = draft.attachments.clone();
+            let edit = draft.editing_message_id.take();
+            (atts, edit)
+        };
+
+        self.service.update(cx, |service, cx| {
+            service.send_message_with(&text, attachments, editing_message_id, cx)
+        });
     }
 
     fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
@@ -1211,7 +1278,9 @@ fn bridge_show_pill(
     let deps = PillDeps {
         audio: Rc::new(RefCell::new(audio.clone())),
         appearance: appearance.clone(),
-        system_reduced_motion: false,
+        // Real OS probe (cached for the app lifetime) instead of the previous
+        // hardcoded `false` — parity audit UI §7.
+        system_reduced_motion: system_reduced_motion(),
         on_cancel: Some(on_cancel),
     };
     match cx.update(|app| open_pill_window(app, deps)) {
@@ -1326,6 +1395,124 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
     // we're on a GPUI thread without a tokio runtime guard).
     gpui_tokio_bridge::Tokio::spawn(cx, watcher).detach();
     let _ = PILL_COORDINATOR.set(pill);
+}
+
+// ===========================================================================
+// Global dictation hotkey (parity audit config §12)
+// ===========================================================================
+
+/// The OS-global dictation accelerator. This is the catalog default for
+/// `dictation.toggle` (`renderer/shared/keybindings.ts:77` and
+/// `aiden-core::keybindings::CommandId::DictationToggle` both use
+/// "Command+Shift+D"). The in-app `cmd-shift-d` binding stays as the
+/// fallback for builds/apps without the global registration.
+#[cfg(target_os = "macos")]
+const DICTATION_GLOBAL_ACCELERATOR: &str = "Command+Shift+D";
+
+/// Register the dictation pill toggle as a REAL OS-global hotkey, so ⌘⇧D
+/// starts/stops dictation while another app is focused — the TS
+/// `globalShortcut.register` equivalent (parity audit config §12). Called
+/// once from `main.rs` boot after the stores open.
+///
+/// Accessibility permission: registering a global hotkey requires the macOS
+/// Accessibility permission for this process. When it is missing the OS
+/// either refuses the registration or `GlobalHotkeyManager::initialize`
+/// fails — in both cases we log a warning, register nothing, and the in-app
+/// binding remains the only toggle path.
+///
+/// The `MacHotkeyPort` (which owns the `global-hotkey` manager and thus the
+/// live OS claim) is moved into the app-lifetime listener task; the claim is
+/// released when the tokio bridge runtime tears down at process exit.
+#[cfg(target_os = "macos")]
+pub(crate) fn register_global_dictation_hotkey(cx: &mut App) -> bool {
+    let manager = match GlobalHotkeyManager::initialize() {
+        Ok(manager) => manager,
+        Err(error) => {
+            tracing::warn!(
+                "global dictation hotkey unavailable ({error}); falling back to in-app ⌘⇧D"
+            );
+            return false;
+        }
+    };
+    let port = MacHotkeyPort::new(manager);
+    if !port.register(DICTATION_GLOBAL_ACCELERATOR) {
+        tracing::warn!(
+            "could not register the global dictation hotkey {DICTATION_GLOBAL_ACCELERATOR} \
+             (Accessibility permission missing?); falling back to in-app ⌘⇧D"
+        );
+        return false;
+    }
+    let expected_id = DICTATION_GLOBAL_ACCELERATOR
+        .parse::<global_hotkey::hotkey::HotKey>()
+        .map(|hotkey| hotkey.id())
+        .ok();
+    // Route OS-level presses onto the pill coordinator. The listener runs on
+    // the tokio bridge so `PillCoordinator::toggle` (a tokio state machine)
+    // can be awaited directly; the blocking channel poll is moved off the
+    // tokio workers via `spawn_blocking`. `Tokio::spawn` needs an entity
+    // context to bridge the future back onto the GPUI executor, so a
+    // throwaway scaffold entity provides it (dropped immediately; the tokio
+    // task — and the `MacHotkeyPort` inside it — outlives the scaffold).
+    let scaffold = cx.new(|_| ());
+    cx.update_entity(&scaffold, |_, inner| {
+        gpui_tokio_bridge::Tokio::spawn(inner, dictation_hotkey_listener(expected_id, port))
+            .detach();
+    });
+    tracing::info!(
+        accelerator = DICTATION_GLOBAL_ACCELERATOR,
+        "registered the global dictation hotkey"
+    );
+    true
+}
+
+/// Non-macOS builds have no OS-global hotkey surface; the in-app binding is
+/// the only toggle path. Compile-time no-op so `main.rs` stays
+/// platform-agnostic.
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn register_global_dictation_hotkey(_cx: &mut App) -> bool {
+    false
+}
+
+/// Poll the `global-hotkey` event channel for the dictation accelerator and
+/// toggle the pill coordinator on each press. Keeps `port` alive for the app
+/// lifetime — dropping the listener (at process exit) unregisters the hotkey.
+#[cfg(target_os = "macos")]
+async fn dictation_hotkey_listener(expected_id: Option<u32>, port: MacHotkeyPort) {
+    let _port = port; // the OS claim lives exactly as long as this task
+    loop {
+        let event = tokio::task::spawn_blocking({
+            || GlobalHotKeyEvent::receiver().recv_timeout(std::time::Duration::from_millis(250))
+        })
+        .await;
+        match event {
+            Ok(Ok(hotkey_event)) => {
+                if hotkey_event.state == HotKeyState::Pressed
+                    && expected_id.is_none_or(|id| id == hotkey_event.id)
+                {
+                    toggle_dictation_from_global_hotkey().await;
+                }
+            }
+            // Channel poll timeout — nothing pressed, keep waiting.
+            Ok(Err(_)) => {}
+            // The blocking poll task ended (runtime shutdown) — stop.
+            Err(_) => break,
+        }
+    }
+}
+
+/// Toggle dictation from the OS-global hotkey — the exact same path as the
+/// in-app ⌘⇧D binding. The coordinator is only wired after the main window
+/// opens (`AppState::new`), so earlier presses are ignored with a debug log.
+#[cfg(target_os = "macos")]
+async fn toggle_dictation_from_global_hotkey() {
+    match PILL_COORDINATOR.get() {
+        Some(pill) => pill.toggle().await,
+        None => {
+            tracing::debug!(
+                "global dictation hotkey pressed before the pill coordinator was wired"
+            );
+        }
+    }
 }
 
 impl Render for AppState {
@@ -1493,6 +1680,19 @@ mod tests {
         assert_eq!(cycle_appearance_mode(Mode::System), Mode::Light);
         assert_eq!(cycle_appearance_mode(Mode::Light), Mode::Dark);
         assert_eq!(cycle_appearance_mode(Mode::Dark), Mode::System);
+    }
+
+    #[test]
+    fn motion_gate_resolves_the_override_and_the_os_probe() {
+        // On: always reduced, regardless of the OS probe.
+        assert!(motion_reduced(ReduceMotion::On, false));
+        assert!(motion_reduced(ReduceMotion::On, true));
+        // Off: never reduced.
+        assert!(!motion_reduced(ReduceMotion::Off, false));
+        assert!(!motion_reduced(ReduceMotion::Off, true));
+        // System: follows the OS probe (parity with the pill's MotionGate).
+        assert!(motion_reduced(ReduceMotion::System, true));
+        assert!(!motion_reduced(ReduceMotion::System, false));
     }
 
     #[test]

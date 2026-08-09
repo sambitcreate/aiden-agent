@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use aiden_core::appearance::{create_default_appearance_config, AppearanceConfig, Mode};
 use aiden_core::chat_title::{
@@ -29,6 +30,8 @@ use aiden_data::chat_store::{
 use aiden_data::now_millis;
 use aiden_data::portable_config::{Workspace, WorkspacePermission};
 use aiden_data::usage_store::{UsageRequestRecord, UsageRequestStatus};
+use aiden_providers::catalog;
+use aiden_providers::live_discovery::{self, DiscoveryOptions, RuntimeKind};
 use aiden_providers::{StreamOptions, StreamRequest};
 use futures::StreamExt;
 use gpui::{AppContext as _, Context, Task};
@@ -49,6 +52,10 @@ use crate::services::stream::{chat_usage_record, message_content};
 
 /// The persisted-selection settings key (`settings.json`).
 const MODEL_SELECTION_KEY: &str = "modelSelection";
+
+/// Total bound for the boot-time local-runtime model discovery (5s), so an
+/// offline local server can never delay the provider catalog.
+const BOOT_DISCOVERY_TOTAL_TIMEOUT_MS: u64 = 5_000;
 
 /// Tool-free system prompt for the background first-turn title request.
 const TITLE_SYSTEM_PROMPT: &str =
@@ -203,6 +210,9 @@ impl ChatService {
                 // keeps this in localStorage; `updatedAt` is the port's proxy).
                 this.workspace = this.workspaces.iter().max_by_key(|w| w.updated_at).cloned();
                 this.booted = true;
+                // Background discovery for local `custom:` providers: the
+                // picker picks up running local models when it settles.
+                this.merge_local_runtime_models(cx);
                 cx.notify();
             })
             .ok();
@@ -276,6 +286,91 @@ impl ChatService {
             this.update(cx, |this, cx| {
                 this.providers = providers;
                 this.selection = this.resolve_selection(&settings);
+                this.merge_local_runtime_models(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fold live models from running local servers into the provider catalog:
+    /// for every `custom:` provider with a loopback URL, ask the running
+    /// server (Ollama `/api/tags`, LM Studio `/v1/models`, or the OpenAI
+    /// shape) which models it serves and merge them into the provider's model
+    /// list (deduped, user-added models preserved). Runs on the tokio bridge
+    /// concurrently with a 5s total bound; failures are logged quietly and the
+    /// in-place update lands whenever the discovery settles, so an offline
+    /// server never blocks boot. Call after `this.providers` is populated.
+    fn merge_local_runtime_models(&self, cx: &mut Context<Self>) {
+        let candidates: Vec<(String, String, RuntimeKind)> = self
+            .providers
+            .iter()
+            .filter(|provider| {
+                catalog::is_custom_provider_id(&provider.id)
+                    && catalog::is_loopback_provider_base_url(Some(&provider.base_url))
+            })
+            .map(|provider| {
+                (
+                    provider.id.clone(),
+                    provider.base_url.clone(),
+                    live_discovery::runtime_kind_for_provider(&provider.id, &provider.base_url),
+                )
+            })
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let task = Tokio::spawn(cx, async move {
+            futures::future::join_all(candidates.into_iter().map(
+                |(provider_id, base_url, runtime)| async move {
+                    let options = DiscoveryOptions {
+                        total_timeout: Duration::from_millis(BOOT_DISCOVERY_TOTAL_TIMEOUT_MS),
+                        ..Default::default()
+                    };
+                    let result =
+                        live_discovery::discover_models_with_options(&base_url, runtime, &options)
+                            .await;
+                    (provider_id, result)
+                },
+            ))
+            .await
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(discoveries) = task.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                for (provider_id, result) in discoveries {
+                    let Some(provider) = this
+                        .providers
+                        .iter_mut()
+                        .find(|provider| provider.id == provider_id)
+                    else {
+                        continue;
+                    };
+                    match result {
+                        Ok(models) => {
+                            let before = provider.models.len();
+                            provider.models =
+                                live_discovery::merge_discovered_models(&provider.models, &models);
+                            if provider.models.len() > before {
+                                tracing::debug!(
+                                    provider = %provider_id,
+                                    added = provider.models.len() - before,
+                                    "discovered live models from local runtime"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                provider = %provider_id,
+                                error = %error,
+                                "local runtime model discovery failed"
+                            );
+                        }
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -708,6 +803,17 @@ impl ChatService {
     }
 
     pub fn send_message(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.send_message_with(text, Vec::new(), None, cx);
+    }
+
+    /// Send with attachments and optional edit target (rebranch).
+    pub fn send_message_with(
+        &mut self,
+        text: &str,
+        attachments: Vec<aiden_core::Attachment>,
+        editing_message_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let text = text.trim().to_string();
         if text.is_empty() || self.generation_active() {
             return;
@@ -757,6 +863,28 @@ impl ChatService {
             },
         };
 
+        // Edit mode: truncate the transcript from the edited message onward
+        // (rebranch), then proceed as a normal send.
+        if let Some(edit_id) = &editing_message_id {
+            if let Some(chat) = self.active_chat.as_mut() {
+                if let Some(pos) = chat.messages.iter().position(|m| &m.id == edit_id) {
+                    chat.messages.truncate(pos);
+                    chat.updated_at = now_millis();
+                    let stores = self.stores.clone();
+                    let truncate_id = chat_id.clone();
+                    let keep = pos;
+                    cx.spawn(async move |_, cx| {
+                        let _ = cx
+                            .background_spawn(async move {
+                                stores.chat.truncate_messages(&truncate_id, keep).ok()
+                            })
+                            .await;
+                    })
+                    .detach();
+                }
+            }
+        }
+
         let counter = self.bump_generation(&chat_id);
         self.active_error = None;
         self.generation = Some(GenerationState {
@@ -781,7 +909,11 @@ impl ChatService {
             created_at: now_millis(),
             model: None,
             reasoning: None,
-            attachments: None,
+            attachments: if attachments.is_empty() {
+                None
+            } else {
+                Some(attachments.clone())
+            },
             timeline: None,
             subagents: None,
         };

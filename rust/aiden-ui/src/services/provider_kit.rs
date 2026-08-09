@@ -16,8 +16,8 @@ use aiden_agent::tool_loop_guard::{
 };
 use aiden_core::{
     AssistantMessage, AssistantMessageEvent, ChatMessage, ChatRole, ContentBlock,
-    GenerationTimeline, Message, StopReason, TextContent, ToolCall, ToolDef, ToolResultMessage,
-    Usage, UsageCost, UserContent, UserMessage,
+    GenerationTimeline, ImageContent, Message, StopReason, TextContent, ToolCall, ToolDef,
+    ToolResultMessage, Usage, UsageCost, UserBlock, UserContent, UserMessage,
 };
 use aiden_data::config_store::Provider as StoredProvider;
 use aiden_data::portable_config::{ProviderKind, Workspace, WorkspacePermission};
@@ -370,10 +370,36 @@ pub fn chat_history_to_messages(
     history
         .iter()
         .filter_map(|entry| match entry.role {
-            ChatRole::User => Some(Message::User(UserMessage {
-                content: UserContent::Text(entry.content.clone()),
-                timestamp: entry.created_at,
-            })),
+            ChatRole::User => {
+                let images: Vec<_> = entry
+                    .attachments
+                    .iter()
+                    .flatten()
+                    .filter(|a| a.kind == aiden_core::AttachmentKind::Image)
+                    .filter_map(|a| {
+                        a.data.as_ref().map(|data| {
+                            UserBlock::Image(ImageContent {
+                                data: data.clone(),
+                                mime_type: a.mime_type.clone(),
+                            })
+                        })
+                    })
+                    .collect();
+                let content = if images.is_empty() {
+                    UserContent::Text(entry.content.clone())
+                } else {
+                    let mut blocks = vec![UserBlock::Text(TextContent {
+                        text: entry.content.clone(),
+                        text_signature: None,
+                    })];
+                    blocks.extend(images);
+                    UserContent::Blocks(blocks)
+                };
+                Some(Message::User(UserMessage {
+                    content,
+                    timestamp: entry.created_at,
+                }))
+            }
             ChatRole::Assistant => Some(Message::Assistant(AssistantMessage {
                 content: if entry.content.is_empty() {
                     Vec::new()

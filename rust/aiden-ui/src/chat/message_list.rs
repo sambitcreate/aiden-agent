@@ -73,6 +73,13 @@ impl AppState {
         let scroll = self.message_scroll.clone();
         let show_stream = should_show_stream_bubble(&snapshot);
         let generation = snapshot.generation.clone();
+        // Reduced motion (parity audit UI §7): the persisted
+        // `appearance.reduceMotion` override combined with the cached macOS
+        // probe decides whether the streaming cursor may animate.
+        let motion_reduced = crate::app::motion_reduced(
+            self.service.read(cx).appearance.reduce_motion,
+            crate::app::system_reduced_motion(),
+        );
 
         // Stick-to-bottom: keep the transcript pinned while the user is at the
         // bottom (typical while streaming). Once they scroll up this stops
@@ -103,7 +110,12 @@ impl AppState {
                 }),
             )
             .when(show_stream, |el| {
-                el.child(render_stream_bubble(&generation, window, cx))
+                el.child(render_stream_bubble(
+                    &generation,
+                    motion_reduced,
+                    window,
+                    cx,
+                ))
             })
     }
 
@@ -279,6 +291,7 @@ fn render_assistant_message(
 
 fn render_stream_bubble(
     generation: &Option<GenerationState>,
+    motion_reduced: bool,
     window: &mut Window,
     cx: &mut Context<AppState>,
 ) -> impl IntoElement {
@@ -312,7 +325,9 @@ fn render_stream_bubble(
 
     // Blinking streaming cursor: a keyed state per generation (`counter`)
     // drives the blink via a timer loop that stops once the generation is no
-    // longer active, so no state leaks after streaming ends.
+    // longer active, so no state leaks after streaming ends. Under reduced
+    // motion the blink loop is skipped — the cursor renders solid, matching
+    // the TS streaming-reveal collapse (parity audit UI §7).
     let cursor_visible = {
         let cursor = window.use_keyed_state(
             ElementId::Name(SharedString::from(format!(
@@ -325,7 +340,7 @@ fn render_stream_bubble(
             |_, _| StreamCursorState::default(),
         );
         let visible = cursor.read(cx).visible;
-        if streaming && !cursor.read(cx).spawned {
+        if streaming && !cursor.read(cx).spawned && !motion_reduced {
             let cursor_entity = cursor.clone();
             cursor.update(cx, |state, _cx| state.spawned = true);
             cx.spawn(async move |this, cx| loop {

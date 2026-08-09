@@ -264,6 +264,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "futures",
+ "global-hotkey",
  "gpui",
  "gpui-component",
  "gpui-component-assets",

@@ -44,6 +44,9 @@ serde_json.workspace = true
 chrono.workspace = true
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
+# OS-global hotkey event delivery (dictation pill toggle while another app is
+# focused; parity audit config §12). Same pin as aiden-mac.
+global-hotkey = "0.8"
 
 [dev-dependencies]
 tempfile.workspace = true

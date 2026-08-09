@@ -7,7 +7,8 @@
 //! editor and typography preferences are out of scope for this pass.
 
 use aiden_core::appearance::{
-    get_preset_variant, theme_presets, AppearanceConfig, Mode, PresetId, Scheme, Selection,
+    get_preset_variant, theme_presets, AppearanceConfig, Mode, PresetId, ReduceMotion, Scheme,
+    Selection,
 };
 use gpui::{
     div, px, AppContext as _, Context, FontWeight, InteractiveElement as _, IntoElement,
@@ -82,7 +83,9 @@ impl SettingsView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = cx.theme();
+        // Cloned (not borrowed) so `theme` stays usable after the
+        // `cx`-capturing row/button closures below.
+        let theme = cx.theme().clone();
         let config = self.appearance.config();
         let presets = theme_presets();
         let current_scheme = resolve_scheme(config.mode, cx.window_appearance());
@@ -181,6 +184,54 @@ impl SettingsView {
                             })),
                     ),
             )
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Reduced motion"),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(
+                        "Reduce or remove motion throughout the app. System follows the \
+                             macOS accessibility setting (Reduce Motion in System Settings → \
+                             Accessibility → Display).",
+                    ))
+                    .child(
+                        h_flex().w_full().gap_2().children(
+                            [ReduceMotion::System, ReduceMotion::On, ReduceMotion::Off]
+                                .into_iter()
+                                .map(|preference| {
+                                    let active = config.reduce_motion == preference;
+                                    let mut button = Button::new(SharedString::from(
+                                        format!("reduce-motion-{:?}", preference)
+                                            .to_ascii_lowercase(),
+                                    ))
+                                    .outline()
+                                    .small();
+                                    if active {
+                                        button = button.primary();
+                                    }
+                                    // "System" shows the live OS probe so the
+                                    // choice is never a mystery.
+                                    let label: &str =
+                                        match (preference, crate::app::system_reduced_motion()) {
+                                            (ReduceMotion::System, true) => "System (reduced)",
+                                            (ReduceMotion::System, false) => "System",
+                                            (ReduceMotion::On, _) => "On",
+                                            (ReduceMotion::Off, _) => "Off",
+                                        };
+                                    button.label(label).on_click(cx.listener(
+                                        move |this, _event, _window, cx| {
+                                            this.appearance.set_reduce_motion(preference, cx);
+                                        },
+                                    ))
+                                }),
+                        ),
+                    ),
+            )
     }
 
     /// One preset choice row with a color swatch strip.
@@ -270,6 +321,31 @@ impl AppearanceState {
         cx.notify();
     }
 
+    /// Switch the reduce-motion preference (`System | On | Off`) and persist
+    /// it under the `appearance` key. The pill and the main chat surface both
+    /// read the persisted override (see `crate::app::motion_reduced`).
+    fn set_reduce_motion(&mut self, reduce_motion: ReduceMotion, cx: &mut Context<SettingsView>) {
+        let services = cx.entity().read(cx).services.clone();
+        let mut config = self.config();
+        if config.reduce_motion == reduce_motion {
+            return;
+        }
+        config.reduce_motion = reduce_motion;
+        self.appearance = Some(config.clone());
+        let value = appearance_to_settings(&config);
+        cx.spawn(async move |_this, cx| {
+            let _ = cx
+                .background_spawn(async move {
+                    let mut patch = serde_json::Map::new();
+                    patch.insert(SETTINGS_APPEARANCE_KEY.to_string(), value);
+                    let _ = services.config.set_settings(&patch, &|| true);
+                })
+                .await;
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Apply a preset to the active scheme's variant and persist.
     fn set_preset(&mut self, preset: PresetId, cx: &mut Context<SettingsView>) {
         let services = cx.entity().read(cx).services.clone();
@@ -334,5 +410,21 @@ mod tests {
         assert!(hsla_from_hex("006AD6").is_none());
         assert!(hsla_from_hex("#GGGGGG").is_none());
         assert!(hsla_from_hex("#000").is_none());
+    }
+
+    #[test]
+    fn reduce_motion_override_round_trips_through_the_settings_map() {
+        let mut config =
+            crate::services::appearance::appearance_from_settings(&serde_json::Map::new());
+        assert_eq!(config.reduce_motion, ReduceMotion::System);
+        config.reduce_motion = ReduceMotion::On;
+        let mut settings = serde_json::Map::new();
+        settings.insert(
+            SETTINGS_APPEARANCE_KEY.to_string(),
+            appearance_to_settings(&config),
+        );
+        let back = crate::services::appearance::appearance_from_settings(&settings);
+        assert_eq!(back.reduce_motion, ReduceMotion::On);
+        assert_eq!(back.mode, config.mode);
     }
 }
