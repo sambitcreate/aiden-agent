@@ -1,6 +1,8 @@
 /* global console, process */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,14 +74,40 @@ export function distributionElectronBuilderArguments(staging, { enableAutoUpdate
 export async function verifyMacUpdateMetadata(staging, expectedVersion) {
   const metadataPath = path.join(staging, "latest-mac.yml");
   const metadata = await readFile(metadataPath, "utf8");
-  if (!metadata.includes(`version: ${expectedVersion}`)) {
+  const versions = [...metadata.matchAll(/^version:\s*(.+?)\s*$/gmu)].map((match) => match[1]);
+  if (versions.length !== 1 || versions[0] !== expectedVersion) {
     throw new Error("macOS update metadata does not match the packaged application version.");
   }
   if (!/^files:\s*$/mu.test(metadata) || !/^\s+- url: .+\.zip\s*$/mu.test(metadata)) {
     throw new Error("macOS update metadata does not identify a ZIP update payload.");
   }
-  if (!/^\s+sha512: [A-Za-z0-9+/=]+\s*$/mu.test(metadata)) {
-    throw new Error("macOS update metadata is missing its signed payload digest.");
+  const archives = await discoverMacDistributionArchives(staging);
+  const zipName = path.basename(archives.zip);
+  if (!/^[A-Za-z0-9._-]+$/u.test(zipName)) {
+    throw new Error("macOS update ZIP name is not stable for GitHub release assets.");
+  }
+  const urls = [...metadata.matchAll(/^\s+- url:\s*(.+?)\s*$/gmu)].map((match) => match[1]);
+  if (urls.length !== 1 || urls[0] !== zipName) {
+    throw new Error("macOS update metadata does not name the exact ZIP release asset.");
+  }
+  const paths = [...metadata.matchAll(/^path:\s*(.+?)\s*$/gmu)].map((match) => match[1]);
+  if (paths.length !== 1 || paths[0] !== zipName) {
+    throw new Error("macOS update metadata path does not name the exact ZIP release asset.");
+  }
+  const fileDigests = [...metadata.matchAll(/^\s+sha512:\s*([A-Za-z0-9+/=]+)\s*$/gmu)].map(
+    (match) => match[1],
+  );
+  const legacyDigests = [...metadata.matchAll(/^sha512:\s*([A-Za-z0-9+/=]+)\s*$/gmu)].map(
+    (match) => match[1],
+  );
+  if (fileDigests.length !== 1 || legacyDigests.length !== 1) {
+    throw new Error("macOS update metadata must contain both ZIP payload digests.");
+  }
+  const digest = createHash("sha512");
+  for await (const chunk of createReadStream(archives.zip)) digest.update(chunk);
+  const actualDigest = digest.digest("base64");
+  if (fileDigests[0] !== actualDigest || legacyDigests[0] !== actualDigest) {
+    throw new Error("macOS update metadata digest does not match the exact ZIP release asset.");
   }
   return metadataPath;
 }
