@@ -158,6 +158,14 @@ test("summary leads with the work when nothing was explored", () => {
     summarizeActivity(timeline("completed", tools({ run_command: 1 }))),
     "Ran 1 command",
   );
+  assert.equal(
+    activityLineText(step("compact", 0, "compact_context", "running")),
+    "Compacting context",
+  );
+  assert.equal(
+    summarizeActivity(timeline("completed", tools({ compact_context: 1 }))),
+    "Compacted context",
+  );
 });
 
 test("uncounted tools fall back to a neutral tool-call tally", () => {

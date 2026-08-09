@@ -80,6 +80,7 @@ import {
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
 import { ensureUserDataDir } from "./services/data-store.js";
+import { piCompactionSessionStore } from "./services/pi-compaction-session-store.js";
 import {
   reconcileExternalProviderCredentialChanges,
   reconcilePendingProviderCredentialRotation,
@@ -1055,9 +1056,10 @@ if (!ownsSingleInstanceLock) {
       // Reconcile every persisted active child at the actual restart boundary,
       // before a renderer can read or append run history.
       await subagentRunStore.initialize();
-      await reconcilePendingChatDeletions(subagentRunStore, async (chatId) =>
-        chatStore.remove(chatId),
-      );
+      await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
+        await piCompactionSessionStore.deleteChat(chatId);
+        await chatStore.remove(chatId);
+      });
       await reconcilePendingManagedWorktreeDeletions({
         listWorkspaces: () => configStore.listWorkspaces(),
         deletionPending: (workspace) => {

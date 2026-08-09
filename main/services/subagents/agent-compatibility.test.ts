@@ -552,6 +552,7 @@ test("child context compaction bounds oversized tool output before the next prov
     models: [{ id: "compat-context", contextWindow: 8_192 }],
   });
   let secondContext = "";
+  let continuationContext = "";
   core.setResponses([
     fauxAssistantMessage(fauxToolCall("oversized_read", {}), {
       stopReason: "toolUse",
@@ -559,6 +560,12 @@ test("child context compaction bounds oversized tool output before the next prov
     async (context) => {
       secondContext = JSON.stringify(context);
       return fauxAssistantMessage("bounded");
+    },
+    fauxAssistantMessage("semantic history checkpoint"),
+    fauxAssistantMessage("semantic turn-prefix checkpoint"),
+    async (context) => {
+      continuationContext = JSON.stringify(context);
+      return fauxAssistantMessage("continued from checkpoint");
     },
   ]);
   const oversizedRead: AgentTool = {
@@ -579,13 +586,17 @@ test("child context compaction bounds oversized tool output before the next prov
   );
 
   await runningChild.prompt("Read the oversized payload, then conclude.");
+  await runningChild.agent.prompt("Continue from the compacted checkpoint.");
 
-  assert.equal(core.state.callCount, 2);
+  assert.equal(core.state.callCount, 5);
   assert.match(
     secondContext,
     /context window|characters compacted|payload omitted/u,
   );
   assert.ok(secondContext.length < 100_000);
+  assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
+  assert.match(continuationContext, /conversation history.*compacted.*summary/isu);
+  assert.match(continuationContext, /semantic history checkpoint/u);
   assert.equal(registry.activeCount, 0);
 });
 
@@ -600,6 +611,7 @@ test("forked initial context is compacted before the first provider request", as
       firstContext = JSON.stringify(context);
       return fauxAssistantMessage("bounded");
     },
+    fauxAssistantMessage("semantic checkpoint"),
   ]);
   const registry = new SubagentRuntimeRegistry();
   const modelRuntime = runtimeFrom(
@@ -628,7 +640,7 @@ test("forked initial context is compacted before the first provider request", as
 
   await runningChild.prompt("Conclude from the forked conversation.");
 
-  assert.equal(core.state.callCount, 1);
+  assert.equal(core.state.callCount, 2);
   assert.doesNotMatch(firstContext, /FORK-START|FORK-END/u);
   assert.match(firstContext, /Conclude from the forked conversation/u);
   assert.ok(firstContext.length < 100_000);

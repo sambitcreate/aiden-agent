@@ -8,7 +8,12 @@
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { Agent } from "@earendil-works/pi-agent-core";
+import {
+  Agent,
+  convertToLlm,
+  type AgentMessage,
+} from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools, skillToolKey } from "./tools.js";
@@ -64,7 +69,17 @@ import {
   summarizeScheduleToolCall,
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
-import { toPiMessages } from "./generation-messages.js";
+import { chatMessageToPiMessage } from "./generation-messages.js";
+import {
+  createPiCompactionModels,
+  PiCompactionCoordinator,
+  type PiCompactionEvent,
+} from "./pi-compaction-core.js";
+import {
+  appendPiMessages,
+  piCompactionSessionStore,
+  syncChatMessagesToPiSession,
+} from "./pi-compaction-session-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
@@ -185,6 +200,7 @@ interface LoadMonitorState {
 
 interface ActiveGeneration {
   agent: Agent;
+  compaction: PiCompactionCoordinator;
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
@@ -843,11 +859,13 @@ export const llmClient = {
     if (initialization.controller.signal.aborted)
       initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
+    let authoritativeChat!: Chat;
     try {
       const chat = await chatStore.get(params.chatId);
       if (!chat) {
         throw new Error("This chat is no longer available.");
       }
+      authoritativeChat = chat;
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
@@ -977,7 +995,7 @@ export const llmClient = {
         finalTimeline.steps.length === 0 &&
         !subagents
       ) {
-        return { chat: undefined, error: undefined };
+        return { chat: undefined, error: undefined, messageId: undefined };
       }
       try {
         // The inspector store is authoritative. Never announce terminal chat
@@ -999,7 +1017,10 @@ export const llmClient = {
             expectedWorkspaceId: initialization.workspaceId,
           },
         );
-        return { chat, error: undefined };
+        const messageId = [...chat.messages]
+          .reverse()
+          .find((message) => message.role === "assistant")?.id;
+        return { chat, error: undefined, messageId };
       } catch (error) {
         logger.error(
           "pi",
@@ -1009,6 +1030,7 @@ export const llmClient = {
         return {
           chat: undefined,
           error: "local storage failed",
+          messageId: undefined,
         };
       }
     };
@@ -1018,6 +1040,13 @@ export const llmClient = {
     let aborted = false;
     let currentAssistantTurnHadTextDelta = false;
     let currentAssistantTurnHadReasoningDelta = false;
+    let pendingPiMessages: AgentMessage[] = [];
+    let lastAssistantMessage: AssistantMessage | undefined;
+    let activeCompactionStepId: string | undefined;
+    let piSession:
+      | Awaited<ReturnType<typeof piCompactionSessionStore.openChat>>
+      | undefined;
+    let compaction: PiCompactionCoordinator | undefined;
     let candidate: Agent | null = null;
     try {
       const assistantMcpInventory =
@@ -1071,8 +1100,91 @@ export const llmClient = {
         systemPrompt,
         tools,
       });
+      piSession = await piCompactionSessionStore.openChat(params.chatId);
+      const onCompactionEvent = (event: PiCompactionEvent) => {
+        if (event.type === "start") {
+          activeCompactionStepId = timeline.compactionStarted();
+          logger.info("pi", `Started ${event.reason} compaction for stream ${streamId}.`, {
+            model: model.id,
+          });
+          return;
+        }
+        if (activeCompactionStepId) {
+          timeline.compactionFinished(
+            activeCompactionStepId,
+            event.aborted ? "cancelled" : event.result ? "completed" : "failed",
+          );
+          activeCompactionStepId = undefined;
+        }
+        logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
+          aborted: event.aborted,
+          tokensBefore: event.result?.tokensBefore,
+          estimatedTokensAfter: event.result?.estimatedTokensAfter,
+          willRetry: event.willRetry,
+        });
+        if (event.errorMessage) {
+          logger.warn("pi", `Compaction failed for stream ${streamId}: ${event.errorMessage}`);
+        }
+      };
+      compaction = new PiCompactionCoordinator({
+        session: piSession,
+        models: createPiCompactionModels(runtime),
+        model,
+        thinkingLevel,
+        signal: initialization.controller.signal,
+        onEvent: onCompactionEvent,
+      });
+
+      const currentUser = [...authoritativeChat.messages]
+        .reverse()
+        .find((message) => message.role === "user");
+      const priorVisibleMessages = currentUser
+        ? authoritativeChat.messages.filter((message) => message.id !== currentUser.id)
+        : authoritativeChat.messages;
+      await syncChatMessagesToPiSession(
+        piSession,
+        priorVisibleMessages,
+        model,
+        supportsImages,
+      );
+      const prePromptContext = await piSession.buildContext();
+      const previousAssistant = [...prePromptContext.messages]
+        .reverse()
+        .find((message): message is AssistantMessage => message.role === "assistant");
+      let prePromptMessages = prePromptContext.messages;
+      if (previousAssistant) {
+        const prePromptCompaction = await compaction.check(previousAssistant, {
+          includeAborted: true,
+        });
+        if (prePromptCompaction.messages) {
+          prePromptMessages = [...prePromptCompaction.messages];
+          const trailing = prePromptMessages[prePromptMessages.length - 1];
+          if (
+            prePromptCompaction.shouldRetry ||
+            (trailing?.role === "assistant" && trailing.stopReason === "error")
+          ) {
+            prePromptMessages.pop();
+          }
+        }
+      }
+      if (currentUser) {
+        await syncChatMessagesToPiSession(
+          piSession,
+          authoritativeChat.messages,
+          model,
+          supportsImages,
+        );
+      }
+      const initialMessages = currentUser
+        ? [
+            ...prePromptMessages,
+            chatMessageToPiMessage(currentUser, model, supportsImages),
+          ]
+        : (await piSession.buildContext()).messages;
+      compaction.beginPrompt();
       candidate = new Agent({
         ...buildAgentRuntimeOptions(params.chatId, runtime),
+        convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
         runtime.apiKey &&
         workspaceId &&
@@ -1114,7 +1226,7 @@ export const llmClient = {
           model,
           thinkingLevel,
           tools,
-          messages: toPiMessages(params, model, supportsImages),
+          messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
           if (!attendedAssistant) return undefined;
@@ -1353,7 +1465,9 @@ export const llmClient = {
             break;
           }
           case "message_end": {
+            pendingPiMessages.push(event.message);
             if (event.message.role === "assistant") {
+              lastAssistantMessage = event.message;
               await usageStore.record(
                 assistantUsageRecord({
                   message: event.message,
@@ -1469,7 +1583,7 @@ export const llmClient = {
       throw error;
     }
     const agent = candidate;
-    if (!agent) {
+    if (!agent || !piSession || !compaction) {
       endLoadMonitor(initialization, streamId, false);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
@@ -1480,9 +1594,84 @@ export const llmClient = {
       );
       throw new Error("Could not initialize the generation agent.");
     }
+    const piJournal = piSession;
+    const piCoordinator = compaction;
+    const flushPiMessages = async (): Promise<boolean> => {
+      if (pendingPiMessages.length === 0) return true;
+      const batch = pendingPiMessages;
+      pendingPiMessages = [];
+      try {
+        await appendPiMessages(piJournal, batch);
+        return true;
+      } catch (error) {
+        pendingPiMessages = [...batch, ...pendingPiMessages];
+        logger.error(
+          "pi",
+          `Could not append Pi session messages for stream ${streamId}.`,
+          error,
+        );
+        return false;
+      }
+    };
+    const markPersistedAssistant = async (messageId: string | undefined) => {
+      if (!messageId) return;
+      try {
+        await appendPiMessages(piJournal, [], messageId);
+      } catch (error) {
+        logger.warn(
+          "pi",
+          `Could not mark persisted assistant message for stream ${streamId}.`,
+          error,
+        );
+      }
+    };
+    const runWithPiCompaction = async () => {
+      for (;;) {
+        const fullLengthBeforeAttempt = full.length;
+        const reasoningLengthBeforeAttempt = reasoning.length;
+        lastAssistantMessage = undefined;
+        try {
+          await agent.continue();
+        } catch (error) {
+          await flushPiMessages();
+          throw error;
+        }
+        const journalFlushed = await flushPiMessages();
+        if (!journalFlushed) return;
+        const completedAssistant = lastAssistantMessage as
+          | AssistantMessage
+          | undefined;
+        if (!completedAssistant) return;
+        const result = await piCoordinator.check(completedAssistant);
+        if (
+          result.errorMessage &&
+          completedAssistant.stopReason === "error"
+        ) {
+          errored = result.errorMessage;
+        }
+        if (!result.messages) return;
+
+        const rebuiltMessages = [...result.messages];
+        const trailing = rebuiltMessages[rebuiltMessages.length - 1];
+        if (
+          result.shouldRetry &&
+          trailing?.role === "assistant" &&
+          trailing.stopReason === "error"
+        ) {
+          rebuiltMessages.pop();
+        }
+        agent.state.messages = rebuiltMessages;
+        if (!result.shouldRetry) return;
+        full = full.slice(0, fullLengthBeforeAttempt);
+        reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
+        errored = null;
+        aborted = false;
+      }
+    };
 
     const activeGeneration: ActiveGeneration = {
       agent,
+      compaction: piCoordinator,
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
@@ -1515,7 +1704,7 @@ export const llmClient = {
 
     const completion = (async () => {
       try {
-        await agent.continue();
+        await runWithPiCompaction();
         const wasCancelled = activeGeneration.cancelRequested;
         const finalError = wasCancelled
           ? null
@@ -1533,6 +1722,7 @@ export const llmClient = {
             reasoning,
             finalTimeline,
           );
+          await markPersistedAssistant(persisted.messageId);
           sendGeneration(streamId, "chat:error", {
             streamId,
             message: persisted.error
@@ -1553,6 +1743,7 @@ export const llmClient = {
             reasoning,
             finalTimeline,
           );
+          await markPersistedAssistant(persisted.messageId);
           sendGeneration(streamId, "chat:error", {
             streamId,
             message: persisted.error
@@ -1573,6 +1764,7 @@ export const llmClient = {
             reasoning,
             finalTimeline,
           );
+          await markPersistedAssistant(persisted.messageId);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", {
               streamId,
@@ -1600,6 +1792,7 @@ export const llmClient = {
           reasoning,
           finalTimeline,
         );
+        await markPersistedAssistant(persisted.messageId);
         sendGeneration(streamId, "chat:error", {
           streamId,
           message: persisted.error
@@ -1660,6 +1853,7 @@ export const llmClient = {
     }
     if (generation) {
       generation.cancelRequested = true;
+      generation.compaction.abort();
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       void generation.computerUse?.close();

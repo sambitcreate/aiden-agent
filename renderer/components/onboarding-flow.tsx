@@ -66,7 +66,7 @@ const providerChoices: Array<{
   },
 ];
 
-const featureBoxes = [
+export const onboardingFeatureBoxes = [
   [
     "Local profile",
     "Your name personalizes Profile and model-facing context while staying on-device.",
@@ -78,7 +78,7 @@ const featureBoxes = [
   ],
   [
     "Private by design",
-    "Aiden stores local settings and secrets on this Mac rather than bundling credentials.",
+    "Chat context, compaction history, settings, and secrets stay on this Mac; model requests go only to your chosen provider.",
   ],
   ["macOS polish", "Glass cards, quiet motion, keyboard focus, and sidebar-friendly navigation."],
   ["Bento overview", "Hover any tile to reveal how each capability fits into your daily flow."],
@@ -373,7 +373,7 @@ export function OnboardingFlow() {
                   Hover each bento tile to learn what you can explore next.
                 </Text>
                 <div className="mt-6 grid auto-rows-[132px] grid-cols-3 gap-3 max-[760px]:grid-cols-2">
-                  {featureBoxes.map(([title, description], boxIndex) => (
+                  {onboardingFeatureBoxes.map(([title, description], boxIndex) => (
                     <article
                       key={title}
                       className={`group relative overflow-hidden rounded-[22px] border border-field bg-well p-4 shadow-control transition duration-150 hover:-translate-y-1 hover:bg-control hover:shadow-control-hover ${boxIndex === 0 || boxIndex === 5 ? "col-span-2" : ""}`}

@@ -1,5 +1,5 @@
 import type { Api, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
-import type { ChatStartParams } from "./types.js";
+import type { ChatMessage, ChatStartParams } from "./types.js";
 
 const ZERO_USAGE = {
   input: 0,
@@ -52,4 +52,31 @@ export function toPiMessages(
     }
     return { role: "user", content: parts.length ? parts : message.content, timestamp: now };
   });
+}
+
+/**
+ * Rehydrate one main-process-owned chat message for Pi's private session
+ * journal. Unlike the renderer start payload, this keeps the persisted
+ * timestamp and stable chat-message identity is recorded separately by the
+ * journal synchronizer.
+ */
+export function chatMessageToPiMessage(
+  message: ChatMessage,
+  model: Model<Api>,
+  supportsImages: boolean,
+): Message {
+  const params: ChatStartParams = {
+    chatId: "journal-rehydration",
+    providerId: model.provider,
+    model: model.id,
+    messages: [
+      {
+        role: message.role,
+        content: message.content,
+        attachments: message.attachments,
+      },
+    ],
+  };
+  const converted = toPiMessages(params, model, supportsImages)[0];
+  return { ...converted, timestamp: message.createdAt };
 }

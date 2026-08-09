@@ -32,6 +32,7 @@ const VERBS: Record<string, VerbPair> = {
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using Mac", complete: "Used Mac" },
+  compact_context: { active: "Compacting context", complete: "Compacted context" },
 };
 
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
@@ -124,6 +125,7 @@ const TALLIED_TOOLS = [
   "edit_file",
   "web_search",
   "computer_use",
+  "compact_context",
 ];
 
 /**
@@ -152,6 +154,7 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
   const changes = countTools(steps, ["write_file", "edit_file"]);
   const web = countTools(steps, ["web_search"]);
   const mac = countTools(steps, ["computer_use"]);
+  const compactions = countTools(steps, ["compact_context"]);
   const other = toolSteps.filter((step) => !TALLIED_TOOLS.includes(step.toolName)).length;
 
   const explored = [
@@ -164,6 +167,7 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
     commands ? `${running ? "running" : "ran"} ${plural(commands, "command")}` : "",
     web ? plural(web, "web search", "web searches") : "",
     mac ? plural(mac, "Mac action") : "",
+    compactions ? (running ? "compacting context" : "compacted context") : "",
     other ? plural(other, "tool call") : "",
   ].filter(Boolean);
 
