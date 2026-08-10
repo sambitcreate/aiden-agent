@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use aiden_core::{Attachment, ChatMessage, ChatRole};
 use gpui::{
-    div, prelude::FluentBuilder as _, px, relative, App, Context, ElementId, FontWeight,
+    div, prelude::FluentBuilder as _, px, relative, rems, App, Context, ElementId, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
@@ -47,7 +47,9 @@ use gpui_component::{
 
 use crate::app::AppState;
 use crate::chat::activity_feed::timeline_feed;
-use crate::chat::composer::{attachment_image_element, composer_draft};
+use crate::chat::composer::{
+    attachment_image_element, composer_draft, CHAT_CONTENT_MAX_WIDTH_REMS, CHAT_DOCK_GUTTER_PX,
+};
 use crate::services::chat_service::{ChatSnapshot, GenerationState};
 
 /// Pixels from the very bottom that still count as "at the bottom" — mirrors
@@ -59,6 +61,10 @@ const MESSAGE_ACTIONS_GROUP: &str = "message-actions";
 
 /// Max width for images rendered inline in user bubbles (gap 4 of the audit).
 const MAX_ATTACHMENT_WIDTH_PX: f32 = 400.0;
+const USER_BUBBLE_MAX_FRACTION: f32 = 0.8;
+const USER_BUBBLE_PADDING_X_PX: f32 = 16.0;
+const USER_BUBBLE_PADDING_Y_PX: f32 = 10.0;
+const USER_BUBBLE_RADIUS_PX: f32 = 16.0;
 
 impl AppState {
     /// The scrollable transcript. Renders persisted messages, then the live
@@ -76,11 +82,17 @@ impl AppState {
         // Reduced motion (parity audit UI §7): the persisted
         // `appearance.reduceMotion` override combined with the cached macOS
         // probe decides whether the streaming cursor may animate.
-        let motion_reduced = crate::app::motion_reduced(
-            self.service.read(cx).appearance.reduce_motion,
-            crate::app::system_reduced_motion(),
-        );
-
+        let motion_reduced = cx
+            .try_global::<crate::services::appearance::AidenAppearanceRuntime>()
+            .map_or_else(
+                || {
+                    crate::app::motion_reduced(
+                        self.service.read(cx).appearance.reduce_motion,
+                        crate::app::system_reduced_motion(),
+                    )
+                },
+                |runtime| runtime.motion_reduced,
+            );
         // Stick-to-bottom: keep the transcript pinned while the user is at the
         // bottom (typical while streaming). Once they scroll up this stops
         // pinning and the "Jump to bottom" button (in `chat_pane`) takes over.
@@ -94,9 +106,6 @@ impl AppState {
             .flex_1()
             .w_full()
             .overflow_y_scroll()
-            .px_4()
-            .py_3()
-            .gap_2()
             // Re-render on scroll so the "Jump to bottom" button appears as
             // soon as the user scrolls away from the bottom (idle chats do not
             // otherwise re-render).
@@ -104,19 +113,27 @@ impl AppState {
                 let app_id = cx.entity().entity_id();
                 move |_event, _window, cx| cx.notify(app_id)
             })
-            .children(
-                snapshot.messages.iter().map(|message| {
-                    render_persisted_message(message, window, cx).into_any_element()
-                }),
+            .child(
+                v_flex()
+                    .id("chat-content-column")
+                    .w_full()
+                    .max_w(rems(CHAT_CONTENT_MAX_WIDTH_REMS))
+                    .mx_auto()
+                    .px(px(CHAT_DOCK_GUTTER_PX))
+                    .py_6()
+                    .gap_5()
+                    .children(snapshot.messages.iter().map(|message| {
+                        render_persisted_message(message, window, cx).into_any_element()
+                    }))
+                    .when(show_stream, |el| {
+                        el.child(render_stream_bubble(
+                            &generation,
+                            motion_reduced,
+                            window,
+                            cx,
+                        ))
+                    }),
             )
-            .when(show_stream, |el| {
-                el.child(render_stream_bubble(
-                    &generation,
-                    motion_reduced,
-                    window,
-                    cx,
-                ))
-            })
     }
 
     /// Toggle the streaming thinking block's expanded state.
@@ -199,6 +216,7 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut Context<AppState>) -> impl
             v_flex()
                 .items_end()
                 .gap_1()
+                .max_w(relative(USER_BUBBLE_MAX_FRACTION))
                 // Image attachments render inline (max 400 px), scaled down
                 // from the persisted base64 (gap 4).
                 .when_some(
@@ -211,11 +229,10 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut Context<AppState>) -> impl
                 .when(!message.content.trim().is_empty(), |el| {
                     el.child(
                         div()
-                            .max_w(relative(0.8))
-                            .rounded_2xl()
+                            .rounded(px(USER_BUBBLE_RADIUS_PX))
                             .bg(muted)
-                            .px_4()
-                            .py_2()
+                            .px(px(USER_BUBBLE_PADDING_X_PX))
+                            .py(px(USER_BUBBLE_PADDING_Y_PX))
                             .child(prewrap(&message.content)),
                     )
                 })
@@ -237,7 +254,7 @@ fn render_assistant_message(
         ))))
         .group(MESSAGE_ACTIONS_GROUP)
         .w_full()
-        .gap_1()
+        .gap_3()
         // Persisted activity timeline: thinking/tool steps survive reloads
         // via the message's `timeline` field.
         .when_some(
@@ -370,7 +387,7 @@ fn render_stream_bubble(
     v_flex()
         .id("stream-bubble")
         .w_full()
-        .gap_1()
+        .gap_3()
         // Live activity timeline: tool steps and thinking stretches render as
         // they're recorded by the driver's `TimelineProjector`.
         .when_some(
@@ -722,7 +739,10 @@ fn thinking_header(
         .px_2()
         .py_0p5()
         .rounded_md()
-        .cursor_pointer()
+        .when(
+            crate::services::appearance::pointer_cursors_enabled(cx),
+            |el| el.cursor_pointer(),
+        )
         .child(
             Icon::new(IconName::Loader)
                 .small()
@@ -758,6 +778,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn user_bubble_geometry_matches_the_canonical_contract() {
+        assert_eq!(USER_BUBBLE_MAX_FRACTION, 0.8);
+        assert_eq!(USER_BUBBLE_PADDING_X_PX, 16.0);
+        assert_eq!(USER_BUBBLE_PADDING_Y_PX, 10.0);
+        assert_eq!(USER_BUBBLE_RADIUS_PX, 16.0);
+    }
+
+    #[test]
     fn stream_bubble_hidden_once_persisted() {
         let persisted = ChatMessage {
             id: "m2".into(),
@@ -775,6 +803,7 @@ mod tests {
             generation: Some(GenerationState {
                 chat_id: "c".into(),
                 counter: 1,
+                provider_id: "anthropic".into(),
                 text: "the answer".into(),
                 thinking: String::new(),
                 thinking_active: false,
