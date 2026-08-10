@@ -23,26 +23,37 @@
 mod state;
 mod view;
 
+use std::sync::atomic::Ordering;
+
 use aiden_core::appearance::{parse_appearance_config, ReduceMotion};
+use aiden_data::config_store::provider_connection_snapshot;
 use aiden_data::portable_config::StoredProvider;
 use gpui::{
-    actions, px, size, App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle,
-    KeyBinding, Subscription, Task, Window, WindowBounds, WindowHandle, WindowOptions,
+    actions, div, px, size, App, AppContext as _, Bounds, Context, Entity, EventEmitter,
+    FocusHandle, KeyBinding, ParentElement as _, Styled as _, Subscription, Task, Window,
+    WindowBounds, WindowHandle, WindowOptions,
 };
 use gpui_component::{
     input::{InputEvent, InputState},
-    Root, TitleBar,
+    ActiveTheme as _, Root, TitleBar, WindowExt as _,
 };
+use gpui_tokio_bridge::Tokio;
 
 use crate::services::appearance::{
     appearance_to_settings, apply_appearance, resolve_scheme, SETTINGS_APPEARANCE_KEY,
 };
+use crate::services::codex_auth::{CodexAuthAttemptGuard, CodexDialogLease};
 use crate::services::stores::Stores;
 
 use state::{
-    NextOutcome, OnboardingProvider, Step, MODEL_SELECTION_SETTINGS_KEY, ONBOARDING_COMPLETE_KEY,
-    PROFILE_NAME_SETTINGS_KEY,
+    NextOutcome, OnboardingProvider, ProviderChoice, Step, MODEL_SELECTION_SETTINGS_KEY,
+    ONBOARDING_COMPLETE_KEY, PROFILE_NAME_SETTINGS_KEY,
 };
+
+enum CodexAuthUpdate {
+    DeviceCode(crate::services::codex_auth::CodexDeviceAuthorization),
+    Finished(Result<(), String>),
+}
 
 actions!(onboarding, [OnboardingNext, OnboardingBack, OnboardingSkip]);
 
@@ -96,6 +107,8 @@ pub struct OnboardingView {
     focused_step: usize,
     /// Focus target for the primary action on non-Welcome steps.
     next_focus: FocusHandle,
+    codex_revision: u64,
+    codex_attempt: Option<CodexAuthAttemptGuard>,
     _boot: Option<Task<anyhow::Result<()>>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -135,6 +148,8 @@ impl OnboardingView {
             completed_emitted: false,
             focused_step: usize::MAX,
             next_focus: cx.focus_handle(),
+            codex_revision: 0,
+            codex_attempt: None,
             _boot: None,
             _subscriptions: Vec::new(),
         };
@@ -192,11 +207,12 @@ impl OnboardingView {
     fn boot(&mut self, cx: &mut Context<Self>) {
         let stores = self.stores.clone();
         let task = cx.spawn(async move |this, cx| -> anyhow::Result<()> {
-            let (settings, providers) = cx
+            let (settings, providers, codex_configured) = cx
                 .background_spawn(async move {
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let providers = stores.config.list_providers().unwrap_or_default();
-                    (settings, providers)
+                    let codex_configured = stores.codex_auth.is_configured().unwrap_or(false);
+                    (settings, providers, codex_configured)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -211,6 +227,10 @@ impl OnboardingView {
                     .map(|config| config.reduce_motion)
                     .unwrap_or(ReduceMotion::System);
                 this.machine.set_reduce_motion(reduce_motion);
+                this.machine.codex_configured = codex_configured;
+                if codex_configured {
+                    this.machine.record_codex_configured();
+                }
                 if let Some(first) = providers.first() {
                     this.machine
                         .set_catalog(Some(first.id.clone()), first.models.clone());
@@ -325,6 +345,12 @@ impl OnboardingView {
     /// then advance. `openai-signin` skips the write (the OAuth window is a
     /// later-phase stub; the model step falls back to the boot catalog).
     fn save_provider_then_advance(&mut self, cx: &mut Context<Self>) {
+        if self.machine.choice == ProviderChoice::ChatGpt && self.machine.codex_configured {
+            self.machine.record_codex_configured();
+            let _ = self.machine.advance();
+            cx.notify();
+            return;
+        }
         self.busy = true;
         cx.notify();
         let pending = self.machine.pending_provider_save();
@@ -356,7 +382,7 @@ impl OnboardingView {
                     if let Some(key) = &pending.api_key {
                         stores
                             .keys
-                            .set(&provider.id, key)
+                            .set_bound(&provider.id, key, &provider_connection_snapshot(&stored))
                             .map_err(|error| format!("Couldn't save the API key: {error}"))?;
                     }
                     Ok(Some(provider.clone()))
@@ -394,6 +420,144 @@ impl OnboardingView {
             }
         })
         .detach();
+    }
+
+    fn start_codex_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.codex_revision = self.codex_revision.wrapping_add(1);
+        let revision = self.codex_revision;
+        self.busy = true;
+        self.machine.error = None;
+        let auth_store = self.stores.codex_auth.clone();
+        let attempt = CodexAuthAttemptGuard::new(auth_store.clone());
+        let cancelled = attempt.cancelled();
+        let auth_revision = attempt.revision();
+        self.codex_attempt = Some(attempt);
+        let dialog_lease = CodexDialogLease::default();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        Tokio::spawn(cx, async move {
+            let oauth = crate::services::codex_auth::CodexDeviceOAuth::default();
+            let authorization = match oauth.begin(&cancelled).await {
+                Ok(authorization) => authorization,
+                Err(error) => {
+                    let _ = tx.send(CodexAuthUpdate::Finished(Err(error.to_string())));
+                    return;
+                }
+            };
+            if tx
+                .send(CodexAuthUpdate::DeviceCode(authorization.clone()))
+                .is_err()
+            {
+                return;
+            }
+            let result = oauth
+                .complete(&authorization, &cancelled)
+                .await
+                .and_then(|credential| {
+                    auth_store
+                        .commit_auth_attempt(auth_revision, &credential)
+                        .and_then(|committed| {
+                            if committed {
+                                Ok(())
+                            } else {
+                                Err(aiden_providers::ProviderError::Auth(
+                                    "ChatGPT sign-in was cancelled.".to_string(),
+                                ))
+                            }
+                        })
+                })
+                .map_err(|error| error.to_string());
+            let _ = tx.send(CodexAuthUpdate::Finished(result));
+        })
+        .detach();
+
+        let return_focus = window.focused(cx);
+        cx.spawn_in(window, async move |this, cx| -> anyhow::Result<()> {
+            while let Some(update) = rx.recv().await {
+                let done = matches!(update, CodexAuthUpdate::Finished(_));
+                this.update_in(cx, |this, window, cx| {
+                    if matches!(update, CodexAuthUpdate::Finished(_))
+                        && dialog_lease.take_owned_dialog()
+                    {
+                        window.close_dialog(cx);
+                        if let Some(focus) = &return_focus {
+                            focus.focus(window);
+                        }
+                    }
+                    if !crate::services::codex_auth::auth_revision_is_current(
+                        this.codex_revision,
+                        revision,
+                    ) {
+                        return;
+                    }
+                    match update {
+                        CodexAuthUpdate::DeviceCode(authorization) => {
+                            cx.open_url(crate::services::codex_auth::DEVICE_VERIFICATION_URI);
+                            let code = authorization.user_code;
+                            let cancel = this
+                                .codex_attempt
+                                .as_ref()
+                                .map(CodexAuthAttemptGuard::cancelled);
+                            let auth_store = this.stores.codex_auth.clone();
+                            let return_focus = return_focus.clone();
+                            let dialog_lease = dialog_lease.clone();
+                            dialog_lease.mark_open();
+                            window.open_dialog(cx, move |dialog, _window, cx| {
+                                let cancel = cancel.clone();
+                                let auth_store = auth_store.clone();
+                                let return_focus = return_focus.clone();
+                                let cancel_lease = dialog_lease.clone();
+                                let close_lease = dialog_lease.clone();
+                                dialog
+                                    .title("Sign in to ChatGPT")
+                                    .overlay_closable(false)
+                                    .child(
+                                        gpui_component::v_flex()
+                                            .gap_3()
+                                            .child("Enter this temporary code on OpenAI's verification page:")
+                                            .child(div().text_2xl().font_weight(gpui::FontWeight::SEMIBOLD).child(code.clone()))
+                                            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("OAuth tokens stay encrypted in this Mac's Keychain.")),
+                                    )
+                                    .footer(|_, cancel_button, window, cx| vec![cancel_button(window, cx)])
+                                    .on_cancel(move |_, _, _| {
+                                        if let Some(cancel) = &cancel {
+                                            cancel.store(true, Ordering::SeqCst);
+                                        }
+                                        auth_store.invalidate_auth_attempts();
+                                        cancel_lease.request_focus_restore();
+                                        true
+                                    })
+                                    .on_close(move |_, window, _| {
+                                        close_lease.mark_closed();
+                                        if close_lease.should_restore_focus() {
+                                            if let Some(focus) = &return_focus {
+                                                focus.focus(window);
+                                            }
+                                        }
+                                    })
+                            });
+                        }
+                        CodexAuthUpdate::Finished(result) => {
+                            this.busy = false;
+                            this.codex_attempt = None;
+                            match result {
+                                Ok(()) => this.machine.record_codex_configured(),
+                                Err(error) => this.machine.error = Some(static_str(&error)),
+                            }
+                        }
+                    }
+                    cx.notify();
+                })?;
+                if done {
+                    break;
+                }
+            }
+            Ok(())
+        })
+        .detach();
+        cx.notify();
     }
 
     fn on_back(&mut self, _: &OnboardingBack, _window: &mut Window, cx: &mut Context<Self>) {
@@ -476,7 +640,7 @@ impl OnboardingView {
     fn preview_appearance(&self, cx: &mut Context<Self>) {
         let config = self.machine.appearance_config();
         let scheme = resolve_scheme(config.mode, cx.window_appearance());
-        apply_appearance(cx, &config, scheme);
+        apply_appearance(cx, &config, scheme, false, false);
     }
 }
 
