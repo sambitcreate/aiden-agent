@@ -103,3 +103,32 @@ test("moves edited legacy-provider preferences into their reserved custom identi
     "custom:openai-legacy::work-model": { x: 0.4, y: 0.5, source: "user" },
   });
 });
+
+test("keeps local selection, pins, and Model Pad placement through onboarding ID aliases", () => {
+  const releasedId = "custom:onboarding-lmstudio";
+  const canonicalId = "custom:lmstudio";
+  const storage = memoryStorage({
+    [SELECTED_PROVIDER_KEY]: releasedId,
+    [PINNED_MODELS_KEY]: JSON.stringify([
+      `${releasedId}::loaded-model`,
+      `${canonicalId}::loaded-model`,
+    ]),
+    [MODEL_PAD_LAYOUT_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      placements: {
+        [`${releasedId}::loaded-model`]: { x: 0.15, y: 0.85, source: "user" },
+        [`${canonicalId}::loaded-model`]: { x: 0.7, y: 0.4, source: "user" },
+      },
+    }),
+  });
+
+  assert.equal(migrateGoogleProviderPreferences(storage, { [releasedId]: canonicalId }), true);
+  assert.equal(storage.value(SELECTED_PROVIDER_KEY), canonicalId);
+  assert.deepEqual(JSON.parse(storage.value(PINNED_MODELS_KEY) ?? "[]"), [
+    `${canonicalId}::loaded-model`,
+  ]);
+  assert.deepEqual(JSON.parse(storage.value(MODEL_PAD_LAYOUT_KEY) ?? "{}").placements, {
+    [`${canonicalId}::loaded-model`]: { x: 0.7, y: 0.4, source: "user" },
+  });
+  assert.equal(migrateGoogleProviderPreferences(storage, { [releasedId]: canonicalId }), false);
+});
