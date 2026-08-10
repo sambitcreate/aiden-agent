@@ -1,6 +1,6 @@
 //! Keyboard shortcuts settings (port of `shortcut-settings.tsx`).
 //!
-//! Renders the 25-command catalog from `aiden_core::keybindings`, shows the
+//! Renders the 26-command catalog from `aiden_core::keybindings`, shows the
 //! effective binding for each (default / custom / disabled), supports
 //! record-into-field rebinding (keydown capture on the row), per-command
 //! enable/disable, single-command reset, and reset-to-defaults. Overrides are
@@ -8,15 +8,19 @@
 //! repair/mutate pipeline (`apply_keybinding_mutation`).
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
+#[cfg(test)]
+use aiden_core::keybindings::normalize_keybinding_overrides;
 use aiden_core::keybindings::{
     accelerator_from_keyboard_event, apply_keybinding_mutation, effective_bindings,
-    normalize_keybinding_overrides, pretty_accelerator, KeybindingErrorCode, KeybindingMutation,
-    KeyboardEventLike,
+    pretty_accelerator, GlobalShortcutState, GlobalShortcutStatus, KeybindingErrorCode,
+    KeybindingMutation, KeyboardEventLike,
 };
 use aiden_core::CommandId;
 use gpui::{
-    div, prelude::FluentBuilder as _, AppContext as _, Context, Entity, FontWeight,
+    div, prelude::FluentBuilder as _, AppContext as _, Context, Entity, FocusHandle, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
 };
 use gpui_component::{
@@ -29,10 +33,7 @@ use gpui_component::{
 
 use super::{SettingsServices, SettingsView};
 
-/// The settings key holding the keybinding override document.
-const KEYBINDINGS_SETTINGS_KEY: &str = "keybindings";
-
-/// Local catalog metadata (titles/descriptions) for the 25 commands. The
+/// Local catalog metadata (titles/descriptions) for the 26 commands. The
 /// *bindings* themselves always come from `aiden_core` (the catalog defaults +
 /// effective resolution); this table only mirrors the renderer's display copy.
 fn catalog() -> &'static [(CommandId, &'static str, &'static str)] {
@@ -200,23 +201,36 @@ pub struct ShortcutsState {
     pub overrides: serde_json::Value,
     /// The command currently recording a replacement.
     pub recording: Option<CommandId>,
+    recording_owner: Option<u64>,
+    owner_signal: Arc<AtomicU64>,
     /// Last mutation error (e.g. a conflicting shortcut).
     pub error: Option<String>,
     /// The last conflict so the user can force-replace it.
     pub pending_replacement: Option<(CommandId, String)>,
+    pub global: Vec<GlobalShortcutStatus>,
+    pub applying: bool,
     pub search: Option<Entity<InputState>>,
+    recorder_focus: Option<FocusHandle>,
+    recorder_blur: Option<gpui::Subscription>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl ShortcutsState {
+    pub fn owner_signal(&self) -> Arc<AtomicU64> {
+        self.owner_signal.clone()
+    }
     /// Recompute the effective bindings from the persisted settings map.
     pub fn hydrate(&mut self, settings: &serde_json::Map<String, serde_json::Value>) {
-        let overrides = settings
-            .get(KEYBINDINGS_SETTINGS_KEY)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        self.overrides = normalize_keybinding_overrides(&overrides);
-        self.effective = effective_bindings(&self.overrides, None);
+        let _ = settings;
+    }
+
+    pub fn sync_runtime(&mut self, runtime: &crate::shortcut_runtime::ShortcutRuntime) {
+        let snapshot = runtime.snapshot();
+        self.overrides = serde_json::to_value(&snapshot.overrides).unwrap_or_default();
+        self.effective = snapshot.effective.clone();
+        self.global = snapshot.global.clone();
+        self.applying = runtime.applying();
+        self.error = runtime.error().map(ToOwned::to_owned);
     }
 
     #[allow(dead_code)] // row renderer resolves bindings through `overridden` today
@@ -264,6 +278,16 @@ impl ShortcutsState {
 }
 
 impl SettingsView {
+    pub(crate) fn cancel_shortcut_recording(&mut self, cx: &mut Context<Self>) {
+        self.shortcuts.cancel_recording(&self.services, cx);
+    }
+
+    fn cancel_shortcut_recording_owner(&mut self, owner: u64, cx: &mut Context<Self>) {
+        if self.shortcuts.recording_owner == Some(owner) {
+            self.shortcuts.cancel_recording(&self.services, cx);
+        }
+    }
+
     /// The Shortcuts section.
     pub(crate) fn shortcuts_section(
         &mut self,
@@ -273,10 +297,13 @@ impl SettingsView {
         // Window-created state first (borrows `cx` mutably); the theme
         // reference is only needed for rendering.
         let search_input = self.shortcuts.ensure_search_input(window, cx);
+        let recorder_focus = self.shortcuts.recorder_focus.clone();
         let query = self.shortcuts.query(cx).trim().to_lowercase();
         let effective = self.shortcuts.effective.clone();
         let error = self.shortcuts.error.clone();
+        let pending_replacement = self.shortcuts.pending_replacement.clone();
         let recording = self.shortcuts.recording;
+        let global = self.shortcuts.global.clone();
         let theme = cx.theme();
 
         let rows: Vec<(CommandId, &'static str, &'static str)> = catalog()
@@ -333,6 +360,7 @@ impl SettingsView {
                                 .ghost()
                                 .icon(IconName::Undo2)
                                 .label("Reset to defaults")
+                                .disabled(self.shortcuts.applying)
                                 .on_click(cx.listener(|this, _event, _window, cx| {
                                     this.shortcuts.reset_all(&this.services, cx);
                                 })),
@@ -373,6 +401,43 @@ impl SettingsView {
                         ),
                 )
             })
+            .when_some(pending_replacement, |el, (command, binding)| {
+                let label = pretty_accelerator(Some(&binding));
+                el.child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(theme.muted)
+                        .child(div().flex_1().text_sm().child(format!(
+                            "{label} is already in use. Replace the conflicting shortcut?"
+                        )))
+                        .child(
+                            Button::new("replace-conflicting-shortcut")
+                                .small()
+                                .label("Replace")
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.shortcuts.pending_replacement = None;
+                                    this.shortcuts.error = None;
+                                    this.services.shortcuts.update(cx, |runtime, cx| {
+                                        runtime.apply(
+                                            KeybindingMutation::SetBinding {
+                                                command_id: command,
+                                                binding: binding.clone(),
+                                                replace: true,
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .w_full()
@@ -383,6 +448,7 @@ impl SettingsView {
                         let binding = effective.get(id.as_str()).cloned().flatten();
                         let overridden = self.shortcuts.overridden(id);
                         let is_recording = recording == Some(id);
+                        let status = global.iter().find(|status| status.command_id == id);
                         self.shortcut_row(
                             id,
                             title,
@@ -390,6 +456,8 @@ impl SettingsView {
                             binding.as_deref(),
                             overridden,
                             is_recording,
+                            status,
+                            recorder_focus.clone(),
                             cx,
                         )
                     })),
@@ -406,6 +474,8 @@ impl SettingsView {
         binding: Option<&str>,
         overridden: bool,
         recording: bool,
+        global_status: Option<&GlobalShortcutStatus>,
+        recorder_focus: Option<FocusHandle>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -417,6 +487,13 @@ impl SettingsView {
         } else {
             "Custom"
         };
+        let source = match global_status.map(|status| status.state) {
+            Some(GlobalShortcutState::Active) => format!("{source} · Active"),
+            Some(GlobalShortcutState::Unavailable) => format!("{source} · Unavailable"),
+            Some(GlobalShortcutState::Disabled) => format!("{source} · Off"),
+            None => source.to_string(),
+        };
+        let status_message = global_status.and_then(|status| status.message.clone());
         let can_enable = binding.is_some() || command_default_binding(command).is_some();
 
         h_flex()
@@ -430,6 +507,10 @@ impl SettingsView {
                 this.shortcuts
                     .on_record_key(event, command, &this.services, cx);
             }))
+            .when_some(
+                recorder_focus.clone().filter(|_| recording),
+                |row, focus| row.track_focus(&focus),
+            )
             .child(
                 v_flex()
                     .flex_1()
@@ -456,7 +537,16 @@ impl SettingsView {
                             .text_color(theme.muted_foreground)
                             .mt_0p5()
                             .child(description),
-                    ),
+                    )
+                    .when_some(status_message, |column, message| {
+                        column.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.danger)
+                                .mt_0p5()
+                                .child(message),
+                        )
+                    }),
             )
             .child(
                 h_flex()
@@ -471,8 +561,18 @@ impl SettingsView {
                             } else {
                                 pretty_accelerator(binding)
                             })
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.shortcuts.toggle_recording(command, cx);
+                            .disabled(self.shortcuts.applying)
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                if let Some(focus) = this.shortcuts.toggle_recording(
+                                    command,
+                                    &this.services,
+                                    window,
+                                    cx,
+                                ) {
+                                    cx.defer_in(window, move |_this, window, _cx| {
+                                        focus.focus(window);
+                                    });
+                                }
                             })),
                     )
                     .when(overridden, |el| {
@@ -496,7 +596,7 @@ impl SettingsView {
                     .child(
                         Switch::new(SharedString::from(format!("shortcut-enabled-{id}")))
                             .checked(binding.is_some())
-                            .disabled(!can_enable)
+                            .disabled(!can_enable || self.shortcuts.applying)
                             .label(if binding.is_some() {
                                 "Enabled"
                             } else {
@@ -526,13 +626,51 @@ fn command_default_binding(command: CommandId) -> Option<String> {
 }
 
 impl ShortcutsState {
-    fn toggle_recording(&mut self, command: CommandId, cx: &mut Context<SettingsView>) {
+    fn toggle_recording(
+        &mut self,
+        command: CommandId,
+        services: &SettingsServices,
+        window: &mut Window,
+        cx: &mut Context<SettingsView>,
+    ) -> Option<FocusHandle> {
         if self.recording == Some(command) {
-            self.recording = None;
+            self.cancel_recording(services, cx);
+            None
         } else {
+            self.cancel_recording(services, cx);
             self.recording = Some(command);
+            let owner = services
+                .shortcuts
+                .update(cx, |runtime, cx| runtime.suspend_recorder(cx));
+            self.recording_owner = Some(owner);
+            self.owner_signal.store(owner, Ordering::Release);
+            let focus = cx.focus_handle().tab_stop(true);
+            let subscription = cx.on_blur(&focus, window, move |this, _window, cx| {
+                this.cancel_shortcut_recording_owner(owner, cx);
+            });
+            self.recorder_blur = Some(subscription);
+            self.recorder_focus = Some(focus.clone());
+            self.error = None;
+            cx.notify();
+            Some(focus)
         }
-        self.error = None;
+    }
+
+    fn cancel_recording(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
+        let Some(owner) = self.recording_owner.take() else {
+            self.recording = None;
+            self.recorder_focus = None;
+            self.recorder_blur = None;
+            self.owner_signal.store(0, Ordering::Release);
+            return;
+        };
+        self.recording = None;
+        self.recorder_focus = None;
+        self.recorder_blur = None;
+        self.owner_signal.store(0, Ordering::Release);
+        services
+            .shortcuts
+            .update(cx, |runtime, cx| runtime.cancel_recorder(owner, cx));
         cx.notify();
     }
 
@@ -549,8 +687,7 @@ impl ShortcutsState {
         }
         let key = event.keystroke.key.clone();
         if key == "escape" || key == "esc" {
-            self.recording = None;
-            cx.notify();
+            self.cancel_recording(services, cx);
             return;
         }
         let modifiers = &event.keystroke.modifiers;
@@ -564,7 +701,7 @@ impl ShortcutsState {
         let Some(binding) = encode_shortcut(&capture) else {
             return;
         };
-        self.recording = None;
+        self.cancel_recording(services, cx);
         self.apply(
             KeybindingMutation::SetBinding {
                 command_id: command,
@@ -583,10 +720,9 @@ impl ShortcutsState {
         services: &SettingsServices,
         cx: &mut Context<SettingsView>,
     ) {
-        let services = services.clone();
         let current = self.overrides.clone();
-        let next = match apply_keybinding_mutation(&current, &mutation, None) {
-            Ok(next) => next,
+        match apply_keybinding_mutation(&current, &mutation, None) {
+            Ok(_) => {}
             Err(error) => {
                 self.error = Some(error.message.clone());
                 if error.code == KeybindingErrorCode::Conflict {
@@ -598,69 +734,59 @@ impl ShortcutsState {
                 return;
             }
         };
-        self.overrides = next.clone();
-        self.effective = effective_bindings(&next, None);
         self.pending_replacement = None;
-        let config = services.config.clone();
-        cx.spawn(async move |this, cx| {
-            let _ = cx
-                .background_spawn(async move {
-                    let mut patch = serde_json::Map::new();
-                    patch.insert(KEYBINDINGS_SETTINGS_KEY.to_string(), next);
-                    let _ = config.set_settings(&patch, &|| true);
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                // Reload the settings mirror so the persisted overrides match
-                // the in-memory document.
-                this.refresh(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        services
+            .shortcuts
+            .update(cx, |runtime, cx| runtime.apply(mutation, cx));
         cx.notify();
     }
 
     /// Reset every command to its catalog default in one persisted document.
     fn reset_all(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
-        let services = services.clone();
-        let mut next = self.overrides.clone();
-        for command in aiden_core::COMMAND_IDS {
-            match apply_keybinding_mutation(
-                &next,
-                &KeybindingMutation::Reset {
-                    command_id: *command,
-                },
-                None,
-            ) {
-                Ok(updated) => next = updated,
-                Err(error) => {
-                    self.error = Some(error.message);
-                    cx.notify();
-                    return;
-                }
-            }
-        }
-        self.overrides = next.clone();
-        self.effective = effective_bindings(&next, None);
-        let config = services.config.clone();
-        cx.spawn(async move |this, cx| {
-            let _ = cx
-                .background_spawn(async move {
-                    let mut patch = serde_json::Map::new();
-                    patch.insert(KEYBINDINGS_SETTINGS_KEY.to_string(), next);
-                    let _ = config.set_settings(&patch, &|| true);
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.refresh(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        self.cancel_recording(services, cx);
+        services
+            .shortcuts
+            .update(cx, |runtime, cx| runtime.reset_all(cx));
         cx.notify();
+    }
+}
+
+/// Last-resort recorder cleanup when the Settings entity itself is dropped.
+/// Ordinary navigation uses the same owner-checked runtime cancellation path;
+/// this guard closes the lifecycle hole where no blur/navigation callback can
+/// run because the whole entity is being destroyed.
+pub struct RecorderDropGuard {
+    runtime: gpui::Entity<crate::shortcut_runtime::ShortcutRuntime>,
+    owner: Arc<AtomicU64>,
+    app: gpui::AsyncApp,
+}
+
+impl RecorderDropGuard {
+    pub fn new(
+        runtime: gpui::Entity<crate::shortcut_runtime::ShortcutRuntime>,
+        owner: Arc<AtomicU64>,
+        app: gpui::AsyncApp,
+    ) -> Self {
+        Self {
+            runtime,
+            owner,
+            app,
+        }
+    }
+}
+
+impl Drop for RecorderDropGuard {
+    fn drop(&mut self) {
+        let owner = self.owner.swap(0, Ordering::AcqRel);
+        if owner == 0 {
+            return;
+        }
+        let runtime = self.runtime.clone();
+        self.app
+            .spawn(async move |cx| {
+                let _ = runtime.update(cx, |runtime, cx| runtime.cancel_recorder(owner, cx));
+            })
+            .detach();
     }
 }
 
@@ -705,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_has_25_commands_and_matches_command_ids() {
+    fn catalog_has_26_commands_and_matches_command_ids() {
         let catalog = catalog();
         assert_eq!(catalog.len(), aiden_core::COMMAND_IDS.len());
         let ids: std::collections::HashSet<_> = catalog.iter().map(|(id, _, _)| *id).collect();
@@ -758,5 +884,18 @@ mod tests {
             effective_bindings(&reset, None)["chat.new"].as_deref(),
             Some("Command+N")
         );
+    }
+
+    #[test]
+    fn recorder_blur_subscription_is_scoped_and_cleared() {
+        let source = include_str!("shortcuts.rs");
+        let recording = source
+            .split("fn toggle_recording")
+            .nth(1)
+            .and_then(|source| source.split("fn on_record_key").next())
+            .unwrap();
+        assert!(recording.contains("self.recorder_blur = Some(subscription)"));
+        assert!(recording.matches("self.recorder_blur = None").count() >= 2);
+        assert!(!recording.contains("self._subscriptions.push(subscription)"));
     }
 }
