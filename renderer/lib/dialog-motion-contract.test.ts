@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { ProviderEditorFocusTarget } from "../components/settings/provider-editor-focus.js";
 
 function source(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), "utf8");
@@ -94,4 +95,29 @@ test("strong elevation stays modal-only while Environment keeps the original dia
     styles,
     /:root\[data-reduce-motion="false"\] \[data-slot="dialog-content"\]\[data-state="closed"\]/u,
   );
+});
+
+test("provider editor focus targets are path-specific, connected, and one-shot", () => {
+  const lifecycle = new ProviderEditorFocusTarget();
+  const focused: string[] = [];
+  const configure = {
+    isConnected: true,
+    focus: () => focused.push("configure"),
+  };
+  const addProvider = {
+    isConnected: true,
+    focus: () => focused.push("add"),
+  };
+
+  lifecycle.capture(configure);
+  lifecycle.capture(addProvider);
+  const target = lifecycle.take();
+  target?.focus();
+
+  assert.deepEqual(focused, ["add"], "the Add path replaces a stale Configure target");
+  assert.equal(lifecycle.take(), null, "closing consumes the target exactly once");
+
+  lifecycle.capture({ isConnected: false, focus: () => focused.push("detached") });
+  assert.equal(lifecycle.take(), null, "detached controls are never focused");
+  assert.deepEqual(focused, ["add"]);
 });
