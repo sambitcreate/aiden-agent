@@ -73,6 +73,10 @@ use state::{
 
 actions!(pill, [ClosePill, TogglePill]);
 
+fn meter_should_continue(phase: Phase, motion: MotionGate) -> bool {
+    phase == Phase::Listening && motion.allow()
+}
+
 /// Everything the pill needs from its creator. The coordinator constructs this
 /// and calls [`open_pill_window`].
 pub struct PillDeps {
@@ -110,11 +114,15 @@ impl PillView {
         ]);
 
         let mut appearance = AppearanceSyncState::new();
+        let reduce_motion = deps.appearance.reduce_motion;
         appearance.adopt(deps.appearance);
         Self {
             state: PillState::new(),
             audio: deps.audio,
-            motion: MotionGate::default().with_system_reduced(deps.system_reduced_motion),
+            motion: MotionGate {
+                reduce_motion,
+                system_reduced: deps.system_reduced_motion,
+            },
             meter_levels: vec![0.0; WAVEFORM_BARS],
             appearance,
             on_cancel: deps.on_cancel,
@@ -138,14 +146,22 @@ impl PillView {
     /// Adopt an appearance broadcast (palette/scheme changes while hidden).
     #[allow(dead_code)] // coordinator-facing; appearance sync lands with the wiring phase
     pub fn update_appearance(&mut self, config: AppearanceConfig, cx: &mut Context<Self>) {
+        self.motion.reduce_motion = config.reduce_motion;
         self.appearance.adopt(config);
+        if self.state.phase == Phase::Listening && self.motion.allow() {
+            self.start_meter(cx);
+        }
         cx.notify();
     }
 
     /// Inject the OS reduced-motion preference once the platform probe exists.
     #[allow(dead_code)] // coordinator-facing; the platform probe lands later
-    pub fn set_system_reduced_motion(&mut self, reduced: bool) {
+    pub fn set_system_reduced_motion(&mut self, reduced: bool, cx: &mut Context<Self>) {
         self.motion = self.motion.with_system_reduced(reduced);
+        if self.state.phase == Phase::Listening && self.motion.allow() {
+            self.start_meter(cx);
+        }
+        cx.notify();
     }
 
     /// Drive the level meter while `Listening`: poll the injected source on
@@ -159,7 +175,9 @@ impl PillView {
         let audio = self.audio.clone();
         let task = cx.spawn(async move |this, cx| -> anyhow::Result<()> {
             loop {
-                if !this.read_with(cx, |this, _| this.state.phase == Phase::Listening)? {
+                if !this.read_with(cx, |this, _| {
+                    meter_should_continue(this.state.phase, this.motion)
+                })? {
                     break;
                 }
                 let levels = audio.borrow_mut().levels(WAVEFORM_BARS);
@@ -444,4 +462,25 @@ pub fn open_pill_window(cx: &mut App, deps: PillDeps) -> anyhow::Result<WindowHa
     };
 
     cx.open_window(options, |_window, cx| cx.new(|cx| PillView::new(cx, deps)))
+}
+
+#[cfg(test)]
+mod appearance_tests {
+    use super::*;
+    use aiden_core::appearance::ReduceMotion;
+
+    #[test]
+    fn live_motion_update_stops_the_listening_meter() {
+        let allowed = MotionGate {
+            reduce_motion: ReduceMotion::Off,
+            system_reduced: false,
+        };
+        let reduced = MotionGate {
+            reduce_motion: ReduceMotion::On,
+            system_reduced: false,
+        };
+
+        assert!(meter_should_continue(Phase::Listening, allowed));
+        assert!(!meter_should_continue(Phase::Listening, reduced));
+    }
 }
