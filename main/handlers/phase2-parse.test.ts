@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseMcpServer, parseSkill } from "./phase2-parse.js";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 
 test("parseSkill parses a complete skill payload", () => {
   const skill = parseSkill({
@@ -33,6 +34,22 @@ test("parseSkill rejects non-object payloads and missing required fields", () =>
   assert.throws(() => parseSkill({ id: "x" }), /Expected non-empty string for "name"/);
   assert.throws(() => parseSkill({ id: "", name: "x" }), /Expected non-empty string for "id"/);
   assert.throws(() => parseSkill({ id: "   ", name: "x" }), /Expected non-empty string for "id"/);
+});
+
+test("parseSkill rejects oversized configured-skill fields before persistence", () => {
+  assert.throws(
+    () => parseSkill({ id: "x", name: "n".repeat(SLASH_LIMITS.safeNameCharacters + 1) }),
+    /configured-skill safety limits/u,
+  );
+  assert.throws(
+    () =>
+      parseSkill({
+        id: "x",
+        name: "X",
+        instructions: "i".repeat(SLASH_LIMITS.instructionBytes + 1),
+      }),
+    /configured-skill safety limits/u,
+  );
 });
 
 test("parseMcpServer parses a stdio server with command/args/env", () => {

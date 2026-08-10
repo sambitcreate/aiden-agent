@@ -120,7 +120,12 @@ export function MessageList({
             <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
           ) : null}
           {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
-          <SafeMessageBubble role={m.role} content={m.content} attachments={m.attachments} />
+          <SafeMessageBubble
+            role={m.role}
+            content={m.content}
+            attachments={m.attachments}
+            skill={m.skill}
+          />
         </div>
       ))}
 

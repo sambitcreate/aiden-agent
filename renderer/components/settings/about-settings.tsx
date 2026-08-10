@@ -58,7 +58,7 @@ export function AboutSettings() {
   return (
     <>
       <FieldSet title="About">
-        <div className="flex items-center gap-4 p-4 max-[540px]:items-start">
+        <div className="settings-about-header flex items-center gap-4 p-4 max-[540px]:items-start">
           <img src={APP_ICON_URL} alt="" className="size-16 shrink-0" />
           <div className="min-w-0 flex-1">
             <h3 className="text-large-strong text-primary">{appInfo?.name ?? "Aiden Agent"}</h3>
@@ -92,7 +92,7 @@ export function AboutSettings() {
           label="Reset onboarding"
           description="Clear this profile’s setup and preferences, restart Aiden, and return to the first onboarding step."
         >
-          <div className="flex justify-end max-[540px]:justify-start">
+          <div className="settings-action-align-narrow flex justify-end max-[540px]:justify-start">
             <Button
               ref={resetButtonRef}
               size="small"

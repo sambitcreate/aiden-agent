@@ -720,6 +720,127 @@ test("status and logout expose only the provider snapshot", async () => {
   );
 });
 
+test("logout uses the credential-removal backend without requiring an OAuth setup backend", async () => {
+  let deleted = false;
+  let authBackendCalls = 0;
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: () => {
+      authBackendCalls += 1;
+      throw new Error("This API-key provider has no OAuth login.");
+    },
+    logoutBackendFor: () => ({
+      logout: async () => {
+        deleted = true;
+      },
+      snapshot: async () => ({
+        id: "anthropic",
+        hasKey: true,
+        canLogout: false,
+      }),
+    }),
+    openExternal: async () => undefined,
+  });
+
+  assert.deepEqual(await coordinator.logout("anthropic"), {
+    id: "anthropic",
+    hasKey: true,
+    canLogout: false,
+  });
+  assert.equal(deleted, true);
+  assert.equal(authBackendCalls, 0);
+});
+
+test("a post-delete snapshot failure reports committed logout with unknown ambient auth", async () => {
+  let deleted = false;
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: () => {
+      throw new Error("OAuth setup is unavailable.");
+    },
+    logoutBackendFor: () => ({
+      logout: async () => {
+        deleted = true;
+      },
+      snapshot: async () => {
+        throw new Error("status read failed after delete");
+      },
+      committedFallback: () => ({ id: "anthropic", hasKey: null, canLogout: false }),
+    }),
+    openExternal: async () => undefined,
+  });
+
+  assert.deepEqual(await coordinator.logout("anthropic"), {
+    id: "anthropic",
+    hasKey: null,
+    canLogout: false,
+  });
+  assert.equal(deleted, true);
+});
+
+test("pre-commit logout failures never expose credential-store paths", async () => {
+  const diagnostics: unknown[] = [];
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: () => {
+      throw new Error("OAuth setup is unavailable.");
+    },
+    logoutBackendFor: () => ({
+      logout: async () => {
+        throw new Error(
+          "EACCES opening /Users/private-name/Library/Application Support/Aiden/pi-credentials.json",
+        );
+      },
+      snapshot: async () => undefined,
+    }),
+    openExternal: async () => undefined,
+    diagnostic: (event) => diagnostics.push(event),
+  });
+
+  await assert.rejects(
+    coordinator.logout("anthropic"),
+    (error: unknown) =>
+      error instanceof ProviderAuthRequestError &&
+      error.message === "Provider sign-out did not complete. Try again.",
+  );
+  assert.equal(JSON.stringify(diagnostics).includes("private-name"), false);
+  assert.deepEqual(diagnostics, [
+    {
+      operation: "logout",
+      providerId: "anthropic",
+      errorName: "Error",
+      errorCode: undefined,
+    },
+  ]);
+});
+
+test("logout backend resolution failures are normalized before crossing IPC", async () => {
+  const diagnostics: unknown[] = [];
+  const coordinator = new ProviderAuthFlowCoordinator({
+    backendFor: () => {
+      throw new Error("OAuth setup is unavailable.");
+    },
+    logoutBackendFor: () => {
+      throw new Error("Provider catalog failed at /Users/private-name/catalog.json");
+    },
+    openExternal: async () => undefined,
+    diagnostic: (event) => diagnostics.push(event),
+  });
+
+  await assert.rejects(
+    coordinator.logout("removed-provider"),
+    (error: unknown) =>
+      error instanceof ProviderAuthRequestError &&
+      error.message === "Provider sign-out did not complete. Try again.",
+  );
+  assert.equal(JSON.stringify(diagnostics).includes("private-name"), false);
+  assert.deepEqual(diagnostics, [
+    {
+      operation: "logout",
+      providerId: "removed-provider",
+      errorName: "Error",
+      errorCode: undefined,
+    },
+  ]);
+});
+
 test("raw provider errors and token-like text never cross IPC or diagnostics", async () => {
   const owner = new FakeOwner(1);
   const diagnostics: unknown[] = [];

@@ -34,11 +34,20 @@ interface GitBranchPickerProps {
   disabledReason?: string;
   detached?: boolean;
   unborn?: boolean;
+  /** Used with a keyed mount by `/worktree` to open the managed flow. */
+  openWorktreeOnMount?: boolean;
+  /** Restores focus to the slash-command origin instead of the untouched trigger. */
+  programmaticReturnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 type CreateMode = "branch" | "worktree" | null;
 
-function statusSummary(uncommitted: number, ahead: number, behind: number, upstream?: string): string | undefined {
+function statusSummary(
+  uncommitted: number,
+  ahead: number,
+  behind: number,
+  upstream?: string,
+): string | undefined {
   const parts: string[] = [];
   if (uncommitted > 0) parts.push(`${uncommitted} change${uncommitted === 1 ? "" : "s"}`);
   if (ahead > 0) parts.push(`↑${ahead}`);
@@ -58,12 +67,19 @@ export function GitBranchPicker({
   disabledReason,
   detached: detachedProp = false,
   unborn: unbornProp = false,
+  openWorktreeOnMount = false,
+  programmaticReturnFocusRef,
 }: GitBranchPickerProps) {
   const qc = useQueryClient();
   const searchRef = React.useRef<HTMLInputElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = React.useState(false);
-  const [createMode, setCreateMode] = React.useState<CreateMode>(null);
+  const openManagedWorktree =
+    openWorktreeOnMount && Boolean(onCreateWorktree) && !disabled && !unbornProp;
+  const programmaticOriginRef = React.useRef(openManagedWorktree);
+  const [open, setOpen] = React.useState(openManagedWorktree);
+  const [createMode, setCreateMode] = React.useState<CreateMode>(
+    openManagedWorktree ? "worktree" : null,
+  );
   const [newName, setNewName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
@@ -81,7 +97,8 @@ export function GitBranchPicker({
   const list = branches.data?.branches ?? [];
   const remoteBranches = branches.data?.remoteBranches ?? [];
   const status = statusSummary(uncommitted, ahead, behind, upstream);
-  const currentSummary = [unborn ? "No commits yet" : undefined, status].filter(Boolean).join(" · ") || undefined;
+  const currentSummary =
+    [unborn ? "No commits yet" : undefined, status].filter(Boolean).join(" · ") || undefined;
   const unavailable = disabled || busy;
   const branchWorktrees = new Map(
     (worktrees.data ?? [])
@@ -109,6 +126,11 @@ export function GitBranchPicker({
   };
 
   const backToList = () => {
+    if (programmaticOriginRef.current) {
+      setOpen(false);
+      reset();
+      return;
+    }
     reset();
     requestAnimationFrame(() => searchRef.current?.focus());
   };
@@ -211,7 +233,7 @@ export function GitBranchPicker({
             variant="transparent"
             size="small"
             disabled={disabled}
-            className="h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]"
+            className="composer-branch-trigger h-7 min-w-0 max-w-[14rem] flex-1 shrink gap-1.5 px-2 text-tertiary max-[520px]:max-w-[7rem]"
             title={disabledReason ?? (currentSummary ? `${current} · ${currentSummary}` : current)}
           >
             <GitBranch className="size-4 shrink-0" />
@@ -226,7 +248,16 @@ export function GitBranchPicker({
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
-            if (triggerRef.current?.isConnected && !triggerRef.current.disabled) triggerRef.current.focus();
+            const returnTarget = programmaticOriginRef.current
+              ? programmaticReturnFocusRef?.current
+              : triggerRef.current;
+            programmaticOriginRef.current = false;
+            if (
+              returnTarget?.isConnected &&
+              !(returnTarget instanceof HTMLButtonElement && returnTarget.disabled)
+            ) {
+              returnTarget.focus();
+            }
           });
         }}
       >
@@ -287,9 +318,14 @@ export function GitBranchPicker({
               </Text>
             </div>
             {branches.error ? (
-              <div className="mx-2 mt-2 flex items-center justify-between gap-2 rounded-control bg-support-red/[0.08] px-2 py-1.5 text-small text-support-red" role="status">
+              <div
+                className="mx-2 mt-2 flex items-center justify-between gap-2 rounded-control bg-support-red/[0.08] px-2 py-1.5 text-small text-support-red"
+                role="status"
+              >
                 <span className="min-w-0">
-                  {branches.data ? "Refresh failed. Showing known branches." : "Branches are unavailable."}
+                  {branches.data
+                    ? "Refresh failed. Showing known branches."
+                    : "Branches are unavailable."}
                 </span>
                 <button
                   type="button"
@@ -327,11 +363,17 @@ export function GitBranchPicker({
                           Checked out in {otherWorktree.split("/").filter(Boolean).pop()}
                         </span>
                       ) : isActive && currentSummary ? (
-                        <span className="block truncate text-small text-tertiary">{currentSummary}</span>
+                        <span className="block truncate text-small text-tertiary">
+                          {currentSummary}
+                        </span>
                       ) : unborn && isActive ? (
-                        <span className="block truncate text-small text-tertiary">Create the first commit to continue</span>
+                        <span className="block truncate text-small text-tertiary">
+                          Create the first commit to continue
+                        </span>
                       ) : name === defaultBranch ? (
-                        <span className="block truncate text-small text-tertiary">Default branch</span>
+                        <span className="block truncate text-small text-tertiary">
+                          Default branch
+                        </span>
                       ) : null}
                     </div>
                     {isActive ? <Check className="size-4 shrink-0 text-accent" /> : null}
@@ -339,14 +381,23 @@ export function GitBranchPicker({
                 );
               })}
               {remoteBranches.length > 0 ? (
-                <div className="px-2 pb-1 pt-2 text-small-strong text-tertiary">Remote tracking refs</div>
+                <div className="px-2 pb-1 pt-2 text-small-strong text-tertiary">
+                  Remote tracking refs
+                </div>
               ) : null}
               {remoteBranches.map((name) => (
-                <CommandItem key={`remote-${name}`} value={`remote ${name}`} disabled className="gap-2">
+                <CommandItem
+                  key={`remote-${name}`}
+                  value={`remote ${name}`}
+                  disabled
+                  className="gap-2"
+                >
                   <GitBranch className="size-4 shrink-0 text-tertiary" />
                   <div className="min-w-0 flex-1">
                     <span className="block truncate text-small-strong">{name}</span>
-                    <span className="block truncate text-small text-tertiary">Create a local branch to switch</span>
+                    <span className="block truncate text-small text-tertiary">
+                      Create a local branch to switch
+                    </span>
                   </div>
                 </CommandItem>
               ))}
@@ -359,7 +410,9 @@ export function GitBranchPicker({
               className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
             >
               <Plus className="size-4 shrink-0" />
-              <span className="min-w-0 truncate text-left text-small-strong">Create and checkout new branch…</span>
+              <span className="min-w-0 truncate text-left text-small-strong">
+                Create and checkout new branch…
+              </span>
             </button>
             {onCreateWorktree ? (
               <button
@@ -369,7 +422,9 @@ export function GitBranchPicker({
                 className="flex min-h-7 w-full items-center gap-2 px-2 py-1.5 text-secondary outline-none transition-[background-color,box-shadow,color,opacity] duration-150 ease-out hover:bg-list-hover hover:text-primary active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
               >
                 <FolderGit2 className="size-4 shrink-0" />
-                <span className="min-w-0 truncate text-left text-small-strong">New isolated worktree…</span>
+                <span className="min-w-0 truncate text-left text-small-strong">
+                  New isolated worktree…
+                </span>
               </button>
             ) : null}
           </Command>

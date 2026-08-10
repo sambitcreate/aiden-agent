@@ -2,16 +2,18 @@
 // messages render markdown full-width, native-transcript style.
 
 import { Callout, ErrorBoundary, Text } from "./ui";
-import { FileText } from "lucide-react";
+import { FileText, Sparkles } from "lucide-react";
 import { Markdown } from "./markdown";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal";
 import { CopyButton } from "./copy-button";
 import type { Attachment, ChatMessage } from "../lib/types";
+import type { SkillProvenanceV1 } from "../shared/slash-commands";
 
 export interface MessageBubbleProps {
   role: ChatMessage["role"];
   content: string;
   attachments?: Attachment[];
+  skill?: SkillProvenanceV1;
   /** Render the assistant reply through the stable streaming reveal path. */
   streaming?: boolean;
   streamComplete?: boolean;
@@ -34,6 +36,7 @@ export function MessageBubble({
   role,
   content,
   attachments,
+  skill,
   streaming,
   streamComplete,
   onStreamHandoffComplete,
@@ -42,6 +45,16 @@ export function MessageBubble({
     return (
       <div className="group flex justify-end">
         <div className="flex max-w-[80%] flex-col items-end gap-2">
+          {skill ? (
+            <div
+              className="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/20 bg-accent/[0.08] px-2 py-1 text-small text-secondary"
+              aria-label={`${skill.name}, ${skill.source} skill`}
+            >
+              <Sparkles aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+              <span className="truncate font-medium text-primary">{skill.name}</span>
+              <span className="text-mini capitalize text-tertiary">{skill.source}</span>
+            </div>
+          ) : null}
           {attachments && attachments.length > 0 ? (
             <div className="flex flex-wrap justify-end gap-2">
               {attachments.map((a) =>

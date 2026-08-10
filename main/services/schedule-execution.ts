@@ -6,7 +6,10 @@ import { chatStore } from "./chat-store.js";
 import { configStore } from "./config-store.js";
 import { llmClient } from "./llm-client.js";
 import { providerRegistry } from "./provider-registry.js";
-import { resolveScheduledScript, runScheduledScript } from "./schedule-script.js";
+import {
+  resolveScheduledScript,
+  runScheduledScript,
+} from "./schedule-script.js";
 import { scheduleStore, type ScheduleStore } from "./schedule-store.js";
 import { SCHEDULE_TOOL_NAME } from "./schedule-tool.js";
 import {
@@ -15,10 +18,16 @@ import {
   scheduledTaskGenerationMode,
 } from "./schedule-guard.js";
 import { showScheduledNotification } from "./schedule-notification.js";
-import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.js";
+import type {
+  ChatDone,
+  ChatError,
+  ScheduledRun,
+  ScheduledTask,
+} from "./types.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
+import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 
 function createBackgroundOwner(streamId: string): {
   owner: ChatGenerationOwner;
@@ -35,7 +44,8 @@ function createBackgroundOwner(streamId: string): {
     documentId: `scheduled:${streamId}`,
     isDestroyed: () => destroyed,
     send: (channel: NotificationChannel, payload: unknown) => {
-      if (destroyed) throw new Error("The scheduled generation is no longer active.");
+      if (destroyed)
+        throw new Error("The scheduled generation is no longer active.");
       if (channel === "chat:done" || channel === "chat:error")
         settle?.(payload as ChatDone | ChatError);
     },
@@ -61,8 +71,14 @@ function scheduledTurnId(taskId: string, kind: string): string {
   return `scheduled-${kind}-${taskId}-${Date.now().toString(36)}-${scheduledTurnSequence.toString(36)}`;
 }
 
-async function appendClaimedChatMessage(chatId: string, content: string): Promise<void> {
-  const chat = await chatStore.appendMessage(chatId, { role: "assistant", content });
+async function appendClaimedChatMessage(
+  chatId: string,
+  content: string,
+): Promise<void> {
+  const chat = await chatStore.appendMessage(chatId, {
+    role: "assistant",
+    content,
+  });
   ipcMain.broadcast("chats:metadata-updated", {
     chatId: chat.id,
     workspaceId: chat.workspaceId,
@@ -85,10 +101,15 @@ async function appendSerializedChatMessage(
     await appendClaimedChatMessage(chatId, content);
   } finally {
     turn.release();
+    turn.settleAsyncWork();
   }
 }
 
-function notify(task: ScheduledTask, body: string, chatId: string | undefined): void {
+function notify(
+  task: ScheduledTask,
+  body: string,
+  chatId: string | undefined,
+): void {
   showScheduledNotification(task, body, chatId, {
     isSupported: () => Notification.isSupported(),
     create: (options) => new Notification(options),
@@ -103,27 +124,26 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeControllers = new Map<string, AbortController>();
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
-    let chatId = await store.ensureChatId(task.id, () =>
-      chatStore.create({
-        title: task.name,
-        workspaceId: task.workspaceId,
-        providerId: task.providerId,
-        model: task.model,
-      }),
-    );
-    let chat = await chatStore.get(chatId);
-    if (!chat) {
-      await store.clearChatId(task.id, chatId);
-      chatId = await store.ensureChatId(task.id, () =>
+    const create = (claimedChatId: string) =>
+      createScheduledChatClaim(claimedChatId, () =>
         chatStore.create({
+          id: claimedChatId,
           title: task.name,
           workspaceId: task.workspaceId,
           providerId: task.providerId,
           model: task.model,
         }),
       );
+    let chatId = await store.ensureChatId(task.id, create);
+    let chat = await chatStore.get(chatId);
+    if (!chat) {
+      await store.clearChatId(task.id, chatId);
+      chatId = await store.ensureChatId(task.id, create);
       chat = await chatStore.get(chatId);
-      if (!chat) throw new Error("Could not create the scheduled task's dedicated chat.");
+      if (!chat)
+        throw new Error(
+          "Could not create the scheduled task's dedicated chat.",
+        );
     }
     if (chat) {
       ipcMain.broadcast("chats:metadata-updated", {
@@ -153,17 +173,25 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const workspace = task.workspaceId
       ? await configStore.getWorkspace(task.workspaceId)
       : undefined;
-    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
-    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
+    if (task.workspaceId && !workspace)
+      throw new Error("The task workspace no longer exists.");
+    if (workspace?.permission === "none")
+      throw new Error("The task workspace has No Access.");
     if (workspace) await assertManagedWorktreeAdmission(workspace);
     const script = await resolveScheduledScript({
       script: task.script ?? "",
       workspaceRoot: workspace?.folderPath,
     });
     const turnId = scheduledTurnId(task.id, "script");
-    const turn = llmClient.beginChatTurn(chatId, turnId, `scheduled-script:${task.id}`);
+    const turn = llmClient.beginChatTurn(
+      chatId,
+      turnId,
+      `scheduled-script:${task.id}`,
+    );
     if (!turn) {
-      throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
+      throw new Error(
+        "The scheduled task's dedicated chat already has a turn in progress.",
+      );
     }
     try {
       const processResult = await runScheduledScript(script, {
@@ -177,12 +205,18 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       }
       if (processResult.timedOut) {
         const error = "Script timed out after 60 seconds.";
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${error}`);
+        await appendClaimedChatMessage(
+          chatId,
+          `Scheduled task failed: ${error}`,
+        );
         return { result: "error", output: processResult.stdout, error };
       }
       if (processResult.outputLimitExceeded) {
         const error = "Script exceeded the 1 MB output limit.";
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${error}`);
+        await appendClaimedChatMessage(
+          chatId,
+          `Scheduled task failed: ${error}`,
+        );
         return { result: "error", output: processResult.stdout, error };
       }
       if (processResult.exitCode !== 0) {
@@ -190,7 +224,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           processResult.stderr.trim() ||
           `Process exited with code ${String(processResult.exitCode)}.`;
         const error = detail.slice(0, 4_096);
-        await appendClaimedChatMessage(chatId, `Scheduled task failed: ${error}`);
+        await appendClaimedChatMessage(
+          chatId,
+          `Scheduled task failed: ${error}`,
+        );
         return { result: "error", output: processResult.stdout, error };
       }
       if (!processResult.stdout.trim()) return { result: "silent", output: "" };
@@ -198,6 +235,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       return { result: "success", output: processResult.stdout };
     } finally {
       turn.release();
+      turn.settleAsyncWork();
     }
   }
 
@@ -214,18 +252,26 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     const workspace = task.workspaceId
       ? await configStore.getWorkspace(task.workspaceId)
       : undefined;
-    if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
-    if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
+    if (task.workspaceId && !workspace)
+      throw new Error("The task workspace no longer exists.");
+    if (workspace?.permission === "none")
+      throw new Error("The task workspace has No Access.");
     if (workspace) await assertManagedWorktreeAdmission(workspace);
     const settings = await configStore.getSettings();
     const providerId = task.providerId ?? settings.lastProviderId;
-    if (!providerId) throw new Error("Choose a provider before running this scheduled task.");
+    if (!providerId)
+      throw new Error("Choose a provider before running this scheduled task.");
     const provider =
       (await providerRegistry.selectionProvider(providerId)) ??
       (await configStore.getProvider(providerId));
     if (!provider) throw new Error("The task provider no longer exists.");
-    const model = task.model ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
-    if (!model) throw new Error("Choose a model before running this scheduled task.");
+    const model =
+      task.model ??
+      settings.lastModel ??
+      provider.defaultModel ??
+      provider.models[0];
+    if (!model)
+      throw new Error("Choose a model before running this scheduled task.");
     const prompt = task.prompt?.trim();
     if (!prompt) throw new Error("The scheduled task prompt is empty.");
     if (signal.aborted) throw new Error("Scheduled task was cancelled.");
@@ -240,19 +286,32 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       task.permission === "full";
     const mcpServerIds = task.mcpServerIds ?? (legacyAllMcp ? undefined : []);
     const allowMcpTools =
-      task.permission === "full" && (legacyAllMcp || (mcpServerIds?.length ?? 0) > 0);
+      task.permission === "full" &&
+      (legacyAllMcp || (mcpServerIds?.length ?? 0) > 0);
     const background = createBackgroundOwner(streamId);
-    const turn = llmClient.beginChatTurn(chatId, streamId, background.owner.documentId);
+    const turn = llmClient.beginChatTurn(
+      chatId,
+      streamId,
+      background.owner.documentId,
+    );
     if (!turn) {
-      throw new Error("The scheduled task's dedicated chat already has a turn in progress.");
+      throw new Error(
+        "The scheduled task's dedicated chat already has a turn in progress.",
+      );
     }
     activeStreams.set(task.id, streamId);
     try {
-      await chatStore.appendMessage(
-        chatId,
-        { role: "user", content: prompt },
-        { providerId, model },
-      );
+      try {
+        await chatStore.appendMessage(
+          chatId,
+          { role: "user", content: prompt },
+          { providerId, model },
+        );
+      } finally {
+        // Generation still owns the authority lease after this append frame,
+        // but no renderer/scheduler payload remains retained by persistence.
+        turn.settleAsyncWork();
+      }
       if (signal.aborted) throw new Error("Scheduled task was cancelled.");
       const started = await llmClient.start(
         streamId,
@@ -278,18 +337,27 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
           turnId: streamId,
         },
       );
-      if (!started) throw new Error("The scheduled generation was cancelled before it started.");
+      if (!started)
+        throw new Error(
+          "The scheduled generation was cancelled before it started.",
+        );
       const terminal = await background.terminal;
       if (signal.aborted) {
         const error = "Scheduled task was cancelled.";
         await llmClient.waitForChatIdle(chatId);
-        await appendSerializedChatMessage(chatId, error, scheduledTurnId(task.id, "cancelled"));
+        await appendSerializedChatMessage(
+          chatId,
+          error,
+          scheduledTurnId(task.id, "cancelled"),
+        );
         return { result: "blocked", output: "", error };
       }
       if ("message" in terminal) {
         const error = terminal.message;
         return {
-          result: /\bblocked\b|\bread-only\b|\bdenied\b/iu.test(error) ? "blocked" : "error",
+          result: /\bblocked\b|\bread-only\b|\bdenied\b/iu.test(error)
+            ? "blocked"
+            : "error",
           output: terminal.content ?? "",
           error,
         };

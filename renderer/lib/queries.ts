@@ -72,8 +72,8 @@ export const queryKeys = {
   gitBranches: (workspaceId: string | undefined) => ["gitBranches", workspaceId ?? "none"] as const,
   gitWorktrees: (workspaceId: string | undefined) =>
     ["gitWorktrees", workspaceId ?? "none"] as const,
-  discoveredSkills: (folderPath: string | undefined) =>
-    ["discoveredSkills", folderPath ?? "none"] as const,
+  skillCatalog: (workspaceId: string | undefined) =>
+    ["skillCatalog", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -169,14 +169,63 @@ export function subscribeCodexProviderState(
 
 export async function logoutCodexProvider(
   queryClient: QueryClient,
-  logout: (providerId: "openai-codex") => Promise<CodexProviderSnapshot> = providersApi.logout,
+  logout: (providerId: "openai-codex") => Promise<CodexProviderSnapshot> = (providerId) =>
+    providersApi.logout(providerId) as Promise<CodexProviderSnapshot>,
 ): Promise<CodexProviderSnapshot> {
   await cancelCodexProviderReads(queryClient);
   const next = await logout("openai-codex");
   await cancelCodexProviderReads(queryClient);
   queryClient.setQueryData(queryKeys.codexProviderStatus, next);
+  queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) =>
+    current?.map((provider) =>
+      provider.id === "openai-codex" ? { ...provider, hasKey: false, canLogout: false } : provider,
+    ),
+  );
   await queryClient.invalidateQueries({ queryKey: queryKeys.providers });
   return next;
+}
+
+export async function logoutBuiltinProvider(
+  queryClient: QueryClient,
+  providerId: string,
+  logout: (providerId: string) => Promise<unknown> = providersApi.logout,
+): Promise<{ remainingAuthenticated: boolean | null }> {
+  if (providerId === "openai-codex") {
+    const next = await logoutCodexProvider(
+      queryClient,
+      (codexId) => logout(codexId) as Promise<CodexProviderSnapshot>,
+    );
+    return { remainingAuthenticated: next.configured };
+  }
+  await queryClient.cancelQueries({ queryKey: queryKeys.providers });
+  const result = await logout(providerId);
+  if (
+    !result ||
+    typeof result !== "object" ||
+    (result as { id?: unknown }).id !== providerId ||
+    !(
+      typeof (result as { hasKey?: unknown }).hasKey === "boolean" ||
+      (result as { hasKey?: unknown }).hasKey === null
+    ) ||
+    (result as { canLogout?: unknown }).canLogout !== false
+  ) {
+    throw new Error("Provider sign-out returned an invalid status.");
+  }
+  const remainingAuthenticated = (result as { hasKey: boolean | null }).hasKey;
+  await queryClient.cancelQueries({ queryKey: queryKeys.providers });
+  queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) =>
+    current?.map((provider) =>
+      provider.id === providerId
+        ? {
+            ...provider,
+            hasKey: remainingAuthenticated ?? provider.hasKey,
+            canLogout: false,
+          }
+        : provider,
+    ),
+  );
+  await queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+  return { remainingAuthenticated };
 }
 
 export function useChats(workspaceId?: string) {
@@ -302,10 +351,11 @@ export function useGitBranches(workspaceId: string | undefined, enabled = true) 
   });
 }
 
-export function useDiscoveredSkills(folderPath: string | undefined) {
+export function useDiscoveredSkills(workspaceId: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.discoveredSkills(folderPath),
-    queryFn: () => skillsApi.discovered(folderPath),
+    queryKey: queryKeys.skillCatalog(workspaceId),
+    queryFn: () => skillsApi.catalog(workspaceId as string),
+    enabled: Boolean(workspaceId),
     staleTime: 30_000,
   });
 }

@@ -58,6 +58,7 @@ import {
 } from "../services/workspace-operation-registry.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { assertWorkspaceRecordRemovalAllowed } from "../services/workspace-record-removal.js";
+import { parseWorktreeCreateParams } from "./worktree-create-params.js";
 
 const PERMISSIONS: WorkspacePermission[] = ["full", "ask", "none"];
 
@@ -527,9 +528,11 @@ export function registerWorkspaceHandlers(): void {
   );
 
   ipcMain.handle("git:createWorktree", async (event, workspaceId: unknown, name: unknown) => {
-    const sourceWorkspaceId = asString(workspaceId, "workspaceId");
+    const { workspaceId: sourceWorkspaceId, branch } = parseWorktreeCreateParams(
+      workspaceId,
+      name,
+    );
     return withWorkspaceOperation(event, sourceWorkspaceId, async (resolved, signal) => {
-      const branch = asString(name, "name").trim();
       const worktreeRoot = await ensureUserDataDir("worktrees");
       const worktree = await gitCreateWorktree(resolved.folderPath, worktreeRoot, branch, signal);
       const now = Date.now();

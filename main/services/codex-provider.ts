@@ -296,6 +296,25 @@ export class CodexProviderService {
     };
   }
 
+  /** Safe status after logout has committed but a fresh Pi auth probe cannot complete. */
+  committedLogoutSnapshot(): CodexProviderSnapshot {
+    const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
+    let models: CodexModelSummary[] = [];
+    try {
+      models = this.models.getModels(OPENAI_CODEX_PROVIDER_ID).map(summarizeModel);
+    } catch {
+      // Model metadata is optional in this post-commit recovery response.
+    }
+    return {
+      id: OPENAI_CODEX_PROVIDER_ID,
+      name: provider?.name ?? OPENAI_CODEX_PROVIDER_LABEL,
+      authName: provider?.auth.oauth?.name ?? "ChatGPT",
+      configured: false,
+      needsAttention: false,
+      models,
+    };
+  }
+
   /** Complete the remote OAuth exchange without mutating the credential store. */
   authenticate(interaction: AuthInteraction): Promise<OAuthCredential> {
     const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);

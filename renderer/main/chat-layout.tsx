@@ -5,7 +5,7 @@
 import { Outlet, useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
-import { SplitView } from "../components/ui";
+import { SplitView, Text, toast } from "../components/ui";
 import { ChatSidebar } from "../components/chat-sidebar";
 import { chatsApi, onNotification } from "../lib/ipc";
 import {
@@ -21,6 +21,7 @@ import {
   useEnvironmentPanel,
 } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
+import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
@@ -97,20 +98,43 @@ export function ChatIndex() {
   const { activeId, isLoading } = useActiveWorkspace();
   const chats = useChats(activeId);
   const startedRef = React.useRef(false);
+  const appendReconciliationRequired = useAppendReconciliationRequired();
 
   React.useEffect(() => {
-    if (isLoading || !activeId || chats.isLoading || startedRef.current) return;
+    if (
+      appendReconciliationRequired ||
+      isLoading ||
+      !activeId ||
+      chats.isLoading ||
+      startedRef.current
+    ) {
+      return;
+    }
     startedRef.current = true;
     const list = chats.data ?? [];
     if (list.length > 0) {
       void navigate({ to: "/chat/$chatId", params: { chatId: list[0].id }, replace: true });
     } else {
-      void chatsApi.create({ workspaceId: activeId }).then((chat) => {
-        void chats.refetch();
-        void navigate({ to: "/chat/$chatId", params: { chatId: chat.id }, replace: true });
-      });
+      void chatsApi
+        .create({ workspaceId: activeId })
+        .then((chat) => {
+          void chats.refetch();
+          void navigate({ to: "/chat/$chatId", params: { chatId: chat.id }, replace: true });
+        })
+        .catch((error: unknown) => {
+          startedRef.current = false;
+          toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
+        });
     }
-  }, [isLoading, activeId, chats.isLoading, chats.data, navigate, chats]);
+  }, [appendReconciliationRequired, isLoading, activeId, chats.isLoading, chats.data, navigate, chats]);
 
-  return <div className="h-full" />;
+  return appendReconciliationRequired ? (
+    <div className="flex h-full items-center justify-center p-6" role="status">
+      <Text color="secondary">
+        Reload Aiden to reconcile the previous message before continuing.
+      </Text>
+    </div>
+  ) : (
+    <div className="h-full" />
+  );
 }

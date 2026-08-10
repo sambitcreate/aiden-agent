@@ -32,10 +32,7 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
-import {
-  SETTINGS_DESTINATIONS,
-  type SettingsSection,
-} from "../lib/settings-section";
+import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
 
@@ -188,7 +185,7 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
       }
     >
       <ScrollArea className="h-full" title="Settings">
-        <div className="mx-auto w-full max-w-2xl px-5 py-6">
+        <div className="settings-responsive mx-auto w-full max-w-2xl px-5 py-6">
           <ActiveSection />
         </div>
       </ScrollArea>

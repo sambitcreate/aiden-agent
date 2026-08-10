@@ -12,6 +12,7 @@ import test from "node:test";
 import {
   LEGACY_CONFIG_ARCHIVE_SUFFIX,
   LOCAL_CONFIG_FILENAME,
+  PORTABLE_CONFIG_MAX_BYTES,
   PORTABLE_CONFIG_FILENAME,
   PORTABLE_README_FILENAME,
   PROVIDER_MODEL_CACHE_FILENAME,
@@ -20,9 +21,12 @@ import {
   createPortableConfigStores,
   isProviderAliasMap,
   isMcpServer,
+  isSkillList,
   isPortableProvider,
   splitStoredProvider,
 } from "./portable-config-core.js";
+import { CONFIGURED_SKILL_LIMITS } from "./skill-config-limits.js";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import type { PortableConfigShape } from "./portable-config-core.js";
 import type { StoredProvider, Workspace } from "./types.js";
 
@@ -116,6 +120,158 @@ function legacyConfig() {
     workspaces: [workspace],
   };
 }
+
+test("configured skill lists enforce per-entry, count, and aggregate bounds", () => {
+  const skill = (id: string, instructions = "i") => ({
+    id,
+    name: `Skill ${id}`,
+    description: "",
+    instructions,
+    enabled: true,
+  });
+  assert.equal(
+    isSkillList(
+      Array.from({ length: CONFIGURED_SKILL_LIMITS.entries + 1 }, (_, index) =>
+        skill(String(index)),
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    isSkillList([
+      skill("oversized", "i".repeat(SLASH_LIMITS.instructionBytes + 1)),
+    ]),
+    false,
+  );
+  const aggregateInstruction = "i".repeat(SLASH_LIMITS.instructionBytes);
+  const aggregateCount =
+    Math.floor(CONFIGURED_SKILL_LIMITS.aggregateBytes / SLASH_LIMITS.instructionBytes) + 1;
+  assert.equal(
+    isSkillList(
+      Array.from({ length: aggregateCount }, (_, index) =>
+        skill(`aggregate-${index}`, aggregateInstruction),
+      ),
+    ),
+    false,
+  );
+});
+
+test("portable config ingestion with unsafe skill bounds publishes no skills", async (t) => {
+  const r = await roots(t);
+  await fs.mkdir(r.portableRoot, { recursive: true });
+  await fs.writeFile(
+    r.portableFile,
+    JSON.stringify({
+      providers: [],
+      providerIdAliases: {},
+      mcpServers: [],
+      skills: [
+        {
+          id: "oversized",
+          name: "Oversized",
+          description: "",
+          instructions: "i".repeat(SLASH_LIMITS.instructionBytes + 1),
+          enabled: true,
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const instance = stores(r);
+  assert.deepEqual((await instance.portable.load()).skills, []);
+  assert.equal(await instance.portable.loadedFromUnsafeFile(), true);
+});
+
+test("legacy migration defers instead of consuming over-bound skill lists", async (t) => {
+  const scenarios = [
+    {
+      name: "count",
+      skills: Array.from({ length: CONFIGURED_SKILL_LIMITS.entries + 1 }, (_, index) => ({
+        id: `skill-${index}`,
+        name: `Skill ${index}`,
+        description: "",
+        instructions: "i",
+        enabled: true,
+      })),
+    },
+    {
+      name: "aggregate",
+      skills: Array.from(
+        {
+          length:
+            Math.floor(
+              CONFIGURED_SKILL_LIMITS.aggregateBytes / SLASH_LIMITS.instructionBytes,
+            ) + 1,
+        },
+        (_, index) => ({
+          id: `skill-${index}`,
+          name: `Skill ${index}`,
+          description: "",
+          instructions: "i".repeat(SLASH_LIMITS.instructionBytes),
+          enabled: true,
+        }),
+      ),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async (t) => {
+      const r = await roots(t);
+      await fs.writeFile(
+        r.localFile,
+        JSON.stringify({ ...legacyConfig(), skills: scenario.skills }),
+        "utf8",
+      );
+
+      assert.equal(await stores(r).ensureMigrated(), false);
+      assert.equal(await missing(r.portableFile), true);
+      assert.equal(await missing(r.archiveFile), true);
+      assert.equal((await readJson<{ skills: unknown[] }>(r.localFile)).skills.length, scenario.skills.length);
+    });
+  }
+});
+
+test("oversized portable and legacy config files fail before JSON ingestion", async (t) => {
+  const oversized = JSON.stringify({
+    providers: [],
+    providerIdAliases: {},
+    mcpServers: [],
+    skills: [
+      {
+        id: "oversized",
+        name: "Oversized",
+        description: "",
+        instructions: "i".repeat(PORTABLE_CONFIG_MAX_BYTES),
+        enabled: true,
+      },
+    ],
+  });
+
+  await t.test("portable", async (t) => {
+    const r = await roots(t);
+    await fs.mkdir(r.portableRoot, { recursive: true });
+    await fs.writeFile(r.portableFile, oversized, "utf8");
+    const instance = stores(r);
+    assert.deepEqual(await instance.portable.load(), {
+      providers: [],
+      providerIdAliases: {},
+      mcpServers: [],
+      skills: [],
+    });
+    assert.equal(await instance.portable.loadedFromCorruptFile(), true);
+  });
+
+  await t.test("legacy", async (t) => {
+    const r = await roots(t);
+    await fs.writeFile(r.localFile, oversized, "utf8");
+    const instance = stores(r);
+    assert.equal(await instance.ensureMigrated(), false);
+    assert.equal(await instance.local.loadedFromCorruptFile(), true);
+    assert.equal(await missing(r.archiveFile), true);
+    assert.equal((await fs.stat(r.localFile)).size > PORTABLE_CONFIG_MAX_BYTES, true);
+  });
+});
 
 async function writeLegacy(r: Roots): Promise<void> {
   await fs.writeFile(r.localFile, JSON.stringify(legacyConfig(), null, 2), "utf-8");

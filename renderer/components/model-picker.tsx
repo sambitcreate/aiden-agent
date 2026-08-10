@@ -456,7 +456,7 @@ export function ModelPicker({
             hasUnavailableSelection
               ? "Selected model is unavailable. Choose a model."
               : selected
-                ? `Selected model: ${selected.label} from ${selected.providerLabel}, ${selected.isLocal ? "local" : "hosted"}. Choose a model.`
+                ? `Selected model: ${selected.label}. Choose a model.`
                 : hasModels
                   ? "Choose a model"
                   : unavailableMessage
@@ -479,7 +479,7 @@ export function ModelPicker({
           ) : null}
           <span className="min-w-0 truncate">
             {selected
-              ? `${selected.label} · ${selected.providerLabel} · ${selected.isLocal ? "Local" : "Hosted"}`
+              ? selected.label
               : hasUnavailableSelection
                 ? "Model unavailable"
                 : hasModels

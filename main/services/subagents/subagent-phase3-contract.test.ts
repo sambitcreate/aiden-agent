@@ -233,7 +233,7 @@ test("empty-chat workspace moves serialize against generation authority and term
     beginMove,
   );
   const moveCommit = handler.indexOf(
-    "await chatStore.moveEmptyChatToWorkspace(chatId, nextWorkspaceId)",
+    "await chatStore.moveEmptyChatToWorkspace(",
     workspaceLookup,
   );
   assert.ok(moveHandler >= 0);
@@ -276,10 +276,7 @@ test("renderer message appends serialize against detached terminal persistence",
     "llmClient.beginChatTurn(chatId, turnId, owner.documentId)",
     appendHandler,
   );
-  const persist = handler.indexOf(
-    "await chatStore.appendMessage(",
-    beginAppend,
-  );
+  const persist = handler.indexOf("chatStore.appendMessage(", beginAppend);
   const failureRelease = handler.indexOf(
     "if (!appended) turn.release();",
     persist,
@@ -306,11 +303,16 @@ test("renderer message appends serialize against detached terminal persistence",
   assert.match(generationHandler, /turnId: messageTurnId/u);
   assert.match(
     schedule,
-    /beginChatTurn\(chatId, streamId, background\.owner\.documentId\)[\s\S]{0,900}chatStore\.appendMessage\([\s\S]{0,900}turnId: streamId/u,
+    /beginChatTurn\(\s*chatId,\s*streamId,\s*background\.owner\.documentId,?\s*\)[\s\S]{0,900}chatStore\.appendMessage\([\s\S]{0,1600}turnId: streamId/u,
   );
   assert.match(
     schedule,
-    /beginChatTurn\(chatId, turnId, `scheduled-script:\$\{task\.id\}`\)[\s\S]{0,1600}appendClaimedChatMessage/u,
+    /beginChatTurn\(\s*chatId,\s*turnId,\s*`scheduled-script:\$\{task\.id\}`,?\s*\)[\s\S]{0,1600}appendClaimedChatMessage/u,
+  );
+  assert.equal(
+    (schedule.match(/turn\.settleAsyncWork\(\)/gu) ?? []).length,
+    3,
+    "every scheduled turn path must settle its claimed append frame",
   );
   assert.match(
     handler,
@@ -333,11 +335,11 @@ test("renderer turn tokens cross append and generation IPC without an admission 
     ipc,
     /startGeneration\([\s\S]{0,180}messageTurnId: string[\s\S]{0,220}const streamId = messageTurnId/u,
   );
-  assert.match(ipc, /"chat:start", streamId, params, messageTurnId/u);
-  assert.match(
-    pane,
-    /const messageTurnId = createChatTurnId\(\)[\s\S]{0,700}turnId: messageTurnId[\s\S]{0,400}runGeneration\(updated\.messages, messageTurnId\)/u,
-  );
+  assert.match(ipc, /"chat:start",\s*streamId,\s*params,\s*messageTurnId/u);
+  const turn = pane.indexOf("const messageTurnId = createChatTurnId()");
+  const append = pane.indexOf("turnId: messageTurnId", turn);
+  const generation = pane.indexOf("runGeneration(messageTurnId)", append);
+  assert.ok(turn >= 0 && append > turn && generation > append);
   assert.match(
     assistant,
     /const messageTurnId = createChatTurnId\(\)[\s\S]{0,4200}startGeneration\([\s\S]{0,2600}messageTurnId/u,
@@ -470,10 +472,7 @@ test("persisted chat workspace ownership closes generation admission before setu
     "workspaceMutationGate.isChanging(authoritativeWorkspaceId)",
     bindInitialization,
   );
-  const prepare = llm.indexOf(
-    "{ ...params, workspaceId: authoritativeWorkspaceId }",
-    admissionCheck,
-  );
+  const prepare = llm.indexOf("mode: authoritativeMode", admissionCheck);
   const registerInitialization = llm.indexOf(
     "initializing.set(streamId, initialization)",
   );
@@ -1111,7 +1110,10 @@ test("production OAuth transport observes bounded credentials before use or pers
   );
   const saveTokensMethod = oauth.slice(
     oauth.indexOf("async saveTokens("),
-    oauth.indexOf("async saveCodeVerifier(", oauth.indexOf("async saveTokens(")),
+    oauth.indexOf(
+      "async saveCodeVerifier(",
+      oauth.indexOf("async saveTokens("),
+    ),
   );
   assert.ok(saveTokensMethod.indexOf("this.observeTokens?.(tokens)") >= 0);
   assert.ok(

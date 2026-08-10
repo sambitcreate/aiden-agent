@@ -1,13 +1,17 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Planned — source and UI audit complete; implementation has not
-  started
+- **Status:** Complete — all delivery phases and release hardening passed final review
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
-  [Keyboard Command System](completed/keyboard-command-system-plan.md),
-  [Aiden Assistant](aiden-assistant-plan.md), and
-  [Pi Provider Integration](pi-provider-integration-plan.md)
+  [Keyboard Command System](keyboard-command-system-plan.md),
+  [Aiden Assistant](../aiden-assistant-plan.md), and
+  [Pi Provider Integration](../pi-provider-integration-plan.md)
+
+> **Post-completion refinement (2026-08-10):** The delivered palette now uses
+> explicit namespaces: `/` lists app commands only, while `$` lists skills
+> only. This keeps each surface focused while preserving the same bounded
+> keyboard interaction and authoritative one-turn skill invocation contract.
 
 ## Outcome
 
@@ -101,20 +105,20 @@ underlying product capability does not exist.
 | `/settings`      | Core              | Open Aiden Settings through the existing settings command.                     |
 | `/model`         | Core              | Open the existing model picker; alias `/models`.                               |
 | `/scoped-models` | Defer             | Aiden has no equivalent scoped-model editor yet.                               |
-| `/export`        | Later             | Use a main-owned save dialog and an Aiden export schema.                       |
+| `/export`        | Shipped (Phase 4) | Main-owned save dialog and a bounded, versioned Aiden export schema.           |
 | `/import`        | Defer             | Requires schema/version, attachment, duplicate, and trust policy.              |
 | `/share`         | Omit              | Aiden has no share service or privacy contract.                                |
 | `/copy`          | Core              | Copy the most recent assistant response, with a disabled reason when absent.   |
 | `/name`          | Core              | Rename the current chat; argument or small inline prompt.                      |
-| `/session`       | Later             | Open a truthful Aiden session-details view when that view exists.              |
+| `/session`       | Shipped (Phase 4) | Open a truthful Aiden session-details view.                                    |
 | `/changelog`     | Omit              | Do not inherit Pi release notes for an Aiden product surface.                  |
 | `/hotkeys`       | Core              | Open Keyboard Shortcuts; alias `/shortcuts`.                                   |
-| `/fork`          | Later             | Create a new chat from a selected completed turn using Aiden data rules.       |
-| `/clone`         | Later             | Clone the current linear chat using Aiden data rules.                          |
+| `/fork`          | Shipped (Phase 4) | Create a new chat from a selected completed turn using Aiden data rules.       |
+| `/clone`         | Shipped (Phase 4) | Clone the current linear chat using Aiden data rules.                          |
 | `/tree`          | Omit              | Aiden has no Pi session-tree UI or data model.                                 |
 | `/trust`         | Omit              | Workspace trust is not currently an Aiden capability.                          |
 | `/login`         | Core              | Open the canonical provider connection surface.                                |
-| `/logout`        | Later             | Requires provider selection, impact copy, and confirmation.                    |
+| `/logout`        | Shipped (Phase 4) | Choose a removable built-in credential, explain impact, and confirm.           |
 | `/new`           | Core              | Create a new chat through the existing canonical action.                       |
 | `/compact`       | Defer             | Compaction exists internally, but the user-facing contract remains unfinished. |
 | `/resume`        | Core              | Open chat search/history; alias `/chats`.                                      |
@@ -160,15 +164,15 @@ adapter, availability function, and behavior when the draft contains content.
 | `/skills`      | —              | Open skill management. This is distinct from invoking a skill row.               |
 | `/theme`       | `/appearance`  | Open the current appearance choices.                                             |
 
-### Later catalog additions
+### Selected session commands (Phase 4)
 
-| Command     | Preconditions                                                              |
+| Command     | Shipped contract                                                           |
 | ----------- | -------------------------------------------------------------------------- |
 | `/logout`   | Provider chooser, confirmation, truthful account-impact copy, and tests.   |
-| `/fork`     | Stable turn selection and an explicit copy contract.                       |
+| `/fork`     | Stable turn selection and an explicit visible-history copy contract.       |
 | `/clone`    | Stable current-chat cloning contract.                                      |
-| `/export`   | Main-owned save dialog and versioned Aiden export schema.                  |
-| `/session`  | A real Aiden session-details destination.                                  |
+| `/export`   | Main-owned save dialog and bounded, versioned Aiden export schema.         |
+| `/session`  | A truthful Aiden session-details destination.                              |
 | `/worktree` | A managed-worktree creation flow with branch/name input and safety checks. |
 
 The screenshot’s Chat, Cloud, Code review, Fast, Feedback, Goal, Init, MCP,
@@ -364,7 +368,11 @@ existing composer seams:
 - expose a structured selected-skill value through the composer submission;
 - render the popup in the composer stacking context without changing footer
   measurement; and
-- clear a selected skill only after append and start handoff succeeds.
+- clear the submitted payload only after the user message crosses its durable
+  append barrier. Fresh-resolution, workspace, and other pre-append failures
+  preserve the draft, attachments, and chip. A later start-handoff or provider
+  setup failure is surfaced against that already-committed message and must not
+  retain a duplicateable composer payload.
 
 The parser and keyboard reducer stay framework-independent so most behavior can
 be verified without mounting the full chat screen.
@@ -465,6 +473,14 @@ expanded instructions. Older messages without provenance remain valid.
 The Aiden Assistant dock rejects/does not offer explicit skill references in
 this phase. Its intentionally empty tool set remains unchanged.
 
+The attended Assistant itself is an intentional capability of the active
+renderer document because that document owns the Assistant dock and approval
+UI. Main separates its exact, bounded creation path from ordinary chat
+creation, persists the reserved Assistant identity itself, and derives
+generation mode from that persisted identity. The boundary prevents an
+ordinary chat or `chat:start` envelope from forging Assistant mode; it does not
+attempt to make the visible Assistant product inaccessible to its own renderer.
+
 ### 5. Bounds and privacy
 
 Phase 0 must centralize and test explicit limits:
@@ -512,6 +528,14 @@ becomes available.
 
 ### Phase 0 — Freeze the contract
 
+**Completed 2026-08-09.** The curated catalog, canonical action and availability
+keys, parser/ranker/session reducer, exact skill DTOs, deterministic collision
+policy, workspace/revision-bound opaque invocation identity, and centralized
+bounds are implemented. Skill discovery now performs bounded, regular-file,
+symlink-safe reads. The registered 29-test focused gate, command-system suite,
+TypeScript, ESLint, and diff checks pass. Three independent high-reasoning
+review lanes returned clean final P0/P1/P2 verdicts after the correction loops.
+
 - Finalize the curated command list, aliases, icons, copy, and action kinds.
 - Define the pure trigger/parser/ranker/session-state contract.
 - Define `SkillCatalogEntry`, `SkillInvocationV1`, provenance, errors, and
@@ -528,6 +552,19 @@ skill identity behavior.
 
 ### Phase 1 — Unify skill resolution
 
+**Completed 2026-08-09.** One main-process registry snapshot now drives model
+tools, prompt disclosure, the renderer-safe workspace catalog, and explicit
+resolution. Content-derived revisions preserve unchanged invocation IDs while
+workspace/config/permission changes invalidate every affected consumer.
+Discovery and configured skills have per-file, source, count, aggregate, and
+config-file byte bounds; root/file descriptor identities close symlink and
+replacement races. No Access performs no workspace discovery, catalog IPC
+accepts only main-resolved workspace IDs, and renderer DTOs expose no paths,
+instructions, tool keys, or secrets. The registered 51-test Slash Commands
+gate, focused config/discovery suites, full repository suite, TypeScript,
+ESLint, and diff checks pass. Three independent high-reasoning review lanes
+returned clean final P0/P1/P2 verdicts after the correction loops.
+
 - Implement the main-process skill registry.
 - Move tool assembly and prompt disclosure onto the shared resolver.
 - Fix configured/workspace/global collision inconsistency.
@@ -539,6 +576,20 @@ skill identity behavior.
 the same skill or the same unavailable reason.
 
 ### Phase 2 — Composer command palette
+
+**Completed 2026-08-09.** The composer now owns a bounded, overlaid Commands
+and Skills palette backed by the safe workspace catalog and canonical command
+dispatcher. All 19 core rows implement deterministic parsing/ranking,
+availability reasons, argument validation, draft preservation, keyboard and
+pointer control, listbox semantics, responsive styling, reduced motion, and
+approval-first layering. Synchronous picker/navigation actions commit in the
+same event turn; delayed clipboard work uses an interaction/session guard so
+focus, selection, IME, dismissal, blocking, unmount, or a newer draft cannot
+consume stale text. The registered 63-test Slash Commands gate, full repository
+suite, TypeScript, ESLint, formatting/diff checks, and React Doctor pass with
+only the pre-existing `ChatPane` state-organization warning. Three independent
+high-reasoning review lanes returned clean final P0/P1/P2 verdicts after the
+correction loops.
 
 - Add pure slash parsing/ranking/session helpers.
 - Extract canonical command action/result builders.
@@ -552,6 +603,21 @@ the same skill or the same unavailable reason.
 Command-K; opening/filtering never shifts the transcript.
 
 ### Phase 3 — Active skill invocation
+
+**Completed 2026-08-09.** The composer can select, revalidate, replace, remove,
+and submit one opaque workspace-bound skill invocation with safe visible
+provenance. Main performs fresh authoritative resolution, bounded formatting,
+durable append, exact current-user-turn injection, and one-shot handoff without
+exposing or persisting expanded instructions. Renderer append/start/create and
+native attachment boundaries are exact, bounded, owner-bound, and fail closed;
+turn, payload, prepared-skill, and generation-lifetime reservations prevent
+unbounded retained work. Crash reconciliation distinguishes definitely absent,
+committed, and indeterminate writes, fences retries across routes, and preserves
+one exact main-minted identity for scheduled chats. The registered 227-test
+Slash Commands gate, 73 adjacent lifecycle/recovery tests, full repository
+suite, TypeScript, ESLint, diff checks, and React Doctor pass. Three independent
+high-reasoning correctness, adversarial, and edge-case review lanes returned
+explicitly clean verdicts on the same final snapshot.
 
 - Add the selected-skill composer chip and submission contract.
 - Resolve and snapshot the invocation inside the append/start turn lease.
@@ -577,7 +643,44 @@ not be presented as complete slash-command support without active skills.
 **Exit:** each enabled row maps to a real, tested Aiden capability; unsupported
 Pi rows remain absent.
 
+**Completed 2026-08-09:** all six selected session commands ship with bounded
+main-process contracts, durable copy/export/worktree semantics, safe
+provider-credential removal, renderer draft/focus recovery, and deterministic
+large-history/Unicode behavior. The final snapshot passed the expanded focused
+suite, TypeScript, ESLint, diff checks, and three independent clean
+correctness, adversarial, and edge-case reviews.
+
 ### Phase 5 — Hardening and release
+
+**Release-candidate validation completed 2026-08-09.** The registered focused
+gate passes 289 tests. A mounted 500-skill benchmark executes the real ranking,
+presence, and fresh `ComposerSlashPalette` React mount path at a measured p95
+of 22.30 ms (28.37 ms maximum in the full focused gate), while traps on the production `aidenAPI`
+bridge and `fetch` prove that opening/filtering the palette performs no renderer
+IPC, MCP, or network call. TypeScript, ESLint,
+production builds, hardened Developer ID packaging, strict package
+verification, and formatting/diff checks pass. React Doctor reports no new
+feature-specific error; its changed-branch score is 79 with six previously
+reviewed structural/performance advisories.
+
+The signed packaged app was exercised in an isolated profile without touching
+the installed production app or its data. Direct checks covered light and dark
+themes, all four appearance presets, macOS Increase Contrast, reduced motion,
+wide and 592 px narrow layouts, a 499-skill catalog capped to 100 visible rows,
+keyboard selection and Escape focus restoration, Command-K parity, VoiceOver
+enabled with VO navigation and textarea focus recovery, safe configured-skill
+selection/provenance, native text attachment selection and returned focus,
+the dictation entry point, the model picker, an active/stop generation state,
+and a real Ask First approval card that was denied. The isolated local model
+used loopback only; the app also launched with that endpoint unavailable and
+kept the file UI operational. Automated main/renderer tests complement those
+direct checks for skill add/change/delete races, cancellation, workspace and
+config changes, append/create crash reconciliation, relaunch, legacy histories,
+and the invariant that skill instructions never reach renderer storage or
+change permission/approval authority.
+
+Three independent high-reasoning correctness, adversarial, and edge-case
+review lanes returned explicit clean verdicts on the corrected final snapshot.
 
 - Run full regression, packaged-app, accessibility, theme, and performance
   gates.
@@ -609,7 +712,8 @@ Pi rows remain absent.
 - Pointer selection without textarea blur.
 - Draft and attachments survive app actions, failures, and navigation guards.
 - Skill chip add/remove/replace and one-explicit-skill rule.
-- Successful send clears state only after the handoff succeeds.
+- Pre-append failures preserve the submitted state; a durable append consumes
+  the exact submitted fields even when the later start handoff fails.
 - Workspace/config changes revalidate selected skills.
 - ARIA relationships, active descendant, stable IDs, live-region copy, and
   reduced motion.
