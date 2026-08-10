@@ -24,9 +24,10 @@ use aiden_core::ToolDef;
 use aiden_data::config_store::ConfigStore;
 use aiden_data::portable_config::McpServer;
 use aiden_data::schedule_store::{
-    next_scheduled_run, DataStorePersistence, ScheduleStore, ScheduledTask, ScheduledTaskInput,
+    next_scheduled_run, DataStorePersistence, ScheduledTask, ScheduledTaskInput,
     ScheduledTaskPermission,
 };
+use aiden_scheduler::runtime::SchedulerCore;
 use async_trait::async_trait;
 
 use crate::services::mcp_tools::{collect_chat_mcp_tools, ChatMcpTools, McpStreamContext};
@@ -99,23 +100,49 @@ impl aiden_agent::project_tool::WorkspaceLister for StoreWorkspaceLister {
     }
 }
 
-/// The scheduling persistence surface the executor drives.
+/// The scheduling lifecycle surface the executor drives.
+#[async_trait]
 pub trait ScheduleSource: Send + Sync {
     fn list(&self) -> Vec<ScheduledTask>;
     /// Upsert by input id (`None` creates a new task).
-    fn save(&self, input: &ScheduledTaskInput) -> Result<ScheduledTask, String>;
+    async fn save(
+        &self,
+        input: &ScheduledTaskInput,
+        expected_updated_at: Option<u64>,
+    ) -> Result<ScheduledTask, String>;
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reserved for the existing approval-gated removal lifecycle; not exposed while execution is unsupported"
+        )
+    )]
+    async fn remove(&self, id: &str) -> Result<(), String>;
 }
 
-/// [`ScheduleSource`] over the shared machine-local schedule store.
-pub struct StoreScheduleSource(pub Arc<ScheduleStore<DataStorePersistence, DataStorePersistence>>);
+/// [`ScheduleSource`] over the app's shared scheduler authority.
+pub struct StoreScheduleSource(pub Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>);
 
+#[async_trait]
 impl ScheduleSource for StoreScheduleSource {
     fn list(&self) -> Vec<ScheduledTask> {
-        self.0.list().unwrap_or_default()
+        self.0.store().list().unwrap_or_default()
     }
 
-    fn save(&self, input: &ScheduledTaskInput) -> Result<ScheduledTask, String> {
-        self.0.save(input).map_err(|error| error.to_string())
+    async fn save(
+        &self,
+        input: &ScheduledTaskInput,
+        expected_updated_at: Option<u64>,
+    ) -> Result<ScheduledTask, String> {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        self.0
+            .save(input, expected_updated_at, &cancellation)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn remove(&self, id: &str) -> Result<(), String> {
+        self.0.remove(id).await.map_err(|error| error.to_string())
     }
 }
 
@@ -167,11 +194,25 @@ pub fn parse_schedule_input(call: &ToolCall, now: u64) -> Result<ScheduledTaskIn
     let model = required("model")?;
 
     let id = if call.name == EDIT_AUTOMATION_TOOL {
+        if args
+            .get("expectedUpdatedAt")
+            .and_then(serde_json::Value::as_u64)
+            .is_none()
+        {
+            return Err(
+                "expectedUpdatedAt is required and must come from list_scheduled_tasks."
+                    .to_string(),
+            );
+        }
         Some(required("taskId")?)
     } else {
         None
     };
-    let enabled = args.get("enabled").and_then(serde_json::Value::as_bool);
+    let enabled = if call.name == SCHEDULE_TASK_TOOL {
+        Some(false)
+    } else {
+        args.get("enabled").and_then(serde_json::Value::as_bool)
+    };
 
     Ok(ScheduledTaskInput {
         id,
@@ -206,6 +247,8 @@ fn task_json(task: &ScheduledTask) -> serde_json::Value {
         "cron": task.cron,
         "timezone": task.timezone,
         "nextRunAt": task.next_run_at,
+        "updatedAt": task.updated_at,
+        "executionStatus": "unsupported",
         "permission": match task.permission {
             ScheduledTaskPermission::ReadOnly => "read-only",
             ScheduledTaskPermission::Full => "full",
@@ -251,7 +294,7 @@ impl AssistantToolExecutor {
         vec![
             ToolDef {
                 name: SCHEDULE_TASK_TOOL.to_string(),
-                description: "Propose one new LLM automation that runs unattended on a schedule. The user must confirm the proposal; never claim it was saved until the tool result confirms it. Pass an exact project ID from list_projects as workspaceId and exact server IDs from list_mcp_servers as mcpServerIds.".to_string(),
+                description: "Propose one dormant LLM automation. Scheduled execution is currently unsupported, so a saved proposal remains disabled. The user must confirm the proposal; never claim it is active or will run. Pass an exact project ID from list_projects as workspaceId and exact server IDs from list_mcp_servers as mcpServerIds.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -286,9 +329,10 @@ impl AssistantToolExecutor {
                         "workspaceId": { "type": "string" },
                         "mcpServerIds": { "type": "array", "items": { "type": "string" } },
                         "providerId": { "type": "string" },
-                        "model": { "type": "string" }
+                        "model": { "type": "string" },
+                        "expectedUpdatedAt": { "type": "integer", "minimum": 0 }
                     },
-                    "required": ["taskId"],
+                    "required": ["taskId", "expectedUpdatedAt"],
                     "additionalProperties": false,
                 }),
             },
@@ -312,6 +356,20 @@ impl AssistantToolExecutor {
         defs
     }
 
+    /// Remove a saved automation through the same lifecycle authority. This
+    /// is intentionally not exposed as an Assistant tool while scheduled
+    /// execution is unsupported.
+    #[expect(
+        dead_code,
+        reason = "keeps removal on the shared authority without advertising a dormant Assistant tool"
+    )]
+    pub async fn remove_schedule(&self, id: &str) -> Result<(), ToolExecutionError> {
+        self.schedule
+            .remove(id)
+            .await
+            .map_err(ToolExecutionError::Message)
+    }
+
     async fn list_scheduled_tasks(&self) -> Result<ToolOutput, ToolExecutionError> {
         let tasks = self.schedule.list();
         let payload = serde_json::json!({
@@ -328,10 +386,12 @@ impl AssistantToolExecutor {
             .map_err(ToolExecutionError::Message)?;
         let task = self
             .schedule
-            .save(&input)
+            .save(&input, None)
+            .await
             .map_err(ToolExecutionError::Message)?;
         let payload = serde_json::json!({
             "status": "created",
+            "schedulerEnabled": false,
             "task": task_json(&task),
         });
         Ok(ToolOutput::text(
@@ -342,12 +402,24 @@ impl AssistantToolExecutor {
     async fn edit_automation(&self, call: &ToolCall) -> Result<ToolOutput, ToolExecutionError> {
         let input = parse_schedule_input(call, aiden_data::now_millis())
             .map_err(ToolExecutionError::Message)?;
+        let expected_updated_at = call
+            .arguments
+            .get("expectedUpdatedAt")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                ToolExecutionError::Message(
+                    "expectedUpdatedAt is required and must come from list_scheduled_tasks."
+                        .to_string(),
+                )
+            })?;
         let task = self
             .schedule
-            .save(&input)
+            .save(&input, Some(expected_updated_at))
+            .await
             .map_err(ToolExecutionError::Message)?;
         let payload = serde_json::json!({
             "status": "updated",
+            "schedulerEnabled": false,
             "task": task_json(&task),
         });
         Ok(ToolOutput::text(
@@ -416,6 +488,7 @@ pub fn enabled_mcp_servers(config: &Arc<ConfigStore>) -> Vec<McpServer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiden_data::schedule_store::create_schedule_store;
 
     struct FakeMcpLister;
     #[async_trait]
@@ -435,12 +508,21 @@ mod tests {
 
     struct NoopScheduleSource;
 
+    #[async_trait]
     impl ScheduleSource for NoopScheduleSource {
         fn list(&self) -> Vec<ScheduledTask> {
             Vec::new()
         }
 
-        fn save(&self, _input: &ScheduledTaskInput) -> Result<ScheduledTask, String> {
+        async fn save(
+            &self,
+            _input: &ScheduledTaskInput,
+            _expected_updated_at: Option<u64>,
+        ) -> Result<ScheduledTask, String> {
+            Err("noop".to_string())
+        }
+
+        async fn remove(&self, _id: &str) -> Result<(), String> {
             Err("noop".to_string())
         }
     }
@@ -489,6 +571,7 @@ mod tests {
         assert_eq!(input.workspace_id.as_deref(), Some("w-1"));
         assert_eq!(input.permission, Some(ScheduledTaskPermission::Full));
         assert_eq!(input.notify, Some(false));
+        assert_eq!(input.enabled, Some(false));
         assert!(input.id.is_none());
     }
 
@@ -545,6 +628,7 @@ mod tests {
                     "prompt": "Updated.",
                     "cron": "30 7 * * *",
                     "timezone": "UTC",
+                    "expectedUpdatedAt": 42,
                     "enabled": false,
                     "providerId": "p",
                     "model": "m",
@@ -600,5 +684,54 @@ mod tests {
             outcome,
             Err(ToolExecutionError::NotFound("nope".to_string()))
         );
+    }
+
+    #[tokio::test]
+    async fn assistant_and_settings_share_revision_checked_schedule_authority() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(create_schedule_store(
+            DataStorePersistence::new("schedules.json", Some(directory.path().to_path_buf())),
+            DataStorePersistence::new("schedule-runs.json", Some(directory.path().to_path_buf())),
+            Box::new(aiden_data::now_millis),
+            None,
+        ));
+        let scheduler = aiden_scheduler::runtime::create_scheduler(
+            store,
+            Arc::new(crate::services::stores::DisabledTaskExecutor),
+            None,
+            Box::new(aiden_data::now_millis),
+        );
+        let assistant = StoreScheduleSource(scheduler.clone());
+        let input = ScheduledTaskInput {
+            name: "Dormant task".to_string(),
+            enabled: Some(false),
+            mode: aiden_data::schedule_store::ScheduledTaskMode::Llm,
+            cron: "0 9 * * *".to_string(),
+            timezone: Some("UTC".to_string()),
+            provider_id: Some("provider".to_string()),
+            model: Some("model".to_string()),
+            prompt: Some("Summarize updates.".to_string()),
+            permission: Some(ScheduledTaskPermission::ReadOnly),
+            ..ScheduledTaskInput::default()
+        };
+        let created = assistant.save(&input, None).await.unwrap();
+        let mut settings_edit = input.clone();
+        settings_edit.id = Some(created.id.clone());
+        settings_edit.name = "Settings edit".to_string();
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        scheduler
+            .save(&settings_edit, Some(created.updated_at), &cancellation)
+            .await
+            .unwrap();
+
+        let stale = assistant
+            .save(&settings_edit, Some(created.updated_at))
+            .await;
+
+        assert!(stale
+            .unwrap_err()
+            .contains("changed before the edit was saved"));
+        assistant.remove(&created.id).await.unwrap();
+        assert!(scheduler.store().get(&created.id).unwrap().is_none());
     }
 }
