@@ -115,6 +115,19 @@ pub trait CodexAuthStore: Send + Sync {
     fn read(&self) -> Result<Option<OAuthCredential>, ProviderError>;
     /// Serialized write: `Some` replaces, `None` deletes.
     fn write(&self, credential: Option<&OAuthCredential>) -> Result<(), ProviderError>;
+    /// Atomically replace the credential only if the exact expected value is
+    /// still current. A sign-out or newer login must make this return false.
+    fn compare_and_swap(
+        &self,
+        expected: Option<&OAuthCredential>,
+        replacement: Option<&OAuthCredential>,
+    ) -> Result<bool, ProviderError>;
+    fn auth_snapshot(&self) -> Result<(Option<OAuthCredential>, bool), ProviderError>;
+    fn compare_and_set_needs_attention(
+        &self,
+        expected: &OAuthCredential,
+        needs_attention: bool,
+    ) -> Result<bool, ProviderError>;
 }
 
 /// OAuth token refresh — a network call the app may inject for tests.
@@ -130,6 +143,7 @@ pub trait CodexTokenRefresher: Send + Sync {
 pub struct HttpCodexTokenRefresher {
     pub token_url: String,
     pub client_id: String,
+    pub timeout_ms: u64,
 }
 
 impl Default for HttpCodexTokenRefresher {
@@ -137,6 +151,7 @@ impl Default for HttpCodexTokenRefresher {
         Self {
             token_url: CODEX_TOKEN_URL.to_string(),
             client_id: CODEX_CLIENT_ID.to_string(),
+            timeout_ms: 15_000,
         }
     }
 }
@@ -148,9 +163,18 @@ impl CodexTokenRefresher for HttpCodexTokenRefresher {
     ) -> Pin<Box<dyn Future<Output = Result<OAuthCredential, ProviderError>> + Send>> {
         let token_url = self.token_url.clone();
         let client_id = self.client_id.clone();
+        let timeout_ms = self.timeout_ms;
         let refresh_token = refresh_token.to_string();
         Box::pin(async move {
-            let response = reqwest::Client::new()
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_millis(timeout_ms))
+                .build()
+                .map_err(|_| {
+                    ProviderError::Stream(
+                        "OpenAI Codex token refresh client could not be created.".to_string(),
+                    )
+                })?;
+            let response = client
                 .post(&token_url)
                 .header("content-type", "application/x-www-form-urlencoded")
                 .form(&[
@@ -762,10 +786,9 @@ pub fn resolve_runtime_auth_with_retry(
 
 /// `resolveRuntimeAuth` — read, refresh when near expiry, derive account id.
 /// `request_cancelled` models the caller's abort signal for error taxonomy.
-pub fn resolve_runtime_auth(
+pub async fn resolve_runtime_auth(
     store: &dyn CodexAuthStore,
     refresher: &dyn CodexTokenRefresher,
-    revision_guard: Option<&str>,
     request_cancelled: bool,
 ) -> Result<PreparedCodexAuth, CodexAuthError> {
     let stored = store.read().map_err(|err| {
@@ -775,12 +798,6 @@ pub fn resolve_runtime_auth(
         ))
     })?;
     let mut credential = stored.clone();
-    let revision_before = credential_revision(credential.as_ref());
-    if let Some(guard) = revision_guard {
-        if revision_before.as_deref() != Some(guard) {
-            return Err(CodexAuthError::Superseded);
-        }
-    }
     let Some(credential_value) = credential.clone() else {
         return Err(CodexAuthError::Runtime(CodexRuntimeError::new(
             CodexRuntimeErrorCode::SignInRequired,
@@ -792,11 +809,9 @@ pub fn resolve_runtime_auth(
             .expires
             .saturating_sub(OAUTH_REFRESH_SKEW_MS)
     {
-        let refreshed = refresher
-            .refresh(&credential_value.refresh)
-            .await_blocking()
-            .map_err(|err| {
+        let refreshed = refresher.refresh(&credential_value.refresh).await.map_err(|err| {
                 if is_codex_authentication_failure(Some(&err.to_string())) {
+                    let _ = store.compare_and_set_needs_attention(&credential_value, true);
                     CodexAuthError::Runtime(CodexRuntimeError::new(
                         CodexRuntimeErrorCode::SignInNeedsAttention,
                         "Your ChatGPT sign-in needs attention. Sign in again in Settings → Providers.",
@@ -808,18 +823,17 @@ pub fn resolve_runtime_auth(
                     ))
                 }
             })?;
-        // Persist the rotated credential (conditional on revision).
-        if let Some(guard) = revision_guard {
-            if credential_revision(credential.as_ref()).as_deref() != Some(guard) {
-                return Err(CodexAuthError::Superseded);
-            }
+        let committed = store
+            .compare_and_swap(Some(&credential_value), Some(&refreshed))
+            .map_err(|err| {
+                CodexAuthError::Runtime(CodexRuntimeError::new(
+                    CodexRuntimeErrorCode::TemporarilyUnavailable,
+                    err.to_string(),
+                ))
+            })?;
+        if !committed {
+            return Err(CodexAuthError::Superseded);
         }
-        store.write(Some(&refreshed)).map_err(|err| {
-            CodexAuthError::Runtime(CodexRuntimeError::new(
-                CodexRuntimeErrorCode::TemporarilyUnavailable,
-                err.to_string(),
-            ))
-        })?;
         credential = Some(refreshed);
     }
     let Some(credential_value) = credential.clone() else {
@@ -827,6 +841,7 @@ pub fn resolve_runtime_auth(
         return Err(CodexAuthError::Superseded);
     };
     let account_id = extract_account_id(&credential_value.access).map_err(|_| {
+        let _ = store.compare_and_set_needs_attention(&credential_value, true);
         CodexAuthError::Runtime(CodexRuntimeError::new(
             CodexRuntimeErrorCode::SignInNeedsAttention,
             "Your ChatGPT sign-in needs attention. Sign in again in Settings → Providers.",
@@ -835,6 +850,13 @@ pub fn resolve_runtime_auth(
     if request_cancelled {
         return Err(CodexAuthError::Cancelled);
     }
+    if store
+        .auth_snapshot()
+        .map(|(_, needs_attention)| needs_attention)
+        .unwrap_or(false)
+    {
+        let _ = store.compare_and_set_needs_attention(&credential_value, false);
+    }
     Ok(PreparedCodexAuth {
         access_token: credential_value.access,
         account_id,
@@ -842,20 +864,40 @@ pub fn resolve_runtime_auth(
     })
 }
 
-/// Blocking shim for the async refresher trait inside the sync resolver.
-trait AwaitBlocking {
-    fn await_blocking(self) -> Result<OAuthCredential, ProviderError>;
-}
-
-impl AwaitBlocking
-    for Pin<Box<dyn Future<Output = Result<OAuthCredential, ProviderError>> + Send>>
-{
-    fn await_blocking(self) -> Result<OAuthCredential, ProviderError> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| ProviderError::Stream(format!("runtime: {err}")))?;
-        runtime.block_on(self)
+async fn resolve_runtime_auth_with_store_retry(
+    store: &dyn CodexAuthStore,
+    refresher: &dyn CodexTokenRefresher,
+    request_cancelled: bool,
+) -> Result<PreparedCodexAuth, CodexRuntimeError> {
+    let mut attempt = 0;
+    loop {
+        match resolve_runtime_auth(store, refresher, request_cancelled).await {
+            Ok(auth) => return Ok(auth),
+            Err(CodexAuthError::Superseded) if attempt < 2 && !request_cancelled => {
+                attempt += 1;
+            }
+            Err(CodexAuthError::Cancelled) | Err(CodexAuthError::Superseded)
+                if request_cancelled =>
+            {
+                return Err(CodexRuntimeError::new(
+                    CodexRuntimeErrorCode::RequestCancelled,
+                    "Codex request cancelled.",
+                ));
+            }
+            Err(CodexAuthError::Superseded) => {
+                return Err(CodexRuntimeError::new(
+                    CodexRuntimeErrorCode::TemporarilyUnavailable,
+                    "Your ChatGPT sign-in changed while this request was starting. Try again.",
+                ));
+            }
+            Err(CodexAuthError::Cancelled) => {
+                return Err(CodexRuntimeError::new(
+                    CodexRuntimeErrorCode::RequestCancelled,
+                    "Codex request cancelled.",
+                ));
+            }
+            Err(CodexAuthError::Runtime(error)) => return Err(error),
+        }
     }
 }
 
@@ -900,7 +942,7 @@ impl CodexProvider {
 
     /// `prepareRuntimeModel` — validate the selection and resolve OAuth before
     /// the request enters the stream.
-    pub fn prepare_runtime_model(&self, model_id: &str) -> Result<(), CodexRuntimeError> {
+    pub async fn prepare_runtime_model(&self, model_id: &str) -> Result<(), CodexRuntimeError> {
         if let Some(check) = &self.model_available {
             if !check(model_id) {
                 return Err(CodexRuntimeError::new(
@@ -909,17 +951,12 @@ impl CodexProvider {
                 ));
             }
         }
-        resolve_runtime_auth_with_retry(
-            || {
-                resolve_runtime_auth(
-                    self.auth_store.as_ref(),
-                    self.refresher.as_ref(),
-                    None,
-                    false,
-                )
-            },
+        resolve_runtime_auth_with_store_retry(
+            self.auth_store.as_ref(),
+            self.refresher.as_ref(),
             false,
-        )?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -1083,17 +1120,12 @@ async fn drive_codex(
     loop {
         state = match state {
             CodexDriveState::Idle => {
-                let auth = resolve_runtime_auth_with_retry(
-                    || {
-                        resolve_runtime_auth(
-                            provider.auth_store.as_ref(),
-                            provider.refresher.as_ref(),
-                            None,
-                            false,
-                        )
-                    },
+                let auth = resolve_runtime_auth_with_store_retry(
+                    provider.auth_store.as_ref(),
+                    provider.refresher.as_ref(),
                     false,
-                );
+                )
+                .await;
                 let auth = match auth {
                     Ok(auth) => auth,
                     Err(runtime_error) => {
@@ -1610,6 +1642,28 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
             *self.0.lock().unwrap() = credential.cloned();
             Ok(())
         }
+        fn compare_and_swap(
+            &self,
+            expected: Option<&OAuthCredential>,
+            replacement: Option<&OAuthCredential>,
+        ) -> Result<bool, ProviderError> {
+            let mut current = self.0.lock().unwrap();
+            if current.as_ref() != expected {
+                return Ok(false);
+            }
+            *current = replacement.cloned();
+            Ok(true)
+        }
+        fn auth_snapshot(&self) -> Result<(Option<OAuthCredential>, bool), ProviderError> {
+            Ok((self.read()?, false))
+        }
+        fn compare_and_set_needs_attention(
+            &self,
+            expected: &OAuthCredential,
+            _: bool,
+        ) -> Result<bool, ProviderError> {
+            Ok(self.read()?.as_ref() == Some(expected))
+        }
     }
 
     struct StaticRefresher(OAuthCredential);
@@ -1623,6 +1677,96 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
         }
     }
 
+    struct PausedRefresher {
+        started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        resume: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+        credential: OAuthCredential,
+    }
+
+    impl CodexTokenRefresher for PausedRefresher {
+        fn refresh(
+            &self,
+            _refresh_token: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<OAuthCredential, ProviderError>> + Send>> {
+            let started = self.started.lock().unwrap().take();
+            let resume = self.resume.lock().unwrap().take();
+            let credential = self.credential.clone();
+            Box::pin(async move {
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                if let Some(resume) = resume {
+                    let _ = resume.await;
+                }
+                Ok(credential)
+            })
+        }
+    }
+
+    struct AttentionStore(Mutex<(Option<OAuthCredential>, bool)>);
+    impl CodexAuthStore for AttentionStore {
+        fn read(&self) -> Result<Option<OAuthCredential>, ProviderError> {
+            Ok(self.0.lock().unwrap().0.clone())
+        }
+        fn write(&self, credential: Option<&OAuthCredential>) -> Result<(), ProviderError> {
+            *self.0.lock().unwrap() = (credential.cloned(), false);
+            Ok(())
+        }
+        fn compare_and_swap(
+            &self,
+            expected: Option<&OAuthCredential>,
+            replacement: Option<&OAuthCredential>,
+        ) -> Result<bool, ProviderError> {
+            let mut current = self.0.lock().unwrap();
+            if current.0.as_ref() != expected {
+                return Ok(false);
+            }
+            *current = (replacement.cloned(), false);
+            Ok(true)
+        }
+        fn auth_snapshot(&self) -> Result<(Option<OAuthCredential>, bool), ProviderError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn compare_and_set_needs_attention(
+            &self,
+            expected: &OAuthCredential,
+            needs_attention: bool,
+        ) -> Result<bool, ProviderError> {
+            let mut current = self.0.lock().unwrap();
+            if current.0.as_ref() != Some(expected) {
+                return Ok(false);
+            }
+            current.1 = needs_attention;
+            Ok(true)
+        }
+    }
+
+    struct PausedRejectingRefresher {
+        started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        resume: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+    impl CodexTokenRefresher for PausedRejectingRefresher {
+        fn refresh(
+            &self,
+            _: &str,
+        ) -> Pin<Box<dyn Future<Output = Result<OAuthCredential, ProviderError>> + Send>> {
+            let started = self.started.lock().unwrap().take();
+            let resume = self.resume.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                if let Some(resume) = resume {
+                    let _ = resume.await;
+                }
+                Err(ProviderError::from_http_status(
+                    401,
+                    "refresh rejected".to_string(),
+                ))
+            })
+        }
+    }
+
     fn jwt_token(account_id: &str) -> String {
         use base64::Engine;
         let payload =
@@ -1631,8 +1775,8 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
         format!("header.{payload}.signature")
     }
 
-    #[test]
-    fn auth_resolves_without_refresh_when_not_expiring() {
+    #[tokio::test]
+    async fn auth_resolves_without_refresh_when_not_expiring() {
         let store = MemoryStore(Mutex::new(Some(OAuthCredential {
             access: jwt_token("acct_1"),
             refresh: "refresh-token".into(),
@@ -1643,11 +1787,9 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
             refresh: "new-refresh".into(),
             expires: now_ms() + 3_600_000,
         });
-        let auth = resolve_runtime_auth_with_retry(
-            || resolve_runtime_auth(&store, &refresher, None, false),
-            false,
-        )
-        .unwrap();
+        let auth = resolve_runtime_auth_with_store_retry(&store, &refresher, false)
+            .await
+            .unwrap();
         assert_eq!(auth.access_token, jwt_token("acct_1"));
         assert_eq!(auth.account_id, "acct_1");
         // No refresh → store unchanged.
@@ -1657,8 +1799,8 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
         );
     }
 
-    #[test]
-    fn auth_refreshes_when_near_expiry() {
+    #[tokio::test]
+    async fn auth_refreshes_when_near_expiry() {
         let store = MemoryStore(Mutex::new(Some(OAuthCredential {
             access: jwt_token("acct_1"),
             refresh: "refresh-token".into(),
@@ -1669,11 +1811,9 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
             refresh: "new-refresh".into(),
             expires: now_ms() + 3_600_000,
         });
-        let auth = resolve_runtime_auth_with_retry(
-            || resolve_runtime_auth(&store, &refresher, None, false),
-            false,
-        )
-        .unwrap();
+        let auth = resolve_runtime_auth_with_store_retry(&store, &refresher, false)
+            .await
+            .unwrap();
         assert_eq!(auth.access_token, jwt_token("acct_2"));
         assert_eq!(auth.account_id, "acct_2");
         // Rotated credential was persisted.
@@ -1683,19 +1823,145 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
         );
     }
 
-    #[test]
-    fn auth_requires_sign_in_when_missing() {
+    #[tokio::test]
+    async fn sign_out_during_refresh_cannot_be_undone_by_late_completion() {
+        let store = Arc::new(MemoryStore(Mutex::new(Some(OAuthCredential {
+            access: jwt_token("acct_1"),
+            refresh: "refresh-token".into(),
+            expires: now_ms() + 30_000,
+        }))));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let refresher = Arc::new(PausedRefresher {
+            started: Mutex::new(Some(started_tx)),
+            resume: Mutex::new(Some(resume_rx)),
+            credential: OAuthCredential {
+                access: jwt_token("acct_2"),
+                refresh: "new-refresh".into(),
+                expires: now_ms() + 3_600_000,
+            },
+        });
+        let task_store = store.clone();
+        let task_refresher = refresher.clone();
+        let task = tokio::spawn(async move {
+            resolve_runtime_auth_with_store_retry(
+                task_store.as_ref(),
+                task_refresher.as_ref(),
+                false,
+            )
+            .await
+        });
+        started_rx.await.unwrap();
+        store.write(None).unwrap();
+        resume_tx.send(()).unwrap();
+
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(error.code, CodexRuntimeErrorCode::SignInRequired);
+        assert_eq!(store.read().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn old_refresh_rejection_cannot_mark_a_new_login_as_needing_attention() {
+        let old = OAuthCredential {
+            access: jwt_token("old"),
+            refresh: "old-refresh".into(),
+            expires: now_ms() + 30_000,
+        };
+        let new = OAuthCredential {
+            access: jwt_token("new"),
+            refresh: "new-refresh".into(),
+            expires: now_ms() + 3_600_000,
+        };
+        let store = Arc::new(AttentionStore(Mutex::new((Some(old), false))));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let refresher = Arc::new(PausedRejectingRefresher {
+            started: Mutex::new(Some(started_tx)),
+            resume: Mutex::new(Some(resume_rx)),
+        });
+        let task = tokio::spawn({
+            let store = Arc::clone(&store);
+            let refresher = Arc::clone(&refresher);
+            async move { resolve_runtime_auth(store.as_ref(), refresher.as_ref(), false).await }
+        });
+        started_rx.await.unwrap();
+        store.write(Some(&new)).unwrap();
+        resume_tx.send(()).unwrap();
+
+        let error = task.await.unwrap().unwrap_err();
+        assert!(matches!(error, CodexAuthError::Runtime(_)));
+        assert_eq!(store.auth_snapshot().unwrap(), (Some(new), false));
+    }
+
+    #[tokio::test]
+    async fn near_expiry_refresh_runs_through_actual_drive_without_nested_runtime() {
+        use futures::StreamExt as _;
+
+        let store = Arc::new(MemoryStore(Mutex::new(Some(OAuthCredential {
+            access: jwt_token("acct_1"),
+            refresh: "refresh-token".into(),
+            expires: now_ms() + 30_000,
+        }))));
+        let provider = CodexProvider::new(store.clone())
+            .with_refresher(Arc::new(StaticRefresher(OAuthCredential {
+                access: jwt_token("acct_2"),
+                refresh: "new-refresh".into(),
+                expires: now_ms() + 3_600_000,
+            })))
+            .with_base_url("http://127.0.0.1:9");
+        let mut stream = provider
+            .stream_simple(
+                &request("gpt-5.4"),
+                &StreamOptions {
+                    max_retries: Some(0),
+                    timeout_ms: Some(100),
+                    ..StreamOptions::default()
+                },
+            )
+            .unwrap();
+
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            AssistantMessageEvent::Error { .. }
+        ));
+        assert_eq!(store.read().unwrap().unwrap().access, jwt_token("acct_2"));
+    }
+
+    #[tokio::test]
+    async fn http_token_refresh_has_a_hard_request_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+        let refresher = HttpCodexTokenRefresher {
+            token_url: format!("http://{address}/token"),
+            client_id: "client".to_string(),
+            timeout_ms: 25,
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            refresher.refresh("refresh"),
+        )
+        .await
+        .expect("refresh must respect its own request timeout");
+        assert!(result.is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn auth_requires_sign_in_when_missing() {
         let store = MemoryStore(Mutex::new(None));
         let refresher = StaticRefresher(OAuthCredential {
             access: "x".into(),
             refresh: "y".into(),
             expires: now_ms() + 3_600_000,
         });
-        let err = resolve_runtime_auth_with_retry(
-            || resolve_runtime_auth(&store, &refresher, None, false),
-            false,
-        )
-        .unwrap_err();
+        let err = resolve_runtime_auth_with_store_retry(&store, &refresher, false)
+            .await
+            .unwrap_err();
         assert_eq!(err.code, CodexRuntimeErrorCode::SignInRequired);
         assert!(err.message.contains("Sign in with ChatGPT"));
     }
@@ -1782,16 +2048,16 @@ data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomple
         assert_eq!(json_message, "model not found");
     }
 
-    #[test]
-    fn provider_prepare_runtime_model_validates_and_resolves_auth() {
+    #[tokio::test]
+    async fn provider_prepare_runtime_model_validates_and_resolves_auth() {
         let store = Arc::new(MemoryStore(Mutex::new(Some(OAuthCredential {
             access: jwt_token("acct_1"),
             refresh: "refresh".into(),
             expires: now_ms() + 3_600_000,
         }))));
         let provider = CodexProvider::new(store).with_model_check(Box::new(|id| id == "gpt-5.4"));
-        assert!(provider.prepare_runtime_model("gpt-5.4").is_ok());
-        let err = provider.prepare_runtime_model("gpt-4").unwrap_err();
+        assert!(provider.prepare_runtime_model("gpt-5.4").await.is_ok());
+        let err = provider.prepare_runtime_model("gpt-4").await.unwrap_err();
         assert_eq!(err.code, CodexRuntimeErrorCode::ModelUnavailable);
     }
 }
