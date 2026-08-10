@@ -33,8 +33,23 @@ use crate::{DataStore, DataStoreError, DataStoreOptions};
 // ===========================================================================
 
 pub const MAX_CONFIG_ID_LENGTH: usize = 256;
+pub const MAX_MCP_SERVERS: usize = 256;
+pub const MAX_MCP_NAME_LENGTH: usize = 256;
+pub const MAX_MCP_URL_LENGTH: usize = 4_096;
+pub const MAX_MCP_ARGS: usize = 128;
+pub const MAX_MCP_MAP_ENTRIES: usize = 64;
+pub const MAX_MCP_KEY_LENGTH: usize = 256;
+pub const MAX_MCP_VALUE_LENGTH: usize = 4_096;
 pub const MAX_PROVIDER_BASE_URL_LENGTH: usize = 4_096;
 pub const MAX_PROVIDER_KEY_LENGTH: usize = 1_048_576;
+pub const MAX_CONFIGURED_SKILLS: usize = 500;
+pub const MAX_SKILL_ID_LENGTH: usize = 128;
+pub const MAX_SKILL_NAME_LENGTH: usize = 128;
+pub const MAX_SKILL_DESCRIPTION_LENGTH: usize = 512;
+pub const MAX_SKILL_INSTRUCTIONS_LENGTH: usize = 1_048_576;
+/// Maximum aggregate instruction payload retained for configured Skills.
+/// This matches the immutable per-turn runtime registry ceiling.
+pub const MAX_CONFIGURED_SKILL_INSTRUCTIONS_BYTES: usize = 8 * 1_048_576;
 
 pub const PORTABLE_CONFIG_FILENAME: &str = "config.json";
 pub const SETTINGS_FILENAME: &str = "settings.json";
@@ -413,13 +428,6 @@ pub fn is_record(value: &Value) -> bool {
     value.is_object()
 }
 
-fn is_string_map(value: &Value) -> bool {
-    match value {
-        Value::Object(entries) => entries.values().all(Value::is_string),
-        _ => false,
-    }
-}
-
 /// View an alias record (`providerId -> string`) as a plain string map. The
 /// JSON object is stored as `Map<String, Value>` to preserve key order.
 fn aliases_view(record: &Map<String, Value>) -> std::collections::BTreeMap<String, String> {
@@ -646,27 +654,63 @@ pub fn is_mcp_server(value: &Value) -> bool {
     let enabled = record.get("enabled").and_then(Value::as_bool);
     id.map(|id| !id.trim().is_empty() && id.len() <= MAX_CONFIG_ID_LENGTH)
         .unwrap_or(false)
-        && name.is_some()
+        && name.is_some_and(|name| !name.is_empty() && name.len() <= MAX_MCP_NAME_LENGTH)
         && matches!(transport, Some("stdio" | "http" | "sse"))
         && enabled.is_some()
         && match record.get("command") {
-            None | Some(Value::String(_)) => true,
+            None => true,
+            Some(Value::String(value)) => {
+                value.len() <= MAX_MCP_VALUE_LENGTH && !value.contains('\0')
+            }
             Some(_) => false,
         }
         && match record.get("args") {
-            Some(Value::Array(args)) => args.iter().all(Value::is_string),
-            _ => true,
+            None => true,
+            Some(Value::Array(args)) => {
+                args.len() <= MAX_MCP_ARGS
+                    && args.iter().all(|value| {
+                        value.as_str().is_some_and(|value| {
+                            value.len() <= MAX_MCP_VALUE_LENGTH && !value.contains('\0')
+                        })
+                    })
+            }
+            Some(_) => false,
         }
         && match record.get("env") {
-            Some(value) => is_string_map(value),
+            Some(Value::Object(map)) => {
+                map.len() <= MAX_MCP_MAP_ENTRIES
+                    && map.iter().all(|(key, value)| {
+                        !key.is_empty()
+                            && key.len() <= MAX_MCP_KEY_LENGTH
+                            && !key.chars().any(char::is_control)
+                            && value.as_str().is_some_and(|value| {
+                                value.len() <= MAX_MCP_VALUE_LENGTH && !value.contains('\0')
+                            })
+                    })
+            }
+            Some(_) => false,
             _ => true,
         }
         && match record.get("url") {
-            None | Some(Value::String(_)) => true,
+            None => true,
+            Some(Value::String(value)) => {
+                value.len() <= MAX_MCP_URL_LENGTH && !value.chars().any(char::is_control)
+            }
             Some(_) => false,
         }
         && match record.get("headers") {
-            Some(value) => is_string_map(value),
+            Some(Value::Object(map)) => {
+                map.len() <= MAX_MCP_MAP_ENTRIES
+                    && map.iter().all(|(key, value)| {
+                        !key.is_empty()
+                            && key.len() <= MAX_MCP_KEY_LENGTH
+                            && !key.chars().any(char::is_control)
+                            && value.as_str().is_some_and(|value| {
+                                value.len() <= MAX_MCP_VALUE_LENGTH && !value.contains('\0')
+                            })
+                    })
+            }
+            Some(_) => false,
             _ => true,
         }
         && match record.get("oauth") {
@@ -674,7 +718,10 @@ pub fn is_mcp_server(value: &Value) -> bool {
             Some(_) => false,
         }
         && match record.get("presetId") {
-            None | Some(Value::String(_)) => true,
+            None => true,
+            Some(Value::String(value)) => {
+                value.len() <= MAX_CONFIG_ID_LENGTH && !value.chars().any(char::is_control)
+            }
             Some(_) => false,
         }
 }
@@ -686,24 +733,36 @@ pub fn is_skill(value: &Value) -> bool {
     record
         .get("id")
         .and_then(Value::as_str)
-        .map(|id| !id.trim().is_empty())
+        .map(|id| !id.is_empty() && id == id.trim() && id.len() <= MAX_SKILL_ID_LENGTH)
         .unwrap_or(false)
-        && record.get("name").map(Value::is_string).unwrap_or(false)
+        && record
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| {
+                !name.is_empty()
+                    && name == name.trim()
+                    && name.chars().count() <= MAX_SKILL_NAME_LENGTH
+            })
         && record
             .get("description")
-            .map(Value::is_string)
-            .unwrap_or(false)
+            .and_then(Value::as_str)
+            .is_some_and(|description| description.chars().count() <= MAX_SKILL_DESCRIPTION_LENGTH)
         && record
             .get("instructions")
-            .map(Value::is_string)
-            .unwrap_or(false)
+            .and_then(Value::as_str)
+            .is_some_and(|instructions| {
+                !instructions.trim().is_empty()
+                    && instructions.len() <= MAX_SKILL_INSTRUCTIONS_LENGTH
+            })
         && record.get("enabled").and_then(Value::as_bool).is_some()
 }
 
 pub fn is_mcp_server_list(value: &Value) -> bool {
     match value {
         Value::Array(servers) => {
-            servers.iter().all(is_mcp_server) && has_unique_ids(&to_servers(servers))
+            servers.len() <= MAX_MCP_SERVERS
+                && servers.iter().all(is_mcp_server)
+                && has_unique_ids(&to_servers(servers))
         }
         _ => false,
     }
@@ -718,9 +777,65 @@ fn to_servers(values: &[Value]) -> Vec<McpServer> {
 
 pub fn is_skill_list(value: &Value) -> bool {
     match value {
-        Value::Array(skills) => skills.iter().all(is_skill) && has_unique_ids(&to_skills(skills)),
+        Value::Array(skills) => {
+            skills.len() <= MAX_CONFIGURED_SKILLS
+                && skills.iter().all(is_skill)
+                && configured_skill_value_identities_are_unique(skills)
+                && configured_skill_value_instructions_fit(skills)
+        }
         _ => false,
     }
+}
+
+fn configured_skill_value_identities_are_unique(skills: &[Value]) -> bool {
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    skills.iter().all(|value| {
+        let Some(record) = value.as_object() else {
+            return false;
+        };
+        let Some(id) = record.get("id").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(name) = record.get("name").and_then(Value::as_str) else {
+            return false;
+        };
+        ids.insert(id) && names.insert(name.to_lowercase())
+    })
+}
+
+fn configured_skill_value_instructions_fit(skills: &[Value]) -> bool {
+    skills
+        .iter()
+        .try_fold(0usize, |total, value| {
+            total.checked_add(
+                value
+                    .get("instructions")
+                    .and_then(Value::as_str)
+                    .map_or(usize::MAX, str::len),
+            )
+        })
+        .is_some_and(|total| total <= MAX_CONFIGURED_SKILL_INSTRUCTIONS_BYTES)
+}
+
+/// Configured skills must have unambiguous persisted and model-facing
+/// identities. Names are compared case-insensitively because discovery uses
+/// the same precedence key.
+pub fn configured_skill_identities_are_unique(skills: &[Skill]) -> bool {
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    skills.iter().all(|skill| {
+        ids.insert(skill.id.trim().to_string()) && names.insert(skill.name.trim().to_lowercase())
+    })
+}
+
+pub fn configured_skill_instructions_fit(skills: &[Skill]) -> bool {
+    skills
+        .iter()
+        .try_fold(0usize, |total, skill| {
+            total.checked_add(skill.instructions.len())
+        })
+        .is_some_and(|total| total <= MAX_CONFIGURED_SKILL_INSTRUCTIONS_BYTES)
 }
 
 fn to_skills(values: &[Value]) -> Vec<Skill> {
@@ -2882,6 +2997,50 @@ mod tests {
         ));
         assert!(unsafe_config);
         assert!(config.provider_id_aliases.is_empty());
+    }
+
+    #[test]
+    fn normalize_rejects_non_array_mcp_arguments_as_unsafe() {
+        let server = serde_json::json!({
+            "id": "mcp-test",
+            "name": "Test",
+            "transport": "stdio",
+            "command": "npx",
+            "args": "--not-an-array",
+            "enabled": true
+        });
+        assert!(!is_mcp_server(&server));
+        assert!(!is_mcp_server_list(&serde_json::json!([server.clone()])));
+
+        let (config, unsafe_config) = normalize_portable_config(&serde_json::json!({
+            "mcpServers": [server]
+        }));
+        assert!(unsafe_config);
+        assert!(config.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn configured_skill_list_enforces_the_aggregate_instruction_budget() {
+        let mut skills = (0..8)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("skill-{index}"),
+                    "name": format!("Skill {index}"),
+                    "description": "",
+                    "instructions": "i".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+                    "enabled": true,
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(is_skill_list(&Value::Array(skills.clone())));
+        skills.push(serde_json::json!({
+            "id": "overflow",
+            "name": "Overflow",
+            "description": "",
+            "instructions": "x",
+            "enabled": true,
+        }));
+        assert!(!is_skill_list(&Value::Array(skills)));
     }
 
     #[test]
