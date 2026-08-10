@@ -150,9 +150,24 @@ fn main() {
         }
     };
 
-    gpui::Application::new()
-        .with_assets(gpui_component_assets::Assets)
-        .run(move |cx: &mut App| {
+    let app = gpui::Application::new().with_assets(gpui_component_assets::Assets);
+    app.on_reopen(|cx| {
+            // Dock-click when the window was closed via ✕: reopen it.
+            if cx.windows().is_empty() {
+                let stores = match Stores::open() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        eprintln!("failed to open stores on reopen: {e}");
+                        return;
+                    }
+                };
+                if let Err(e) = open_main_window(cx, stores) {
+                    eprintln!("failed to reopen the Aiden window: {e}");
+                }
+            }
+            cx.activate(true);
+        });
+    app.run(move |cx: &mut App| {
             // gpui-component MUST be initialized first: theme global, i18n,
             // and component keybindings.
             gpui_component::init(cx);
@@ -403,6 +418,10 @@ fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::Window
     };
 
     cx.open_window(options, |window, cx| {
+        // Red ✕ button: allow the window to close. The app process stays
+        // alive (macOS convention); the user can reopen via the dock icon
+        // (on_reopen handler below). ⌘Q / ⌘W still fully quit.
+        window.on_window_should_close(cx, |_window, _cx| true);
         let view = cx.new(|cx| AppState::new(stores, window, cx));
         cx.new(|cx| Root::new(view, window, cx))
     })
