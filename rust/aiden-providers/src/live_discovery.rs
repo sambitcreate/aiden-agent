@@ -115,6 +115,17 @@ pub async fn discover_models_with_options(
     runtime: RuntimeKind,
     options: &DiscoveryOptions,
 ) -> Result<Vec<DiscoveredModel>, DiscoveryError> {
+    discover_models_with_auth(base_url, runtime, options, None).await
+}
+
+/// Discover models with an optional transient bearer credential. The key is
+/// applied only to these bounded requests and is never included in errors.
+pub async fn discover_models_with_auth(
+    base_url: &str,
+    runtime: RuntimeKind,
+    options: &DiscoveryOptions,
+    api_key: Option<&str>,
+) -> Result<Vec<DiscoveredModel>, DiscoveryError> {
     let client = reqwest::Client::builder()
         .connect_timeout(options.connect_timeout)
         .timeout(options.total_timeout)
@@ -123,15 +134,15 @@ pub async fn discover_models_with_options(
     match runtime {
         RuntimeKind::LmStudio => {
             let url = provider_endpoint(base_url, "/v1/models")?;
-            let body = fetch(&client, &url, options).await?;
+            let body = fetch(&client, &url, options, api_key).await?;
             parse_lmstudio_models(&body)
         }
         RuntimeKind::Ollama => {
             let url = provider_endpoint(base_url, "/api/tags")?;
-            let body = fetch(&client, &url, options).await?;
+            let body = fetch(&client, &url, options, api_key).await?;
             parse_ollama_tags(&body)
         }
-        RuntimeKind::Generic => generic_discovery(&client, base_url, options).await,
+        RuntimeKind::Generic => generic_discovery(&client, base_url, options, api_key).await,
     }
 }
 
@@ -344,15 +355,16 @@ async fn generic_discovery(
     client: &reqwest::Client,
     base_url: &str,
     options: &DiscoveryOptions,
+    api_key: Option<&str>,
 ) -> Result<Vec<DiscoveredModel>, DiscoveryError> {
     let first = provider_endpoint(base_url, "/v1/models")?;
-    match fetch(client, &first, options).await {
+    match fetch(client, &first, options, api_key).await {
         Ok(body) => parse_lmstudio_models(&body),
         // `canFallBackFromNative` (models.ts): only 404/405 fall through to
         // the bare `${baseUrl}/models`; timeouts / connection errors surface.
         Err(error) if http_status(&error).is_some_and(|status| status == 404 || status == 405) => {
             let second = generic_models_endpoint(base_url)?;
-            let body = fetch(client, &second, options).await?;
+            let body = fetch(client, &second, options, api_key).await?;
             parse_lmstudio_models(&body)
         }
         Err(error) => Err(error),
@@ -370,23 +382,26 @@ async fn fetch(
     client: &reqwest::Client,
     url: &str,
     options: &DiscoveryOptions,
+    api_key: Option<&str>,
 ) -> Result<serde_json::Value, DiscoveryError> {
-    let response = client
-        .get(url)
+    let request = client.get(url);
+    let request = match api_key.map(str::trim).filter(|key| !key.is_empty()) {
+        Some(key) => request.bearer_auth(key),
+        None => request,
+    };
+    let response = request
         .send()
         .await
         .map_err(|error| classify(&error, options))?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let body = response.text().await.unwrap_or_default();
-        let body = body.trim();
-        let message = if body.is_empty() {
-            String::new()
-        } else {
-            let truncated: String = body.chars().take(200).collect();
-            format!(" — {truncated}")
-        };
-        return Err(DiscoveryError::Http { status, message });
+        // Response bodies are untrusted and may reflect Authorization values.
+        // Status-only failures are actionable without risking credential
+        // material in UI errors or diagnostics.
+        return Err(DiscoveryError::Http {
+            status,
+            message: String::new(),
+        });
     }
     response
         .json::<serde_json::Value>()
@@ -720,6 +735,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_discovery_sends_transient_bearer_key() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 4096];
+            let read = socket.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let _ = request_tx.send(request);
+            let body = r#"{"data":[{"id":"private-model"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        let models = discover_models_with_auth(
+            &format!("http://{address}"),
+            RuntimeKind::LmStudio,
+            &DiscoveryOptions::default(),
+            Some("draft-secret"),
+        )
+        .await
+        .unwrap();
+        let request = request_rx.await.unwrap();
+        server.await.unwrap();
+        assert_eq!(models[0].id, "private-model");
+        assert!(request.contains("authorization: Bearer draft-secret"));
+    }
+
+    #[tokio::test]
     async fn generic_discovery_falls_back_from_404_to_base_url_models() {
         let server = mock_server(&[
             ("/v1/models", 404, "{}"),
@@ -744,6 +791,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, DiscoveryError::Http { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn authenticated_error_body_cannot_echo_the_transient_secret() {
+        let server =
+            mock_server(&[("/v1/models", 401, r#"{"error":"Bearer draft-secret"}"#)]).await;
+        let error = discover_models_with_auth(
+            &server.base,
+            RuntimeKind::LmStudio,
+            &DiscoveryOptions::default(),
+            Some("draft-secret"),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "Failed to list models: HTTP 401");
+        assert!(!error.to_string().contains("draft-secret"));
     }
 
     #[tokio::test]
