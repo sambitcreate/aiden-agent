@@ -553,6 +553,13 @@ impl TerminalDrawer {
         self.open
     }
 
+    pub fn close(&mut self, cx: &mut Context<Self>) {
+        if self.open {
+            self.open = false;
+            cx.notify();
+        }
+    }
+
     /// Restart the shell in a new working directory (used when the active
     /// workspace changes). The old PTY is dropped (SIGHUP to its shell) and a
     /// fresh backend spawns in the new folder.
