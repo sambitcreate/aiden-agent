@@ -1,7 +1,8 @@
 //! Settings surface (port of `renderer/components/settings/*`).
 //!
-//! A single [`SettingsView`] entity renders a left navigation column and the
-//! active section's content. Every section talks to the durable stores through
+//! A single [`SettingsView`] entity renders the active section's content. The
+//! application shell renders the catalog-driven settings navigation in its one
+//! shared leading rail. Every section talks to the durable stores through
 //! [`SettingsServices`] (Arc handles constructed by the orchestrator from
 //! `services::stores::Stores`) and runs all store/keychain I/O on the
 //! background executor, mirroring the chat service patterns. Pure form logic
@@ -13,97 +14,43 @@
 //! `shortcuts`, `mcp`, `scheduled`, `about`), each implementing render
 //! helpers on `SettingsView`, so this file stays a thin shell + router.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use aiden_data::config_store::ConfigStore;
+use aiden_data::model_pad_store::ModelPadStore;
+use aiden_data::portable_config::Workspace;
 use aiden_data::schedule_store::{DataStorePersistence, ScheduleStore};
 use aiden_data::secret_map::ProviderKeysStore;
 use aiden_mcp::client::McpClientManager;
+use aiden_scheduler::runtime::SchedulerCore;
 use gpui::{
-    div, prelude::FluentBuilder as _, AppContext as _, Context, ElementId, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window,
+    div, prelude::FluentBuilder as _, AppContext as _, Context, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _};
+use gpui_component::{v_flex, ActiveTheme};
 
 mod about;
 mod appearance;
 mod assistant;
+pub mod catalog;
 mod computer_use;
 mod mcp;
 mod model_data;
+#[allow(dead_code)]
+mod model_pad;
+pub(crate) mod navigation;
 mod providers;
 mod scheduled;
 mod shortcuts;
+pub(crate) mod skills;
 mod voice;
 mod web_search;
 
 use providers::enrich_provider_row;
 
-/// The left-nav sections, in display order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsSection {
-    Providers,
-    ModelData,
-    Assistant,
-    WebSearch,
-    Voice,
-    ComputerUse,
-    Appearance,
-    Shortcuts,
-    Mcp,
-    ScheduledTasks,
-    About,
-}
+pub use catalog::SettingsDestinationId as SettingsSection;
 
-impl SettingsSection {
-    pub const ALL: &'static [SettingsSection] = &[
-        SettingsSection::Providers,
-        SettingsSection::ModelData,
-        SettingsSection::Assistant,
-        SettingsSection::WebSearch,
-        SettingsSection::Voice,
-        SettingsSection::ComputerUse,
-        SettingsSection::Appearance,
-        SettingsSection::Shortcuts,
-        SettingsSection::Mcp,
-        SettingsSection::ScheduledTasks,
-        SettingsSection::About,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            SettingsSection::Providers => "Providers",
-            SettingsSection::ModelData => "Model data",
-            SettingsSection::Assistant => "Assistant",
-            SettingsSection::WebSearch => "Web search",
-            SettingsSection::Voice => "Voice & dictation",
-            SettingsSection::ComputerUse => "Computer use",
-            SettingsSection::Appearance => "Appearance",
-            SettingsSection::Shortcuts => "Keyboard shortcuts",
-            SettingsSection::Mcp => "MCP servers",
-            SettingsSection::ScheduledTasks => "Scheduled tasks",
-            SettingsSection::About => "About",
-        }
-    }
-
-    pub fn icon(self) -> IconName {
-        match self {
-            SettingsSection::Providers => IconName::Globe,
-            SettingsSection::ModelData => IconName::ChartPie,
-            SettingsSection::Assistant => IconName::Bot,
-            SettingsSection::WebSearch => IconName::Search,
-            SettingsSection::Voice => IconName::GalleryVerticalEnd,
-            SettingsSection::ComputerUse => IconName::Inspector,
-            SettingsSection::Appearance => IconName::Palette,
-            SettingsSection::Shortcuts => IconName::Check,
-            SettingsSection::Mcp => IconName::SquareTerminal,
-            SettingsSection::ScheduledTasks => IconName::Calendar,
-            SettingsSection::About => IconName::Info,
-        }
-    }
-}
+const SETTINGS_CONTENT_MAX_WIDTH_PX: f32 = 672.0;
 
 /// Everything the settings surface needs from the data layer. The orchestrator
 /// constructs this (convenience constructor: [`SettingsServices::from_stores`])
@@ -112,10 +59,17 @@ impl SettingsSection {
 pub struct SettingsServices {
     pub config: Arc<ConfigStore>,
     pub keys: Arc<ProviderKeysStore>,
+    pub codex_auth: Arc<crate::services::codex_auth::PiCodexAuthStore>,
+    pub foundation_models: Arc<aiden_computer_use::FoundationModelsConnection>,
     pub schedules: Arc<ScheduleStore<DataStorePersistence, DataStorePersistence>>,
+    /// The shared lifecycle authority for every schedule mutation.
+    pub scheduler: Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>,
     pub mcp: Arc<McpClientManager>,
-    /// The portable config directory (`~/.aiden`), for the About section.
-    pub config_dir: PathBuf,
+    pub mcp_mutation: Arc<crate::services::mcp_mutation::McpMutationAuthority>,
+    pub shortcuts: gpui::Entity<crate::shortcut_runtime::ShortcutRuntime>,
+    pub appearance_service: gpui::Entity<crate::services::chat_service::ChatService>,
+    /// Device-local, network-free personal model arrangement.
+    pub model_pad: Arc<ModelPadStore>,
     /// The Artificial Analysis runtime (keychain credential + device-local
     /// cache + the pinned Free endpoint). Every network path requires the
     /// explicit [`aiden_providers::artificial_analysis::UserInitiated`] token,
@@ -127,31 +81,41 @@ pub struct SettingsServices {
 impl SettingsServices {
     /// Build the services from the app's durable stores. The schedule store is
     /// shared with the scheduled-tasks panel (both surfaces list the same
-    /// task records), and the MCP manager is fresh per settings surface.
-    pub fn from_stores(stores: &crate::services::stores::Stores) -> Self {
-        let config_dir = aiden_data::aiden_config_dir()
-            .unwrap_or_else(|_| aiden_data::home_dir().join(".aiden"));
+    /// task records), and MCP uses the same app-lifetime manager as chat.
+    pub fn from_stores(
+        stores: &crate::services::stores::Stores,
+        shortcuts: gpui::Entity<crate::shortcut_runtime::ShortcutRuntime>,
+        appearance_service: gpui::Entity<crate::services::chat_service::ChatService>,
+    ) -> Self {
         Self {
             config: stores.config.clone(),
             keys: stores.keys.clone(),
+            codex_auth: stores.codex_auth.clone(),
+            foundation_models: stores.foundation_models.clone(),
             schedules: stores.schedules.clone(),
-            mcp: Arc::new(McpClientManager::new()),
-            config_dir,
+            scheduler: stores.scheduler.clone(),
+            mcp: stores.mcp.clone(),
+            mcp_mutation: stores.mcp_mutation.clone(),
+            shortcuts,
+            appearance_service,
+            model_pad: Arc::new(ModelPadStore::default()),
             aa: model_data::build_aa_runtime(),
         }
     }
 }
 
-/// The settings window entity: left nav + active section content.
+/// The retained settings content entity. Navigation belongs to the app shell.
 pub struct SettingsView {
     services: SettingsServices,
     active: SettingsSection,
     booted: bool,
     pub(crate) error: Option<String>,
     _subscriptions: Vec<gpui::Subscription>,
+    _recorder_drop_guard: shortcuts::RecorderDropGuard,
 
     pub(crate) providers: providers::ProvidersState,
     pub(crate) model_data: model_data::ModelDataState,
+    pub(crate) model_pad: model_pad::ModelPadState,
     pub(crate) assistant: assistant::AssistantState,
     pub(crate) web_search: web_search::WebSearchState,
     pub(crate) voice: voice::VoiceState,
@@ -160,28 +124,64 @@ pub struct SettingsView {
     pub(crate) shortcuts: shortcuts::ShortcutsState,
     pub(crate) mcp: mcp::McpState,
     pub(crate) scheduled: scheduled::ScheduledState,
+    pub(crate) skills: skills::SkillsState,
 }
 
 impl SettingsView {
-    pub fn new(cx: &mut Context<Self>, services: SettingsServices) -> Self {
+    pub fn new(
+        cx: &mut Context<Self>,
+        services: SettingsServices,
+        workspace: Option<Workspace>,
+    ) -> Self {
+        let shortcuts = shortcuts::ShortcutsState::default();
+        let recorder_drop_guard = shortcuts::RecorderDropGuard::new(
+            services.shortcuts.clone(),
+            shortcuts.owner_signal(),
+            cx.to_async(),
+        );
         let mut this = Self {
             services,
             active: SettingsSection::Providers,
             booted: false,
             error: None,
             _subscriptions: Vec::new(),
+            _recorder_drop_guard: recorder_drop_guard,
             providers: providers::ProvidersState::default(),
             model_data: model_data::ModelDataState::default(),
+            model_pad: model_pad::ModelPadState::default(),
             assistant: assistant::AssistantState::default(),
             web_search: web_search::WebSearchState::default(),
             voice: voice::VoiceState::default(),
             computer_use: computer_use::ComputerUseState::default(),
             appearance: appearance::AppearanceState::default(),
-            shortcuts: shortcuts::ShortcutsState::default(),
+            shortcuts,
             mcp: mcp::McpState::default(),
             scheduled: scheduled::ScheduledState::default(),
+            skills: skills::SkillsState::new(cx, workspace.as_ref()),
         };
+        let runtime = this.services.shortcuts.clone();
+        this._subscriptions.push(cx.subscribe(
+            &runtime,
+            |this, runtime, _event: &crate::shortcut_runtime::ShortcutRuntimeChanged, cx| {
+                this.shortcuts.sync_runtime(runtime.read(cx));
+                cx.notify();
+            },
+        ));
+        let appearance_service = this.services.appearance_service.clone();
+        this._subscriptions.push(cx.observe(
+            &appearance_service,
+            |this, _appearance_service, cx| {
+                if let Ok((account, needs_attention)) = this.services.codex_auth.account_status() {
+                    this.providers.codex_configured = account.is_some();
+                    this.providers.codex_account = account;
+                    this.providers.codex_needs_attention = needs_attention;
+                }
+                cx.notify()
+            },
+        ));
+        this.shortcuts.sync_runtime(runtime.read(cx));
         this.boot(cx);
+        this.refresh_skills(cx);
         this
     }
 
@@ -212,6 +212,9 @@ impl SettingsView {
                         })
                         .unwrap_or_default();
                     let settings = services.config.get_settings().unwrap_or_default();
+                    let model_pad = services.model_pad.load();
+                    let codex_status = services.codex_auth.account_status();
+                    let foundation_status = services.foundation_models.status(false).await;
                     let schedules = services
                         .schedules
                         .list()
@@ -245,6 +248,9 @@ impl SettingsView {
                         workspaces,
                         capabilities,
                         catalog_status,
+                        model_pad,
+                        codex_status,
+                        foundation_status,
                     )
                 })
                 .await;
@@ -257,10 +263,29 @@ impl SettingsView {
                     workspaces,
                     capabilities,
                     catalog_status,
+                    model_pad,
+                    codex_status,
+                    foundation_status,
                 ) = snapshot;
                 this.providers.providers = providers;
                 this.providers.settings = settings;
                 this.providers.capabilities = capabilities;
+                match codex_status {
+                    Ok((account, needs_attention)) => {
+                        this.providers.codex_configured = account.is_some();
+                        this.providers.codex_account = account;
+                        this.providers.codex_needs_attention = needs_attention;
+                    }
+                    Err(_) => {
+                        this.providers.codex_configured = false;
+                        this.providers.codex_account = None;
+                        this.providers.codex_error = Some(
+                            "ChatGPT secure storage could not be read. Retry or sign in again."
+                                .to_string(),
+                        );
+                    }
+                }
+                this.providers.foundation_status = foundation_status;
                 this.scheduled.schedules = schedules;
                 this.scheduled.workspaces = workspaces;
                 this.mcp.servers = mcp_servers;
@@ -268,6 +293,12 @@ impl SettingsView {
                 this.appearance.hydrate(&settings, cx);
                 this.shortcuts.hydrate(&this.providers.settings);
                 this.model_data.catalog = Some(catalog_status);
+                let available_models =
+                    model_pad::available_model_inventory(&this.providers.providers)
+                        .into_iter()
+                        .map(|entry| entry.value)
+                        .collect::<Vec<_>>();
+                this.model_pad.hydrate(model_pad, available_models);
                 this.assistant.hydrate(&settings);
                 this.web_search.hydrate(&settings);
                 this.voice.hydrate(&settings);
@@ -289,9 +320,27 @@ impl SettingsView {
     /// Route the settings surface to a section (the shell calls this when the
     /// palette or the sidebar gear opens settings).
     pub(crate) fn select_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        if self.active != section {
+            if self.active == SettingsSection::Appearance {
+                self.services
+                    .appearance_service
+                    .update(cx, |service, cx| service.flush_appearance_save(cx));
+            }
+            self.cancel_shortcut_recording(cx);
+            if self.active == SettingsSection::Providers {
+                self.cancel_codex_sign_in();
+            }
+        }
         self.active = section;
         self.error = None;
+        if section == SettingsSection::Skills {
+            self.refresh_skills(cx);
+        }
         cx.notify();
+    }
+
+    pub(crate) fn active_section(&self) -> SettingsSection {
+        self.active
     }
     /// Refresh the provider + settings snapshots after a mutation (all section
     /// mutations run on the background and then call this).
@@ -325,9 +374,16 @@ impl SettingsView {
             this.update(cx, |this, cx| {
                 let (providers, settings, mcp_servers) = snapshot;
                 this.providers.providers = providers;
+                this.model_pad.set_available_models(
+                    model_pad::available_model_inventory(&this.providers.providers)
+                        .into_iter()
+                        .map(|entry| entry.value),
+                );
                 this.providers.settings = settings;
                 this.mcp.servers = mcp_servers;
                 this.shortcuts.hydrate(&this.providers.settings);
+                let services = this.services.clone();
+                this.model_data.load_aa_status(&services, cx);
                 cx.notify();
             })
             .ok();
@@ -338,117 +394,55 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        v_flex()
-            .id("settings-view")
-            .size_full()
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .child(
-                h_flex()
-                    .id("settings-body")
-                    .flex_1()
-                    .size_full()
-                    .child(self.sidebar(window, cx))
-                    .child(self.content(window, cx)),
-            )
+        self.content(window, cx)
     }
 }
 
 impl SettingsView {
-    /// Left navigation column.
-    fn sidebar(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let active = self.active;
-        v_flex()
-            .id("settings-nav")
-            .w(gpui::px(210.))
-            .h_full()
-            .flex_shrink_0()
-            .bg(theme.sidebar)
-            .text_color(theme.sidebar_foreground)
-            .py_3()
-            .px_2()
-            .gap_0p5()
-            .child(
-                div()
-                    .px_3()
-                    .pb_2()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .child("Settings"),
-            )
-            .children(SettingsSection::ALL.iter().map(|section| {
-                let selected = *section == active;
-                let (bg, fg) = if selected {
-                    (theme.sidebar_accent, theme.sidebar_accent_foreground)
-                } else {
-                    (theme.sidebar, theme.sidebar_foreground)
-                };
-                let section_id = *section;
-                let label = section.label();
-                let icon = section.icon();
-                h_flex()
-                    .id(ElementId::Name(SharedString::from(format!(
-                        "settings-nav-{}",
-                        label.to_ascii_lowercase().replace(' ', "-")
-                    ))))
-                    .w_full()
-                    .px_2()
-                    .py_1p5()
-                    .gap_2()
-                    .items_center()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(bg)
-                    .text_color(fg)
-                    .hover(move |style| {
-                        if !selected {
-                            style.bg(theme.sidebar_primary)
-                        } else {
-                            style
-                        }
-                    })
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.select_section(section_id, cx);
-                    }))
-                    .child(Icon::new(icon).small().text_color(fg))
-                    .child(div().text_sm().truncate().child(label))
-            }))
-    }
-
     /// Active section content (scrollable right column).
     fn content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let inner = match self.active {
             SettingsSection::Providers => self.providers_section(window, cx).into_any_element(),
-            SettingsSection::ModelData => self.model_data_section(window, cx).into_any_element(),
-            SettingsSection::Assistant => self.assistant_section(window, cx).into_any_element(),
-            SettingsSection::WebSearch => self.web_search_section(window, cx).into_any_element(),
-            SettingsSection::Voice => self.voice_section(window, cx).into_any_element(),
-            SettingsSection::ComputerUse => {
-                self.computer_use_section(window, cx).into_any_element()
-            }
-            SettingsSection::Appearance => self.appearance_section(window, cx).into_any_element(),
-            SettingsSection::Shortcuts => self.shortcuts_section(window, cx).into_any_element(),
+            SettingsSection::ModelData => self.model_pad_section(window, cx).into_any_element(),
+            SettingsSection::Skills => self.skills_section(window, cx).into_any_element(),
             SettingsSection::Mcp => self.mcp_section(window, cx).into_any_element(),
+            SettingsSection::WebSearch => self.web_search_section(window, cx).into_any_element(),
             SettingsSection::ScheduledTasks => {
                 self.scheduled_section(window, cx).into_any_element()
             }
+            SettingsSection::Assistant => self.assistant_section(window, cx).into_any_element(),
+            SettingsSection::ComputerUse => {
+                self.computer_use_section(window, cx).into_any_element()
+            }
+            SettingsSection::Voice => self.voice_section(window, cx).into_any_element(),
+            SettingsSection::Shortcut => self.shortcuts_section(window, cx).into_any_element(),
+            SettingsSection::Appearance => self.appearance_section(window, cx).into_any_element(),
             SettingsSection::About => self.about_section(window, cx).into_any_element(),
         };
         let theme = cx.theme();
         v_flex()
-            .id("settings-content")
+            .id("settings-view")
             .flex_1()
             .h_full()
             .min_w(gpui::px(0.))
+            .bg(theme.background)
+            .text_color(theme.foreground)
             .overflow_y_scroll()
-            .child(div().w_full().px_6().py_5().child(inner))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(gpui::px(SETTINGS_CONTENT_MAX_WIDTH_PX))
+                    .mx_auto()
+                    .px_5()
+                    .py_6()
+                    .child(inner),
+            )
             .when_some(self.error.clone(), |el, message| {
                 el.child(
                     div()
                         .w_full()
+                        .max_w(gpui::px(SETTINGS_CONTENT_MAX_WIDTH_PX))
+                        .mx_auto()
                         .px_4()
                         .py_2()
                         .text_sm()
@@ -464,14 +458,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_section_has_a_unique_label_and_icon() {
-        let labels: std::collections::HashSet<_> = SettingsSection::ALL
-            .iter()
-            .map(|section| section.label())
-            .collect();
-        assert_eq!(labels.len(), SettingsSection::ALL.len());
-        for section in SettingsSection::ALL {
-            assert!(!section.label().is_empty());
-        }
+    fn content_measure_matches_the_electron_shell() {
+        assert_eq!(SETTINGS_CONTENT_MAX_WIDTH_PX, 672.0);
     }
 }
