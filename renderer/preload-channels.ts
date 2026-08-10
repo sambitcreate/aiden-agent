@@ -37,6 +37,8 @@ export const INVOKE_PREFIXES = [
 export const NATIVE_INVOKE_CHANNELS = {
   accessibilityRequest: "aiden:accessibility:request",
   accessibilityStatus: "aiden:accessibility:status",
+  attachmentDroppedRead: "aiden:attachments:dropped-read",
+  attachmentClipboardRead: "aiden:attachments:clipboard-read",
   dialogOpen: "aiden:dialog:open",
   themeGet: "aiden:theme:get",
   themeSet: "aiden:theme:set",
