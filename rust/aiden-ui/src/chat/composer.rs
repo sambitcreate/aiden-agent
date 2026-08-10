@@ -7,80 +7,66 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use aiden_core::{Attachment, AttachmentKind, ChatMessage};
+#[cfg(test)]
+use aiden_core::ChatMessage;
+use aiden_core::{Attachment, AttachmentKind};
 use aiden_data::chat_store::new_uuid_like;
 use base64::Engine as _;
-use gpui::{
-    div, prelude::FluentBuilder as _, App, Entity, IntoElement, ParentElement as _, SharedString,
-    Styled as _, StyledImage as _, Window,
-};
-use gpui_component::{
-    h_flex,
-    select::{Select, SelectItem, SelectState},
-    v_flex, ActiveTheme, Sizable as _,
-};
+use gpui::{App, IntoElement as _, Styled as _, StyledImage as _};
 
+use crate::chat::model_pad_picker::ModelPadRuntime;
 use crate::services::provider_kit::ConfiguredProvider;
+
+/// Canonical Electron chat-column measure (`--chat-content-max-width`).
+pub const CHAT_CONTENT_MAX_WIDTH_REMS: f32 = 52.0;
+/// Canonical Electron dock inset (`--aiden-dock-gutter: 4.5rem`). This stays
+/// fixed at every window width; compact controls wrap inside the remaining
+/// column instead of changing the transcript/composer alignment.
+pub const CHAT_DOCK_GUTTER_PX: f32 = 72.0;
+/// The composer textarea uses eight auto-grow rows, equivalent to the
+/// Electron `max-h-48` (192px) at the app's 24px input line height.
+pub const COMPOSER_MAX_ROWS: usize = 8;
 
 /// One model choice in the picker: provider + model. The `SelectItem::Value`
 /// is a compact key so duplicate model ids across providers stay distinct.
 #[derive(Debug, Clone)]
 pub struct ModelItem {
+    pub provider_id: String,
     pub provider_label: String,
     pub model: String,
     /// The model was contributed by the models.dev capability catalog (not a
     /// provider preset); the picker renders it with a "discovered" badge.
     pub discovered: bool,
+    pub local: bool,
+    pub metadata: Option<aiden_data::portable_config::ProviderModelMetadata>,
     value_key: String,
+    pad_key: String,
 }
 
-impl SelectItem for ModelItem {
-    type Value = String;
-
-    fn title(&self) -> SharedString {
-        format!("{} · {}", self.provider_label, self.model).into()
+impl ModelItem {
+    #[cfg(test)]
+    pub(crate) fn test_item(provider_id: &str, model: &str) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            provider_label: provider_id.into(),
+            model: model.into(),
+            discovered: false,
+            local: false,
+            metadata: None,
+            value_key: model_key(provider_id, model),
+            pad_key: format!("{provider_id}::{model}"),
+        }
     }
 
-    fn value(&self) -> &Self::Value {
+    pub(crate) fn value_key(&self) -> String {
+        self.value_key.clone()
+    }
+    #[cfg(test)]
+    pub(crate) fn value(&self) -> &str {
         &self.value_key
     }
-
-    fn render(&self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let accent = theme.accent;
-        let model = self.model.clone();
-        let provider_label = self.provider_label.clone();
-        v_flex()
-            .gap_0p5()
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(model),
-                    )
-                    .when(self.discovered, |el| {
-                        el.child(
-                            div()
-                                .px_1()
-                                .py_0p5()
-                                .rounded_sm()
-                                .bg(accent.opacity(0.14))
-                                .text_xs()
-                                .text_color(accent)
-                                .child("discovered"),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(provider_label),
-            )
+    pub(crate) fn pad_key(&self) -> &str {
+        &self.pad_key
     }
 }
 
@@ -101,8 +87,18 @@ pub fn decode_model_key(key: &str) -> Option<(String, String)> {
 /// Build the picker items from the configured providers. Catalog-sourced
 /// models (appended to `provider.models` by the boot enrichment) render with
 /// the "discovered" badge; preset/default models do not.
+#[cfg(test)]
 pub fn model_items(providers: &[ConfiguredProvider]) -> Vec<ModelItem> {
-    providers
+    model_items_with_layout(providers, None)
+}
+
+/// Build the canonical provider/model items, promoting only models saved on
+/// the personal Pad. Provider/model identity remains owned by ChatService.
+pub fn model_items_with_layout(
+    providers: &[ConfiguredProvider],
+    runtime: Option<&ModelPadRuntime>,
+) -> Vec<ModelItem> {
+    let mut items = providers
         .iter()
         .flat_map(|provider| {
             let mut models = provider.models.clone();
@@ -112,26 +108,47 @@ pub fn model_items(providers: &[ConfiguredProvider]) -> Vec<ModelItem> {
                 }
             }
             models.into_iter().map(move |model| ModelItem {
+                provider_id: provider.id.clone(),
                 provider_label: provider.label.clone(),
                 value_key: model_key(&provider.id, &model),
+                pad_key: format!("{}::{model}", provider.id),
                 discovered: provider.catalog_models.contains(&model),
+                local: aiden_core::is_local_provider_deployment(
+                    &aiden_core::provider_deployment::ProviderDeploymentFields {
+                        id: Some(provider.id.clone()),
+                        base_url: Some(provider.base_url.clone()),
+                        deployment: provider.deployment.map(|deployment| match deployment {
+                            aiden_data::portable_config::ProviderDeployment::Local => {
+                                aiden_core::ProviderDeployment::Local
+                            }
+                            aiden_data::portable_config::ProviderDeployment::Hosted => {
+                                aiden_core::ProviderDeployment::Hosted
+                            }
+                        }),
+                    },
+                ),
+                metadata: provider.model_metadata.get(&model).cloned(),
                 model,
             })
         })
-        .collect()
-}
-
-/// The model picker select element (rendered in the sidebar footer).
-pub fn model_picker(
-    state: &Entity<SelectState<Vec<ModelItem>>>,
-    disabled: bool,
-) -> Select<Vec<ModelItem>> {
-    Select::new(state)
-        .placeholder("Model")
-        .search_placeholder("Search models")
-        .disabled(disabled)
-        .small()
-        .menu_width(gpui::px(240.))
+        .collect::<Vec<_>>();
+    if let Some(runtime) = runtime {
+        items.sort_by(|left, right| {
+            let left_position = runtime.layout.placements.get(&left.pad_key);
+            let right_position = runtime.layout.placements.get(&right.pad_key);
+            match (left_position, right_position) {
+                (Some(left_position), Some(right_position)) => right_position
+                    .y
+                    .total_cmp(&left_position.y)
+                    .then_with(|| left_position.x.total_cmp(&right_position.x))
+                    .then_with(|| left.value_key.cmp(&right.value_key)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
+    }
+    items
 }
 
 // ===========================================================================
@@ -373,10 +390,8 @@ pub fn attachment_image_element(
 /// is re-sent as a fresh turn (a rebranch). Returns `None` when the target
 /// isn't in the list (stale edit target) so the caller falls back to a plain
 /// send instead of nuking history.
-pub fn truncate_history_after(
-    messages: &[ChatMessage],
-    message_id: &str,
-) -> Option<Vec<ChatMessage>> {
+#[cfg(test)]
+fn truncate_history_after(messages: &[ChatMessage], message_id: &str) -> Option<Vec<ChatMessage>> {
     let index = messages
         .iter()
         .position(|message| message.id == message_id)?;
@@ -400,6 +415,13 @@ mod tests {
     }
 
     #[test]
+    fn chat_measure_matches_electron_dock_contract() {
+        assert_eq!(CHAT_DOCK_GUTTER_PX, 72.0);
+        assert_eq!(CHAT_CONTENT_MAX_WIDTH_REMS, 52.0);
+        assert_eq!(COMPOSER_MAX_ROWS, 8);
+    }
+
+    #[test]
     fn model_items_flatten_providers_and_defaults() {
         let providers = vec![
             ConfiguredProvider {
@@ -407,6 +429,7 @@ mod tests {
                 label: "Anthropic".into(),
                 kind: aiden_data::portable_config::ProviderKind::Anthropic,
                 base_url: String::new(),
+                deployment: None,
                 models: vec!["claude-sonnet-5".into(), "claude-sonnet-6".into()],
                 default_model: None,
                 model_metadata: Default::default(),
@@ -419,6 +442,7 @@ mod tests {
                 label: "LM Studio".into(),
                 kind: aiden_data::portable_config::ProviderKind::Openai,
                 base_url: String::new(),
+                deployment: None,
                 models: vec!["qwen2.5-coder".into()],
                 default_model: Some("qwen2.5-coder".into()),
                 model_metadata: Default::default(),
@@ -435,6 +459,51 @@ mod tests {
         assert!(items[1].discovered, "catalog-sourced models are badged");
         assert_eq!(items[2].value(), "custom:lmstudio\u{0}qwen2.5-coder");
         assert!(!items[2].discovered);
+
+        let mut layout = aiden_core::model_pad::ModelPadLayout::empty();
+        layout.placements.insert(
+            "custom:lmstudio::qwen2.5-coder".into(),
+            aiden_core::model_pad::ModelPadPlacement {
+                x: 0.5,
+                y: 0.5,
+                source: aiden_core::model_pad::ModelPadPlacementSource::User,
+            },
+        );
+        let runtime = ModelPadRuntime {
+            layout,
+            revision: 1,
+        };
+        let promoted = model_items_with_layout(&providers, Some(&runtime));
+        assert_eq!(promoted[0].value(), "custom:lmstudio\u{0}qwen2.5-coder");
+    }
+
+    #[test]
+    fn deployment_override_and_ipv6_loopback_drive_local_labels() {
+        let provider =
+            |base_url: &str,
+             deployment: Option<aiden_data::portable_config::ProviderDeployment>| {
+                ConfiguredProvider {
+                    id: "custom:test".into(),
+                    label: "Test".into(),
+                    kind: aiden_data::portable_config::ProviderKind::Openai,
+                    base_url: base_url.into(),
+                    deployment,
+                    models: vec!["model".into()],
+                    default_model: None,
+                    model_metadata: Default::default(),
+                    catalog_models: Vec::new(),
+                    needs_key: false,
+                    has_key: true,
+                }
+            };
+        let ipv6 = model_items(&[provider("http://[::1]:11434/v1", None)]);
+        let overridden = model_items(&[provider(
+            "http://127.0.0.1:11434/v1",
+            Some(aiden_data::portable_config::ProviderDeployment::Hosted),
+        )]);
+
+        assert!(ipv6[0].local);
+        assert!(!overridden[0].local);
     }
 
     // -----------------------------------------------------------------------
