@@ -12,6 +12,7 @@ native/computer-use-broker/target/
 # Agent context (auto-generated, not worth versioning)
 .claude/
 .agents/
+.opencode/
 .impeccable/live/
 .memory/
 .zcode/plans/
