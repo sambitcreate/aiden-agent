@@ -8,8 +8,12 @@
 //! model persisted into `settings.json` under `modelSelection`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use aiden_core::chat_title::{
+    ChatTitleProviderId, FoundationModelsConnectionState, FoundationModelsConnectionStatus,
+};
 use aiden_data::config_store::Provider as StoredProviderRow;
 use aiden_data::portable_config::{ProviderDeployment, ProviderKind, StoredProvider};
 use aiden_providers::live_discovery;
@@ -22,19 +26,74 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
+    select::{Select, SelectEvent, SelectItem, SelectState},
     spinner::Spinner,
-    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
+    v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
 };
 use gpui_tokio_bridge::Tokio;
 
 use super::{SettingsServices, SettingsView};
+use crate::services::codex_auth::{
+    auth_revision_is_current, CodexAuthAttemptGuard, CodexDeviceOAuth, CodexDialogLease,
+    DEVICE_VERIFICATION_URI,
+};
 use crate::services::provider_kit::ModelSelection;
+
+enum CodexAuthUpdate {
+    DeviceCode(crate::services::codex_auth::CodexDeviceAuthorization),
+    Finished {
+        operation_error: Option<String>,
+        actual_account: Result<Option<String>, String>,
+        needs_attention: bool,
+    },
+}
 
 /// The settings key for the persisted provider+model selection.
 const MODEL_SELECTION_KEY: &str = "modelSelection";
 /// The settings key holding the anthropic per-model thinking preferences.
 const ANTHROPIC_THINKING_KEY: &str = "anthropicThinkingByModel";
 const ANTHROPIC_LEVELS: &[&str] = &["off", "low", "medium", "high", "xhigh", "max"];
+const TITLE_PROVIDER_SELECT_WIDTH_PX: f32 = 192.0;
+
+#[derive(Clone)]
+struct TitleProviderItem {
+    value: ChatTitleProviderId,
+    label: &'static str,
+}
+
+impl SelectItem for TitleProviderItem {
+    type Value = ChatTitleProviderId;
+
+    fn title(&self) -> SharedString {
+        self.label.into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+fn title_provider_items() -> Vec<TitleProviderItem> {
+    vec![
+        TitleProviderItem {
+            value: ChatTitleProviderId::Automatic,
+            label: "Automatic",
+        },
+        TitleProviderItem {
+            value: ChatTitleProviderId::AppleFoundationModels,
+            label: "On-device only",
+        },
+        TitleProviderItem {
+            value: ChatTitleProviderId::ChatModel,
+            label: "Selected chat model",
+        },
+    ]
+}
+
+fn title_provider_select_max_width(window_width: f32) -> Option<f32> {
+    (!crate::shell::sidebar::is_compact_sidebar_width(window_width))
+        .then_some(TITLE_PROVIDER_SELECT_WIDTH_PX)
+}
 
 /// A provider row as listed (owns key state; the key itself never leaves the
 /// keychain).
@@ -49,8 +108,10 @@ pub struct ProviderRow {
     pub needs_key: bool,
     pub has_key: bool,
     pub is_builtin: bool,
-    /// Models contributed by the models.dev capability catalog (not part of
-    /// the stored record). Filled from the capability catalog at boot;
+    pub is_preset: bool,
+    pub deployment: ProviderDeployment,
+    /// Models contributed by the bundled capability catalog (not part of the
+    /// stored record). Filled from the offline catalog at boot;
     /// rendered with a "discovered" badge vs the preset defaults.
     pub catalog_models: Vec<String>,
 }
@@ -66,7 +127,11 @@ impl From<&StoredProviderRow> for ProviderRow {
             default_model: provider.default_model.clone(),
             needs_key: provider.needs_key,
             has_key: provider.has_key,
-            is_builtin: provider.is_builtin.unwrap_or(false),
+            is_builtin: provider.is_builtin.unwrap_or(false)
+                || provider.is_preset.unwrap_or(false)
+                || !aiden_providers::catalog::is_custom_provider_id(&provider.id),
+            is_preset: provider.is_preset.unwrap_or(false),
+            deployment: provider.deployment.unwrap_or(ProviderDeployment::Hosted),
             catalog_models: Vec::new(),
         }
     }
@@ -81,6 +146,10 @@ pub struct DiscoveryState {
     pub running: bool,
     /// The last completed discovery outcome (cleared when a new Test starts).
     pub outcome: Option<DiscoveryOutcome>,
+    /// Monotonic request generation; stale completions are ignored.
+    pub revision: u64,
+    /// Cancels the active HTTP request when the draft changes or closes.
+    pub cancel: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 /// The outcome of one Test/discovery run.
@@ -104,6 +173,8 @@ pub struct ProviderDraft {
     pub kind: ProviderKind,
     pub needs_key: bool,
     pub has_key: bool,
+    pub deployment: ProviderDeployment,
+    pub is_preset: bool,
     /// The default model for new turns (model id or empty).
     pub default_model: String,
     /// The anthropic thinking level for the default model (empty = unset).
@@ -127,10 +198,37 @@ pub struct ProvidersState {
     pub discoveries: HashMap<String, DiscoveryState>,
     pub error: Option<String>,
     pub notice: Option<String>,
+    pub codex_configured: bool,
+    pub codex_account: Option<String>,
+    pub codex_needs_attention: bool,
+    pub codex_busy: bool,
+    pub codex_error: Option<String>,
+    pub codex_revision: u64,
+    pub codex_attempt: Option<CodexAuthAttemptGuard>,
+    pub codex_dialog: Option<CodexDialogLease>,
+    pub foundation_status: Option<FoundationModelsConnectionStatus>,
+    pub foundation_loading: bool,
+    pub foundation_error: Option<String>,
+    pub title_revision: Arc<AtomicU64>,
+    title_provider_select: Option<Entity<SelectState<Vec<TitleProviderItem>>>>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl ProvidersState {
+    fn codex_auth_active(&self) -> bool {
+        self.codex_attempt.is_some()
+            || self
+                .codex_dialog
+                .as_ref()
+                .is_some_and(CodexDialogLease::is_open)
+    }
+
+    fn detach_codex_dialog(&mut self) -> bool {
+        self.codex_dialog
+            .take()
+            .is_some_and(|lease| lease.take_owned_dialog())
+    }
+
     /// The persisted model selection, if it still points at a configured
     /// provider + model (catalog-contributed models count as offered).
     pub fn selection(&self) -> Option<ModelSelection> {
@@ -156,8 +254,8 @@ impl ProvidersState {
 impl SettingsView {
     /// The Providers section: header, built-in rows, custom rows, editor.
     pub(crate) fn providers_section(
-        &self,
-        _window: &mut Window,
+        &mut self,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         // Owned color copies: closures below borrow `cx` mutably (row render
@@ -167,6 +265,7 @@ impl SettingsView {
         let info = theme.info;
         let foreground = theme.foreground;
         let muted_foreground = theme.muted_foreground;
+        let foundation_card = self.foundation_models_card(window, cx).into_any_element();
         let state = &self.providers;
         let builtins: Vec<&ProviderRow> = state
             .providers
@@ -246,6 +345,8 @@ impl SettingsView {
                         .child(message),
                 )
             })
+            .child(self.codex_provider_card(cx))
+            .child(foundation_card)
             .child(
                 v_flex()
                     .w_full()
@@ -303,6 +404,622 @@ impl SettingsView {
             .when_some(state.removing.clone(), |el, removing| {
                 el.child(self.provider_remove_confirm(&removing, cx))
             })
+    }
+
+    fn codex_provider_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let configured = self.providers.codex_configured;
+        let needs_attention = self.providers.codex_needs_attention;
+        let usable = configured && !needs_attention;
+        let busy = self.providers.codex_busy;
+        v_flex()
+            .id("codex-provider-card")
+            .w_full()
+            .gap_3()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_start()
+                    .gap_3()
+                    .child(
+                        div()
+                            .size(px(28.0))
+                            .rounded_md()
+                            .bg(theme.muted)
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::Bot).xsmall()),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("ChatGPT / Codex"),
+                                    )
+                                    .child(
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_md()
+                                            .bg(if usable {
+                                                theme.success.opacity(0.14)
+                                            } else {
+                                                theme.muted
+                                            })
+                                            .text_xs()
+                                            .text_color(if usable {
+                                                theme.success
+                                            } else {
+                                                theme.muted_foreground
+                                            })
+                                            .child(if needs_attention {
+                                                "Sign in again"
+                                            } else if configured {
+                                                "Configured"
+                                            } else {
+                                                "Sign in needed"
+                                            }),
+                                    ),
+                            )
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                                "Use your ChatGPT Plus or Pro account for Codex models. \
+                                         OAuth tokens stay encrypted in this Mac's Keychain.",
+                            ))
+                            .when_some(self.providers.codex_account.clone(), |el, account| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(account),
+                                )
+                            })
+                            .when(usable, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Models: GPT-5.3 Codex Spark, GPT-5.4, GPT-5.4 mini, GPT-5.5, GPT-5.6 Luna, Sol, and Terra"),
+                                )
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("codex-sign-in")
+                                    .small()
+                                    .primary()
+                                    .label(if configured {
+                                        "Sign in again"
+                                    } else {
+                                        "Sign in"
+                                    })
+                                    .loading(busy)
+                                    .disabled(busy)
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        this.start_codex_sign_in(window, cx);
+                                    })),
+                            )
+                            .when(configured, |el| {
+                                el.child(
+                                    Button::new("codex-sign-out")
+                                        .small()
+                                        .ghost()
+                                        .label("Sign out")
+                                        .disabled(busy)
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.sign_out_codex(cx);
+                                        })),
+                                )
+                            }),
+                    ),
+            )
+            .when_some(self.providers.codex_error.clone(), |el, error| {
+                el.child(div().text_xs().text_color(theme.danger).child(error))
+            })
+    }
+
+    fn foundation_models_card(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let selected = self
+            .providers
+            .settings
+            .get("chatTitleProviderId")
+            .and_then(serde_json::Value::as_str)
+            .and_then(ChatTitleProviderId::from_str)
+            .unwrap_or(ChatTitleProviderId::Automatic);
+        let title_provider_select = self.title_provider_select(selected, window, cx);
+        let title_provider_max_width =
+            title_provider_select_max_width(window.viewport_size().width.into());
+        let theme = cx.theme();
+        let status = self.providers.foundation_status.as_ref();
+        let status_label = status.map_or("Not checked", |status| match status.state {
+            FoundationModelsConnectionState::Ready => "Ready",
+            FoundationModelsConnectionState::ModelPreparing => "Preparing",
+            _ => "Unavailable",
+        });
+        v_flex()
+            .id("foundation-models-title-card")
+            .w_full()
+            .gap_3()
+            .p_3()
+            .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Chat titles"),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Apple Foundation Models run on-device when available."),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(status_label),
+                            )
+                            .when_some(status.map(|status| status.detail.clone()), |el, detail| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child(detail),
+                                )
+                            }),
+                    )
+                    .child(
+                        Button::new("foundation-refresh")
+                            .small()
+                            .ghost()
+                            .label("Refresh status")
+                            .loading(self.providers.foundation_loading)
+                            .disabled(self.providers.foundation_loading)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.refresh_foundation_status(cx);
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .when_some(title_provider_max_width, |element, width| {
+                        element.max_w(px(width))
+                    })
+                    .child(
+                        Select::new(&title_provider_select)
+                            .small()
+                            .disabled(self.providers.foundation_loading)
+                            .menu_width(px(TITLE_PROVIDER_SELECT_WIDTH_PX)),
+                    ),
+            )
+            .when_some(self.providers.foundation_error.clone(), |el, error| {
+                el.child(div().text_xs().text_color(theme.danger).child(error))
+            })
+    }
+
+    fn title_provider_select(
+        &mut self,
+        selected: ChatTitleProviderId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<SelectState<Vec<TitleProviderItem>>> {
+        if let Some(state) = &self.providers.title_provider_select {
+            if state.read(cx).selected_value() != Some(&selected) {
+                let state = state.clone();
+                cx.defer_in(window, move |_, window, cx| {
+                    state.update(cx, |state, cx| {
+                        state.set_selected_value(&selected, window, cx)
+                    });
+                });
+            }
+            return state.clone();
+        }
+        let items = title_provider_items();
+        let selected_index = items
+            .iter()
+            .position(|item| item.value == selected)
+            .map(|row| gpui_component::IndexPath::default().row(row));
+        let state = cx.new(|cx| SelectState::new(items, selected_index, window, cx));
+        self.providers._subscriptions.push(cx.subscribe_in(
+            &state,
+            window,
+            |this, _state, event, window, cx| {
+                let SelectEvent::Confirm(Some(value)) = event else {
+                    return;
+                };
+                this.save_title_provider(*value, window, cx);
+            },
+        ));
+        self.providers.title_provider_select = Some(state.clone());
+        state
+    }
+
+    fn refresh_foundation_status(&mut self, cx: &mut Context<Self>) {
+        if self.providers.foundation_loading {
+            return;
+        }
+        let revision = self.providers.title_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.providers.foundation_loading = true;
+        self.providers.foundation_error = None;
+        let connection = self.services.foundation_models.clone();
+        let current = self.providers.title_revision.clone();
+        let task = Tokio::spawn(cx, async move { connection.status(true).await });
+        cx.spawn(async move |this, cx| {
+            let status = task.await.ok().flatten();
+            this.update(cx, |this, cx| {
+                if current.load(Ordering::SeqCst) != revision {
+                    return;
+                }
+                this.providers.foundation_loading = false;
+                this.providers.foundation_status = status;
+                this.providers.foundation_error =
+                    this.providers.foundation_status.is_none().then(|| {
+                        "Apple Foundation Models are not available on this device.".to_string()
+                    });
+                cx.notify();
+            })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+
+    fn save_title_provider(
+        &mut self,
+        value: ChatTitleProviderId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let revision = self.providers.title_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = self.providers.title_revision.clone();
+        let config = self.services.config.clone();
+        self.providers.foundation_loading = true;
+        self.providers.foundation_error = None;
+        let task = Tokio::spawn(cx, async move {
+            let mut patch = serde_json::Map::new();
+            patch.insert(
+                "chatTitleProviderId".to_string(),
+                serde_json::Value::String(value.as_str().to_string()),
+            );
+            config
+                .set_settings(&patch, &|| current.load(Ordering::SeqCst) == revision)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task
+                .await
+                .unwrap_or_else(|_| Err("Chat title setting save was interrupted.".to_string()));
+            this.update_in(cx, |this, window, cx| {
+                if this.providers.title_revision.load(Ordering::SeqCst) != revision {
+                    return;
+                }
+                this.providers.foundation_loading = false;
+                match result {
+                    Ok(()) => {
+                        this.providers.settings.insert(
+                            "chatTitleProviderId".to_string(),
+                            serde_json::Value::String(value.as_str().to_string()),
+                        );
+                    }
+                    Err(error) => {
+                        this.providers.foundation_error = Some(error);
+                        let persisted = this
+                            .providers
+                            .settings
+                            .get("chatTitleProviderId")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(ChatTitleProviderId::from_str)
+                            .unwrap_or(ChatTitleProviderId::Automatic);
+                        if let Some(select) = &this.providers.title_provider_select {
+                            select.update(cx, |select, cx| {
+                                select.set_selected_value(&persisted, window, cx)
+                            });
+                        }
+                    }
+                }
+                cx.notify();
+            })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+
+    fn start_codex_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.providers.codex_busy {
+            return;
+        }
+        self.providers.codex_revision = self.providers.codex_revision.wrapping_add(1);
+        let revision = self.providers.codex_revision;
+        self.providers.codex_busy = true;
+        self.providers.codex_error = None;
+        let auth_store = self.services.codex_auth.clone();
+        let attempt = CodexAuthAttemptGuard::new(auth_store.clone());
+        let cancelled = attempt.cancelled();
+        let auth_revision = attempt.revision();
+        self.providers.codex_attempt = Some(attempt);
+        let dialog_lease = CodexDialogLease::default();
+        self.providers.codex_dialog = Some(dialog_lease.clone());
+        let return_focus = window.focused(cx);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        Tokio::spawn(cx, async move {
+            let oauth = CodexDeviceOAuth::default();
+            let authorization = match oauth.begin(&cancelled).await {
+                Ok(authorization) => authorization,
+                Err(error) => {
+                    let (actual_account, needs_attention) = auth_store
+                        .account_status()
+                        .map(|(account, attention)| (Ok(account), attention))
+                        .unwrap_or_else(|error| (Err(error.to_string()), true));
+                    let _ = tx.send(CodexAuthUpdate::Finished {
+                        operation_error: Some(error.to_string()),
+                        actual_account,
+                        needs_attention,
+                    });
+                    return;
+                }
+            };
+            if tx
+                .send(CodexAuthUpdate::DeviceCode(authorization.clone()))
+                .is_err()
+            {
+                return;
+            }
+            let operation_error = oauth
+                .complete(&authorization, &cancelled)
+                .await
+                .and_then(|credential| {
+                    auth_store
+                        .commit_auth_attempt(auth_revision, &credential)
+                        .and_then(|committed| {
+                            if committed {
+                                Ok(())
+                            } else {
+                                Err(aiden_providers::ProviderError::Auth(
+                                    "ChatGPT sign-in was cancelled.".to_string(),
+                                ))
+                            }
+                        })
+                })
+                .err()
+                .map(|error| error.to_string());
+            let (actual_account, needs_attention) = auth_store
+                .account_status()
+                .map(|(account, attention)| (Ok(account), attention))
+                .unwrap_or_else(|error| (Err(error.to_string()), true));
+            let _ = tx.send(CodexAuthUpdate::Finished {
+                operation_error,
+                actual_account,
+                needs_attention,
+            });
+        })
+        .detach();
+
+        cx.spawn_in(window, async move |this, cx| -> anyhow::Result<()> {
+            while let Some(update) = rx.recv().await {
+                let done = matches!(update, CodexAuthUpdate::Finished { .. });
+                this.update_in(cx, |this, window, cx| {
+                    if matches!(update, CodexAuthUpdate::Finished { .. })
+                        && dialog_lease.take_owned_dialog()
+                    {
+                        window.close_dialog(cx);
+                        if let Some(focus) = &return_focus {
+                            focus.focus(window);
+                        }
+                    }
+                    if !auth_revision_is_current(this.providers.codex_revision, revision) {
+                        if this
+                            .providers
+                            .codex_dialog
+                            .as_ref()
+                            .is_some_and(|owned| owned.is_same(&dialog_lease))
+                        {
+                            this.providers.codex_dialog = None;
+                        }
+                        return;
+                    }
+                    match update {
+                        CodexAuthUpdate::DeviceCode(authorization) => {
+                            cx.open_url(DEVICE_VERIFICATION_URI);
+                            let code = authorization.user_code;
+                            let cancel = this
+                                .providers
+                                .codex_attempt
+                                .as_ref()
+                                .map(CodexAuthAttemptGuard::cancelled);
+                            let auth_store = this.services.codex_auth.clone();
+                            let return_focus = return_focus.clone();
+                            let dialog_lease = dialog_lease.clone();
+                            dialog_lease.mark_open();
+                            window.open_dialog(cx, move |dialog, _window, cx| {
+                                let cancel = cancel.clone();
+                                let auth_store = auth_store.clone();
+                                let return_focus = return_focus.clone();
+                                let cancel_lease = dialog_lease.clone();
+                                let close_lease = dialog_lease.clone();
+                                dialog
+                                    .title("Sign in to ChatGPT")
+                                    .overlay_closable(false)
+                                    .child(
+                                        v_flex()
+                                            .gap_3()
+                                            .child("Enter this temporary code on OpenAI's verification page:")
+                                            .child(
+                                                div()
+                                                    .text_2xl()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .child(code.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("The browser page has been opened. Aiden never displays or logs the resulting tokens."),
+                                            ),
+                                    )
+                                    .footer(|_, cancel_button, window, cx| {
+                                        vec![cancel_button(window, cx)]
+                                    })
+                                    .on_cancel(move |_, _, _| {
+                                        if let Some(cancel) = &cancel {
+                                            cancel.store(true, Ordering::SeqCst);
+                                        }
+                                        auth_store.invalidate_auth_attempts();
+                                        cancel_lease.request_focus_restore();
+                                        true
+                                    })
+                                    .on_close(move |_, window, _| {
+                                        close_lease.mark_closed();
+                                        if close_lease.should_restore_focus() {
+                                            if let Some(focus) = &return_focus {
+                                                focus.focus(window);
+                                            }
+                                        }
+                                    })
+                            });
+                        }
+                        CodexAuthUpdate::Finished {
+                            operation_error,
+                            actual_account,
+                            needs_attention,
+                        } => {
+                            this.providers.codex_busy = false;
+                            this.providers.codex_attempt = None;
+                            this.providers.codex_dialog = None;
+                            this.providers.codex_needs_attention = needs_attention;
+                            match actual_account {
+                                Ok(account) => {
+                                    this.providers.codex_configured = account.is_some();
+                                    this.providers.codex_account = account;
+                                    this.providers.codex_error = operation_error;
+                                }
+                                Err(error) => {
+                                    this.providers.codex_configured = false;
+                                    this.providers.codex_account = None;
+                                    this.providers.codex_error = Some(
+                                        operation_error.unwrap_or(error),
+                                    );
+                                }
+                            }
+                            this.service_refresh_after_codex(cx);
+                        }
+                    }
+                    cx.notify();
+                })?;
+                if done {
+                    break;
+                }
+            }
+            Ok(())
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn sign_out_codex(&mut self, cx: &mut Context<Self>) {
+        if self.providers.codex_busy {
+            return;
+        }
+        self.providers.codex_revision = self.providers.codex_revision.wrapping_add(1);
+        let revision = self.providers.codex_revision;
+        self.providers.codex_busy = true;
+        self.providers.codex_error = None;
+        let store = self.services.codex_auth.clone();
+        let state_store = store.clone();
+        let task = Tokio::spawn(cx, async move {
+            let operation_error = store.clear().err().map(|error| error.to_string());
+            let (actual_account, needs_attention) = store
+                .account_status()
+                .map(|(account, attention)| (Ok(account), attention))
+                .unwrap_or_else(|error| (Err(error.to_string()), true));
+            (operation_error, actual_account, needs_attention)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = match task.await {
+                Ok(result) => result,
+                Err(_) => (
+                    Some("ChatGPT sign-out was interrupted.".to_string()),
+                    state_store
+                        .account_status()
+                        .map(|(account, _)| account)
+                        .map_err(|error| error.to_string()),
+                    state_store
+                        .account_status()
+                        .map(|(_, attention)| attention)
+                        .unwrap_or(true),
+                ),
+            };
+            this.update(cx, |this, cx| {
+                if !auth_revision_is_current(this.providers.codex_revision, revision) {
+                    return;
+                }
+                this.providers.codex_busy = false;
+                let (operation_error, actual_account, needs_attention) = result;
+                this.providers.codex_needs_attention = needs_attention;
+                match actual_account {
+                    Ok(account) => {
+                        this.providers.codex_configured = account.is_some();
+                        this.providers.codex_account = account;
+                        this.providers.codex_error = operation_error;
+                    }
+                    Err(error) => {
+                        this.providers.codex_configured = false;
+                        this.providers.codex_account = None;
+                        this.providers.codex_error = Some(operation_error.unwrap_or(error));
+                    }
+                }
+                this.service_refresh_after_codex(cx);
+                cx.notify();
+            })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_codex_sign_in(&mut self) -> bool {
+        let owned_dialog = self.providers.detach_codex_dialog();
+        if self.providers.codex_attempt.take().is_some() {
+            self.providers.codex_revision = self.providers.codex_revision.wrapping_add(1);
+            self.providers.codex_busy = false;
+        }
+        owned_dialog
+    }
+
+    pub(crate) fn codex_auth_active(&self) -> bool {
+        self.providers.codex_auth_active()
+    }
+
+    fn service_refresh_after_codex(&self, cx: &mut Context<Self>) {
+        self.services
+            .appearance_service
+            .update(cx, |service, cx| service.refresh_providers(cx));
     }
 
     /// One rounded card listing a set of provider rows.
@@ -578,16 +1295,17 @@ impl SettingsView {
                     }),
             )
             .child(if is_builtin {
-                let click_id = id.clone();
                 Button::new(ElementId::Name(SharedString::from(format!(
                     "provider-manage-{id}"
                 ))))
                 .small()
-                .label(if has_key { "Manage" } else { "Set up" })
-                .on_click(cx.listener(move |this, _event, window, cx| {
-                    this.providers
-                        .open_editor(Some(click_id.clone()), window, cx);
-                }))
+                .label(if has_key {
+                    "Managed"
+                } else {
+                    "Setup unavailable"
+                })
+                .disabled(true)
+                .tooltip("Pi-native provider setup is not available in this build")
                 .into_any_element()
             } else {
                 h_flex()
@@ -657,6 +1375,12 @@ impl SettingsView {
         let can_save = !label_value.trim().is_empty()
             && !base_url_value.trim().is_empty()
             && valid_base_url(&base_url_value);
+        let discovery = self
+            .providers
+            .discoveries
+            .get(&draft.provider_id)
+            .cloned()
+            .unwrap_or_default();
 
         v_flex()
             .id("provider-editor")
@@ -689,7 +1413,7 @@ impl SettingsView {
                             .icon(IconName::Close)
                             .tooltip("Close")
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.providers.editing = None;
+                                this.providers.close_editor();
                                 cx.notify();
                             })),
                     ),
@@ -837,12 +1561,22 @@ impl SettingsView {
                     .justify_end()
                     .gap_2()
                     .child(
+                        Button::new("test-provider-draft")
+                            .small()
+                            .ghost()
+                            .label("Test connection")
+                            .disabled(draft.saving || discovery.running)
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.providers.test_discover_draft(&this.services, cx);
+                            })),
+                    )
+                    .child(
                         Button::new("cancel-provider-edit")
                             .small()
                             .ghost()
                             .label("Cancel")
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.providers.editing = None;
+                                this.providers.close_editor();
                                 cx.notify();
                             })),
                     )
@@ -857,6 +1591,20 @@ impl SettingsView {
                             })),
                     ),
             )
+            .when_some(discovery.outcome, |el, outcome| {
+                let message = match outcome {
+                    DiscoveryOutcome::Found { count, .. } => {
+                        format!("Found {count} available model(s).")
+                    }
+                    DiscoveryOutcome::Failed(message) => message,
+                };
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(message),
+                )
+            })
     }
 
     /// Inline delete-confirmation card.
@@ -920,7 +1668,17 @@ impl ProvidersState {
             .map(|row| row.id.clone())
             .or(provider_id)
             .unwrap_or_else(new_custom_provider_id);
-        let (label, base_url, models, needs_key, has_key, kind, default_model) = match existing {
+        let (
+            label,
+            base_url,
+            models,
+            needs_key,
+            has_key,
+            kind,
+            default_model,
+            deployment,
+            is_preset,
+        ) = match existing {
             Some(row) => (
                 row.label.clone(),
                 row.base_url.clone(),
@@ -929,6 +1687,8 @@ impl ProvidersState {
                 row.has_key,
                 row.kind,
                 row.default_model.clone().unwrap_or_default(),
+                row.deployment,
+                row.is_preset,
             ),
             None => (
                 "Custom Provider".to_string(),
@@ -938,6 +1698,8 @@ impl ProvidersState {
                 false,
                 ProviderKind::Openai,
                 String::new(),
+                ProviderDeployment::Local,
+                false,
             ),
         };
         let thinking_level = if kind == ProviderKind::Anthropic && !default_model.is_empty() {
@@ -966,8 +1728,11 @@ impl ProvidersState {
         let label_input = make_input(cx, window, "My provider", &label);
         let base_url_input = make_input(cx, window, "https://api.example.com/v1", &base_url);
         let models_input = make_input(cx, window, "model-one", &models.join("\n"));
-        let api_key_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Paste your API key"));
+        let api_key_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Paste your API key")
+                .masked(true)
+        });
         for input in [
             label_input.clone(),
             base_url_input.clone(),
@@ -975,8 +1740,20 @@ impl ProvidersState {
             api_key_input.clone(),
         ] {
             let subscription =
-                cx.subscribe_in(&input, window, |_this, _source, event, _window, cx| {
+                cx.subscribe_in(&input, window, |this, _source, event, _window, cx| {
                     if matches!(event, InputEvent::Change) {
+                        if let Some(draft) = this.providers.editing.as_ref() {
+                            if let Some(discovery) =
+                                this.providers.discoveries.get_mut(&draft.provider_id)
+                            {
+                                if let Some(cancel) = discovery.cancel.take() {
+                                    let _ = cancel.send(true);
+                                }
+                                discovery.revision = discovery.revision.wrapping_add(1);
+                                discovery.running = false;
+                                discovery.outcome = None;
+                            }
+                        }
                         cx.notify();
                     }
                 });
@@ -992,6 +1769,8 @@ impl ProvidersState {
             kind,
             needs_key,
             has_key,
+            deployment,
+            is_preset,
             default_model,
             thinking_level,
             saving: false,
@@ -1005,6 +1784,19 @@ impl ProvidersState {
             draft.thinking_level = level.to_string();
             cx.notify();
         }
+    }
+
+    fn close_editor(&mut self) {
+        if let Some(draft) = self.editing.as_ref() {
+            if let Some(discovery) = self.discoveries.get_mut(&draft.provider_id) {
+                discovery.revision = discovery.revision.wrapping_add(1);
+                discovery.running = false;
+                if let Some(cancel) = discovery.cancel.take() {
+                    let _ = cancel.send(true);
+                }
+            }
+        }
+        self.editing = None;
     }
 
     /// Remove the stored keychain key for the provider being edited.
@@ -1053,6 +1845,8 @@ impl ProvidersState {
         let kind = draft.kind;
         let default_model = draft.default_model.clone();
         let thinking_level = draft.thinking_level.clone();
+        let deployment = draft.deployment;
+        let is_preset = draft.is_preset;
         draft.saving = true;
 
         let services = services.clone();
@@ -1069,39 +1863,39 @@ impl ProvidersState {
                 Some(default_model.clone())
             },
             needs_key,
-            deployment: Some(ProviderDeployment::Hosted),
-            is_preset: Some(false),
+            deployment: Some(deployment),
+            is_preset: Some(is_preset),
             is_builtin: Some(false),
             extra: serde_json::Map::new(),
         };
 
         cx.spawn(async move |this, cx| {
-            let mut outcome: Option<String> = None;
-            let saved = cx
+            let selection = {
+                let model = if default_model.is_empty() {
+                    models.first().cloned()
+                } else {
+                    Some(default_model.clone())
+                };
+                model.map(|model| ModelSelection {
+                    provider_id: provider_id.clone(),
+                    model,
+                })
+            };
+            let mut outcome = cx
                 .background_spawn({
                     let config = services.config.clone();
+                    let keys = services.keys.clone();
                     let provider = provider.clone();
-                    async move { config.save_provider(&provider, &|| true).ok() }
+                    async move {
+                        crate::services::provider_mutation::ProviderMutationService::new(
+                            config, keys,
+                        )
+                        .save_custom(&provider, key_draft.as_deref(), selection.as_ref())
+                        .err()
+                        .map(|error| error.to_string())
+                    }
                 })
                 .await;
-            if saved.is_none() {
-                outcome = Some("The provider could not be saved.".to_string());
-            } else if let Some(key) = key_draft {
-                let wrote = cx
-                    .background_spawn({
-                        let keys = services.keys.clone();
-                        let provider_id = provider_id.clone();
-                        async move { keys.set(&provider_id, &key).is_ok() }
-                    })
-                    .await;
-                if !wrote {
-                    outcome = Some(
-                        "The connection was saved, but the API key could not be written to the \
-                         keychain."
-                            .to_string(),
-                    );
-                }
-            }
             if outcome.is_none() && kind == ProviderKind::Anthropic && !thinking_level.is_empty() {
                 let model = default_model.clone();
                 if !model.is_empty() {
@@ -1120,32 +1914,14 @@ impl ProvidersState {
                         .await;
                 }
             }
-            // Persist the default model selection for new turns.
-            let selection = {
-                let model = if default_model.is_empty() {
-                    models.first().cloned()
-                } else {
-                    Some(default_model.clone())
-                };
-                model.map(|model| ModelSelection {
-                    provider_id: provider_id.clone(),
-                    model,
-                })
-            };
-            if let Some(selection) = selection {
-                cx.background_spawn({
-                    let config = services.config.clone();
-                    let value = selection.to_settings();
-                    async move {
-                        let mut patch = serde_json::Map::new();
-                        patch.insert(MODEL_SELECTION_KEY.to_string(), value);
-                        let _ = config.set_settings(&patch, &|| true);
-                    }
-                })
-                .await;
-            }
             this.update(cx, |this, cx| {
-                this.providers.editing = None;
+                if outcome.is_none() {
+                    this.providers.close_editor();
+                } else if let Some(draft) = this.providers.editing.as_mut() {
+                    if draft.provider_id == provider_id {
+                        draft.saving = false;
+                    }
+                }
                 this.providers.error = outcome.clone();
                 this.providers.notice = if outcome.is_none() {
                     Some("Provider saved.".to_string())
@@ -1200,6 +1976,96 @@ impl ProvidersState {
         cx.notify();
     }
 
+    /// Test the exact editor draft. A changed connection can use only a newly
+    /// entered key; bound lookup fails closed for an old endpoint credential.
+    fn test_discover_draft(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
+        let Some(draft) = self.editing.as_ref() else {
+            return;
+        };
+        let provider_id = draft.provider_id.clone();
+        let base_url = draft.base_url.read(cx).value().trim().to_string();
+        let key_draft = draft.api_key.read(cx).value().trim().to_string();
+        let connection = StoredProvider {
+            id: provider_id.clone(),
+            kind: draft.kind,
+            label: draft.label.read(cx).value().trim().to_string(),
+            base_url: base_url.clone(),
+            models: parse_models_text(&draft.models.read(cx).value()),
+            model_metadata: None,
+            default_model: (!draft.default_model.is_empty()).then(|| draft.default_model.clone()),
+            needs_key: draft.needs_key,
+            deployment: Some(draft.deployment),
+            is_preset: Some(draft.is_preset),
+            is_builtin: Some(false),
+            extra: serde_json::Map::new(),
+        };
+        let state = self.discoveries.entry(provider_id.clone()).or_default();
+        if let Some(cancel) = state.cancel.take() {
+            let _ = cancel.send(true);
+        }
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        state.running = true;
+        state.outcome = None;
+        let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+        state.cancel = Some(cancel);
+
+        let config = services.config.clone();
+        let runtime = live_discovery::runtime_kind_for_provider(&provider_id, &base_url);
+        let task = Tokio::spawn(cx, async move {
+            let api_key = if !key_draft.is_empty() {
+                Some(key_draft)
+            } else if connection.needs_key {
+                config.get_bound_provider_key(&connection).ok().flatten()
+            } else {
+                None
+            };
+            if connection.needs_key && api_key.is_none() {
+                return Err("Enter the API key for this connection before testing.".to_string());
+            }
+            let options = live_discovery::DiscoveryOptions::default();
+            tokio::select! {
+                _ = cancelled.changed() => Err("The model discovery was cancelled.".to_string()),
+                result = live_discovery::discover_models_with_auth(
+                    &base_url,
+                    runtime,
+                    &options,
+                    api_key.as_deref(),
+                ) => result.map_err(|error| error.to_string()),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                let still_open = this
+                    .providers
+                    .editing
+                    .as_ref()
+                    .is_some_and(|draft| draft.provider_id == provider_id);
+                let state = this.providers.discoveries.entry(provider_id).or_default();
+                if !still_open || state.revision != revision {
+                    return;
+                }
+                state.running = false;
+                state.cancel = None;
+                state.outcome = Some(match result {
+                    Ok(Ok(models)) => DiscoveryOutcome::Found {
+                        count: models.len(),
+                        models: models.into_iter().map(|model| model.id).collect(),
+                    },
+                    Ok(Err(error)) => DiscoveryOutcome::Failed(error),
+                    Err(_) => {
+                        DiscoveryOutcome::Failed("The model discovery was interrupted.".to_string())
+                    }
+                });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Persist the discovered model list as the provider's configured models
     /// (the "Use these models" button). The current record's label / URL /
     /// key survive; only the cached model list is swapped.
@@ -1216,18 +2082,15 @@ impl ProvidersState {
             let saved = cx
                 .background_spawn({
                     let config = services.config.clone();
+                    let keys = services.keys.clone();
                     let provider_id = provider_id.clone();
                     let models = models.clone();
                     async move {
-                        let Some(mut provider) = config.get_provider(&provider_id).ok().flatten()
-                        else {
-                            return Err("The provider record could not be read.".to_string());
-                        };
-                        provider.models = models;
-                        config
-                            .save_provider(&provider, &|| true)
-                            .map(|_| ())
-                            .map_err(|error| error.to_string())
+                        crate::services::provider_mutation::ProviderMutationService::new(
+                            config, keys,
+                        )
+                        .save_discovered_models(&provider_id, models)
+                        .map_err(|error| error.to_string())
                     }
                 })
                 .await;
@@ -1261,15 +2124,17 @@ impl ProvidersState {
         cx.spawn(async move |this, cx| {
             let ok = cx
                 .background_spawn(async move {
-                    services
-                        .config
-                        .remove_provider(&provider_id, &|| true)
-                        .is_ok()
+                    crate::services::provider_mutation::ProviderMutationService::new(
+                        services.config.clone(),
+                        services.keys.clone(),
+                    )
+                    .remove_custom(&provider_id)
+                    .is_ok()
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.providers.removing = None;
-                this.providers.editing = None;
+                this.providers.close_editor();
                 this.providers.error = if ok {
                     None
                 } else {
@@ -1335,6 +2200,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chat_title_setting_choices_round_trip_exact_persisted_values() {
+        for choice in [
+            ChatTitleProviderId::Automatic,
+            ChatTitleProviderId::AppleFoundationModels,
+            ChatTitleProviderId::ChatModel,
+        ] {
+            assert_eq!(ChatTitleProviderId::from_str(choice.as_str()), Some(choice));
+        }
+    }
+
+    #[test]
+    fn chat_title_select_fits_compact_settings_and_preserves_keyboard_order() {
+        assert_eq!(title_provider_select_max_width(390.0), None);
+        assert_eq!(
+            title_provider_select_max_width(700.0),
+            Some(TITLE_PROVIDER_SELECT_WIDTH_PX)
+        );
+        assert_eq!(
+            title_provider_items()
+                .into_iter()
+                .map(|item| item.value)
+                .collect::<Vec<_>>(),
+            vec![
+                ChatTitleProviderId::Automatic,
+                ChatTitleProviderId::AppleFoundationModels,
+                ChatTitleProviderId::ChatModel,
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_dialog_keeps_settings_auth_active_until_its_exact_close() {
+        let lease = CodexDialogLease::default();
+        let mut state = ProvidersState {
+            codex_dialog: Some(lease.clone()),
+            ..Default::default()
+        };
+        lease.mark_open();
+        assert!(state.codex_auth_active());
+
+        lease.mark_closed();
+        assert!(!state.codex_auth_active());
+        state.codex_dialog = None;
+        assert!(!state.codex_auth_active());
+    }
+
+    #[test]
+    fn navigation_detaches_dialog_before_late_finish_and_never_requests_invoker_focus() {
+        let lease = CodexDialogLease::default();
+        lease.mark_open();
+        let mut state = ProvidersState {
+            codex_dialog: Some(lease.clone()),
+            ..Default::default()
+        };
+        let destination_focus_valid = true;
+
+        assert!(state.detach_codex_dialog());
+        assert!(!lease.take_owned_dialog());
+        assert!(!lease.should_restore_focus());
+        assert!(destination_focus_valid);
+    }
+
+    #[test]
     fn parses_models_one_per_line_deduped() {
         let text = "gpt-4o\n  claude-sonnet-5\n\ngpt-4o\nclaude-sonnet-5\n";
         assert_eq!(parse_models_text(text), vec!["gpt-4o", "claude-sonnet-5"]);
@@ -1386,6 +2314,8 @@ mod tests {
             needs_key: true,
             has_key: true,
             is_builtin: true,
+            is_preset: true,
+            deployment: ProviderDeployment::Hosted,
             catalog_models: Vec::new(),
         };
         let enriched = enrich_provider_row(row.clone(), Some(&catalog));
