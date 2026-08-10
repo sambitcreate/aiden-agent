@@ -185,7 +185,10 @@ where
     T: Persistence<Vec<Value>>,
     U: Persistence<Vec<Value>>,
 {
-    store: ScheduleStore<T, U>,
+    // One app-owned store is the authority for the runtime and every surface.
+    // Separate store instances over the same JSON files can publish stale
+    // cached state after another instance writes.
+    store: Arc<ScheduleStore<T, U>>,
     executor: Arc<dyn TaskExecutor>,
     state: Mutex<CoreState>,
     running: Mutex<HashMap<String, Arc<RunningTask>>>,
@@ -205,7 +208,7 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        store: ScheduleStore<T, U>,
+        store: Arc<ScheduleStore<T, U>>,
         executor: Arc<dyn TaskExecutor>,
         events: Option<mpsc::UnboundedSender<SchedulerEvent>>,
         now: Box<dyn Fn() -> u64 + Send + Sync>,
@@ -219,7 +222,7 @@ where
             executor,
             state: Mutex::new(CoreState {
                 started: false,
-                globally_enabled: true,
+                globally_enabled: false,
                 blocked_workspaces: HashSet::new(),
                 tick_task: None,
             }),
@@ -244,7 +247,7 @@ where
 
     /// The underlying store (tests and bindings inspect task/run state).
     pub fn store(&self) -> &ScheduleStore<T, U> {
-        &self.store
+        self.store.as_ref()
     }
 
     pub fn is_started(&self) -> bool {
@@ -909,10 +912,11 @@ where
     }
 }
 
-/// Convenience constructor for tests and simple bindings: default diagnostics
-/// and an always-enabled global gate.
+/// Convenience constructor for production bindings: default diagnostics and
+/// a fail-closed global gate. A caller with a real executor must opt in by
+/// constructing [`SchedulerCore`] with an explicit enable provider.
 pub fn create_scheduler<T, U>(
-    store: ScheduleStore<T, U>,
+    store: Arc<ScheduleStore<T, U>>,
     executor: Arc<dyn TaskExecutor>,
     events: Option<mpsc::UnboundedSender<SchedulerEvent>>,
     now: Box<dyn Fn() -> u64 + Send + Sync>,
@@ -926,7 +930,7 @@ where
         executor,
         events,
         now,
-        Box::new(|| async { true }.boxed()),
+        Box::new(|| async { false }.boxed()),
         Box::new(|message| tracing::warn!("[schedule] {message}")),
         Box::new(|message| tracing::error!("[schedule] {message}")),
         SchedulerConfig::default(),
@@ -1068,6 +1072,7 @@ mod tests {
 
     struct Harness {
         core: Arc<HarnessCore>,
+        store: Arc<ScheduleStore<Memory, Memory>>,
         executor: Arc<FakeExecutor>,
         events: tokio::sync::mpsc::UnboundedReceiver<SchedulerEvent>,
         clock: Arc<AtomicU64>,
@@ -1080,7 +1085,7 @@ mod tests {
 
         fn with_config(config: SchedulerConfig) -> Self {
             let clock = Arc::new(AtomicU64::new(0));
-            let store = create_schedule_store(
+            let store = Arc::new(create_schedule_store(
                 MemoryPersistence::<Vec<Value>>::new(vec![]),
                 MemoryPersistence::<Vec<Value>>::new(vec![]),
                 Box::new({
@@ -1088,11 +1093,11 @@ mod tests {
                     move || clock.load(Ordering::SeqCst)
                 }),
                 None,
-            );
+            ));
             let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
             let executor = FakeExecutor::new();
             let core = SchedulerCore::new(
-                store,
+                store.clone(),
                 executor.clone(),
                 Some(events_tx),
                 Box::new({
@@ -1106,6 +1111,7 @@ mod tests {
             );
             Self {
                 core,
+                store,
                 executor,
                 events: events_rx,
                 clock,
@@ -1133,6 +1139,13 @@ mod tests {
             }
             events
         }
+    }
+
+    #[test]
+    fn scheduler_uses_the_exact_injected_schedule_store_authority() {
+        let harness = Harness::new();
+
+        assert!(Arc::ptr_eq(&harness.store, &harness.core.store));
     }
 
     // ------------------------------------------------------------------
@@ -1397,7 +1410,7 @@ mod tests {
         let gate = Gate::new();
         let tasks = GatedPersistence::new(MemoryPersistence::new(vec![]), gate.clone());
         let runs = MemoryPersistence::new(vec![]);
-        let store = create_schedule_store(
+        let store = Arc::new(create_schedule_store(
             tasks,
             runs,
             Box::new({
@@ -1405,7 +1418,7 @@ mod tests {
                 move || clock.load(Ordering::SeqCst)
             }),
             None,
-        );
+        ));
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let executor = FakeExecutor::new();
         let core = SchedulerCore::new(
@@ -1494,7 +1507,7 @@ mod tests {
         let gate = Gate::new();
         let tasks = GatedPersistence::new(MemoryPersistence::new(vec![]), gate.clone());
         let runs = MemoryPersistence::new(vec![]);
-        let store = create_schedule_store(
+        let store = Arc::new(create_schedule_store(
             tasks,
             runs,
             Box::new({
@@ -1502,7 +1515,7 @@ mod tests {
                 move || clock.load(Ordering::SeqCst)
             }),
             None,
-        );
+        ));
         let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
         let executor = FakeExecutor::new();
         let core = SchedulerCore::new(
@@ -1618,5 +1631,23 @@ mod tests {
         harness.wait_pending(&task.id).await;
         harness.core.stop();
         assert_eq!(manual.await.unwrap().result, ScheduledRunResult::Blocked);
+    }
+
+    #[tokio::test]
+    async fn production_constructor_starts_with_the_global_gate_closed() {
+        let store = Arc::new(create_schedule_store(
+            MemoryPersistence::<Vec<Value>>::new(vec![]),
+            MemoryPersistence::<Vec<Value>>::new(vec![]),
+            Box::new(|| 0),
+            None,
+        ));
+        let executor = FakeExecutor::new();
+        let core = create_scheduler(store, executor.clone(), None, Box::new(|| 0));
+
+        core.start().await.unwrap();
+
+        assert!(!core.is_globally_enabled());
+        assert_eq!(executor.pending_count(), 0);
+        core.stop();
     }
 }
