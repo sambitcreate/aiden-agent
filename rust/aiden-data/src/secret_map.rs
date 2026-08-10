@@ -27,9 +27,9 @@
 //! [`SecretEntryStatus::NeedsRotation`] so the UI can prompt re-entry; they
 //! are never silently deleted or overwritten with garbage.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 
 use serde_json::{Map, Value};
 
@@ -38,6 +38,7 @@ use crate::{DataStore, DataStoreError};
 
 /// The key prefix for endpoint-binding entries (secret-map-core / secrets.ts).
 pub const PROVIDER_BINDING_KEY_PREFIX: &str = "__aiden_internal_provider_binding_v1__:";
+const PROVIDER_PENDING_KEY_PREFIX: &str = "__aiden_internal_provider_pending_v1__:";
 
 /// The keychain-service marker written into JSON slots by the keyring cipher.
 /// `base64("aiden-k1:")` — anything else in a slot is a legacy safeStorage blob.
@@ -57,6 +58,10 @@ pub enum SecretMapError {
 
 fn binding_id_for(value_id: &str) -> String {
     format!("{PROVIDER_BINDING_KEY_PREFIX}{value_id}")
+}
+
+fn pending_id_for(value_id: &str) -> String {
+    format!("{PROVIDER_PENDING_KEY_PREFIX}{value_id}")
 }
 
 /// Keychain account namespace for provider-keys.json slots. Kept distinct from
@@ -342,11 +347,30 @@ pub struct ProviderKeysStore {
     store: DataStore<SecretKeyMap>,
     cipher: Arc<dyn SecretCipher>,
     keychain: crate::KeychainSecretStore,
+    /// One authority per backing file, shared across independently constructed
+    /// stores. The guard covers fixed-account keychain staging and map publish.
+    authority: Arc<StdMutex<HashSet<String>>>,
+}
+
+fn shared_credential_authority(path: PathBuf) -> Arc<StdMutex<HashSet<String>>> {
+    static AUTHORITIES: OnceLock<StdMutex<HashMap<PathBuf, Weak<StdMutex<HashSet<String>>>>>> =
+        OnceLock::new();
+    let authorities = AUTHORITIES.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut authorities = authorities
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(authority) = authorities.get(&path).and_then(Weak::upgrade) {
+        return authority;
+    }
+    let authority = Arc::new(StdMutex::new(HashSet::new()));
+    authorities.insert(path, Arc::downgrade(&authority));
+    authority
 }
 
 impl ProviderKeysStore {
     pub fn new(root: PathBuf, service: impl Into<String>, cipher: Arc<dyn SecretCipher>) -> Self {
         let service = service.into();
+        let authority = shared_credential_authority(root.join("provider-keys.json"));
         Self {
             store: DataStore::new(
                 "provider-keys.json",
@@ -360,6 +384,7 @@ impl ProviderKeysStore {
             ),
             cipher,
             keychain: crate::KeychainSecretStore::new(service),
+            authority,
         }
     }
 
@@ -386,7 +411,17 @@ impl ProviderKeysStore {
 
     /// Non-destructive slot inspection (the renderer-facing `hasKey` uses this).
     pub fn status(&self, provider_id: &str) -> Result<SecretEntryStatus, ProviderKeysError> {
+        let revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if revoked.contains(provider_id) {
+            return Ok(SecretEntryStatus::Missing);
+        }
         let map = self.store.load()?;
+        if secret_key_entry(&map, &pending_id_for(provider_id)).is_some() {
+            return Ok(SecretEntryStatus::Missing);
+        }
         Ok(Self::slot_status(
             self.cipher.as_ref(),
             provider_id,
@@ -396,7 +431,17 @@ impl ProviderKeysStore {
 
     /// Whether a string value is stored (regardless of decryptability).
     pub fn has_key(&self, provider_id: &str) -> Result<bool, ProviderKeysError> {
+        let revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if revoked.contains(provider_id) {
+            return Ok(false);
+        }
         let map = self.store.load()?;
+        if secret_key_entry(&map, &pending_id_for(provider_id)).is_some() {
+            return Ok(false);
+        }
         Ok(secret_key_entry(&map, provider_id).is_some())
     }
 
@@ -418,6 +463,62 @@ impl ProviderKeysStore {
                 provider_id: provider_id.to_string(),
             }),
             Err(err) => Err(ProviderKeysError::SecureStorage(err.to_string())),
+        }
+    }
+
+    /// Return a credential only when its binding matches, reading both marker
+    /// slots from one immutable map snapshot. This prevents a concurrent
+    /// rotation from pairing an old binding observation with a new key.
+    pub fn get_bound(
+        &self,
+        provider_id: &str,
+        expected_binding: &str,
+    ) -> Result<Option<String>, ProviderKeysError> {
+        let revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if revoked.contains(provider_id) {
+            return Ok(None);
+        }
+        let map = self.store.load()?;
+        if secret_key_entry(&map, &pending_id_for(provider_id)).is_some() {
+            return Ok(None);
+        }
+        let binding_id = binding_id_for(provider_id);
+        let Some(encoded_binding) = secret_key_entry(&map, &binding_id) else {
+            return Ok(None);
+        };
+        let Some(encoded_key) = secret_key_entry(&map, provider_id) else {
+            return Ok(None);
+        };
+        let binding_bytes = crate::base64::decode(encoded_binding).ok_or_else(|| {
+            ProviderKeysError::NeedsRotation {
+                provider_id: binding_id.clone(),
+            }
+        })?;
+        let binding = match self
+            .cipher
+            .decrypt_string(&keychain_binding_account_for(provider_id), &binding_bytes)
+        {
+            Ok(binding) => binding,
+            Err(SecretCipherError::NeedsRotation) => return Ok(None),
+            Err(error) => return Err(ProviderKeysError::SecureStorage(error.to_string())),
+        };
+        if binding != expected_binding {
+            return Ok(None);
+        }
+        let key_bytes =
+            crate::base64::decode(encoded_key).ok_or_else(|| ProviderKeysError::NeedsRotation {
+                provider_id: provider_id.to_string(),
+            })?;
+        match self
+            .cipher
+            .decrypt_string(&keychain_account_for(provider_id), &key_bytes)
+        {
+            Ok(key) => Ok(Some(key)),
+            Err(SecretCipherError::NeedsRotation) => Ok(None),
+            Err(error) => Err(ProviderKeysError::SecureStorage(error.to_string())),
         }
     }
 
@@ -456,6 +557,115 @@ impl ProviderKeysStore {
         Ok(())
     }
 
+    /// Encrypt and publish a credential with its endpoint binding in one map
+    /// revision. Readers use [`Self::get_bound`] so they can never combine
+    /// slots from different rotations.
+    pub fn set_bound(
+        &self,
+        provider_id: &str,
+        key: &str,
+        binding: &str,
+    ) -> Result<(), ProviderKeysError> {
+        self.publish_bound(provider_id, key, binding, false)
+    }
+
+    /// Stage a bound pair behind a durable pending marker. Request-time reads
+    /// remain unavailable until [`Self::activate_bound`] commits the mutation.
+    pub fn stage_bound(
+        &self,
+        provider_id: &str,
+        key: &str,
+        binding: &str,
+    ) -> Result<(), ProviderKeysError> {
+        self.publish_bound(provider_id, key, binding, true)
+    }
+
+    fn publish_bound(
+        &self,
+        provider_id: &str,
+        key: &str,
+        binding: &str,
+        pending: bool,
+    ) -> Result<(), ProviderKeysError> {
+        let mut revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        revoked.insert(provider_id.to_string());
+        let pending_id = pending_id_for(provider_id);
+        // The durable deny marker must commit before either fixed keychain
+        // account changes. A crash or failed later write therefore reopens in
+        // an unavailable state even when the endpoint binding is unchanged.
+        self.store
+            .update(|map| set_secret_key_entry(map, &pending_id, "!".into()))?;
+        if !self.cipher.is_encryption_available() {
+            return Err(ProviderKeysError::SecureStorage(
+                "secure storage is unavailable".into(),
+            ));
+        }
+        let staged = (|| {
+            let binding_marker = self
+                .cipher
+                .encrypt_string(&keychain_binding_account_for(provider_id), binding)
+                .map_err(|error| ProviderKeysError::SecureStorage(error.to_string()))?;
+            let key_marker = self
+                .cipher
+                .encrypt_string(&keychain_account_for(provider_id), key)
+                .map_err(|error| ProviderKeysError::SecureStorage(error.to_string()))?;
+            let encoded_binding = crate::base64::encode(&binding_marker);
+            let encoded_key = crate::base64::encode(&key_marker);
+            let binding_id = binding_id_for(provider_id);
+            self.store.update(|map| {
+                set_secret_key_entry(map, &binding_id, encoded_binding);
+                set_secret_key_entry(map, provider_id, encoded_key);
+            })?;
+            if !pending {
+                self.store
+                    .update(|map| delete_secret_key_entry(map, &pending_id))?;
+            }
+            Ok(())
+        })();
+        match staged {
+            Ok(()) => {
+                revoked.remove(provider_id);
+                Ok(())
+            }
+            Err(error) => {
+                // A fixed keychain account may already contain one newly
+                // staged value. Keep the pair revoked until a complete publish
+                // succeeds, so no partially rotated credential can dispatch.
+                revoked.insert(provider_id.to_string());
+                Err(error)
+            }
+        }
+    }
+
+    /// Commit a fully staged credential after its provider transaction lands.
+    pub fn activate_bound(&self, provider_id: &str) -> Result<(), ProviderKeysError> {
+        let mut revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pending_id = pending_id_for(provider_id);
+        self.store
+            .update(|map| delete_secret_key_entry(map, &pending_id))?;
+        revoked.remove(provider_id);
+        Ok(())
+    }
+
+    /// Durably deny request-time use without discarding the recoverable pair.
+    pub fn revoke_bound(&self, provider_id: &str) -> Result<(), ProviderKeysError> {
+        let mut revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        revoked.insert(provider_id.to_string());
+        let pending_id = pending_id_for(provider_id);
+        self.store
+            .update(|map| set_secret_key_entry(map, &pending_id, "!".into()))?;
+        Ok(())
+    }
+
     pub fn get_binding(&self, provider_id: &str) -> Result<Option<String>, ProviderKeysError> {
         let binding_id = binding_id_for(provider_id);
         let account = keychain_binding_account_for(provider_id);
@@ -480,21 +690,42 @@ impl ProviderKeysStore {
     /// entries (TS `secrets.deleteKey` removes both slots so a stale binding
     /// can never block a freshly re-entered key).
     pub fn delete(&self, provider_id: &str) -> Result<(), ProviderKeysError> {
+        self.delete_with_marker_removal(provider_id, || {
+            let binding_id = binding_id_for(provider_id);
+            let pending_id = pending_id_for(provider_id);
+            self.store.update(|map| {
+                let removed_value = delete_secret_key_entry(map, provider_id);
+                let removed_binding = delete_secret_key_entry(map, &binding_id);
+                let removed_pending = delete_secret_key_entry(map, &pending_id);
+                removed_value || removed_binding || removed_pending
+            })?;
+            Ok(())
+        })
+    }
+
+    fn delete_with_marker_removal(
+        &self,
+        provider_id: &str,
+        remove_markers: impl FnOnce() -> Result<(), ProviderKeysError>,
+    ) -> Result<(), ProviderKeysError> {
+        let mut revoked = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        revoked.insert(provider_id.to_string());
+        // Marker removal is authoritative: after this publication every reader
+        // sees the credential as absent even if keychain cleanup fails.
+        let marker_result = remove_markers();
         let _ = self.cipher.delete_entry(&keychain_account_for(provider_id));
         let _ = self.keychain.delete(&keychain_account_for(provider_id));
-        let binding_id = binding_id_for(provider_id);
         let _ = self
             .cipher
             .delete_entry(&keychain_binding_account_for(provider_id));
         let _ = self
             .keychain
             .delete(&keychain_binding_account_for(provider_id));
-        self.store.update(|map| {
-            let removed_value = delete_secret_key_entry(map, provider_id);
-            let removed_binding = delete_secret_key_entry(map, &binding_id);
-            removed_value || removed_binding
-        })?;
-        Ok(())
+        // A subsequent successful set_bound clears the in-process tombstone.
+        marker_result
     }
 
     /// Apply a whole-map migration, persisting only when the closure reports a
@@ -739,6 +970,52 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FailingDeleteCipher(MemoryCipher);
+
+    impl SecretCipher for FailingDeleteCipher {
+        fn is_encryption_available(&self) -> bool {
+            self.0.is_encryption_available()
+        }
+
+        fn encrypt_string(&self, account: &str, value: &str) -> Result<Vec<u8>, SecretCipherError> {
+            self.0.encrypt_string(account, value)
+        }
+
+        fn decrypt_string(&self, account: &str, value: &[u8]) -> Result<String, SecretCipherError> {
+            self.0.decrypt_string(account, value)
+        }
+
+        fn delete_entry(&self, _account: &str) -> Result<(), SecretCipherError> {
+            Err(SecretCipherError::Keychain(
+                "injected cleanup failure".into(),
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct FailAfterKeychainWriteCipher(MemoryCipher);
+
+    impl SecretCipher for FailAfterKeychainWriteCipher {
+        fn is_encryption_available(&self) -> bool {
+            true
+        }
+
+        fn encrypt_string(&self, account: &str, value: &str) -> Result<Vec<u8>, SecretCipherError> {
+            let marker = self.0.encrypt_string(account, value)?;
+            if value == "new-secret" {
+                return Err(SecretCipherError::Keychain(
+                    "injected post-write failure".into(),
+                ));
+            }
+            Ok(marker)
+        }
+
+        fn decrypt_string(&self, account: &str, value: &[u8]) -> Result<String, SecretCipherError> {
+            self.0.decrypt_string(account, value)
+        }
+    }
+
     #[test]
     fn prototype_sensitive_provider_ids_round_trip_as_own_entries() {
         for provider_id in ["__proto__", "constructor", "toString"] {
@@ -946,6 +1223,198 @@ mod tests {
         assert!(store.get_binding("anthropic").unwrap().is_some());
         store.delete("anthropic").unwrap();
         assert_eq!(store.get("anthropic").unwrap(), None);
+    }
+
+    #[test]
+    fn successful_marker_removal_is_authoritative_when_keychain_cleanup_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(FailingDeleteCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store.set_bound("custom:test", "secret", "binding").unwrap();
+
+        store.delete("custom:test").unwrap();
+        drop(store);
+        let reopened = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher);
+
+        assert_eq!(reopened.get_bound("custom:test", "binding").unwrap(), None);
+    }
+
+    #[test]
+    fn staged_bound_credential_is_unavailable_until_activated() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher);
+        store
+            .stage_bound("custom:test", "secret", "binding")
+            .unwrap();
+        assert_eq!(store.get_bound("custom:test", "binding").unwrap(), None);
+        assert!(!store.has_key("custom:test").unwrap());
+        assert_eq!(
+            store.status("custom:test").unwrap(),
+            SecretEntryStatus::Missing
+        );
+
+        store.activate_bound("custom:test").unwrap();
+
+        assert_eq!(
+            store.get_bound("custom:test", "binding").unwrap(),
+            Some("secret".into())
+        );
+    }
+
+    #[test]
+    fn failed_rotation_after_keychain_write_reopens_with_durable_deny_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(FailAfterKeychainWriteCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store
+            .set_bound("custom:test", "old-secret", "same-binding")
+            .unwrap();
+
+        assert!(store
+            .set_bound("custom:test", "new-secret", "same-binding")
+            .is_err());
+        drop(store);
+        let reopened = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher);
+
+        assert_eq!(
+            reopened.get_bound("custom:test", "same-binding").unwrap(),
+            None
+        );
+        assert!(!reopened.has_key("custom:test").unwrap());
+    }
+
+    #[test]
+    fn bound_rotation_never_exposes_a_cross_revision_key_endpoint_pair() {
+        use std::sync::mpsc;
+        use std::sync::Barrier;
+
+        struct FixedMarkerBlockingCipher {
+            vault: StdMutex<HashMap<String, String>>,
+            entered: Arc<Barrier>,
+            release: Arc<Barrier>,
+            staged: mpsc::Sender<String>,
+        }
+
+        impl SecretCipher for FixedMarkerBlockingCipher {
+            fn is_encryption_available(&self) -> bool {
+                true
+            }
+
+            fn encrypt_string(
+                &self,
+                account: &str,
+                value: &str,
+            ) -> Result<Vec<u8>, SecretCipherError> {
+                self.vault
+                    .lock()
+                    .unwrap()
+                    .insert(account.to_string(), value.to_string());
+                self.staged.send(value.to_string()).unwrap();
+                if value == "binding-b" {
+                    self.entered.wait();
+                    self.release.wait();
+                }
+                // Production keyring markers carry no plaintext identity: both
+                // fixed accounts publish the same marker bytes.
+                Ok(b"keyring:v1".to_vec())
+            }
+
+            fn decrypt_string(
+                &self,
+                account: &str,
+                marker: &[u8],
+            ) -> Result<String, SecretCipherError> {
+                if marker != b"keyring:v1" {
+                    return Err(SecretCipherError::NeedsRotation);
+                }
+                self.vault
+                    .lock()
+                    .unwrap()
+                    .get(account)
+                    .cloned()
+                    .ok_or(SecretCipherError::UnrecognizedFormat)
+            }
+        }
+
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let (staged_tx, staged_rx) = mpsc::channel();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(FixedMarkerBlockingCipher {
+            vault: StdMutex::new(HashMap::new()),
+            entered: entered.clone(),
+            release: release.clone(),
+            staged: staged_tx,
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(ProviderKeysStore::new(
+            dir.path().to_path_buf(),
+            "aiden-agent",
+            cipher,
+        ));
+        store
+            .set_bound("provider", "secret-a", "binding-a")
+            .unwrap();
+        for _ in staged_rx.try_iter() {}
+
+        let rotation_b = store.clone();
+        let thread_b = std::thread::spawn(move || {
+            rotation_b
+                .set_bound("provider", "secret-b", "binding-b")
+                .unwrap();
+        });
+        entered.wait();
+        assert_eq!(staged_rx.recv().unwrap(), "binding-b");
+
+        let rotation_c = store.clone();
+        let thread_c = std::thread::spawn(move || {
+            rotation_c
+                .set_bound("provider", "secret-c", "binding-c")
+                .unwrap();
+        });
+        // Without the shared authority this forced schedule would stage C's
+        // binding while B is paused, then publish a cross-pair. No second
+        // rotation may reach either fixed account before B publishes.
+        assert!(staged_rx
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err());
+        release.wait();
+        thread_b.join().unwrap();
+        thread_c.join().unwrap();
+
+        assert_eq!(store.get_bound("provider", "binding-a").unwrap(), None);
+        assert_eq!(store.get_bound("provider", "binding-b").unwrap(), None);
+        assert_eq!(
+            store.get_bound("provider", "binding-c").unwrap().as_deref(),
+            Some("secret-c")
+        );
+    }
+
+    #[test]
+    fn failed_marker_removal_keeps_a_staged_credential_revoked_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(FailingDeleteCipher::default());
+        let store = ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        store
+            .stage_bound("custom:test", "secret", "binding")
+            .unwrap();
+
+        let result = store.delete_with_marker_removal("custom:test", || {
+            Err(ProviderKeysError::SecureStorage(
+                "injected marker failure".into(),
+            ))
+        });
+
+        assert!(result.is_err());
+        drop(store);
+        let reopened =
+            ProviderKeysStore::new(dir.path().to_path_buf(), "aiden-agent", cipher.clone());
+        assert!(!reopened.has_key("custom:test").unwrap());
+        assert_eq!(
+            reopened.status("custom:test").unwrap(),
+            SecretEntryStatus::Missing
+        );
+        assert_eq!(reopened.get_bound("custom:test", "binding").unwrap(), None);
     }
 
     #[test]
