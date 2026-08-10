@@ -154,6 +154,16 @@ pub fn spec_fingerprint(spec: &McpServerSpec) -> String {
             .expect("snapshot is serializable")
             .as_bytes(),
     );
+    // The resolved remote map includes an injected preset credential. Hashing
+    // its canonical bytes gives the cache a non-reversible credential revision
+    // without retaining or logging the secret itself. Absent, A, and B keys
+    // therefore always produce distinct connection generations.
+    if let Some(remote) = &spec.remote {
+        let encoded = serde_json::to_vec(&remote.headers).expect("headers are serializable");
+        let revision = Sha256::digest(encoded);
+        hasher.update(b"\0credential-revision\0");
+        hasher.update(revision);
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -449,6 +459,7 @@ impl McpClientManager {
     /// killing the stdio child), so a reconfigured command, URL, env, header,
     /// or preset key always takes effect.
     pub async fn ensure_connected(&self, spec: &McpServerSpec) -> Result<(), McpError> {
+        let admitted_generation = self.config_generation();
         let fingerprint = spec_fingerprint(spec);
         {
             let clients = self.clients.lock().await;
@@ -462,6 +473,15 @@ impl McpClientManager {
         // serialize unrelated servers or block a second chat generation.
         let client = Arc::new(self.connect_spec(spec).await?);
         let mut clients = self.clients.lock().await;
+        if self.config_generation() != admitted_generation {
+            if clients
+                .get(&spec.server.id)
+                .is_some_and(|existing| existing.fingerprint == fingerprint)
+            {
+                return Ok(());
+            }
+            return Err(McpError::StaleGeneration);
+        }
         if let Some(existing) = clients.get(&spec.server.id) {
             if existing.fingerprint == fingerprint {
                 // A concurrent connect won; the loser's transport is dropped
@@ -502,6 +522,14 @@ impl McpClientManager {
     /// [`Self::list_tools`] with the same counter.
     pub fn config_generation(&self) -> u64 {
         self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Invalidate every in-flight operation before an owning configuration
+    /// transaction publishes a new portable record.  Mutation authorities use
+    /// this before (and after) publication so a late result can never cross a
+    /// configuration boundary.
+    pub fn invalidate_config(&self) {
+        self.bump_config_generation();
     }
 
     pub async fn is_connected(&self, server_id: &str) -> bool {
@@ -623,10 +651,27 @@ impl McpClientManager {
         tracing::info!(server = %server_id, "MCP server disconnected");
     }
 
+    /// Synchronous variant for the portable-config watcher thread.  The
+    /// watcher is deliberately outside a Tokio runtime; using `blocking_lock`
+    /// there keeps external edits from leaving an old child process connected.
+    pub fn disconnect_blocking(&self, server_id: &str) {
+        self.clients.blocking_lock().remove(server_id);
+        let mut generations = self.generations.blocking_lock();
+        let next = generations.get(server_id).copied().unwrap_or(0) + 1;
+        generations.insert(server_id.to_string(), next);
+        self.bump_config_generation();
+        tracing::info!(server = %server_id, "MCP server disconnected by external config edit");
+    }
+
     pub async fn close_all(&self) {
         let mut clients = self.clients.lock().await;
         clients.clear();
         self.generations.lock().await.clear();
+        drop(clients);
+        // `close_all` is used by Reset Connections.  It is a configuration
+        // boundary too: callers already waiting on a client must reject their
+        // late result rather than publishing it after the reset.
+        self.bump_config_generation();
     }
 
     pub async fn connected_ids(&self) -> Vec<String> {
@@ -999,6 +1044,36 @@ mod tests {
             ..spec.clone()
         };
         assert_ne!(spec_fingerprint(&spec), spec_fingerprint(&remote));
+    }
+
+    #[test]
+    fn preset_credential_revisions_change_the_connection_fingerprint() {
+        let preset = crate::get_mcp_preset("composio").unwrap();
+        let server = crate::server_from_preset(preset, None).unwrap();
+        let unkeyed = crate::resolve_mcp_server(&server).unwrap();
+        let keyed_a = unkeyed.clone().with_preset_api_key("key-a".into()).unwrap();
+        let keyed_b = unkeyed.clone().with_preset_api_key("key-b".into()).unwrap();
+        assert_ne!(spec_fingerprint(&unkeyed), spec_fingerprint(&keyed_a));
+        assert_ne!(spec_fingerprint(&keyed_a), spec_fingerprint(&keyed_b));
+    }
+
+    #[tokio::test]
+    async fn ensure_connected_replaces_unkeyed_and_rotated_preset_clients() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = McpClientManager::with_connect(counting_connect(connects.clone(), 0));
+        let preset = crate::get_mcp_preset("composio").unwrap();
+        let server = crate::server_from_preset(preset, None).unwrap();
+        let unkeyed = crate::resolve_mcp_server(&server).unwrap();
+        let keyed_a = unkeyed.clone().with_preset_api_key("key-a".into()).unwrap();
+        let keyed_b = unkeyed.clone().with_preset_api_key("key-b".into()).unwrap();
+        manager.ensure_connected(&unkeyed).await.unwrap();
+        manager.ensure_connected(&keyed_a).await.unwrap();
+        manager.ensure_connected(&keyed_b).await.unwrap();
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(
+            manager.cached_fingerprint(&server.id).await.as_deref(),
+            Some(spec_fingerprint(&keyed_b).as_str())
+        );
     }
 
     // ---------------------------------------------------------------------
@@ -1459,6 +1534,39 @@ mod tests {
         // A subsequent ensure_connected finds the cached client (no new spawn).
         manager.ensure_connected(&spec).await.unwrap();
         assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn slow_connect_is_rejected_after_reset_fence() {
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let started = Arc::new(std::sync::Mutex::new(Some(started_tx)));
+        let release = Arc::new(tokio::sync::Mutex::new(Some(release_rx)));
+        let manager = Arc::new(McpClientManager::with_connect(Box::new(move |spec| {
+            let spec = spec.clone();
+            let started = started.clone();
+            let release = release.clone();
+            async move {
+                if let Some(started) = started.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                if let Some(release) = release.lock().await.take() {
+                    let _ = release.await;
+                }
+                Ok(fixture_client(&spec, 0, None).await)
+            }
+            .boxed()
+        })));
+        let task = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.ensure_connected(&remote_spec("docs")).await })
+        };
+        started_rx.await.expect("connect started");
+        manager.close_all().await;
+        let _ = release_tx.send(());
+        let error = task.await.expect("connect task").unwrap_err();
+        assert!(matches!(error, McpError::StaleGeneration));
+        assert!(!manager.is_connected("docs").await);
     }
 
     #[tokio::test]
