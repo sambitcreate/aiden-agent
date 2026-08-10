@@ -10,7 +10,6 @@ use aiden_data::schedule_store::{
     next_scheduled_run, system_timezone, ScheduledTask, ScheduledTaskInput, ScheduledTaskMode,
     ScheduledTaskPermission,
 };
-use chrono::{DateTime, Utc};
 use gpui::{
     div, prelude::FluentBuilder as _, px, AppContext as _, Context, ElementId, Entity, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
@@ -31,9 +30,6 @@ pub struct ScheduleRow {
     pub id: String,
     pub name: String,
     pub cron: String,
-    pub enabled: bool,
-    pub next_run_at: Option<u64>,
-    pub last_result: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -43,11 +39,6 @@ impl From<&ScheduledTask> for ScheduleRow {
             id: task.id.clone(),
             name: task.name.clone(),
             cron: task.cron.clone(),
-            enabled: task.enabled,
-            next_run_at: task.next_run_at,
-            last_result: task
-                .last_result
-                .map(|result| format!("{result:?}").to_lowercase()),
             last_error: task.last_error.clone(),
         }
     }
@@ -156,8 +147,7 @@ pub fn humanize_cron(cron: &str) -> String {
     scope
 }
 
-/// Validate a cron expression and produce either an error or the next-run
-/// preview label.
+/// Validate a cron expression without implying the dormant scheduler will run.
 pub fn cron_feedback(cron: &str) -> Result<String, String> {
     let trimmed = cron.trim();
     if trimmed.is_empty() {
@@ -165,12 +155,7 @@ pub fn cron_feedback(cron: &str) -> Result<String, String> {
     }
     let timezone = system_timezone();
     match next_scheduled_run(trimmed, &timezone, aiden_data::now_millis()) {
-        Ok(next) => {
-            let when = DateTime::<Utc>::from_timestamp_millis(next as i64)
-                .map(|date| date.format("%a %b %d %H:%M").to_string())
-                .unwrap_or_else(|| "soon".to_string());
-            Ok(format!("Next run: {when}"))
-        }
+        Ok(_) => Ok("Schedule valid · execution remains dormant".to_string()),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -210,9 +195,9 @@ impl SettingsView {
                                     .text_color(theme.muted_foreground)
                                     .mt_0p5()
                                     .child(
-                                    "Automate recurring Ask Aiden prompts. Pausing a task keeps \
-                                         its schedule.",
-                                ),
+                                        "Scheduled execution is unavailable. Saved tasks remain \
+                                         dormant and will not run.",
+                                    ),
                             ),
                     )
                     .child(
@@ -220,6 +205,10 @@ impl SettingsView {
                             .small()
                             .icon(IconName::Plus)
                             .label("New task")
+                            .disabled(true)
+                            .tooltip(
+                                "New tasks are unavailable until scheduled execution is supported",
+                            )
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.scheduled.open_draft(window, cx);
                             })),
@@ -306,13 +295,7 @@ impl SettingsView {
         let theme = cx.theme();
         let id = row.id.clone();
         let name = row.name.clone();
-        let dot_color = if !row.enabled {
-            theme.muted_foreground
-        } else if row.last_result.as_deref() == Some("error") {
-            theme.danger
-        } else {
-            theme.success
-        };
+        let dot_color = theme.muted_foreground;
         h_flex()
             .id(ElementId::Name(SharedString::from(format!(
                 "schedule-row-{id}"
@@ -340,15 +323,10 @@ impl SettingsView {
                             .text_color(theme.muted_foreground)
                             .mt_0p5()
                             .truncate()
-                            .child(if row.enabled {
-                                format!(
-                                    "{} · {}",
-                                    humanize_cron(&row.cron),
-                                    next_run_label(row.next_run_at)
-                                )
-                            } else {
-                                "Paused".to_string()
-                            }),
+                            .child(format!(
+                                "Dormant · {} · execution unsupported",
+                                humanize_cron(&row.cron)
+                            )),
                     )
                     .when_some(row.last_error.clone(), |el, error| {
                         el.child(
@@ -365,8 +343,9 @@ impl SettingsView {
                 Switch::new(ElementId::Name(SharedString::from(format!(
                     "schedule-enabled-{id}"
                 ))))
-                .checked(row.enabled)
-                .label(if row.enabled { "Enabled" } else { "Disabled" })
+                .checked(false)
+                .disabled(true)
+                .label("Dormant")
                 .on_click(cx.listener(move |this, checked, _window, cx| {
                     this.scheduled
                         .toggle_enabled(&click_id, *checked, &this.services, cx);
@@ -692,11 +671,14 @@ impl ScheduledState {
             mcp_server_bindings: None,
             execution_profile: None,
             notify: Some(true),
-            enabled: Some(true),
+            enabled: Some(false),
         };
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { services.schedules.save(&input) })
+                .background_spawn(async move {
+                    let cancellation = tokio_util::sync::CancellationToken::new();
+                    services.scheduler.save(&input, None, &cancellation).await
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.scheduled.adding = None;
@@ -729,7 +711,13 @@ impl ScheduledState {
         let id = id.to_string();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { services.schedules.set_enabled(&id, enabled) })
+                .background_spawn(async move {
+                    if enabled {
+                        services.scheduler.resume(&id).await
+                    } else {
+                        services.scheduler.pause(&id).await
+                    }
+                })
                 .await;
             this.update(cx, |this, cx| {
                 match result {
@@ -757,7 +745,7 @@ impl ScheduledState {
         let id = id.to_string();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { services.schedules.remove(&id) })
+                .background_spawn(async move { services.scheduler.remove(&id).await })
                 .await;
             this.update(cx, |this, cx| {
                 this.scheduled.removing = None;
@@ -801,16 +789,6 @@ impl SettingsView {
     }
 }
 
-/// Format a millisecond timestamp as a short local label.
-fn next_run_label(next_run_at: Option<u64>) -> String {
-    match next_run_at {
-        Some(next) => DateTime::<Utc>::from_timestamp_millis(next as i64)
-            .map(|date| date.format("%a %b %d %H:%M").to_string())
-            .unwrap_or_else(|| "no future run".to_string()),
-        None => "no future run".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,9 +810,9 @@ mod tests {
         assert!(cron_feedback("").is_err());
         assert!(cron_feedback("not a cron").is_err());
         let ok = cron_feedback("0 9 * * 1-5").unwrap();
-        assert!(ok.starts_with("Next run: "));
+        assert_eq!(ok, "Schedule valid · execution remains dormant");
         let with_seconds = cron_feedback("30 9 * * *").unwrap();
-        assert!(with_seconds.starts_with("Next run: "));
+        assert_eq!(with_seconds, "Schedule valid · execution remains dormant");
     }
 
     #[test]
@@ -866,8 +844,6 @@ mod tests {
             updated_at: 2,
         };
         let row = ScheduleRow::from(&task);
-        assert_eq!(row.last_result.as_deref(), Some("error"));
         assert_eq!(row.last_error.as_deref(), Some("boom"));
-        assert!(row.enabled);
     }
 }
