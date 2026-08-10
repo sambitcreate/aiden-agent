@@ -91,6 +91,17 @@ import {
 } from "../shared/attachment-contract";
 import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
 
+const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/heic",
+  "image/heif",
+]);
+const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
+
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
   ready: boolean;
@@ -304,6 +315,8 @@ export function Composer({
   const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
   const [attachmentStatus, setAttachmentStatus] = React.useState("");
+  const attachmentOperationRef = React.useRef(false);
+  const attachmentDescriptionId = React.useId();
   const [sending, setSending] = React.useState(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
@@ -814,14 +827,48 @@ export function Composer({
     }
   }, [onRenameChat, renameTitle, renaming]);
 
-  const handleAttach = async () => {
+  const beginAttachmentRead = (status: string): boolean => {
     if (gitOperationBusy) {
       toast.info("Wait for the current Git operation to finish before attaching files.");
+      return false;
+    }
+    if (attachmentOperationRef.current) {
+      toast.info("Wait for the current attachments to finish loading.");
+      return false;
+    }
+    attachmentOperationRef.current = true;
+    setAttaching(true);
+    setAttachmentStatus(status);
+    return true;
+  };
+
+  const finishAttachmentRead = () => {
+    attachmentOperationRef.current = false;
+    setAttaching(false);
+    requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+  };
+
+  const acceptReadAttachments = (added: Attachment[], emptyStatus: string): number => {
+    if (visionSupported === false && added.some((attachment) => attachment.kind === "image")) {
+      added = added.filter((attachment) => attachment.kind !== "image");
+      toast.info("The selected model can't read images — image attachments were skipped.");
+    }
+    if (added.length === 0) {
+      setAttachmentStatus(emptyStatus);
+      return 0;
+    }
+    attachmentRevisionRef.current += 1;
+    setAttachments((current) => [...current, ...added]);
+    setAttachmentStatus(
+      `${added.length} ${added.length === 1 ? "attachment is" : "attachments are"} ready.`,
+    );
+    return added.length;
+  };
+
+  const handleAttach = async () => {
+    if (!beginAttachmentRead("Attachment picker open. Selected files will load before sending.")) {
       return;
     }
-    if (attaching) return;
-    setAttaching(true);
-    setAttachmentStatus("Attachment picker open. Selected files will load before sending.");
     try {
       const remainingSlots = attachmentSlotsRemaining(attachments.length);
       if (remainingSlots <= 0) {
@@ -845,32 +892,130 @@ export function Composer({
           `${picked.skipped} selected ${picked.skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
         );
       }
-      let added = picked.attachments;
-      if (added.length === 0) {
-        setAttachmentStatus("No attachments were added.");
-        return;
-      }
-      // Drop images when the model can't see them, with a hint.
-      if (visionSupported === false && added.some((a) => a.kind === "image")) {
-        added = added.filter((a) => a.kind !== "image");
-        toast.info("The selected model can't read images — image attachments were skipped.");
-      }
-      if (added.length === 0) {
-        setAttachmentStatus("No compatible attachments were added.");
-        return;
-      }
-      attachmentRevisionRef.current += 1;
-      setAttachments((prev) => [...prev, ...added]);
-      setAttachmentStatus(
-        `${added.length} ${added.length === 1 ? "attachment is" : "attachments are"} ready.`,
-      );
+      acceptReadAttachments(picked.attachments, "No compatible attachments were added.");
     } catch (error) {
       setAttachmentStatus("Attachments could not be loaded.");
       toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
-      setAttaching(false);
-      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
+      finishAttachmentRead();
     }
+  };
+
+  const readDroppedAttachments = async (files: File[]) => {
+    if (!beginAttachmentRead("Dropped files are loading before sending.")) return;
+    try {
+      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      if (remainingSlots <= 0 || remainingInlineBytes <= 0) {
+        toast.info("This message has reached its attachment limit.");
+        setAttachmentStatus("The attachment limit has been reached.");
+        return;
+      }
+      const added = await attachmentsApi.readDroppedFiles(
+        files,
+        remainingSlots,
+        visionSupported !== false,
+        remainingInlineBytes,
+      );
+      const accepted = acceptReadAttachments(added, "No compatible dropped files were added.");
+      if (accepted < files.length) {
+        toast.info(
+          `${files.length - accepted} dropped ${files.length - accepted === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
+        );
+      }
+    } catch (error) {
+      setAttachmentStatus("Dropped files could not be loaded.");
+      toast.error(error instanceof Error ? error.message : "Couldn't read that dropped file.");
+    } finally {
+      finishAttachmentRead();
+    }
+  };
+
+  const readClipboardImages = async (files: File[]) => {
+    if (!beginAttachmentRead("Clipboard images are loading before sending.")) return;
+    try {
+      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      const eligible: File[] = [];
+      let plannedBytes = 0;
+      for (const file of files) {
+        if (
+          eligible.length >= remainingSlots ||
+          file.size <= 0 ||
+          file.size > MAX_CLIPBOARD_IMAGE_BYTES ||
+          !CLIPBOARD_IMAGE_MIME_TYPES.has(file.type.toLowerCase()) ||
+          plannedBytes + file.size > remainingInlineBytes
+        ) {
+          continue;
+        }
+        plannedBytes += file.size;
+        eligible.push(file);
+      }
+      if (eligible.length === 0 || remainingInlineBytes <= 0) {
+        setAttachmentStatus("No compatible clipboard images were added.");
+        toast.info("Clipboard images were empty, unsupported, or beyond the attachment limit.");
+        return;
+      }
+      const payload = await Promise.all(
+        eligible.map(async (file) => ({
+          mimeType: file.type.toLowerCase(),
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        })),
+      );
+      const added = await attachmentsApi.readClipboardImages(
+        payload,
+        remainingSlots,
+        remainingInlineBytes,
+      );
+      const accepted = acceptReadAttachments(added, "No clipboard images were added.");
+      if (accepted < files.length) {
+        toast.info(
+          `${files.length - accepted} clipboard ${files.length - accepted === 1 ? "image was" : "images were"} skipped because of the attachment limit or model support.`,
+        );
+      }
+    } catch (error) {
+      setAttachmentStatus("Clipboard images could not be loaded.");
+      toast.error(error instanceof Error ? error.message : "Couldn't read that clipboard image.");
+    } finally {
+      finishAttachmentRead();
+    }
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void readDroppedAttachments(files);
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = Array.from(event.clipboardData.items).flatMap((item) => {
+      if (item.kind !== "file" || !CLIPBOARD_IMAGE_MIME_TYPES.has(item.type.toLowerCase())) {
+        return [];
+      }
+      const file = item.getAsFile();
+      return file ? [file] : [];
+    });
+    if (images.length === 0) return;
+    event.preventDefault();
+
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (pastedText) {
+      const target = event.currentTarget;
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      const cursor = start + pastedText.length;
+      setText((current) => `${current.slice(0, start)}${pastedText}${current.slice(end)}`);
+      requestAnimationFrame(() => {
+        target.setSelectionRange(cursor, cursor);
+        updateSelection({ start: cursor, end: cursor });
+      });
+    }
+    void readClipboardImages(images);
   };
 
   const removeAttachment = (id: string) => {
@@ -879,7 +1024,7 @@ export function Composer({
   };
 
   const submit = async () => {
-    if (attaching) {
+    if (attachmentOperationRef.current || attaching) {
       toast.info("Wait for the selected attachments to finish loading before sending.");
       return;
     }
@@ -1205,7 +1350,15 @@ export function Composer({
             ) : null}
           </div>
 
-          <div className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80">
+          <div
+            className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80"
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
+            <span id={attachmentDescriptionId} className="sr-only">
+              Drag files here or paste an image to attach it. Use Attach files or images to choose
+              files with the keyboard.
+            </span>
             {selectedSkill ? (
               <div className="mb-1.5 flex items-center px-1.5">
                 <div
@@ -1303,6 +1456,7 @@ export function Composer({
                 });
               }}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               onSelect={(event) =>
                 updateSelection({
                   start: event.currentTarget.selectionStart,
@@ -1326,6 +1480,7 @@ export function Composer({
               }}
               onFocus={markSlashInteraction}
               aria-autocomplete={slashSession ? "list" : undefined}
+              aria-describedby={attachmentDescriptionId}
               aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
               aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
               placeholder={composerPlaceholder({
