@@ -49,9 +49,16 @@ interface ProviderEditorProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
+  returnFocus?: () => HTMLElement | null;
 }
 
-export function ProviderEditor({ provider, open, onOpenChange, onSaved }: ProviderEditorProps) {
+export function ProviderEditor({
+  provider,
+  open,
+  onOpenChange,
+  onSaved,
+  returnFocus,
+}: ProviderEditorProps) {
   const [label, setLabel] = React.useState(provider.label);
   const [baseUrl, setBaseUrl] = React.useState(provider.baseUrl);
   const [kind, setKind] = React.useState<ProviderKind>(provider.kind);
@@ -113,10 +120,17 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
   const applyDiscoveredModels = (
     list: string[],
     metadata: Record<string, ProviderModelMetadata>,
+    recommendedModel?: string,
   ) => {
     setModels(list);
     setModelMetadata(metadata);
-    setDefaultModel((current) => (list.includes(current) ? current : (list[0] ?? "")));
+    setDefaultModel((current) =>
+      list.includes(current)
+        ? current
+        : recommendedModel && list.includes(recommendedModel)
+          ? recommendedModel
+          : (list[0] ?? ""),
+    );
     setModelsStale(false);
   };
 
@@ -132,7 +146,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
     setTesting(true);
     try {
       const result = await providersApi.test(buildDraft(), keyDraft.trim() || undefined);
-      applyDiscoveredModels(result.models, result.modelMetadata);
+      applyDiscoveredModels(result.models, result.modelMetadata, result.recommendedModel);
       if (result.models.length > 0) {
         setConnectionNotice({
           message: `${result.modelCount} model${result.modelCount === 1 ? "" : "s"} found. Save to use them.`,
@@ -190,6 +204,7 @@ export function ProviderEditor({ provider, open, onOpenChange, onSaved }: Provid
       confirmLabel="Save"
       confirmDisabled={saving || testing}
       onConfirm={handleSave}
+      returnFocus={returnFocus}
     >
       <FieldSet>
         <Field label="Name">
