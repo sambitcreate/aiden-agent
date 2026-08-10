@@ -186,18 +186,31 @@ fn is_snapshot_record(value: &Value) -> Result<(), InvalidPendingMcpCredentialCl
     );
     let valid_url = record
         .get("url")
-        .map(|value| value.is_string())
+        .map(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| value.len() <= 4096 && !value.chars().any(char::is_control))
+        })
         .unwrap_or(true);
     let valid_command = record
         .get("command")
-        .map(|value| value.is_string())
+        .map(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| value.len() <= 4096 && !value.contains('\0'))
+        })
         .unwrap_or(true);
     let valid_args = record
         .get("args")
         .map(|value| {
-            value
-                .as_array()
-                .is_some_and(|entries| entries.iter().all(Value::is_string))
+            value.as_array().is_some_and(|entries| {
+                entries.len() <= 128
+                    && entries.iter().all(|entry| {
+                        entry
+                            .as_str()
+                            .is_some_and(|value| value.len() <= 4096 && !value.contains('\0'))
+                    })
+            })
         })
         .unwrap_or(true);
     let valid_env_hash = record
@@ -214,11 +227,19 @@ fn is_snapshot_record(value: &Value) -> Result<(), InvalidPendingMcpCredentialCl
         .unwrap_or(true);
     let valid_preset_id = record
         .get("presetId")
-        .map(|value| value.is_string())
+        .map(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| value.len() <= 256 && !value.chars().any(char::is_control))
+        })
         .unwrap_or(true);
     let valid_id = record
         .get("id")
-        .map(|value| value.is_string())
+        .map(|value| {
+            value.as_str().is_some_and(|value| {
+                !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+            })
+        })
         .unwrap_or(false);
     if !(valid_transport
         && valid_url
@@ -248,14 +269,39 @@ pub fn parse_snapshot(
     if value.is_null() {
         return Ok(None);
     }
-    let record = value.as_object().expect("validated above");
+    let record = value
+        .as_object()
+        .ok_or(InvalidPendingMcpCredentialCleanup)?;
+    let id = record
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or(InvalidPendingMcpCredentialCleanup)?;
+    let transport = record
+        .get("transport")
+        .and_then(Value::as_str)
+        .ok_or(InvalidPendingMcpCredentialCleanup)?;
+    let args = match record.get("args") {
+        Some(Value::Array(entries)) => Some(
+            entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .map(str::to_string)
+                        .ok_or(InvalidPendingMcpCredentialCleanup)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        None => None,
+        Some(_) => return Err(InvalidPendingMcpCredentialCleanup),
+    };
     Ok(Some(McpCredentialConnectionSnapshot {
-        id: record["id"].as_str().expect("validated").to_string(),
-        transport: match record["transport"].as_str().expect("validated") {
+        id: id.to_string(),
+        transport: match transport {
             "stdio" => McpTransport::Stdio,
             "http" => McpTransport::Http,
             "sse" => McpTransport::Sse,
-            _ => unreachable!("validated above"),
+            _ => return Err(InvalidPendingMcpCredentialCleanup),
         },
         url: record
             .get("url")
@@ -265,12 +311,7 @@ pub fn parse_snapshot(
             .get("command")
             .and_then(Value::as_str)
             .map(str::to_string),
-        args: record.get("args").and_then(Value::as_array).map(|entries| {
-            entries
-                .iter()
-                .map(|entry| entry.as_str().expect("validated").to_string())
-                .collect()
-        }),
+        args,
         env_hash: record
             .get("envHash")
             .and_then(Value::as_str)
@@ -334,6 +375,13 @@ pub fn parse_pending_mcp_credential_cleanup(
     let Some(record) = value.as_object() else {
         return Err(InvalidPendingMcpCredentialCleanup);
     };
+    const ALLOWED: &[&str] = &["version", "kind", "serverId", "previous", "target"];
+    if record.len() != ALLOWED.len()
+        || record.keys().any(|key| !ALLOWED.contains(&key.as_str()))
+        || !ALLOWED.iter().all(|key| record.contains_key(*key))
+    {
+        return Err(InvalidPendingMcpCredentialCleanup);
+    }
     let valid_kind = matches!(
         record.get("kind").and_then(Value::as_str),
         Some("remove" | "disable-oauth" | "replace")
@@ -341,13 +389,25 @@ pub fn parse_pending_mcp_credential_cleanup(
     let valid_server_id = record
         .get("serverId")
         .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty() && id.len() <= 256);
+        .is_some_and(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control));
     if record.get("version").and_then(Value::as_u64) != Some(1) || !valid_kind || !valid_server_id {
         return Err(InvalidPendingMcpCredentialCleanup);
     }
-    let previous = parse_snapshot(&record["previous"])?;
-    let target = parse_snapshot(&record["target"])?;
-    let server_id = record["serverId"].as_str().expect("validated").to_string();
+    let previous = parse_snapshot(
+        record
+            .get("previous")
+            .ok_or(InvalidPendingMcpCredentialCleanup)?,
+    )?;
+    let target = parse_snapshot(
+        record
+            .get("target")
+            .ok_or(InvalidPendingMcpCredentialCleanup)?,
+    )?;
+    let server_id = record
+        .get("serverId")
+        .and_then(Value::as_str)
+        .ok_or(InvalidPendingMcpCredentialCleanup)?
+        .to_string();
     let ids_match = previous
         .as_ref()
         .map(|snapshot| snapshot.id == server_id)
@@ -361,7 +421,11 @@ pub fn parse_pending_mcp_credential_cleanup(
     }
     Ok(PendingMcpCredentialCleanupV1 {
         version: 1,
-        kind: match record["kind"].as_str().expect("validated") {
+        kind: match record
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or(InvalidPendingMcpCredentialCleanup)?
+        {
             "remove" => McpCredentialCleanupKind::Remove,
             "disable-oauth" => McpCredentialCleanupKind::DisableOauth,
             _ => McpCredentialCleanupKind::Replace,
@@ -599,6 +663,23 @@ mod tests {
         let mut wrong_previous = value.clone();
         wrong_previous["previous"]["id"] = serde_json::json!("different");
         assert!(parse_pending_mcp_credential_cleanup(&wrong_previous).is_err());
+        for missing in ["kind", "serverId", "previous", "target"] {
+            let mut malformed = value.clone();
+            malformed.as_object_mut().unwrap().remove(missing);
+            assert!(parse_pending_mcp_credential_cleanup(&malformed).is_err());
+        }
+        let mut unknown = value.clone();
+        unknown["future"] = serde_json::json!(true);
+        assert!(parse_pending_mcp_credential_cleanup(&unknown).is_err());
+        let mut controlled = value;
+        controlled["serverId"] = serde_json::json!("mcp\nserver");
+        assert!(parse_pending_mcp_credential_cleanup(&controlled).is_err());
+        let mut oversized = serde_json::to_value(&pending).unwrap();
+        oversized["previous"]["args"] = serde_json::json!(vec!["x"; 129]);
+        assert!(parse_pending_mcp_credential_cleanup(&oversized).is_err());
+        let mut oversized = serde_json::to_value(&pending).unwrap();
+        oversized["previous"]["url"] = serde_json::json!("x".repeat(4097));
+        assert!(parse_pending_mcp_credential_cleanup(&oversized).is_err());
     }
 
     #[test]
