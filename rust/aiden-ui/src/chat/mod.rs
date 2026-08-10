@@ -4,3 +4,7 @@ pub mod activity_feed;
 pub mod chat_pane;
 pub mod composer;
 pub mod message_list;
+#[allow(dead_code)]
+pub mod model_pad_picker;
+pub mod model_picker;
+pub mod toolbar;
