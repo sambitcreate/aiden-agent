@@ -637,6 +637,14 @@ impl AppState {
         if text.is_empty() {
             return;
         }
+        // Don't clear the input or attempt to send while a generation is
+        // active — send_message_with would silently reject it and the user's
+        // typed text would vanish. The Send button already becomes Stop.
+        let is_active = self.service.read(cx).generation_active();
+        if is_active {
+            return;
+        }
+
         self.composer_input
             .update(cx, |input, inner| input.set_value("", window, inner));
 

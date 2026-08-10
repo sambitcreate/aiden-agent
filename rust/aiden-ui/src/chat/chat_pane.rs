@@ -583,25 +583,25 @@ impl AppState {
     pub(crate) fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer_input.read(cx).value().to_string();
         let trimmed = text.trim().to_string();
-        let draft = composer_draft(cx).clone();
         if trimmed.is_empty() {
-            // Keep the input contents (and any staged attachments) for the
-            // user instead of silently dropping them.
             return;
         }
+        // Don't clear if a generation is active — the send would be rejected
+        // and the user's text would vanish.
+        let is_active = self.service.read(cx).generation_active();
+        if is_active {
+            return;
+        }
+
+        let draft = composer_draft(cx).clone();
         self.composer_input
             .update(cx, |input, inner| input.set_value("", window, inner));
         composer_draft(cx).clear();
-        if let Some(target) = draft.editing_message_id {
-            self.service.update(cx, |service, _cx| {
-                if let Some(chat) = service.active_chat.as_mut() {
-                    if let Some(truncated) = truncate_history_after(&chat.messages, &target) {
-                        chat.messages = truncated;
-                    }
-                }
-            });
-        }
-        self.service
-            .update(cx, |service, cx| service.send_message(&trimmed, cx));
+
+        // Route through send_message_with so the edit rebranch (truncation)
+        // is persisted to the ChatStore — same path as the Enter key handler.
+        self.service.update(cx, |service, cx| {
+            service.send_message_with(&trimmed, draft.attachments, draft.editing_message_id, cx);
+        });
     }
 }
