@@ -17,6 +17,7 @@ use gpui_component::{
 };
 
 use crate::app::AppState;
+use crate::services::appearance::pointer_cursors_enabled;
 
 use super::state::{
     commit_selection_description, filter_branches, git_chip_from_info, order_local_branches,
@@ -32,10 +33,11 @@ impl AppState {
     pub(crate) fn git_chip(
         &self,
         state: &WorkspaceBarSnapshot,
+        interaction_busy: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let busy = state.git_busy;
+        let busy = state.git_busy || interaction_busy;
         let hover_theme = theme.clone();
         let active_theme = theme.clone();
         let (text, dirty, ahead, behind, tone, enabled) =
@@ -80,10 +82,15 @@ impl AppState {
             .gap_1()
             .items_center()
             .rounded_md()
-            .cursor_pointer()
+            .when(enabled && !busy && pointer_cursors_enabled(cx), |el| {
+                el.cursor_pointer()
+            })
+            .when(busy, |el| el.opacity(0.55))
             .text_color(tone)
-            .hover(move |style| style.bg(hover_theme.list_hover))
-            .active(move |style| style.bg(active_theme.list_active))
+            .when(enabled && !busy, |el| {
+                el.hover(move |style| style.bg(hover_theme.list_hover))
+                    .active(move |style| style.bg(active_theme.list_active))
+            })
             .on_click(cx.listener(move |this, _event, window, cx| {
                 if enabled && !busy {
                     this.workspace_state.update(cx, |state, cx| {
@@ -165,7 +172,7 @@ pub(crate) fn branches_content(
     let branch_input = state.branch_input.clone();
     let query = state.search_input.read(cx).value().to_string();
     let branches = state.branches.clone();
-    let busy = state.git_busy;
+    let busy = state.git_busy || state.interaction_blocked;
     let branch_error = state.branch_error.clone();
     let creating = state.branch_creating;
     let active_folder = state.active_folder.is_some();
@@ -366,7 +373,7 @@ fn branch_row(
         .gap_2()
         .items_center()
         .rounded_md()
-        .cursor_pointer()
+        .when(pointer_cursors_enabled(cx), |el| el.cursor_pointer())
         .bg(if is_current {
             theme.list_active
         } else {
@@ -564,7 +571,7 @@ pub(crate) fn commit_content(
     let state = entity.read(cx);
     let commit_input = state.commit_input.clone();
     let review = state.review.clone();
-    let busy = state.git_busy;
+    let busy = state.git_busy || state.interaction_blocked;
     let error = state.commit_error.clone();
     let mode = state.commit_mode;
     let message = state.commit_input.read(cx).value().to_string();
@@ -881,7 +888,7 @@ pub(crate) fn push_content(
     let push_input = state.push_input.clone();
     let confirm_input = state.confirm_input.clone();
     let capability = state.push_capability.clone();
-    let busy = state.git_busy;
+    let busy = state.git_busy || state.interaction_blocked;
     let error = state.push_error.clone();
     let remote = state.push_remote.clone();
     let set_upstream = state.push_set_upstream;
