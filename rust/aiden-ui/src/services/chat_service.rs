@@ -274,6 +274,7 @@ pub struct ChatService {
     native_boot_restore: Option<NativeBootRestore>,
     system_high_contrast: bool,
     system_reduced_motion: bool,
+    native_restore_completed: bool,
     native_observer_started: bool,
     native_poll_started: bool,
     /// Generation for the *active* chat (only one stream at a time).
@@ -309,6 +310,7 @@ impl ChatService {
     ) -> Self {
         let appearance = initial_appearance;
         let initial_effective = prepared_accessibility(prepared_native.restored);
+        let native_restore_completed = prepared_native.restored.is_some();
         let appearance_write_revision = stores.appearance_intent_revision.clone();
         let _ = cx;
         Self {
@@ -329,6 +331,7 @@ impl ChatService {
             native_boot_restore: prepared_native.restored,
             system_high_contrast: initial_effective.high_contrast,
             system_reduced_motion: initial_effective.reduce_motion,
+            native_restore_completed,
             native_observer_started: false,
             native_poll_started: false,
             generation: None,
@@ -1072,12 +1075,11 @@ impl ChatService {
     }
 
     fn restore_native_appearance(&mut self, cx: &mut Context<Self>) {
-        if self.native_observer_started || !self.native_appearance.is_supported() {
+        if !self.native_appearance.is_supported() {
             return;
         }
         if let Some(restored) = self.native_boot_restore.take() {
-            self.native_observer_started = true;
-            let _ = self.native_appearance.ensure_observation();
+            self.native_restore_completed = true;
             if self.appearance.dock_icon != restored.dock_icon {
                 self.appearance.dock_icon = restored.dock_icon;
                 self.appearance_coordinator = AppearanceCoordinator::new(self.appearance.clone());
@@ -1086,6 +1088,12 @@ impl ChatService {
             self.system_high_contrast = restored.effective.high_contrast;
             self.system_reduced_motion = restored.effective.reduce_motion;
             self.apply_appearance(cx);
+            self.native_observer_started = self.native_appearance.ensure_observation().is_ok();
+            self.start_native_appearance_poll(cx);
+            return;
+        }
+        if self.native_restore_completed {
+            self.native_observer_started = self.native_appearance.ensure_observation().is_ok();
             self.start_native_appearance_poll(cx);
             return;
         }
@@ -1094,11 +1102,11 @@ impl ChatService {
             .restore_at_boot(self.appearance.mode, self.appearance.dock_icon)
         {
             Ok(restored) => {
-                self.native_observer_started = true;
+                self.native_restore_completed = true;
                 // Observation is deliberately independent from restore. A
                 // registration failure leaves the restored native state valid
                 // and `poll_native_appearance_events` retries later.
-                let _ = self.native_appearance.ensure_observation();
+                self.native_observer_started = self.native_appearance.ensure_observation().is_ok();
                 if self.appearance.dock_icon != restored.dock_icon {
                     // The native boundary fell back to the stable Aiden icon.
                     // Persist the confirmed selection so Settings never shows
@@ -1152,14 +1160,14 @@ impl ChatService {
 
     pub fn poll_native_appearance_events(&mut self, cx: &mut Context<Self>) {
         if native_restore_retry_needed(
-            self.native_observer_started,
+            self.native_restore_completed,
             self.native_appearance.is_supported(),
         ) {
             if let Ok(restored) = self
                 .native_appearance
                 .restore_at_boot(self.appearance.mode, self.appearance.dock_icon)
             {
-                self.native_observer_started = true;
+                self.native_restore_completed = true;
                 let recovery = self.appearance_coordinator.begin_native_apply();
                 self.appearance_coordinator
                     .complete_native_apply(recovery.revision, Ok(()));
@@ -1176,8 +1184,11 @@ impl ChatService {
                 cx.notify();
             }
         }
-        if self.native_observer_started {
-            let _ = self.native_appearance.ensure_observation();
+        if native_observer_retry_needed(
+            self.native_observer_started,
+            self.native_appearance.is_supported(),
+        ) {
+            self.native_observer_started = self.native_appearance.ensure_observation().is_ok();
         }
         let events = self.native_appearance.take_events();
         let mut changed = false;
@@ -2302,6 +2313,10 @@ fn native_restore_retry_needed(restored: bool, supported: bool) -> bool {
     supported && !restored
 }
 
+fn native_observer_retry_needed(started: bool, supported: bool) -> bool {
+    supported && !started
+}
+
 fn claim_appearance_intent(sequence: &AtomicU64) -> u64 {
     sequence.fetch_add(1, Ordering::AcqRel).saturating_add(1)
 }
@@ -2387,6 +2402,9 @@ mod tests {
         assert!(native_restore_retry_needed(false, true));
         assert!(!native_restore_retry_needed(true, true));
         assert!(!native_restore_retry_needed(false, false));
+        assert!(native_observer_retry_needed(false, true));
+        assert!(!native_observer_retry_needed(true, true));
+        assert!(!native_observer_retry_needed(false, false));
     }
 
     #[test]
@@ -2399,6 +2417,19 @@ mod tests {
 
         assert!(!appearance_intent_is_current(&old_window, old_save));
         assert!(appearance_intent_is_current(&reopened_window, new_save));
+    }
+
+    #[test]
+    fn close_fence_invalidates_a_save_still_waiting_in_debounce() {
+        let process_sequence = AtomicU64::new(0);
+        let debounced_save = claim_appearance_intent(&process_sequence);
+        let close_flush = claim_appearance_intent(&process_sequence);
+
+        assert!(!appearance_intent_is_current(
+            &process_sequence,
+            debounced_save
+        ));
+        assert!(appearance_intent_is_current(&process_sequence, close_flush));
     }
 
     fn title_test_provider() -> ConfiguredProvider {
