@@ -8,6 +8,9 @@ import {
   moveSlashSelection,
   pageSlashSelection,
   rankSlashResults,
+  selectedSkillComposerReducer,
+  selectedSkillStatus,
+  successfulSendAttachmentRemainder,
   slashActionCommitIsCurrent,
   slashPalettePresenceState,
   slashTabAcceptsSelection,
@@ -21,6 +24,88 @@ const input = (draft: string, caret = draft.length) => ({
   selectionEnd: caret,
   composing: false,
   tracker: updateSlashSessionTracker(undefined, draft),
+});
+
+test("selected skills revalidate by exact opaque ID and workspace without rebinding", () => {
+  const selected = {
+    workspaceId: "workspace-a",
+    invocation: {
+      version: 1 as const,
+      invocationId: invocationId(1),
+      displayName: "Review",
+      source: "workspace" as const,
+    },
+  };
+  const exact: SkillCatalogEntry = {
+    invocationId: invocationId(1),
+    name: "Review",
+    description: "Review changes",
+    source: "workspace",
+    available: true,
+  };
+  assert.equal(
+    selectedSkillStatus(selected, "workspace-a", undefined, "loading").state,
+    "checking",
+  );
+  assert.equal(selectedSkillStatus(selected, "workspace-a", [exact], "ready").state, "valid");
+  assert.equal(selectedSkillStatus(selected, "workspace-a", [exact], "loading").state, "checking");
+  assert.equal(selectedSkillStatus(selected, "workspace-b", [exact], "ready").state, "invalid");
+  assert.equal(selectedSkillStatus(selected, "workspace-a", [exact], "error").state, "invalid");
+  assert.equal(
+    selectedSkillStatus(
+      selected,
+      "workspace-a",
+      [{ ...exact, invocationId: invocationId(2) }],
+      "ready",
+    ).state,
+    "invalid",
+  );
+});
+
+test("selected skill interactions replace, remove, and clear only the accepted snapshot", () => {
+  const first = {
+    workspaceId: "workspace-a",
+    invocation: {
+      version: 1 as const,
+      invocationId: invocationId(1),
+      displayName: "Review",
+      source: "workspace" as const,
+    },
+  };
+  const second = {
+    ...first,
+    invocation: { ...first.invocation, invocationId: invocationId(2), displayName: "Test" },
+  };
+  let state = selectedSkillComposerReducer({ revision: 0 }, { type: "select", selected: first });
+  assert.equal(state.selected, first);
+  const submittedRevision = state.revision;
+  state = selectedSkillComposerReducer(state, { type: "select", selected: second });
+  assert.equal(state.selected, second, "a second palette choice replaces the first");
+  assert.equal(
+    selectedSkillComposerReducer(state, { type: "send-succeeded", submittedRevision }).selected,
+    second,
+    "a late send success cannot erase a replacement",
+  );
+  const removed = selectedSkillComposerReducer(state, { type: "remove" });
+  assert.equal(removed.selected, undefined);
+  state = selectedSkillComposerReducer(removed, { type: "select", selected: first });
+  assert.equal(
+    selectedSkillComposerReducer(state, {
+      type: "send-succeeded",
+      submittedRevision: state.revision,
+    }).selected,
+    undefined,
+    "an accepted send consumes its exact selected skill",
+  );
+});
+
+test("successful send cleanup preserves only payload fields changed while start was pending", () => {
+  const sent = [{ id: "sent" }];
+  assert.deepEqual(successfulSendAttachmentRemainder(sent, sent, true), []);
+  assert.deepEqual(successfulSendAttachmentRemainder([...sent, { id: "new" }], sent, false), [
+    { id: "new" },
+  ]);
+  assert.deepEqual(successfulSendAttachmentRemainder([], sent, false), []);
 });
 
 test("slash trigger requires the first non-whitespace token and a collapsed caret inside it", () => {

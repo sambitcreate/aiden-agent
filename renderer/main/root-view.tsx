@@ -26,6 +26,7 @@ import {
 } from "../lib/chat-terminal-sync";
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
+import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 
 export function RootView() {
   useTheme();
@@ -55,6 +56,7 @@ function RootContent() {
   const environmentPanel = useEnvironmentPanel();
   const terminal = useWorkspaceTerminal();
   const { activeId } = useActiveWorkspace();
+  const appendReconciliationRequired = useAppendReconciliationRequired();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
@@ -64,6 +66,13 @@ function RootContent() {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits before leaving the chat."
         : null;
+  React.useEffect(() => {
+    if (!appendReconciliationRequired) return;
+    toast.error("Message save status is unknown. Reload Aiden before creating or sending again.", {
+      id: "append-reconciliation-required",
+      duration: Infinity,
+    });
+  }, [appendReconciliationRequired]);
   const reconcileChatCacheAfterIdle = React.useCallback(
     async (chatId: string) => {
       const chatKey = queryKeys.chat(chatId);
@@ -128,7 +137,7 @@ function RootContent() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.chats });
       await navigate({ to: "/chat/$chatId", params: { chatId: chat.id } });
     },
-    Boolean(activeId),
+    Boolean(activeId) && !appendReconciliationRequired,
   );
   React.useEffect(() => {
     void appApi.setCloseGuard({

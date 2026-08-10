@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
-import { chatMessageToPiMessage, toPiMessages } from "./generation-messages.js";
+import {
+  chatMessageToPiMessage,
+  chatUserTextWithAttachments,
+  toPiMessages,
+} from "./generation-messages.js";
+import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -51,13 +56,19 @@ test("keeps images only when the generation's effective model accepts them", () 
   const vision = toPiMessages(params, model, true)[0];
   assert.equal(vision.role, "user");
   assert.ok(Array.isArray(vision.content));
-  assert.equal(vision.content.some((part) => part.type === "image"), true);
+  assert.equal(
+    vision.content.some((part) => part.type === "image"),
+    true,
+  );
   assert.equal(JSON.stringify(vision.content).includes("note.txt"), true);
 
   const text = toPiMessages(params, model, false)[0];
   assert.equal(text.role, "user");
   assert.ok(Array.isArray(text.content));
-  assert.equal(text.content.some((part) => part.type === "image"), false);
+  assert.equal(
+    text.content.some((part) => part.type === "image"),
+    false,
+  );
   assert.equal(JSON.stringify(text.content).includes("note.txt"), true);
   assert.equal(JSON.stringify(text.content).includes("IMAGE_SENTINEL"), false);
 });
@@ -96,4 +107,41 @@ test("journal rehydration preserves the authoritative chat timestamp", () => {
 
   assert.equal(message.role, "assistant");
   assert.equal(message.timestamp, 123_456);
+});
+
+test("an explicit invocation overrides only the exact in-memory current turn", () => {
+  const persisted = {
+    id: "message-2",
+    role: "user" as const,
+    content: "Inspect this.",
+    createdAt: 234_567,
+    attachments: params.messages[0]!.attachments,
+  };
+  const journal = chatMessageToPiMessage(persisted, model, true);
+  assert.doesNotMatch(JSON.stringify(journal), /PRIVATE_SKILL_INSTRUCTIONS/u);
+
+  const current = chatMessageToPiMessage(
+    persisted,
+    model,
+    true,
+    '<skill name="Review">PRIVATE_SKILL_INSTRUCTIONS</skill>\n\nAttached file: note.txt\n```\nnote\n```\n\nInspect this.',
+  );
+  const serialized = JSON.stringify(current);
+  assert.match(serialized, /PRIVATE_SKILL_INSTRUCTIONS/u);
+  assert.equal(serialized.match(/Attached file: note\.txt/gu)?.length, 1);
+  assert.equal(serialized.includes("IMAGE_SENTINEL"), true);
+  assert.ok(serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") < serialized.indexOf("note.txt"));
+});
+
+test("skill message text is rejected before aggregate attachment concatenation exceeds its budget", () => {
+  assert.throws(
+    () => chatUserTextWithAttachments("12345", undefined, 4),
+    (error: unknown) =>
+      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+  );
+  assert.throws(
+    () => chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
+    (error: unknown) =>
+      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+  );
 });

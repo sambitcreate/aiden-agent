@@ -1,6 +1,6 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Active — Phases 0–2 are complete; Phase 3 active skill invocation is next
+- **Status:** Active — Phases 0–3 are complete; Phase 4 selected session commands are next
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
@@ -363,7 +363,11 @@ existing composer seams:
 - expose a structured selected-skill value through the composer submission;
 - render the popup in the composer stacking context without changing footer
   measurement; and
-- clear a selected skill only after append and start handoff succeeds.
+- clear the submitted payload only after the user message crosses its durable
+  append barrier. Fresh-resolution, workspace, and other pre-append failures
+  preserve the draft, attachments, and chip. A later start-handoff or provider
+  setup failure is surfaced against that already-committed message and must not
+  retain a duplicateable composer payload.
 
 The parser and keyboard reducer stay framework-independent so most behavior can
 be verified without mounting the full chat screen.
@@ -463,6 +467,14 @@ expanded instructions. Older messages without provenance remain valid.
 
 The Aiden Assistant dock rejects/does not offer explicit skill references in
 this phase. Its intentionally empty tool set remains unchanged.
+
+The attended Assistant itself is an intentional capability of the active
+renderer document because that document owns the Assistant dock and approval
+UI. Main separates its exact, bounded creation path from ordinary chat
+creation, persists the reserved Assistant identity itself, and derives
+generation mode from that persisted identity. The boundary prevents an
+ordinary chat or `chat:start` envelope from forging Assistant mode; it does not
+attempt to make the visible Assistant product inaccessible to its own renderer.
 
 ### 5. Bounds and privacy
 
@@ -587,6 +599,21 @@ Command-K; opening/filtering never shifts the transcript.
 
 ### Phase 3 — Active skill invocation
 
+**Completed 2026-08-09.** The composer can select, revalidate, replace, remove,
+and submit one opaque workspace-bound skill invocation with safe visible
+provenance. Main performs fresh authoritative resolution, bounded formatting,
+durable append, exact current-user-turn injection, and one-shot handoff without
+exposing or persisting expanded instructions. Renderer append/start/create and
+native attachment boundaries are exact, bounded, owner-bound, and fail closed;
+turn, payload, prepared-skill, and generation-lifetime reservations prevent
+unbounded retained work. Crash reconciliation distinguishes definitely absent,
+committed, and indeterminate writes, fences retries across routes, and preserves
+one exact main-minted identity for scheduled chats. The registered 227-test
+Slash Commands gate, 73 adjacent lifecycle/recovery tests, full repository
+suite, TypeScript, ESLint, diff checks, and React Doctor pass. Three independent
+high-reasoning correctness, adversarial, and edge-case review lanes returned
+explicitly clean verdicts on the same final snapshot.
+
 - Add the selected-skill composer chip and submission contract.
 - Resolve and snapshot the invocation inside the append/start turn lease.
 - Use Pi `formatSkillInvocation()` and inject only into the current generation
@@ -643,7 +670,8 @@ Pi rows remain absent.
 - Pointer selection without textarea blur.
 - Draft and attachments survive app actions, failures, and navigation guards.
 - Skill chip add/remove/replace and one-explicit-skill rule.
-- Successful send clears state only after the handoff succeeds.
+- Pre-append failures preserve the submitted state; a durable append consumes
+  the exact submitted fields even when the later start handoff fails.
 - Workspace/config changes revalidate selected skills.
 - ARIA relationships, active descendant, stable IDs, live-region copy, and
   reduced motion.

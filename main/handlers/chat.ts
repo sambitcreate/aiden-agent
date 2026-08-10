@@ -32,20 +32,34 @@ export function registerChatGenerationHandlers(): void {
         throw new Error("Invalid chat message turn identifier.");
       }
       const parsed = parseParams(params);
-      await startGenerationAndMaybeTitle(
-        {
-          start: (streamId, params) =>
-            llmClient.start(streamId, params, owner, {
-              allowSubagents: true,
-              usageSource: "chat",
-              turnId: messageTurnId,
-            }),
-          startTitle: (input) => chatTitleService.startForFirstTurn(input),
-        },
-        id,
-        parsed,
-      );
-      return { streamId: id };
+      let accepted = false;
+      try {
+        const started = await startGenerationAndMaybeTitle(
+          {
+            start: (streamId, params) =>
+              llmClient.start(streamId, params, owner, {
+                allowSubagents: true,
+                usageSource: "chat",
+                turnId: messageTurnId,
+                onTurnAccepted: () => {
+                  accepted = true;
+                },
+              }),
+            startTitle: (input) => chatTitleService.startForFirstTurn(input),
+          },
+          id,
+          parsed,
+        );
+        return { streamId: id, accepted, started };
+      } catch (error) {
+        if (!accepted) throw error;
+        return {
+          streamId: id,
+          accepted: true,
+          started: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
   );
 

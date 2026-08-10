@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { appUpdatesApi, chatsApi, gitApi, workspacesApi } from "../lib/ipc";
 import { truncatePathMiddle } from "../lib/truncate-path";
+import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import {
   CHAT_TITLE_FADE_OUT_MS,
   createChatTitleReveal,
@@ -301,6 +302,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
+  const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useChats(activeId);
   const foundationModels = useFoundationModelsConnection();
   const [search, setSearch] = React.useState("");
@@ -490,6 +492,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       }
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const list = await chatsApi.list(id);
+      if (list.length === 0 && appendReconciliationRequired) {
+        toast.error("Reload Aiden before creating a chat in this workspace.");
+        return false;
+      }
       const target = list[0] ?? (await chatsApi.create({ workspaceId: id }));
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
       const previousWorkspaceId = activeId;
@@ -504,6 +510,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     },
     [
       activeId,
+      appendReconciliationRequired,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
       environmentPanel.editorState.dirty,
@@ -517,25 +524,29 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
 
   const switchWorkspace = React.useCallback(
     (id: string) => {
-      if (id !== activeId) void enterWorkspace(id);
+      if (id !== activeId) {
+        void enterWorkspace(id).catch((error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Aiden could not switch workspaces.");
+        });
+      }
     },
     [activeId, enterWorkspace],
   );
 
   const openFolderWorkspace = React.useCallback(async () => {
-    if (workspaceSwitchBlocked) return;
+    if (workspaceSwitchBlocked || appendReconciliationRequired) return;
     const ws = await workspacesApi.createFromFolder();
     if (!ws) return;
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await enterWorkspace(ws.id);
-  }, [enterWorkspace, qc, workspaceSwitchBlocked]);
+  }, [appendReconciliationRequired, enterWorkspace, qc, workspaceSwitchBlocked]);
 
   const newEmptyWorkspace = React.useCallback(async () => {
-    if (workspaceSwitchBlocked) return;
+    if (workspaceSwitchBlocked || appendReconciliationRequired) return;
     const ws = await workspacesApi.create({ permission: "ask" });
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await enterWorkspace(ws.id);
-  }, [enterWorkspace, qc, workspaceSwitchBlocked]);
+  }, [appendReconciliationRequired, enterWorkspace, qc, workspaceSwitchBlocked]);
 
   const commitRemoveWorkspace = async () => {
     if (!removingWorkspace || removingWorkspaceBusy) return;
@@ -654,11 +665,15 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   );
 
   const newAgent = React.useCallback(async () => {
-    if (!activeId) return;
-    const created = await chatsApi.create({ workspaceId: activeId });
-    await qc.invalidateQueries({ queryKey: queryKeys.chats });
-    void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
-  }, [activeId, navigate, qc]);
+    if (!activeId || appendReconciliationRequired) return;
+    try {
+      const created = await chatsApi.create({ workspaceId: activeId });
+      await qc.invalidateQueries({ queryKey: queryKeys.chats });
+      void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
+    }
+  }, [activeId, appendReconciliationRequired, navigate, qc]);
 
   return (
     <>
@@ -694,7 +709,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
           <SidebarListItem
             icon={<SquarePen />}
             title="New Agent"
-            disabled={!activeId}
+            disabled={!activeId || appendReconciliationRequired}
             onClick={() => void newAgent()}
           />
           <SidebarListItem
@@ -739,10 +754,16 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 </DropdownMenuCheckboxItem>
               ))}
               <DropdownMenuSeparator />
-              <DropdownMenuItem disabled={workspaceSwitchBlocked} onSelect={openFolderWorkspace}>
+              <DropdownMenuItem
+                disabled={workspaceSwitchBlocked || appendReconciliationRequired}
+                onSelect={openFolderWorkspace}
+              >
                 Open folder as workspace…
               </DropdownMenuItem>
-              <DropdownMenuItem disabled={workspaceSwitchBlocked} onSelect={newEmptyWorkspace}>
+              <DropdownMenuItem
+                disabled={workspaceSwitchBlocked || appendReconciliationRequired}
+                onSelect={newEmptyWorkspace}
+              >
                 New empty workspace
               </DropdownMenuItem>
               {active && workspaces.length > 1 ? (

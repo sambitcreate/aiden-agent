@@ -22,6 +22,7 @@ const READINESS_TEXT: Record<Exclude<AssistantReadiness, "ready">, string> = {
   stopping: "Stopping response…",
   rendering: "Finishing response…",
   "turn-saving": "Saving conversation…",
+  "reload-required": "Message save status is unknown. Reload Aiden before sending again.",
   unavailable: "Aiden could not load your providers. Try again in a moment.",
   unset: "Choose a provider and model in the main composer before chatting here.",
 };
@@ -47,7 +48,7 @@ export function AssistantPanel({
 
   const submit = () => {
     if (!canSend) return;
-    chat.send(draft);
+    chat.send(draft, onDraftChange);
     onDraftChange("");
   };
 

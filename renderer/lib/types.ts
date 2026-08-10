@@ -9,6 +9,7 @@ import type { GenerationThinkingLevel } from "../shared/generation-thinking";
 import type { GenerationTimeline } from "../shared/generation-timeline";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
+import type { SkillProvenanceV1 } from "../shared/slash-commands";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -461,6 +462,7 @@ export interface ChatMessage {
   model?: string;
   reasoning?: string;
   attachments?: Attachment[];
+  skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
   subagents?: SubagentMessageReferenceV1;
 }
@@ -841,11 +843,6 @@ export interface ChatStartParams {
   /** Renderers may only request the attended Aiden mode. */
   mode?: "assistant";
   thinkingLevel?: GenerationThinkingLevel;
-  messages: Array<{
-    role: ChatRole;
-    content: string;
-    attachments?: Attachment[];
-  }>;
 }
 
 export interface ApprovalRequest {

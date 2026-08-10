@@ -238,6 +238,33 @@ test("workspace path changes replace the snapshot immediately and expire old ids
   );
 });
 
+test("send-time resolution bypasses a still-live catalog cache", async () => {
+  const h = harness();
+  h.setConfigured([configured()]);
+  const first = await h.registry.snapshot("one");
+  const invocationId = first.catalog[0]!.invocationId;
+  assert.equal((await h.registry.resolveFresh("one", invocationId)).name, "Review");
+
+  h.setConfigured([configured({ instructions: "Changed instructions." })]);
+  await assert.rejects(
+    h.registry.resolveFresh("one", invocationId),
+    (error) => error instanceof SkillInvocationError && error.code === "invalid_reference",
+  );
+  assert.equal((await h.registry.snapshot("one")).catalog[0]!.invocationId, invocationId);
+});
+
+test("every workspace permission transition invalidates invocation IDs", async () => {
+  const h = harness();
+  h.setConfigured([configured()]);
+  const ask = await h.registry.snapshot("one");
+  h.workspaces.set("one", { ...workspace("one"), permission: "full" });
+  const full = await h.registry.snapshot("one");
+  h.workspaces.set("one", { ...workspace("one"), permission: "none" });
+  const none = await h.registry.snapshot("one");
+  assert.notEqual(ask.catalog[0]!.invocationId, full.catalog[0]!.invocationId);
+  assert.notEqual(full.catalog[0]!.invocationId, none.catalog[0]!.invocationId);
+});
+
 test("catalog projection and prompt never expose instructions or paths", async () => {
   const h = harness();
   h.setDiscovered([
@@ -287,7 +314,10 @@ test("No Access does not read workspace skills and does not suppress global skil
     snapshot.available.map((skill) => skill.name),
     ["Global helper"],
   );
-  assert.equal(snapshot.catalog.some((entry) => entry.source === "workspace"), false);
+  assert.equal(
+    snapshot.catalog.some((entry) => entry.source === "workspace"),
+    false,
+  );
   assert.deepEqual(h.roots, [undefined]);
 });
 

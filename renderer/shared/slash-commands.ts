@@ -10,6 +10,7 @@ export const SLASH_LIMITS = Object.freeze({
   unavailableReasonCharacters: 160,
   invocationIdCharacters: 47,
   instructionBytes: 256 * 1024,
+  formattedInvocationBytes: 1024 * 1024,
 });
 
 export const SKILL_SOURCES = ["configured", "workspace", "global"] as const;
@@ -378,7 +379,15 @@ function hasUnsafeDisplayCharacter(value: string): boolean {
 }
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  return Object.keys(value).sort().join("\n") === [...expected].sort().join("\n");
+  const expectedKeys = new Set(expected);
+  let count = 0;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    count += 1;
+    if (count > expected.length || !expectedKeys.has(key)) return false;
+  }
+  if (count !== expected.length) return false;
+  return expected.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
 
 export function normalizeSafeSkillText(
@@ -387,7 +396,7 @@ export function normalizeSafeSkillText(
   maximum: number,
   allowEmpty = false,
 ): string {
-  if (typeof value !== "string" || hasUnsafeDisplayCharacter(value)) {
+  if (typeof value !== "string" || value.length > maximum * 8 || hasUnsafeDisplayCharacter(value)) {
     throw new SkillInvocationError("invalid_reference", `Invalid ${label}.`);
   }
   const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
@@ -485,4 +494,14 @@ export function skillProvenance(name: string, source: SkillSource): SkillProvena
     name: normalizeSafeSkillText(name, "skill name", SLASH_LIMITS.safeNameCharacters),
     source,
   };
+}
+
+export function parseSkillProvenanceV1(value: unknown): SkillProvenanceV1 | undefined {
+  if (!isRecord(value) || value.version !== 1 || !isSkillSource(value.source)) return undefined;
+  if (!exactKeys(value, ["name", "source", "version"])) return undefined;
+  try {
+    return skillProvenance(value.name as string, value.source);
+  } catch {
+    return undefined;
+  }
 }

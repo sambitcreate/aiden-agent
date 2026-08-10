@@ -98,6 +98,7 @@ function skillRegistryFingerprint(
   };
   field(workspace.id);
   field(workspace.folderPath);
+  field(workspace.permission);
   for (const candidate of candidates) {
     field(candidate.stableId);
     field(candidate.name);
@@ -187,6 +188,22 @@ export class SkillRegistry {
 
   async resolve(workspaceId: string, invocationId: string): Promise<RegisteredSkill> {
     const snapshot = await this.snapshot(workspaceId);
+    return this.#resolveFromSnapshot(snapshot, invocationId);
+  }
+
+  /** Bypass registry and discovery caches at the authoritative send boundary. */
+  async resolveFresh(workspaceId: string, invocationId: string): Promise<RegisteredSkill> {
+    if (!workspaceId || workspaceId.length > 256) {
+      throw new SkillInvocationError("workspace_changed", "Invalid skill workspace.");
+    }
+    const workspace = await this.#dependencies.getWorkspace(workspaceId);
+    if (!workspace || workspace.id !== workspaceId) {
+      throw new SkillInvocationError("workspace_changed", "Skill workspace is unavailable.");
+    }
+    return this.#resolveFromSnapshot(await this.#load(workspace), invocationId);
+  }
+
+  #resolveFromSnapshot(snapshot: SkillRegistrySnapshot, invocationId: string): RegisteredSkill {
     const skill = snapshot.skills.find((candidate) => candidate.invocationId === invocationId);
     if (!skill) {
       throw new SkillInvocationError("invalid_reference", "Skill selection expired or changed.");

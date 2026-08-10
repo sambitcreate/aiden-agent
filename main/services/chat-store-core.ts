@@ -15,6 +15,8 @@ import type { Chat, ChatMessage, ChatMeta } from "./types.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import { safeStoredAttachments } from "./attachment-contract.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -42,17 +44,35 @@ export interface ChatStoreDurability {
   syncFile?: (target: string) => Promise<void>;
 }
 
+export class ChatCreateReconciliationRequiredError extends Error {
+  readonly chatId: string;
+
+  constructor(chatId: string) {
+    super("Chat creation could not be reconciled safely.");
+    this.name = "ChatCreateReconciliationRequiredError";
+    this.chatId = chatId;
+  }
+}
+
+export function isChatCreateReconciliationRequiredError(
+  error: unknown,
+): error is ChatCreateReconciliationRequiredError {
+  return error instanceof ChatCreateReconciliationRequiredError;
+}
+
 export function createChatStore(
   resolveChatsDir: () => Promise<string>,
-  resolveProviderId: (providerId: string | undefined) => Promise<string | undefined> = async (
-    providerId,
-  ) => migrateLegacyPiProviderId(providerId),
+  resolveProviderId: (
+    providerId: string | undefined,
+  ) => Promise<string | undefined> = async (providerId) =>
+    migrateLegacyPiProviderId(providerId),
   durability: ChatStoreDurability = {},
 ) {
   let operationTail: Promise<void> = Promise.resolve();
   const syncDirectory = durability.syncDirectory ?? syncPath;
   const syncFile = durability.syncFile ?? syncPath;
-  const readFile = durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
+  const readFile =
+    durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
   let pendingDirectorySync: string | undefined;
 
   async function syncDirectoryDurably(directory: string): Promise<void> {
@@ -103,7 +123,8 @@ export function createChatStore(
   }
 
   function isValidMeta(value: unknown): value is ChatMeta {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
     const meta = value as Record<string, unknown>;
     return (
       typeof meta.id === "string" &&
@@ -116,7 +137,8 @@ export function createChatStore(
       Number.isFinite(meta.createdAt) &&
       typeof meta.updatedAt === "number" &&
       Number.isFinite(meta.updatedAt) &&
-      (meta.workspaceId === undefined || typeof meta.workspaceId === "string") &&
+      (meta.workspaceId === undefined ||
+        typeof meta.workspaceId === "string") &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
       (meta.model === undefined || typeof meta.model === "string")
     );
@@ -147,7 +169,10 @@ export function createChatStore(
     if (removed) await syncDirectoryDurably(directory);
   }
 
-  async function removeStagedFileDurably(staged: string, directory: string): Promise<void> {
+  async function removeStagedFileDurably(
+    staged: string,
+    directory: string,
+  ): Promise<void> {
     try {
       await fs.rm(staged);
     } catch (error) {
@@ -165,7 +190,10 @@ export function createChatStore(
     const directory = path.dirname(target);
     await removeCrashLeftStages(directory);
     const sorted = [...index].sort((a, b) => b.updatedAt - a.updatedAt);
-    const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`);
+    const staged = path.join(
+      directory,
+      `.${path.basename(target)}.${randomUUID()}.${purpose}.tmp`,
+    );
     try {
       await fs.writeFile(staged, JSON.stringify(sorted, null, 2), {
         encoding: "utf-8",
@@ -224,7 +252,8 @@ export function createChatStore(
       const chat = await readChat(meta.id);
       if (!chat || chat.id !== meta.id) continue;
       const recoveredMeta = metaOf(chat);
-      if (isValidMeta(recoveredMeta)) recovered.set(recoveredMeta.id, recoveredMeta);
+      if (isValidMeta(recoveredMeta))
+        recovered.set(recoveredMeta.id, recoveredMeta);
     }
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (
@@ -257,7 +286,10 @@ export function createChatStore(
       }),
     );
     if (quarantineExisting) {
-      const quarantine = path.join(directory, `.${path.basename(target)}.${randomUUID()}.corrupt`);
+      const quarantine = path.join(
+        directory,
+        `.${path.basename(target)}.${randomUUID()}.corrupt`,
+      );
       try {
         await fs.rename(target, quarantine);
         await syncDirectoryDurably(directory);
@@ -275,7 +307,8 @@ export function createChatStore(
     try {
       parsed = JSON.parse(await readFile(target)) as unknown;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return recoverIndex(false);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return recoverIndex(false);
       if (error instanceof SyntaxError) return recoverIndex(true);
       throw error;
     }
@@ -330,7 +363,10 @@ export function createChatStore(
       parsed.id !== id ||
       !Array.isArray(messages) ||
       !messages.every(
-        (message) => message !== null && typeof message === "object" && !Array.isArray(message),
+        (message) =>
+          message !== null &&
+          typeof message === "object" &&
+          !Array.isArray(message),
       )
     ) {
       return null;
@@ -340,7 +376,12 @@ export function createChatStore(
     const migratedProvider = providerId !== chat.providerId;
     if (migratedProvider) chat.providerId = providerId;
     chat.messages = chat.messages.map((message) => ({
-      ...message,
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      createdAt: message.createdAt,
+      model: message.model,
+      attachments: safeStoredAttachments(message.attachments),
       reasoning:
         message.role === "assistant" &&
         typeof message.reasoning === "string" &&
@@ -348,21 +389,33 @@ export function createChatStore(
           ? message.reasoning
           : undefined,
       timeline:
-        message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
+        message.role === "assistant"
+          ? parseGenerationTimeline(message.timeline)
+          : undefined,
       subagents:
         message.role === "assistant"
           ? parseSubagentMessageReferenceV1(message.subagents)
+          : undefined,
+      skill:
+        message.role === "user"
+          ? parseSkillProvenanceV1(message.skill)
           : undefined,
     }));
     if (migratedProvider) await writeChat(chat).catch(() => undefined);
     return chat;
   }
 
-  async function writeChat(chat: Chat, beforeRename: () => void = () => undefined): Promise<void> {
+  async function writeChat(
+    chat: Chat,
+    beforeRename: () => void = () => undefined,
+  ): Promise<void> {
     const target = await chatPath(chat.id);
     const directory = path.dirname(target);
     await removeCrashLeftStages(directory);
-    const staged = path.join(directory, `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`);
+    const staged = path.join(
+      directory,
+      `.${path.basename(target)}.${randomUUID()}.chat-write.tmp`,
+    );
     try {
       await fs.writeFile(staged, JSON.stringify(chat, null, 2), {
         encoding: "utf-8",
@@ -402,9 +455,12 @@ export function createChatStore(
     await writeIndex(index);
   }
 
-  async function writeChatAndMeta(chat: Chat): Promise<void> {
+  async function writeChatAndMeta(
+    chat: Chat,
+    beforeRename: () => void = () => undefined,
+  ): Promise<void> {
     await beginChatTransaction(chat.id);
-    await writeChat(chat);
+    await writeChat(chat, beforeRename);
     await updateMeta(chat);
     await clearChatTransaction(chat.id);
   }
@@ -436,7 +492,10 @@ export function createChatStore(
         continue;
       }
       const nextMeta = metaOf(chat);
-      if (indexPosition < 0 || JSON.stringify(index[indexPosition]) !== JSON.stringify(nextMeta)) {
+      if (
+        indexPosition < 0 ||
+        JSON.stringify(index[indexPosition]) !== JSON.stringify(nextMeta)
+      ) {
         if (indexPosition < 0) index.push(nextMeta);
         else index[indexPosition] = nextMeta;
         changed = true;
@@ -466,15 +525,18 @@ export function createChatStore(
     },
 
     async create(input: {
+      id?: string;
       title?: string;
       workspaceId?: string;
       providerId?: string;
       model?: string;
+      assertCurrent?: () => void;
     }): Promise<Chat> {
       return serialized(async () => {
+        input.assertCurrent?.();
         const now = Date.now();
         const chat: Chat = {
-          id: newId(),
+          id: input.id ?? newId(),
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
           providerId: await resolveProviderId(input.providerId),
@@ -483,8 +545,32 @@ export function createChatStore(
           updatedAt: now,
           messages: [],
         };
-        await writeChatAndMeta(chat);
-        return chat;
+        try {
+          await writeChatAndMeta(chat, () => input.assertCurrent?.());
+          return chat;
+        } catch (createError) {
+          let installed: Chat | null;
+          try {
+            installed = await readChat(chat.id);
+          } catch {
+            throw new ChatCreateReconciliationRequiredError(chat.id);
+          }
+          if (!installed) {
+            try {
+              await clearChatTransaction(chat.id);
+            } catch {
+              throw new ChatCreateReconciliationRequiredError(chat.id);
+            }
+            throw createError;
+          }
+          try {
+            await updateMeta(installed);
+            await clearChatTransaction(installed.id);
+            return installed;
+          } catch {
+            throw new ChatCreateReconciliationRequiredError(chat.id);
+          }
+        }
       });
     },
 
@@ -517,7 +603,10 @@ export function createChatStore(
     },
 
     /** Move only an untouched new chat so its workspace can be chosen from the composer. */
-    async moveEmptyChatToWorkspace(id: string, workspaceId: string): Promise<Chat> {
+    async moveEmptyChatToWorkspace(
+      id: string,
+      workspaceId: string,
+    ): Promise<Chat> {
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
@@ -540,12 +629,14 @@ export function createChatStore(
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
-        if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+        if (!isCurrent())
+          throw new Error("The renderer document is no longer active.");
         chat.computerUseEnabled = enabled;
         await writeChat(chat, () => {
           // No await occurs between this ownership check and invoking the
           // atomic rename, so a replaced document cannot commit the staged opt-in.
-          if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+          if (!isCurrent())
+            throw new Error("The renderer document is no longer active.");
         });
         return chat;
       });
@@ -569,22 +660,32 @@ export function createChatStore(
 
     async appendMessage(
       id: string,
-      message: Omit<ChatMessage, "id" | "createdAt"> & { id?: string; createdAt?: number },
+      message: Omit<ChatMessage, "id" | "createdAt"> & {
+        id?: string;
+        createdAt?: number;
+      },
       meta?: {
         providerId?: string;
         model?: string;
         autoTitle?: boolean;
         expectedWorkspaceId?: string;
+        isCurrent?: () => boolean;
       },
     ): Promise<Chat> {
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
+        if (meta?.isCurrent && !meta.isCurrent()) {
+          throw new Error("The renderer document is no longer active.");
+        }
         if (
           meta?.expectedWorkspaceId !== undefined &&
-          (chat.workspaceId ?? DEFAULT_WORKSPACE_ID) !== meta.expectedWorkspaceId
+          (chat.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
+            meta.expectedWorkspaceId
         ) {
-          throw new Error("The chat workspace changed before the message could be saved.");
+          throw new Error(
+            "The chat workspace changed before the message could be saved.",
+          );
         }
         const full: ChatMessage = {
           id: message.id ?? newId(),
@@ -597,9 +698,15 @@ export function createChatStore(
             message.reasoning.trim()
               ? message.reasoning
               : undefined,
-          attachments: message.attachments,
+          attachments: safeStoredAttachments(message.attachments),
+          skill:
+            message.role === "user"
+              ? parseSkillProvenanceV1(message.skill)
+              : undefined,
           timeline:
-            message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
+            message.role === "assistant"
+              ? parseGenerationTimeline(message.timeline)
+              : undefined,
           subagents:
             message.role === "assistant"
               ? parseSubagentMessageReferenceV1(message.subagents)
@@ -607,24 +714,38 @@ export function createChatStore(
           createdAt: message.createdAt ?? Date.now(),
         };
         const isFirstUserMessage =
-          full.role === "user" && !chat.messages.some((entry) => entry.role === "user");
+          full.role === "user" &&
+          !chat.messages.some((entry) => entry.role === "user");
         chat.messages.push(full);
         chat.updatedAt = Date.now();
         if (meta?.providerId) chat.providerId = meta.providerId;
         if (meta?.model) chat.model = meta.model;
-        if (meta?.autoTitle && isFirstUserMessage && isDefaultChatTitle(chat.title)) {
+        if (
+          meta?.autoTitle &&
+          isFirstUserMessage &&
+          isDefaultChatTitle(chat.title)
+        ) {
           chat.title = deriveChatTitleSeed(full);
         }
-        await writeChatAndMeta(chat);
+        await writeChatAndMeta(chat, () => {
+          if (meta?.isCurrent && !meta.isCurrent()) {
+            throw new Error("The renderer document is no longer active.");
+          }
+        });
         return chat;
       });
     },
 
     /** Replace only the untouched first-message seed, preserving any manual rename. */
-    async replaceAutoTitle(id: string, expectedSeed: string, title: string): Promise<Chat | null> {
+    async replaceAutoTitle(
+      id: string,
+      expectedSeed: string,
+      title: string,
+    ): Promise<Chat | null> {
       return serialized(async () => {
         const chat = await readChat(id);
-        if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed)) return null;
+        if (!chat || !canReplaceGeneratedChatTitle(chat.title, expectedSeed))
+          return null;
         const nextTitle = title.trim();
         if (!nextTitle || nextTitle === chat.title) return null;
         chat.title = nextTitle;

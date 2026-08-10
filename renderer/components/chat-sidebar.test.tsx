@@ -23,7 +23,10 @@ test("sidebar places New Agent above Scheduled beneath search", () => {
 
   assert.notEqual(newAgentIndex, -1);
   assert.notEqual(scheduledIndex, -1);
-  assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
+  assert.ok(
+    newAgentIndex < scheduledIndex,
+    "New Agent should appear before Scheduled",
+  );
   assert.ok(
     scheduledIndex < workspaceIndex,
     "Scheduled should stay above the workspace switcher and chat list",
@@ -32,7 +35,11 @@ test("sidebar places New Agent above Scheduled beneath search", () => {
 
 test("new agent uses the same sidebar row style as scheduled", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
+  const section = between(
+    sidebar,
+    '<div className="flex flex-col gap-0.5 px-2.5 pb-2">',
+    "</div>",
+  );
   assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
   assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
   assert.doesNotMatch(section, /variant="accent"/u);
@@ -40,8 +47,14 @@ test("new agent uses the same sidebar row style as scheduled", () => {
 
 test("newAgent creates a chat in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
-  assert.match(sidebar, /if \(!activeId\) return;/u);
+  assert.match(
+    sidebar,
+    /const newAgent = React\.useCallback\(async \(\) => \{/u,
+  );
+  assert.match(
+    sidebar,
+    /if \(!activeId \|\| appendReconciliationRequired\) return;/u,
+  );
   assert.match(sidebar, /chatsApi\.create\(\{ workspaceId: activeId \}\)/u);
   assert.match(
     sidebar,
@@ -57,8 +70,14 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   const settingsIndex = footer.indexOf('title="Settings"');
 
   assert.notEqual(updateIndex, -1);
-  assert.ok(updateIndex < profileIndex, "the temporary update status should lead the footer");
-  assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
+  assert.ok(
+    updateIndex < profileIndex,
+    "the temporary update status should lead the footer",
+  );
+  assert.ok(
+    profileIndex < settingsIndex,
+    "Profile and Settings should keep their stable order",
+  );
 });
 
 test("update-ready banner offers Later and a guarded restart action", () => {
@@ -75,7 +94,10 @@ test("update-ready banner offers Later and a guarded restart action", () => {
   assert.match(banner, />\s*Later\s*</u);
   assert.match(banner, /Update and restart/u);
   assert.match(banner, /appUpdatesApi\.restart\(\)/u);
-  assert.match(banner, /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u);
+  assert.match(
+    banner,
+    /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u,
+  );
 });
 
 test("a stale initial update-state response cannot overwrite a newer notification", () => {
@@ -104,11 +126,20 @@ test("update-ready banner uses the Aiden mark and shared compact-surface motion"
     "\n}\n\nfunction GeneratedTitleReveal",
   );
 
-  assert.match(sidebar, /const AIDEN_MARK_URL = new URL\("\.\.\/\.\.\/resources\/app-icon\.png"/u);
-  assert.match(banner, /<img src=\{AIDEN_MARK_URL\} alt="" className="size-8 shrink-0" \/>/u);
+  assert.match(
+    sidebar,
+    /const AIDEN_MARK_URL = new URL\("\.\.\/\.\.\/resources\/app-icon\.png"/u,
+  );
+  assert.match(
+    banner,
+    /<img src=\{AIDEN_MARK_URL\} alt="" className="size-8 shrink-0" \/>/u,
+  );
   assert.doesNotMatch(sidebar, /CircleArrowUp/u);
   assert.match(banner, /data-state=\{open \? "open" : "closed"\}/u);
-  assert.match(banner, /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u);
+  assert.match(
+    banner,
+    /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u,
+  );
   assert.match(
     styles,
     /@keyframes aiden-app-update-banner-in[\s\S]*translateY\(4px\) scale\(0\.98\)/u,
@@ -132,7 +163,10 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
 
 test("workspace menu middle-truncates folder paths", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(sidebar, /import \{ truncatePathMiddle \} from "\.\.\/lib\/truncate-path"/u);
+  assert.match(
+    sidebar,
+    /import \{ truncatePathMiddle \} from "\.\.\/lib\/truncate-path"/u,
+  );
   assert.match(
     sidebar,
     /sublabel=\{\s*w\.folderPath \? truncatePathMiddle\(w\.folderPath\) : undefined\s*\}/u,
@@ -142,10 +176,18 @@ test("workspace menu middle-truncates folder paths", () => {
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  const deletion = between(sidebar, "const commitDelete = async () => {", "\n  };");
+  const deletion = between(
+    sidebar,
+    "const commitDelete = async () => {",
+    "\n  };",
+  );
   const remove = deletion.indexOf("await chatsApi.remove(deleting.id)");
-  const purge = deletion.indexOf("await removeDeletedChatFromCache(qc, deleting.id)");
-  const refresh = deletion.indexOf("await qc.invalidateQueries({ queryKey: queryKeys.chats })");
+  const purge = deletion.indexOf(
+    "await removeDeletedChatFromCache(qc, deleting.id)",
+  );
+  const refresh = deletion.indexOf(
+    "await qc.invalidateQueries({ queryKey: queryKeys.chats })",
+  );
 
   assert.ok(remove >= 0);
   assert.ok(purge > remove);
@@ -166,7 +208,10 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.match(chat, /storageKey="aiden-agent"/u);
   assert.match(chat, /sidebarSize=\{\{ default: 272, min: 236, max: 340 \}\}/u);
   assert.match(settings, /storageKey="aiden-agent"/u);
-  assert.match(settings, /sidebarSize=\{\{ default: 272, min: 236, max: 340 \}\}/u);
+  assert.match(
+    settings,
+    /sidebarSize=\{\{ default: 272, min: 236, max: 340 \}\}/u,
+  );
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 

@@ -2,9 +2,81 @@ import {
   SLASH_COMMANDS,
   SLASH_LIMITS,
   type SkillCatalogEntry,
+  type SkillInvocationV1,
   type SkillSource,
   type SlashCommandDefinition,
 } from "../shared/slash-commands";
+
+export interface SelectedSkillInvocation {
+  workspaceId: string;
+  invocation: SkillInvocationV1;
+}
+
+export interface SelectedSkillComposerState {
+  selected?: SelectedSkillInvocation;
+  revision: number;
+}
+
+export type SelectedSkillComposerAction =
+  | { type: "select"; selected: SelectedSkillInvocation }
+  | { type: "remove" }
+  | { type: "send-succeeded"; submittedRevision: number };
+
+/** Keeps a skill attached to exactly one accepted message, without erasing a replacement. */
+export function selectedSkillComposerReducer(
+  state: SelectedSkillComposerState,
+  action: SelectedSkillComposerAction,
+): SelectedSkillComposerState {
+  if (action.type === "select") {
+    return { selected: action.selected, revision: state.revision + 1 };
+  }
+  if (action.type === "remove") {
+    return { selected: undefined, revision: state.revision + 1 };
+  }
+  if (action.submittedRevision !== state.revision) return state;
+  return { selected: undefined, revision: state.revision + 1 };
+}
+
+export type SelectedSkillStatus =
+  | { state: "valid"; entry: SkillCatalogEntry }
+  | { state: "checking"; reason: string }
+  | { state: "invalid"; reason: string };
+
+export function selectedSkillStatus(
+  selected: SelectedSkillInvocation,
+  currentWorkspaceId: string | undefined,
+  catalog: readonly SkillCatalogEntry[] | undefined,
+  catalogState: "loading" | "error" | "ready",
+): SelectedSkillStatus {
+  if (!currentWorkspaceId || selected.workspaceId !== currentWorkspaceId) {
+    return { state: "invalid", reason: "This skill belongs to a different workspace." };
+  }
+  if (catalogState === "error") {
+    return { state: "invalid", reason: "This skill could not be verified. Remove or replace it." };
+  }
+  if (catalogState === "loading") {
+    return { state: "checking", reason: "Checking skill availability…" };
+  }
+  const exact = catalog?.find((entry) => entry.invocationId === selected.invocation.invocationId);
+  if (exact?.available) return { state: "valid", entry: exact };
+  if (exact) {
+    return {
+      state: "invalid",
+      reason: exact.unavailableReason ?? "This skill is currently unavailable.",
+    };
+  }
+  return { state: "invalid", reason: "This skill changed or is no longer available." };
+}
+
+export function successfulSendAttachmentRemainder<T extends { id: string }>(
+  current: readonly T[],
+  submitted: readonly T[],
+  unchanged: boolean,
+): T[] {
+  if (unchanged) return [];
+  const submittedIds = new Set(submitted.map((attachment) => attachment.id));
+  return current.filter((attachment) => !submittedIds.has(attachment.id));
+}
 
 export interface SlashSessionTracker {
   epoch: number;

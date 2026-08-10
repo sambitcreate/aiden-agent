@@ -60,6 +60,7 @@ test("Enter-key submission and the Send button share the Computer Use save gate"
     sending: false,
     permissionSaving: false,
     gitOperationBusy: false,
+    attaching: false,
   };
   assert.equal(composerSubmissionAllowed({ ...base, computerUseSaving: false }), true);
   assert.equal(composerSubmissionAllowed({ ...base, computerUseSaving: true }), false);

@@ -77,7 +77,9 @@ export function ComposerSlashPalettePresence({
 }) {
   const lastContentRef = React.useRef(children);
   const [retained, setRetained] = React.useState(present);
-  if (present && children) lastContentRef.current = children;
+  React.useLayoutEffect(() => {
+    if (present && children) lastContentRef.current = children;
+  }, [children, present]);
   const reduceMotion =
     typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "true";
   const presenceState = slashPalettePresenceState({

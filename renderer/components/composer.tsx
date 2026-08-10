@@ -35,16 +35,20 @@ import {
   OctagonAlert,
   Plus,
   ShieldQuestion,
+  Sparkles,
   Square,
   X,
 } from "lucide-react";
 import { GitBranchPicker } from "./git-branch-picker";
 import { WorkspacePicker } from "./workspace-picker";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
-import { attachmentsApi, pickFiles } from "../lib/ipc";
+import { attachmentsApi } from "../lib/ipc";
 import { useDiscoveredSkills, useSettings } from "../lib/queries";
 import type { Attachment, Workspace, WorkspacePermission } from "../lib/types";
-import { composerSubmissionAllowed, computerUseControlState } from "../lib/computer-use-control";
+import {
+  composerSubmissionAllowed,
+  computerUseControlState,
+} from "../lib/computer-use-control";
 import {
   dismissComputerUseNotice,
   shouldShowComputerUseNotice,
@@ -63,6 +67,9 @@ import {
   updateSlashSessionTracker,
   type SlashResult,
   type SlashSessionTracker,
+  selectedSkillComposerReducer,
+  selectedSkillStatus,
+  successfulSendAttachmentRemainder,
 } from "../lib/slash-command-core";
 import {
   attemptSlashCommandAction,
@@ -76,6 +83,13 @@ import {
   ComposerSlashPalettePresence,
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
+import type { SkillInvocationV1, SkillSource } from "../shared/slash-commands";
+import {
+  attachmentInlineBytesRemaining,
+  attachmentSlotsRemaining,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../shared/attachment-contract";
+import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract";
 
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
@@ -86,7 +100,11 @@ interface ComposerProps {
   hasMessages: boolean;
   /** Stable identifier used to select an empty-chat prompt. */
   chatId: string;
-  onSend: (text: string, attachments: Attachment[]) => Promise<void>;
+  onSend: (
+    text: string,
+    attachments: Attachment[],
+    skillInvocation?: SkillInvocationV1,
+  ) => Promise<void>;
   onStop: () => void;
   isGenerating: boolean;
   canStopGeneration?: boolean;
@@ -99,7 +117,9 @@ interface ComposerProps {
   gitDetached?: boolean;
   gitUnborn?: boolean;
   onOpenFolder?: () => void;
-  onChangePermission?: (permission: WorkspacePermission) => void | Promise<void>;
+  onChangePermission?: (
+    permission: WorkspacePermission,
+  ) => void | Promise<void>;
   workspacePickerEnabled?: boolean;
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
@@ -163,6 +183,14 @@ const PERMISSION_META: Record<
   },
 };
 
+function skillSourceLabel(source: SkillSource): string {
+  return source === "configured"
+    ? "Configured"
+    : source === "workspace"
+      ? "Workspace"
+      : "Global";
+}
+
 interface ComposerDraftState {
   text: string;
   slashTracker: SlashSessionTracker;
@@ -179,10 +207,16 @@ function composerDraftReducer(
   if (action.type === "dismiss-slash") {
     return {
       ...state,
-      slashTracker: { ...state.slashTracker, dismissedEpoch: state.slashTracker.epoch },
+      slashTracker: {
+        ...state.slashTracker,
+        dismissedEpoch: state.slashTracker.epoch,
+      },
     };
   }
-  const text = typeof action.value === "function" ? action.value(state.text) : action.value;
+  const text =
+    typeof action.value === "function"
+      ? action.value(state.text)
+      : action.value;
   return {
     text,
     slashTracker: updateSlashSessionTracker(state.slashTracker, text),
@@ -242,11 +276,14 @@ export function Composer({
   const slashActionPendingRef = React.useRef(false);
   const slashPaletteBlockedRef = React.useRef(slashPaletteBlocked);
   const slashInteractionRevisionRef = React.useRef(0);
+  const textRevisionRef = React.useRef(0);
+  const attachmentRevisionRef = React.useRef(0);
   const markSlashInteraction = React.useCallback(() => {
     slashInteractionRevisionRef.current += 1;
   }, []);
   const setText = React.useCallback((value: React.SetStateAction<string>) => {
     slashInteractionRevisionRef.current += 1;
+    textRevisionRef.current += 1;
     dispatchDraft({ type: "update", value });
   }, []);
   const dismissSlash = React.useCallback(() => {
@@ -254,7 +291,16 @@ export function Composer({
     dispatchDraft({ type: "dismiss-slash" });
   }, []);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [skillSelection, dispatchSkillSelection] = React.useReducer(
+    selectedSkillComposerReducer,
+    {
+      selected: undefined,
+      revision: 0,
+    },
+  );
+  const selectedSkill = skillSelection.selected;
   const [attaching, setAttaching] = React.useState(false);
+  const [attachmentStatus, setAttachmentStatus] = React.useState("");
   const [sending, setSending] = React.useState(false);
   const [permissionSaving, setPermissionSaving] = React.useState(false);
   const [confirmFullAccess, setConfirmFullAccess] = React.useState(false);
@@ -293,13 +339,41 @@ export function Composer({
       permissionSaving,
       computerUseSaving: computerUse?.saving === true,
       gitOperationBusy,
+      attaching,
     }) && !configurationBusy;
-  const canSend = (text.trim().length > 0 || attachments.length > 0) && submissionAllowed;
-
   const settings = useSettings();
   const skillCatalog = useDiscoveredSkills(workspace?.id);
+  const selectedSkillState = React.useMemo(
+    () =>
+      selectedSkill
+        ? selectedSkillStatus(
+            selectedSkill,
+            workspace?.id,
+            skillCatalog.data,
+            skillCatalog.isError
+              ? "error"
+              : skillCatalog.isFetching
+                ? "loading"
+                : "ready",
+          )
+        : undefined,
+    [
+      selectedSkill,
+      skillCatalog.data,
+      skillCatalog.isError,
+      skillCatalog.isFetching,
+      workspace?.id,
+    ],
+  );
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) &&
+    submissionAllowed &&
+    (!selectedSkillState || selectedSkillState.state === "valid");
   const voice = useVoiceRecorder(
-    (transcript) => setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript)),
+    (transcript) =>
+      setText((prev) =>
+        prev.trim() ? `${prev.trim()} ${transcript}` : transcript,
+      ),
     {
       provider: settings.data?.voiceProvider ?? "openai",
       localModel: settings.data?.localVoiceModel,
@@ -313,7 +387,10 @@ export function Composer({
 
   const slashSession = React.useMemo(
     () =>
-      slashPaletteBlocked || confirmFullAccess || renameDialogOpen || permissionMenuOpen
+      slashPaletteBlocked ||
+      confirmFullAccess ||
+      renameDialogOpen ||
+      permissionMenuOpen
         ? null
         : deriveSlashSession({
             draft: text,
@@ -359,8 +436,12 @@ export function Composer({
         ? "Wait for the current Git operation to finish before changing panels."
         : undefined,
       payloadAfterToken: slashSession
-        ? Boolean(consumeSlashToken(text, slashSession).trim() || attachments.length > 0)
-        : Boolean(text.trim() || attachments.length > 0),
+        ? Boolean(
+            consumeSlashToken(text, slashSession).trim() ||
+            attachments.length > 0 ||
+            selectedSkill,
+          )
+        : Boolean(text.trim() || attachments.length > 0 || selectedSkill),
     }),
     [
       attachments.length,
@@ -374,6 +455,7 @@ export function Composer({
       slashActionBusy,
       slashNavigationBlockedReason,
       slashSession,
+      selectedSkill,
       text,
       workspace,
       workspaceChangeBlockedReason,
@@ -385,7 +467,10 @@ export function Composer({
     [slashActionContext],
   );
   const slashResultSelectable = React.useCallback(
-    (result: SlashResult) => result.kind === "command" && commandAvailability(result).available,
+    (result: SlashResult) =>
+      result.kind === "skill"
+        ? result.skill.available
+        : commandAvailability(result).available,
     [commandAvailability],
   );
   const selectableSlashIds = React.useMemo(() => {
@@ -415,12 +500,42 @@ export function Composer({
       if (
         slashActionPendingRef.current ||
         !slashSession ||
-        !slashResultSelectable(result) ||
-        result.kind !== "command"
+        !slashResultSelectable(result)
       ) {
         return;
       }
-      const argument = validateSlashCommandArgument(result.command, slashSession.argument);
+      if (result.kind === "skill") {
+        if (!workspace?.id) return;
+        const nextText = consumeSlashToken(text, slashSession);
+        const nextCaret = slashSession.tokenStart;
+        dispatchSkillSelection({
+          type: "select",
+          selected: {
+            workspaceId: workspace.id,
+            invocation: {
+              version: 1,
+              invocationId: result.skill.invocationId,
+              displayName: result.skill.name,
+              source: result.skill.source,
+            },
+          },
+        });
+        setText(nextText);
+        dismissSlash();
+        setActiveSlashId(undefined);
+        requestAnimationFrame(() => {
+          const textarea = inputRef?.current;
+          if (!textarea) return;
+          textarea.focus({ preventScroll: true });
+          textarea.setSelectionRange(nextCaret, nextCaret);
+          setSelection({ start: nextCaret, end: nextCaret });
+        });
+        return;
+      }
+      const argument = validateSlashCommandArgument(
+        result.command,
+        slashSession.argument,
+      );
       if (!argument.valid) {
         toast.info(argument.reason ?? "That command argument is invalid.");
         return;
@@ -436,18 +551,22 @@ export function Composer({
         interactionRevision: slashInteractionRevisionRef.current,
         blocked: slashPaletteBlockedRef.current,
       };
-      const attempted = attemptSlashCommandAction(result.command, argument.value ?? "", {
-        executeCommand: commandSystem.execute,
-        openSettings: (section) => onOpenSettings?.(section),
-        requestRename,
-        copyLatestResponse: async () => {
-          if (!latestAssistantResponse) return;
-          await navigator.clipboard.writeText(latestAssistantResponse);
-          toast.success("Latest response copied");
+      const attempted = attemptSlashCommandAction(
+        result.command,
+        argument.value ?? "",
+        {
+          executeCommand: commandSystem.execute,
+          openSettings: (section) => onOpenSettings?.(section),
+          requestRename,
+          copyLatestResponse: async () => {
+            if (!latestAssistantResponse) return;
+            await navigator.clipboard.writeText(latestAssistantResponse);
+            toast.success("Latest response copied");
+          },
+          openReview: () => onOpenReview?.(),
+          openAccess: () => setPermissionMenuOpen(true),
         },
-        openReview: () => onOpenReview?.(),
-        openAccess: () => setPermissionMenuOpen(true),
-      });
+      );
       const asyncAction = attempted.kind === "async";
       if (asyncAction) slashActionPendingRef.current = true;
       const attempt = asyncAction ? await attempted.completion : attempted;
@@ -473,7 +592,9 @@ export function Composer({
           blocked: slashPaletteBlockedRef.current,
         })
       ) {
-        toast.info("Command completed; your newer draft and slash session were left unchanged.");
+        toast.info(
+          "Command completed; your newer draft and slash session were left unchanged.",
+        );
         return;
       }
       setText(nextText);
@@ -498,6 +619,7 @@ export function Composer({
       slashResultSelectable,
       slashSession,
       text,
+      workspace?.id,
     ],
   );
 
@@ -510,7 +632,9 @@ export function Composer({
       setRenameDialogOpen(false);
       toast.success("Chat renamed");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't rename this chat.");
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't rename this chat.",
+      );
     } finally {
       setRenaming(false);
     }
@@ -518,51 +642,135 @@ export function Composer({
 
   const handleAttach = async () => {
     if (gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before attaching files.");
+      toast.info(
+        "Wait for the current Git operation to finish before attaching files.",
+      );
       return;
     }
-    const paths = await pickFiles();
-    if (paths.length === 0) return;
+    if (attaching) return;
     setAttaching(true);
+    setAttachmentStatus(
+      "Attachment picker open. Selected files will load before sending.",
+    );
     try {
-      let added = await attachmentsApi.read(paths);
+      const remainingSlots = attachmentSlotsRemaining(attachments.length);
+      if (remainingSlots <= 0) {
+        setAttachmentStatus("The attachment count limit has been reached.");
+        toast.info(
+          `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments per message.`,
+        );
+        return;
+      }
+      const remainingInlineBytes = attachmentInlineBytesRemaining(attachments);
+      if (remainingInlineBytes <= 0) {
+        setAttachmentStatus("The attachment data limit has been reached.");
+        toast.info("This message has reached the attachment data limit.");
+        return;
+      }
+      const picked = await attachmentsApi.pickAndRead(
+        remainingSlots,
+        visionSupported !== false,
+        remainingInlineBytes,
+      );
+      if (picked.skipped > 0) {
+        toast.info(
+          `${picked.skipped} selected ${picked.skipped === 1 ? "file was" : "files were"} skipped because of the attachment limit or model support.`,
+        );
+      }
+      let added = picked.attachments;
+      if (added.length === 0) {
+        setAttachmentStatus("No attachments were added.");
+        return;
+      }
       // Drop images when the model can't see them, with a hint.
       if (visionSupported === false && added.some((a) => a.kind === "image")) {
         added = added.filter((a) => a.kind !== "image");
-        toast.info("The selected model can't read images — image attachments were skipped.");
+        toast.info(
+          "The selected model can't read images — image attachments were skipped.",
+        );
       }
+      if (added.length === 0) {
+        setAttachmentStatus("No compatible attachments were added.");
+        return;
+      }
+      attachmentRevisionRef.current += 1;
       setAttachments((prev) => [...prev, ...added]);
+      setAttachmentStatus(
+        `${added.length} ${added.length === 1 ? "attachment is" : "attachments are"} ready.`,
+      );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
+      setAttachmentStatus("Attachments could not be loaded.");
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't read that file.",
+      );
     } finally {
       setAttaching(false);
     }
   };
 
-  const removeAttachment = (id: string) =>
+  const removeAttachment = (id: string) => {
+    attachmentRevisionRef.current += 1;
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
 
   const submit = async () => {
+    if (attaching) {
+      toast.info(
+        "Wait for the selected attachments to finish loading before sending.",
+      );
+      return;
+    }
     if (gitOperationBusy) {
-      toast.info("Wait for the current Git operation to finish before sending.");
+      toast.info(
+        "Wait for the current Git operation to finish before sending.",
+      );
       return;
     }
     const trimmed = text.trim();
+    if (
+      new TextEncoder().encode(trimmed).byteLength >
+      MAX_CHAT_MESSAGE_CONTENT_BYTES
+    ) {
+      toast.info("Message text exceeds the 1 MB limit.");
+      return;
+    }
     if ((!trimmed && attachments.length === 0) || !submissionAllowed) return;
+    if (selectedSkillState && selectedSkillState.state !== "valid") {
+      toast.info(selectedSkillState.reason);
+      return;
+    }
     if (
       visionSupported === false &&
       attachments.some((attachment) => attachment.kind === "image")
     ) {
-      toast.info("Switch to a vision-capable model before sending these images.");
+      toast.info(
+        "Switch to a vision-capable model before sending these images.",
+      );
       return;
     }
+    const submittedTextRevision = textRevisionRef.current;
+    const submittedAttachmentRevision = attachmentRevisionRef.current;
+    const submittedSkillRevision = skillSelection.revision;
+    const submittedSkill = selectedSkill?.invocation;
     setSending(true);
     try {
-      await onSend(trimmed, attachments);
-      setText("");
-      setAttachments([]);
+      await onSend(trimmed, attachments, submittedSkill);
+      if (textRevisionRef.current === submittedTextRevision) setText("");
+      setAttachments((current) =>
+        successfulSendAttachmentRemainder(
+          current,
+          attachments,
+          attachmentRevisionRef.current === submittedAttachmentRevision,
+        ),
+      );
+      dispatchSkillSelection({
+        type: "send-succeeded",
+        submittedRevision: submittedSkillRevision,
+      });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't send this message.");
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't send this message.",
+      );
     } finally {
       setSending(false);
     }
@@ -583,7 +791,9 @@ export function Composer({
         setActiveSlashId((current) =>
           moveSlashSelectionId(
             selectableSlashIds,
-            selectableSlashIds.includes(current ?? "") ? current : effectiveActiveSlashId,
+            selectableSlashIds.includes(current ?? "")
+              ? current
+              : effectiveActiveSlashId,
             event.key === "ArrowDown" ? 1 : -1,
           ),
         );
@@ -599,10 +809,16 @@ export function Composer({
         markSlashInteraction();
         setActiveSlashId((current) =>
           event.key === "Home" || event.key === "End"
-            ? moveSlashSelectionId(selectableSlashIds, undefined, event.key === "Home" ? 1 : -1)
+            ? moveSlashSelectionId(
+                selectableSlashIds,
+                undefined,
+                event.key === "Home" ? 1 : -1,
+              )
             : pageSlashSelectionId(
                 selectableSlashIds,
-                selectableSlashIds.includes(current ?? "") ? current : effectiveActiveSlashId,
+                selectableSlashIds.includes(current ?? "")
+                  ? current
+                  : effectiveActiveSlashId,
                 event.key === "PageDown" ? 1 : -1,
               ),
         );
@@ -612,7 +828,10 @@ export function Composer({
       const acceptsSelection =
         (event.key === "Enter" && !event.shiftKey) ||
         (event.key === "Tab" &&
-          slashTabAcceptsSelection(selectableCount, slashActionPendingRef.current));
+          slashTabAcceptsSelection(
+            selectableCount,
+            slashActionPendingRef.current,
+          ));
       if (acceptsSelection && effectiveActiveSlashId) {
         if (effectiveActiveSlashId === COMPOSER_SLASH_RETRY_ID) {
           event.preventDefault();
@@ -632,7 +851,11 @@ export function Composer({
         }
       }
     }
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
       event.preventDefault();
       void submit();
     }
@@ -647,7 +870,11 @@ export function Composer({
   const computerUseControl = computerUseControlState({
     enabled: computerUse?.enabled ?? false,
     ready: computerUse?.ready ?? false,
-    busy: computerUse?.saving === true || isGenerating || sending || gitOperationBusy,
+    busy:
+      computerUse?.saving === true ||
+      isGenerating ||
+      sending ||
+      gitOperationBusy,
   });
 
   const applyPermission = async (nextPermission: WorkspacePermission) => {
@@ -668,7 +895,11 @@ export function Composer({
     try {
       await onChangePermission(nextPermission);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't change workspace access.");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Couldn't change workspace access.",
+      );
     } finally {
       setPermissionSaving(false);
     }
@@ -701,7 +932,10 @@ export function Composer({
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
-              slashPaletteBlocked || confirmFullAccess || renameDialogOpen || permissionMenuOpen
+              slashPaletteBlocked ||
+              confirmFullAccess ||
+              renameDialogOpen ||
+              permissionMenuOpen
             }
           >
             {slashSession ? (
@@ -721,13 +955,14 @@ export function Composer({
                   markSlashInteraction();
                   void skillCatalog.refetch();
                 }}
+                skillSelectionEnabled
               />
             ) : null}
           </ComposerSlashPalettePresence>
           {computerUse ? (
             <span id={computerUseDescriptionId} className="sr-only">
-              Computer Use may send screenshots and accessibility text to the selected model. Every
-              input action asks for approval.
+              Computer Use may send screenshots and accessibility text to the
+              selected model. Every input action asks for approval.
             </span>
           ) : null}
           {showComputerUseNotice ? (
@@ -735,10 +970,20 @@ export function Composer({
               aria-label="Computer Use privacy notice"
               className="mx-3 mb-2 flex min-h-8 items-center gap-2 rounded-control bg-popover px-2.5 py-1.5 outline outline-1 outline-accent/20"
             >
-              <MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
-              <Text as="p" variant="small" color="secondary" className="min-w-0 flex-1 text-pretty">
-                <span className="font-medium text-primary">Computer Use is on.</span> Screen details
-                may go to your model; actions still ask.
+              <MousePointer2
+                aria-hidden="true"
+                className="size-3.5 shrink-0 text-accent"
+              />
+              <Text
+                as="p"
+                variant="small"
+                color="secondary"
+                className="min-w-0 flex-1 text-pretty"
+              >
+                <span className="font-medium text-primary">
+                  Computer Use is on.
+                </span>{" "}
+                Screen details may go to your model; actions still ask.
               </Text>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -754,10 +999,14 @@ export function Composer({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("session")}>
+                  <DropdownMenuItem
+                    onSelect={() => dismissComputerUseNotice("session")}
+                  >
                     Hide for this session
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => dismissComputerUseNotice("permanent")}>
+                  <DropdownMenuItem
+                    onSelect={() => dismissComputerUseNotice("permanent")}
+                  >
                     Don’t show again
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -766,12 +1015,16 @@ export function Composer({
           ) : null}
           {/* Workspace context: folder (opens in Finder) · local execution · git branch. */}
           <div className="relative z-0 mx-3 flex min-h-8 min-w-0 items-center gap-0.5 rounded-t-xl bg-context-bar px-1.5 pb-2 pt-1 backdrop-blur-md">
-            {workspacePickerEnabled && onSelectWorkspace && onCreateScratchWorkspace ? (
+            {workspacePickerEnabled &&
+            onSelectWorkspace &&
+            onCreateScratchWorkspace ? (
               <WorkspacePicker
+                key={workspaceChangeBlockedReason ? "blocked" : "available"}
                 workspaces={workspaces}
                 activeWorkspaceId={workspace?.id}
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
+                blockedReason={workspaceChangeBlockedReason}
                 trigger={
                   <Button
                     variant="transparent"
@@ -783,10 +1036,16 @@ export function Composer({
                       gitOperationBusy ||
                       Boolean(workspaceChangeBlockedReason)
                     }
-                    aria-label="Choose a workspace"
+                    aria-label={
+                      workspaceChangeBlockedReason
+                        ? `Workspace unavailable: ${workspaceChangeBlockedReason}`
+                        : "Choose a workspace"
+                    }
                   >
                     <Folder className="size-4 shrink-0" />
-                    <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                    <span className="max-w-[16rem] truncate">
+                      {folderName ?? "Workspace"}
+                    </span>
                   </Button>
                 }
               />
@@ -797,10 +1056,14 @@ export function Composer({
                 className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
                 onClick={onOpenFolder}
                 disabled={!workspace?.folderPath}
-                aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
+                aria-label={
+                  workspace?.folderPath ? "Open folder in Finder" : "Workspace"
+                }
               >
                 <Folder className="size-4 shrink-0" />
-                <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
+                <span className="max-w-[16rem] truncate">
+                  {folderName ?? "Workspace"}
+                </span>
               </Button>
             )}
             {/* Execution location — Pi runs locally on this Mac. */}
@@ -833,6 +1096,65 @@ export function Composer({
           </div>
 
           <div className="composer-shell relative z-10 -mt-1 rounded-2xl bg-popover p-2.5 shadow-composer outline outline-1 outline-field/80">
+            {selectedSkill ? (
+              <div className="mb-1.5 flex items-center px-1.5">
+                <div
+                  className={cn(
+                    "flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-small",
+                    selectedSkillState?.state === "valid"
+                      ? "border-accent/25 bg-accent/10 text-primary"
+                      : selectedSkillState?.state === "checking"
+                        ? "border-field bg-control text-secondary"
+                        : "border-support-warning/35 bg-support-warning/10 text-primary",
+                  )}
+                  title={
+                    selectedSkillState?.state === "valid"
+                      ? `${skillSourceLabel(selectedSkill.invocation.source)} skill`
+                      : selectedSkillState?.reason
+                  }
+                >
+                  {selectedSkillState?.state === "checking" ? (
+                    <Loader2
+                      aria-hidden="true"
+                      className="size-3.5 shrink-0 animate-spin"
+                    />
+                  ) : (
+                    <Sparkles
+                      aria-hidden="true"
+                      className="size-3.5 shrink-0 text-accent"
+                    />
+                  )}
+                  <span className="truncate font-medium">
+                    {selectedSkill.invocation.displayName}
+                  </span>
+                  <span className="shrink-0 text-mini text-tertiary">
+                    {selectedSkillState?.state === "valid"
+                      ? skillSourceLabel(selectedSkill.invocation.source)
+                      : selectedSkillState?.state === "checking"
+                        ? "Checking"
+                        : "Unavailable"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      dispatchSkillSelection({ type: "remove" });
+                      requestAnimationFrame(() =>
+                        inputRef?.current?.focus({ preventScroll: true }),
+                      );
+                    }}
+                    aria-label={`Remove ${selectedSkill.invocation.displayName} skill from message`}
+                    className="-mr-1 rounded-full p-0.5 text-tertiary transition-colors hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:text-primary"
+                  >
+                    <X aria-hidden="true" className="size-3.5" />
+                  </button>
+                </div>
+                <span className="sr-only" role="status" aria-live="polite">
+                  {selectedSkillState?.state === "valid"
+                    ? `${selectedSkill.invocation.displayName} skill selected.`
+                    : selectedSkillState?.reason}
+                </span>
+              </div>
+            ) : null}
             {attachments.length > 0 ? (
               <div className="mb-1.5 flex flex-wrap gap-2 px-1.5">
                 {attachments.map((a) => (
@@ -849,7 +1171,9 @@ export function Composer({
                     ) : (
                       <FileText className="size-4 shrink-0 text-tertiary" />
                     )}
-                    <span className="max-w-[10rem] truncate text-small">{a.name}</span>
+                    <span className="max-w-[10rem] truncate text-small">
+                      {a.name}
+                    </span>
                     <button
                       type="button"
                       onClick={() => removeAttachment(a.id)}
@@ -896,8 +1220,12 @@ export function Composer({
               }}
               onFocus={markSlashInteraction}
               aria-autocomplete={slashSession ? "list" : undefined}
-              aria-controls={slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined}
-              aria-activedescendant={slashSession ? effectiveActiveSlashId : undefined}
+              aria-controls={
+                slashSession ? COMPOSER_SLASH_PALETTE_ID : undefined
+              }
+              aria-activedescendant={
+                slashSession ? effectiveActiveSlashId : undefined
+              }
               placeholder={composerPlaceholder({
                 ready,
                 readinessMessage,
@@ -908,7 +1236,13 @@ export function Composer({
               rows={1}
             />
             {!ready && readinessMessage && text.trim().length > 0 ? (
-              <Text as="p" role="status" variant="small" color="tertiary" className="px-1.5 pb-1">
+              <Text
+                as="p"
+                role="status"
+                variant="small"
+                color="tertiary"
+                className="px-1.5 pb-1"
+              >
                 {readinessMessage}
               </Text>
             ) : null}
@@ -920,11 +1254,21 @@ export function Composer({
                   iconOnly
                   className="rounded-full"
                   onClick={handleAttach}
-                  disabled={attaching || isGenerating || sending || gitOperationBusy}
-                  aria-label="Attach files or images"
+                  disabled={
+                    attaching || isGenerating || sending || gitOperationBusy
+                  }
+                  aria-label={
+                    attaching
+                      ? "Choosing or loading attachments"
+                      : "Attach files or images"
+                  }
+                  aria-busy={attaching || undefined}
                 >
                   {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
                 </Button>
+                <span className="sr-only" role="status" aria-live="polite">
+                  {attachmentStatus}
+                </span>
                 <DropdownMenu
                   open={permissionMenuOpen}
                   onOpenChange={(open) => {
@@ -970,7 +1314,9 @@ export function Composer({
                         gitOperationBusy ||
                         Boolean(workspaceChangeBlockedReason)
                       }
-                      onCheckedChange={(checked) => checked && requestPermission("full")}
+                      onCheckedChange={(checked) =>
+                        checked && requestPermission("full")
+                      }
                     >
                       Full access
                     </DropdownMenuCheckboxItem>
@@ -982,7 +1328,9 @@ export function Composer({
                         gitOperationBusy ||
                         Boolean(workspaceChangeBlockedReason)
                       }
-                      onCheckedChange={(checked) => checked && requestPermission("ask")}
+                      onCheckedChange={(checked) =>
+                        checked && requestPermission("ask")
+                      }
                     >
                       Ask first
                     </DropdownMenuCheckboxItem>
@@ -994,7 +1342,9 @@ export function Composer({
                         gitOperationBusy ||
                         Boolean(workspaceChangeBlockedReason)
                       }
-                      onCheckedChange={(checked) => checked && requestPermission("none")}
+                      onCheckedChange={(checked) =>
+                        checked && requestPermission("none")
+                      }
                     >
                       No access
                     </DropdownMenuCheckboxItem>
@@ -1052,8 +1402,12 @@ export function Composer({
                   size="small"
                   iconOnly
                   disabled={voice.transcribing || isGenerating || sending}
-                  onClick={() => (voice.recording ? voice.stop() : voice.start())}
-                  aria-label={voice.recording ? "Stop recording" : "Start voice input"}
+                  onClick={() =>
+                    voice.recording ? voice.stop() : voice.start()
+                  }
+                  aria-label={
+                    voice.recording ? "Stop recording" : "Start voice input"
+                  }
                 >
                   {voice.transcribing ? (
                     <Loader2 className="animate-spin" />
@@ -1095,8 +1449,8 @@ export function Composer({
         description={
           <Text variant="small" color="secondary">
             Aiden will be able to read and edit files, and run commands in “
-            {folderName ?? "this workspace"}” without asking each time. You can change this any time
-            from the composer.
+            {folderName ?? "this workspace"}” without asking each time. You can
+            change this any time from the composer.
           </Text>
         }
         confirmLabel="Enable Full Access"

@@ -76,6 +76,7 @@ import {
   type AnthropicThinkingLevel,
 } from "../shared/anthropic-thinking";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
+import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { mergeSubagentSnapshots } from "../lib/subagent-view-state";
 import { visibleSubagentReferences } from "../lib/subagent-feature-gate";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
@@ -88,6 +89,8 @@ import {
   isSubagentShellApprovalDetails,
   isSubagentWorkspaceWriteApprovalDetails,
 } from "../shared/assistant";
+import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
+import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -106,11 +109,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const providers = useProviders();
+  const documentAppendReconciliationRequired = useAppendReconciliationRequired();
   const chat = useChat(chatId);
   const settings = useSettings();
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
+  const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] =
+    React.useState<ReadonlySet<string>>(() => new Set());
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
@@ -175,9 +181,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
     ? "Loading chat…"
     : chat.isError
       ? "This chat could not be loaded. Try again."
-      : detachedGenerationDraining
-        ? "Finishing the previous response…"
-        : undefined;
+      : documentAppendReconciliationRequired || appendReconciliationRequiredChats.has(chatId)
+        ? "Message save status is unknown. Reload Aiden before sending another message."
+        : detachedGenerationDraining
+          ? "Finishing the previous response…"
+          : undefined;
   const ready = modelReady && !computerUseReadinessMessage && !chatReadinessMessage;
   const readinessMessage =
     chatReadinessMessage ?? modelReadinessMessage ?? computerUseReadinessMessage;
@@ -334,8 +342,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () =>
       [...messages]
         .reverse()
-        .find((message) => message.role === "assistant" && message.content.trim())
-        ?.content,
+        .find((message) => message.role === "assistant" && message.content.trim())?.content,
     [messages],
   );
   const subagentReferences = React.useMemo(
@@ -397,7 +404,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, []);
 
   const runGeneration = React.useCallback(
-    (history: Chat["messages"], messageTurnId: string) => {
+    (messageTurnId: string) => {
       const generationIntent = generationIntentRef.current;
       setError(null);
       setIsStoppingGeneration(false);
@@ -449,11 +456,6 @@ export function ChatPane({ chatId }: { chatId: string }) {
               : anthropicThinkingSupported
                 ? anthropicThinkingLevel
                 : undefined,
-          messages: history.map((m) => ({
-            role: m.role,
-            content: m.content,
-            attachments: m.attachments,
-          })),
         },
         {
           onDelta: (delta) => {
@@ -609,6 +611,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         messageTurnId,
       );
       generationRef.current = handle;
+      return handle.started;
     },
     [
       chatId,
@@ -626,7 +629,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const handleSend = React.useCallback(
-    async (text: string, attachments: Attachment[]) => {
+    async (text: string, attachments: Attachment[], skillInvocation?: SkillInvocationV1) => {
       if (computerUseSaving) {
         throw new Error("Wait for the Computer Use setting to finish saving before sending.");
       }
@@ -638,22 +641,41 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStoppingGeneration(false);
       setIsStartingGeneration(true);
       try {
-        const updated = await chatsApi.appendMessage(
-          chatId,
-          {
-            role: "user",
-            content: text,
-            attachments: attachments.length ? attachments : undefined,
-          },
-          { providerId, model, autoTitle: true, turnId: messageTurnId },
-        );
+        let updated: Chat;
+        try {
+          updated = await chatsApi.appendMessage(
+            chatId,
+            {
+              role: "user",
+              content: text,
+              attachments: attachments.length ? attachments : undefined,
+            },
+            { providerId, model, autoTitle: true, turnId: messageTurnId, skillInvocation },
+          );
+        } catch (appendError) {
+          if (isAppendReconciliationRequired(appendError)) {
+            setAppendReconciliationRequiredChats((current) => new Set(current).add(chatId));
+            void qc.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+          }
+          throw appendError;
+        }
         qc.setQueryData(queryKeys.chat(chatId), updated);
         void qc.invalidateQueries({ queryKey: queryKeys.chats });
         if (generationIntentRef.current !== generationIntent) {
-          await chatsApi.abandonTurn(chatId, messageTurnId);
+          try {
+            await chatsApi.abandonTurn(chatId, messageTurnId);
+          } catch (error) {
+            if (mountedRef.current) {
+              setError(error instanceof Error ? error.message : String(error));
+            }
+          }
           return;
         }
-        runGeneration(updated.messages, messageTurnId);
+        const started = await runGeneration(messageTurnId);
+        // The user message crossed its durability barrier in appendMessage.
+        // Start rejection is surfaced by the stream callback but cannot turn
+        // that committed message back into an unsent composer payload.
+        if (!started.ok && mountedRef.current) setError(started.error.message);
       } finally {
         if (
           mountedRef.current &&
@@ -876,6 +898,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
+      if (documentAppendReconciliationRequired) {
+        throw new Error("Reload Aiden before changing this chat's workspace.");
+      }
       if (!isNewChat) throw new Error("Only a new chat can change workspaces.");
       if (environmentPanel.gitOperationBusy) {
         throw new Error(
@@ -897,6 +922,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [
       effectiveWorkspaceId,
       chatId,
+      documentAppendReconciliationRequired,
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
@@ -907,6 +933,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   );
 
   const createScratchWorkspace = React.useCallback(async () => {
+    if (documentAppendReconciliationRequired) {
+      throw new Error("Reload Aiden before creating a scratch workspace from this chat.");
+    }
     if (!isNewChat) throw new Error("Start a new chat before choosing a scratch folder.");
     if (environmentPanel.editorState.dirty)
       throw new Error("Save or discard the open file's edits before creating a scratch workspace.");
@@ -922,6 +951,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
     await moveNewChatToWorkspace(workspace.id);
   }, [
+    documentAppendReconciliationRequired,
     environmentPanel.editorState.dirty,
     environmentPanel.editorState.saving,
     environmentPanel.gitOperationBusy,
@@ -932,6 +962,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
+      if (documentAppendReconciliationRequired) {
+        throw new Error("Reload Aiden before creating a worktree from this chat.");
+      }
       if (!effectiveWorkspace) throw new Error("Choose a Git workspace first.");
       if (isGenerating || isStartingGeneration)
         throw new Error("Stop the current response before changing Git workspaces.");
@@ -956,6 +989,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [
       effectiveWorkspace,
+      documentAppendReconciliationRequired,
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
@@ -1229,7 +1263,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onCreateGitWorktree={createGitWorktree}
             onGitOperationBusyChange={environmentPanel.setGitOperationBusy}
             gitOperationBusy={environmentPanel.gitOperationBusy}
-            workspaceChangeBlockedReason={settingsBlockedReason}
+            workspaceChangeBlockedReason={
+              documentAppendReconciliationRequired
+                ? "Reload Aiden before changing this chat's workspace."
+                : settingsBlockedReason
+            }
             gitMutationBlockedReason={environmentPanel.gitMutationBlockedReason ?? undefined}
             gitWorktreeDescription={
               isNewChat

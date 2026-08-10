@@ -11,7 +11,12 @@ interface FakeBridge {
   invokes: Array<{ channel: string; args: unknown[] }>;
 }
 
-function installFakeBridge(options: { rejectStart?: boolean } = {}): {
+function installFakeBridge(
+  options: {
+    rejectStart?: boolean;
+    startResponse?: { accepted: boolean; started: boolean; error?: string };
+  } = {},
+): {
   bridge: FakeBridge;
   restore: () => void;
 } {
@@ -28,7 +33,14 @@ function installFakeBridge(options: { rejectStart?: boolean } = {}): {
           if (channel === "chat:start" && options.rejectStart) {
             throw new Error("Generation start rejected.");
           }
-          return channel === "chat:start" ? { streamId: args[0] } : undefined;
+          return channel === "chat:start"
+            ? {
+                streamId: args[0],
+                accepted: true,
+                started: true,
+                ...options.startResponse,
+              }
+            : undefined;
         },
         onNotification: (channel: string, handler: (payload: unknown) => void) => {
           const handlers = bridge.listeners.get(channel) ?? new Set();
@@ -74,7 +86,6 @@ test("lifecycle cancellation releases every stream subscription immediately", as
         workspaceId: "workspace-1",
         providerId: "provider-1",
         model: "model-1",
-        messages: [],
       },
       callbacks(),
       "turn-1",
@@ -93,6 +104,69 @@ test("lifecycle cancellation releases every stream subscription immediately", as
     );
   } finally {
     restore();
+  }
+});
+
+test("generation exposes a non-rejecting authoritative start result", async () => {
+  const accepted = installFakeBridge();
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-accepted",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-accepted",
+    );
+    assert.deepEqual(await handle.started, { ok: true });
+    handle.cancel("lifecycle");
+  } finally {
+    accepted.restore();
+  }
+
+  const rejected = installFakeBridge({ rejectStart: true });
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-rejected-result",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-rejected-result",
+    );
+    const result = await handle.started;
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.match(result.error.message, /start rejected/iu);
+  } finally {
+    rejected.restore();
+  }
+});
+
+test("a post-handoff setup failure reports the error but keeps the committed send accepted", async () => {
+  const failure = installFakeBridge({
+    startResponse: { accepted: true, started: false, error: "Provider setup failed." },
+  });
+  const errors: string[] = [];
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-accepted-failure",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onError: (message) => errors.push(message) },
+      "turn-accepted-failure",
+    );
+    assert.deepEqual(await handle.started, { ok: true });
+    assert.deepEqual(errors, ["Provider setup failed."]);
+    assert.equal(listenerCount(failure.bridge), 0);
+  } finally {
+    failure.restore();
   }
 });
 
@@ -123,7 +197,6 @@ test("user Stop retains terminal delivery before releasing subscriptions", () =>
         workspaceId: "workspace-1",
         providerId: "provider-1",
         model: "model-1",
-        messages: [],
       },
       callbacks(),
       "turn-2",
@@ -150,7 +223,6 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
         workspaceId: "workspace-1",
         providerId: "provider-1",
         model: "model-1",
-        messages: [],
       },
       callbacks(),
       "turn-disabled",
@@ -164,7 +236,6 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
         workspaceId: "workspace-1",
         providerId: "provider-1",
         model: "model-1",
-        messages: [],
       },
       {
         ...callbacks(),
@@ -191,7 +262,6 @@ test("approval details are forwarded only to their owning stream", () => {
         providerId: "provider-1",
         model: "model-1",
         mode: "assistant",
-        messages: [],
       },
       {
         ...callbacks(),
@@ -269,7 +339,6 @@ test("a lifecycle-detached start rejection clears through authoritative fallback
         workspaceId: "workspace-1",
         providerId: "provider-1",
         model: "model-1",
-        messages: [],
       },
       {
         ...callbacks(),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
 import test from "node:test";
 import {
   SLASH_COMMANDS,
@@ -6,8 +7,11 @@ import {
   SkillInvocationError,
   parseSkillCatalog,
   parseSkillInvocationV1,
+  parseSkillProvenanceV1,
   skillProvenance,
 } from "./slash-commands.js";
+
+const source = fs.readFileSync(new URL("./slash-commands.ts", import.meta.url), "utf8");
 
 const invocationId = (character = "a") => `sk1_${character.repeat(43)}`;
 
@@ -95,6 +99,35 @@ test("skill invocation parser requires an exact opaque reference", () => {
   }
 });
 
+test("skill invocation exact-key checks do not join attacker-controlled field names", () => {
+  const hugeKey = "x".repeat(2 * 1024 * 1024);
+  assert.throws(
+    () =>
+      parseSkillInvocationV1({
+        version: 1,
+        invocationId: `sk1_${"a".repeat(43)}`,
+        displayName: "Review",
+        source: "global",
+        [hugeKey]: true,
+      }),
+    (error: unknown) => error instanceof Error && error.message.length < 100,
+  );
+  assert.doesNotMatch(source, /Object\.keys\(value\)\.sort\(\)\.join/u);
+});
+
+test("skill invocation rejects huge display hints before normalization", () => {
+  assert.throws(
+    () =>
+      parseSkillInvocationV1({
+        version: 1,
+        invocationId: invocationId(),
+        displayName: "x".repeat(1_000_000),
+        source: "workspace",
+      }),
+    (error: unknown) => error instanceof SkillInvocationError && error.code === "invalid_reference",
+  );
+});
+
 test("catalog parser is exact, bounded, unique, and strips no hidden internal object", () => {
   const entry = {
     invocationId: invocationId(),
@@ -117,4 +150,18 @@ test("persisted skill provenance contains display metadata only", () => {
   assert.deepEqual(provenance, { version: 1, name: "Review", source: "configured" });
   const serialized = JSON.stringify(provenance);
   assert.doesNotMatch(serialized, /invocationId|instructions|path|tool|secret/u);
+});
+
+test("persisted skill provenance is exact, bounded, and fail-closed", () => {
+  const provenance = { version: 1 as const, name: "Review", source: "workspace" as const };
+  assert.deepEqual(parseSkillProvenanceV1(provenance), provenance);
+  assert.equal(parseSkillProvenanceV1({ ...provenance, invocationId: "private" }), undefined);
+  assert.equal(parseSkillProvenanceV1({ ...provenance, name: "bad\u202e" }), undefined);
+  assert.equal(
+    parseSkillProvenanceV1({
+      ...provenance,
+      name: "x".repeat(SLASH_LIMITS.safeNameCharacters + 1),
+    }),
+    undefined,
+  );
 });

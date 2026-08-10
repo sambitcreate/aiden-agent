@@ -8,6 +8,7 @@ import type { GenerationTimeline } from "../../renderer/shared/generation-timeli
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
+import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -187,6 +188,8 @@ export interface ChatMessage {
   reasoning?: string;
   /** Files attached to a user message. */
   attachments?: Attachment[];
+  /** Safe display-only provenance for an explicitly invoked skill. */
+  skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Bounded references to separately persisted renderer-safe child run records. */

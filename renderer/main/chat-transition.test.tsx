@@ -92,6 +92,62 @@ test("a stale send cannot clear the next chat's starting-generation guard", () =
   );
 });
 
+test("a committed append is not presented as unsent when generation start later fails", () => {
+  const pane = source("./chat-pane.tsx");
+  const handleSend = between(
+    pane,
+    "const handleSend = React.useCallback(",
+    "const handleStop = React.useCallback",
+  );
+  const append = handleSend.indexOf("await chatsApi.appendMessage(");
+  const start = handleSend.indexOf("await runGeneration(messageTurnId)");
+  assert.ok(append >= 0 && start > append);
+  assert.match(handleSend, /if \(!started\.ok && mountedRef\.current\) setError/u);
+  assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
+});
+
+test("an indeterminate append blocks retries until an application reload reconciles storage", () => {
+  const pane = source("./chat-pane.tsx");
+  assert.match(pane, /isAppendReconciliationRequired\(appendError\)/u);
+  assert.match(
+    pane,
+    /setAppendReconciliationRequiredChats\(\(current\) => new Set\(current\)\.add\(chatId\)\)/u,
+  );
+  assert.match(pane, /appendReconciliationRequiredChats\.has\(chatId\)/u);
+  assert.match(pane, /Reload Aiden before sending another message/u);
+  assert.doesNotMatch(
+    between(pane, "// Reset transient state when switching chats.", "}, [chatId]);"),
+    /setAppendReconciliationRequiredChats/u,
+  );
+});
+
+test("append reconciliation is surfaced across route remounts and chat creation paths", () => {
+  const root = source("./root-view.tsx");
+  const layout = source("./chat-layout.tsx");
+  const sidebar = source("../components/chat-sidebar.tsx");
+  assert.match(root, /useAppendReconciliationRequired\(\)/u);
+  assert.match(root, /duration: Infinity/u);
+  assert.match(layout, /appendReconciliationRequired \?/u);
+  assert.match(layout, /\.catch\(\(error: unknown\)/u);
+  assert.match(sidebar, /disabled=\{!activeId \|\| appendReconciliationRequired\}/u);
+  assert.match(sidebar, /Aiden could not create a chat/u);
+  assert.match(sidebar, /list\.length === 0 && appendReconciliationRequired/u);
+  assert.match(sidebar, /workspaceSwitchBlocked \|\| appendReconciliationRequired/u);
+  assert.match(sidebar, /enterWorkspace\(id\)\.catch/u);
+  const pane = source("./chat-pane.tsx");
+  const worktreeGuard = pane.indexOf("if (documentAppendReconciliationRequired)");
+  const worktreeMutation = pane.indexOf("gitApi.createWorktree(", worktreeGuard);
+  assert.ok(worktreeGuard >= 0 && worktreeMutation > worktreeGuard);
+  const scratchGuard = pane.indexOf(
+    "if (documentAppendReconciliationRequired)",
+    pane.indexOf("const createScratchWorkspace"),
+  );
+  const scratchMutation = pane.indexOf("workspacesApi.createScratch(", scratchGuard);
+  assert.ok(scratchGuard >= 0 && scratchMutation > scratchGuard);
+  assert.match(pane, /workspaceChangeBlockedReason=\{[\s\S]{0,180}documentAppendReconciliationRequired/u);
+  assert.match(pane, /documentAppendReconciliationRequired \|\| appendReconciliationRequiredChats/u);
+});
+
 test("composer stays keyed so drafts and attachments do not leak between chats", () => {
   const pane = source("./chat-pane.tsx");
   const composer = between(pane, "<Composer", "readinessMessage=");

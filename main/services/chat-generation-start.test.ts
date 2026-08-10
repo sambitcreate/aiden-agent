@@ -66,6 +66,7 @@ test("rapid A to B to A navigation cannot append a newer user turn while A drain
       return true;
     } finally {
       turn.release();
+      turn.settleAsyncWork();
     }
   };
 
@@ -88,6 +89,7 @@ test("rapid A to B to A navigation cannot append a newer user turn while A drain
   assert.equal(admission.isAdmitted("chat-b"), false);
 
   append.release();
+  append.settleAsyncWork();
   append.release();
   assert.equal(admission.isAdmitted("chat-a"), false);
   assert.ok(admission.tryBegin("chat-a", "turn-4", "scheduler", false));
@@ -98,6 +100,7 @@ test("turn lease hands off only to the exact owner after generation is registere
   const lease = admission.tryBegin("chat-a", "turn-1", "renderer-document-1", false);
   assert.ok(lease);
   const events: string[] = [];
+  lease.settleAsyncWork();
 
   assert.equal(
     admission.handoff("chat-a", "wrong-turn", "renderer-document-1", () => {
@@ -127,6 +130,7 @@ test("renderer and scheduler turns cannot interleave or orphan their transcript 
   const renderer = admission.tryBegin("chat-a", "renderer-1", "renderer-document", generationBusy);
   assert.ok(renderer);
   messages.push("renderer-user");
+  renderer.settleAsyncWork();
   assert.equal(admission.tryBegin("chat-a", "schedule-1", "scheduled-owner", generationBusy), null);
 
   assert.equal(
@@ -143,6 +147,7 @@ test("renderer and scheduler turns cannot interleave or orphan their transcript 
   assert.ok(scheduled);
   messages.push("scheduled-output");
   scheduled.release();
+  scheduled.settleAsyncWork();
   assert.deepEqual(messages, ["renderer-user", "renderer-assistant", "scheduled-output"]);
 });
 
@@ -150,6 +155,7 @@ test("throwing generation registration fails closed until the owner releases", (
   const admission = new ChatTurnAdmission();
   const lease = admission.tryBegin("chat-a", "turn-1", "renderer", false);
   assert.ok(lease);
+  lease.settleAsyncWork();
   assert.throws(
     () =>
       admission.handoff("chat-a", "turn-1", "renderer", () => {

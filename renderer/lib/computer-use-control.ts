@@ -19,6 +19,7 @@ export interface ComposerSubmissionStateInput {
   permissionSaving: boolean;
   computerUseSaving: boolean;
   gitOperationBusy: boolean;
+  attaching: boolean;
 }
 
 /** One gate shared by the Send button and Enter-key submission path. */
@@ -29,7 +30,8 @@ export function composerSubmissionAllowed(input: ComposerSubmissionStateInput): 
     !input.sending &&
     !input.permissionSaving &&
     !input.computerUseSaving &&
-    !input.gitOperationBusy
+    !input.gitOperationBusy &&
+    !input.attaching
   );
 }
 
