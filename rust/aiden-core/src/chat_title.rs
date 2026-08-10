@@ -404,6 +404,14 @@ pub enum ChatTitleProviderId {
 }
 
 impl ChatTitleProviderId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChatTitleProviderId::Automatic => "automatic",
+            ChatTitleProviderId::AppleFoundationModels => "apple-foundation-models",
+            ChatTitleProviderId::ChatModel => "chat-model",
+        }
+    }
+
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
             "automatic" => Some(ChatTitleProviderId::Automatic),
