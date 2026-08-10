@@ -122,8 +122,14 @@ export interface ProviderAuthBackend {
   logout(): Promise<void>;
 }
 
+export interface ProviderLogoutBackend {
+  snapshot(): Promise<unknown>;
+  logout(): Promise<void>;
+  committedFallback?(): unknown;
+}
+
 export interface ProviderAuthDiagnostic {
-  operation: "login" | "open_external";
+  operation: "login" | "logout" | "open_external";
   providerId: string;
   errorName: string;
   errorCode?: string;
@@ -131,6 +137,7 @@ export interface ProviderAuthDiagnostic {
 
 export interface ProviderAuthFlowDependencies {
   backendFor(providerId: string, authType: AuthType): ProviderAuthBackend;
+  logoutBackendFor?(providerId: string): ProviderLogoutBackend;
   openExternal(url: string): Promise<void>;
   diagnostic?(event: ProviderAuthDiagnostic): void;
   flowTimeoutMs?: number;
@@ -607,9 +614,24 @@ export class ProviderAuthFlowCoordinator {
     });
     this.logoutCompletion = logoutCompletion;
     try {
-      const backend = this.dependencies.backendFor(validProviderId, "oauth");
-      await backend.logout();
-      return await backend.snapshot();
+      let backend: ProviderLogoutBackend | ProviderAuthBackend;
+      try {
+        backend =
+          this.dependencies.logoutBackendFor?.(validProviderId) ??
+          this.dependencies.backendFor(validProviderId, "oauth");
+        await backend.logout();
+      } catch (error) {
+        this.reportDiagnostic("logout", validProviderId, error);
+        throw new ProviderAuthRequestError("Provider sign-out did not complete. Try again.");
+      }
+      try {
+        return await backend.snapshot();
+      } catch (error) {
+        const committedFallback =
+          "committedFallback" in backend ? backend.committedFallback : undefined;
+        if (!committedFallback) throw error;
+        return committedFallback();
+      }
     } finally {
       this.logoutInProgress = false;
       resolveLogout();

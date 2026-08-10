@@ -8,6 +8,7 @@ import type { GenerationTimeline } from "../../renderer/shared/generation-timeli
 import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.js";
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
+import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -64,6 +65,8 @@ export interface StoredProvider {
 /** Provider as exposed to the renderer — `hasKey` is derived, the key itself never leaves the backend. */
 export interface Provider extends StoredProvider {
   hasKey: boolean;
+  /** True only when Aiden owns a stored credential it can remove. */
+  canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
   /** Pi-owned setup options. No credentials or provider environment values cross IPC. */
@@ -187,6 +190,8 @@ export interface ChatMessage {
   reasoning?: string;
   /** Files attached to a user message. */
   attachments?: Attachment[];
+  /** Safe display-only provenance for an explicitly invoked skill. */
+  skill?: SkillProvenanceV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Bounded references to separately persisted renderer-safe child run records. */

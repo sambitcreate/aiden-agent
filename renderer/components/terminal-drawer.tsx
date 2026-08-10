@@ -6,16 +6,21 @@ import * as React from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Minus, PanelBottomClose, Plus, SquareSplitHorizontal, SquareSplitVertical, TerminalSquare, X } from "lucide-react";
+import {
+  Minus,
+  PanelBottomClose,
+  Plus,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 import { Button, Text, toast } from "./ui";
 import { cn } from "../lib/ui-utils";
 import { onNotification, terminalApi, type TerminalSession } from "../lib/ipc";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
-import {
-  useShortcutBinding,
-  useShortcutLabel,
-} from "../lib/command-system";
+import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 
 const MIN_DRAWER_HEIGHT = 152;
@@ -24,6 +29,7 @@ const MIN_CHAT_HEIGHT = 320;
 const DEFAULT_DRAWER_HEIGHT = 232;
 const MAX_PANES = 4;
 const HEIGHT_STORAGE_KEY = "aiden-agent.terminal-height-v2";
+const TERMINAL_DRAWER_MOTION_MS = 300;
 
 type SplitDirection = "single" | "horizontal" | "vertical";
 
@@ -50,7 +56,10 @@ const TerminalContext = React.createContext<TerminalContextValue | null>(null);
 function maxDrawerHeight(): number {
   return Math.max(
     MIN_DRAWER_HEIGHT,
-    Math.min(Math.floor(window.innerHeight * MAX_DRAWER_RATIO), window.innerHeight - MIN_CHAT_HEIGHT),
+    Math.min(
+      Math.floor(window.innerHeight * MAX_DRAWER_RATIO),
+      window.innerHeight - MIN_CHAT_HEIGHT,
+    ),
   );
 }
 
@@ -93,7 +102,10 @@ function terminalTheme() {
     background,
     foreground,
     cursor: appearanceValue("--terminal-cursor", "#0a84ff"),
-    selectionBackground: appearanceValue("--terminal-selection", dark ? "rgb(10 132 255 / 0.3)" : "rgb(10 132 255 / 0.2)"),
+    selectionBackground: appearanceValue(
+      "--terminal-selection",
+      dark ? "rgb(10 132 255 / 0.3)" : "rgb(10 132 255 / 0.2)",
+    ),
     black: appearanceValue("--terminal-black", dark ? "#252a31" : "#34373b"),
     red,
     green,
@@ -148,7 +160,10 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
   React.useEffect(() => {
     const removeExited = ({ sessionId }: { sessionId: string }) => {
       setSessions((previous) => previous.filter((session) => session.id !== sessionId));
-      setLayout((previous) => ({ ...previous, ids: previous.ids.filter((id) => id !== sessionId) }));
+      setLayout((previous) => ({
+        ...previous,
+        ids: previous.ids.filter((id) => id !== sessionId),
+      }));
       setActiveId((previous) => (previous === sessionId ? undefined : previous));
     };
     return onNotification("terminal:exit", removeExited);
@@ -158,7 +173,9 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     if (creatingRef.current) return creatingRef.current;
     const pending = (async () => {
       if (!active?.folderPath || active.permission === "none") {
-        toast.error("Choose a folder workspace and enable workspace access before opening a terminal.");
+        toast.error(
+          "Choose a folder workspace and enable workspace access before opening a terminal.",
+        );
         return undefined;
       }
       try {
@@ -185,29 +202,43 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     setLayout({ direction: "single", ids: [session.id] });
   }, [create]);
 
-  const split = React.useCallback(async (direction: Exclude<SplitDirection, "single">) => {
-    const base = activeId && layout.ids.includes(activeId) ? layout.ids : activeId ? [activeId] : [];
-    if (base.length >= MAX_PANES) {
-      toast.info(`A terminal group can show up to ${MAX_PANES} panes.`);
-      return;
-    }
-    const session = await create();
-    if (!session) return;
-    setLayout({ direction, ids: [...base, session.id] });
-  }, [activeId, create, layout.ids]);
+  const split = React.useCallback(
+    async (direction: Exclude<SplitDirection, "single">) => {
+      const base =
+        activeId && layout.ids.includes(activeId) ? layout.ids : activeId ? [activeId] : [];
+      if (base.length >= MAX_PANES) {
+        toast.info(`A terminal group can show up to ${MAX_PANES} panes.`);
+        return;
+      }
+      const session = await create();
+      if (!session) return;
+      setLayout({ direction, ids: [...base, session.id] });
+    },
+    [activeId, create, layout.ids],
+  );
 
   const close = React.useCallback((id: string) => {
     void terminalApi.close(id).catch(() => undefined);
     setSessions((previous) => previous.filter((session) => session.id !== id));
-    setLayout((previous) => ({ ...previous, ids: previous.ids.filter((sessionId) => sessionId !== id) }));
-    setActiveId((previous) => previous === id ? sessionsRef.current.find((session) => session.id !== id)?.id : previous);
+    setLayout((previous) => ({
+      ...previous,
+      ids: previous.ids.filter((sessionId) => sessionId !== id),
+    }));
+    setActiveId((previous) =>
+      previous === id ? sessionsRef.current.find((session) => session.id !== id)?.id : previous,
+    );
   }, []);
 
   const toggle = React.useCallback(() => {
     if (open) {
-      const hadTerminalFocus = document.activeElement instanceof Element && document.activeElement.closest(".terminal-drawer");
+      const hadTerminalFocus =
+        document.activeElement instanceof Element &&
+        document.activeElement.closest(".terminal-drawer");
       setOpen(false);
-      if (hadTerminalFocus) requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-terminal-toggle]")?.focus());
+      if (hadTerminalFocus)
+        requestAnimationFrame(() =>
+          document.querySelector<HTMLElement>("[data-terminal-toggle]")?.focus(),
+        );
     } else if (sessions.length > 0) {
       setOpen(true);
     } else {
@@ -215,32 +246,55 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
     }
   }, [newTerminal, open, sessions.length]);
 
-  const value = React.useMemo<TerminalContextValue>(() => ({
-    open,
-    sessions,
-    activeId,
-    layout,
-    canOpen: Boolean(active?.folderPath && active.permission !== "none"),
-    toggle,
-    newTerminal,
-    split,
-    select: (id) => {
-      setActiveId(id);
-      setLayout((previous) => previous.ids.includes(id) ? previous : { direction: "single", ids: [id] });
-    },
-    close,
-  }), [active?.folderPath, active?.permission, activeId, close, layout, newTerminal, open, sessions, split, toggle]);
+  const value = React.useMemo<TerminalContextValue>(
+    () => ({
+      open,
+      sessions,
+      activeId,
+      layout,
+      canOpen: Boolean(active?.folderPath && active.permission !== "none"),
+      toggle,
+      newTerminal,
+      split,
+      select: (id) => {
+        setActiveId(id);
+        setLayout((previous) =>
+          previous.ids.includes(id) ? previous : { direction: "single", ids: [id] },
+        );
+      },
+      close,
+    }),
+    [
+      active?.folderPath,
+      active?.permission,
+      activeId,
+      close,
+      layout,
+      newTerminal,
+      open,
+      sessions,
+      split,
+      toggle,
+    ],
+  );
 
   return <TerminalContext.Provider value={value}>{children}</TerminalContext.Provider>;
 }
 
 export function useWorkspaceTerminal(): TerminalContextValue {
   const context = React.useContext(TerminalContext);
-  if (!context) throw new Error("useWorkspaceTerminal must be used inside WorkspaceTerminalProvider.");
+  if (!context)
+    throw new Error("useWorkspaceTerminal must be used inside WorkspaceTerminalProvider.");
   return context;
 }
 
-function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch }: {
+function TerminalViewport({
+  session,
+  active,
+  onFocus,
+  onUnavailable,
+  clearEpoch,
+}: {
   session: TerminalSession;
   active: boolean;
   onFocus: () => void;
@@ -287,24 +341,32 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
       lastSequence = event.sequence;
       xterm.write(event.data);
     };
-    const cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>("terminal:data", (event) => {
-      if (event.sessionId !== session.id) return;
-      if (!hydrated) queuedData.push(event);
-      else writeData(event);
-    });
-    void terminalApi.snapshot(session.id).then(({ buffer, sequence }) => {
-      if (xtermRef.current !== xterm) return;
-      if (buffer) xterm.write(buffer);
-      lastSequence = sequence;
-      hydrated = true;
-      for (const event of queuedData) writeData(event);
-      resize();
-    }).catch(() => {
-      // Electron's main process can restart during development. Remove the
-      // renderer-side tab instead of leaving an inert terminal pane behind.
-      onUnavailableRef.current();
-    });
-    const disposeInput = xterm.onData((data) => void terminalApi.write(session.id, data).catch(() => undefined));
+    const cancelData = onNotification<{ sessionId: string; sequence: number; data: string }>(
+      "terminal:data",
+      (event) => {
+        if (event.sessionId !== session.id) return;
+        if (!hydrated) queuedData.push(event);
+        else writeData(event);
+      },
+    );
+    void terminalApi
+      .snapshot(session.id)
+      .then(({ buffer, sequence }) => {
+        if (xtermRef.current !== xterm) return;
+        if (buffer) xterm.write(buffer);
+        lastSequence = sequence;
+        hydrated = true;
+        for (const event of queuedData) writeData(event);
+        resize();
+      })
+      .catch(() => {
+        // Electron's main process can restart during development. Remove the
+        // renderer-side tab instead of leaving an inert terminal pane behind.
+        onUnavailableRef.current();
+      });
+    const disposeInput = xterm.onData(
+      (data) => void terminalApi.write(session.id, data).catch(() => undefined),
+    );
     xterm.attachCustomKeyEventHandler((event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") return false;
       return true;
@@ -351,18 +413,23 @@ function TerminalViewport({ session, active, onFocus, onUnavailable, clearEpoch 
 }
 
 export function TerminalDrawer() {
-  const { open, sessions, activeId, layout, canOpen, toggle, newTerminal, split, select, close } = useWorkspaceTerminal();
+  const { open, sessions, activeId, layout, canOpen, toggle, newTerminal, split, select, close } =
+    useWorkspaceTerminal();
   const [height, setHeight] = React.useState(initialHeight);
   const toggleShortcut = useShortcutLabel("terminal.toggle");
   const toggleShortcutBinding = useShortcutBinding("terminal.toggle");
   const [clearEpoch, setClearEpoch] = React.useState(0);
+  const [present, setPresent] = React.useState(open);
   const resizeRef = React.useRef<{ startY: number; startHeight: number } | null>(null);
   const heightRef = React.useRef(height);
   heightRef.current = height;
   const visibleIds = layout.ids.filter((id) => sessions.some((session) => session.id === id));
-  const visibleSessions = visibleIds.length > 0
-    ? visibleIds.map((id) => sessions.find((session) => session.id === id)!).filter(Boolean)
-    : activeId ? sessions.filter((session) => session.id === activeId) : [];
+  const visibleSessions =
+    visibleIds.length > 0
+      ? visibleIds.map((id) => sessions.find((session) => session.id === id)!).filter(Boolean)
+      : activeId
+        ? sessions.filter((session) => session.id === activeId)
+        : [];
   const canSplit = visibleSessions.length < MAX_PANES;
 
   React.useEffect(() => {
@@ -371,6 +438,20 @@ export function TerminalDrawer() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  React.useEffect(() => {
+    if (open) {
+      setPresent(true);
+      return;
+    }
+    if (!present) return;
+    const reduceMotion = document.documentElement.dataset.reduceMotion === "true";
+    const timeout = window.setTimeout(
+      () => setPresent(false),
+      reduceMotion ? 0 : TERMINAL_DRAWER_MOTION_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [open, present]);
+
   const beginResize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -378,7 +459,9 @@ export function TerminalDrawer() {
   };
   const resize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!resizeRef.current) return;
-    setHeight(clampHeight(resizeRef.current.startHeight + resizeRef.current.startY - event.clientY));
+    setHeight(
+      clampHeight(resizeRef.current.startHeight + resizeRef.current.startY - event.clientY),
+    );
   };
   const endResize = () => {
     resizeRef.current = null;
@@ -401,13 +484,15 @@ export function TerminalDrawer() {
     }
   };
 
-  // T3 Code removes its drawer from the layout when closed rather than
-  // shrinking a still-painted terminal to zero. Keeping it mounted created a
-  // phantom dark surface at the bottom of Aiden's chat column.
-  if (!open) return null;
+  // Keep the surface only for its short exit curve, then remove it so a closed
+  // terminal cannot leave a phantom painted region at the bottom of the chat.
+  if (!present) return null;
 
   return (
     <section
+      inert={!open ? true : undefined}
+      aria-hidden={!open ? true : undefined}
+      data-state={open ? "open" : "closed"}
       className="terminal-drawer relative shrink-0 overflow-hidden border-t border-separator bg-popover"
       style={{ "--terminal-drawer-height": `${height}px` } as React.CSSProperties}
     >
@@ -428,7 +513,10 @@ export function TerminalDrawer() {
       />
       <div className="flex h-full min-h-0 flex-col">
         <header className="drag-region flex h-11 shrink-0 items-center gap-2 border-b border-separator px-3">
-          <div className="no-drag flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1" aria-label="Terminal tabs">
+          <div
+            className="no-drag flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-1"
+            aria-label="Terminal tabs"
+          >
             {sessions.map((session, index) => {
               const selected = activeId === session.id;
               return (
@@ -441,7 +529,12 @@ export function TerminalDrawer() {
                       : "border-transparent text-secondary hover:border-field/70 hover:bg-list-hover hover:text-primary",
                   )}
                 >
-                  <button type="button" onClick={() => select(session.id)} aria-current={selected ? "page" : undefined} className="flex min-w-0 items-center gap-1.5 rounded-md outline-none transition-shadow focus-visible:bg-list-selection focus-visible:outline-none">
+                  <button
+                    type="button"
+                    onClick={() => select(session.id)}
+                    aria-current={selected ? "page" : undefined}
+                    className="flex min-w-0 items-center gap-1.5 rounded-md outline-none transition-shadow focus-visible:bg-list-selection focus-visible:outline-none"
+                  >
                     <TerminalSquare className="size-3.5 shrink-0" />
                     <span className="max-w-28 truncate">{`Terminal ${index + 1}`}</span>
                   </button>
@@ -459,29 +552,85 @@ export function TerminalDrawer() {
                 </div>
               );
             })}
-            <Button variant="transparent" size="small" iconOnly onClick={() => void newTerminal()} disabled={!canOpen} aria-label="New terminal tab" title="New terminal tab">
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              onClick={() => void newTerminal()}
+              disabled={!canOpen}
+              aria-label="New terminal tab"
+              title="New terminal tab"
+            >
               <Plus />
             </Button>
           </div>
           <div className="no-drag flex shrink-0 items-center gap-0.5 border-l border-separator pl-2">
-            <Button variant="transparent" size="small" iconOnly onClick={() => void split("horizontal")} disabled={!canOpen || !canSplit || sessions.length === 0} aria-label="Split terminal horizontally" title="Split terminal horizontally">
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              onClick={() => void split("horizontal")}
+              disabled={!canOpen || !canSplit || sessions.length === 0}
+              aria-label="Split terminal horizontally"
+              title="Split terminal horizontally"
+            >
               <SquareSplitHorizontal />
             </Button>
-            <Button variant="transparent" size="small" iconOnly onClick={() => void split("vertical")} disabled={!canOpen || !canSplit || sessions.length === 0} aria-label="Split terminal vertically" title="Split terminal vertically">
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              onClick={() => void split("vertical")}
+              disabled={!canOpen || !canSplit || sessions.length === 0}
+              aria-label="Split terminal vertically"
+              title="Split terminal vertically"
+            >
               <SquareSplitVertical />
             </Button>
-            <Button variant="transparent" size="small" iconOnly onClick={() => setClearEpoch((value) => value + 1)} disabled={!activeId} aria-label="Clear terminal view" title="Clear terminal view">
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              onClick={() => setClearEpoch((value) => value + 1)}
+              disabled={!activeId}
+              aria-label="Clear terminal view"
+              title="Clear terminal view"
+            >
               <Minus />
             </Button>
-            <Button variant="transparent" size="small" iconOnly onClick={toggle} aria-label="Hide terminal" aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)} title={`Hide terminal (${toggleShortcut})`}>
+            <Button
+              variant="transparent"
+              size="small"
+              iconOnly
+              onClick={toggle}
+              aria-label="Hide terminal"
+              aria-keyshortcuts={ariaKeyShortcut(toggleShortcutBinding)}
+              title={`Hide terminal (${toggleShortcut})`}
+            >
               <PanelBottomClose />
             </Button>
           </div>
         </header>
         {visibleSessions.length > 0 ? (
-          <div className={cn("min-h-0 flex-1 gap-px bg-separator", layout.direction === "vertical" ? "grid grid-rows-[repeat(var(--terminal-panes),minmax(0,1fr))]" : layout.direction === "horizontal" ? "grid grid-cols-[repeat(var(--terminal-panes),minmax(0,1fr))]" : "block")} style={{ "--terminal-panes": visibleSessions.length } as React.CSSProperties}>
+          <div
+            className={cn(
+              "min-h-0 flex-1 gap-px bg-separator",
+              layout.direction === "vertical"
+                ? "grid grid-rows-[repeat(var(--terminal-panes),minmax(0,1fr))]"
+                : layout.direction === "horizontal"
+                  ? "grid grid-cols-[repeat(var(--terminal-panes),minmax(0,1fr))]"
+                  : "block",
+            )}
+            style={{ "--terminal-panes": visibleSessions.length } as React.CSSProperties}
+          >
             {visibleSessions.map((session) => (
-              <div key={session.id} className={cn("min-h-0 min-w-0 bg-popover", activeId === session.id && "ring-1 ring-inset ring-accent/35")}>
+              <div
+                key={session.id}
+                className={cn(
+                  "min-h-0 min-w-0 bg-popover",
+                  activeId === session.id && "ring-1 ring-inset ring-accent/35",
+                )}
+              >
                 <TerminalViewport
                   session={session}
                   active={activeId === session.id}
@@ -494,8 +643,15 @@ export function TerminalDrawer() {
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
-            <Text variant="small" color="secondary">Open a terminal tab to work in this workspace.</Text>
-            <Button variant="filled" size="small" onClick={() => void newTerminal()} disabled={!canOpen}>
+            <Text variant="small" color="secondary">
+              Open a terminal tab to work in this workspace.
+            </Text>
+            <Button
+              variant="filled"
+              size="small"
+              onClick={() => void newTerminal()}
+              disabled={!canOpen}
+            >
               <Plus /> New terminal
             </Button>
           </div>

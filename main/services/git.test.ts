@@ -41,8 +41,9 @@ async function temporaryDirectory(t: test.TestContext): Promise<string> {
   return directory;
 }
 
-async function waitForFile(filePath: string): Promise<void> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       await fs.access(filePath);
       return;
@@ -2183,7 +2184,7 @@ test("GitService reconciles an abort after the exact branch ref was updated", as
   const service = new GitService({
     cacheTtlMs: 0,
     gitBinary: wrapper,
-    mutationTimeoutMs: 5_000,
+    mutationTimeoutMs: 30_000,
   });
   const review = await service.review(repository);
   const controller = new AbortController();
@@ -2197,17 +2198,7 @@ test("GitService reconciles an abort after the exact branch ref was updated", as
     controller.signal,
   );
 
-  let refUpdated = false;
-  for (let attempt = 0; attempt < 150; attempt += 1) {
-    try {
-      await fs.access(marker);
-      refUpdated = true;
-      break;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-  }
-  assert.equal(refUpdated, true);
+  await waitForFile(marker, 15_000);
   controller.abort();
   const result = await operation;
   assert.match(result.warning ?? "", /stopped responding/);

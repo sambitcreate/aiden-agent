@@ -9,6 +9,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 
 export interface DataStoreOptions<T> {
+  /** Refuse descriptor reads larger than this byte ceiling, including files that grow mid-read. */
+  maxBytes?: number;
   /**
    * Copy an unparseable file aside before a write replaces it. Set this for any
    * file the user maintains by hand: a JSON typo must cost them a restart, not
@@ -118,7 +120,7 @@ export class DataStore<T> {
         try {
           filePath = await this.getFilePath();
           await this.recoverHeldFiles(filePath);
-          bytes = await readRegularFile(filePath);
+          bytes = await readRegularFile(filePath, this.options.maxBytes);
           data = decodeUtf8(bytes);
           this.diskSnapshot = Buffer.from(bytes);
           const parsed = JSON.parse(data) as unknown;
@@ -205,7 +207,7 @@ export class DataStore<T> {
   private async preserveCorrupt(destination: string): Promise<void> {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     try {
-      const contents = await readRegularFile(destination);
+      const contents = await readRegularFile(destination, this.options.maxBytes);
       await fs.writeFile(`${destination}.invalid-${stamp}`, contents, {
         flag: "wx",
       });
@@ -308,7 +310,7 @@ export class DataStore<T> {
       const suffix = predecessor ? ".previous" : ".held";
       const encodedHash = name.slice(prefix.length, -suffix.length).split(".", 1)[0];
       try {
-        const contents = await readRegularFile(held);
+        const contents = await readRegularFile(held, this.options.maxBytes);
         if (/^[a-f0-9]{64}$/u.test(encodedHash) && this.contentHash(contents) === encodedHash) {
           await fs.rm(held, { force: true });
         } else {
@@ -356,7 +358,9 @@ export class DataStore<T> {
     try {
       if (this.diskSnapshot !== null) {
         try {
-          heldMatches = (await readRegularFile(held)).equals(this.diskSnapshot);
+          heldMatches = (await readRegularFile(held, this.options.maxBytes)).equals(
+            this.diskSnapshot,
+          );
         } catch {
           throw new DataStoreExternalChangeError();
         }
@@ -364,7 +368,10 @@ export class DataStore<T> {
       }
       await this.options.beforeProtectedPublish?.();
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-      if (this.diskSnapshot !== null && !(await readRegularFile(held)).equals(this.diskSnapshot)) {
+      if (
+        this.diskSnapshot !== null &&
+        !(await readRegularFile(held, this.options.maxBytes)).equals(this.diskSnapshot)
+      ) {
         heldMatches = false;
         await this.restoreHeldFile(held, destination, true);
         throw new DataStoreExternalChangeError();
@@ -425,6 +432,16 @@ export class DataStore<T> {
    */
   private async writeNow(data: T, isCurrent: () => boolean): Promise<void> {
     if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+    if (this.options.isSafe && !this.options.isSafe(data)) {
+      throw new DataStoreUnsafeWriteError();
+    }
+    const serialized = `${JSON.stringify(data, null, 2)}\n`;
+    if (
+      this.options.maxBytes !== undefined &&
+      Buffer.byteLength(serialized, "utf8") > this.options.maxBytes
+    ) {
+      throw new DataStoreUnsafeWriteError();
+    }
     const destination = await this.getFilePath();
     if (this.options.preserveCorruptFile) {
       // `corrupt` is only assessed by load(). update() always loads first, but a
@@ -437,7 +454,6 @@ export class DataStore<T> {
       path.dirname(destination),
       `.${path.basename(destination)}.${randomUUID()}.tmp`,
     );
-    const serialized = `${JSON.stringify(data, null, 2)}\n`;
     try {
       await fs.writeFile(staged, serialized, "utf-8");
       const stagedHandle = await fs.open(staged, "r");

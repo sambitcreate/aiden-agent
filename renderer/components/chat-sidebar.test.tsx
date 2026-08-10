@@ -41,7 +41,7 @@ test("new agent uses the same sidebar row style as scheduled", () => {
 test("newAgent creates a chat in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
-  assert.match(sidebar, /if \(!activeId\) return;/u);
+  assert.match(sidebar, /if \(!activeId \|\| appendReconciliationRequired\) return;/u);
   assert.match(sidebar, /chatsApi\.create\(\{ workspaceId: activeId \}\)/u);
   assert.match(
     sidebar,
@@ -181,9 +181,73 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
 });
 
+test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
+  const ui = source("./ui.tsx");
+  assert.match(
+    ui,
+    /bg-sidebar transition-\[width,opacity\] duration-300 ease-out motion-reduce:transition-none/u,
+  );
+  assert.match(
+    ui,
+    /scroll-area-header[\s\S]{0,180}transition-\[padding\] duration-300 ease-out motion-reduce:transition-none/u,
+  );
+  assert.match(ui, /style=\{\{ paddingLeft: split\?\.collapsed \? 142 : undefined \}\}/u);
+});
+
+test("sidebar breakpoint hands layout width through an animated spacer", () => {
+  const ui = source("./ui.tsx");
+  assert.match(ui, /const reservedSidebarWidth = !compact && !collapsed \? width : 0;/u);
+  assert.match(ui, /absolute inset-y-0 left-0 z-10[\s\S]{0,120}transition-\[width,opacity\]/u);
+  assert.match(
+    ui,
+    /aria-hidden="true"[\s\S]{0,180}transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,120}reservedSidebarWidth/u,
+  );
+  assert.doesNotMatch(ui, /compact && !collapsed && "absolute inset-y-0/u);
+});
+
+test("compact split view starts collapsed before first paint", () => {
+  const ui = source("./ui.tsx");
+  assert.match(
+    ui,
+    /useState\(\s*\(\) => window\.innerWidth < 700 \|\| localStorage\.getItem\(collapseKey\) === "1"/u,
+  );
+});
+
+test("allocated composer and settings widths drive their compact layouts", () => {
+  const composer = source("./composer.tsx");
+  const settings = source("../main/settings-view.tsx");
+  const styles = source("../styles.css");
+  assert.match(composer, /className="composer-responsive pointer-events-auto relative isolate"/u);
+  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-2xl/u);
+  assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
+  assert.match(styles, /@container composer \(max-width: 520px\)/u);
+  assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
+  assert.match(styles, /@container settings-content \(max-width: 640px\)/u);
+});
+
+test("environment inline handoff uses the same animated spacer pattern", () => {
+  const panel = source("./environment-panel.tsx");
+  assert.match(panel, /environment-panel absolute inset-y-0 right-0 z-30/u);
+  assert.match(
+    panel,
+    /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
+  );
+  assert.doesNotMatch(panel, /inline \? "relative" : "absolute/u);
+});
+
+test("terminal drawer keeps its exit surface until the shared motion completes", () => {
+  const terminal = source("./terminal-drawer.tsx");
+  const styles = source("../styles.css");
+  assert.match(terminal, /const TERMINAL_DRAWER_MOTION_MS = 300;/u);
+  assert.match(terminal, /data-state=\{open \? "open" : "closed"\}/u);
+  assert.match(terminal, /reduceMotion \? 0 : TERMINAL_DRAWER_MOTION_MS/u);
+  assert.match(styles, /\.terminal-drawer\[data-state="closed"\][\s\S]*height: 0;/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.terminal-drawer/u);
+});
+
 test("sidebar list items use a fill focus state instead of a focus ring", () => {
   const ui = source("./ui.tsx");
-  const item = between(ui, "export function SidebarListItem", "\n}");
+  const item = between(ui, "export function SidebarListItem", "\n\nexport function ScrollArea");
   assert.match(item, /focus-visible:bg-list-selection/u);
   assert.doesNotMatch(item, /focus-visible:ring/u);
 });
@@ -201,4 +265,17 @@ test("shared controls use theme fill or border focus instead of focus rings", ()
   assert.doesNotMatch(input, /focus:ring-/u);
   assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
   assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
+});
+
+test("toasts use elevation without a colored border or outline", () => {
+  const styles = source("../styles.css");
+  assert.match(styles, /--elevation-toast: 0 4px 12px/u);
+  for (const token of ["normal", "success", "error", "info", "warning"]) {
+    assert.match(styles, new RegExp(`--${token}-border: transparent !important;`, "u"));
+  }
+  assert.match(
+    styles,
+    /\[data-sonner-toast\] \{\s*border: 0 !important;[\s\S]*outline: 0 !important;/u,
+  );
+  assert.doesNotMatch(styles, /--elevation-toast: 0 0 0/u);
 });

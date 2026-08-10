@@ -20,13 +20,14 @@ import { FolderGit2, Plus, Trash2 } from "lucide-react";
 import { skillsApi } from "../../lib/ipc";
 import { queryKeys, useDiscoveredSkills, useSkills, useWorkspaces } from "../../lib/queries";
 import type { Skill } from "../../lib/types";
+import { resolveSkillCatalogWorkspaceId } from "../../lib/skill-catalog-workspace";
 
-/** Folder path of the active workspace, read from localStorage (settings sits outside WorkspaceProvider). */
-function useActiveFolderPath(): string | undefined {
+/** Active workspace id from localStorage (settings sits outside WorkspaceProvider). */
+function useActiveWorkspaceId(): string | undefined {
   const workspaces = useWorkspaces();
   const activeId =
     typeof localStorage !== "undefined" ? localStorage.getItem("aiden-agent.workspaceId") : null;
-  return workspaces.data?.find((w) => w.id === activeId)?.folderPath;
+  return resolveSkillCatalogWorkspaceId(workspaces.data, activeId);
 }
 
 function newSkill(): Skill {
@@ -45,10 +46,14 @@ export function SkillsSettings() {
   const [editing, setEditing] = React.useState<Skill | null>(null);
   const [removing, setRemoving] = React.useState<Skill | null>(null);
 
-  const folderPath = useActiveFolderPath();
-  const discovered = useDiscoveredSkills(folderPath);
+  const workspaceId = useActiveWorkspaceId();
+  const discovered = useDiscoveredSkills(workspaceId);
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.skills });
+  const invalidate = () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: queryKeys.skills }),
+      qc.invalidateQueries({ queryKey: ["skillCatalog"] }),
+    ]);
 
   const toggle = async (skill: Skill, enabled: boolean) => {
     await skillsApi.save({ ...skill, enabled });
@@ -56,7 +61,7 @@ export function SkillsSettings() {
   };
 
   const list = skills.data ?? [];
-  const discoveredList = discovered.data ?? [];
+  const discoveredList = (discovered.data ?? []).filter((skill) => skill.source !== "configured");
 
   return (
     <div className="flex flex-col gap-4">
@@ -127,12 +132,12 @@ export function SkillsSettings() {
             <Text variant="small" color="secondary" className="mt-0.5 block">
               Auto-discovered SKILL.md files in workspace and global <code>.agents/skills</code>,{" "}
               <code>.claude/skills</code>, and <code>.aiden/&#123;skill,skills&#125;</code> folders.
-              Always available.
+              Availability follows the same collision and safety rules as the composer and model.
             </Text>
           </div>
           <div className="rounded-card border border-separator">
             {discoveredList.map((s, i) => (
-              <React.Fragment key={s.id}>
+              <React.Fragment key={s.invocationId}>
                 {i > 0 ? <Separator /> : null}
                 <div className="flex items-center gap-3 px-3.5 py-3">
                   <FolderGit2 className="size-4 shrink-0 text-tertiary" />
@@ -144,9 +149,12 @@ export function SkillsSettings() {
                       <Badge color={s.source === "workspace" ? "blue" : "secondary"}>
                         {s.source}
                       </Badge>
+                      {!s.available ? <Badge color="red">Unavailable</Badge> : null}
                     </div>
                     <Text variant="small" color="tertiary" truncate className="mt-0.5 block">
-                      {s.description || s.path}
+                      {!s.available
+                        ? s.unavailableReason || "Unavailable"
+                        : s.description || "No description"}
                     </Text>
                   </div>
                 </div>

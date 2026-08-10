@@ -34,6 +34,7 @@ import type {
 } from "./types.js";
 import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "./types.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
+import { isConfiguredSkill, isConfiguredSkillList } from "./skill-config-limits.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -68,6 +69,8 @@ export interface ProviderModelCacheEntry {
 export interface ProviderModelCacheShape {
   byProvider: Record<string, ProviderModelCacheEntry>;
 }
+
+export const PORTABLE_CONFIG_MAX_BYTES = 32 * 1024 * 1024;
 
 export function mergeProviderModelCacheEntries(
   fallback: ProviderModelCacheEntry | undefined,
@@ -280,15 +283,7 @@ export function isMcpServer(value: unknown): value is McpServer {
 }
 
 export function isSkill(value: unknown): value is Skill {
-  if (!isRecord(value)) return false;
-  return (
-    typeof value.id === "string" &&
-    value.id.trim().length > 0 &&
-    typeof value.name === "string" &&
-    typeof value.description === "string" &&
-    typeof value.instructions === "string" &&
-    typeof value.enabled === "boolean"
-  );
+  return isConfiguredSkill(value);
 }
 
 export function isMcpServerList(value: unknown): value is McpServer[] {
@@ -296,7 +291,22 @@ export function isMcpServerList(value: unknown): value is McpServer[] {
 }
 
 export function isSkillList(value: unknown): value is Skill[] {
-  return Array.isArray(value) && value.every(isSkill) && hasUniqueIds(value);
+  return isConfiguredSkillList(value);
+}
+
+function normalizePortableSkillBounds(value: unknown): PortableConfigShape {
+  const normalized = isRecord(value) ? structuredClone(value) : {};
+  if (Object.prototype.hasOwnProperty.call(normalized, "skills") && !isSkillList(normalized.skills)) {
+    normalized.skills = [];
+  }
+  return normalized as unknown as PortableConfigShape;
+}
+
+function portableSkillBoundsAreSafe(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (!Object.prototype.hasOwnProperty.call(value, "skills") || isSkillList(value.skills))
+  );
 }
 
 function isProviderBaseUrl(value: unknown): value is string {
@@ -614,7 +624,7 @@ function sameProviderConnection(left: PortableProvider, right: PortableProvider)
 
 async function fileEqualsContents(contents: Buffer, target: string): Promise<boolean> {
   try {
-    return contents.equals(await readRegularFile(target));
+    return contents.equals(await readRegularFile(target, PORTABLE_CONFIG_MAX_BYTES));
   } catch {
     return false;
   }
@@ -705,13 +715,13 @@ async function legacyArchiveState(
   let hasUsableSnapshot = false;
   let sourceBytes: Buffer;
   try {
-    sourceBytes = await readRegularFile(source);
+    sourceBytes = await readRegularFile(source, PORTABLE_CONFIG_MAX_BYTES);
   } catch {
     return { hasUsableSnapshot: false, matchesSource: false };
   }
   for (const candidate of candidates) {
     try {
-      const candidateBytes = await readRegularFile(candidate);
+      const candidateBytes = await readRegularFile(candidate, PORTABLE_CONFIG_MAX_BYTES);
       if (sourceBytes.equals(candidateBytes)) {
         return { hasUsableSnapshot: true, matchesSource: true };
       }
@@ -887,6 +897,9 @@ export function createPortableConfigStores(
     // This is the one file a person edits by hand, so a JSON typo must not be
     // silently overwritten with defaults the next time anything writes.
     {
+      maxBytes: PORTABLE_CONFIG_MAX_BYTES,
+      normalize: normalizePortableSkillBounds,
+      isSafe: portableSkillBoundsAreSafe,
       preserveCorruptFile: true,
       reloadBeforeWrite: true,
       rejectCorruptWrite: true,
@@ -909,6 +922,7 @@ export function createPortableConfigStores(
     { workspaces: [], seeded: false },
     localRoot,
     {
+      maxBytes: PORTABLE_CONFIG_MAX_BYTES,
       normalize: normalizeLocalConfigShape,
       isSafe: isLocalConfigShapeSafe,
       reloadBeforeWrite: true,

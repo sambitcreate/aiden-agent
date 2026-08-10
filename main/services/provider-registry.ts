@@ -24,7 +24,7 @@ import {
   googleThinkingCanDisable,
   googleThinkingLevelsForModel,
 } from "../../renderer/shared/google-thinking.js";
-import type { ProviderAuthBackend } from "./provider-auth-flow-core.js";
+import type { ProviderAuthBackend, ProviderLogoutBackend } from "./provider-auth-flow-core.js";
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -201,6 +201,29 @@ export class ProviderRegistry {
     };
   }
 
+  /** Credential removal is independent of which interactive setup method a provider offers. */
+  logoutBackend(providerId: string): ProviderLogoutBackend {
+    if (isCustomProviderId(providerId)) {
+      throw new Error("Custom connections do not use Pi-native authentication.");
+    }
+    if (providerId === OPENAI_CODEX_PROVIDER_ID) {
+      return {
+        snapshot: () => this.codex.snapshot(),
+        logout: () => this.codex.logout(),
+        committedFallback: () => this.codex.committedLogoutSnapshot(),
+      };
+    }
+    if (!this.models.getProvider(providerId)) {
+      throw new Error("This Pi provider is no longer available.");
+    }
+    return {
+      snapshot: async () =>
+        (await this.listBuiltinProviders()).find((item) => item.id === providerId),
+      logout: () => this.credentials.delete(providerId),
+      committedFallback: () => ({ id: providerId, hasKey: null, canLogout: false }),
+    };
+  }
+
   /** Restore durable dynamic catalogs before exposing any Pi snapshot. */
   async ensureBuiltinCatalogs(): Promise<void> {
     if (!this.catalogHydration) {
@@ -244,6 +267,9 @@ export class ProviderRegistry {
    */
   async listBuiltinProviders(): Promise<Provider[]> {
     await this.ensureBuiltinCatalogs();
+    const storedCredentialIds = new Set(
+      (await this.credentials.list()).map((credential) => credential.providerId),
+    );
     return Promise.all(
       this.builtinProviders().map(async (provider) => {
         let availableModels: readonly Model<Api>[] | undefined;
@@ -275,7 +301,12 @@ export class ProviderRegistry {
           (method): method is { type: "api_key" | "oauth"; label: string; canLogin: boolean } =>
             method !== undefined,
         );
-        return { ...record, hasKey: configured, authMethods };
+        return {
+          ...record,
+          hasKey: configured,
+          canLogout: storedCredentialIds.has(provider.id),
+          authMethods,
+        };
       }),
     );
   }

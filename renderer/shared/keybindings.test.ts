@@ -138,6 +138,7 @@ test("rejects conflicts and reserved bindings without mutating the prior value",
 
 test("catalog defaults remain conflict-free and avoid native role accelerators", () => {
   assert.doesNotThrow(() => validateEffectiveBindings(effectiveBindings(undefined)));
+  assert.equal(effectiveBinding("sidebar.toggle", undefined), "Command+B");
 });
 
 test("reset removes only the selected override", () => {

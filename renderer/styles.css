@@ -117,7 +117,7 @@
   --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
   --elevation-popover:
     0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
-  --elevation-toast: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 4px 12px rgb(0 0 0 / 0.1);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
   --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
   --elevation-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
@@ -169,7 +169,7 @@
     inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
   --elevation-popover:
     0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
-  --elevation-toast: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 4px 12px rgb(0 0 0 / 0.54);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
   --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
   --elevation-modal: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 22px 48px -10px rgb(0 0 0 / 0.78);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
@@ -398,6 +398,81 @@ textarea {
   container: chat-toolbar / inline-size;
 }
 
+.composer-responsive {
+  container: composer / inline-size;
+}
+
+.settings-responsive {
+  container: settings-content / inline-size;
+}
+
+@container composer (max-width: 520px) {
+  .composer-workspace-trigger {
+    max-width: 9rem;
+  }
+
+  .composer-permission-control {
+    width: 1.75rem;
+    padding-inline: 0;
+  }
+
+  .composer-permission-label,
+  .composer-slash-detail {
+    display: none;
+  }
+
+  .composer-action-row {
+    width: 100%;
+  }
+
+  .composer-branch-trigger {
+    max-width: 7rem;
+  }
+}
+
+@container composer (max-width: 460px) {
+  .composer-local-label {
+    display: none;
+  }
+}
+
+@container settings-content (max-width: 640px) {
+  .settings-computer-use-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .settings-computer-use-actions {
+    align-items: flex-start;
+  }
+
+  .settings-action-align {
+    justify-content: flex-start;
+  }
+}
+
+@container settings-content (max-width: 620px) {
+  .settings-model-pad-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@container settings-content (max-width: 540px) {
+  .settings-field-horizontal {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .settings-about-header {
+    align-items: flex-start;
+  }
+
+  .settings-action-align-narrow {
+    justify-content: flex-start;
+  }
+}
+
 @container chat-toolbar (max-width: 600px) {
   .open-in-editor-label {
     display: none;
@@ -469,7 +544,27 @@ textarea {
 .terminal-drawer {
   min-height: 0;
   height: var(--terminal-drawer-height);
+  opacity: 1;
+  transition:
+    height 300ms cubic-bezier(0.19, 1, 0.22, 1),
+    opacity 180ms ease-out,
+    border-color 180ms ease-out;
+}
+
+.terminal-drawer[data-state="open"] {
   animation: aiden-terminal-drawer-in 300ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.terminal-drawer[data-state="closed"] {
+  height: 0;
+  opacity: 0;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+:root[data-reduce-motion="true"] .terminal-drawer {
+  animation: none;
+  transition: none;
 }
 
 .terminal-drawer .xterm {
@@ -639,6 +734,44 @@ textarea {
     transform: translateY(-2px);
     filter: blur(1px);
   }
+}
+
+@keyframes aiden-slash-palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes aiden-slash-palette-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(3px) scale(0.985);
+  }
+}
+
+.composer-slash-palette[data-presence="visible"] {
+  opacity: 1;
+}
+
+.composer-slash-palette[data-presence="exiting"] {
+  pointer-events: none;
+}
+
+:root[data-reduce-motion="false"] .composer-slash-palette[data-presence="visible"] {
+  animation: aiden-slash-palette-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
+}
+
+:root[data-reduce-motion="false"] .composer-slash-palette[data-presence="exiting"] {
+  animation: aiden-slash-palette-out 100ms ease-in both;
 }
 
 /* One new row appends at the bottom, so shifting the whole stack up by exactly
@@ -872,24 +1005,26 @@ textarea {
 
 [data-sonner-toaster] {
   --normal-bg: var(--surface-popover) !important;
-  --normal-border: var(--border-field) !important;
+  --normal-border: transparent !important;
   --normal-text: var(--text-primary) !important;
   --success-bg: var(--surface-popover) !important;
-  --success-border: color-mix(in srgb, var(--support-green), transparent 58%) !important;
+  --success-border: transparent !important;
   --success-text: var(--text-primary) !important;
   --error-bg: var(--surface-popover) !important;
-  --error-border: color-mix(in srgb, var(--support-red), transparent 58%) !important;
+  --error-border: transparent !important;
   --error-text: var(--text-primary) !important;
   --info-bg: var(--surface-popover) !important;
-  --info-border: color-mix(in srgb, var(--accent), transparent 58%) !important;
+  --info-border: transparent !important;
   --info-text: var(--text-primary) !important;
   --warning-bg: var(--surface-popover) !important;
-  --warning-border: color-mix(in srgb, var(--support-warning), transparent 58%) !important;
+  --warning-border: transparent !important;
   --warning-text: var(--text-primary) !important;
 }
 
 [data-sonner-toast] {
+  border: 0 !important;
   border-radius: var(--radius-card) !important;
+  outline: 0 !important;
   box-shadow: var(--elevation-toast) !important;
 }
 

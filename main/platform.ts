@@ -49,7 +49,13 @@ export const logger = {
 
 function broadcast(channel: NotificationChannel, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) window.webContents.send(channel, payload);
+    try {
+      if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.send(channel, payload);
+      }
+    } catch (error) {
+      logger.warn("ipc", `Could not deliver ${channel} notification.`, error);
+    }
   }
 }
 

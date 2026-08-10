@@ -296,7 +296,10 @@ test("store methods remain safe when called without an object receiver", async (
   });
   const { ensureChatId, recordRun } = store;
 
-  assert.equal(await ensureChatId(task.id, async () => ({ id: "chat-detached" })), "chat-detached");
+  const claimedChatId = await ensureChatId(task.id, async (claimedChatId) => ({
+    id: claimedChatId,
+  }));
+  assert.match(claimedChatId, /^scheduled-/u);
   await recordRun({
     taskId: task.id,
     startedAt: 10,
@@ -306,14 +309,20 @@ test("store methods remain safe when called without an object receiver", async (
   });
 
   const updated = await store.get(task.id);
-  assert.equal(updated?.chatId, "chat-detached");
+  assert.equal(updated?.chatId, claimedChatId);
   assert.equal(updated?.lastRunAt, 20);
   assert.equal(updated?.lastResult, "success");
 });
 
 test("script names reject traversal and path separators", () => {
   assert.equal(validateScriptName("daily-report.sh"), "daily-report.sh");
-  for (const invalid of ["", "..", "../secret.sh", "nested/task.sh", "nested\\task.sh"]) {
+  for (const invalid of [
+    "",
+    "..",
+    "../secret.sh",
+    "nested/task.sh",
+    "nested\\task.sh",
+  ]) {
     assert.throws(() => validateScriptName(invalid), /single file name/iu);
   }
 });
@@ -347,7 +356,10 @@ test("stored invalid schedules are quarantined instead of aborting startup", asy
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+  );
   const [task] = await store.list();
   assert.equal(task?.id, "broken");
   assert.equal(task?.enabled, false);
@@ -373,7 +385,10 @@ test("stored project-plus-MCP schedules are quarantined until their scope is spl
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+  );
   const task = await store.get("mixed-task");
   assert.equal(task?.enabled, false);
   assert.match(task?.lastError ?? "", /either one project or MCP servers/iu);
@@ -395,9 +410,15 @@ test("a quarantined Assistant-profile task cannot be re-enabled with elevated ca
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+  );
   assert.equal((await store.get("corrupt-assistant"))?.enabled, false);
-  await assert.rejects(store.setEnabled("corrupt-assistant", true), /provider\/model-pinned/iu);
+  await assert.rejects(
+    store.setEnabled("corrupt-assistant", true),
+    /provider\/model-pinned/iu,
+  );
 });
 
 test("stored Assistant tasks without an approved provider binding are quarantined", async () => {
@@ -416,7 +437,10 @@ test("stored Assistant tasks without an approved provider binding are quarantine
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+  );
   const task = await store.get("unpinned-assistant");
   assert.equal(task?.enabled, false);
   assert.match(task?.lastError ?? "", /provider\/model-pinned/iu);
@@ -439,7 +463,10 @@ test("loads legacy Gemini scheduled tasks through the native Google provider", a
       updatedAt: 1,
     },
   ]);
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]));
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+  );
   assert.equal((await store.list())[0]?.providerId, "google");
 });
 
@@ -462,12 +489,20 @@ test("persists protected custom aliases for historical and newly saved schedules
   ]);
   const alias = async (providerId: string | undefined) =>
     providerId === "openai" ? "custom:openai-legacy" : providerId;
-  const store = createScheduleStore(tasks, new MemoryPersistence<unknown[]>([]), () => 1, alias);
+  const store = createScheduleStore(
+    tasks,
+    new MemoryPersistence<unknown[]>([]),
+    () => 1,
+    alias,
+  );
 
   const migrated = (await store.list())[0];
   assert.equal(migrated?.providerId, "custom:openai-legacy");
   assert.equal(migrated?.updatedAt, 2);
-  assert.equal((tasks.snapshot()[0] as { providerId?: string }).providerId, "custom:openai-legacy");
+  assert.equal(
+    (tasks.snapshot()[0] as { providerId?: string }).providerId,
+    "custom:openai-legacy",
+  );
   assert.equal((tasks.snapshot()[0] as { updatedAt?: number }).updatedAt, 2);
 
   const created = await store.save({
@@ -479,7 +514,10 @@ test("persists protected custom aliases for historical and newly saved schedules
     prompt: "Summarize only changes.",
   });
   assert.equal(created.providerId, "custom:openai-legacy");
-  assert.equal((tasks.snapshot()[1] as { providerId?: string }).providerId, "custom:openai-legacy");
+  assert.equal(
+    (tasks.snapshot()[1] as { providerId?: string }).providerId,
+    "custom:openai-legacy",
+  );
 });
 
 test("script tasks require explicit Full permission", async () => {
@@ -530,11 +568,17 @@ test("a missing dedicated chat can be cleared and recreated", async () => {
     timezone: "UTC",
     prompt: "Summarize changes.",
   });
-  let created = 0;
-  const create = async () => ({ id: `chat-${++created}` });
-  assert.equal(await store.ensureChatId(task.id, create), "chat-1");
+  const created: string[] = [];
+  const create = async (claimedChatId: string) => {
+    created.push(claimedChatId);
+    return { id: claimedChatId };
+  };
+  const first = await store.ensureChatId(task.id, create);
+  assert.equal(created.length, 1);
   await store.clearChatId(task.id, "different-chat");
-  assert.equal((await store.get(task.id))?.chatId, "chat-1");
-  await store.clearChatId(task.id, "chat-1");
-  assert.equal(await store.ensureChatId(task.id, create), "chat-2");
+  assert.equal((await store.get(task.id))?.chatId, first);
+  await store.clearChatId(task.id, first);
+  const second = await store.ensureChatId(task.id, create);
+  assert.notEqual(second, first);
+  assert.equal(created.length, 2);
 });

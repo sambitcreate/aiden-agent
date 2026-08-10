@@ -28,6 +28,7 @@ import {
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
 import { configStore } from "./services/config-store.js";
+import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
 import {
   createLastSafeSnapshotReload,
@@ -1177,7 +1178,10 @@ if (!ownsSingleInstanceLock) {
   setPortableCredentialSnapshotListener(() => reloadAndReconcilePortableConfig.syncCurrent());
   const portableConfigWatcher = createPortableConfigWatcher(
     reloadAndReconcilePortableConfig,
-    () => ipcMain.broadcast("app:config-externally-changed", {}),
+    () => {
+      skillRegistry.invalidate();
+      ipcMain.broadcast("app:config-externally-changed", {});
+    },
     (error: unknown) =>
       logger.warn("portable-config", "Failed to re-read the portable config", error),
   );

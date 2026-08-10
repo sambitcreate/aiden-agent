@@ -106,6 +106,14 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
   assert.match(source, /FEATURE_LAYOUTS[\s\S]*?col-span-4 row-span-2/u);
   assert.match(source, /group-hover:opacity-100/u);
   assert.match(source, /group-focus:opacity-100/u);
+  assert.match(
+    source,
+    /Use Command-K or \/ for app commands, and \$ to attach a reusable skill\./u,
+  );
+  assert.match(
+    source,
+    /Create reusable instructions, then type \$ to attach one to your next message\./u,
+  );
   assert.match(source, /tabIndex=\{0\}/u);
   for (const group of [
     "Build in your workspace",

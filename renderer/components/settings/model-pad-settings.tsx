@@ -177,7 +177,7 @@ export function ModelPadSettings() {
           </div>
         </div>
 
-        <div className="grid grid-cols-[minmax(0,1fr)_13.5rem] gap-4 max-[620px]:grid-cols-1">
+        <div className="settings-model-pad-grid grid grid-cols-[minmax(0,1fr)_13.5rem] gap-4 max-[620px]:grid-cols-1">
           <div className="min-w-0">
             <div className="mb-2 flex items-center justify-center text-[11px] text-secondary">
               More capable
