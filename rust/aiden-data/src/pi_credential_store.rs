@@ -23,7 +23,7 @@
 //! single document mutex serializes the whole-file RMW so concurrent updates
 //! to different providers never lose entries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -100,6 +100,8 @@ pub struct StoredCredential {
 pub struct CredentialDocument {
     pub version: u8,
     pub entries: BTreeMap<String, StoredCredential>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub pending: BTreeSet<String>,
 }
 
 impl CredentialDocument {
@@ -107,6 +109,7 @@ impl CredentialDocument {
         Self {
             version: 1,
             entries: BTreeMap::new(),
+            pending: BTreeSet::new(),
         }
     }
 }
@@ -121,6 +124,17 @@ fn shared_mutex(key: String) -> Arc<parking_lot::Mutex<()>> {
     guard
         .entry(key)
         .or_insert_with(|| Arc::new(parking_lot::Mutex::new(())))
+        .clone()
+}
+
+fn shared_authority(key: String) -> Arc<StdMutex<HashSet<String>>> {
+    static REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<StdMutex<HashSet<String>>>>>> =
+        OnceLock::new();
+    let registry = REGISTRY.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = registry.lock().unwrap();
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(StdMutex::new(HashSet::new())))
         .clone()
 }
 
@@ -194,6 +208,17 @@ fn parse_document(text: &str) -> Result<CredentialDocument, PiCredentialError> {
         Some(serde_json::Value::Object(entries)) => entries,
         _ => return Err(PiCredentialError::UnsupportedVersion),
     };
+    let mut pending = BTreeSet::new();
+    if let Some(raw_pending) = object.get("pending") {
+        let values = raw_pending
+            .as_array()
+            .ok_or(PiCredentialError::InvalidShape)?;
+        for value in values {
+            let provider_id = value.as_str().ok_or(PiCredentialError::InvalidShape)?;
+            validate_provider_id(provider_id)?;
+            pending.insert(provider_id.to_string());
+        }
+    }
     let mut parsed = BTreeMap::new();
     for (provider_id, raw_entry) in entries {
         validate_provider_id(provider_id)?;
@@ -214,6 +239,7 @@ fn parse_document(text: &str) -> Result<CredentialDocument, PiCredentialError> {
     Ok(CredentialDocument {
         version,
         entries: parsed,
+        pending,
     })
 }
 
@@ -289,16 +315,21 @@ pub struct EncryptedPiCredentialStoreOptions {
     /// Test/diagnostic hooks.
     pub sync_directory: Option<Box<dyn Fn(&Path) -> Result<(), std::io::Error> + Send + Sync>>,
     pub on_durability_warning: Option<Box<dyn Fn(&std::io::Error) + Send + Sync>>,
+    /// Test-only failure injection before a document publication.
+    pub before_document_write:
+        Option<Box<dyn Fn(&CredentialDocument) -> Result<(), std::io::Error> + Send + Sync>>,
 }
 
 /// The `pi-provider-credentials.json` store (see module docs).
 pub struct EncryptedPiCredentialStore {
     options: EncryptedPiCredentialStoreOptions,
+    authority: Arc<StdMutex<HashSet<String>>>,
 }
 
 impl EncryptedPiCredentialStore {
     pub fn new(options: EncryptedPiCredentialStoreOptions) -> Self {
-        Self { options }
+        let authority = shared_authority(options.file_path.to_string_lossy().into_owned());
+        Self { options, authority }
     }
 
     fn mutex(&self, scope: &str) -> Arc<parking_lot::Mutex<()>> {
@@ -319,6 +350,9 @@ impl EncryptedPiCredentialStore {
     }
 
     fn write_document(&self, document: &CredentialDocument) -> Result<(), PiCredentialError> {
+        if let Some(before_write) = &self.options.before_document_write {
+            before_write(document)?;
+        }
         write_document_durably(
             &self.options.file_path,
             document,
@@ -393,13 +427,30 @@ impl EncryptedPiCredentialStore {
         })
     }
 
-    pub fn read(&self, provider_id: &str) -> Result<Option<Credential>, PiCredentialError> {
-        validate_provider_id(provider_id)?;
-        let entry = self.read_document()?.entries.get(provider_id).cloned();
+    fn read_unlocked(&self, provider_id: &str) -> Result<Option<Credential>, PiCredentialError> {
+        let authority = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if authority.contains(provider_id) {
+            return Ok(None);
+        }
+        let document = self.read_document()?;
+        if document.pending.contains(provider_id) {
+            return Ok(None);
+        }
+        let entry = document.entries.get(provider_id).cloned();
         match entry {
             Some(entry) => Ok(Some(self.decrypt_entry(provider_id, &entry)?)),
             None => Ok(None),
         }
+    }
+
+    pub fn read(&self, provider_id: &str) -> Result<Option<Credential>, PiCredentialError> {
+        validate_provider_id(provider_id)?;
+        let provider_mutex = self.mutex(&format!("provider:{provider_id}"));
+        let _provider_guard = provider_mutex.lock();
+        self.read_unlocked(provider_id)
     }
 
     pub fn list(&self) -> Result<Vec<CredentialInfo>, PiCredentialError> {
@@ -407,6 +458,7 @@ impl EncryptedPiCredentialStore {
         let mut entries: Vec<CredentialInfo> = document
             .entries
             .into_iter()
+            .filter(|(provider_id, _)| !document.pending.contains(provider_id))
             .map(|(provider_id, entry)| CredentialInfo {
                 provider_id,
                 r#type: entry.r#type,
@@ -426,17 +478,26 @@ impl EncryptedPiCredentialStore {
         validate_provider_id(provider_id)?;
         let provider_mutex = self.mutex(&format!("provider:{provider_id}"));
         let _provider_guard = provider_mutex.lock();
-        let current = self.read(provider_id)?;
+        let current = self.read_unlocked(provider_id)?;
         let next = modifier(current.as_ref())?;
         let Some(next) = next else {
             return Ok(current);
         };
-        let encrypted = self.encrypt_credential(provider_id, &next)?;
+        let mut authority = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let document_mutex = self.mutex("document");
         let _document_guard = document_mutex.lock();
         let mut document = self.read_document()?;
-        document.entries.insert(provider_id.to_string(), encrypted);
+        authority.insert(provider_id.to_string());
+        document.pending.insert(provider_id.to_string());
         self.write_document(&document)?;
+        let encrypted = self.encrypt_credential(provider_id, &next)?;
+        document.entries.insert(provider_id.to_string(), encrypted);
+        document.pending.remove(provider_id);
+        self.write_document(&document)?;
+        authority.remove(provider_id);
         Ok(Some(next))
     }
 
@@ -444,12 +505,24 @@ impl EncryptedPiCredentialStore {
         validate_provider_id(provider_id)?;
         let provider_mutex = self.mutex(&format!("provider:{provider_id}"));
         let _provider_guard = provider_mutex.lock();
+        let mut authority = self
+            .authority
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        authority.insert(provider_id.to_string());
         let document_mutex = self.mutex("document");
         let _document_guard = document_mutex.lock();
         let mut document = self.read_document()?;
-        if document.entries.remove(provider_id).is_some() {
-            self.write_document(&document)?;
-        }
+        document.pending.insert(provider_id.to_string());
+        self.write_document(&document)?;
+        document.entries.remove(provider_id);
+        document.pending.remove(provider_id);
+        let removal_result = self.write_document(&document);
+        let _ = self
+            .options
+            .cipher
+            .delete_entry(&keychain_account(provider_id));
+        removal_result?;
         Ok(())
     }
 }
@@ -465,6 +538,82 @@ mod tests {
     struct TestCipher {
         vault: StdMutex<HashMap<String, String>>,
         unavailable: bool,
+    }
+
+    #[derive(Clone, Default)]
+    struct FixedMarkerCipher {
+        vault: Arc<StdMutex<HashMap<String, String>>>,
+        deleted: Arc<StdMutex<Vec<String>>>,
+    }
+
+    impl SecretCipher for FixedMarkerCipher {
+        fn is_encryption_available(&self) -> bool {
+            true
+        }
+
+        fn encrypt_string(&self, account: &str, value: &str) -> Result<Vec<u8>, SecretCipherError> {
+            self.vault
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(crate::secret_map::KEYRING_MARKER.to_vec())
+        }
+
+        fn decrypt_string(&self, account: &str, value: &[u8]) -> Result<String, SecretCipherError> {
+            if value != crate::secret_map::KEYRING_MARKER {
+                return Err(SecretCipherError::NeedsRotation);
+            }
+            self.vault
+                .lock()
+                .unwrap()
+                .get(account)
+                .cloned()
+                .ok_or(SecretCipherError::UnrecognizedFormat)
+        }
+
+        fn delete_entry(&self, account: &str) -> Result<(), SecretCipherError> {
+            self.vault.lock().unwrap().remove(account);
+            self.deleted.lock().unwrap().push(account.to_string());
+            Ok(())
+        }
+    }
+
+    struct PausingFixedMarkerCipher {
+        vault: Arc<StdMutex<HashMap<String, String>>>,
+        read_started: StdMutex<Option<std::sync::mpsc::Sender<()>>>,
+        resume_read: StdMutex<Option<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl SecretCipher for PausingFixedMarkerCipher {
+        fn is_encryption_available(&self) -> bool {
+            true
+        }
+
+        fn encrypt_string(&self, account: &str, value: &str) -> Result<Vec<u8>, SecretCipherError> {
+            self.vault
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(crate::secret_map::KEYRING_MARKER.to_vec())
+        }
+
+        fn decrypt_string(&self, account: &str, value: &[u8]) -> Result<String, SecretCipherError> {
+            if value != crate::secret_map::KEYRING_MARKER {
+                return Err(SecretCipherError::NeedsRotation);
+            }
+            if let Some(started) = self.read_started.lock().unwrap().take() {
+                let _ = started.send(());
+                if let Some(resume) = self.resume_read.lock().unwrap().take() {
+                    let _ = resume.recv();
+                }
+            }
+            self.vault
+                .lock()
+                .unwrap()
+                .get(account)
+                .cloned()
+                .ok_or(SecretCipherError::UnrecognizedFormat)
+        }
     }
 
     impl TestCipher {
@@ -523,6 +672,7 @@ mod tests {
             cipher,
             sync_directory: None,
             on_durability_warning: None,
+            before_document_write: None,
         });
         (dir, file, store)
     }
@@ -571,6 +721,7 @@ mod tests {
                 on_durability_warning: Some(Box::new(move |error| {
                     warnings.lock().unwrap().push(error.to_string());
                 })),
+                before_document_write: None,
             });
             (dir, file, store)
         };
@@ -585,8 +736,12 @@ mod tests {
             store.read("artificial-analysis").unwrap(),
             Some(serde_json::json!({ "type": "api_key", "key": "secret" }))
         );
-        assert_eq!(warnings.lock().unwrap().len(), 1);
-        assert!(warnings.lock().unwrap()[0].contains("unsupported"));
+        assert_eq!(warnings.lock().unwrap().len(), 2);
+        assert!(warnings
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|warning| warning.contains("unsupported")));
     }
 
     #[test]
@@ -627,6 +782,7 @@ mod tests {
             cipher,
             sync_directory: None,
             on_durability_warning: None,
+            before_document_write: None,
         });
         store
             .modify("openai-codex", |_| Ok(Some(oauth("codex"))))
@@ -695,6 +851,7 @@ mod tests {
             cipher: Arc::new(TestCipher::default()),
             sync_directory: None,
             on_durability_warning: None,
+            before_document_write: None,
         });
         for invalid in ["", "no spaces", "bad!", "x".repeat(129).as_str()] {
             assert!(matches!(
@@ -704,5 +861,135 @@ mod tests {
         }
         // The TS regex is case-insensitive: uppercase ids are valid.
         assert!(store.read("OpenAI").is_ok());
+    }
+
+    #[test]
+    fn fixed_marker_rotation_failure_reopens_durably_denied() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("credentials.json");
+        let cipher = FixedMarkerCipher::default();
+        let initial = EncryptedPiCredentialStore::new(EncryptedPiCredentialStoreOptions {
+            file_path: file.clone(),
+            cipher: Arc::new(cipher.clone()),
+            sync_directory: None,
+            on_durability_warning: None,
+            before_document_write: None,
+        });
+        initial
+            .modify("openai-codex", |_| Ok(Some(oauth("old-access"))))
+            .unwrap();
+
+        let writes = Arc::new(AtomicUsize::new(0));
+        let writes_for_hook = writes.clone();
+        let failing = EncryptedPiCredentialStore::new(EncryptedPiCredentialStoreOptions {
+            file_path: file.clone(),
+            cipher: Arc::new(cipher.clone()),
+            sync_directory: None,
+            on_durability_warning: None,
+            before_document_write: Some(Box::new(move |_| {
+                if writes_for_hook.fetch_add(1, Ordering::SeqCst) == 1 {
+                    Err(std::io::Error::other("forced active publication failure"))
+                } else {
+                    Ok(())
+                }
+            })),
+        });
+        assert!(failing
+            .modify("openai-codex", |_| Ok(Some(oauth("new-access"))))
+            .is_err());
+        let persisted = parse_document(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(persisted.pending.contains("openai-codex"));
+
+        let reopened = EncryptedPiCredentialStore::new(EncryptedPiCredentialStoreOptions {
+            file_path: file,
+            cipher: Arc::new(cipher),
+            sync_directory: None,
+            on_durability_warning: None,
+            before_document_write: None,
+        });
+        assert_eq!(reopened.read("openai-codex").unwrap(), None);
+        assert!(reopened.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fixed_marker_reader_cannot_cross_a_pending_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("credentials.json");
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let cipher = Arc::new(PausingFixedMarkerCipher {
+            vault: Arc::new(StdMutex::new(HashMap::new())),
+            read_started: StdMutex::new(Some(started_tx)),
+            resume_read: StdMutex::new(Some(resume_rx)),
+        });
+        let options = |cipher: Arc<dyn SecretCipher>| EncryptedPiCredentialStoreOptions {
+            file_path: file.clone(),
+            cipher,
+            sync_directory: None,
+            on_durability_warning: None,
+            before_document_write: None,
+        };
+        let seed = EncryptedPiCredentialStore::new(options(cipher.clone()));
+        seed.modify("openai-codex", |_| Ok(Some(oauth("old-access"))))
+            .unwrap();
+
+        let reader = Arc::new(EncryptedPiCredentialStore::new(options(cipher.clone())));
+        let reader_task = {
+            let reader = reader.clone();
+            std::thread::spawn(move || reader.read("openai-codex").unwrap())
+        };
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let writer = EncryptedPiCredentialStore::new(options(cipher.clone()));
+        let (writer_done_tx, writer_done_rx) = std::sync::mpsc::channel();
+        let writer_task = std::thread::spawn(move || {
+            let result = writer.modify("openai-codex", |_| Ok(Some(oauth("new-access"))));
+            let _ = writer_done_tx.send(());
+            result
+        });
+        assert!(matches!(
+            writer_done_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        let vaulted = cipher.vault.lock().unwrap();
+        assert!(vaulted
+            .get(&keychain_account("openai-codex"))
+            .unwrap()
+            .contains("old-access"));
+        drop(vaulted);
+
+        resume_tx.send(()).unwrap();
+        let observed = reader_task.join().unwrap().unwrap();
+        assert_eq!(observed["access"], "old-access");
+        writer_task.join().unwrap().unwrap();
+        assert_eq!(
+            reader.read("openai-codex").unwrap().unwrap()["access"],
+            "new-access"
+        );
+    }
+
+    #[test]
+    fn delete_durably_removes_marker_and_best_effort_keychain_entry() {
+        let cipher = FixedMarkerCipher::default();
+        let deleted = cipher.deleted.clone();
+        let (_dir, file, store) = fixture(Arc::new(cipher));
+        store
+            .modify("openai-codex", |_| Ok(Some(oauth("access"))))
+            .unwrap();
+
+        store.delete("openai-codex").unwrap();
+
+        assert_eq!(store.read("openai-codex").unwrap(), None);
+        let document = parse_document(&std::fs::read_to_string(file).unwrap()).unwrap();
+        assert!(!document.entries.contains_key("openai-codex"));
+        assert!(!document.pending.contains("openai-codex"));
+        assert!(deleted
+            .lock()
+            .unwrap()
+            .contains(&keychain_account("openai-codex")));
     }
 }
