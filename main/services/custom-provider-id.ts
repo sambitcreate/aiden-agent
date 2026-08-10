@@ -17,13 +17,21 @@ export function customProviderId(providerId: string): string {
 
 /**
  * Aiden template identities, deliberately separate from Pi's provider IDs.
- * The legacy spellings remain here for the brief migration window so existing
- * local connections retain their specialized discovery behavior.
+ * Legacy spellings and collision-safe numeric siblings remain recognized so
+ * migrated local connections retain specialized discovery and loading probes.
  */
 export function isLmStudioProviderId(providerId: string): boolean {
-  return providerId === "lmstudio" || providerId === `${CUSTOM_PROVIDER_ID_PREFIX}lmstudio`;
+  return (
+    providerId === "lmstudio" ||
+    providerId === `${CUSTOM_PROVIDER_ID_PREFIX}lmstudio` ||
+    /^custom:lmstudio-(?:[2-9]|[1-9]\d+)$/u.test(providerId)
+  );
 }
 
 export function isOllamaProviderId(providerId: string): boolean {
-  return providerId === "ollama" || providerId === `${CUSTOM_PROVIDER_ID_PREFIX}ollama`;
+  return (
+    providerId === "ollama" ||
+    providerId === `${CUSTOM_PROVIDER_ID_PREFIX}ollama` ||
+    /^custom:ollama-(?:[2-9]|[1-9]\d+)$/u.test(providerId)
+  );
 }
