@@ -66,7 +66,14 @@ impl Render for OnboardingView {
         let step = self.machine.current();
         let step_index = self.machine.step_index();
         let total = self.machine.total_steps();
-        let motion = motion_allowed(self.machine.reduce_motion, false);
+        // System is a live process preference, not a baked-in false. This is
+        // also refreshed by the native accessibility observer while the main
+        // window is open; onboarding uses the same conservative probe before
+        // it has a ChatService owner.
+        let motion = motion_allowed(
+            self.machine.reduce_motion,
+            crate::services::appearance::current_system_reduced_motion(cx),
+        );
         let finish = step == Step::Finish;
 
         // Focus management: the name field on Welcome, the primary action
@@ -374,6 +381,33 @@ impl OnboardingView {
                         )
                     }),
             )
+            .when(self.machine.choice == ProviderChoice::ChatGpt, |el| {
+                el.child(
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .child(
+                            Button::new("onboarding-chatgpt-sign-in")
+                                .primary()
+                                .label(if self.machine.codex_configured {
+                                    "Signed in"
+                                } else {
+                                    "Sign in with ChatGPT"
+                                })
+                                .disabled(self.busy || self.machine.codex_configured)
+                                .loading(self.busy)
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.start_codex_sign_in(window, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("A browser opens only after you choose Sign in."),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
@@ -399,7 +433,10 @@ impl OnboardingView {
             } else {
                 theme.popover
             })
-            .cursor_pointer()
+            .when(
+                crate::services::appearance::pointer_cursors_enabled(cx),
+                |el| el.cursor_pointer(),
+            )
             .hover(|style| style.bg(theme.muted))
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.machine.choice = choice;
@@ -477,7 +514,7 @@ impl OnboardingView {
                     .rounded_lg()
                     .border_1()
                     .border_color(if active { theme.accent } else { theme.border })
-                    .cursor_pointer()
+                    .when(crate::services::appearance::pointer_cursors_enabled(cx), |el| el.cursor_pointer())
                     .hover(|style| style.bg(theme.muted))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.machine.set_model(Some(click_id.clone()));
@@ -608,7 +645,10 @@ impl OnboardingView {
                                     .rounded_lg()
                                     .border_1()
                                     .border_color(if active { theme.accent } else { theme.border })
-                                    .cursor_pointer()
+                                    .when(
+                                        crate::services::appearance::pointer_cursors_enabled(cx),
+                                        |el| el.cursor_pointer(),
+                                    )
                                     .hover(|style| style.bg(theme.muted))
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.machine.set_preset(preset_id);
@@ -646,7 +686,7 @@ impl OnboardingView {
 
     fn permissions_step(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let rows: [(&str, &str); 4] = [
+        let rows: [(&str, &str); 5] = [
             (
                 "Dictation",
                 "Dictation needs microphone access to transcribe your voice. Allow it in System \
@@ -667,6 +707,12 @@ impl OnboardingView {
                 "No silent network access",
                 "This onboarding step makes no network calls. Providers are contacted only when \
                  you chat or explicitly refresh model data.",
+            ),
+            (
+                "Skills",
+                "Skill names, descriptions, and tool disclosure may be sent to the selected model \
+                 before invocation. Detailed instructions and supporting-file content are sent only \
+                 when invoked. Skills never expand workspace access or bypass approvals.",
             ),
         ];
 
