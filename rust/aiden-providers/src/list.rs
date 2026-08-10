@@ -55,6 +55,51 @@ pub struct CodexProviderSnapshot {
     pub models: Vec<CodexModelSummary>,
 }
 
+/// Snapshot of the exact Codex models bundled with the pinned Pi release.
+/// Hosts still gate exposure on an encrypted OAuth credential.
+pub fn bundled_codex_provider_snapshot(configured: bool) -> CodexProviderSnapshot {
+    let model =
+        |id: &str, name: &str, vision: bool, context_window: u64, max: bool| CodexModelSummary {
+            id: id.to_string(),
+            name: name.to_string(),
+            api: "openai-codex-responses".to_string(),
+            reasoning: true,
+            vision,
+            context_window,
+            max_tokens: 128_000,
+            thinking_levels: if max {
+                vec!["low", "medium", "high", "xhigh", "max"]
+            } else {
+                vec!["low", "medium", "high", "xhigh"]
+            }
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        };
+    CodexProviderSnapshot {
+        id: OPENAI_CODEX_PROVIDER_ID.to_string(),
+        name: "OpenAI Codex".to_string(),
+        auth_name: "OpenAI (ChatGPT Plus/Pro)".to_string(),
+        configured,
+        needs_attention: false,
+        models: vec![
+            model(
+                "gpt-5.3-codex-spark",
+                "GPT-5.3 Codex Spark",
+                false,
+                128_000,
+                false,
+            ),
+            model("gpt-5.4", "GPT-5.4", true, 272_000, false),
+            model("gpt-5.4-mini", "GPT-5.4 mini", true, 272_000, false),
+            model("gpt-5.5", "GPT-5.5", true, 272_000, false),
+            model("gpt-5.6-luna", "GPT-5.6 Luna", true, 372_000, true),
+            model("gpt-5.6-sol", "GPT-5.6 Sol", true, 372_000, true),
+            model("gpt-5.6-terra", "GPT-5.6 Terra", true, 372_000, true),
+        ],
+    }
+}
+
 /// The model-metadata shape embedded in a picker entry.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
