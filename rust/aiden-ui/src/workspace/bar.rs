@@ -1,5 +1,5 @@
-//! The workspace context bar rendering: the workspace / git / open-in-editor
-//! chips plus the workspace picker overlay content.
+//! The workspace context bar rendering: workspace and Git context plus the
+//! workspace picker overlay content. Editor launching lives in the titlebar.
 
 use aiden_data::portable_config::Workspace;
 use gpui::{
@@ -7,7 +7,9 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
-use gpui_component::{h_flex, input::Input, v_flex, ActiveTheme, Icon, IconName, Sizable as _};
+use gpui_component::{
+    h_flex, input::Input, v_flex, ActiveTheme, Icon, IconName, PixelsExt as _, Sizable as _,
+};
 
 use crate::app::AppState;
 
@@ -16,44 +18,65 @@ use super::state::{
 };
 
 impl AppState {
-    /// The chat-pane header strip: workspace chip · git chip · editor chip.
+    /// The quiet strip attached to the composer: workspace · local execution ·
+    /// git. Permission is intentionally absent until the Rust service
+    /// exposes an honest mutation path.
     pub(crate) fn workspace_bar(
         &self,
-        _window: &mut Window,
+        interaction_busy: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
         let snapshot = self.workspace_state.read(cx).bar_snapshot();
         let workspace = self.service.read(cx).workspace.clone();
+        let window_width = window.viewport_size().width.as_f32();
+        let hide_local = window_width < 460.0;
+        let context_busy = interaction_busy || snapshot.git_busy;
         h_flex()
             .id("workspace-bar")
-            .w_full()
-            .px_3()
-            .py_1()
-            .gap_1()
+            .mx_3()
+            .min_h(px(32.))
+            .min_w(px(0.))
+            .px_1p5()
+            .pt_1()
+            .pb_2()
+            .mb(px(-4.))
+            .gap_0p5()
             .items_center()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(self.workspace_chip(workspace.as_ref(), cx))
+            .rounded_t(px(12.))
+            .bg(theme.secondary)
+            .child(self.workspace_chip(workspace.as_ref(), window_width < 700.0, context_busy, cx))
             .child(self.bar_divider(theme.border))
-            .child(self.git_chip(&snapshot, cx))
-            .child(self.bar_divider(theme.border))
-            .child(self.editor_chip(&snapshot, cx))
+            .when(!hide_local, |el| {
+                el.child(
+                    h_flex()
+                        .px_2()
+                        .gap_1()
+                        .items_center()
+                        .text_color(theme.muted_foreground)
+                        .child(
+                            Icon::new(IconName::SquareTerminal)
+                                .xsmall()
+                                .text_color(theme.muted_foreground),
+                        )
+                        .child(div().text_xs().child("Local")),
+                )
+                .child(self.bar_divider(theme.border))
+            })
+            .child(self.git_chip(&snapshot, interaction_busy, cx))
     }
 
     fn bar_divider(&self, color: gpui::Hsla) -> impl IntoElement {
-        div()
-            .id("workspace-bar-divider")
-            .h(px(14.))
-            .w(px(1.))
-            .bg(color)
-            .flex_shrink_0()
+        div().h(px(14.)).w(px(1.)).bg(color).flex_shrink_0()
     }
 
     /// The workspace chip: current workspace name (or "No workspace").
     fn workspace_chip(
         &self,
         workspace: Option<&Workspace>,
+        compact: bool,
+        busy: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme().clone();
@@ -72,18 +95,26 @@ impl AppState {
             .gap_1()
             .items_center()
             .rounded_md()
-            .cursor_pointer()
+            .when(
+                !busy && crate::services::appearance::pointer_cursors_enabled(cx),
+                |el| el.cursor_pointer(),
+            )
+            .when(busy, |el| el.opacity(0.55))
             .text_color(if has_workspace {
                 theme.foreground
             } else {
                 theme.muted_foreground
             })
-            .hover(move |style| style.bg(hover_theme.list_hover))
-            .active(move |style| style.bg(active_theme.list_active))
-            .on_click(cx.listener(|this, _event, window, cx| {
-                this.workspace_state.update(cx, |state, cx| {
-                    state.open_overlay(Overlay::Workspaces, window, cx)
-                });
+            .when(!busy, |el| {
+                el.hover(move |style| style.bg(hover_theme.list_hover))
+                    .active(move |style| style.bg(active_theme.list_active))
+            })
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                if !busy {
+                    this.workspace_state.update(cx, |state, cx| {
+                        state.open_overlay(Overlay::Workspaces, window, cx)
+                    });
+                }
             }))
             .child(
                 Icon::new(if folder {
@@ -94,7 +125,13 @@ impl AppState {
                 .xsmall()
                 .text_color(theme.muted_foreground),
             )
-            .child(div().text_xs().max_w(px(220.)).truncate().child(name))
+            .child(
+                div()
+                    .text_xs()
+                    .max_w(px(if compact { 120.0 } else { 220.0 }))
+                    .truncate()
+                    .child(name),
+            )
     }
 }
 
@@ -164,7 +201,10 @@ pub(crate) fn workspaces_content(
                         .gap_2()
                         .items_center()
                         .rounded_md()
-                        .cursor_pointer()
+                        .when(
+                            crate::services::appearance::pointer_cursors_enabled(cx),
+                            |el| el.cursor_pointer(),
+                        )
                         .bg(if selected {
                             theme.list_active
                         } else {
@@ -233,7 +273,10 @@ pub(crate) fn workspaces_content(
                         .gap_2()
                         .items_center()
                         .rounded_md()
-                        .cursor_pointer()
+                        .when(
+                            crate::services::appearance::pointer_cursors_enabled(cx),
+                            |el| el.cursor_pointer(),
+                        )
                         .hover(move |style| style.bg(theme.list_hover))
                         .on_click({
                             let entity = entity.clone();
