@@ -7,33 +7,36 @@
 //! scheduled/usage/subagents, settings) as lazily created entities, and
 //! routes the sidebar palette / gear / keyboard actions onto them.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use aiden_core::appearance::{Mode, ReduceMotion};
 use futures::FutureExt;
 use gpui::{
     actions, div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity,
-    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
-    Styled as _, Subscription, Window,
+    FocusHandle, Focusable as _, FontWeight, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window,
 };
-// macOS-only: the OS-global dictation hotkey registration (parity audit
-// config §12) and the `global-hotkey` event receiver that routes presses
-// into the pill coordinator.
 #[cfg(target_os = "macos")]
-use aiden_mac::hotkey::{GlobalHotkeyManager, MacHotkeyPort, ShortcutRegistrationPort as _};
-#[cfg(target_os = "macos")]
-use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use gpui_component::{
+    button::ButtonVariants as _,
     h_flex,
     input::{InputEvent, InputState},
-    select::{SelectEvent, SelectItem as _, SelectState},
-    v_flex, ActiveTheme, IconName, WindowExt as _,
+    resizable::ResizableState,
+    v_flex, ActiveTheme, IconName, PixelsExt as _, Sizable as _, WindowExt as _,
 };
 
 use crate::assistant::{AssistantPanel, AssistantPanelDeps, AssistantPanelEvent};
-use crate::chat::composer::{decode_model_key, model_items, model_key, ModelItem};
+use crate::chat::composer::{model_items_with_layout, model_key, COMPOSER_MAX_ROWS};
+use crate::chat::model_pad_picker::ModelPadRuntime;
+use crate::chat::model_picker::{ComposerModelPicker, ModelPickerPins};
+use crate::environment::{
+    EnvironmentWorkbench, FilesEvent, FilesNotification, FilesWorkbench, ReviewEvent,
+    ReviewWorkbench,
+};
 use crate::panels::command_palette::{
     CommandPalette, CommandPaletteDeps, PaletteCommand, PaletteDataSource, PaletteProvider,
     RecentCommandsStore, SettingsRecentStore,
@@ -53,8 +56,59 @@ use crate::pill::{
 use crate::services::chat_service::ChatService;
 use crate::services::provider_kit::ConfiguredProvider;
 use crate::services::stores::Stores;
+use crate::settings::navigation::{
+    capture_settings_return_view, settings_compact_tab_target, settings_escape_target,
+    SettingsCompactTabTarget, SettingsEscapeTarget, SettingsNavigation,
+};
 use crate::settings::{SettingsSection, SettingsServices, SettingsView};
-use crate::workspace::{NotificationKind, Overlay, WorkspaceEvent, WorkspaceState};
+use crate::workspace::{NotificationKind, WorkspaceEvent, WorkspaceState};
+
+fn pending_files_replay_authorized(
+    generation_active: bool,
+    git_busy: bool,
+    files_saving: bool,
+    pending: bool,
+) -> bool {
+    pending && !generation_active && !git_busy && !files_saving
+}
+
+const fn model_pad_settings_entry_allowed(git_busy: bool) -> bool {
+    !git_busy
+}
+
+fn provider_catalog_fingerprint(providers: &[ConfiguredProvider]) -> Vec<String> {
+    providers
+        .iter()
+        .map(|provider| {
+            let mut models = provider.models.clone();
+            models.sort();
+            let mut metadata = provider.model_metadata.iter().collect::<Vec<_>>();
+            metadata.sort_by(|left, right| left.0.cmp(right.0));
+            let metadata = metadata
+                .into_iter()
+                .map(|(model, metadata)| {
+                    format!(
+                        "{model}={}",
+                        serde_json::to_string(metadata).unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{}|{}|{}|{:?}|{}|{}|{}|{}|{}",
+                provider.id,
+                provider.label,
+                provider.base_url,
+                provider.deployment,
+                provider.has_key,
+                provider.needs_key,
+                provider.default_model.as_deref().unwrap_or_default(),
+                models.join(","),
+                metadata
+            )
+        })
+        .collect()
+}
 
 actions!(
     aiden,
@@ -63,6 +117,7 @@ actions!(
         Quit,
         TogglePalette,
         ToggleTerminal,
+        ToggleEnvironment,
         TogglePill,
         OpenSettings,
         SearchChats,
@@ -82,11 +137,15 @@ actions!(
         CloseWindow,
         ToggleSidebar,
         ToggleAssistant,
+        OpenAssistant,
         ToggleSubagents,
         ToggleUsage,
         FocusComposer,
         SendMessage,
         SaveFile,
+        ChangeModel,
+        ManageProviders,
+        SearchSettings,
     ]
 );
 
@@ -103,37 +162,69 @@ pub enum AppView {
     Settings,
 }
 
-impl AppView {
-    pub const ALL: &'static [AppView] = &[
-        AppView::Chat,
-        AppView::Assistant,
-        AppView::Scheduled,
-        AppView::Subagents,
-        AppView::Usage,
-        AppView::Settings,
-    ];
+#[derive(Debug, Clone)]
+enum PendingFilesMutation {
+    SelectWorkspace(String),
+    AdoptFolder(std::path::PathBuf),
+    ChooseWorkspaceFolder,
+    SelectChat(String),
+    DeleteChat(String),
+    NewChat,
+    Navigate(AppView),
+    Quit,
+    CloseWindow,
+    Palette(PaletteCommand),
+}
 
-    pub fn label(self) -> &'static str {
-        match self {
-            AppView::Chat => "Chats",
-            AppView::Assistant => "Assistant",
-            AppView::Scheduled => "Scheduled",
-            AppView::Usage => "Usage",
-            AppView::Subagents => "Subagents",
-            AppView::Settings => "Settings",
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilesMutationGate {
+    Allow,
+    ConfirmDiscard,
+    BlockSaving,
+}
 
-    pub fn icon(self) -> IconName {
-        match self {
-            AppView::Chat => IconName::BookOpen,
-            AppView::Assistant => IconName::PanelBottom,
-            AppView::Scheduled => IconName::Calendar,
-            AppView::Usage => IconName::ChartPie,
-            AppView::Subagents => IconName::Bot,
-            AppView::Settings => IconName::Settings2,
-        }
+fn files_mutation_gate(dirty: bool, saving: bool) -> FilesMutationGate {
+    if saving {
+        FilesMutationGate::BlockSaving
+    } else if dirty {
+        FilesMutationGate::ConfirmDiscard
+    } else {
+        FilesMutationGate::Allow
     }
+}
+
+fn settings_auth_must_cancel_on_navigation(current: AppView, next: AppView) -> bool {
+    current == AppView::Settings && next != AppView::Settings
+}
+
+fn competing_root_modal_allowed(codex_auth_active: bool) -> bool {
+    !codex_auth_active
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostAuthNavigationFocus {
+    Composer,
+    Sidebar,
+}
+
+fn post_auth_navigation_focus(view: AppView) -> PostAuthNavigationFocus {
+    if view == AppView::Chat {
+        PostAuthNavigationFocus::Composer
+    } else {
+        PostAuthNavigationFocus::Sidebar
+    }
+}
+
+fn settings_return_capture_allowed(
+    gate: FilesMutationGate,
+    pending_confirmation_established: bool,
+) -> bool {
+    gate == FilesMutationGate::Allow
+        || (gate == FilesMutationGate::ConfirmDiscard && pending_confirmation_established)
+}
+
+fn environment_workbench_rendered(view: AppView) -> bool {
+    view == AppView::Chat
 }
 
 /// Cycle the appearance mode forward (system → light → dark → system). Pure
@@ -143,20 +234,6 @@ pub fn cycle_appearance_mode(mode: Mode) -> Mode {
         Mode::System => Mode::Light,
         Mode::Light => Mode::Dark,
         Mode::Dark => Mode::System,
-    }
-}
-
-/// Map a palette settings destination id onto a settings section. `"usage"`
-/// deliberately resolves to `None` — usage lives on its own panel.
-pub fn settings_section_from_id(id: &str) -> Option<SettingsSection> {
-    match id {
-        "appearance" => Some(SettingsSection::Appearance),
-        "providers" => Some(SettingsSection::Providers),
-        "shortcuts" => Some(SettingsSection::Shortcuts),
-        "mcp" => Some(SettingsSection::Mcp),
-        "scheduled-tasks" => Some(SettingsSection::ScheduledTasks),
-        "about" => Some(SettingsSection::About),
-        _ => None,
     }
 }
 
@@ -227,6 +304,9 @@ static PILL_WINDOW: std::sync::Mutex<Option<gpui::WindowHandle<PillView>>> =
 /// The wired dictation coordinator, reachable from the pill window's cancel
 /// button and the bridge task (both constructed before `AppState` finishes).
 static PILL_COORDINATOR: std::sync::OnceLock<Arc<PillCoordinator>> = std::sync::OnceLock::new();
+/// Mirrors the active chat's generation state for the OS-global dictation
+/// callback, which runs outside the `AppState` entity.
+static CHAT_GENERATION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // ===========================================================================
 // Reduced motion (parity audit UI §7)
@@ -305,9 +385,15 @@ pub struct AppState {
     pub(crate) composer_input: Entity<InputState>,
     /// Sidebar chat search input.
     pub(crate) search_input: Entity<InputState>,
-    /// Model picker (created once; items sync with the provider catalog).
-    pub(crate) model_select: Option<Entity<SelectState<Vec<ModelItem>>>>,
-    model_select_dirty: bool,
+    /// Search field owned by the retained composer model picker.
+    pub(crate) model_picker_input: Entity<InputState>,
+    /// Retained composer picker presentation state. ChatService owns selection.
+    pub(crate) model_picker: Entity<ComposerModelPicker>,
+    /// One roving-focus stop for the filtered model-list rows.
+    pub(crate) model_picker_focus: FocusHandle,
+    pub(crate) model_picker_pad_focus: FocusHandle,
+    pub(crate) model_picker_empty_pad_focus: FocusHandle,
+    pub(crate) model_picker_trigger_focus: FocusHandle,
     pub(crate) message_scroll: ScrollHandle,
     last_message_len: usize,
     last_catalog: Vec<String>,
@@ -322,45 +408,496 @@ pub struct AppState {
     // Lazily created surface entities (created on first navigation/toggle and
     // kept alive so their state — e.g. the terminal PTY — survives view
     // switches and drawer toggles).
-    settings: Option<Entity<SettingsView>>,
+    pub(crate) settings: Option<Entity<SettingsView>>,
     scheduled: Option<Entity<ScheduledPanel>>,
     usage: Option<Entity<UsagePanel>>,
     subagents: Option<Entity<SubagentsPanel>>,
     assistant: Option<Entity<AssistantPanel>>,
-    terminal: Option<Entity<TerminalDrawer>>,
+    pub(crate) terminal: Option<Entity<TerminalDrawer>>,
+    pub(crate) environment: Entity<EnvironmentWorkbench>,
+    pub(crate) files: Entity<FilesWorkbench>,
+    pub(crate) review: Entity<ReviewWorkbench>,
+    files_dirty: bool,
+    files_saving: bool,
+    pending_files_mutation: Option<PendingFilesMutation>,
     palette: Option<Entity<CommandPalette>>,
     palette_source: Option<Arc<std::sync::Mutex<PaletteSourceSnapshot>>>,
-    /// Whether the leading sidebar is shown (⌃⌘S / cmd-ctrl-s toggles it).
-    sidebar_visible: bool,
+    palette_invoker_focus: Option<FocusHandle>,
+    /// Persisted wide-screen preference plus transient compact-overlay state.
+    pub(crate) sidebar_visibility: crate::shell::sidebar::SidebarVisibility,
+    /// The persisted inline width and the state backing pointer resizing.
+    pub(crate) sidebar_width: f32,
+    sidebar_resizable: Entity<ResizableState>,
+    /// Focus restoration and keyboard resizing for the compact overlay/rail.
+    pub(crate) sidebar_return_focus: Option<FocusHandle>,
+    pub(crate) sidebar_last_focus: FocusHandle,
+    pub(crate) sidebar_toggle_focus: FocusHandle,
+    sidebar_resize_focus: FocusHandle,
+    pub(crate) settings_navigation: SettingsNavigation,
+    pub(crate) settings_return_view: Option<AppView>,
+    pub(crate) settings_return_focus: Option<FocusHandle>,
+    pub(crate) terminal_toggle_focus: FocusHandle,
+    pub(crate) environment_toggle_focus: FocusHandle,
+    last_environment_overlay: bool,
+    last_environment_summary: bool,
 }
 
 impl AppState {
-    pub fn new(stores: Stores, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let service = cx.new(|cx| ChatService::new(stores.clone(), cx));
+    fn authorize_files_mutation(
+        &mut self,
+        mutation: PendingFilesMutation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match files_mutation_gate(self.files_dirty, self.files_saving) {
+            FilesMutationGate::Allow => return true,
+            FilesMutationGate::BlockSaving => return false,
+            FilesMutationGate::ConfirmDiscard => {}
+        }
+        self.pending_files_mutation = Some(mutation);
+        self.set_view(AppView::Chat, cx);
+        self.environment.update(cx, |environment, cx| {
+            environment.show(crate::environment::EnvironmentTab::Files, window, cx);
+        });
+        self.files
+            .update(cx, |files, cx| files.request_external_discard(window, cx));
+        false
+    }
+
+    pub(crate) fn navigate_view(
+        &mut self,
+        view: AppView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if view == AppView::Settings {
+            let return_focus = window.focused(cx);
+            if self.authorize_settings_entry(
+                PendingFilesMutation::Navigate(view),
+                return_focus,
+                window,
+                cx,
+            ) {
+                self.enter_settings(Some(SettingsSection::Providers), window, cx);
+            }
+            return;
+        }
+        if self.authorize_files_mutation(PendingFilesMutation::Navigate(view), window, cx) {
+            self.set_view(view, cx);
+        }
+    }
+
+    pub(crate) fn navigate_chat(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.authorize_files_mutation(PendingFilesMutation::SelectChat(id.clone()), window, cx) {
+            self.set_view(AppView::Chat, cx);
+            self.service
+                .update(cx, |service, cx| service.select_chat(&id, cx));
+        }
+    }
+
+    pub(crate) fn delete_chat_guarded(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.authorize_files_mutation(PendingFilesMutation::DeleteChat(id.clone()), window, cx) {
+            self.service
+                .update(cx, |service, cx| service.delete_chat(&id, cx));
+        }
+    }
+
+    pub(crate) fn new_chat_guarded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.service.read(cx).workspace.is_none() {
+            return;
+        }
+        if self.authorize_files_mutation(PendingFilesMutation::NewChat, window, cx) {
+            self.set_view(AppView::Chat, cx);
+            self.service.update(cx, |service, cx| service.new_chat(cx));
+        }
+    }
+
+    fn quit_guarded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_shortcut_recording(cx);
+        if self.authorize_files_mutation(PendingFilesMutation::Quit, window, cx) {
+            self.request_quit(cx);
+        }
+    }
+
+    pub(crate) fn request_native_close(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.cancel_shortcut_recording(cx);
+        let authorized =
+            self.authorize_files_mutation(PendingFilesMutation::CloseWindow, window, cx);
+        if authorized {
+            self.cancel_settings_codex_auth(cx);
+            self.service.update(cx, |service, _cx| {
+                service.flush_appearance_save_before_quit()
+            });
+        }
+        authorized
+    }
+
+    fn sidebar_frame(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let rail = if self.view == AppView::Settings {
+            self.settings_navigation_view(window, cx).into_any_element()
+        } else {
+            self.sidebar(window, cx).into_any_element()
+        };
+        v_flex()
+            .id("sidebar-frame")
+            .size_full()
+            .bg(theme.sidebar)
+            .child(gpui_component::TitleBar::new().h(px(52.)).bg(theme.sidebar))
+            .child(div().flex_1().min_h(px(0.)).child(rail))
+            .into_any_element()
+    }
+
+    fn main_column(
+        &mut self,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let title_inset = crate::chat::toolbar::titlebar_left_inset(self.sidebar_visibility);
+        v_flex()
+            .id("main-column")
+            .size_full()
+            .min_w(px(0.))
+            .bg(theme.background)
+            .child(
+                gpui_component::TitleBar::new()
+                    .h(px(crate::chat::toolbar::CHAT_TITLEBAR_HEIGHT_PX))
+                    .child(
+                        h_flex()
+                            .size_full()
+                            .items_center()
+                            .pl(px(title_inset))
+                            .pr_4()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .min_w(px(0.))
+                                    .flex_1()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.foreground)
+                                    .truncate()
+                                    .child(title),
+                            )
+                            .when(self.view == AppView::Chat, |el| {
+                                el.child(self.chat_toolbar_actions(window, cx))
+                            }),
+                    ),
+            )
+            .child(self.content_view(window, cx))
+            .into_any_element()
+    }
+
+    fn environment_container_width(&self, window: &Window) -> f32 {
+        let width = window.viewport_size().width.as_f32();
+        if !self.sidebar_visibility.compact && self.sidebar_visibility.visible() {
+            (width - self.sidebar_width).max(0.0)
+        } else {
+            width
+        }
+    }
+
+    fn environment_overlay_open(&self, window: &Window, cx: &App) -> bool {
+        if !environment_workbench_rendered(self.view) {
+            return false;
+        }
+        let environment = self.environment.read(cx);
+        environment.full_open()
+            && !crate::environment::layout::resolve_layout(
+                environment.preferred_width,
+                self.environment_container_width(window),
+            )
+            .inline
+    }
+
+    fn workbench_column(
+        &mut self,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let conversation = self.main_column(title, window, cx);
+        if self.view != AppView::Chat {
+            return conversation;
+        }
+        let width = self.environment_container_width(window);
+        let workspace = self.service.read(cx).workspace.clone();
+        let (overlay, summary, should_focus_overlay, should_focus_summary, focus_target) = {
+            let environment = self.environment.read(cx);
+            let layout =
+                crate::environment::layout::resolve_layout(environment.preferred_width, width);
+            let overlay = environment.full_open() && !layout.inline;
+            let summary =
+                environment.open && environment.tab == crate::environment::EnvironmentTab::Overview;
+            (
+                overlay,
+                summary,
+                crate::environment::should_focus_overlay_transition(
+                    self.last_environment_overlay,
+                    overlay,
+                    environment.panel_scope.contains_focused(window, cx),
+                ),
+                crate::environment::should_focus_summary_transition(
+                    self.last_environment_summary,
+                    summary,
+                    environment.summary_scope.contains_focused(window, cx),
+                ),
+                if summary {
+                    environment.summary_focus.clone()
+                } else {
+                    environment.active_tab_focus.clone()
+                },
+            )
+        };
+        if should_focus_overlay || should_focus_summary {
+            cx.defer_in(window, move |_this, window, _cx| {
+                focus_target.focus(window);
+            });
+        }
+        self.last_environment_overlay = overlay;
+        self.last_environment_summary = summary;
+        crate::environment::environment_workbench(
+            &self.environment,
+            conversation,
+            crate::environment::EnvironmentWorkbenchProps {
+                container_width: width,
+                workspace,
+                fallback_focus: self.environment_toggle_focus.clone(),
+                files: self.files.clone(),
+                review: self.review.clone(),
+            },
+            window,
+            cx,
+        )
+    }
+
+    fn shell_body(
+        &mut self,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if self.sidebar_visibility.compact {
+            let saved_width = self
+                .sidebar_resizable
+                .read(cx)
+                .sizes()
+                .first()
+                .map(|width| width.as_f32())
+                .unwrap_or(self.sidebar_width);
+            let overlay_width = crate::shell::sidebar::sidebar_overlay_width(
+                saved_width,
+                window.viewport_size().width.as_f32(),
+            );
+            return div()
+                .id("app-body-compact")
+                .relative()
+                .flex_1()
+                .size_full()
+                .overflow_hidden()
+                .child(self.workbench_column(title, window, cx))
+                .when(self.sidebar_visibility.visible(), |el| {
+                    el.child(
+                        div()
+                            .id("sidebar-overlay-backdrop")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .bg(gpui::black().opacity(0.18))
+                            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                                cx.stop_propagation();
+                            })
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                cx.stop_propagation();
+                                this.dismiss_compact_sidebar(window, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .h_full()
+                            .w(px(overlay_width))
+                            .occlude()
+                            .child(self.sidebar_frame(window, cx)),
+                    )
+                })
+                .into_any_element();
+        }
+
+        if !self.sidebar_visibility.visible() {
+            return h_flex()
+                .id("app-body")
+                .flex_1()
+                .size_full()
+                .child(self.workbench_column(title, window, cx))
+                .into_any_element();
+        }
+
+        let config = self.stores.config.clone();
+        let app = cx.weak_entity();
+        let resizable = gpui_component::resizable::h_resizable("app-body-resizable")
+            .with_state(&self.sidebar_resizable)
+            .child(
+                gpui_component::resizable::resizable_panel()
+                    .size(px(self.sidebar_width))
+                    .size_range(
+                        px(crate::shell::sidebar::SIDEBAR_MIN_WIDTH)
+                            ..px(crate::shell::sidebar::SIDEBAR_MAX_WIDTH),
+                    )
+                    .child(self.sidebar_frame(window, cx)),
+            )
+            .child(
+                gpui_component::resizable::resizable_panel()
+                    .size_range(px(320.)..gpui::Pixels::MAX)
+                    .child(self.workbench_column(title, window, cx)),
+            )
+            .on_resize(move |state, _window, cx| {
+                let Some(width) = state.read(cx).sizes().first().copied() else {
+                    return;
+                };
+                let _ = app.update(cx, |this, cx| {
+                    this.sidebar_width = width.as_f32();
+                    cx.notify();
+                });
+                crate::shell::sidebar::persist_sidebar_width(config.clone(), width.as_f32(), cx);
+            });
+        let theme = cx.theme();
+        div()
+            .id("app-body")
+            .relative()
+            .flex_1()
+            .size_full()
+            .child(resizable)
+            .child(
+                div()
+                    .id("sidebar-keyboard-resize")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(self.sidebar_width - 4.0))
+                    .w(px(8.0))
+                    .cursor_col_resize()
+                    .track_focus(&self.sidebar_resize_focus)
+                    .tab_stop(true)
+                    .focus(move |style| style.bg(theme.list_active))
+                    .on_key_down(
+                        cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                            let shift = event.keystroke.modifiers.shift;
+                            if let Some(width) = crate::shell::sidebar::keyboard_resize_width(
+                                this.sidebar_width,
+                                &event.keystroke.key,
+                                shift,
+                            ) {
+                                this.sidebar_width = width;
+                                this.sidebar_resizable = cx.new(|_| ResizableState::default());
+                                crate::shell::sidebar::persist_sidebar_width(
+                                    this.stores.config.clone(),
+                                    width,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub fn new(
+        stores: Stores,
+        initial_appearance: aiden_core::appearance::AppearanceConfig,
+        prepared_native: crate::services::native_appearance::PreparedNativeAppearance,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        if cx.try_global::<ModelPadRuntime>().is_none() {
+            cx.set_global(ModelPadRuntime::default());
+        }
+        if cx.try_global::<ModelPickerPins>().is_none() {
+            cx.set_global(ModelPickerPins::load(&stores.config));
+        }
+        let service =
+            cx.new(|cx| ChatService::new(stores.clone(), initial_appearance, prepared_native, cx));
+        // This is intentionally before `Root::new` renders its first frame.
+        service.update(cx, |service, cx| service.apply_appearance(cx));
         service.update(cx, |service, cx| service.boot(cx));
 
         let composer_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .auto_grow(1, 8)
+                .auto_grow(1, COMPOSER_MAX_ROWS)
                 .placeholder("Message Aiden…")
         });
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search chats"));
+        let model_picker_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter models…"));
+        let sidebar_width = crate::shell::sidebar::load_sidebar_width(&stores.config);
+        let sidebar_compact =
+            crate::shell::sidebar::is_compact_sidebar_width(window.viewport_size().width.as_f32());
+        let sidebar_wide_visible = crate::shell::sidebar::load_sidebar_wide_visible(&stores.config);
+        let sidebar_resizable = cx.new(|_| ResizableState::default());
+        let workspace_config = stores.config.clone();
+        let environment_config = stores.config.clone();
+        let files = cx.new(|cx| FilesWorkbench::new(window, cx));
+        let workspace_state = cx.new(|cx| WorkspaceState::new(workspace_config, window, cx));
+        let review_git = workspace_state.read(cx).git_service();
+        let review = cx.new(|cx| ReviewWorkbench::new(review_git, window, cx));
+        let settings_navigation = SettingsNavigation::new(window, cx);
 
         let mut this = Self {
-            service,
+            service: service.clone(),
             stores,
             view: AppView::default(),
             composer_input,
             search_input,
-            model_select: None,
-            model_select_dirty: true,
+            model_picker_input,
+            model_picker: cx.new(|cx| {
+                let providers = service.read(cx).providers.clone();
+                let selection = service
+                    .read(cx)
+                    .selection
+                    .as_ref()
+                    .map(|selection| model_key(&selection.provider_id, &selection.model));
+                ComposerModelPicker::new(
+                    model_items_with_layout(&providers, cx.try_global::<ModelPadRuntime>()),
+                    selection,
+                )
+            }),
+            model_picker_focus: cx.focus_handle(),
+            model_picker_pad_focus: cx.focus_handle(),
+            model_picker_empty_pad_focus: cx.focus_handle(),
+            model_picker_trigger_focus: cx.focus_handle(),
             message_scroll: ScrollHandle::new(),
             last_message_len: 0,
             last_catalog: Vec::new(),
             last_workspace_id: None,
             appearance_applied: false,
             _subscriptions: Vec::new(),
-            workspace_state: cx.new(|cx| WorkspaceState::new(window, cx)),
+            workspace_state,
+            environment: cx.new(|cx| EnvironmentWorkbench::new(environment_config, cx)),
+            files,
+            review,
+            files_dirty: false,
+            files_saving: false,
+            pending_files_mutation: None,
             settings: None,
             scheduled: None,
             usage: None,
@@ -369,27 +906,103 @@ impl AppState {
             terminal: None,
             palette: None,
             palette_source: None,
-            sidebar_visible: true,
+            palette_invoker_focus: None,
+            sidebar_visibility: crate::shell::sidebar::SidebarVisibility::new(
+                sidebar_wide_visible,
+                sidebar_compact,
+            ),
+            sidebar_width,
+            sidebar_resizable,
+            sidebar_return_focus: None,
+            sidebar_last_focus: cx.focus_handle().tab_stop(true),
+            sidebar_toggle_focus: cx.focus_handle().tab_stop(true),
+            sidebar_resize_focus: cx.focus_handle().tab_stop(true),
+            settings_navigation,
+            settings_return_view: None,
+            settings_return_focus: None,
+            terminal_toggle_focus: cx.focus_handle().tab_stop(true),
+            environment_toggle_focus: cx.focus_handle().tab_stop(true),
+            last_environment_overlay: false,
+            last_environment_summary: false,
         };
+
+        // The pill is a separate GPUI window, so it does not inherit the
+        // main window's globals. Keep an already-open pill synchronized with
+        // both persisted appearance edits and AppKit accessibility events.
+        this._subscriptions
+            .push(cx.observe(&service, |_this, service, cx| {
+                let appearance = service.read(cx).appearance.clone();
+                let system_reduced = service.read(cx).system_reduced_motion();
+                let handle = match PILL_WINDOW.lock() {
+                    Ok(guard) => *guard,
+                    Err(poisoned) => *poisoned.into_inner(),
+                };
+                if let Some(handle) = handle {
+                    let _ = handle.update(cx, |view, _window, cx| {
+                        view.update_appearance(appearance, cx);
+                        view.set_system_reduced_motion(system_reduced, cx);
+                    });
+                }
+            }));
+
+        cx.spawn(async move |this, cx| {
+            let layout = cx
+                .background_spawn(async move {
+                    aiden_data::model_pad_store::ModelPadStore::default().load()
+                })
+                .await;
+            if let Ok(layout) = layout {
+                let _ =
+                    cx.update_global::<ModelPadRuntime, _>(|runtime, _cx| runtime.replace(layout));
+                this.update(cx, |this, cx| {
+                    this.reconcile_model_picker(cx);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+        this._subscriptions
+            .push(cx.observe_global::<ModelPadRuntime>(|this, cx| {
+                this.reconcile_model_picker(cx);
+                cx.notify();
+            }));
+
+        this._subscriptions
+            .push(cx.observe_window_bounds(window, |this, window, cx| {
+                let compact = crate::shell::sidebar::is_compact_sidebar_width(
+                    window.viewport_size().width.as_f32(),
+                );
+                if compact != this.sidebar_visibility.compact {
+                    let restore_focus = this.sidebar_visibility.compact_open;
+                    this.sidebar_visibility = this.sidebar_visibility.transition(
+                        crate::shell::sidebar::SidebarVisibilityEvent::WindowCompact(compact),
+                    );
+                    if restore_focus {
+                        this.restore_sidebar_focus(window);
+                    }
+                    cx.notify();
+                }
+            }));
+
+        // Keep `Mode::System` synchronized with native light/dark changes.
+        // Explicit Light/Dark modes resolve to themselves, so reapplying them
+        // here is harmless and keeps this observer independent of Settings.
+        this._subscriptions.push(cx.observe_window_appearance(
+            window,
+            |this: &mut AppState, _window: &mut Window, cx: &mut Context<AppState>| {
+                this.service
+                    .update(cx, |service, cx| service.apply_appearance(cx));
+                cx.notify();
+            },
+        ));
 
         // Wire the dictation pill (coordinator + window bridge).
         wire_pill_coordinator(cx);
 
-        // Start the scheduled-task runtime: a 30 s tick loop that evaluates
-        // due tasks through the logging executor and records runs (real chat
-        // execution lands with the scheduler-executor follow-up).
-        {
-            let scheduler = this.stores.scheduler.clone();
-            gpui_tokio_bridge::Tokio::spawn(cx, async move {
-                match scheduler.start().await {
-                    Ok(()) => tracing::info!("scheduled-task runtime started"),
-                    Err(error) => {
-                        tracing::error!("scheduled-task runtime failed to start: {error}")
-                    }
-                }
-            })
-            .detach();
-        }
+        // Scheduled execution remains deliberately dormant until the app owns
+        // a real bounded executor. Starting with a placeholder would create
+        // unattended fictional-success runs.
 
         // Portable config watch: an external `~/.aiden/config.json` edit
         // (announced by the background poll thread) refreshes the provider
@@ -412,6 +1025,9 @@ impl AppState {
                         );
                         this.service
                             .update(cx, |service, cx| service.refresh_providers(cx));
+                        if let Some(settings) = this.settings.clone() {
+                            settings.update(cx, |settings, cx| settings.refresh_managed_skills(cx));
+                        }
                     });
                 }
             })
@@ -428,9 +1044,8 @@ impl AppState {
                     let text = this.composer_input.read(cx).value().to_string();
                     this.send_composer(&text, window, cx);
                 }
-                InputEvent::PressEnter { secondary: true }
-                | InputEvent::Focus
-                | InputEvent::Blur => {}
+                InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                InputEvent::PressEnter { secondary: true } => {}
             },
         ));
 
@@ -448,18 +1063,32 @@ impl AppState {
             },
         ));
 
-        // Model picker confirmations (the select is created lazily on first
-        // render once the provider catalog has loaded).
-        let model_select = this.model_select_entity(window, cx);
-        this._subscriptions.push(cx.subscribe(
-            &model_select,
-            |this, _source, event: &SelectEvent<Vec<ModelItem>>, cx| {
-                if let SelectEvent::Confirm(Some(key)) = event {
-                    if let Some((provider_id, model)) = decode_model_key(key) {
-                        this.service.update(cx, |service, cx| {
-                            service.select_model(&provider_id, &model, cx);
-                        });
-                    }
+        this._subscriptions.push(cx.subscribe_in(
+            &this.model_picker_input,
+            window,
+            |this, _source, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let query = this.model_picker_input.read(cx).value().to_string();
+                    this.model_picker.update(cx, |picker, cx| {
+                        picker.query = query;
+                        picker.repair_active_visible();
+                        cx.notify();
+                    });
+                }
+            },
+        ));
+
+        // Settings search only filters the dedicated settings rail. The active
+        // section remains unchanged even when its row is filtered out.
+        this._subscriptions.push(cx.subscribe_in(
+            &this.settings_navigation.search,
+            window,
+            |_this, _source, event, _window, cx| {
+                if matches!(
+                    event,
+                    InputEvent::Change | InputEvent::Focus | InputEvent::Blur
+                ) {
+                    cx.notify();
                 }
             },
         ));
@@ -471,10 +1100,30 @@ impl AppState {
             window,
             |this, _source, event: &WorkspaceEvent, window, cx| match event {
                 WorkspaceEvent::SelectWorkspace { id } => {
+                    if this.service.read(cx).generation_active() {
+                        return;
+                    }
+                    if !this.authorize_files_mutation(
+                        PendingFilesMutation::SelectWorkspace(id.clone()),
+                        window,
+                        cx,
+                    ) {
+                        return;
+                    }
                     this.service
                         .update(cx, |service, cx| service.select_workspace(id, cx));
                 }
                 WorkspaceEvent::AdoptFolder { folder } => {
+                    if this.service.read(cx).generation_active() {
+                        return;
+                    }
+                    if !this.authorize_files_mutation(
+                        PendingFilesMutation::AdoptFolder(folder.clone()),
+                        window,
+                        cx,
+                    ) {
+                        return;
+                    }
                     this.service.update(cx, |service, cx| {
                         service.add_workspace_from_folder(folder, cx)
                     });
@@ -498,50 +1147,257 @@ impl AppState {
                 }
             },
         ));
+        this._subscriptions.push(cx.observe_in(
+            &this.workspace_state,
+            window,
+            |this, workspace_state, window, cx| {
+                let git_busy = workspace_state.read(cx).git_busy;
+                let blocked = git_busy || this.service.read(cx).generation_active();
+                this.files.update(cx, |files, cx| {
+                    files.set_interaction_blocked(blocked, window, cx);
+                });
+                cx.notify();
+            },
+        ));
+        this._subscriptions
+            .push(cx.observe(&this.environment, |this, environment, cx| {
+                let environment = environment.read(cx);
+                let active = environment.open
+                    && matches!(
+                        environment.tab,
+                        crate::environment::EnvironmentTab::Review
+                            | crate::environment::EnvironmentTab::Overview
+                    );
+                let overview = environment.tab == crate::environment::EnvironmentTab::Overview;
+                this.review.update(cx, |review, cx| {
+                    if overview && review.mode != crate::environment::ReviewMode::Changes {
+                        review.set_mode(crate::environment::ReviewMode::Changes, cx);
+                    }
+                    review.set_active(active, cx);
+                });
+                cx.notify();
+            }));
+        this._subscriptions.push(cx.subscribe_in(
+            &this.review,
+            window,
+            |this, _source, event: &ReviewEvent, window, cx| match event {
+                ReviewEvent::OpenFile { request_id, path } => {
+                    this.environment.update(cx, |environment, cx| {
+                        environment.show(crate::environment::EnvironmentTab::Files, window, cx)
+                    });
+                    let container_width = this.environment_container_width(window);
+                    let preferred_width = this.environment.read(cx).preferred_width;
+                    this.files.update(cx, |files, cx| {
+                        files.open_from_review(
+                            *request_id,
+                            path.clone(),
+                            crate::environment::compact_files_for_environment(
+                                preferred_width,
+                                container_width,
+                            ),
+                            window,
+                            cx,
+                        )
+                    });
+                }
+            },
+        ));
+        this._subscriptions
+            .push(cx.observe(&this.review, |_this, _review, cx| cx.notify()));
+        this._subscriptions
+            .push(cx.observe(&this.files, |_this, _files, cx| cx.notify()));
+        this._subscriptions.push(cx.subscribe_in(
+            &this.files,
+            window,
+            |this, _source, event: &FilesEvent, window, cx| match event {
+                FilesEvent::StateChanged(snapshot) => {
+                    this.files_dirty = snapshot.dirty;
+                    this.files_saving = snapshot.saving;
+                    let blocked = this.service.read(cx).generation_active()
+                        || snapshot.dirty
+                        || snapshot.saving;
+                    this.workspace_state.update(cx, |state, cx| {
+                        state.set_interaction_blocked(blocked, cx);
+                    });
+                    cx.notify();
+                }
+                FilesEvent::ExternalDiscardRequested => {
+                    let authorized = pending_files_replay_authorized(
+                        this.service.read(cx).generation_active(),
+                        this.workspace_state.read(cx).git_busy,
+                        this.files_saving,
+                        this.pending_files_mutation.is_some(),
+                    );
+                    if !authorized {
+                        return;
+                    }
+                    let confirmed = this
+                        .files
+                        .update(cx, |files, cx| files.confirm_external_discard(window, cx));
+                    if confirmed {
+                        if let Some(mutation) = this.pending_files_mutation.take() {
+                            match mutation {
+                                PendingFilesMutation::SelectWorkspace(id) => {
+                                    this.service.update(cx, |service, cx| {
+                                        service.select_workspace(&id, cx)
+                                    });
+                                }
+                                PendingFilesMutation::AdoptFolder(folder) => {
+                                    this.service.update(cx, |service, cx| {
+                                        service.add_workspace_from_folder(&folder, cx)
+                                    });
+                                }
+                                PendingFilesMutation::ChooseWorkspaceFolder => {
+                                    this.workspace_state
+                                        .update(cx, |state, cx| state.choose_folder(window, cx));
+                                }
+                                PendingFilesMutation::SelectChat(id) => {
+                                    this.set_view(AppView::Chat, cx);
+                                    this.service
+                                        .update(cx, |service, cx| service.select_chat(&id, cx));
+                                }
+                                PendingFilesMutation::DeleteChat(id) => {
+                                    this.service
+                                        .update(cx, |service, cx| service.delete_chat(&id, cx));
+                                }
+                                PendingFilesMutation::NewChat => {
+                                    this.set_view(AppView::Chat, cx);
+                                    this.service.update(cx, |service, cx| service.new_chat(cx));
+                                }
+                                PendingFilesMutation::Navigate(AppView::Settings) => {
+                                    this.enter_settings(
+                                        Some(SettingsSection::Providers),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                                PendingFilesMutation::Navigate(view) => this.set_view(view, cx),
+                                PendingFilesMutation::Quit => this.request_quit(cx),
+                                PendingFilesMutation::CloseWindow => {
+                                    this.cancel_settings_codex_auth(cx);
+                                    this.service.update(cx, |service, _cx| {
+                                        service.flush_appearance_save_before_quit()
+                                    });
+                                    crate::mark_main_window_closed(cx);
+                                    window.remove_window();
+                                }
+                                PendingFilesMutation::Palette(command) => {
+                                    this.on_palette_command(command, window, cx)
+                                }
+                            }
+                        }
+                    }
+                }
+                FilesEvent::ExternalDiscardCancelled => {
+                    if this
+                        .pending_files_mutation
+                        .as_ref()
+                        .is_some_and(|mutation| {
+                            matches!(
+                                mutation,
+                                PendingFilesMutation::Navigate(AppView::Settings)
+                                    | PendingFilesMutation::Palette(
+                                        PaletteCommand::OpenSettings
+                                            | PaletteCommand::OpenSettingsSection(_)
+                                    )
+                            )
+                        })
+                    {
+                        this.settings_return_view = None;
+                        this.settings_return_focus = None;
+                        this.palette_invoker_focus = None;
+                    }
+                    this.pending_files_mutation = None;
+                }
+                FilesEvent::Notification(FilesNotification::Warning(message)) => {
+                    window.push_notification(
+                        gpui_component::notification::Notification::warning(message.clone()),
+                        cx,
+                    );
+                }
+            },
+        ));
 
         // Service changes: apply appearance once booted, sync the model picker
         // catalog, follow streaming output, and mirror workspace state.
-        this._subscriptions
-            .push(cx.observe(&this.service, |this, _service, cx| {
+        this._subscriptions.push(cx.observe_in(
+            &this.service,
+            window,
+            |this, _service, window, cx| {
                 this.sync_from_service(cx);
-            }));
+                let files_blocked = this.service.read(cx).generation_active()
+                    || this.workspace_state.read(cx).git_busy;
+                let workspace = this.service.read(cx).workspace.clone();
+                this.files.update(cx, |files, cx| {
+                    files.set_interaction_blocked(files_blocked, window, cx);
+                    files.set_workspace(workspace.clone(), window, cx);
+                });
+                this.review
+                    .update(cx, |review, cx| review.set_workspace(workspace, cx));
+                if !crate::chat::toolbar::terminal_eligible(
+                    this.service.read(cx).workspace.as_ref(),
+                ) && this.environment.read(cx).open
+                {
+                    let composer_focus = this.composer_input.read(cx).focus_handle(cx);
+                    this.environment.update(cx, |environment, cx| {
+                        environment.close_to_fallback(window, &composer_focus, cx);
+                    });
+                }
+            },
+        ));
 
         // The chat view is the default view, so the workspace bar is visible
         // from startup (refresh + poll are gated on a folder being present).
         this.workspace_state.update(cx, |state, cx| {
             state.set_visible(true, cx);
         });
+        let initial_workspace = this.service.read(cx).workspace.clone();
+        let review_active = {
+            let environment = this.environment.read(cx);
+            environment.open
+                && matches!(
+                    environment.tab,
+                    crate::environment::EnvironmentTab::Review
+                        | crate::environment::EnvironmentTab::Overview
+                )
+        };
+        this.review.update(cx, |review, cx| {
+            review.set_workspace(initial_workspace, cx);
+            review.set_active(review_active, cx);
+        });
 
         this
     }
 
-    /// Create (once) the model-picker select state. Needs a window, so it is
-    /// called from `AppState::new` (which has one) and cached.
-    fn model_select_entity(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<SelectState<Vec<ModelItem>>> {
-        if let Some(state) = &self.model_select {
-            return state.clone();
-        }
-        let providers = self.service.read(cx).providers.clone();
-        let items = model_items(&providers);
-        let selected = self
-            .service
-            .read(cx)
+    fn reconcile_model_picker(&mut self, cx: &mut Context<Self>) {
+        let service = self.service.read(cx);
+        let booted = service.booted;
+        let providers = service.providers.clone();
+        let selection = service
             .selection
             .as_ref()
-            .and_then(|selection| {
-                let key = model_key(&selection.provider_id, &selection.model);
-                items
-                    .iter()
-                    .position(|item| item.value() == &key)
-                    .map(|row| gpui_component::IndexPath::default().row(row))
-            });
-        let state = cx.new(|cx| SelectState::new(items, selected, window, cx));
-        self.model_select = Some(state.clone());
-        state
+            .map(|selection| model_key(&selection.provider_id, &selection.model));
+        let runtime = cx.try_global::<ModelPadRuntime>().cloned();
+        self.model_picker.update(cx, |picker, cx| {
+            picker.reconcile(&providers, runtime.as_ref(), selection);
+            cx.notify();
+        });
+        if booted {
+            let available = self
+                .model_picker
+                .read(cx)
+                .items
+                .iter()
+                .map(crate::chat::composer::ModelItem::value_key)
+                .collect();
+            let pins = cx.default_global::<ModelPickerPins>();
+            if pins.reconcile(&available) {
+                let snapshot = pins.clone();
+                let store = self.stores.config.clone();
+                cx.background_spawn(async move { snapshot.persist(&store) })
+                    .detach();
+            }
+        }
     }
 
     /// Central sync point driven by service notifications (no window access
@@ -555,28 +1411,46 @@ impl AppState {
         }
 
         let service = self.service.read(cx);
-        let catalog: Vec<String> = service
-            .providers
-            .iter()
-            .map(|provider| {
-                format!(
-                    "{}:{}:{}",
-                    provider.id,
-                    provider.models.len(),
-                    provider.has_key
-                )
-            })
-            .collect();
+        let catalog = provider_catalog_fingerprint(&service.providers);
+        let providers = service.providers.clone();
+        let selection = service
+            .selection
+            .as_ref()
+            .map(|selection| model_key(&selection.provider_id, &selection.model));
+        let _ = service;
         if catalog != self.last_catalog {
             self.last_catalog = catalog;
-            self.model_select_dirty = true;
+            let runtime = cx.try_global::<ModelPadRuntime>().cloned();
+            self.model_picker.update(cx, |picker, cx| {
+                picker.reconcile(&providers, runtime.as_ref(), selection);
+                cx.notify();
+            });
         }
+        if booted {
+            let available = self
+                .model_picker
+                .read(cx)
+                .items
+                .iter()
+                .map(crate::chat::composer::ModelItem::value_key)
+                .collect();
+            let pins = cx.default_global::<ModelPickerPins>();
+            if pins.reconcile(&available) {
+                let snapshot = pins.clone();
+                let store = self.stores.config.clone();
+                cx.background_spawn(async move { snapshot.persist(&store) })
+                    .detach();
+            }
+        }
+        let service = self.service.read(cx);
 
+        let generation_active = service.generation_active();
+        CHAT_GENERATION_ACTIVE.store(generation_active, Ordering::Relaxed);
         let message_len = service
             .active_chat
             .as_ref()
             .map_or(0, |chat| chat.messages.len());
-        if message_len != self.last_message_len || service.generation_active() {
+        if message_len != self.last_message_len || generation_active {
             self.last_message_len = message_len;
             self.message_scroll.scroll_to_bottom();
         }
@@ -590,45 +1464,37 @@ impl AppState {
             .as_ref()
             .map(|workspace| workspace.id.clone());
         let folder = service.workspace_folder();
+        let workspace = service.workspace.clone();
+        let terminal_allowed = crate::chat::toolbar::terminal_eligible(workspace.as_ref());
         let workspace_changed = active_id != self.last_workspace_id;
         if workspace_changed {
             self.last_workspace_id = active_id.clone();
         }
         if workspace_changed {
             if let Some(terminal) = &self.terminal {
-                let cwd = folder.clone().unwrap_or_else(aiden_data::home_dir);
-                terminal.update(cx, |terminal, cx| terminal.set_cwd(cwd, cx));
+                if let Some(cwd) = folder.clone() {
+                    terminal.update(cx, |terminal, cx| terminal.set_cwd(cwd, cx));
+                } else {
+                    terminal.update(cx, |terminal, cx| terminal.close(cx));
+                }
             }
         }
+        if !terminal_allowed {
+            if let Some(terminal) = &self.terminal {
+                terminal.update(cx, |terminal, cx| terminal.close(cx));
+            }
+        }
+        let workspace_interaction_blocked =
+            generation_active || self.files_dirty || self.files_saving;
         self.workspace_state.update(cx, |state, cx| {
             state.set_mirror(workspaces, active_id, folder, cx);
+            state.set_interaction_blocked(workspace_interaction_blocked, cx);
         });
-    }
-
-    /// Apply the model-picker catalog + selection; called from render with
-    /// window access, deferred until the current update completes.
-    fn sync_model_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.model_select_dirty {
-            return;
+        if let Some(settings) = self.settings.clone() {
+            settings.update(cx, |settings, cx| {
+                settings.set_skills_workspace(workspace.as_ref(), cx)
+            });
         }
-        self.model_select_dirty = false;
-        let Some(select) = self.model_select.clone() else {
-            return;
-        };
-        let providers = self.service.read(cx).providers.clone();
-        let selection_key = self
-            .service
-            .read(cx)
-            .selection
-            .as_ref()
-            .map(|selection| model_key(&selection.provider_id, &selection.model));
-        let items = model_items(&providers);
-        cx.defer_in(window, move |_this, window, cx| {
-            select.update(cx, |state, cx| state.set_items(items, window, cx));
-            if let Some(key) = selection_key {
-                select.update(cx, |state, cx| state.set_selected_value(&key, window, cx));
-            }
-        });
     }
 
     /// Send the composer contents (Enter or the send button).
@@ -661,13 +1527,12 @@ impl AppState {
         });
     }
 
-    fn on_new_chat(&mut self, _: &NewChat, _: &mut Window, cx: &mut Context<Self>) {
-        self.set_view(AppView::Chat, cx);
-        self.service.update(cx, |service, cx| service.new_chat(cx));
+    fn on_new_chat(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_chat_guarded(window, cx);
     }
 
-    fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
-        self.request_quit(cx);
+    fn on_quit(&mut self, _: &Quit, window: &mut Window, cx: &mut Context<Self>) {
+        self.quit_guarded(window, cx);
     }
 
     /// The quit barrier: warn + cancel when a generation is in flight, stop
@@ -675,6 +1540,7 @@ impl AppState {
     /// and quit. Full dialog UX lands later — for now a warning log plus
     /// clean cancellation so no tokio stream task leaks past shutdown.
     fn request_quit(&mut self, cx: &mut Context<Self>) {
+        self.cancel_settings_codex_auth(cx);
         let barrier = self.stores.quit_barrier.clone();
         if self.service.read(cx).generation_active() {
             tracing::warn!(
@@ -683,9 +1549,9 @@ impl AppState {
             // Aborts the provider stream: sets the driver's cancel flag and
             // settles the partial bubble so the watcher/driver tasks end
             // instead of running to completion into a dead channel.
-            self.service
-                .update(cx, |service, cx| service.stop_generation(cx));
         }
+        self.service.update(cx, |service, cx| service.dispose(cx));
+        self.stores.foundation_models.dispose();
         // Stop the scheduler tick loop (aborts the tick task, requests
         // cancellation of any live runs) so no background tokio task
         // outlives the app.
@@ -703,27 +1569,40 @@ impl AppState {
 
     /// ⌘,: open Settings (providers section is the landing spot).
     fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_settings_section(window, cx);
+        let return_focus = window.focused(cx);
+        if !self.authorize_settings_entry(
+            PendingFilesMutation::Navigate(AppView::Settings),
+            return_focus.clone(),
+            window,
+            cx,
+        ) {
+            return;
+        }
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.enter_settings(Some(SettingsSection::Providers), window, cx);
     }
 
     /// ⌘⇧F: focus the sidebar chat search.
     fn on_search_chats(&mut self, _: &SearchChats, window: &mut Window, cx: &mut Context<Self>) {
         self.set_view(AppView::Chat, cx);
+        if !self.sidebar_visibility.visible() {
+            self.open_sidebar(window, cx);
+        }
         self.search_input
             .update(cx, |input, cx| input.focus(window, cx));
     }
 
     /// ⌘⇧[ / ⌘⇧]: previous/next chat in the sidebar order.
-    fn on_previous_chat(&mut self, _: &PreviousChat, _: &mut Window, cx: &mut Context<Self>) {
-        self.cycle_chat(false, cx);
+    fn on_previous_chat(&mut self, _: &PreviousChat, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_chat(false, window, cx);
     }
 
-    fn on_next_chat(&mut self, _: &NextChat, _: &mut Window, cx: &mut Context<Self>) {
-        self.cycle_chat(true, cx);
+    fn on_next_chat(&mut self, _: &NextChat, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_chat(true, window, cx);
     }
 
     /// ⌘1..⌘9: jump to the Nth chat in the (search-filtered) sidebar list.
-    fn jump_to_chat(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn jump_to_chat(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let ids: Vec<String> = self
             .service
             .read(cx)
@@ -735,45 +1614,43 @@ impl AppState {
             tracing::debug!(index, count = ids.len(), "chat jump out of range");
             return;
         };
-        self.set_view(AppView::Chat, cx);
-        self.service
-            .update(cx, |service, cx| service.select_chat(&id, cx));
+        self.navigate_chat(id, window, cx);
     }
 
-    fn on_chat_jump_1(&mut self, _: &ChatJump1, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(0, cx);
+    fn on_chat_jump_1(&mut self, _: &ChatJump1, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(0, window, cx);
     }
 
-    fn on_chat_jump_2(&mut self, _: &ChatJump2, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(1, cx);
+    fn on_chat_jump_2(&mut self, _: &ChatJump2, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(1, window, cx);
     }
 
-    fn on_chat_jump_3(&mut self, _: &ChatJump3, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(2, cx);
+    fn on_chat_jump_3(&mut self, _: &ChatJump3, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(2, window, cx);
     }
 
-    fn on_chat_jump_4(&mut self, _: &ChatJump4, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(3, cx);
+    fn on_chat_jump_4(&mut self, _: &ChatJump4, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(3, window, cx);
     }
 
-    fn on_chat_jump_5(&mut self, _: &ChatJump5, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(4, cx);
+    fn on_chat_jump_5(&mut self, _: &ChatJump5, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(4, window, cx);
     }
 
-    fn on_chat_jump_6(&mut self, _: &ChatJump6, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(5, cx);
+    fn on_chat_jump_6(&mut self, _: &ChatJump6, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(5, window, cx);
     }
 
-    fn on_chat_jump_7(&mut self, _: &ChatJump7, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(6, cx);
+    fn on_chat_jump_7(&mut self, _: &ChatJump7, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(6, window, cx);
     }
 
-    fn on_chat_jump_8(&mut self, _: &ChatJump8, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(7, cx);
+    fn on_chat_jump_8(&mut self, _: &ChatJump8, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(7, window, cx);
     }
 
-    fn on_chat_jump_9(&mut self, _: &ChatJump9, _: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to_chat(8, cx);
+    fn on_chat_jump_9(&mut self, _: &ChatJump9, window: &mut Window, cx: &mut Context<Self>) {
+        self.jump_to_chat(8, window, cx);
     }
 
     /// ⌘O: open the macOS workspace-folder picker.
@@ -783,54 +1660,207 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !competing_root_modal_allowed(self.settings_codex_auth_active(cx)) {
+            return;
+        }
+        if self.environment_overlay_open(window, cx) {
+            return;
+        }
+        if self.service.read(cx).generation_active() {
+            return;
+        }
+        if !self.authorize_files_mutation(PendingFilesMutation::ChooseWorkspaceFolder, window, cx) {
+            return;
+        }
+        self.dismiss_compact_sidebar_before_content_focus(cx);
         self.workspace_state
             .update(cx, |state, cx| state.choose_folder(window, cx));
     }
 
     /// ⌘⇧E: open the "open in editor" overlay for the active workspace.
     fn on_open_in_editor(&mut self, _: &OpenInEditor, window: &mut Window, cx: &mut Context<Self>) {
+        if self.environment_overlay_open(window, cx) {
+            return;
+        }
+        if self.service.read(cx).generation_active() {
+            return;
+        }
+        self.dismiss_compact_sidebar_before_content_focus(cx);
         self.set_view(AppView::Chat, cx);
         self.workspace_state.update(cx, |state, cx| {
-            state.open_overlay(Overlay::Editors, window, cx);
+            state.open_preferred_editor(window, cx);
         });
     }
 
     /// ⌘W: close the window. A single-window app has nothing to fall back to,
     /// so this is a full quit (same barrier path as ⌘Q) — no windowless
     /// process lingers in the dock.
-    fn on_close_window(&mut self, _: &CloseWindow, _: &mut Window, cx: &mut Context<Self>) {
-        self.request_quit(cx);
+    fn on_close_window(&mut self, _: &CloseWindow, window: &mut Window, cx: &mut Context<Self>) {
+        self.quit_guarded(window, cx);
     }
 
     /// ⌃⌘S (cmd-ctrl-s): show/hide the sidebar.
-    fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
-        self.sidebar_visible = !self.sidebar_visible;
+    fn on_toggle_sidebar(
+        &mut self,
+        _: &ToggleSidebar,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_sidebar(window, cx);
+    }
+
+    fn open_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_visibility.compact {
+            if !self.sidebar_visibility.compact_open {
+                if self.environment_overlay_open(window, cx) {
+                    let fallback = self.environment_toggle_focus.clone();
+                    self.environment.update(cx, |environment, cx| {
+                        environment.close(window, &fallback, cx);
+                    });
+                }
+                self.sidebar_return_focus = window.focused(cx);
+                self.sidebar_visibility = self
+                    .sidebar_visibility
+                    .transition(crate::shell::sidebar::SidebarVisibilityEvent::Toggle);
+            }
+        } else if !self.sidebar_visibility.wide_visible {
+            self.sidebar_visibility = self
+                .sidebar_visibility
+                .transition(crate::shell::sidebar::SidebarVisibilityEvent::Toggle);
+            crate::shell::sidebar::persist_sidebar_wide_visible(
+                self.stores.config.clone(),
+                self.sidebar_visibility.wide_visible,
+                cx,
+            );
+        }
         cx.notify();
+    }
+
+    fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_visibility.compact && !self.sidebar_visibility.compact_open {
+            if self.environment_overlay_open(window, cx) {
+                let fallback = self.environment_toggle_focus.clone();
+                self.environment.update(cx, |environment, cx| {
+                    environment.close(window, &fallback, cx);
+                });
+            }
+            self.sidebar_return_focus = window.focused(cx);
+        }
+        let was_compact_open = self.sidebar_visibility.compact_open;
+        self.sidebar_visibility = self
+            .sidebar_visibility
+            .transition(crate::shell::sidebar::SidebarVisibilityEvent::Toggle);
+        if self.sidebar_visibility.compact {
+            if self.sidebar_visibility.compact_open {
+                if self.view == AppView::Settings {
+                    self.settings_navigation.back_focus.focus(window);
+                } else {
+                    self.search_input
+                        .update(cx, |input, cx| input.focus(window, cx));
+                }
+            } else if was_compact_open {
+                self.restore_sidebar_focus(window);
+            }
+        } else {
+            crate::shell::sidebar::persist_sidebar_wide_visible(
+                self.stores.config.clone(),
+                self.sidebar_visibility.wide_visible,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_compact_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.sidebar_visibility.compact_open {
+            return;
+        }
+        self.sidebar_visibility = self
+            .sidebar_visibility
+            .transition(crate::shell::sidebar::SidebarVisibilityEvent::DismissCompact);
+        self.restore_sidebar_focus(window);
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_compact_sidebar_for_navigation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.sidebar_visibility.compact_open {
+            return;
+        }
+        self.sidebar_visibility = self
+            .sidebar_visibility
+            .transition(crate::shell::sidebar::SidebarVisibilityEvent::DismissCompact);
+        self.sidebar_return_focus = None;
+        self.sidebar_toggle_focus.focus(window);
+        cx.notify();
+    }
+
+    fn dismiss_compact_sidebar_before_content_focus(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_visibility.compact_open {
+            self.sidebar_visibility = self
+                .sidebar_visibility
+                .transition(crate::shell::sidebar::SidebarVisibilityEvent::DismissCompact);
+            self.sidebar_return_focus = None;
+            cx.notify();
+        }
+    }
+
+    fn restore_sidebar_focus(&mut self, window: &mut Window) {
+        if let Some(focus) = self.sidebar_return_focus.take() {
+            focus.focus(window);
+        }
     }
 
     /// Toggle a panel view: opening it again (or ⌘⇧A/S/U from another view)
     /// returns to the chat view.
-    fn toggle_view(&mut self, target: AppView, cx: &mut Context<Self>) {
-        if self.view == target {
-            self.set_view(AppView::Chat, cx);
+    fn toggle_view(&mut self, target: AppView, window: &mut Window, cx: &mut Context<Self>) {
+        let destination = if self.view == target {
+            AppView::Chat
         } else {
-            self.set_view(target, cx);
-        }
+            target
+        };
+        self.navigate_view(destination, window, cx);
     }
 
     /// ⌘⇧A: toggle the Assistant panel.
-    fn on_toggle_assistant(&mut self, _: &ToggleAssistant, _: &mut Window, cx: &mut Context<Self>) {
-        self.toggle_view(AppView::Assistant, cx);
+    fn on_toggle_assistant(
+        &mut self,
+        _: &ToggleAssistant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.toggle_view(AppView::Assistant, window, cx);
+    }
+
+    fn on_open_assistant(
+        &mut self,
+        _: &OpenAssistant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.navigate_view(AppView::Assistant, window, cx);
     }
 
     /// ⌘⇧S: toggle the Subagents panel.
-    fn on_toggle_subagents(&mut self, _: &ToggleSubagents, _: &mut Window, cx: &mut Context<Self>) {
-        self.toggle_view(AppView::Subagents, cx);
+    fn on_toggle_subagents(
+        &mut self,
+        _: &ToggleSubagents,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.toggle_view(AppView::Subagents, window, cx);
     }
 
     /// ⌘⇧U: toggle the Usage panel.
-    fn on_toggle_usage(&mut self, _: &ToggleUsage, _: &mut Window, cx: &mut Context<Self>) {
-        self.toggle_view(AppView::Usage, cx);
+    fn on_toggle_usage(&mut self, _: &ToggleUsage, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.toggle_view(AppView::Usage, window, cx);
     }
 
     /// ⌥⌘Space: focus the composer (the TS global `composer.focus`, bound
@@ -841,6 +1871,10 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.environment_overlay_open(window, cx) {
+            return;
+        }
+        self.dismiss_compact_sidebar_before_content_focus(cx);
         self.set_view(AppView::Chat, cx);
         self.composer_input
             .update(cx, |input, cx| input.focus(window, cx));
@@ -849,14 +1883,20 @@ impl AppState {
     /// ⌘↩: send the composer contents from anywhere (plain Enter already
     /// sends while the composer is focused).
     fn on_send_message(&mut self, _: &SendMessage, window: &mut Window, cx: &mut Context<Self>) {
+        if self.environment_overlay_open(window, cx) {
+            return;
+        }
         let text = self.composer_input.read(cx).value().to_string();
         self.send_composer(&text, window, cx);
     }
 
-    /// ⌘S: no file editor is wired in the GPUI port yet — accept the shortcut
-    /// so the settings catalog stays honest (parity audit UI §2).
-    fn on_save_file(&mut self, _: &SaveFile, _: &mut Window, _cx: &mut Context<Self>) {
-        tracing::debug!("file.save: no file editor is wired yet");
+    fn on_save_file(&mut self, _: &SaveFile, window: &mut Window, cx: &mut Context<Self>) {
+        if self.environment.read(cx).tab != crate::environment::EnvironmentTab::Files
+            || !self.files.read(cx).focus_inside(window, cx)
+        {
+            return;
+        }
+        self.files.update(cx, |files, cx| files.save(window, cx));
     }
 
     // =======================================================================
@@ -865,6 +1905,32 @@ impl AppState {
 
     /// Route the main content area (session-only; never persisted).
     pub(crate) fn set_view(&mut self, view: AppView, cx: &mut Context<Self>) {
+        if self.view == AppView::Settings && view != AppView::Settings {
+            self.service
+                .update(cx, |service, cx| service.flush_appearance_save(cx));
+        }
+        if settings_auth_must_cancel_on_navigation(self.view, view) {
+            let close_auth_dialog = self.cancel_settings_codex_auth(cx);
+            if close_auth_dialog {
+                let destination_focus = match post_auth_navigation_focus(view) {
+                    PostAuthNavigationFocus::Composer => {
+                        self.composer_input.read(cx).focus_handle(cx)
+                    }
+                    PostAuthNavigationFocus::Sidebar => self.sidebar_last_focus.clone(),
+                };
+                if let Some(window_handle) = cx.active_window() {
+                    cx.defer(move |cx| {
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            window.close_dialog(cx);
+                            destination_focus.focus(window);
+                        });
+                    });
+                }
+            }
+            self.cancel_shortcut_recording(cx);
+            self.settings_return_view = None;
+            self.settings_return_focus = None;
+        }
         if self.view != view {
             self.view = view;
             cx.notify();
@@ -882,14 +1948,99 @@ impl AppState {
         }
     }
 
+    fn cancel_shortcut_recording(&mut self, cx: &mut Context<Self>) {
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| settings.cancel_shortcut_recording(cx));
+        }
+    }
+
+    fn settings_codex_auth_active(&self, cx: &App) -> bool {
+        self.settings
+            .as_ref()
+            .is_some_and(|settings| settings.read(cx).codex_auth_active())
+    }
+
+    fn cancel_settings_codex_auth(&self, cx: &mut Context<Self>) -> bool {
+        self.settings.as_ref().is_some_and(|settings| {
+            settings.update(cx, |settings, _| settings.cancel_codex_sign_in())
+        })
+    }
+
+    fn enter_settings(
+        &mut self,
+        section: Option<SettingsSection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_view(AppView::Settings, cx);
+        let settings = self.settings_entity(window, cx);
+        let workspace = self.service.read(cx).workspace.clone();
+        settings.update(cx, |settings, cx| {
+            settings.set_skills_workspace(workspace.as_ref(), cx)
+        });
+        if let Some(section) = section {
+            settings.update(cx, |settings, cx| settings.select_section(section, cx));
+        }
+        cx.notify();
+    }
+
+    fn capture_settings_return(&mut self, origin_view: AppView, origin_focus: Option<FocusHandle>) {
+        if origin_view == AppView::Settings {
+            return;
+        }
+        self.settings_return_view =
+            capture_settings_return_view(self.settings_return_view, origin_view);
+        if self.settings_return_focus.is_none() {
+            self.settings_return_focus = origin_focus;
+        }
+    }
+
+    fn authorize_settings_entry(
+        &mut self,
+        mutation: PendingFilesMutation,
+        origin_focus: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let origin_view = self.view;
+        let gate = files_mutation_gate(self.files_dirty, self.files_saving);
+        let allowed = self.authorize_files_mutation(mutation, window, cx);
+        let pending_confirmation_established = !allowed
+            && gate == FilesMutationGate::ConfirmDiscard
+            && self.pending_files_mutation.is_some();
+        if settings_return_capture_allowed(gate, pending_confirmation_established) {
+            self.capture_settings_return(origin_view, origin_focus);
+        }
+        allowed
+    }
+
     /// Route to Settings and select the Providers section (the shell's
     /// default settings landing spot).
     pub(crate) fn open_settings_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_view(AppView::Settings, cx);
-        let settings = self.settings_entity(window, cx);
-        settings.update(cx, |settings, cx| {
-            settings.select_section(SettingsSection::Providers, cx);
-        });
+        let return_focus = window.focused(cx);
+        if self.authorize_settings_entry(
+            PendingFilesMutation::Navigate(AppView::Settings),
+            return_focus,
+            window,
+            cx,
+        ) {
+            self.enter_settings(Some(SettingsSection::Providers), window, cx);
+        }
+    }
+
+    pub(crate) fn open_model_pad_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !model_pad_settings_entry_allowed(self.workspace_state.read(cx).git_busy) {
+            return;
+        }
+        let return_focus = Some(self.model_picker_trigger_focus.clone());
+        if self.authorize_settings_entry(
+            PendingFilesMutation::Navigate(AppView::Settings),
+            return_focus,
+            window,
+            cx,
+        ) {
+            self.enter_settings(Some(SettingsSection::ModelData), window, cx);
+        }
     }
 
     // =======================================================================
@@ -902,11 +2053,77 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let opening = self
+            .palette
+            .as_ref()
+            .is_none_or(|palette| !palette.read(cx).open);
+        if opening && !competing_root_modal_allowed(self.settings_codex_auth_active(cx)) {
+            return;
+        }
+        if opening {
+            self.palette_invoker_focus = window.focused(cx);
+        }
+        self.dismiss_compact_sidebar_before_content_focus(cx);
         self.ensure_palette(window, cx);
         self.refresh_palette_source(cx);
         if let Some(palette) = &self.palette {
             palette.update(cx, |palette, cx| palette.toggle(window, cx));
         }
+    }
+
+    fn open_palette_mode(
+        &mut self,
+        mode: crate::panels::command_palette::PaletteMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !competing_root_modal_allowed(self.settings_codex_auth_active(cx)) {
+            return;
+        }
+        self.palette_invoker_focus = window.focused(cx);
+        self.dismiss_compact_sidebar_before_content_focus(cx);
+        self.ensure_palette(window, cx);
+        self.refresh_palette_source(cx);
+        if let Some(palette) = &self.palette {
+            palette.update(cx, |palette, cx| {
+                palette.open(window, cx);
+                palette.enter_mode(mode, cx);
+            });
+        }
+    }
+
+    fn on_change_model(&mut self, _: &ChangeModel, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette_mode(
+            crate::panels::command_palette::PaletteMode::Models,
+            window,
+            cx,
+        );
+    }
+
+    fn on_manage_providers(
+        &mut self,
+        _: &ManageProviders,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_palette_mode(
+            crate::panels::command_palette::PaletteMode::Providers,
+            window,
+            cx,
+        );
+    }
+
+    fn on_search_settings(
+        &mut self,
+        _: &SearchSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_palette_mode(
+            crate::panels::command_palette::PaletteMode::Settings,
+            window,
+            cx,
+        );
     }
 
     /// The live snapshot for the palette (chats, providers, selection,
@@ -957,6 +2174,9 @@ impl AppState {
     /// Dismiss the palette overlay (used for commands that do not close it
     /// themselves, e.g. RefreshProviders).
     fn close_palette(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_codex_auth_active(cx) {
+            return;
+        }
         if let Some(palette) = &self.palette {
             palette.update(cx, |palette, cx| palette.close_state(cx));
             window.close_dialog(cx);
@@ -970,6 +2190,60 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_codex_auth_active(cx) {
+            return;
+        }
+        let palette_invoker_focus = self.palette_invoker_focus.take();
+        let settings_target = match &command {
+            PaletteCommand::OpenSettings => Some(SettingsSection::Providers),
+            PaletteCommand::OpenSettingsSection(id) => SettingsSection::parse(id),
+            _ => None,
+        };
+        let settings_command = matches!(
+            command,
+            PaletteCommand::OpenSettings | PaletteCommand::OpenSettingsSection(_)
+        );
+        if settings_command && settings_target.is_none() {
+            self.close_palette(window, cx);
+            return;
+        }
+        if let Some(section) = settings_target {
+            if !self.authorize_settings_entry(
+                PendingFilesMutation::Palette(command.clone()),
+                palette_invoker_focus.clone(),
+                window,
+                cx,
+            ) {
+                self.palette_invoker_focus = palette_invoker_focus;
+                self.close_palette(window, cx);
+                return;
+            }
+            self.enter_settings(Some(section), window, cx);
+            return;
+        }
+        let changes_context = matches!(
+            command,
+            PaletteCommand::NewChat
+                | PaletteCommand::SelectChat(_)
+                | PaletteCommand::OpenScheduled
+                | PaletteCommand::OpenUsage
+                | PaletteCommand::OpenSubagents
+                | PaletteCommand::OpenAssistant
+                | PaletteCommand::Quit
+                | PaletteCommand::NextChat
+                | PaletteCommand::PreviousChat
+        );
+        if changes_context
+            && !self.authorize_files_mutation(
+                PendingFilesMutation::Palette(command.clone()),
+                window,
+                cx,
+            )
+        {
+            self.palette_invoker_focus = palette_invoker_focus;
+            self.close_palette(window, cx);
+            return;
+        }
         match command {
             PaletteCommand::NewChat => {
                 self.set_view(AppView::Chat, cx);
@@ -981,23 +2255,17 @@ impl AppState {
                     .update(cx, |service, cx| service.select_chat(&id, cx));
             }
             PaletteCommand::SelectModel { provider_id, model } => {
+                if self.service.read(cx).generation_active() {
+                    self.palette_invoker_focus = palette_invoker_focus;
+                    self.close_palette(window, cx);
+                    return;
+                }
                 self.set_view(AppView::Chat, cx);
                 self.service.update(cx, |service, cx| {
                     service.select_model(&provider_id, &model, cx);
                 });
             }
-            PaletteCommand::OpenSettings => self.open_settings_section(window, cx),
-            PaletteCommand::OpenSettingsSection(id) => {
-                if let Some(section) = settings_section_from_id(&id) {
-                    self.set_view(AppView::Settings, cx);
-                    let settings = self.settings_entity(window, cx);
-                    settings.update(cx, |settings, cx| {
-                        settings.select_section(section, cx);
-                    });
-                } else if id == "usage" {
-                    self.set_view(AppView::Usage, cx);
-                }
-            }
+            PaletteCommand::OpenSettings | PaletteCommand::OpenSettingsSection(_) => {}
             PaletteCommand::SetAppearanceMode(mode) => {
                 self.service
                     .update(cx, |service, cx| service.set_appearance_mode(mode, cx));
@@ -1012,15 +2280,23 @@ impl AppState {
             PaletteCommand::OpenUsage => self.set_view(AppView::Usage, cx),
             PaletteCommand::OpenSubagents => self.set_view(AppView::Subagents, cx),
             PaletteCommand::OpenAssistant => self.set_view(AppView::Assistant, cx),
-            PaletteCommand::Quit => cx.quit(),
+            PaletteCommand::Quit => self.request_quit(cx),
             PaletteCommand::ToggleTerminal => self.toggle_terminal(window, cx),
+            PaletteCommand::ToggleEnvironment => self.toggle_environment(window, cx),
+            PaletteCommand::OpenWorkspaceEditor => {
+                if !self.service.read(cx).generation_active() {
+                    self.workspace_state.update(cx, |state, cx| {
+                        state.open_preferred_editor(window, cx);
+                    });
+                }
+            }
             PaletteCommand::FocusComposer => {
                 self.composer_input
                     .update(cx, |input, cx| input.focus(window, cx));
             }
             PaletteCommand::NextChat | PaletteCommand::PreviousChat => {
                 let forward = matches!(command, PaletteCommand::NextChat);
-                self.cycle_chat(forward, cx);
+                self.cycle_chat(forward, window, cx);
             }
             PaletteCommand::RefreshProviders => {
                 self.service
@@ -1028,8 +2304,6 @@ impl AppState {
                 self.close_palette(window, cx);
             }
             PaletteCommand::ToggleSidebar
-            | PaletteCommand::ToggleEnvironment
-            | PaletteCommand::OpenWorkspaceEditor
             | PaletteCommand::SearchChats
             | PaletteCommand::ChangeModel
             | PaletteCommand::ManageProviders
@@ -1044,7 +2318,7 @@ impl AppState {
     }
 
     /// Move to the previous/next chat in the sidebar order (palette arrows).
-    fn cycle_chat(&mut self, forward: bool, cx: &mut Context<Self>) {
+    fn cycle_chat(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         let ids: Vec<String> = self
             .service
             .read(cx)
@@ -1062,9 +2336,7 @@ impl AppState {
             .and_then(|id| ids.iter().position(|candidate| candidate == id))
             .unwrap_or(0);
         let next = ((index as i64 + step).rem_euclid(ids.len() as i64)) as usize;
-        self.set_view(AppView::Chat, cx);
-        self.service
-            .update(cx, |service, cx| service.select_chat(&ids[next], cx));
+        self.navigate_chat(ids[next].clone(), window, cx);
     }
 
     // =======================================================================
@@ -1077,10 +2349,14 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.environment_overlay_open(window, cx) {
+            return;
+        }
+        self.dismiss_compact_sidebar_before_content_focus(cx);
         self.toggle_terminal(window, cx);
     }
 
-    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The drawer only renders inside the chat view (see `chat_view`).
         // Toggling it from another view would silently flip its open state
         // with no visible feedback, and the drawer would pop open (with its
@@ -1088,34 +2364,69 @@ impl AppState {
         if self.view != AppView::Chat {
             return;
         }
-        let entity = self.terminal_entity(window, cx);
+        if !crate::chat::toolbar::terminal_eligible(self.service.read(cx).workspace.as_ref()) {
+            return;
+        }
+        let Some(entity) = self.terminal_entity(window, cx) else {
+            return;
+        };
         entity.update(cx, |terminal, cx| terminal.toggle(window, cx));
+    }
+
+    fn on_toggle_environment(
+        &mut self,
+        _: &ToggleEnvironment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_environment(window, cx);
+    }
+
+    pub(crate) fn toggle_environment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::chat::toolbar::terminal_eligible(self.service.read(cx).workspace.as_ref()) {
+            return;
+        }
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.set_view(AppView::Chat, cx);
+        let fallback = self.environment_toggle_focus.clone();
+        self.environment.update(cx, |environment, cx| {
+            environment.toggle(window, &fallback, cx);
+        });
     }
 
     /// Create the terminal drawer once; the PTY stays alive across toggles
     /// (the drawer hides/shows, it is never destroyed).
     fn terminal_entity(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<TerminalDrawer> {
+    ) -> Option<Entity<TerminalDrawer>> {
         if let Some(entity) = &self.terminal {
-            return entity.clone();
+            return Some(entity.clone());
         }
+        let cwd = self.service.read(cx).workspace_folder()?;
         let deps = TerminalDeps {
             shell: None,
             // The terminal starts in the active workspace folder (the git repo
             // root); a later workspace switch re-homes it via `set_cwd`.
-            cwd: self
-                .service
-                .read(cx)
-                .workspace_folder()
-                .or_else(|| Some(aiden_data::home_dir())),
+            cwd: Some(cwd),
             simple: false,
         };
         let entity = cx.new(|cx| TerminalDrawer::new(cx, deps));
+        let was_open = Rc::new(Cell::new(false));
+        self._subscriptions.push(cx.observe_in(
+            &entity,
+            window,
+            move |this, terminal, window, cx| {
+                let open = terminal.read(cx).is_open();
+                if was_open.replace(open) && !open {
+                    this.terminal_toggle_focus.focus(window);
+                }
+                cx.notify();
+            },
+        ));
         self.terminal = Some(entity.clone());
-        entity
+        Some(entity)
     }
 
     // =======================================================================
@@ -1124,14 +2435,23 @@ impl AppState {
 
     fn settings_entity(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SettingsView> {
         if let Some(entity) = &self.settings {
             return entity.clone();
         }
-        let services = SettingsServices::from_stores(&self.stores);
-        let entity = cx.new(|cx| SettingsView::new(cx, services));
+        let shortcut_runtime = crate::shortcut_runtime::runtime(cx)
+            .expect("shortcut runtime is initialized before the main window");
+        let services =
+            SettingsServices::from_stores(&self.stores, shortcut_runtime, self.service.clone());
+        let workspace = self.service.read(cx).workspace.clone();
+        let entity = cx.new(|cx| SettingsView::new(cx, services, workspace));
+        self._subscriptions.push(cx.observe_in(
+            &entity,
+            window,
+            |_this, _settings, _window, cx| cx.notify(),
+        ));
         self.settings = Some(entity.clone());
         entity
     }
@@ -1157,12 +2477,7 @@ impl AppState {
                     this.toggle_scheduled_task(panel.clone(), id, *enabled, cx);
                 }
                 ScheduledPanelEvent::RunNow { .. } => {
-                    // There is no scheduler runtime in the shell yet; the
-                    // panel lists and toggles tasks, execution lands later.
-                    window.push_notification(
-                        "Scheduled task execution lands with the scheduler runtime.",
-                        cx,
-                    );
+                    window.push_notification("Scheduled task execution is not available yet.", cx);
                 }
             },
         ));
@@ -1170,7 +2485,7 @@ impl AppState {
         entity
     }
 
-    /// Persist an enable/disable toggle through the shared schedule store,
+    /// Persist an enable/disable toggle through the shared scheduler authority,
     /// then reload the panel.
     fn toggle_scheduled_task(
         &mut self,
@@ -1179,11 +2494,15 @@ impl AppState {
         enabled: bool,
         cx: &mut Context<Self>,
     ) {
-        let schedules = self.stores.schedules.clone();
+        let scheduler = self.stores.scheduler.clone();
         let id = id.to_string();
         cx.spawn(async move |_this, cx| {
             cx.background_spawn(async move {
-                let _ = schedules.set_enabled(&id, enabled);
+                if enabled {
+                    let _ = scheduler.resume(&id).await;
+                } else {
+                    let _ = scheduler.pause(&id).await;
+                }
             })
             .await;
             let _ = panel.update(cx, |panel, cx| panel.refresh(cx));
@@ -1246,6 +2565,13 @@ impl AppState {
     // =======================================================================
 
     fn on_toggle_pill(&mut self, _: &TogglePill, _window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_dictation_from_composer(cx);
+    }
+
+    pub(crate) fn toggle_dictation_from_composer(&mut self, cx: &mut Context<Self>) {
+        if self.service.read(cx).generation_active() {
+            return;
+        }
         if let Some(pill) = PILL_COORDINATOR.get().cloned() {
             cx.spawn(async move |_this, _cx| {
                 pill.toggle().await;
@@ -1264,6 +2590,7 @@ fn bridge_show_pill(
     cx: &mut gpui::AsyncApp,
     audio: &Arc<LiveAudioSource>,
     appearance: &aiden_core::appearance::AppearanceConfig,
+    system_reduced_motion: bool,
 ) -> bool {
     let on_cancel: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {
         if let Some(pill) = PILL_COORDINATOR.get() {
@@ -1286,9 +2613,7 @@ fn bridge_show_pill(
     let deps = PillDeps {
         audio: Rc::new(RefCell::new(audio.clone())),
         appearance: appearance.clone(),
-        // Real OS probe (cached for the app lifetime) instead of the previous
-        // hardcoded `false` — parity audit UI §7.
-        system_reduced_motion: system_reduced_motion(),
+        system_reduced_motion,
         on_cancel: Some(on_cancel),
     };
     match cx.update(|app| open_pill_window(app, deps)) {
@@ -1335,6 +2660,9 @@ fn bridge_broadcast(
 /// Wire the dictation pill: spawn the foreground window-command bridge and
 /// construct the coordinator over it. Runs once from [`AppState::new`].
 fn wire_pill_coordinator(cx: &mut Context<AppState>) {
+    if PILL_COORDINATOR.get().is_some() {
+        return;
+    }
     let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel::<PillCommand>();
     let audio = Arc::new(LiveAudioSource::new());
 
@@ -1350,12 +2678,18 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
                         .upgrade()
                         .and_then(|entity| {
                             cx.read_entity(&entity, |state, app| {
-                                state.service.read(app).appearance.clone()
+                                let service = state.service.read(app);
+                                (service.appearance.clone(), service.system_reduced_motion())
                             })
                             .ok()
                         })
-                        .unwrap_or_else(aiden_core::appearance::create_default_appearance_config);
-                    let created = bridge_show_pill(cx, &bridge_audio, &appearance);
+                        .unwrap_or_else(|| {
+                            (
+                                aiden_core::appearance::create_default_appearance_config(),
+                                false,
+                            )
+                        });
+                    let created = bridge_show_pill(cx, &bridge_audio, &appearance.0, appearance.1);
                     let _ = reply.send(created);
                 }
                 PillCommand::Hide => bridge_close_pill(cx),
@@ -1405,155 +2739,269 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
     let _ = PILL_COORDINATOR.set(pill);
 }
 
-// ===========================================================================
-// Global dictation hotkey (parity audit config §12)
-// ===========================================================================
-
-/// The OS-global dictation accelerator. This is the catalog default for
-/// `dictation.toggle` (`renderer/shared/keybindings.ts:77` and
-/// `aiden-core::keybindings::CommandId::DictationToggle` both use
-/// "Command+Shift+D"). The in-app `cmd-shift-d` binding stays as the
-/// fallback for builds/apps without the global registration.
-#[cfg(target_os = "macos")]
-const DICTATION_GLOBAL_ACCELERATOR: &str = "Command+Shift+D";
-
-/// Register the dictation pill toggle as a REAL OS-global hotkey, so ⌘⇧D
-/// starts/stops dictation while another app is focused — the TS
-/// `globalShortcut.register` equivalent (parity audit config §12). Called
-/// once from `main.rs` boot after the stores open.
-///
-/// Accessibility permission: registering a global hotkey requires the macOS
-/// Accessibility permission for this process. When it is missing the OS
-/// either refuses the registration or `GlobalHotkeyManager::initialize`
-/// fails — in both cases we log a warning, register nothing, and the in-app
-/// binding remains the only toggle path.
-///
-/// The `MacHotkeyPort` (which owns the `global-hotkey` manager and thus the
-/// live OS claim) is moved into the app-lifetime listener task; the claim is
-/// released when the tokio bridge runtime tears down at process exit.
-#[cfg(target_os = "macos")]
-pub(crate) fn register_global_dictation_hotkey(cx: &mut App) -> bool {
-    let manager = match GlobalHotkeyManager::initialize() {
-        Ok(manager) => manager,
-        Err(error) => {
-            tracing::warn!(
-                "global dictation hotkey unavailable ({error}); falling back to in-app ⌘⇧D"
-            );
-            return false;
-        }
-    };
-    let port = MacHotkeyPort::new(manager);
-    if !port.register(DICTATION_GLOBAL_ACCELERATOR) {
-        tracing::warn!(
-            "could not register the global dictation hotkey {DICTATION_GLOBAL_ACCELERATOR} \
-             (Accessibility permission missing?); falling back to in-app ⌘⇧D"
-        );
-        return false;
-    }
-    let expected_id = DICTATION_GLOBAL_ACCELERATOR
-        .parse::<global_hotkey::hotkey::HotKey>()
-        .map(|hotkey| hotkey.id())
-        .ok();
-    // Route OS-level presses onto the pill coordinator. The listener runs on
-    // the tokio bridge so `PillCoordinator::toggle` (a tokio state machine)
-    // can be awaited directly; the blocking channel poll is moved off the
-    // tokio workers via `spawn_blocking`. `Tokio::spawn` needs an entity
-    // context to bridge the future back onto the GPUI executor, so a
-    // throwaway scaffold entity provides it (dropped immediately; the tokio
-    // task — and the `MacHotkeyPort` inside it — outlives the scaffold).
-    let scaffold = cx.new(|_| ());
-    cx.update_entity(&scaffold, |_, inner| {
-        gpui_tokio_bridge::Tokio::spawn(inner, dictation_hotkey_listener(expected_id, port))
-            .detach();
-    });
-    tracing::info!(
-        accelerator = DICTATION_GLOBAL_ACCELERATOR,
-        "registered the global dictation hotkey"
-    );
-    true
-}
-
-/// Non-macOS builds have no OS-global hotkey surface; the in-app binding is
-/// the only toggle path. Compile-time no-op so `main.rs` stays
-/// platform-agnostic.
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn register_global_dictation_hotkey(_cx: &mut App) -> bool {
-    false
-}
-
-/// Poll the `global-hotkey` event channel for the dictation accelerator and
-/// toggle the pill coordinator on each press. Keeps `port` alive for the app
-/// lifetime — dropping the listener (at process exit) unregisters the hotkey.
-#[cfg(target_os = "macos")]
-async fn dictation_hotkey_listener(expected_id: Option<u32>, port: MacHotkeyPort) {
-    let _port = port; // the OS claim lives exactly as long as this task
-    loop {
-        let event = tokio::task::spawn_blocking({
-            || GlobalHotKeyEvent::receiver().recv_timeout(std::time::Duration::from_millis(250))
-        })
-        .await;
-        match event {
-            Ok(Ok(hotkey_event)) => {
-                if hotkey_event.state == HotKeyState::Pressed
-                    && expected_id.is_none_or(|id| id == hotkey_event.id)
-                {
-                    toggle_dictation_from_global_hotkey().await;
-                }
-            }
-            // Channel poll timeout — nothing pressed, keep waiting.
-            Ok(Err(_)) => {}
-            // The blocking poll task ended (runtime shutdown) — stop.
-            Err(_) => break,
-        }
-    }
-}
-
-/// Toggle dictation from the OS-global hotkey — the exact same path as the
-/// in-app ⌘⇧D binding. The coordinator is only wired after the main window
-/// opens (`AppState::new`), so earlier presses are ignored with a debug log.
-#[cfg(target_os = "macos")]
-async fn toggle_dictation_from_global_hotkey() {
-    match PILL_COORDINATOR.get() {
-        Some(pill) => pill.toggle().await,
-        None => {
-            tracing::debug!(
-                "global dictation hotkey pressed before the pill coordinator was wired"
-            );
-        }
-    }
-}
-
 impl Render for AppState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sync_model_select(window, cx);
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
 
-        // Title bar: traffic lights are OS-provided; the bar shows the chat
-        // title (or the workspace name when no chat is open).
-        let title: String = self
-            .service
-            .read(cx)
-            .active_chat
+        let title = match self.view {
+            AppView::Chat => crate::chat::toolbar::chat_title(
+                self.service
+                    .read(cx)
+                    .active_chat
+                    .as_ref()
+                    .map(|chat| chat.title.as_str()),
+            ),
+            AppView::Assistant => "Assistant".to_string(),
+            AppView::Scheduled => "Scheduled".to_string(),
+            AppView::Usage => "Profile".to_string(),
+            AppView::Subagents => "Subagents".to_string(),
+            AppView::Settings => "Settings".to_string(),
+        };
+        let environment_overlay = self.environment_overlay_open(window, cx);
+        let files_confirmation = self.files.read(cx).confirmation_open();
+        let skills_modal = self
+            .settings
             .as_ref()
-            .map(|chat| chat.title.clone())
-            .unwrap_or_else(|| {
-                if aiden_data::is_dev_mode() {
-                    "Aiden-RS-DEV".to_string()
-                } else {
-                    "Aiden".to_string()
-                }
-            });
+            .is_some_and(|settings| settings.read(cx).skills_modal_open());
+        let app_key_context = if skills_modal {
+            "SettingsModal"
+        } else if environment_overlay || files_confirmation {
+            "EnvironmentModal"
+        } else {
+            "App"
+        };
+        let sidebar_blocker_width = if environment_overlay
+            && !self.sidebar_visibility.compact
+            && self.sidebar_visibility.visible()
+        {
+            self.sidebar_width
+        } else {
+            0.0
+        };
 
         v_flex()
             .id("aiden-root")
+            .relative()
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
-            .key_context("App")
+            .key_context(app_key_context)
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if let Some(settings) = this
+                    .settings
+                    .clone()
+                    .filter(|settings| settings.read(cx).skills_modal_open())
+                {
+                    if event.keystroke.key == "escape" {
+                        settings.update(cx, |settings, cx| settings.close_skills_modal(window, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if event.keystroke.key == "tab" {
+                        let (handles, focus_inside) = {
+                            let state = settings.read(cx);
+                            (
+                                state.skills_modal_focus_handles(cx),
+                                state.skills_modal_contains_focus(window, cx),
+                            )
+                        };
+                        if let Some((first, last)) = handles {
+                            let focused = window.focused(cx);
+                            let backwards = event.keystroke.modifiers.shift;
+                            if backwards && focused.as_ref() == Some(&first) {
+                                last.focus(window);
+                            } else if !backwards && focused.as_ref() == Some(&last) {
+                                first.focus(window);
+                            } else if !focus_inside {
+                                if backwards {
+                                    last.focus(window);
+                                } else {
+                                    first.focus(window);
+                                }
+                            } else {
+                                return;
+                            }
+                            cx.stop_propagation();
+                        }
+                    }
+                    return;
+                }
+                if this.files.read(cx).confirmation_open() {
+                    if event.keystroke.key == "escape" {
+                        this.files
+                            .update(cx, |files, cx| files.cancel_confirmation(window, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if event.keystroke.key == "tab" {
+                        let (first, last) = {
+                            let files = this.files.read(cx);
+                            (
+                                files.confirmation_focus.clone(),
+                                files.confirmation_last_focus.clone(),
+                            )
+                        };
+                        let focused = window.focused(cx);
+                        if event.keystroke.modifiers.shift {
+                            if focused.as_ref() == Some(&last) {
+                                return;
+                            }
+                            last.focus(window);
+                        } else {
+                            if focused.as_ref() == Some(&first) {
+                                return;
+                            }
+                            first.focus(window);
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+                if window.has_active_dialog(cx) {
+                    return;
+                }
+                if this.view == AppView::Settings && event.keystroke.key == "escape" {
+                    let search_focus = this.settings_navigation.search.read(cx).focus_handle(cx);
+                    match settings_escape_target(
+                        search_focus.is_focused(window),
+                        this.sidebar_visibility.compact_open,
+                    ) {
+                        SettingsEscapeTarget::ClearSearchAndFocusBack => {
+                            this.settings_navigation.search.update(cx, |input, cx| {
+                                input.set_value("", window, cx);
+                            });
+                            this.settings_navigation.back_focus.focus(window);
+                            cx.stop_propagation();
+                            return;
+                        }
+                        SettingsEscapeTarget::DismissCompact => {
+                            this.dismiss_compact_sidebar(window, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                        SettingsEscapeTarget::Native => return,
+                    }
+                }
+                let environment_open = this.environment.read(cx).open;
+                if environment_workbench_rendered(this.view)
+                    && environment_open
+                    && event.keystroke.key == "escape"
+                {
+                    if this.environment.read(cx).tab == crate::environment::EnvironmentTab::Files
+                        && this.files.read(cx).confirmation_open()
+                    {
+                        this.files
+                            .update(cx, |files, cx| files.cancel_confirmation(window, cx));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let fallback = this.environment_toggle_focus.clone();
+                    this.environment.update(cx, |environment, cx| {
+                        environment.close(window, &fallback, cx);
+                    });
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.environment_overlay_open(window, cx) && event.keystroke.key == "tab" {
+                    let (first, last, focus_inside) = {
+                        let environment = this.environment.read(cx);
+                        (
+                            environment.first_focus.clone(),
+                            environment.last_focus.clone(),
+                            environment.panel_scope.contains_focused(window, cx),
+                        )
+                    };
+                    let focused = window.focused(cx);
+                    let backwards = event.keystroke.modifiers.shift;
+                    if backwards && focused.as_ref() == Some(&first) {
+                        last.focus(window);
+                    } else if !backwards && focused.as_ref() == Some(&last) {
+                        first.focus(window);
+                    } else if !focus_inside {
+                        if backwards {
+                            last.focus(window);
+                        } else {
+                            first.focus(window);
+                        }
+                    } else {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                if !this.sidebar_visibility.compact_open {
+                    return;
+                }
+                if this.view == AppView::Settings {
+                    if event.keystroke.key != "tab" {
+                        return;
+                    }
+                    let focused = window.focused(cx);
+                    let last_rail_focus = this.settings_navigation.last_visible_focus(cx);
+                    let target = settings_compact_tab_target(
+                        event.keystroke.modifiers.shift,
+                        focused.as_ref() == Some(&this.settings_navigation.back_focus),
+                        focused.as_ref() == Some(&this.sidebar_toggle_focus),
+                        focused.as_ref() == Some(&last_rail_focus),
+                        this.settings_navigation.scope.contains_focused(window, cx),
+                    );
+                    match target {
+                        SettingsCompactTabTarget::Native => return,
+                        SettingsCompactTabTarget::Back => {
+                            this.settings_navigation.back_focus.focus(window)
+                        }
+                        SettingsCompactTabTarget::LastRailControl => last_rail_focus.focus(window),
+                        SettingsCompactTabTarget::LeadingToggle => {
+                            this.sidebar_toggle_focus.focus(window)
+                        }
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                let search_focus = this.search_input.read(cx).focus_handle(cx);
+                if event.keystroke.key == "escape" {
+                    if search_focus.is_focused(window)
+                        && !this.search_input.read(cx).value().is_empty()
+                    {
+                        this.search_input
+                            .update(cx, |input, cx| input.set_value("", window, cx));
+                    } else {
+                        this.dismiss_compact_sidebar(window, cx);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                if event.keystroke.key != "tab" {
+                    return;
+                }
+                let backwards = event.keystroke.modifiers.shift;
+                let focused = window.focused(cx);
+                if backwards && focused.as_ref() == Some(&search_focus) {
+                    this.sidebar_toggle_focus.focus(window);
+                } else if backwards && focused.as_ref() == Some(&this.sidebar_toggle_focus) {
+                    this.sidebar_last_focus.focus(window);
+                } else if !backwards && focused.as_ref() == Some(&this.sidebar_last_focus) {
+                    this.sidebar_toggle_focus.focus(window);
+                } else if !backwards && focused.as_ref() == Some(&this.sidebar_toggle_focus) {
+                    search_focus.focus(window);
+                } else if focused.as_ref() != Some(&search_focus)
+                    && focused.as_ref() != Some(&this.sidebar_last_focus)
+                {
+                    if backwards {
+                        this.sidebar_toggle_focus.focus(window);
+                    } else {
+                        search_focus.focus(window);
+                    }
+                } else {
+                    return;
+                }
+                cx.stop_propagation();
+            }))
             .on_action(cx.listener(Self::on_new_chat))
             .on_action(cx.listener(Self::on_quit))
             .on_action(cx.listener(Self::on_toggle_palette))
             .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_toggle_environment))
             .on_action(cx.listener(Self::on_toggle_pill))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_search_chats))
@@ -1573,38 +3021,81 @@ impl Render for AppState {
             .on_action(cx.listener(Self::on_close_window))
             .on_action(cx.listener(Self::on_toggle_sidebar))
             .on_action(cx.listener(Self::on_toggle_assistant))
+            .on_action(cx.listener(Self::on_open_assistant))
             .on_action(cx.listener(Self::on_toggle_subagents))
             .on_action(cx.listener(Self::on_toggle_usage))
             .on_action(cx.listener(Self::on_focus_composer))
             .on_action(cx.listener(Self::on_send_message))
             .on_action(cx.listener(Self::on_save_file))
-            .child(
-                gpui_component::TitleBar::new().child(
-                    h_flex()
-                        .id("titlebar-content")
-                        .size_full()
+            .on_action(cx.listener(Self::on_change_model))
+            .on_action(cx.listener(Self::on_manage_providers))
+            .on_action(cx.listener(Self::on_search_settings))
+            .child(self.shell_body(title, window, cx))
+            .when(sidebar_blocker_width > 0.0, |el| {
+                el.child(
+                    div()
+                        .id("environment-sidebar-modal-blocker")
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .w(px(sidebar_blocker_width))
+                        .occlude()
+                        .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                            cx.stop_propagation();
+                        })
+                        .on_click(|_event, _window, cx| cx.stop_propagation()),
+                )
+            })
+            .when(!environment_overlay, |el| {
+                el.child(
+                    div()
+                        .id("leading-sidebar-toggle")
+                        .absolute()
+                        .top_0()
+                        .left(px(90.))
+                        .h(px(52.))
+                        .w(px(36.))
+                        .flex()
                         .items_center()
-                        .px_3()
+                        .justify_center()
+                        .track_focus(&self.sidebar_toggle_focus)
+                        .tab_stop(true)
+                        .focus(move |style| style.bg(theme.list_active))
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.toggle_sidebar(window, cx);
+                                cx.stop_propagation();
+                            }
+                        }))
                         .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.muted_foreground)
-                                .truncate()
-                                .child(title),
+                            gpui_component::button::Button::new("titlebar-sidebar-toggle")
+                                .ghost()
+                                .xsmall()
+                                .tab_stop(false)
+                                .icon(if self.sidebar_visibility.visible() {
+                                    IconName::PanelLeftClose
+                                } else {
+                                    IconName::PanelLeftOpen
+                                })
+                                .tooltip("Toggle sidebar (⌃⌘S)")
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.toggle_sidebar(window, cx);
+                                })),
                         ),
-                ),
-            )
-            .child(
-                h_flex()
-                    .id("app-body")
-                    .flex_1()
-                    .size_full()
-                    .when(self.sidebar_visible, |el| {
-                        el.child(self.sidebar(window, cx))
-                    })
-                    .child(self.content_view(window, cx)),
-            )
+                )
+            })
+            .when(files_confirmation, |el| {
+                el.child(crate::environment::files_confirmation_modal(
+                    &self.files,
+                    cx,
+                ))
+            })
+            .when(skills_modal, |el| {
+                el.when_some(self.settings.clone(), |el, settings| {
+                    el.child(crate::settings::skills::skills_modal(&settings, cx))
+                })
+            })
     }
 }
 
@@ -1633,19 +3124,18 @@ impl AppState {
     /// The chat surface: message list + composer, with the terminal drawer
     /// attached at the bottom when it is open (⌘J, chat view only).
     fn chat_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let terminal_open = self
+        let terminal = self
             .terminal
             .as_ref()
-            .is_some_and(|terminal| terminal.read(cx).is_open());
+            .filter(|terminal| terminal.read(cx).is_open())
+            .cloned();
         v_flex()
             .id("chat-view")
             .flex_1()
             .h_full()
             .min_w(px(0.))
             .child(self.chat_pane(window, cx))
-            .when(terminal_open, |el| {
-                el.child(self.terminal_entity(window, cx))
-            })
+            .when_some(terminal, |el, terminal| el.child(terminal))
     }
 }
 
@@ -1654,33 +3144,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn view_router_defaults_to_chat_and_labels_are_unique() {
+    fn pending_files_replay_rechecks_live_busy_state() {
+        assert!(pending_files_replay_authorized(false, false, false, true));
+        assert!(!pending_files_replay_authorized(true, false, false, true));
+        assert!(!pending_files_replay_authorized(false, true, false, true));
+        assert!(!pending_files_replay_authorized(false, false, true, true));
+        assert!(!pending_files_replay_authorized(false, false, false, false));
+    }
+
+    #[test]
+    fn view_router_defaults_to_chat() {
         assert_eq!(AppView::default(), AppView::Chat);
-        let labels: std::collections::HashSet<_> =
-            AppView::ALL.iter().map(|view| view.label()).collect();
-        assert_eq!(labels.len(), AppView::ALL.len());
-        for view in AppView::ALL {
-            assert!(!view.label().is_empty());
-        }
+    }
+
+    #[test]
+    fn leaving_settings_cancels_retained_auth_but_in_section_navigation_does_not() {
+        assert!(settings_auth_must_cancel_on_navigation(
+            AppView::Settings,
+            AppView::Chat
+        ));
+        assert!(!settings_auth_must_cancel_on_navigation(
+            AppView::Settings,
+            AppView::Settings
+        ));
+        assert!(!settings_auth_must_cancel_on_navigation(
+            AppView::Chat,
+            AppView::Settings
+        ));
+    }
+
+    #[test]
+    fn active_auth_dialog_blocks_stacking_and_late_finish_cannot_pop_replacement() {
+        let lease = crate::services::codex_auth::CodexDialogLease::default();
+        lease.mark_open();
+        assert!(!competing_root_modal_allowed(lease.is_open()));
+
+        lease.mark_closed();
+        assert!(competing_root_modal_allowed(lease.is_open()));
+        assert!(!lease.take_owned_dialog());
+    }
+
+    #[test]
+    fn chat_navigation_detaches_auth_before_late_finish_and_keeps_destination_focus() {
+        let lease = crate::services::codex_auth::CodexDialogLease::default();
+        lease.mark_open();
+        assert!(lease.take_owned_dialog());
+        assert_eq!(
+            post_auth_navigation_focus(AppView::Chat),
+            PostAuthNavigationFocus::Composer
+        );
+
+        assert!(!lease.take_owned_dialog());
+        assert!(!lease.should_restore_focus());
     }
 
     #[test]
     fn settings_section_mapping_covers_palette_destinations() {
-        assert_eq!(
-            settings_section_from_id("providers"),
-            Some(SettingsSection::Providers)
-        );
-        assert_eq!(
-            settings_section_from_id("appearance"),
-            Some(SettingsSection::Appearance)
-        );
-        assert_eq!(
-            settings_section_from_id("scheduled-tasks"),
-            Some(SettingsSection::ScheduledTasks)
-        );
-        // Usage lives on its own panel, not in settings.
-        assert_eq!(settings_section_from_id("usage"), None);
-        assert_eq!(settings_section_from_id("nonsense"), None);
+        for section in SettingsSection::ALL {
+            assert_eq!(SettingsSection::parse(section.as_str()), Some(*section));
+        }
+        assert_eq!(SettingsSection::parse("scheduled-tasks"), None);
+        assert_eq!(SettingsSection::parse("usage"), None);
     }
 
     #[test]
@@ -1688,6 +3212,61 @@ mod tests {
         assert_eq!(cycle_appearance_mode(Mode::System), Mode::Light);
         assert_eq!(cycle_appearance_mode(Mode::Light), Mode::Dark);
         assert_eq!(cycle_appearance_mode(Mode::Dark), Mode::System);
+    }
+
+    #[test]
+    fn files_mutation_gate_allows_clean_confirms_dirty_and_blocks_saving() {
+        assert_eq!(files_mutation_gate(false, false), FilesMutationGate::Allow);
+        assert_eq!(
+            files_mutation_gate(true, false),
+            FilesMutationGate::ConfirmDiscard
+        );
+        assert_eq!(
+            files_mutation_gate(true, true),
+            FilesMutationGate::BlockSaving
+        );
+    }
+
+    #[test]
+    fn blocked_settings_routes_leave_no_stale_return_state_then_capture_on_success() {
+        for route in ["navigation", "command shortcut", "palette"] {
+            let mut return_view = None;
+            if settings_return_capture_allowed(FilesMutationGate::BlockSaving, false) {
+                return_view = capture_settings_return_view(return_view, AppView::Chat);
+            }
+            assert_eq!(return_view, None, "{route} must not capture while saving");
+
+            if settings_return_capture_allowed(FilesMutationGate::Allow, false) {
+                return_view = capture_settings_return_view(return_view, AppView::Chat);
+            }
+            assert_eq!(
+                return_view,
+                Some(AppView::Chat),
+                "{route} captures the fresh origin after the later successful attempt"
+            );
+        }
+    }
+
+    #[test]
+    fn dirty_settings_route_captures_only_after_confirmation_is_established() {
+        assert!(!settings_return_capture_allowed(
+            FilesMutationGate::ConfirmDiscard,
+            false
+        ));
+        assert!(settings_return_capture_allowed(
+            FilesMutationGate::ConfirmDiscard,
+            true
+        ));
+    }
+
+    #[test]
+    fn focused_settings_search_wins_escape_before_a_hidden_environment() {
+        assert!(!environment_workbench_rendered(AppView::Settings));
+        assert_eq!(
+            settings_escape_target(true, false),
+            SettingsEscapeTarget::ClearSearchAndFocusBack
+        );
+        assert!(environment_workbench_rendered(AppView::Chat));
     }
 
     #[test]
@@ -1710,6 +3289,7 @@ mod tests {
             label: "Ollama (local)".into(),
             kind: aiden_data::portable_config::ProviderKind::Openai,
             base_url: "http://127.0.0.1:11434/v1".into(),
+            deployment: Some(aiden_data::portable_config::ProviderDeployment::Local),
             models: vec!["qwen3:8b".into()],
             default_model: Some("qwen3:8b".into()),
             model_metadata: Default::default(),
@@ -1723,6 +3303,33 @@ mod tests {
         assert_eq!(mapped.models, vec!["qwen3:8b"]);
         assert!(!mapped.needs_key);
         assert!(!mapped.has_key);
+    }
+
+    #[test]
+    fn catalog_fingerprint_detects_same_count_model_replacement() {
+        let mut provider = ConfiguredProvider {
+            id: "p".into(),
+            label: "Provider".into(),
+            kind: aiden_data::portable_config::ProviderKind::Openai,
+            base_url: "https://example.test/v1".into(),
+            deployment: Some(aiden_data::portable_config::ProviderDeployment::Hosted),
+            models: vec!["old".into()],
+            default_model: Some("old".into()),
+            model_metadata: Default::default(),
+            catalog_models: Vec::new(),
+            needs_key: false,
+            has_key: true,
+        };
+        let before = provider_catalog_fingerprint(&[provider.clone()]);
+        provider.models = vec!["new".into()];
+
+        assert_ne!(before, provider_catalog_fingerprint(&[provider]));
+    }
+
+    #[test]
+    fn model_pad_settings_entry_is_blocked_while_git_is_busy() {
+        assert!(!model_pad_settings_entry_allowed(true));
+        assert!(model_pad_settings_entry_allowed(false));
     }
 
     #[test]
