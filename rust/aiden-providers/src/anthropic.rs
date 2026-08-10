@@ -595,16 +595,14 @@ impl Provider for AnthropicProvider {
 /// provider.
 fn friendly_stream_error(err: &reqwest_eventsource::Error) -> String {
     match err {
-        reqwest_eventsource::Error::InvalidStatusCode(status, _) => {
-            match status.as_u16() {
-                401 => "Invalid API key. Check your key in Settings → Providers.".to_string(),
-                403 => "Access denied. Your key may not have permission for this model.".to_string(),
-                404 => "Model not found. Check the model ID in Settings → Providers.".to_string(),
-                429 => "Rate limit exceeded. Please wait and try again.".to_string(),
-                500..=599 => "The provider is experiencing issues. Try again later.".to_string(),
-                _ => format!("HTTP {status}"),
-            }
-        }
+        reqwest_eventsource::Error::InvalidStatusCode(status, _) => match status.as_u16() {
+            401 => "Invalid API key. Check your key in Settings → Providers.".to_string(),
+            403 => "Access denied. Your key may not have permission for this model.".to_string(),
+            404 => "Model not found. Check the model ID in Settings → Providers.".to_string(),
+            429 => "Rate limit exceeded. Please wait and try again.".to_string(),
+            500..=599 => "The provider is experiencing issues. Try again later.".to_string(),
+            _ => format!("HTTP {status}"),
+        },
         reqwest_eventsource::Error::Transport(_) => {
             "Network error. Check your internet connection.".to_string()
         }
