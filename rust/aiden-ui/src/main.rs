@@ -152,136 +152,137 @@ fn main() {
 
     let app = gpui::Application::new().with_assets(gpui_component_assets::Assets);
     app.on_reopen(|cx| {
-            // Dock-click when the window was closed via ✕: reopen it.
-            if cx.windows().is_empty() {
-                let stores = match Stores::open() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        eprintln!("failed to open stores on reopen: {e}");
-                        return;
-                    }
-                };
-                if let Err(e) = open_main_window(cx, stores) {
-                    eprintln!("failed to reopen the Aiden window: {e}");
-                }
-            }
-            cx.activate(true);
-        });
-    app.run(move |cx: &mut App| {
-            // gpui-component MUST be initialized first: theme global, i18n,
-            // and component keybindings.
-            gpui_component::init(cx);
-            // Tokio runtime for reqwest/SSE work (providers), bridged into
-            // GPUI foreground tasks.
-            gpui_tokio_bridge::init(cx);
-
-            // All 26 commands from the keybinding catalog
-            // (renderer/shared/keybindings.ts ↔ aiden-core::keybindings) are
-            // bound in-app where the target surface exists. The settings
-            // editor lists every catalog command; the bindings below are the
-            // catalog defaults mapped onto gpui's key syntax
-            // ("Command+K" → "cmd-k").
-            cx.bind_keys([
-                // Core (catalog defaults).
-                KeyBinding::new("cmd-q", app::Quit, Some("App")),
-                KeyBinding::new("cmd-n", app::NewChat, Some("App")),
-                KeyBinding::new("cmd-k", app::TogglePalette, Some("App")),
-                KeyBinding::new("cmd-j", app::ToggleTerminal, Some("App")),
-                // In-app pill toggle. A true global hotkey (active while
-                // another app is focused) comes with the aiden-mac wiring in
-                // a later phase.
-                KeyBinding::new("cmd-shift-d", app::TogglePill, Some("App")),
-                // Settings / navigation.
-                KeyBinding::new("cmd-,", app::OpenSettings, Some("App")),
-                KeyBinding::new("cmd-shift-f", app::SearchChats, Some("App")),
-                KeyBinding::new("cmd-shift-[", app::PreviousChat, Some("App")),
-                KeyBinding::new("cmd-shift-]", app::NextChat, Some("App")),
-                KeyBinding::new("cmd-1", app::ChatJump1, Some("App")),
-                KeyBinding::new("cmd-2", app::ChatJump2, Some("App")),
-                KeyBinding::new("cmd-3", app::ChatJump3, Some("App")),
-                KeyBinding::new("cmd-4", app::ChatJump4, Some("App")),
-                KeyBinding::new("cmd-5", app::ChatJump5, Some("App")),
-                KeyBinding::new("cmd-6", app::ChatJump6, Some("App")),
-                KeyBinding::new("cmd-7", app::ChatJump7, Some("App")),
-                KeyBinding::new("cmd-8", app::ChatJump8, Some("App")),
-                KeyBinding::new("cmd-9", app::ChatJump9, Some("App")),
-                KeyBinding::new("cmd-o", app::OpenWorkspaceFolder, Some("App")),
-                KeyBinding::new("cmd-shift-e", app::OpenInEditor, Some("App")),
-                KeyBinding::new("cmd-ctrl-s", app::ToggleSidebar, Some("App")),
-                // Panel toggles + composer (TS global bindings, in-app scope
-                // until the aiden-mac global hotkey wiring lands).
-                KeyBinding::new("cmd-shift-a", app::ToggleAssistant, Some("App")),
-                KeyBinding::new("cmd-shift-s", app::ToggleSubagents, Some("App")),
-                KeyBinding::new("cmd-shift-u", app::ToggleUsage, Some("App")),
-                KeyBinding::new("cmd-alt-space", app::FocusComposer, Some("App")),
-                KeyBinding::new("cmd-alt-a", app::ToggleAssistant, Some("App")),
-                // Aiden-specific conveniences beyond the TS catalog.
-                KeyBinding::new("cmd-shift-t", app::ToggleTerminal, Some("App")),
-                KeyBinding::new("cmd-enter", app::SendMessage, Some("App")),
-                KeyBinding::new("cmd-w", app::CloseWindow, Some("App")),
-                // file.save: accepted (no-op stub) so the catalog stays honest.
-                KeyBinding::new("cmd-s", app::SaveFile, Some("App")),
-            ]);
-
+        // Dock-click when the window was closed via ✕: reopen it.
+        if cx.windows().is_empty() {
             let stores = match Stores::open() {
-                Ok(stores) => stores,
-                Err(error) => {
-                    eprintln!("failed to open Aiden stores: {error}");
-                    std::process::exit(1);
-                }
-            };
-
-            // Global dictation hotkey (parity audit config §12): a real
-            // OS-wide ⌘⇧D registration so the pill toggle works while another
-            // app is focused — not just inside Aiden. The port lives inside
-            // the app-lifetime listener task and is released at process exit.
-            // Without the macOS Accessibility permission the registration is
-            // refused (logged inside) and the in-app ⌘⇧D binding remains the
-            // only toggle path.
-            let global_dictation = app::register_global_dictation_hotkey(cx);
-            tracing::info!(
-                "dictation global hotkey: registered={global_dictation} (in-app ⌘⇧D always bound)"
-            );
-
-            // First run: the onboarding flow owns the app until it completes;
-            // its completion callback closes the onboarding window and opens
-            // the main window. The marker lives in `settings.json` under the
-            // exact TS key (`aiden:onboarding:v1:complete`).
-            let settings = stores.config.get_settings().unwrap_or_default();
-            if onboarding::should_show_onboarding(&settings) {
-                let onboarding_handle = Rc::new(RefCell::new(
-                    None::<gpui::WindowHandle<gpui_component::Root>>,
-                ));
-                let close_handle = onboarding_handle.clone();
-                let stores_for_complete = stores.clone();
-                let services = onboarding::OnboardingServices::new(stores.clone())
-                    .with_on_complete(Box::new(move |cx: &mut App| {
-                        if let Some(handle) = close_handle.borrow().as_ref() {
-                            let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
-                        }
-                        if let Err(error) = open_main_window(cx, stores_for_complete.clone()) {
-                            eprintln!("failed to open the Aiden window: {error}");
-                        }
-                    }));
-                match onboarding::open_onboarding_window(cx, services) {
-                    Ok(handle) => *onboarding_handle.borrow_mut() = Some(handle),
-                    Err(error) => {
-                        eprintln!("failed to open the onboarding window: {error}");
-                        // Never strand the user: fall back to the main window.
-                        if let Err(error) = open_main_window(cx, stores) {
-                            eprintln!("failed to open the Aiden window: {error}");
-                        }
-                    }
-                }
-            } else {
-                if let Err(error) = open_main_window(cx, stores) {
-                    eprintln!("failed to open the Aiden window: {error}");
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("failed to open stores on reopen: {e}");
                     return;
                 }
-                // Bring the window to the front on first launch.
-                cx.activate(true);
+            };
+            if let Err(e) = open_main_window(cx, stores) {
+                eprintln!("failed to reopen the Aiden window: {e}");
             }
-        });
+        }
+        cx.activate(true);
+    });
+    app.run(move |cx: &mut App| {
+        // gpui-component MUST be initialized first: theme global, i18n,
+        // and component keybindings.
+        gpui_component::init(cx);
+        // Tokio runtime for reqwest/SSE work (providers), bridged into
+        // GPUI foreground tasks.
+        gpui_tokio_bridge::init(cx);
+
+        // All 26 commands from the keybinding catalog
+        // (renderer/shared/keybindings.ts ↔ aiden-core::keybindings) are
+        // bound in-app where the target surface exists. The settings
+        // editor lists every catalog command; the bindings below are the
+        // catalog defaults mapped onto gpui's key syntax
+        // ("Command+K" → "cmd-k").
+        cx.bind_keys([
+            // Core (catalog defaults).
+            KeyBinding::new("cmd-q", app::Quit, Some("App")),
+            KeyBinding::new("cmd-n", app::NewChat, Some("App")),
+            KeyBinding::new("cmd-k", app::TogglePalette, Some("App")),
+            KeyBinding::new("cmd-j", app::ToggleTerminal, Some("App")),
+            // In-app pill toggle. A true global hotkey (active while
+            // another app is focused) comes with the aiden-mac wiring in
+            // a later phase.
+            KeyBinding::new("cmd-shift-d", app::TogglePill, Some("App")),
+            // Settings / navigation.
+            KeyBinding::new("cmd-,", app::OpenSettings, Some("App")),
+            KeyBinding::new("cmd-shift-f", app::SearchChats, Some("App")),
+            KeyBinding::new("cmd-shift-[", app::PreviousChat, Some("App")),
+            KeyBinding::new("cmd-shift-]", app::NextChat, Some("App")),
+            KeyBinding::new("cmd-1", app::ChatJump1, Some("App")),
+            KeyBinding::new("cmd-2", app::ChatJump2, Some("App")),
+            KeyBinding::new("cmd-3", app::ChatJump3, Some("App")),
+            KeyBinding::new("cmd-4", app::ChatJump4, Some("App")),
+            KeyBinding::new("cmd-5", app::ChatJump5, Some("App")),
+            KeyBinding::new("cmd-6", app::ChatJump6, Some("App")),
+            KeyBinding::new("cmd-7", app::ChatJump7, Some("App")),
+            KeyBinding::new("cmd-8", app::ChatJump8, Some("App")),
+            KeyBinding::new("cmd-9", app::ChatJump9, Some("App")),
+            KeyBinding::new("cmd-o", app::OpenWorkspaceFolder, Some("App")),
+            KeyBinding::new("cmd-shift-e", app::OpenInEditor, Some("App")),
+            KeyBinding::new("cmd-ctrl-s", app::ToggleSidebar, Some("App")),
+            // Panel toggles + composer (TS global bindings, in-app scope
+            // until the aiden-mac global hotkey wiring lands).
+            KeyBinding::new("cmd-shift-a", app::ToggleAssistant, Some("App")),
+            KeyBinding::new("cmd-shift-s", app::ToggleSubagents, Some("App")),
+            KeyBinding::new("cmd-shift-u", app::ToggleUsage, Some("App")),
+            KeyBinding::new("cmd-alt-space", app::FocusComposer, Some("App")),
+            KeyBinding::new("cmd-alt-a", app::ToggleAssistant, Some("App")),
+            // Aiden-specific conveniences beyond the TS catalog.
+            KeyBinding::new("cmd-shift-t", app::ToggleTerminal, Some("App")),
+            KeyBinding::new("cmd-enter", app::SendMessage, Some("App")),
+            KeyBinding::new("cmd-w", app::CloseWindow, Some("App")),
+            // file.save: accepted (no-op stub) so the catalog stays honest.
+            KeyBinding::new("cmd-s", app::SaveFile, Some("App")),
+        ]);
+
+        let stores = match Stores::open() {
+            Ok(stores) => stores,
+            Err(error) => {
+                eprintln!("failed to open Aiden stores: {error}");
+                std::process::exit(1);
+            }
+        };
+
+        // Global dictation hotkey (parity audit config §12): a real
+        // OS-wide ⌘⇧D registration so the pill toggle works while another
+        // app is focused — not just inside Aiden. The port lives inside
+        // the app-lifetime listener task and is released at process exit.
+        // Without the macOS Accessibility permission the registration is
+        // refused (logged inside) and the in-app ⌘⇧D binding remains the
+        // only toggle path.
+        let global_dictation = app::register_global_dictation_hotkey(cx);
+        tracing::info!(
+            "dictation global hotkey: registered={global_dictation} (in-app ⌘⇧D always bound)"
+        );
+
+        // First run: the onboarding flow owns the app until it completes;
+        // its completion callback closes the onboarding window and opens
+        // the main window. The marker lives in `settings.json` under the
+        // exact TS key (`aiden:onboarding:v1:complete`).
+        let settings = stores.config.get_settings().unwrap_or_default();
+        if onboarding::should_show_onboarding(&settings) {
+            let onboarding_handle = Rc::new(RefCell::new(
+                None::<gpui::WindowHandle<gpui_component::Root>>,
+            ));
+            let close_handle = onboarding_handle.clone();
+            let stores_for_complete = stores.clone();
+            let services = onboarding::OnboardingServices::new(stores.clone()).with_on_complete(
+                Box::new(move |cx: &mut App| {
+                    if let Some(handle) = close_handle.borrow().as_ref() {
+                        let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
+                    }
+                    if let Err(error) = open_main_window(cx, stores_for_complete.clone()) {
+                        eprintln!("failed to open the Aiden window: {error}");
+                    }
+                }),
+            );
+            match onboarding::open_onboarding_window(cx, services) {
+                Ok(handle) => *onboarding_handle.borrow_mut() = Some(handle),
+                Err(error) => {
+                    eprintln!("failed to open the onboarding window: {error}");
+                    // Never strand the user: fall back to the main window.
+                    if let Err(error) = open_main_window(cx, stores) {
+                        eprintln!("failed to open the Aiden window: {error}");
+                    }
+                }
+            }
+        } else {
+            if let Err(error) = open_main_window(cx, stores) {
+                eprintln!("failed to open the Aiden window: {error}");
+                return;
+            }
+            // Bring the window to the front on first launch.
+            cx.activate(true);
+        }
+    });
 
     // Reached only after the app quits (⌘Q / the quit-barrier path): release
     // the single-instance lock so the next launch can claim it. A crash leaves
