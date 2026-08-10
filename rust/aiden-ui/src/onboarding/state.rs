@@ -83,6 +83,7 @@ impl Step {
 /// port and Tailscale was never a builtin provider).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderChoice {
+    ChatGpt,
     Anthropic,
     Google,
     Openai,
@@ -94,6 +95,7 @@ pub enum ProviderChoice {
 
 impl ProviderChoice {
     pub const ALL: &'static [ProviderChoice] = &[
+        ProviderChoice::ChatGpt,
         ProviderChoice::Anthropic,
         ProviderChoice::Google,
         ProviderChoice::Openai,
@@ -105,6 +107,7 @@ impl ProviderChoice {
 
     pub fn title(self) -> &'static str {
         match self {
+            ProviderChoice::ChatGpt => "ChatGPT / Codex",
             ProviderChoice::Anthropic => "Anthropic (Claude)",
             ProviderChoice::Google => "Google Gemini",
             ProviderChoice::Openai => "OpenAI",
@@ -117,6 +120,7 @@ impl ProviderChoice {
 
     pub fn description(self) -> &'static str {
         match self {
+            ProviderChoice::ChatGpt => "Use your ChatGPT Plus or Pro account with Codex models.",
             ProviderChoice::Anthropic => {
                 "Bring Claude with your Anthropic API key and provider-hosted models."
             }
@@ -137,6 +141,7 @@ impl ProviderChoice {
 
     pub fn footnote(self) -> &'static str {
         match self {
+            ProviderChoice::ChatGpt => "OAuth tokens stay encrypted in this Mac's Keychain.",
             ProviderChoice::Anthropic | ProviderChoice::Google => {
                 "The key stays on this Mac and can be rotated later in Settings."
             }
@@ -171,6 +176,7 @@ impl ProviderChoice {
     #[allow(dead_code)] // renderer-contract helper; the view uses the machine defaults
     pub fn base_url_placeholder(self) -> &'static str {
         match self {
+            ProviderChoice::ChatGpt => "Managed by secure ChatGPT sign-in",
             ProviderChoice::LmStudio => "http://127.0.0.1:1234/v1",
             ProviderChoice::Ollama => "http://127.0.0.1:11434/v1",
             _ => "Default provider URL",
@@ -211,6 +217,7 @@ pub fn make_onboarding_provider(
     base_url: &str,
 ) -> Option<OnboardingProvider> {
     let (id, kind, label, models, default_model, needs_key, deployment) = match choice {
+        ProviderChoice::ChatGpt => return None,
         ProviderChoice::Anthropic => (
             "anthropic".to_string(),
             ProviderKind::Anthropic,
@@ -296,6 +303,7 @@ pub fn make_onboarding_provider(
     };
     let base_url = if base_url.trim().is_empty() {
         match choice {
+            ProviderChoice::ChatGpt => return None,
             ProviderChoice::Anthropic => "https://api.anthropic.com/v1",
             ProviderChoice::Google => "https://generativelanguage.googleapis.com/v1beta",
             ProviderChoice::Openai => "https://api.openai.com/v1",
@@ -363,6 +371,7 @@ pub struct OnboardingMachine {
     pub mode: Mode,
     pub reduce_motion: ReduceMotion,
     pub saved_provider: Option<OnboardingProvider>,
+    pub codex_configured: bool,
     /// Fallback catalog loaded from the store at boot (used when the user
     /// skips the provider save).
     pub catalog: Vec<String>,
@@ -376,8 +385,8 @@ impl Default for OnboardingMachine {
         Self {
             step_index: 0,
             name: String::new(),
-            // TS defaulted to "openai-signin"; with that OAuth stub removed the
-            // flow opens on the first real provider, Anthropic.
+            // Keep the key-based first option selected until the user
+            // explicitly chooses the networked ChatGPT sign-in action.
             choice: ProviderChoice::Anthropic,
             api_key: String::new(),
             base_url: String::new(),
@@ -386,6 +395,7 @@ impl Default for OnboardingMachine {
             mode: Mode::System,
             reduce_motion: ReduceMotion::System,
             saved_provider: None,
+            codex_configured: false,
             catalog: Vec::new(),
             catalog_provider_id: None,
             completed: false,
@@ -430,6 +440,9 @@ impl OnboardingMachine {
                 None
             }
             Step::Provider => {
+                if self.choice == ProviderChoice::ChatGpt && !self.codex_configured {
+                    return Some("Sign in to ChatGPT, or choose another provider.");
+                }
                 if self.choice.requires_key() && self.api_key.trim().is_empty() {
                     return Some("Paste an API key or choose a local option.");
                 }
@@ -502,6 +515,22 @@ impl OnboardingMachine {
         self.selected_model = provider.default_model.clone();
         self.saved_provider = Some(provider);
         self.error = None;
+    }
+
+    pub fn record_codex_configured(&mut self) {
+        let snapshot = aiden_providers::list::bundled_codex_provider_snapshot(true);
+        let models = snapshot.models.into_iter().map(|model| model.id).collect();
+        self.codex_configured = true;
+        self.record_provider_saved(OnboardingProvider {
+            id: "openai-codex".to_string(),
+            kind: ProviderKind::Openai,
+            label: "ChatGPT / Codex".to_string(),
+            base_url: "https://chatgpt.com/backend-api".to_string(),
+            models,
+            default_model: Some("gpt-5.4".to_string()),
+            needs_key: true,
+            deployment: ProviderDeployment::Hosted,
+        });
     }
 
     /// Load the configured-provider catalog read at boot (returning users).
@@ -1197,5 +1226,39 @@ mod tests {
         assert_eq!(machine.next(), NextOutcome::Blocked);
         assert!(machine.is_complete());
         assert_eq!(machine.step_index(), 0);
+    }
+
+    #[test]
+    fn choosing_chatgpt_does_not_start_or_persist_any_network_setup() {
+        let mut machine = OnboardingMachine::new();
+        machine.choice = ProviderChoice::ChatGpt;
+
+        let pending = machine.pending_provider_save();
+
+        assert_eq!(pending.provider, None);
+        assert_eq!(pending.api_key, None);
+        machine.step_index = Step::Provider.index();
+        assert_eq!(
+            machine.validate(),
+            Some("Sign in to ChatGPT, or choose another provider.")
+        );
+    }
+
+    #[test]
+    fn configured_chatgpt_exposes_bundled_models_and_exact_selection() {
+        let mut machine = OnboardingMachine::new();
+        machine.choice = ProviderChoice::ChatGpt;
+
+        machine.record_codex_configured();
+
+        assert!(machine.codex_configured);
+        assert!(machine
+            .model_options()
+            .iter()
+            .any(|model| model.id == "gpt-5.6-sol"));
+        assert_eq!(
+            machine.selection(),
+            Some(("openai-codex".to_string(), "gpt-5.4".to_string()))
+        );
     }
 }
