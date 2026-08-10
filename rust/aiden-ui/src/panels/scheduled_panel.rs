@@ -20,7 +20,7 @@ use gpui::{
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _,
+    h_flex, v_flex, ActiveTheme, Disableable as _, Icon, IconName, Sizable as _,
 };
 
 /// Events the panel emits; the orchestrator maps them onto the schedule store.
@@ -44,8 +44,8 @@ impl TaskTab {
     pub fn label(self) -> &'static str {
         match self {
             TaskTab::All => "All",
-            TaskTab::Active => "Active",
-            TaskTab::Paused => "Paused",
+            TaskTab::Active => "Configured",
+            TaskTab::Paused => "Dormant",
         }
     }
 }
@@ -85,50 +85,6 @@ pub fn filter_scheduled_tasks(
         })
         .cloned()
         .collect()
-}
-
-/// `formatNextRun` — relative countdown label.
-pub fn format_next_run(timestamp: Option<u64>, now: u64) -> String {
-    let Some(timestamp) = timestamp else {
-        return "No next run".to_string();
-    };
-    let delta = timestamp as i64 - now as i64;
-    let absolute = delta.unsigned_abs();
-    if absolute < 90_000 {
-        format_relative(delta, 1_000, "second")
-    } else if absolute < 90 * 60_000 {
-        format_relative(delta, 60_000, "minute")
-    } else if absolute < 36 * 3_600_000 {
-        format_relative(delta, 3_600_000, "hour")
-    } else {
-        format_relative(delta, 86_400_000, "day")
-    }
-}
-
-fn format_relative(delta: i64, unit_ms: i64, unit: &str) -> String {
-    let rounded = (delta as f64 / unit_ms as f64).round() as i64;
-    let value = rounded.unsigned_abs();
-    let plural = if value == 1 { "" } else { "s" };
-    if delta >= 0 {
-        format!("in {value} {unit}{plural}")
-    } else {
-        format!("{value} {unit}{plural} ago")
-    }
-}
-
-/// `scheduledTaskStatus` — error, active, or paused.
-pub fn scheduled_task_status(task: &ScheduledTask) -> &'static str {
-    if matches!(
-        task.last_result,
-        Some(ScheduledRunResult::Error) | Some(ScheduledRunResult::Blocked)
-    ) {
-        return "error";
-    }
-    if task.enabled {
-        "active"
-    } else {
-        "paused"
-    }
 }
 
 fn number_field(value: &str, minimum: u32, maximum: u32) -> Option<u32> {
@@ -554,9 +510,7 @@ impl ScheduledPanel {
 
     fn task_row(&self, task: &ScheduledTask, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let status = scheduled_task_status(task);
         let cadence = format_schedule(&task.cron, &task.timezone);
-        let next_run = format_next_run(task.next_run_at, self.now);
         let last_run = task
             .last_run_at
             .map(|timestamp| {
@@ -567,16 +521,8 @@ impl ScheduledPanel {
             })
             .unwrap_or_else(|| "Never run".to_string());
 
-        let status_icon = match status {
-            "error" => IconName::TriangleAlert,
-            "active" => IconName::CircleCheck,
-            _ => IconName::CircleX,
-        };
-        let status_color = match status {
-            "error" => theme.danger,
-            "active" => theme.primary,
-            _ => theme.muted_foreground,
-        };
+        let status_icon = IconName::CircleX;
+        let status_color = theme.muted_foreground;
 
         let id = task.id.clone();
         let toggle_id = id.clone();
@@ -612,7 +558,7 @@ impl ScheduledPanel {
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .truncate()
-                            .child(format!("{cadence} · {next_run}")),
+                            .child(format!("Dormant · {cadence} · execution unsupported")),
                     )
                     .child(
                         div()
@@ -625,7 +571,9 @@ impl ScheduledPanel {
                 gpui_component::switch::Switch::new(ElementId::Name(SharedString::from(format!(
                     "scheduled-enabled-{id}"
                 ))))
-                .checked(task.enabled)
+                .checked(false)
+                .disabled(true)
+                .tooltip("Scheduled execution is unsupported")
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     let target = this
                         .tasks
@@ -643,7 +591,8 @@ impl ScheduledPanel {
                 .small()
                 .ghost()
                 .icon(IconName::SquareTerminal)
-                .tooltip("Run now")
+                .disabled(true)
+                .tooltip("Run now is unavailable until scheduled execution is configured")
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.run_now(&run_now_id, cx);
                 })),
@@ -823,49 +772,6 @@ mod tests {
     }
 
     #[test]
-    fn relative_next_run_labels_and_status_stay_deterministic() {
-        let now = aiden_data::schedule_store::utc_ms(2026, 7, 23, 12, 0, 0);
-        assert!(format_next_run(Some(now + 2 * 3_600_000), now).contains("2 hours"));
-        assert_eq!(format_next_run(None, now), "No next run");
-        assert_eq!(
-            scheduled_task_status(&task(
-                "a",
-                "A",
-                true,
-                ScheduledTaskMode::Llm,
-                Some("p"),
-                None,
-                None
-            )),
-            "active"
-        );
-        assert_eq!(
-            scheduled_task_status(&task(
-                "b",
-                "B",
-                false,
-                ScheduledTaskMode::Llm,
-                Some("p"),
-                None,
-                None
-            )),
-            "paused"
-        );
-        assert_eq!(
-            scheduled_task_status(&task(
-                "c",
-                "C",
-                true,
-                ScheduledTaskMode::Llm,
-                Some("p"),
-                None,
-                Some(ScheduledRunResult::Blocked)
-            )),
-            "error"
-        );
-    }
-
-    #[test]
     fn common_cron_schedules_are_presented_as_human_readable_cadence() {
         // Use the local timezone so no suffix is appended, matching the
         // renderer test's `localTimezone`.
@@ -896,12 +802,5 @@ mod tests {
         );
         assert_eq!(format_schedule("5 0 9 * * *", &timezone), "Custom schedule");
         assert_eq!(format_schedule("garbage", &timezone), "Custom schedule");
-    }
-
-    #[test]
-    fn single_unit_relative_labels_use_seconds() {
-        let now = aiden_data::now_millis();
-        assert!(format_next_run(Some(now + 45_000), now).contains("45 seconds"));
-        assert!(format_next_run(Some(now + 95_000), now).contains("2 minutes"));
     }
 }
