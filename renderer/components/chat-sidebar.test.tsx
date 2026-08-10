@@ -255,3 +255,16 @@ test("shared controls use theme fill or border focus instead of focus rings", ()
   assert.doesNotMatch(ui, /focus-visible:ring-focus-ring/u);
   assert.doesNotMatch(ui, /focus:ring-focus-ring/u);
 });
+
+test("toasts use elevation without a colored border or outline", () => {
+  const styles = source("../styles.css");
+  assert.match(styles, /--elevation-toast: 0 4px 12px/u);
+  for (const token of ["normal", "success", "error", "info", "warning"]) {
+    assert.match(styles, new RegExp(`--${token}-border: transparent !important;`, "u"));
+  }
+  assert.match(
+    styles,
+    /\[data-sonner-toast\] \{\s*border: 0 !important;[\s\S]*outline: 0 !important;/u,
+  );
+  assert.doesNotMatch(styles, /--elevation-toast: 0 0 0/u);
+});

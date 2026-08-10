@@ -117,7 +117,7 @@
   --elevation-control-pressed: inset 0 1px 2px rgb(0 0 0 / 0.14), 0 0 0 0.5px rgb(0 0 0 / 0.08);
   --elevation-popover:
     0 0 0 0.5px rgb(0 0 0 / 0.12), 0 3px 7.5px rgb(0 0 0 / 0.12), 0 0 20px rgb(0 0 0 / 0.035);
-  --elevation-toast: 0 0 0 0.5px rgb(0 0 0 / 0.12), 0 4px 12px rgb(0 0 0 / 0.1);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.1);
   --elevation-dialog: 0 0 0 0.5px rgb(0 0 0 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.3);
   --elevation-modal: 0 0 0 0.5px rgb(0 0 0 / 0.16), 0 20px 44px -10px rgb(0 0 0 / 0.38);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.12);
@@ -169,7 +169,7 @@
     inset 0 1px 2px rgb(0 0 0 / 0.65), 0 0 0 0.5px rgb(255 255 255 / 0.1);
   --elevation-popover:
     0 0 0 0.5px rgb(255 255 255 / 0.14), 0 3px 8px rgb(0 0 0 / 0.58), 0 0 20px rgb(0 0 0 / 0.16);
-  --elevation-toast: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 4px 12px rgb(0 0 0 / 0.54);
+  --elevation-toast: 0 4px 12px rgb(0 0 0 / 0.54);
   --elevation-dialog: 0 0 0 0.5px rgb(255 255 255 / 0.14), 0 16px 32px -8px rgb(0 0 0 / 0.72);
   --elevation-modal: 0 0 0 0.5px rgb(255 255 255 / 0.16), 0 22px 48px -10px rgb(0 0 0 / 0.78);
   --elevation-composer: 0 2px 8px rgb(0 0 0 / 0.45);
@@ -1005,24 +1005,26 @@ textarea {
 
 [data-sonner-toaster] {
   --normal-bg: var(--surface-popover) !important;
-  --normal-border: var(--border-field) !important;
+  --normal-border: transparent !important;
   --normal-text: var(--text-primary) !important;
   --success-bg: var(--surface-popover) !important;
-  --success-border: color-mix(in srgb, var(--support-green), transparent 58%) !important;
+  --success-border: transparent !important;
   --success-text: var(--text-primary) !important;
   --error-bg: var(--surface-popover) !important;
-  --error-border: color-mix(in srgb, var(--support-red), transparent 58%) !important;
+  --error-border: transparent !important;
   --error-text: var(--text-primary) !important;
   --info-bg: var(--surface-popover) !important;
-  --info-border: color-mix(in srgb, var(--accent), transparent 58%) !important;
+  --info-border: transparent !important;
   --info-text: var(--text-primary) !important;
   --warning-bg: var(--surface-popover) !important;
-  --warning-border: color-mix(in srgb, var(--support-warning), transparent 58%) !important;
+  --warning-border: transparent !important;
   --warning-text: var(--text-primary) !important;
 }
 
 [data-sonner-toast] {
+  border: 0 !important;
   border-radius: var(--radius-card) !important;
+  outline: 0 !important;
   box-shadow: var(--elevation-toast) !important;
 }
 
