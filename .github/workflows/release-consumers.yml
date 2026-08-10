@@ -3,26 +3,30 @@ name: Release consumer contract
 on:
   pull_request:
     paths:
-      - ".github/workflows/release.yml"
-      - ".github/workflows/release-consumers.yml"
+      - ".github/workflows/release*.yml"
+      - "docs/releasing.md"
+      - "main/services/app-updater*.ts"
       - "package.json"
       - "package-lock.json"
-      - "scripts/check-release-consumers.mjs"
-      - "scripts/check-release-consumers.test.mjs"
-      - "scripts/run-macos-distribution.mjs"
-      - "scripts/run-macos-distribution.test.mjs"
+      - "scripts/check-macos-release*.mjs"
+      - "scripts/check-release-consumers*.mjs"
+      - "scripts/prepare-ci-release*.mjs"
+      - "scripts/run-macos-distribution*.mjs"
+      - "scripts/verify-macos-package*.mjs"
   push:
     branches:
       - main
     paths:
-      - ".github/workflows/release.yml"
-      - ".github/workflows/release-consumers.yml"
+      - ".github/workflows/release*.yml"
+      - "docs/releasing.md"
+      - "main/services/app-updater*.ts"
       - "package.json"
       - "package-lock.json"
-      - "scripts/check-release-consumers.mjs"
-      - "scripts/check-release-consumers.test.mjs"
-      - "scripts/run-macos-distribution.mjs"
-      - "scripts/run-macos-distribution.test.mjs"
+      - "scripts/check-macos-release*.mjs"
+      - "scripts/check-release-consumers*.mjs"
+      - "scripts/prepare-ci-release*.mjs"
+      - "scripts/run-macos-distribution*.mjs"
+      - "scripts/verify-macos-package*.mjs"
   workflow_dispatch:
 
 permissions:
