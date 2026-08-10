@@ -83,9 +83,11 @@ pub use contract::{
 pub use foundation_models::{
     create_foundation_models_connection, parse_foundation_models_response,
     platform_foundation_models_status, run_helper_request, FoundationHelperSpawner,
-    FoundationModelsConnection, FoundationModelsConnectionError, FoundationModelsResult,
-    FoundationModelsState, NativeFoundationModelsMethod, NativeFoundationModelsRequest,
-    NativeFoundationModelsRunOptions, OpenHelperSpawner, FOUNDATION_MODELS_PROTOCOL_VERSION,
+    FoundationModelsCancellationToken, FoundationModelsConnection, FoundationModelsConnectionError,
+    FoundationModelsResponse, FoundationModelsResult, FoundationModelsState,
+    NativeFoundationModelsMethod, NativeFoundationModelsRequest,
+    NativeFoundationModelsRequestRunner, NativeFoundationModelsRunOptions, OpenHelperSpawner,
+    FOUNDATION_MODELS_PROTOCOL_VERSION,
 };
 pub use generation_gate::{
     activated_computer_use_stream_ids, composer_submission_allowed, computer_use_control_state,
