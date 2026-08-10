@@ -8,6 +8,11 @@
   [Aiden Assistant](../aiden-assistant-plan.md), and
   [Pi Provider Integration](../pi-provider-integration-plan.md)
 
+> **Post-completion refinement (2026-08-10):** The delivered palette now uses
+> explicit namespaces: `/` lists app commands only, while `$` lists skills
+> only. This keeps each surface focused while preserving the same bounded
+> keyboard interaction and authoritative one-turn skill invocation contract.
+
 ## Outcome
 
 Aiden will add a keyboard-first slash palette directly above the main chat

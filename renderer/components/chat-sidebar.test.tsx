@@ -23,10 +23,7 @@ test("sidebar places New Agent above Scheduled beneath search", () => {
 
   assert.notEqual(newAgentIndex, -1);
   assert.notEqual(scheduledIndex, -1);
-  assert.ok(
-    newAgentIndex < scheduledIndex,
-    "New Agent should appear before Scheduled",
-  );
+  assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
   assert.ok(
     scheduledIndex < workspaceIndex,
     "Scheduled should stay above the workspace switcher and chat list",
@@ -35,11 +32,7 @@ test("sidebar places New Agent above Scheduled beneath search", () => {
 
 test("new agent uses the same sidebar row style as scheduled", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  const section = between(
-    sidebar,
-    '<div className="flex flex-col gap-0.5 px-2.5 pb-2">',
-    "</div>",
-  );
+  const section = between(sidebar, '<div className="flex flex-col gap-0.5 px-2.5 pb-2">', "</div>");
   assert.match(section, /<SidebarListItem[\s\S]*title="New Agent"/u);
   assert.match(section, /<SidebarListItem[\s\S]*title="Scheduled"/u);
   assert.doesNotMatch(section, /variant="accent"/u);
@@ -47,14 +40,8 @@ test("new agent uses the same sidebar row style as scheduled", () => {
 
 test("newAgent creates a chat in the active workspace", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(
-    sidebar,
-    /const newAgent = React\.useCallback\(async \(\) => \{/u,
-  );
-  assert.match(
-    sidebar,
-    /if \(!activeId \|\| appendReconciliationRequired\) return;/u,
-  );
+  assert.match(sidebar, /const newAgent = React\.useCallback\(async \(\) => \{/u);
+  assert.match(sidebar, /if \(!activeId \|\| appendReconciliationRequired\) return;/u);
   assert.match(sidebar, /chatsApi\.create\(\{ workspaceId: activeId \}\)/u);
   assert.match(
     sidebar,
@@ -70,14 +57,8 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   const settingsIndex = footer.indexOf('title="Settings"');
 
   assert.notEqual(updateIndex, -1);
-  assert.ok(
-    updateIndex < profileIndex,
-    "the temporary update status should lead the footer",
-  );
-  assert.ok(
-    profileIndex < settingsIndex,
-    "Profile and Settings should keep their stable order",
-  );
+  assert.ok(updateIndex < profileIndex, "the temporary update status should lead the footer");
+  assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
 });
 
 test("update-ready banner offers Later and a guarded restart action", () => {
@@ -94,10 +75,7 @@ test("update-ready banner offers Later and a guarded restart action", () => {
   assert.match(banner, />\s*Later\s*</u);
   assert.match(banner, /Update and restart/u);
   assert.match(banner, /appUpdatesApi\.restart\(\)/u);
-  assert.match(
-    banner,
-    /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u,
-  );
+  assert.match(banner, /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u);
 });
 
 test("a stale initial update-state response cannot overwrite a newer notification", () => {
@@ -126,20 +104,11 @@ test("update-ready banner uses the Aiden mark and shared compact-surface motion"
     "\n}\n\nfunction GeneratedTitleReveal",
   );
 
-  assert.match(
-    sidebar,
-    /const AIDEN_MARK_URL = new URL\("\.\.\/\.\.\/resources\/app-icon\.png"/u,
-  );
-  assert.match(
-    banner,
-    /<img src=\{AIDEN_MARK_URL\} alt="" className="size-8 shrink-0" \/>/u,
-  );
+  assert.match(sidebar, /const AIDEN_MARK_URL = new URL\("\.\.\/\.\.\/resources\/app-icon\.png"/u);
+  assert.match(banner, /<img src=\{AIDEN_MARK_URL\} alt="" className="size-8 shrink-0" \/>/u);
   assert.doesNotMatch(sidebar, /CircleArrowUp/u);
   assert.match(banner, /data-state=\{open \? "open" : "closed"\}/u);
-  assert.match(
-    banner,
-    /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u,
-  );
+  assert.match(banner, /setTimeout\(\(\) => setPresent\(false\), APP_UPDATE_BANNER_EXIT_MS\)/u);
   assert.match(
     styles,
     /@keyframes aiden-app-update-banner-in[\s\S]*translateY\(4px\) scale\(0\.98\)/u,
@@ -163,10 +132,7 @@ test("chat pane toolbar no longer exposes a duplicate new-chat control", () => {
 
 test("workspace menu middle-truncates folder paths", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  assert.match(
-    sidebar,
-    /import \{ truncatePathMiddle \} from "\.\.\/lib\/truncate-path"/u,
-  );
+  assert.match(sidebar, /import \{ truncatePathMiddle \} from "\.\.\/lib\/truncate-path"/u);
   assert.match(
     sidebar,
     /sublabel=\{\s*w\.folderPath \? truncatePathMiddle\(w\.folderPath\) : undefined\s*\}/u,
@@ -176,18 +142,10 @@ test("workspace menu middle-truncates folder paths", () => {
 
 test("successful chat deletion removes the exact transcript cache before list refresh", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  const deletion = between(
-    sidebar,
-    "const commitDelete = async () => {",
-    "\n  };",
-  );
+  const deletion = between(sidebar, "const commitDelete = async () => {", "\n  };");
   const remove = deletion.indexOf("await chatsApi.remove(deleting.id)");
-  const purge = deletion.indexOf(
-    "await removeDeletedChatFromCache(qc, deleting.id)",
-  );
-  const refresh = deletion.indexOf(
-    "await qc.invalidateQueries({ queryKey: queryKeys.chats })",
-  );
+  const purge = deletion.indexOf("await removeDeletedChatFromCache(qc, deleting.id)");
+  const refresh = deletion.indexOf("await qc.invalidateQueries({ queryKey: queryKeys.chats })");
 
   assert.ok(remove >= 0);
   assert.ok(purge > remove);
@@ -208,16 +166,77 @@ test("settings reuses the chat sidebar width so the chrome does not jump", () =>
   assert.match(chat, /storageKey="aiden-agent"/u);
   assert.match(chat, /sidebarSize=\{\{ default: 272, min: 236, max: 340 \}\}/u);
   assert.match(settings, /storageKey="aiden-agent"/u);
-  assert.match(
-    settings,
-    /sidebarSize=\{\{ default: 272, min: 236, max: 340 \}\}/u,
-  );
+  assert.match(settings, /sidebarSize=\{\{ default: 272, min: 236, max: 340 \}\}/u);
   assert.doesNotMatch(settings, /aiden-agent-settings/u);
+});
+
+test("sidebar collapse keeps shared chrome geometry on one synchronized motion curve", () => {
+  const ui = source("./ui.tsx");
+  assert.match(
+    ui,
+    /bg-sidebar transition-\[width,opacity\] duration-300 ease-out motion-reduce:transition-none/u,
+  );
+  assert.match(
+    ui,
+    /scroll-area-header[\s\S]{0,180}transition-\[padding\] duration-300 ease-out motion-reduce:transition-none/u,
+  );
+  assert.match(ui, /style=\{\{ paddingLeft: split\?\.collapsed \? 142 : undefined \}\}/u);
+});
+
+test("sidebar breakpoint hands layout width through an animated spacer", () => {
+  const ui = source("./ui.tsx");
+  assert.match(ui, /const reservedSidebarWidth = !compact && !collapsed \? width : 0;/u);
+  assert.match(ui, /absolute inset-y-0 left-0 z-10[\s\S]{0,120}transition-\[width,opacity\]/u);
+  assert.match(
+    ui,
+    /aria-hidden="true"[\s\S]{0,180}transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,120}reservedSidebarWidth/u,
+  );
+  assert.doesNotMatch(ui, /compact && !collapsed && "absolute inset-y-0/u);
+});
+
+test("compact split view starts collapsed before first paint", () => {
+  const ui = source("./ui.tsx");
+  assert.match(
+    ui,
+    /useState\(\s*\(\) => window\.innerWidth < 700 \|\| localStorage\.getItem\(collapseKey\) === "1"/u,
+  );
+});
+
+test("allocated composer and settings widths drive their compact layouts", () => {
+  const composer = source("./composer.tsx");
+  const settings = source("../main/settings-view.tsx");
+  const styles = source("../styles.css");
+  assert.match(composer, /className="composer-responsive pointer-events-auto relative isolate"/u);
+  assert.match(settings, /className="settings-responsive mx-auto w-full max-w-2xl/u);
+  assert.match(styles, /\.composer-responsive\s*\{\s*container: composer \/ inline-size;/u);
+  assert.match(styles, /@container composer \(max-width: 520px\)/u);
+  assert.match(styles, /\.settings-responsive\s*\{\s*container: settings-content \/ inline-size;/u);
+  assert.match(styles, /@container settings-content \(max-width: 640px\)/u);
+});
+
+test("environment inline handoff uses the same animated spacer pattern", () => {
+  const panel = source("./environment-panel.tsx");
+  assert.match(panel, /environment-panel absolute inset-y-0 right-0 z-30/u);
+  assert.match(
+    panel,
+    /transition-\[width\] duration-300 ease-out motion-reduce:transition-none[\s\S]{0,180}fullOpen && inline \? renderedWidth : 0/u,
+  );
+  assert.doesNotMatch(panel, /inline \? "relative" : "absolute/u);
+});
+
+test("terminal drawer keeps its exit surface until the shared motion completes", () => {
+  const terminal = source("./terminal-drawer.tsx");
+  const styles = source("../styles.css");
+  assert.match(terminal, /const TERMINAL_DRAWER_MOTION_MS = 300;/u);
+  assert.match(terminal, /data-state=\{open \? "open" : "closed"\}/u);
+  assert.match(terminal, /reduceMotion \? 0 : TERMINAL_DRAWER_MOTION_MS/u);
+  assert.match(styles, /\.terminal-drawer\[data-state="closed"\][\s\S]*height: 0;/u);
+  assert.match(styles, /:root\[data-reduce-motion="true"\] \.terminal-drawer/u);
 });
 
 test("sidebar list items use a fill focus state instead of a focus ring", () => {
   const ui = source("./ui.tsx");
-  const item = between(ui, "export function SidebarListItem", "\n}");
+  const item = between(ui, "export function SidebarListItem", "\n\nexport function ScrollArea");
   assert.match(item, /focus-visible:bg-list-selection/u);
   assert.doesNotMatch(item, /focus-visible:ring/u);
 });

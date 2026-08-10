@@ -118,12 +118,24 @@ test("slash trigger requires the first non-whitespace token and a collapsed care
   );
   assert.equal(deriveSlashSession(input("/model later", 9)), null);
   assert.deepEqual(deriveSlashSession(input("  /model task", 5)), {
+    kind: "command",
+    trigger: "/",
     tokenStart: 2,
     tokenEnd: 8,
     token: "/model",
     query: "model",
     argument: " task",
     sessionKey: "1:/model",
+  });
+  assert.deepEqual(deriveSlashSession(input("  $review task", 5)), {
+    kind: "skill",
+    trigger: "$",
+    tokenStart: 2,
+    tokenEnd: 9,
+    token: "$review",
+    query: "review",
+    argument: " task",
+    sessionKey: "1:$review",
   });
   assert.ok(deriveSlashSession(input("\n\t/Users/private")));
   assert.equal(deriveSlashSession(input("ordinary prose")), null);
@@ -146,7 +158,7 @@ test("escape remains sticky through caret and leading-space changes but a change
 });
 
 test("token consumption preserves exact whitespace, newlines, and indentation", () => {
-  const draft = "  /skills\n\n    Keep indentation";
+  const draft = "  $review\n\n    Keep indentation";
   const session = deriveSlashSession(input(draft, 5));
   assert.ok(session);
   assert.equal(session.argument, "\n\n    Keep indentation");
@@ -154,7 +166,7 @@ test("token consumption preserves exact whitespace, newlines, and indentation", 
   assert.equal(consumeSlashToken("changed", session), "changed");
 });
 
-test("ranking prefers exact aliases, then prefixes, words, and fuzzy matches", () => {
+test("commands and skills rank only inside their explicit trigger namespace", () => {
   const skills: SkillCatalogEntry[] = [
     {
       invocationId: invocationId(1),
@@ -164,13 +176,26 @@ test("ranking prefers exact aliases, then prefixes, words, and fuzzy matches", (
       available: true,
     },
   ];
-  assert.equal(rankSlashResults("models", skills).results[0]?.id, "slash-option-command-model");
-  assert.equal(rankSlashResults("rev", skills).results[0]?.id, "slash-option-command-review");
   assert.equal(
-    rankSlashResults("auditor", skills).results[0]?.id,
+    rankSlashResults("models", skills, "command").results[0]?.id,
+    "slash-option-command-model",
+  );
+  assert.equal(
+    rankSlashResults("rev", skills, "command").results[0]?.id,
+    "slash-option-command-review",
+  );
+  assert.equal(
+    rankSlashResults("auditor", skills, "skill").results[0]?.id,
     `slash-option-skill-${invocationId(1)}`,
   );
-  assert.ok(rankSlashResults("mdl", skills).results.length > 0);
+  assert.ok(rankSlashResults("mdl", skills, "command").results.length > 0);
+  assert.equal(rankSlashResults("model", skills, "skill").results.length, 1);
+  assert.ok(
+    rankSlashResults("", skills, "command").results.every((result) => result.kind === "command"),
+  );
+  assert.ok(
+    rankSlashResults("", skills, "skill").results.every((result) => result.kind === "skill"),
+  );
   const astral: SkillCatalogEntry = {
     invocationId: invocationId(2),
     name: "😀 alpha xray",
@@ -179,7 +204,7 @@ test("ranking prefers exact aliases, then prefixes, words, and fuzzy matches", (
     available: true,
   };
   assert.equal(
-    rankSlashResults("😀x", [astral]).results[0]?.id,
+    rankSlashResults("😀x", [astral], "skill").results[0]?.id,
     `slash-option-skill-${invocationId(2)}`,
   );
 });
@@ -192,8 +217,8 @@ test("ranking is deterministic, DOM-safe, source ordered, and capped after all 5
     source: index % 3 === 0 ? "configured" : index % 2 ? "global" : "workspace",
     available: true,
   }));
-  const ranked = rankSlashResults("", [...skills].reverse());
-  const reranked = rankSlashResults("", skills);
+  const ranked = rankSlashResults("", [...skills].reverse(), "skill");
+  const reranked = rankSlashResults("", skills, "skill");
   assert.deepEqual(
     ranked.results.map((result) => result.id),
     reranked.results.map((result) => result.id),
@@ -202,19 +227,20 @@ test("ranking is deterministic, DOM-safe, source ordered, and capped after all 5
   assert.equal(ranked.truncated, true);
   assert.ok(ranked.results.every((result) => /^slash-option-[A-Za-z0-9_-]+$/u.test(result.id)));
   assert.equal(
-    rankSlashResults("Exact last match", skills).results[0]?.id,
+    rankSlashResults("Exact last match", skills, "skill").results[0]?.id,
     `slash-option-skill-${invocationId(499)}`,
   );
-  assert.throws(() => rankSlashResults("", [...skills, skills[0]!]));
+  assert.throws(() => rankSlashResults("", [...skills, skills[0]!], "skill"));
 });
 
 test("oversized Unicode queries do not open or rank", () => {
   assert.equal(deriveSlashSession(input(`/${"😀".repeat(257)}`)), null);
-  assert.throws(() => rankSlashResults("😀".repeat(257), []));
+  assert.equal(deriveSlashSession(input(`$${"😀".repeat(257)}`)), null);
+  assert.throws(() => rankSlashResults("😀".repeat(257), [], "command"));
 });
 
 test("keyboard selection wraps while skipping unavailable results", () => {
-  const results = rankSlashResults("", []).results;
+  const results = rankSlashResults("", [], "command").results;
   const selectable = (result: (typeof results)[number]) =>
     result.kind === "command" && result.command.name !== "new";
   const first = moveSlashSelection(results, undefined, 1, selectable);

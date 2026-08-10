@@ -39,10 +39,7 @@ import {
 import { useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { subagentsApi } from "../lib/ipc";
-import type {
-  SubagentEffectActivityV1,
-  SubagentRunSnapshot,
-} from "../shared/subagent-runs";
+import type { SubagentEffectActivityV1, SubagentRunSnapshot } from "../shared/subagent-runs";
 import {
   buildSubagentRunViews,
   captureSubagentDetailRequest,
@@ -57,10 +54,7 @@ import {
   type SubagentRunView,
   type SubagentRunViewCounts,
 } from "../lib/subagent-view-state";
-import {
-  subagentPanelOwnerKey,
-  subagentPanelSelectionState,
-} from "../lib/subagent-panel-state";
+import { subagentPanelOwnerKey, subagentPanelSelectionState } from "../lib/subagent-panel-state";
 import {
   SubagentLiveAnnouncer,
   type SubagentDetailAnnouncementRequest,
@@ -198,8 +192,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const [subagentDetailRequestVersion, setSubagentDetailRequestVersion] = React.useState(0);
   const [subagentDetailAnnouncement, setSubagentDetailAnnouncement] =
     React.useState<SubagentDetailAnnouncementRequest | null>(null);
-  const [subagentAnnouncerHost, setSubagentAnnouncerHost] =
-    React.useState<HTMLElement | null>(null);
+  const [subagentAnnouncerHost, setSubagentAnnouncerHost] = React.useState<HTMLElement | null>(
+    null,
+  );
   const [gitOperationBusy, setGitOperationBusyState] = React.useState(false);
   const [createWorktree, setCreateWorktree] = React.useState<
     ((branchName: string) => Promise<void>) | undefined
@@ -730,15 +725,10 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     <EnvironmentPanelContext.Provider value={value}>
       {subagentsEnabled ? (
         <SubagentLiveAnnouncer
-          ownerKey={subagentPanelOwnerKey(
-            subagents.chatId,
-            subagents.workspaceId,
-          )}
+          ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}
           runs={subagents.liveSnapshots}
           detailRequest={subagentDetailAnnouncement}
-          portalHost={
-            open && tab !== "overview" ? subagentAnnouncerHost : null
-          }
+          portalHost={open && tab !== "overview" ? subagentAnnouncerHost : null}
         />
       ) : null}
       {children}
@@ -917,10 +907,12 @@ function EnvironmentPanelSurface({
       aria-label="Environment work surface"
       tabIndex={compactModal ? -1 : undefined}
       className={cn(
-        "environment-panel z-30 flex h-full min-h-0 shrink-0 flex-col overflow-hidden bg-popover text-primary",
+        "environment-panel absolute inset-y-0 right-0 z-30 flex h-full min-h-0 flex-col overflow-hidden bg-popover text-primary",
         fullOpen ? "border-l border-separator" : "border-l-0",
-        inline ? "relative" : "absolute inset-y-0 right-0 shadow-dialog",
-        resizing ? "transition-none" : "transition-[width,opacity,transform] duration-300 ease-out",
+        !inline && "shadow-dialog",
+        resizing
+          ? "transition-none"
+          : "transition-[width,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
         !fullOpen && !inline && "translate-x-full",
       )}
       style={{
@@ -1287,6 +1279,14 @@ export function EnvironmentWorkbench({ children }: React.PropsWithChildren) {
         />
       ) : null}
       <EnvironmentSummaryCard />
+      <div
+        aria-hidden="true"
+        className={cn(
+          "h-full shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none",
+          resizing && "transition-none",
+        )}
+        style={{ width: fullOpen && inline ? renderedWidth : 0 }}
+      />
       <EnvironmentPanelSurface
         width={renderedWidth}
         containerWidth={containerWidth}

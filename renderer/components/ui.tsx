@@ -19,11 +19,7 @@ import { createPortal } from "react-dom";
 import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { cn } from "../lib/ui-utils";
-import {
-  useCommandHandler,
-  useShortcutBinding,
-  useShortcutLabel,
-} from "../lib/command-system";
+import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import {
   compactSidebarAutoFocusIntent,
   type CompactSidebarAutoFocusIntent,
@@ -38,7 +34,15 @@ export function Toaster(props: React.ComponentProps<typeof SonnerToaster>) {
 export const TooltipProvider = TooltipPrimitive.Provider;
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "filled" | "muted" | "transparent" | "glass" | "toolbar" | "glassAccent" | "accent" | "destructive";
+  variant?:
+    | "filled"
+    | "muted"
+    | "transparent"
+    | "glass"
+    | "toolbar"
+    | "glassAccent"
+    | "accent"
+    | "destructive";
   size?: "small" | "medium" | "large";
   iconOnly?: boolean;
   radius?: "full" | "rounded";
@@ -46,7 +50,16 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant = "filled", size = "medium", iconOnly, radius = "full", asChild, type = "button", ...props },
+  {
+    className,
+    variant = "filled",
+    size = "medium",
+    iconOnly,
+    radius = "full",
+    asChild,
+    type = "button",
+    ...props
+  },
   ref,
 ) {
   const Component = asChild ? Slot.Root : "button";
@@ -61,14 +74,22 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         size === "medium" && "h-8 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-4.5",
         size === "large" && "h-9 gap-1.5 px-3 [&_svg:not([class*='size-'])]:size-5",
         iconOnly && "aspect-square px-0",
-        variant === "filled" && "bg-control text-primary shadow-control hover:bg-control-hover hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
-        variant === "muted" && "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed focus-visible:bg-control",
-        variant === "transparent" && "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
-        variant === "glass" && "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
-        variant === "toolbar" && "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
-        variant === "glassAccent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
-        variant === "accent" && "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
-        variant === "destructive" && "bg-red text-red-foreground shadow-control hover:bg-red hover:shadow-control-hover active:bg-red active:shadow-control-pressed focus-visible:bg-red",
+        variant === "filled" &&
+          "bg-control text-primary shadow-control hover:bg-control-hover hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        variant === "muted" &&
+          "bg-control/50 text-primary hover:bg-control active:bg-control-hover active:shadow-control-pressed focus-visible:bg-control",
+        variant === "transparent" &&
+          "bg-transparent text-primary hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection",
+        variant === "glass" &&
+          "glass-surface text-primary shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        variant === "toolbar" &&
+          "glass-surface text-toolbar-icon shadow-control hover:bg-control/70 hover:shadow-control-hover active:bg-control-active active:shadow-control-pressed focus-visible:bg-control-active",
+        variant === "glassAccent" &&
+          "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
+        variant === "accent" &&
+          "bg-accent text-accent-foreground shadow-control hover:bg-accent-hover hover:shadow-control-hover active:bg-accent-active active:shadow-control-pressed focus-visible:bg-accent-hover",
+        variant === "destructive" &&
+          "bg-red text-red-foreground shadow-control hover:bg-red hover:shadow-control-hover active:bg-red active:shadow-control-pressed focus-visible:bg-red",
         className,
       )}
       {...props}
@@ -76,10 +97,10 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   );
 });
 
-export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input(
-  { className, ...props },
-  ref,
-) {
+export const Input = React.forwardRef<
+  HTMLInputElement,
+  React.InputHTMLAttributes<HTMLInputElement>
+>(function Input({ className, ...props }, ref) {
   return (
     <input
       ref={ref}
@@ -96,21 +117,22 @@ type TextareaProps = React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
   density?: "default" | "compact";
 };
 
-export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
-  function Textarea({ className, density = "default", ...props }, ref) {
-    return (
-      <textarea
-        ref={ref}
-        className={cn(
-          "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
-          density === "compact" ? "min-h-7" : "min-h-16",
-          className,
-        )}
-        {...props}
-      />
-    );
-  },
-);
+export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(function Textarea(
+  { className, density = "default", ...props },
+  ref,
+) {
+  return (
+    <textarea
+      ref={ref}
+      className={cn(
+        "field-sizing-content w-full resize-none rounded-control border border-field bg-transparent px-3 py-2 text-regular text-primary outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out placeholder:text-secondary hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45 aria-invalid:border-red",
+        density === "compact" ? "min-h-7" : "min-h-16",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 
 type TextProps = React.HTMLAttributes<HTMLElement> & {
   as?: keyof React.JSX.IntrinsicElements;
@@ -119,7 +141,14 @@ type TextProps = React.HTMLAttributes<HTMLElement> & {
   truncate?: boolean;
 };
 
-export function Text({ as = "span", variant = "regular", color = "primary", truncate, className, ...props }: TextProps) {
+export function Text({
+  as = "span",
+  variant = "regular",
+  color = "primary",
+  truncate,
+  className,
+  ...props
+}: TextProps) {
   const Component = as as React.ElementType;
   return (
     <Component
@@ -142,7 +171,11 @@ export function Text({ as = "span", variant = "regular", color = "primary", trun
   );
 }
 
-export function Badge({ color = "gray", className, ...props }: React.HTMLAttributes<HTMLSpanElement> & { color?: string }) {
+export function Badge({
+  color = "gray",
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLSpanElement> & { color?: string }) {
   return (
     <span
       className={cn(
@@ -157,7 +190,11 @@ export function Badge({ color = "gray", className, ...props }: React.HTMLAttribu
   );
 }
 
-export function Callout({ color, className, ...props }: React.HTMLAttributes<HTMLDivElement> & { color?: string }) {
+export function Callout({
+  color,
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement> & { color?: string }) {
   return (
     <div
       className={cn(
@@ -182,30 +219,76 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("flex flex-col items-center justify-center px-6 py-10 text-center", placement === "inline" && "py-6", className)}>
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center px-6 py-10 text-center",
+        placement === "inline" && "py-6",
+        className,
+      )}
+    >
       <Text variant="strong">{title}</Text>
-      {description ? <Text variant="small" color="secondary" className="mt-1 max-w-sm">{description}</Text> : null}
+      {description ? (
+        <Text variant="small" color="secondary" className="mt-1 max-w-sm">
+          {description}
+        </Text>
+      ) : null}
     </div>
   );
 }
 
-export function Status({ variant, className, ...props }: React.HTMLAttributes<HTMLSpanElement> & { variant?: "error" }) {
-  return <span className={cn("rounded-pill border border-field bg-popover px-2 py-1 text-small-strong", variant === "error" && "text-red", className)} {...props} />;
+export function Status({
+  variant,
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLSpanElement> & { variant?: "error" }) {
+  return (
+    <span
+      className={cn(
+        "rounded-pill border border-field bg-popover px-2 py-1 text-small-strong",
+        variant === "error" && "text-red",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
-export const Separator = React.forwardRef<React.ElementRef<typeof SeparatorPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SeparatorPrimitive.Root>>(
-  function Separator({ className, orientation = "horizontal", ...props }, ref) {
-    return <SeparatorPrimitive.Root ref={ref} orientation={orientation} className={cn("shrink-0 bg-separator", orientation === "horizontal" ? "h-px w-full" : "h-full w-px", className)} {...props} />;
-  },
-);
+export const Separator = React.forwardRef<
+  React.ElementRef<typeof SeparatorPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof SeparatorPrimitive.Root>
+>(function Separator({ className, orientation = "horizontal", ...props }, ref) {
+  return (
+    <SeparatorPrimitive.Root
+      ref={ref}
+      orientation={orientation}
+      className={cn(
+        "shrink-0 bg-separator",
+        orientation === "horizontal" ? "h-px w-full" : "h-full w-px",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
 
-export const Label = React.forwardRef<React.ElementRef<typeof LabelPrimitive.Root>, React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>>(
-  function Label({ className, ...props }, ref) {
-    return <LabelPrimitive.Root ref={ref} className={cn("inline-flex items-center gap-2 text-regular text-primary", className)} {...props} />;
-  },
-);
+export const Label = React.forwardRef<
+  React.ElementRef<typeof LabelPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>
+>(function Label({ className, ...props }, ref) {
+  return (
+    <LabelPrimitive.Root
+      ref={ref}
+      className={cn("inline-flex items-center gap-2 text-regular text-primary", className)}
+      {...props}
+    />
+  );
+});
 
-export function FieldSet({ title, className, children }: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
+export function FieldSet({
+  title,
+  className,
+  children,
+}: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
   return (
     <section className={cn("mb-7", className)}>
       {title ? <h2 className="mb-3 px-4 text-large-strong text-primary">{title}</h2> : null}
@@ -220,7 +303,12 @@ export function Field({
   orientation = "horizontal",
   className,
   children,
-}: React.PropsWithChildren<{ label?: React.ReactNode; description?: React.ReactNode; orientation?: "horizontal" | "vertical"; className?: string }>) {
+}: React.PropsWithChildren<{
+  label?: React.ReactNode;
+  description?: React.ReactNode;
+  orientation?: "horizontal" | "vertical";
+  className?: string;
+}>) {
   const labelId = React.useId();
   const descriptionId = React.useId();
   return (
@@ -228,19 +316,37 @@ export function Field({
       role={label ? "group" : undefined}
       aria-labelledby={label ? labelId : undefined}
       aria-describedby={description ? descriptionId : undefined}
-      className={cn("relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden", orientation === "horizontal" ? "grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:gap-2" : "flex flex-col gap-3", className)}
+      className={cn(
+        "relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator last:after:hidden",
+        orientation === "horizontal"
+          ? "settings-field-horizontal grid min-h-12 grid-cols-[minmax(120px,0.8fr)_minmax(160px,1.2fr)] items-center gap-5 max-[540px]:grid-cols-1 max-[540px]:items-start max-[540px]:gap-2"
+          : "flex flex-col gap-3",
+        className,
+      )}
     >
       <div className="min-w-0">
-        {label ? <div id={labelId} className="text-strong text-primary">{label}</div> : null}
-        {description ? <div id={descriptionId} className="mt-0.5 max-w-[34rem] text-small text-secondary">{description}</div> : null}
+        {label ? (
+          <div id={labelId} className="text-strong text-primary">
+            {label}
+          </div>
+        ) : null}
+        {description ? (
+          <div id={descriptionId} className="mt-0.5 max-w-[34rem] text-small text-secondary">
+            {description}
+          </div>
+        ) : null}
       </div>
       <div className="min-w-0">{children}</div>
     </div>
   );
 }
 
-export const FieldGroup = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div className={className} {...props} />;
-export const FieldContent = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div className={className} {...props} />;
+export const FieldGroup = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div className={className} {...props} />
+);
+export const FieldContent = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div className={className} {...props} />
+);
 export const FieldLabel = Label;
 
 const SplitContext = React.createContext<{
@@ -266,12 +372,16 @@ function SplitViewRoot({
   const collapseKey = `${storageKey}.sidebar-collapsed`;
   const widthKey = `${storageKey}.sidebar-width`;
   const limits = sidebarSize ?? { default: 260, min: 220, max: 340 };
-  const [collapsed, setCollapsed] = React.useState(() => localStorage.getItem(collapseKey) === "1");
+  const [collapsed, setCollapsed] = React.useState(
+    () => window.innerWidth < 700 || localStorage.getItem(collapseKey) === "1",
+  );
   const [viewportWidth, setViewportWidth] = React.useState(() => window.innerWidth);
   const compact = viewportWidth < 700;
   const [width, setWidth] = React.useState(() => {
     const saved = Number(localStorage.getItem(widthKey));
-    return Number.isFinite(saved) && saved >= limits.min && saved <= limits.max ? saved : limits.default;
+    return Number.isFinite(saved) && saved >= limits.min && saved <= limits.max
+      ? saved
+      : limits.default;
   });
   const [leadingAnchor, setLeadingAnchor] = React.useState<HTMLDivElement | null>(null);
   const sidebarRef = React.useRef<HTMLElement>(null);
@@ -281,8 +391,7 @@ function SplitViewRoot({
     expanded: !collapsed,
     contentModalOpen,
   });
-  const compactSidebarFocusIntentRef =
-    React.useRef<CompactSidebarAutoFocusIntent | null>(null);
+  const compactSidebarFocusIntentRef = React.useRef<CompactSidebarAutoFocusIntent | null>(null);
   React.useLayoutEffect(() => {
     contentModalOpenRef.current = contentModalOpen;
   }, [contentModalOpen]);
@@ -298,10 +407,11 @@ function SplitViewRoot({
     );
     previousCompactSidebarFocusStateRef.current = next;
   }, [collapsed, compact, contentModalOpen]);
-  const toggle = React.useCallback(() => setCollapsed((value) => {
-    localStorage.setItem(collapseKey, value ? "0" : "1");
-    return !value;
-  }), [collapseKey]);
+  const toggle = React.useCallback(() => {
+    const next = !collapsed;
+    localStorage.setItem(collapseKey, next ? "1" : "0");
+    setCollapsed(next);
+  }, [collapseKey, collapsed]);
   useCommandHandler("sidebar.toggle", toggle, !contentModalOpen);
 
   React.useEffect(() => {
@@ -318,54 +428,74 @@ function SplitViewRoot({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const beginResize = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (collapsed) return;
-    event.preventDefault();
-    const startX = event.clientX;
-    const startWidth = width;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    const move = (moveEvent: PointerEvent) => {
-      setWidth(Math.min(limits.max, Math.max(limits.min, startWidth + moveEvent.clientX - startX)));
-    };
-    const finish = (upEvent: PointerEvent) => {
-      const next = Math.min(limits.max, Math.max(limits.min, startWidth + upEvent.clientX - startX));
+  const beginResize = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (collapsed) return;
+      event.preventDefault();
+      const startX = event.clientX;
+      const startWidth = width;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      const move = (moveEvent: PointerEvent) => {
+        setWidth(
+          Math.min(limits.max, Math.max(limits.min, startWidth + moveEvent.clientX - startX)),
+        );
+      };
+      const finish = (upEvent: PointerEvent) => {
+        const next = Math.min(
+          limits.max,
+          Math.max(limits.min, startWidth + upEvent.clientX - startX),
+        );
+        setWidth(next);
+        localStorage.setItem(widthKey, String(Math.round(next)));
+        document.body.style.removeProperty("cursor");
+        document.body.style.removeProperty("user-select");
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+    },
+    [collapsed, limits.max, limits.min, width, widthKey],
+  );
+
+  const resizeWithKeyboard = React.useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const increment = event.shiftKey ? 40 : 16;
+      let next = width;
+      if (event.key === "ArrowLeft") next = width - increment;
+      else if (event.key === "ArrowRight") next = width + increment;
+      else if (event.key === "Home") next = limits.min;
+      else if (event.key === "End") next = limits.max;
+      else return;
+
+      event.preventDefault();
+      next = Math.min(limits.max, Math.max(limits.min, next));
       setWidth(next);
       localStorage.setItem(widthKey, String(Math.round(next)));
-      document.body.style.removeProperty("cursor");
-      document.body.style.removeProperty("user-select");
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", finish);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", finish);
-  }, [collapsed, limits.max, limits.min, width, widthKey]);
-
-  const resizeWithKeyboard = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    const increment = event.shiftKey ? 40 : 16;
-    let next = width;
-    if (event.key === "ArrowLeft") next = width - increment;
-    else if (event.key === "ArrowRight") next = width + increment;
-    else if (event.key === "Home") next = limits.min;
-    else if (event.key === "End") next = limits.max;
-    else return;
-
-    event.preventDefault();
-    next = Math.min(limits.max, Math.max(limits.min, next));
-    setWidth(next);
-    localStorage.setItem(widthKey, String(Math.round(next)));
-  }, [limits.max, limits.min, width, widthKey]);
+    },
+    [limits.max, limits.min, width, widthKey],
+  );
 
   const compactOpen = compact && !collapsed && !contentModalOpen;
+  const renderedSidebarWidth = collapsed
+    ? 0
+    : compact
+      ? Math.min(width, viewportWidth - 56)
+      : width;
+  const reservedSidebarWidth = !compact && !collapsed ? width : 0;
 
   React.useEffect(() => {
     if (!compactOpen) return;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusableSelector = "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])";
-    const getFocusable = () => [
-      ...Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
-      ...Array.from(leadingAnchor?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
-    ].filter((element) => element.offsetParent !== null);
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableSelector =
+      "button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex='-1'])";
+    const getFocusable = () =>
+      [
+        ...Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
+        ...Array.from(leadingAnchor?.querySelectorAll<HTMLElement>(focusableSelector) ?? []),
+      ].filter((element) => element.offsetParent !== null);
     const frame =
       compactSidebarFocusIntentRef.current === "first-control"
         ? requestAnimationFrame(() => {
@@ -390,7 +520,10 @@ function SplitViewRoot({
       if (event.shiftKey && (active === first || !focusable.includes(active as HTMLElement))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && (active === last || !focusable.includes(active as HTMLElement))) {
+      } else if (
+        !event.shiftKey &&
+        (active === last || !focusable.includes(active as HTMLElement))
+      ) {
         event.preventDefault();
         first.focus();
       }
@@ -421,17 +554,27 @@ function SplitViewRoot({
           inert={collapsed || contentModalOpen ? true : undefined}
           aria-hidden={collapsed || contentModalOpen ? true : undefined}
           className={cn(
-            "h-full shrink-0 overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out",
-            compact && !collapsed && "absolute inset-y-0 left-0 z-30 shadow-dialog",
+            "absolute inset-y-0 left-0 z-10 h-full overflow-hidden bg-sidebar transition-[width,opacity] duration-300 ease-out motion-reduce:transition-none",
+            compact && !collapsed && "z-30 shadow-dialog",
           )}
           style={{
-            width: collapsed ? 0 : compact ? Math.min(width, viewportWidth - 56) : width,
+            width: renderedSidebarWidth,
             opacity: collapsed ? 0 : 1,
             pointerEvents: collapsed || contentModalOpen ? "none" : "auto",
           }}
         >
-          <div style={{ width: compact ? Math.min(width, viewportWidth - 56) : width }} className="h-full">{sidebar}</div>
+          <div
+            style={{ width: compact ? Math.min(width, viewportWidth - 56) : width }}
+            className="h-full"
+          >
+            {sidebar}
+          </div>
         </aside>
+        <div
+          aria-hidden="true"
+          className="h-full shrink-0 transition-[width] duration-300 ease-out motion-reduce:transition-none"
+          style={{ width: reservedSidebarWidth }}
+        />
         <div
           role="separator"
           aria-orientation="vertical"
@@ -483,7 +626,7 @@ function SidebarToggle() {
       aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
       aria-pressed={!context.collapsed}
       title={`Toggle sidebar (${shortcut})`}
-      className="no-drag transition-[width,height,background-color] duration-300"
+      className="no-drag transition-[width,height,background-color] duration-300 motion-reduce:transition-none"
     >
       <PanelLeft />
     </Button>
@@ -493,7 +636,15 @@ function SidebarToggle() {
 
 export const SplitView = Object.assign(SplitViewRoot, { SidebarToggle });
 
-export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchChange, actions, footer, children }: React.PropsWithChildren<{
+export function Sidebar({
+  searchable,
+  searchPlaceholder,
+  searchValue,
+  onSearchChange,
+  actions,
+  footer,
+  children,
+}: React.PropsWithChildren<{
   searchable?: boolean;
   searchPlaceholder?: string;
   searchValue?: string;
@@ -536,7 +687,10 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
   }, [updateScrollEdges]);
 
   return (
-    <div data-sidebar className="glass-surface relative flex h-full min-h-0 flex-col overflow-hidden">
+    <div
+      data-sidebar
+      className="glass-surface relative flex h-full min-h-0 flex-col overflow-hidden"
+    >
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
       {searchable ? (
         <div className="px-3 pb-3">
@@ -575,16 +729,81 @@ export function Sidebar({ searchable, searchPlaceholder, searchValue, onSearchCh
   );
 }
 
-export const SidebarFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div className={cn("relative shrink-0 px-2 pb-2 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-t before:from-sidebar before:to-transparent", className)} {...props} />;
-export const SidebarList = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div className={cn("flex flex-col px-2.5 pb-3", className)} {...props} />;
-export function SidebarListGroup({ title, className, children }: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
-  return <div className={cn("mt-5 first:mt-0", className)}>{title ? <div className="mb-1.5 px-2.5 text-[13px] font-medium text-tertiary">{title}</div> : null}<div className="flex flex-col gap-0.5">{children}</div></div>;
+export const SidebarFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      "relative shrink-0 px-2 pb-2 before:pointer-events-none before:absolute before:inset-x-0 before:-top-10 before:h-10 before:bg-gradient-to-t before:from-sidebar before:to-transparent",
+      className,
+    )}
+    {...props}
+  />
+);
+export const SidebarList = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+  <div className={cn("flex flex-col px-2.5 pb-3", className)} {...props} />
+);
+export function SidebarListGroup({
+  title,
+  className,
+  children,
+}: React.PropsWithChildren<{ title?: React.ReactNode; className?: string }>) {
+  return (
+    <div className={cn("mt-5 first:mt-0", className)}>
+      {title ? (
+        <div className="mb-1.5 px-2.5 text-[13px] font-medium text-tertiary">{title}</div>
+      ) : null}
+      <div className="flex flex-col gap-0.5">{children}</div>
+    </div>
+  );
 }
-export function SidebarListItem({ icon, title, trailing, selected, className, ...props }: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "title"> & { icon?: React.ReactNode; title: React.ReactNode; trailing?: React.ReactNode; selected?: boolean }) {
-  return <button type="button" aria-current={selected ? "page" : undefined} className={cn("flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none", selected && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection", className)} {...props}>{icon ? <span className="flex shrink-0 text-secondary [&_svg:not([class*='size-'])]:size-4.5">{icon}</span> : null}<span className="min-w-0 flex-1 truncate">{title}</span>{trailing !== undefined && trailing !== null ? <span className="flex shrink-0 items-center">{trailing}</span> : null}</button>;
+export function SidebarListItem({
+  icon,
+  title,
+  trailing,
+  selected,
+  className,
+  ...props
+}: Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "title"> & {
+  icon?: React.ReactNode;
+  title: React.ReactNode;
+  trailing?: React.ReactNode;
+  selected?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      aria-current={selected ? "page" : undefined}
+      className={cn(
+        "flex min-h-9 w-full cursor-default items-center gap-2.5 rounded-[11px] px-2.5 py-1.5 text-left text-[14px] text-primary outline-none transition-[background-color] duration-150 ease-out hover:bg-list-hover active:bg-list-selection focus-visible:bg-list-selection focus-visible:outline-none",
+        selected && "bg-list-selection hover:bg-list-selection focus-visible:bg-list-selection",
+        className,
+      )}
+      {...props}
+    >
+      {icon ? (
+        <span className="flex shrink-0 text-secondary [&_svg:not([class*='size-'])]:size-4.5">
+          {icon}
+        </span>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {trailing !== undefined && trailing !== null ? (
+        <span className="flex shrink-0 items-center">{trailing}</span>
+      ) : null}
+    </button>
+  );
 }
 
-export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrollToBottom, autoScrollDeps = [], showScrollToBottomButton, className, children }: React.PropsWithChildren<{
+export function ScrollArea({
+  title,
+  leading,
+  actions,
+  toolbar,
+  footer,
+  autoScrollToBottom,
+  autoScrollDeps = [],
+  showScrollToBottomButton,
+  className,
+  children,
+}: React.PropsWithChildren<{
   title?: React.ReactNode;
   leading?: React.ReactNode;
   actions?: React.ReactNode;
@@ -678,21 +897,27 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
     };
   }, [autoScrollToBottom, scrollToBottom, updateScrollEdges]);
 
-  const resolvedToolbar = toolbar ?? (title || leading || actions ? (
-    <header
-      data-toolbar
-      className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4"
-      style={{ paddingLeft: split?.collapsed ? 142 : undefined }}
-    >
-      <div className="no-drag flex shrink-0 items-center">{leading}</div>
-      <h1 className="min-w-0 flex-1 truncate text-strong text-primary">{title}</h1>
-      <div className="no-drag flex items-center gap-2">{actions}</div>
-    </header>
-  ) : null);
+  const resolvedToolbar =
+    toolbar ??
+    (title || leading || actions ? (
+      <header
+        data-toolbar
+        className="scroll-area-header drag-region relative flex min-h-13 items-center gap-3 px-4 transition-[padding] duration-300 ease-out motion-reduce:transition-none"
+        style={{ paddingLeft: split?.collapsed ? 142 : undefined }}
+      >
+        <div className="no-drag flex shrink-0 items-center">{leading}</div>
+        <h1 className="min-w-0 flex-1 truncate text-strong text-primary">{title}</h1>
+        <div className="no-drag flex items-center gap-2">{actions}</div>
+      </header>
+    ) : null);
 
   return (
     <div className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}>
-      {resolvedToolbar ? <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">{resolvedToolbar}</div> : null}
+      {resolvedToolbar ? (
+        <div ref={toolbarRef} className="absolute inset-x-0 top-0 z-30">
+          {resolvedToolbar}
+        </div>
+      ) : null}
       <div
         ref={viewport}
         data-scroll-top={atTop}
@@ -718,7 +943,11 @@ export function ScrollArea({ title, leading, actions, toolbar, footer, autoScrol
           <ArrowDownToLine />
         </Button>
       ) : null}
-      {footer ? <div ref={footerRef} className="absolute inset-x-0 bottom-0 z-10">{footer}</div> : null}
+      {footer ? (
+        <div ref={footerRef} className="absolute inset-x-0 bottom-0 z-10">
+          {footer}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -773,10 +1002,7 @@ export function Dialog({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
           data-slot="dialog-overlay"
-          className={cn(
-            "fixed inset-0 bg-transparent",
-            layer === "onboarding" ? "z-[70]" : "z-50",
-          )}
+          className={cn("fixed inset-0 bg-transparent", layer === "onboarding" ? "z-[70]" : "z-50")}
         />
         <DialogPrimitive.Content
           data-slot="dialog-content"
@@ -838,7 +1064,18 @@ export function AlertDialog({
   keepOpenOnConfirm = false,
   returnFocus,
   onConfirm,
-}: Omit<DialogProps, "children" | "size" | "confirmDisabled" | "confirmHidden" | "cancelRef" | "dismissDisabled" | "cancelDisabled" | "busy" | "description"> & {
+}: Omit<
+  DialogProps,
+  | "children"
+  | "size"
+  | "confirmDisabled"
+  | "confirmHidden"
+  | "cancelRef"
+  | "dismissDisabled"
+  | "cancelDisabled"
+  | "busy"
+  | "description"
+> & {
   description?: React.ReactNode;
   confirmVariant?: "destructive";
   busy?: boolean;
@@ -861,13 +1098,16 @@ export function AlertDialog({
       }}
     >
       <AlertDialogPrimitive.Portal>
-        <AlertDialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-transparent" />
+        <AlertDialogPrimitive.Overlay
+          data-slot="dialog-overlay"
+          className="fixed inset-0 z-50 bg-transparent"
+        />
         <AlertDialogPrimitive.Content
           data-slot="dialog-content"
           aria-busy={busy}
           onCloseAutoFocus={(event) => {
-            const target = returnFocus?.()
-              ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
+            const target =
+              returnFocus?.() ?? document.querySelector<HTMLElement>("[data-app-focus-root]");
             if (target?.isConnected) {
               event.preventDefault();
               target.focus();
@@ -876,7 +1116,9 @@ export function AlertDialog({
           onEscapeKeyDown={(event) => busy && event.preventDefault()}
           className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,420px)] -translate-x-1/2 -translate-y-1/2 rounded-dialog bg-popover px-6 py-5 shadow-modal outline-none"
         >
-          <AlertDialogPrimitive.Title className="text-heading2 font-semibold">{title}</AlertDialogPrimitive.Title>
+          <AlertDialogPrimitive.Title className="text-heading2 font-semibold">
+            {title}
+          </AlertDialogPrimitive.Title>
           {description ? (
             <AlertDialogPrimitive.Description asChild>
               <div className="mt-2 text-regular text-secondary">{description}</div>
@@ -884,9 +1126,15 @@ export function AlertDialog({
           ) : null}
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialogPrimitive.Cancel asChild>
-              <Button variant="filled" disabled={busy}>Cancel</Button>
+              <Button variant="filled" disabled={busy}>
+                Cancel
+              </Button>
             </AlertDialogPrimitive.Cancel>
-            {keepOpenOnConfirm ? confirm : <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>}
+            {keepOpenOnConfirm ? (
+              confirm
+            ) : (
+              <AlertDialogPrimitive.Action asChild>{confirm}</AlertDialogPrimitive.Action>
+            )}
           </div>
         </AlertDialogPrimitive.Content>
       </AlertDialogPrimitive.Portal>
@@ -894,16 +1142,89 @@ export function AlertDialog({
   );
 }
 
-const menuContentClass = "z-50 min-w-48 overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none";
-const menuItemClass = "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-150 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
+const menuContentClass =
+  "z-50 min-w-48 overflow-hidden rounded-popover bg-popover p-1 text-primary shadow-popover outline-none";
+const menuItemClass =
+  "relative flex min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2 py-1 text-regular outline-none transition-colors duration-150 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-45";
 
 export const DropdownMenu = DropdownMenuPrimitive.Root;
 export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-export const DropdownMenuContent = React.forwardRef<React.ElementRef<typeof DropdownMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>>(function Content({ className, sideOffset = 6, ...props }, ref) { return <DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content ref={ref} data-slot="popover-content" sideOffset={sideOffset} className={cn(menuContentClass, "origin-[var(--radix-dropdown-menu-content-transform-origin)]", className)} {...props} /></DropdownMenuPrimitive.Portal>; });
-export const DropdownMenuLabel = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>) => <DropdownMenuPrimitive.Label className={cn("px-2 py-1.5 text-small-strong text-tertiary", className)} {...props} />;
-export const DropdownMenuSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>) => <DropdownMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
-export const DropdownMenuItem = React.forwardRef<React.ElementRef<typeof DropdownMenuPrimitive.Item>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & { icon?: string; color?: string }>(function Item({ className, icon: _icon, color, ...props }, ref) { return <DropdownMenuPrimitive.Item ref={ref} className={cn(menuItemClass, color === "red" && "text-red", className)} {...props} />; });
-export const DropdownMenuCheckboxItem = React.forwardRef<React.ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>, React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem> & { sublabel?: string }>(function CheckboxItem({ className, children, sublabel, ...props }, ref) { return <DropdownMenuPrimitive.CheckboxItem ref={ref} className={cn(menuItemClass, "group pl-7", className)} {...props}><span className="absolute left-2"><DropdownMenuPrimitive.ItemIndicator><Check className="size-3.5" /></DropdownMenuPrimitive.ItemIndicator></span><span className="flex min-w-0 flex-col"><span>{children}</span>{sublabel ? <span className="max-w-72 text-small text-tertiary group-data-[highlighted]:text-accent-foreground">{sublabel}</span> : null}</span></DropdownMenuPrimitive.CheckboxItem>; });
+export const DropdownMenuContent = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
+>(function Content({ className, sideOffset = 6, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.Content
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-dropdown-menu-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
+  );
+});
+export const DropdownMenuLabel = ({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label>) => (
+  <DropdownMenuPrimitive.Label
+    className={cn("px-2 py-1.5 text-small-strong text-tertiary", className)}
+    {...props}
+  />
+);
+export const DropdownMenuSeparator = ({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>) => (
+  <DropdownMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />
+);
+export const DropdownMenuItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Item> & {
+    icon?: string;
+    color?: string;
+  }
+>(function Item({ className, icon: _icon, color, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.Item
+      ref={ref}
+      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      {...props}
+    />
+  );
+});
+export const DropdownMenuCheckboxItem = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem> & { sublabel?: string }
+>(function CheckboxItem({ className, children, sublabel, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.CheckboxItem
+      ref={ref}
+      className={cn(menuItemClass, "group pl-7", className)}
+      {...props}
+    >
+      <span className="absolute left-2">
+        <DropdownMenuPrimitive.ItemIndicator>
+          <Check className="size-3.5" />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span>{children}</span>
+        {sublabel ? (
+          <span className="max-w-72 text-small text-tertiary group-data-[highlighted]:text-accent-foreground">
+            {sublabel}
+          </span>
+        ) : null}
+      </span>
+    </DropdownMenuPrimitive.CheckboxItem>
+  );
+});
 
 export const CustomDropdownMenu = DropdownMenuPrimitive.Root;
 export const CustomDropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
@@ -921,7 +1242,11 @@ export const PopoverContent = React.forwardRef<
         ref={ref}
         data-slot="popover-content"
         sideOffset={sideOffset}
-        className={cn(menuContentClass, "origin-[var(--radix-popover-content-transform-origin)]", className)}
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-popover-content-transform-origin)]",
+          className,
+        )}
         {...props}
       />
     </PopoverPrimitive.Portal>
@@ -953,40 +1278,280 @@ export const HoverCardContent = React.forwardRef<
 
 export const ContextMenu = ContextMenuPrimitive.Root;
 export const ContextMenuTrigger = ContextMenuPrimitive.Trigger;
-export const ContextMenuContent = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Content>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>>(function ContextContent({ className, ...props }, ref) { return <ContextMenuPrimitive.Portal><ContextMenuPrimitive.Content ref={ref} data-slot="popover-content" className={cn(menuContentClass, "origin-[var(--radix-context-menu-content-transform-origin)]", className)} {...props} /></ContextMenuPrimitive.Portal>; });
-export const ContextMenuSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Separator>) => <ContextMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
-export const ContextMenuItem = React.forwardRef<React.ElementRef<typeof ContextMenuPrimitive.Item>, React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & { icon?: string; color?: string }>(function ContextItem({ className, icon: _icon, color, ...props }, ref) { return <ContextMenuPrimitive.Item ref={ref} className={cn(menuItemClass, color === "red" && "text-red", className)} {...props} />; });
+export const ContextMenuContent = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Content>
+>(function ContextContent({ className, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.Content
+        ref={ref}
+        data-slot="popover-content"
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-context-menu-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
+  );
+});
+export const ContextMenuSeparator = ({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Separator>) => (
+  <ContextMenuPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />
+);
+export const ContextMenuItem = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.Item> & {
+    icon?: string;
+    color?: string;
+  }
+>(function ContextItem({ className, icon: _icon, color, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.Item
+      ref={ref}
+      className={cn(menuItemClass, color === "red" && "text-red", className)}
+      {...props}
+    />
+  );
+});
 
 export const Select = SelectPrimitive.Root;
-export const SelectValue = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Value>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>>(function SelectValue({ className, ...props }, ref) { return <SelectPrimitive.Value ref={ref} className={cn("min-w-0 flex-1 truncate text-left", className)} {...props} />; });
-export const SelectTrigger = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Trigger>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }>(function SelectTrigger({ className, children, size, ...props }, ref) { return <SelectPrimitive.Trigger ref={ref} className={cn("flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45", size === "small" ? "h-7 rounded-lg px-2" : "h-8", className)} {...props}>{children}<SelectPrimitive.Icon className="shrink-0"><ChevronDown className="size-4 text-tertiary" /></SelectPrimitive.Icon></SelectPrimitive.Trigger>; });
-export const SelectContent = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Content>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>>(function SelectContent({ className, children, position = "popper", ...props }, ref) { return <SelectPrimitive.Portal><SelectPrimitive.Content ref={ref} data-slot="popover-content" position={position} className={cn(menuContentClass, "max-h-72 origin-[var(--radix-select-content-transform-origin)]", className)} {...props}><SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport></SelectPrimitive.Content></SelectPrimitive.Portal>; });
-export const SelectItem = React.forwardRef<React.ElementRef<typeof SelectPrimitive.Item>, React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>>(function SelectItem({ className, children, ...props }, ref) { return <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}><span className="absolute left-2"><SelectPrimitive.ItemIndicator><Check className="size-3.5" /></SelectPrimitive.ItemIndicator></span><SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText></SelectPrimitive.Item>; });
+export const SelectValue = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Value>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Value>
+>(function SelectValue({ className, ...props }, ref) {
+  return (
+    <SelectPrimitive.Value
+      ref={ref}
+      className={cn("min-w-0 flex-1 truncate text-left", className)}
+      {...props}
+    />
+  );
+});
+export const SelectTrigger = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger> & { size?: "small" }
+>(function SelectTrigger({ className, children, size, ...props }, ref) {
+  return (
+    <SelectPrimitive.Trigger
+      ref={ref}
+      className={cn(
+        "flex w-full min-w-0 items-center justify-between gap-2 rounded-control border border-field bg-transparent px-3 text-regular outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 ease-out hover:border-primary/30 focus:border-focus-ring focus:bg-input disabled:cursor-not-allowed disabled:opacity-45",
+        size === "small" ? "h-7 rounded-lg px-2" : "h-8",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <SelectPrimitive.Icon className="shrink-0">
+        <ChevronDown className="size-4 text-tertiary" />
+      </SelectPrimitive.Icon>
+    </SelectPrimitive.Trigger>
+  );
+});
+export const SelectContent = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
+>(function SelectContent({ className, children, position = "popper", ...props }, ref) {
+  return (
+    <SelectPrimitive.Portal>
+      <SelectPrimitive.Content
+        ref={ref}
+        data-slot="popover-content"
+        position={position}
+        className={cn(
+          menuContentClass,
+          "max-h-72 origin-[var(--radix-select-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      >
+        <SelectPrimitive.Viewport className="p-1">{children}</SelectPrimitive.Viewport>
+      </SelectPrimitive.Content>
+    </SelectPrimitive.Portal>
+  );
+});
+export const SelectItem = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item>
+>(function SelectItem({ className, children, ...props }, ref) {
+  return (
+    <SelectPrimitive.Item ref={ref} className={cn(menuItemClass, "pl-7", className)} {...props}>
+      <span className="absolute left-2">
+        <SelectPrimitive.ItemIndicator>
+          <Check className="size-3.5" />
+        </SelectPrimitive.ItemIndicator>
+      </span>
+      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+    </SelectPrimitive.Item>
+  );
+});
 
-export const Switch = React.forwardRef<React.ElementRef<typeof SwitchPrimitive.Root>, React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>>(function Switch({ className, ...props }, ref) { return <SwitchPrimitive.Root ref={ref} className={cn("relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45", className)} {...props}><SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" /></SwitchPrimitive.Root>; });
-export const RadioGroup = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Root>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & { orientation?: "horizontal" | "vertical" }>(function RadioGroup({ className, orientation, ...props }, ref) { return <RadioGroupPrimitive.Root ref={ref} className={cn("flex gap-3", orientation === "vertical" && "flex-col", className)} {...props} />; });
-export const RadioGroupItem = React.forwardRef<React.ElementRef<typeof RadioGroupPrimitive.Item>, React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>>(function RadioGroupItem({ className, ...props }, ref) { return <RadioGroupPrimitive.Item ref={ref} className={cn("grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45", className)} {...props}><RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" /></RadioGroupPrimitive.Item>; });
+export const Switch = React.forwardRef<
+  React.ElementRef<typeof SwitchPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>
+>(function Switch({ className, ...props }, ref) {
+  return (
+    <SwitchPrimitive.Root
+      ref={ref}
+      className={cn(
+        "relative h-6 w-10 rounded-pill bg-control-hover shadow-control-pressed outline-none transition-[background-color,box-shadow,opacity] duration-150 ease-out hover:bg-control-active focus-visible:bg-control-active focus-visible:outline-none data-[state=checked]:bg-accent data-[state=checked]:shadow-control data-[state=checked]:hover:bg-accent-hover data-[state=checked]:focus-visible:bg-accent-hover disabled:pointer-events-none disabled:opacity-45",
+        className,
+      )}
+      {...props}
+    >
+      <SwitchPrimitive.Thumb className="block size-5 translate-x-0.5 rounded-full bg-white shadow-control transition-[background-color,transform] duration-150 ease-out data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-accent-foreground" />
+    </SwitchPrimitive.Root>
+  );
+});
+export const RadioGroup = React.forwardRef<
+  React.ElementRef<typeof RadioGroupPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Root> & {
+    orientation?: "horizontal" | "vertical";
+  }
+>(function RadioGroup({ className, orientation, ...props }, ref) {
+  return (
+    <RadioGroupPrimitive.Root
+      ref={ref}
+      className={cn("flex gap-3", orientation === "vertical" && "flex-col", className)}
+      {...props}
+    />
+  );
+});
+export const RadioGroupItem = React.forwardRef<
+  React.ElementRef<typeof RadioGroupPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof RadioGroupPrimitive.Item>
+>(function RadioGroupItem({ className, ...props }, ref) {
+  return (
+    <RadioGroupPrimitive.Item
+      ref={ref}
+      className={cn(
+        "grid size-4 place-items-center rounded-full border border-field bg-input outline-none transition-[background-color,border-color,box-shadow,opacity] duration-150 hover:border-primary/30 focus-visible:border-accent focus-visible:outline-none data-[state=checked]:border-accent disabled:pointer-events-none disabled:opacity-45",
+        className,
+      )}
+      {...props}
+    >
+      <RadioGroupPrimitive.Indicator className="size-2 rounded-full bg-accent" />
+    </RadioGroupPrimitive.Item>
+  );
+});
 
-export const Command = React.forwardRef<React.ElementRef<typeof CommandPrimitive>, React.ComponentPropsWithoutRef<typeof CommandPrimitive>>(function Command({ className, ...props }, ref) { return <CommandPrimitive ref={ref} className={cn("flex w-full flex-col overflow-hidden bg-transparent text-primary", className)} {...props} />; });
-export const CommandInput = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Input>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>>(function CommandInput({ className, ...props }, ref) { return <div className="flex h-9 items-center gap-2 border-b border-separator px-3"><Search className="size-4 shrink-0 text-tertiary" /><CommandPrimitive.Input ref={ref} className={cn("h-full min-w-0 flex-1 bg-transparent text-regular outline-none placeholder:text-secondary", className)} {...props} /></div>; });
-export const CommandList = React.forwardRef<React.ElementRef<typeof CommandPrimitive.List>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>>(function CommandList({ className, ...props }, ref) { return <CommandPrimitive.List ref={ref} className={cn("h-[min(300px,calc(100vh-9rem))] max-h-[min(300px,calc(100vh-9rem))] overflow-y-auto p-1 outline-none", className)} {...props} />; });
-export const CommandEmpty = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>) => <CommandPrimitive.Empty className={cn("px-3 py-6 text-center text-small text-tertiary", className)} {...props} />;
-export const CommandItem = React.forwardRef<React.ElementRef<typeof CommandPrimitive.Item>, React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>>(function CommandItem({ className, ...props }, ref) { return <CommandPrimitive.Item ref={ref} className={cn("relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-150 data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45", className)} {...props} />; });
-export const CommandSeparator = ({ className, ...props }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>) => <CommandPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />;
+export const Command = React.forwardRef<
+  React.ElementRef<typeof CommandPrimitive>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive>
+>(function Command({ className, ...props }, ref) {
+  return (
+    <CommandPrimitive
+      ref={ref}
+      className={cn("flex w-full flex-col overflow-hidden bg-transparent text-primary", className)}
+      {...props}
+    />
+  );
+});
+export const CommandInput = React.forwardRef<
+  React.ElementRef<typeof CommandPrimitive.Input>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Input>
+>(function CommandInput({ className, ...props }, ref) {
+  return (
+    <div className="flex h-9 items-center gap-2 border-b border-separator px-3">
+      <Search className="size-4 shrink-0 text-tertiary" />
+      <CommandPrimitive.Input
+        ref={ref}
+        className={cn(
+          "h-full min-w-0 flex-1 bg-transparent text-regular outline-none placeholder:text-secondary",
+          className,
+        )}
+        {...props}
+      />
+    </div>
+  );
+});
+export const CommandList = React.forwardRef<
+  React.ElementRef<typeof CommandPrimitive.List>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.List>
+>(function CommandList({ className, ...props }, ref) {
+  return (
+    <CommandPrimitive.List
+      ref={ref}
+      className={cn(
+        "h-[min(300px,calc(100vh-9rem))] max-h-[min(300px,calc(100vh-9rem))] overflow-y-auto p-1 outline-none",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
+export const CommandEmpty = ({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>) => (
+  <CommandPrimitive.Empty
+    className={cn("px-3 py-6 text-center text-small text-tertiary", className)}
+    {...props}
+  />
+);
+export const CommandItem = React.forwardRef<
+  React.ElementRef<typeof CommandPrimitive.Item>,
+  React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item>
+>(function CommandItem({ className, ...props }, ref) {
+  return (
+    <CommandPrimitive.Item
+      ref={ref}
+      className={cn(
+        "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-regular outline-none transition-colors duration-150 data-[selected=true]:bg-list-selection data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-45",
+        className,
+      )}
+      {...props}
+    />
+  );
+});
+export const CommandSeparator = ({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>) => (
+  <CommandPrimitive.Separator className={cn("my-1 h-px bg-separator", className)} {...props} />
+);
 
 // Isolates a render failure to one subtree, so a single bad node no longer
 // escalates to the router boundary and replaces the whole screen. A changed
 // resetKey means fresh content to try, so the boundary retries instead of
 // staying stuck on the fallback.
-type ErrorBoundaryProps = { fallback: React.ReactNode; resetKey?: unknown; children: React.ReactNode };
+type ErrorBoundaryProps = {
+  fallback: React.ReactNode;
+  resetKey?: unknown;
+  children: React.ReactNode;
+};
 type ErrorBoundaryState = { failed: boolean; resetKey: unknown };
 export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { failed: false, resetKey: this.props.resetKey };
-  static getDerivedStateFromError(): Partial<ErrorBoundaryState> { return { failed: true }; }
-  static getDerivedStateFromProps(props: ErrorBoundaryProps, state: ErrorBoundaryState): Partial<ErrorBoundaryState> | null { return Object.is(props.resetKey, state.resetKey) ? null : { failed: false, resetKey: props.resetKey }; }
-  render() { return this.state.failed ? this.props.fallback : this.props.children; }
+  static getDerivedStateFromError(): Partial<ErrorBoundaryState> {
+    return { failed: true };
+  }
+  static getDerivedStateFromProps(
+    props: ErrorBoundaryProps,
+    state: ErrorBoundaryState,
+  ): Partial<ErrorBoundaryState> | null {
+    return Object.is(props.resetKey, state.resetKey)
+      ? null
+      : { failed: false, resetKey: props.resetKey };
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }
 
 export function ErrorBoundaryView({ error, reset }: { error?: unknown; reset?: () => void }) {
-  return <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center"><Text variant="heading1">Something went wrong</Text><Text color="secondary">{error instanceof Error ? error.message : "Aiden Agent could not render this screen."}</Text>{reset ? <Button onClick={reset}>Try again</Button> : null}</div>;
+  return (
+    <div className="flex h-screen flex-col items-center justify-center gap-3 p-8 text-center">
+      <Text variant="heading1">Something went wrong</Text>
+      <Text color="secondary">
+        {error instanceof Error ? error.message : "Aiden Agent could not render this screen."}
+      </Text>
+      {reset ? <Button onClick={reset}>Try again</Button> : null}
+    </div>
+  );
 }

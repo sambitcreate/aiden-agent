@@ -24,6 +24,21 @@ test("composer focus tints the whole shell, not only the textarea", () => {
   );
 });
 
+test("composer context controls stay compact without exposing provider copy", () => {
+  const composer = source("./composer.tsx");
+  const modelPicker = source("./model-picker.tsx");
+
+  assert.match(composer, /h-7 gap-1\.5 px-2 max-\[520px\]:size-7 max-\[520px\]:px-0/u);
+  assert.match(
+    composer,
+    /<span className="composer-permission-label max-\[520px\]:hidden">\s*\{permissionSaving \? "Updating…" : perm\.label\}/u,
+  );
+  assert.match(modelPicker, /\? selected\.label\s*: hasUnavailableSelection/u);
+  assert.match(modelPicker, /`Selected model: \$\{selected\.label\}\. Choose a model\.`/u);
+  assert.doesNotMatch(modelPicker, /Selected model: \$\{selected\.label\} from/u);
+  assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
+});
+
 test("chat surfaces share the responsive centered chat-column contract", () => {
   const composer = source("./composer.tsx");
   const messages = source("./message-list.tsx");
@@ -63,16 +78,22 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(composer, /event\.key === "PageDown"/u);
   assert.match(composer, /event\.key === "Home"/u);
   assert.match(palette, /role="listbox"/u);
-  assert.match(palette, /role="group"/u);
+  assert.doesNotMatch(palette, /role="group"/u);
   assert.match(palette, /role="option"/u);
   assert.match(palette, /aria-live="polite"/u);
   assert.match(palette, /absolute inset-x-3 bottom-full/u);
   assert.match(palette, /onPointerDown=\{\(event\) => event\.preventDefault\(\)\}/u);
   assert.match(palette, /motion-reduce:animate-none/u);
   assert.match(palette, /max-\[520px\]:hidden/u);
-  assert.match(palette, /min-w-0 truncate/u);
-  assert.match(styles, /\.composer-slash-palette\s*\{\s*container-type:\s*inline-size/u);
-  assert.match(styles, /@container \(width <= 520px\)[\s\S]{0,120}\.composer-slash-shortcuts/u);
+  assert.doesNotMatch(palette, /Commands and skills/u);
+  assert.doesNotMatch(palette, /composer-slash-shortcuts/u);
+  assert.doesNotMatch(palette, /rounded-md bg-control\/65 text-secondary/u);
+  assert.doesNotMatch(palette, />Commands</u);
+  assert.doesNotMatch(palette, />Skills</u);
+  assert.match(palette, /mode === "command" \? "Slash commands" : "Skills"/u);
+  assert.match(composer, /mode=\{slashSession\.kind\}/u);
+  assert.match(composer, /result\.kind !== slashSession\.kind/u);
+  assert.match(composer, /slashSession\?\.kind === "skill" && skillCatalog\.isError/u);
   assert.match(
     composer,
     /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => inputRef\?\.current\?\.focus/u,

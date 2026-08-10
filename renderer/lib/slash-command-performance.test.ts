@@ -175,7 +175,7 @@ test("opening and rendering the maximum slash catalog stays within the release l
   try {
     let mountKey = 0;
     const renderQuery = (query: string) => {
-      const draft = `/${query}`;
+      const draft = `$${query}`;
       const session = deriveSlashSession({
         draft,
         selectionStart: draft.length,
@@ -184,11 +184,13 @@ test("opening and rendering the maximum slash catalog stays within the release l
         tracker: updateSlashSessionTracker(undefined, draft),
       });
       assert.ok(session);
-      const ranked = rankSlashResults(session.query, catalog);
+      assert.equal(session.kind, "skill");
+      const ranked = rankSlashResults(session.query, catalog, session.kind);
       assert.ok(ranked.results.length <= SLASH_LIMITS.visibleResults);
       mountKey += 1;
       flushSync(() => {
         const palette = React.createElement(ComposerSlashPalette, {
+          mode: session.kind,
           results: ranked.results,
           activeId: ranked.results[0]?.id,
           skillsLoading: false,

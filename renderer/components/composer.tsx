@@ -440,8 +440,13 @@ export function Composer({
     ],
   );
   const rankedSlashResults = React.useMemo(
-    () => rankSlashResults(slashSession?.query ?? "", skillCatalog.data ?? []),
-    [skillCatalog.data, slashSession?.query],
+    () =>
+      rankSlashResults(
+        slashSession?.query ?? "",
+        skillCatalog.data ?? [],
+        slashSession?.kind ?? "command",
+      ),
+    [skillCatalog.data, slashSession?.kind, slashSession?.query],
   );
   const slashActionContext = React.useMemo(
     () => ({
@@ -540,9 +545,11 @@ export function Composer({
     for (const result of rankedSlashResults.results) {
       if (slashResultSelectable(result)) ids.push(result.id);
     }
-    if (skillCatalog.isError) ids.push(COMPOSER_SLASH_RETRY_ID);
+    if (slashSession?.kind === "skill" && skillCatalog.isError) {
+      ids.push(COMPOSER_SLASH_RETRY_ID);
+    }
     return ids;
-  }, [rankedSlashResults.results, skillCatalog.isError, slashResultSelectable]);
+  }, [rankedSlashResults.results, skillCatalog.isError, slashResultSelectable, slashSession?.kind]);
   const effectiveActiveSlashId = slashSession
     ? selectableSlashIds.includes(activeSlashId ?? "")
       ? activeSlashId
@@ -654,7 +661,12 @@ export function Composer({
 
   const selectSlashResult = React.useCallback(
     async (result: SlashResult) => {
-      if (slashActionPendingRef.current || !slashSession || !slashResultSelectable(result)) {
+      if (
+        slashActionPendingRef.current ||
+        !slashSession ||
+        result.kind !== slashSession.kind ||
+        !slashResultSelectable(result)
+      ) {
         return;
       }
       if (result.kind === "skill") {
@@ -1047,7 +1059,7 @@ export function Composer({
   return (
     <>
       <div className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
-        <div className="pointer-events-auto relative isolate">
+        <div className="composer-responsive pointer-events-auto relative isolate">
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -1056,6 +1068,7 @@ export function Composer({
           >
             {slashSession ? (
               <ComposerSlashPalette
+                mode={slashSession.kind}
                 results={rankedSlashResults.results}
                 activeId={effectiveActiveSlashId}
                 skillsLoading={skillCatalog.isLoading}
@@ -1129,7 +1142,7 @@ export function Composer({
                   <Button
                     variant="transparent"
                     size="small"
-                    className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                    className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
                     disabled={
                       isGenerating ||
                       sending ||
@@ -1151,7 +1164,7 @@ export function Composer({
               <Button
                 variant="transparent"
                 size="small"
-                className="h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
+                className="composer-workspace-trigger h-7 min-w-0 max-w-[16rem] flex-1 shrink gap-1.5 px-2 text-secondary max-[520px]:max-w-[9rem]"
                 onClick={onOpenFolder}
                 disabled={!workspace?.folderPath}
                 aria-label={workspace?.folderPath ? "Open folder in Finder" : "Workspace"}
@@ -1162,7 +1175,7 @@ export function Composer({
             )}
             {/* Execution location — Pi runs locally on this Mac. */}
             <span
-              className="flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
+              className="composer-local-label flex h-7 items-center gap-1.5 px-2 text-small text-tertiary max-[460px]:hidden"
               title="The agent runs locally on this Mac"
             >
               <Monitor className="size-4 shrink-0" />
@@ -1375,7 +1388,10 @@ export function Composer({
                     <Button
                       variant="transparent"
                       size="small"
-                      className={cn("h-7 gap-1.5 px-2", perm.className)}
+                      className={cn(
+                        "composer-permission-control h-7 gap-1.5 px-2 max-[520px]:size-7 max-[520px]:px-0",
+                        perm.className,
+                      )}
                       disabled={
                         !workspace ||
                         permissionSaving ||
@@ -1393,7 +1409,9 @@ export function Composer({
                       }
                     >
                       <PermIcon className="size-4 shrink-0" />
-                      {permissionSaving ? "Updating…" : perm.label}
+                      <span className="composer-permission-label max-[520px]:hidden">
+                        {permissionSaving ? "Updating…" : perm.label}
+                      </span>
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start">
@@ -1479,7 +1497,7 @@ export function Composer({
               <div
                 className={cn(
                   "ml-auto flex min-w-0 items-center justify-end gap-1.5",
-                  thinkingControl && "max-[520px]:w-full",
+                  thinkingControl && "composer-action-row max-[520px]:w-full",
                 )}
               >
                 {thinkingControl}

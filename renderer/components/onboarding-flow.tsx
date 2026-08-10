@@ -275,7 +275,7 @@ const featureBentos: FeatureBento[] = [
     id: "skills",
     group: "extend",
     title: "Reusable Skills",
-    description: "Create reusable instructions or auto-load compatible SKILL.md folders.",
+    description: "Create reusable instructions, then type $ to attach one to your next message.",
     icon: Wand2,
     imageUrl: FEATURE_ILLUSTRATIONS.skills,
     size: "wide",
@@ -320,8 +320,7 @@ const featureBentos: FeatureBento[] = [
     id: "commands",
     group: "control",
     title: "Command Palette",
-    description:
-      "Use Command-K or slash commands to navigate, invoke skills, and manage chat sessions.",
+    description: "Use Command-K or / for app commands, and $ to attach a reusable skill.",
     icon: Command,
     imageUrl: FEATURE_ILLUSTRATIONS.commands,
     size: "standard",

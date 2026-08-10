@@ -94,6 +94,8 @@ export interface SlashTriggerInput {
 }
 
 export interface SlashSession {
+  kind: "command" | "skill";
+  trigger: "/" | "$";
   tokenStart: number;
   tokenEnd: number;
   token: string;
@@ -166,12 +168,14 @@ export function pageSlashSelection(
   );
 }
 
-function firstToken(draft: string): { start: number; end: number; token: string } | null {
+function firstToken(
+  draft: string,
+): { start: number; end: number; token: string; trigger: "/" | "$" } | null {
   const start = draft.search(/\S/u);
-  if (start < 0 || draft[start] !== "/") return null;
+  if (start < 0 || (draft[start] !== "/" && draft[start] !== "$")) return null;
   const relativeEnd = draft.slice(start).search(/\s/u);
   const end = relativeEnd < 0 ? draft.length : start + relativeEnd;
-  return { start, end, token: draft.slice(start, end) };
+  return { start, end, token: draft.slice(start, end), trigger: draft[start] };
 }
 
 export function updateSlashSessionTracker(
@@ -251,6 +255,8 @@ export function deriveSlashSession(input: SlashTriggerInput): SlashSession | nul
   if (!tracker.active || tracker.token !== parsed.token) return null;
   if (tracker.dismissedEpoch === tracker.epoch) return null;
   return {
+    kind: parsed.trigger === "/" ? "command" : "skill",
+    trigger: parsed.trigger,
     tokenStart: parsed.start,
     tokenEnd: parsed.end,
     token: parsed.token,
@@ -317,42 +323,51 @@ const SOURCE_ORDER: Record<SkillSource, number> = {
 export function rankSlashResults(
   queryInput: string,
   skills: readonly SkillCatalogEntry[],
+  kind: SlashSession["kind"],
   commands: readonly SlashCommandDefinition[] = SLASH_COMMANDS,
 ): { results: SlashResult[]; truncated: boolean } {
   if (
     Array.from(queryInput).length > SLASH_LIMITS.queryCharacters ||
-    skills.length > SLASH_LIMITS.catalogEntries
+    (kind === "skill" && skills.length > SLASH_LIMITS.catalogEntries)
   ) {
     throw new RangeError("Slash command input exceeds its bounded contract.");
   }
   const query = normalized(queryInput);
   const results: SlashResult[] = [];
-  for (const command of commands) {
-    const score = scoreFields(query, normalized(command.name), command.aliases.map(normalized), [
-      command.name,
-      ...command.aliases,
-      command.title,
-      command.description,
-      ...command.keywords,
-    ]);
-    if (score !== null) {
-      results.push({ kind: "command", id: `slash-option-command-${command.name}`, command, score });
+  if (kind === "command") {
+    for (const command of commands) {
+      const score = scoreFields(query, normalized(command.name), command.aliases.map(normalized), [
+        command.name,
+        ...command.aliases,
+        command.title,
+        command.description,
+        ...command.keywords,
+      ]);
+      if (score !== null) {
+        results.push({
+          kind: "command",
+          id: `slash-option-command-${command.name}`,
+          command,
+          score,
+        });
+      }
     }
-  }
-  for (const skill of skills) {
-    const score = scoreFields(
-      query,
-      normalized(skill.name),
-      [],
-      [skill.name, skill.description, skill.source],
-    );
-    if (score !== null) {
-      results.push({
-        kind: "skill",
-        id: `slash-option-skill-${skill.invocationId}`,
-        skill,
-        score,
-      });
+  } else {
+    for (const skill of skills) {
+      const score = scoreFields(
+        query,
+        normalized(skill.name),
+        [],
+        [skill.name, skill.description, skill.source],
+      );
+      if (score !== null) {
+        results.push({
+          kind: "skill",
+          id: `slash-option-skill-${skill.invocationId}`,
+          skill,
+          score,
+        });
+      }
     }
   }
   results.sort((left, right) => {

@@ -19,7 +19,6 @@ import {
   PanelLeft,
   Pencil,
   Plus,
-  Search,
   Server,
   Settings,
   Sparkles,
@@ -27,7 +26,11 @@ import {
   Wrench,
 } from "lucide-react";
 import { cn } from "../lib/ui-utils";
-import { slashPalettePresenceState, type SlashResult } from "../lib/slash-command-core";
+import {
+  slashPalettePresenceState,
+  type SlashResult,
+  type SlashSession,
+} from "../lib/slash-command-core";
 import type { SlashCommandAvailabilityResult } from "../lib/slash-command-actions";
 import type { SlashCommandIcon } from "../shared/slash-commands";
 
@@ -63,6 +66,7 @@ const ICONS: Record<SlashCommandIcon, React.ComponentType<{ className?: string }
 };
 
 interface ComposerSlashPaletteProps {
+  mode: SlashSession["kind"];
   results: readonly SlashResult[];
   activeId?: string;
   skillsLoading: boolean;
@@ -127,6 +131,7 @@ function sourceLabel(source: Extract<SlashResult, { kind: "skill" }>["skill"]["s
 }
 
 export function ComposerSlashPalette({
+  mode,
   results,
   activeId,
   skillsLoading,
@@ -151,17 +156,19 @@ export function ComposerSlashPalette({
     const timer = window.setTimeout(() => {
       const count = commands.length + skills.length;
       setAnnouncement(
-        skillsError
+        mode === "skill" && skillsError
           ? "Skills could not be loaded. Navigate to Retry skills to try again."
-          : skillsLoading
+          : mode === "skill" && skillsLoading
             ? "Loading skills."
             : count === 0
-              ? "No slash results."
-              : `${count} slash result${count === 1 ? "" : "s"}. Commands first, then skills.`,
+              ? mode === "command"
+                ? "No matching commands."
+                : "No matching skills."
+              : `${count} ${mode}${count === 1 ? "" : "s"}.`,
       );
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [commands.length, skills.length, skillsError, skillsLoading]);
+  }, [commands.length, mode, skills.length, skillsError, skillsLoading]);
 
   React.useEffect(() => {
     if (!activeId) return;
@@ -171,7 +178,7 @@ export function ComposerSlashPalette({
   const row = (result: SlashResult, available: boolean, unavailableReason?: string) => {
     const selected = result.id === activeId;
     const Icon = result.kind === "command" ? ICONS[result.command.icon] : Sparkles;
-    const title = result.kind === "command" ? `/${result.command.name}` : result.skill.name;
+    const title = result.kind === "command" ? `/${result.command.name}` : `$${result.skill.name}`;
     const description =
       result.kind === "command" ? result.command.description : result.skill.description;
     const detail =
@@ -200,7 +207,7 @@ export function ComposerSlashPalette({
           !available && "opacity-50",
         )}
       >
-        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-control/65 text-secondary">
+        <span className="grid size-7 shrink-0 place-items-center text-secondary">
           <Icon aria-hidden="true" className="size-4" />
         </span>
         <span className="min-w-0 flex-1">
@@ -216,7 +223,7 @@ export function ComposerSlashPalette({
         </span>
         <span
           aria-hidden={unavailableReason ? "true" : undefined}
-          className="max-w-40 shrink-0 truncate text-right text-mini text-tertiary max-[520px]:hidden"
+          className="composer-slash-detail max-w-40 shrink-0 truncate text-right text-mini text-tertiary max-[520px]:hidden"
         >
           {detail}
         </span>
@@ -236,93 +243,71 @@ export function ComposerSlashPalette({
       data-presence={presenceState}
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
     >
-      <div className="flex h-9 min-w-0 items-center gap-2 border-b border-separator px-3 text-small text-secondary">
-        <Search aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate">Commands and skills</span>
-        <span className="composer-slash-shortcuts ml-auto shrink-0 text-mini text-tertiary max-[520px]:hidden">
-          ↑↓ navigate · ↩ run · esc close
-        </span>
-      </div>
       <div
         id={COMPOSER_SLASH_PALETTE_ID}
         role="listbox"
-        aria-label="Slash commands and skills"
+        aria-label={mode === "command" ? "Slash commands" : "Skills"}
         className="max-h-[min(22rem,48vh)] overflow-y-auto overscroll-contain p-1.5 [mask-image:linear-gradient(to_bottom,transparent_0,black_0.35rem,black_calc(100%_-_0.35rem),transparent_100%)]"
       >
-        <div role="group" aria-labelledby="slash-command-group-label">
-          <div
-            id="slash-command-group-label"
-            className="sticky top-0 z-10 bg-popover/95 px-2.5 pb-1 pt-1.5 text-mini font-medium uppercase tracking-wide text-tertiary backdrop-blur"
-          >
-            Commands
+        {mode === "command" ? (
+          <div>
+            {commands.length > 0 ? (
+              commands.map((result) => {
+                const availability = commandAvailability(result);
+                return row(result, availability.available, availability.reason);
+              })
+            ) : (
+              <div role="status" className="min-h-9 px-2.5 py-2 text-small text-secondary">
+                No commands match this query.
+              </div>
+            )}
           </div>
-          {commands.length > 0 ? (
-            commands.map((result) => {
-              const availability = commandAvailability(result);
-              return row(result, availability.available, availability.reason);
-            })
-          ) : (
-            <div role="status" className="min-h-9 px-2.5 py-2 text-small text-secondary">
-              No commands match this query.
-            </div>
-          )}
-        </div>
-
-        <div role="group" aria-labelledby="slash-skill-group-label" className="mt-1">
-          <div
-            id="slash-skill-group-label"
-            className="sticky top-0 z-10 bg-popover/95 px-2.5 pb-1 pt-1.5 text-mini font-medium uppercase tracking-wide text-tertiary backdrop-blur"
-          >
-            Skills
+        ) : (
+          <div>
+            {skillsLoading ? (
+              <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
+                <Sparkles
+                  aria-hidden="true"
+                  className="size-4 animate-pulse motion-reduce:animate-none"
+                />
+                Loading skills…
+              </div>
+            ) : skillsError ? (
+              <div
+                id={COMPOSER_SLASH_RETRY_ID}
+                role="option"
+                aria-label="Retry loading skills"
+                aria-selected={activeId === COMPOSER_SLASH_RETRY_ID}
+                onPointerMove={() => onActiveIdChange(COMPOSER_SLASH_RETRY_ID)}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={onRetrySkills}
+                className={cn(
+                  "flex min-h-11 w-full cursor-default items-center gap-2.5 rounded-lg px-2.5 text-left text-small text-secondary hover:bg-list-hover",
+                  activeId === COMPOSER_SLASH_RETRY_ID && "bg-list-selection",
+                )}
+              >
+                <Sparkles aria-hidden="true" className="size-4" />
+                Skills could not be loaded
+                <span className="ml-auto text-mini text-accent">Retry</span>
+              </div>
+            ) : skills.length > 0 ? (
+              skills.map((result) => {
+                const available = result.skill.available && skillSelectionEnabled;
+                const reason = result.skill.available
+                  ? skillSelectionEnabled
+                    ? undefined
+                    : "Selection becomes available with active skill invocation."
+                  : result.skill.unavailableReason;
+                return row(result, available, reason);
+              })
+            ) : (
+              <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
+                <Sparkles aria-hidden="true" className="size-4" />
+                No skills match this query.
+              </div>
+            )}
           </div>
-          {skillsLoading ? (
-            <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
-              <Sparkles
-                aria-hidden="true"
-                className="size-4 animate-pulse motion-reduce:animate-none"
-              />
-              Loading skills…
-            </div>
-          ) : skillsError ? (
-            <div
-              id={COMPOSER_SLASH_RETRY_ID}
-              role="option"
-              aria-label="Retry loading skills"
-              aria-selected={activeId === COMPOSER_SLASH_RETRY_ID}
-              onPointerMove={() => onActiveIdChange(COMPOSER_SLASH_RETRY_ID)}
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={onRetrySkills}
-              className={cn(
-                "flex min-h-11 w-full cursor-default items-center gap-2.5 rounded-lg px-2.5 text-left text-small text-secondary hover:bg-list-hover",
-                activeId === COMPOSER_SLASH_RETRY_ID && "bg-list-selection",
-              )}
-            >
-              <Sparkles aria-hidden="true" className="size-4" />
-              Skills could not be loaded
-              <span className="ml-auto text-mini text-accent">Retry</span>
-            </div>
-          ) : skills.length > 0 ? (
-            skills.map((result) => {
-              const available = result.skill.available && skillSelectionEnabled;
-              const reason = result.skill.available
-                ? skillSelectionEnabled
-                  ? undefined
-                  : "Selection becomes available with active skill invocation."
-                : result.skill.unavailableReason;
-              return row(result, available, reason);
-            })
-          ) : commands.length === 0 ? (
-            <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
-              <Sparkles aria-hidden="true" className="size-4" />
-              No commands or skills found.
-            </div>
-          ) : (
-            <div className="flex min-h-11 items-center gap-2.5 px-2.5 text-small text-secondary">
-              <Sparkles aria-hidden="true" className="size-4" />
-              No skills match this query.
-            </div>
-          )}
-        </div>
+        )}
       </div>
       {truncated ? (
         <div className="border-t border-separator px-3 py-1.5 text-mini text-tertiary">
