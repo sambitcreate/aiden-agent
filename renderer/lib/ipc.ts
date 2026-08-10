@@ -84,6 +84,7 @@ import type {
 } from "../shared/keybindings";
 import {
   parseAppUpdateSnapshot,
+  type AppUpdateCheckResult,
   type AppUpdateRestartResult,
   type AppUpdateSnapshot,
 } from "../shared/app-update";
@@ -143,6 +144,7 @@ export const appApi = {
 export const appUpdatesApi = {
   state: async (): Promise<AppUpdateSnapshot> =>
     parseAppUpdateSnapshot(await invoke<unknown>("app:getUpdateState")),
+  check: () => invoke<AppUpdateCheckResult>("app:checkForUpdates"),
   restart: () => invoke<AppUpdateRestartResult>("app:restartToUpdate"),
   onStateChanged: (handler: (snapshot: AppUpdateSnapshot) => void) =>
     onNotification<unknown>("app:update-state", (payload) =>

@@ -61,7 +61,7 @@ test("downloaded updates appear immediately above Profile in the sidebar footer"
   assert.ok(profileIndex < settingsIndex, "Profile and Settings should keep their stable order");
 });
 
-test("update-ready banner offers Later and a guarded restart action", () => {
+test("update banner reports progress, failure recovery, and a guarded restart action", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const banner = between(
     sidebar,
@@ -70,29 +70,40 @@ test("update-ready banner offers Later and a guarded restart action", () => {
   );
 
   assert.match(banner, /Update ready/u);
+  assert.match(banner, /Downloading update/u);
+  assert.match(banner, /Update download failed/u);
   assert.match(banner, /Aiden Agent \{displayedVersion\}/u);
   assert.match(banner, /Restart to finish installing\./u);
-  assert.match(banner, />\s*Later\s*</u);
+  assert.match(banner, /"Later"/u);
+  assert.match(banner, /Try again/u);
+  assert.match(banner, /appUpdatesApi\.check\(\)/u);
   assert.match(banner, /Update and restart/u);
   assert.match(banner, /appUpdatesApi\.restart\(\)/u);
   assert.match(banner, /disabled=\{!open \|\| restarting \|\| Boolean\(blockedReason\)\}/u);
+  assert.match(banner, /role="progressbar"/u);
 });
 
 test("a stale initial update-state response cannot overwrite a newer notification", () => {
-  const sidebar = source("./chat-sidebar.tsx");
-  const banner = between(
-    sidebar,
-    "function UpdateReadyBanner",
-    "\n}\n\nfunction GeneratedTitleReveal",
-  );
+  const hook = source("../lib/use-app-update-snapshot.ts");
 
-  assert.match(banner, /let notificationRevision = 0;/u);
-  assert.match(banner, /notificationRevision \+= 1;\s+applySnapshot\(next\);/u);
-  assert.match(banner, /const requestedAtRevision = notificationRevision;/u);
-  assert.match(
-    banner,
-    /if \(notificationRevision === requestedAtRevision\) applySnapshot\(next\);/u,
-  );
+  assert.match(hook, /let notificationRevision = 0;/u);
+  assert.match(hook, /notificationRevision \+= 1;\s+applySnapshot\(next\);/u);
+  assert.match(hook, /const requestedAtRevision = notificationRevision;/u);
+  assert.match(hook, /if \(notificationRevision === requestedAtRevision\) applySnapshot\(next\);/u);
+});
+
+test("About exposes the observable updater lifecycle and retry in the initiating surface", () => {
+  const about = source("./settings/about-settings.tsx");
+
+  assert.match(about, /label="Software update"/u);
+  assert.match(about, /useAppUpdateSnapshot\(\)/u);
+  assert.match(about, /appUpdatesApi\.check\(\)/u);
+  assert.match(about, /appUpdatesApi\.restart\(\)/u);
+  assert.match(about, /Check for updates/u);
+  assert.match(about, /Downloading…/u);
+  assert.match(about, /Try again/u);
+  assert.match(about, /Update and restart/u);
+  assert.match(about, /role="progressbar"/u);
 });
 
 test("update-ready banner uses the Aiden mark and shared compact-surface motion", () => {

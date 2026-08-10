@@ -48,7 +48,10 @@ import { disposeDictation, toggleDictation } from "./services/dictation.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
 import { appUpdateService } from "./services/app-updater.js";
-import type { AppUpdateRestartResult } from "../renderer/shared/app-update.js";
+import type {
+  AppUpdateCheckResult,
+  AppUpdateRestartResult,
+} from "../renderer/shared/app-update.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
@@ -152,7 +155,7 @@ const SUBAGENT_PACKAGED_SOAK_STOP_SCRIPT = `(() => {
 })()`;
 
 const SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT =
-  'Boolean(document.querySelector(\'nav[aria-label="Settings"]\'))';
+  "Boolean(document.querySelector('nav[aria-label=\"Settings\"]'))";
 
 // The failure callout is the renderer's own generation error. This fixed,
 // test-only reader makes a failed packaged smoke actionable without exposing
@@ -651,6 +654,13 @@ ipcMain.handle("app:getUpdateState", (event) => {
   return appUpdateService.snapshot();
 });
 
+ipcMain.handle("app:checkForUpdates", async (event): Promise<AppUpdateCheckResult> => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+    return { outcome: "unavailable" };
+  }
+  return appUpdateService.checkNow(false);
+});
+
 ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
     return {
@@ -948,8 +958,9 @@ async function settlePackagedSubagentSoak(session: SubagentPackagedSoakSession):
   if (!(await llmClient.waitForChatIdle(SUBAGENT_PACKAGED_SOAK_CHAT_ID))) {
     throw new Error("Packaged subagent soak did not settle its parent generation.");
   }
-  await waitForPackagedSubagentSoak("child settlement", () =>
-    !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
+  await waitForPackagedSubagentSoak(
+    "child settlement",
+    () => !subagentRuntimeRegistry.hasChatChildren(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
   await subagentHealthMetrics.flush();
   await writeSubagentPackagedSoakReceipt(
@@ -982,8 +993,9 @@ async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Pr
   await waitForPackagedSubagentSoak("child provider response", () =>
     subagentRuntimeRegistry.hasChatProviderResponse(SUBAGENT_PACKAGED_SOAK_CHAT_ID),
   );
-  await waitForPackagedSubagentSoak("aggregate child start", async () =>
-    (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
+  await waitForPackagedSubagentSoak(
+    "aggregate child start",
+    async () => (await subagentHealthMetrics.snapshotForPackagedSoak()).starts === 1,
   );
 
   const action = subagentPackagedSoakAction(session.control.mode);
@@ -1157,10 +1169,8 @@ if (!ownsSingleInstanceLock) {
     async (previous, next) => {
       await Promise.all([
         reconcileExternalProviderCredentialChanges(previous.providers, next.providers),
-        reconcileExternalMcpCredentialChanges(
-          previous.mcpServers,
-          next.mcpServers,
-          (serverId) => mcpManager.disconnect(serverId),
+        reconcileExternalMcpCredentialChanges(previous.mcpServers, next.mcpServers, (serverId) =>
+          mcpManager.disconnect(serverId),
         ),
       ]);
     },

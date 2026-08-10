@@ -28,9 +28,12 @@ visitors and installed apps can download GitHub Release assets without a GitHub 
   public GitHub release in this repository. Each release includes GitHub-generated notes for
   changes since the previous release. The DMG is the website download; the ZIP and YAML are the
   updater payload.
-- Aiden checks shortly after launch and every six hours. It downloads a newer signed update in
-  the background, notifies the user when ready, and installs only after Aiden exits normally.
-  It never interrupts an open workspace or bypasses the existing quit barriers.
+- Aiden checks shortly after launch and every six hours. It owns and observes one full-package
+  download rather than using differential updates because the release set does not publish
+  separate blockmaps. Settings → About and the chat sidebar expose bounded progress, failure,
+  retry, and ready states. A two-minute no-progress stall is cancelled and retried with bounded
+  backoff. Installation starts only after the package and macOS updater handoff are ready, and
+  never interrupts an open workspace or bypasses the existing quit barriers.
 - A failed or rerun job refuses to overwrite an existing tag. Recovery is a new `main` commit,
   which receives a higher version.
 
@@ -74,13 +77,13 @@ its history scan, before changing visibility.
    deployment to `main`, and keep the signing/notarization material scoped to this environment.
 3. Add the following environment secrets:
 
-   | Secret | Value |
-   | --- | --- |
-   | `APPLE_API_KEY_ID` | App Store Connect API key ID |
-   | `APPLE_API_ISSUER` | App Store Connect issuer UUID |
-   | `APPLE_API_KEY_P8` | Complete private `.p8` key contents |
-   | `MACOS_CERTIFICATE_P12` | Base64-encoded Developer ID Application certificate and private key |
-   | `MACOS_CERTIFICATE_PASSWORD` | Password used when exporting that `.p12` |
+   | Secret                       | Value                                                               |
+   | ---------------------------- | ------------------------------------------------------------------- |
+   | `APPLE_API_KEY_ID`           | App Store Connect API key ID                                        |
+   | `APPLE_API_ISSUER`           | App Store Connect issuer UUID                                       |
+   | `APPLE_API_KEY_P8`           | Complete private `.p8` key contents                                 |
+   | `MACOS_CERTIFICATE_P12`      | Base64-encoded Developer ID Application certificate and private key |
+   | `MACOS_CERTIFICATE_PASSWORD` | Password used when exporting that `.p12`                            |
 
 4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
    repository variable to `true` only when the first public beta is approved. The workflow uses

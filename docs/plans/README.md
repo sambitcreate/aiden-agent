@@ -15,7 +15,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Pi Provider Integration](pi-provider-integration-plan.md)                                         | Partial | Pi built-ins, stores, auth, native routing, refresh, and voice credential lookup ship; custom composition, provenance, scalable UX, and rollout cleanup remain.              |
 | [Subagent Orchestration Expansion](subagent-orchestration-expansion-plan.md)                       | Active  | Phases 0–6, Phase 7A durable lifecycle, and the canonical Phase 7B1 storage seam are complete; app-lifetime coordinator activation is next.                                  |
 | [Taracodlab Learnings](taracodlab-learnings-plan.md)                                               | Partial | Phases A–B and D, plus core Phase E, are implemented; the remaining roadmap is open.                                                                                         |
-| [Update, Microphone, and Computer Use Hardening](update-microphone-computer-use-hardening-plan.md) | Partial | Root causes, code fixes, and automated gates are complete; installed 0.27.0 → next-release and clean-TCC signed-package acceptance remain.                                   |
+| [Update, Microphone, and Computer Use Hardening](update-microphone-computer-use-hardening-plan.md) | Partial | Installed acceptance found a silent stalled download; observable full-download recovery is implemented, while repaired-build → next-release and clean-TCC acceptance remain. |
 
 ## Completed
 

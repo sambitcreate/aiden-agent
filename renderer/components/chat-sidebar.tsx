@@ -64,11 +64,8 @@ import { useCommandSystem } from "../lib/command-system";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
-import {
-  IDLE_APP_UPDATE_SNAPSHOT,
-  type AppUpdateRestartResult,
-  type AppUpdateSnapshot,
-} from "../shared/app-update";
+import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
+import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 /** Must match aiden-app-update-banner-out in styles.css. */
@@ -91,46 +88,41 @@ function updateRestartError(result: AppUpdateRestartResult): string | null {
   }
 }
 
+function updateBannerKey(snapshot: AppUpdateSnapshot): string | null {
+  switch (snapshot.status) {
+    case "downloading":
+    case "ready":
+      return `${snapshot.status}:${snapshot.version}`;
+    case "error":
+      return `${snapshot.status}:${snapshot.error}:${snapshot.version ?? "unknown"}`;
+    case "checking":
+    case "idle":
+      return null;
+  }
+}
+
 function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
-  const [snapshot, setSnapshot] = React.useState<AppUpdateSnapshot>(IDLE_APP_UPDATE_SNAPSHOT);
-  const [dismissedVersion, setDismissedVersion] = React.useState<string | null>(null);
+  const snapshot = useAppUpdateSnapshot();
+  const [dismissedKey, setDismissedKey] = React.useState<string | null>(null);
   const [restarting, setRestarting] = React.useState(false);
+  const [retrying, setRetrying] = React.useState(false);
   const [present, setPresent] = React.useState(false);
-  const [displayedVersion, setDisplayedVersion] = React.useState<string | null>(null);
+  const [displayedSnapshot, setDisplayedSnapshot] = React.useState<AppUpdateSnapshot>(snapshot);
   const titleId = React.useId();
-  const readyVersion = snapshot.status === "ready" ? snapshot.version : null;
-  const open = readyVersion !== null && dismissedVersion !== readyVersion;
+  const bannerKey = updateBannerKey(snapshot);
+  const open = bannerKey !== null && dismissedKey !== bannerKey;
 
   React.useEffect(() => {
-    let cancelled = false;
-    let notificationRevision = 0;
-    const applySnapshot = (next: AppUpdateSnapshot) => {
-      if (cancelled) return;
-      setSnapshot(next);
-      setRestarting(false);
-    };
-    const unsubscribe = appUpdatesApi.onStateChanged((next) => {
-      notificationRevision += 1;
-      applySnapshot(next);
-    });
-    const requestedAtRevision = notificationRevision;
-    void appUpdatesApi
-      .state()
-      .then((next) => {
-        if (notificationRevision === requestedAtRevision) applySnapshot(next);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, []);
+    if (snapshot.status !== "ready") setRestarting(false);
+    if (snapshot.status !== "error") setRetrying(false);
+    if (bannerKey === null) setDismissedKey(null);
+  }, [bannerKey, snapshot.status]);
 
   // Keep the banner mounted through its exit animation, matching Aiden's
   // environment summary and assistant dock presence primitives.
   React.useLayoutEffect(() => {
-    if (open && readyVersion) {
-      setDisplayedVersion(readyVersion);
+    if (open) {
+      setDisplayedSnapshot(snapshot);
       setPresent(true);
       return;
     }
@@ -141,7 +133,7 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
     }
     const timeout = window.setTimeout(() => setPresent(false), APP_UPDATE_BANNER_EXIT_MS);
     return () => window.clearTimeout(timeout);
-  }, [open, present, readyVersion]);
+  }, [open, present, snapshot]);
 
   const restart = async () => {
     if (!open) return;
@@ -156,6 +148,8 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
       if (message) {
         setRestarting(false);
         toast.error(message);
+      } else {
+        window.setTimeout(() => setRestarting(false), 10_000);
       }
     } catch (error) {
       setRestarting(false);
@@ -163,7 +157,45 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
     }
   };
 
-  if (!present || !displayedVersion) return null;
+  const retry = async () => {
+    if (!open || displayedSnapshot.status !== "error") return;
+    setRetrying(true);
+    try {
+      const result = await appUpdatesApi.check();
+      if (result.outcome === "unavailable") {
+        setRetrying(false);
+        toast.error("Automatic updates are unavailable in this build.");
+      }
+    } catch {
+      setRetrying(false);
+      toast.error("Aiden could not start another update check.");
+    }
+  };
+
+  if (!present || updateBannerKey(displayedSnapshot) === null) return null;
+
+  const displayedVersion =
+    displayedSnapshot.status === "downloading" ||
+    displayedSnapshot.status === "ready" ||
+    displayedSnapshot.status === "error"
+      ? displayedSnapshot.version
+      : null;
+  const title =
+    displayedSnapshot.status === "downloading"
+      ? "Downloading update"
+      : displayedSnapshot.status === "error"
+        ? displayedSnapshot.error === "download-failed"
+          ? "Update download failed"
+          : "Update check failed"
+        : "Update ready";
+  const description =
+    displayedSnapshot.status === "downloading"
+      ? displayedSnapshot.percent === null
+        ? "Preparing the download…"
+        : `${Math.floor(displayedSnapshot.percent)}% downloaded`
+      : displayedSnapshot.status === "error"
+        ? "Check your connection and try again."
+        : (blockedReason ?? "Restart to finish installing.");
 
   return (
     <section
@@ -177,41 +209,68 @@ function UpdateReadyBanner({ blockedReason }: { blockedReason?: string }) {
         <img src={AIDEN_MARK_URL} alt="" className="size-8 shrink-0" />
         <div className="min-w-0 flex-1">
           <h2 id={titleId} className="text-small-strong">
-            Update ready
+            {title}
           </h2>
-          <p className="mt-0.5 truncate text-small text-secondary">
-            Aiden Agent {displayedVersion}
-          </p>
+          {displayedVersion ? (
+            <p className="mt-0.5 truncate text-small text-secondary">
+              Aiden Agent {displayedVersion}
+            </p>
+          ) : null}
         </div>
       </div>
-      <p className="mt-2 text-small text-secondary">
-        {blockedReason ?? "Restart to finish installing."}
-      </p>
+      <p className="mt-2 text-small text-secondary">{description}</p>
+      {displayedSnapshot.status === "downloading" && displayedSnapshot.percent !== null ? (
+        <div
+          className="mt-2 h-1 overflow-hidden rounded-full bg-control"
+          role="progressbar"
+          aria-label="Update download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.floor(displayedSnapshot.percent)}
+        >
+          <div
+            className="h-full rounded-full bg-accent transition-[width] duration-150"
+            style={{ width: `${displayedSnapshot.percent}%` }}
+          />
+        </div>
+      ) : null}
       <div className="mt-2 flex items-center justify-end gap-1">
         <Button
           size="small"
           variant="transparent"
-          disabled={!open || restarting}
-          onClick={() => setDismissedVersion(displayedVersion)}
+          disabled={!open || restarting || retrying}
+          onClick={() => setDismissedKey(updateBannerKey(displayedSnapshot))}
         >
-          Later
+          {displayedSnapshot.status === "ready" ? "Later" : "Hide"}
         </Button>
-        <Button
-          size="small"
-          variant="accent"
-          disabled={!open || restarting || Boolean(blockedReason)}
-          title={blockedReason}
-          onClick={() => void restart()}
-        >
-          {restarting ? (
-            <>
-              <Loader2 className="animate-spin" aria-hidden="true" />
-              Restarting…
-            </>
-          ) : (
-            "Update and restart"
-          )}
-        </Button>
+        {displayedSnapshot.status === "error" ? (
+          <Button
+            size="small"
+            variant="accent"
+            disabled={!open || retrying}
+            onClick={() => void retry()}
+          >
+            {retrying ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+            {retrying ? "Retrying…" : "Try again"}
+          </Button>
+        ) : displayedSnapshot.status === "ready" ? (
+          <Button
+            size="small"
+            variant="accent"
+            disabled={!open || restarting || Boolean(blockedReason)}
+            title={blockedReason}
+            onClick={() => void restart()}
+          >
+            {restarting ? (
+              <>
+                <Loader2 className="animate-spin" aria-hidden="true" />
+                Restarting…
+              </>
+            ) : (
+              "Update and restart"
+            )}
+          </Button>
+        ) : null}
       </div>
     </section>
   );
