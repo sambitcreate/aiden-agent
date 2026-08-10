@@ -61,12 +61,14 @@ pub mod config_store;
 pub mod dev_log;
 pub mod external_editors;
 pub mod mcp_oauth;
+pub mod model_pad_store;
 pub mod pi_credential_store;
 pub mod portable_config;
 pub mod portable_watch;
 pub mod profile;
 pub mod schedule_store;
 pub mod secret_map;
+pub mod skills_discovery;
 pub mod usage_store;
 
 pub use config_dir::{aiden_config_dir, ConfigDirError, AIDEN_CONFIG_DIR_ENV, AIDEN_DIR_NAME};
