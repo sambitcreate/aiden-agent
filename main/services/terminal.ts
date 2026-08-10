@@ -4,6 +4,7 @@
 
 import * as path from "path";
 import * as fs from "fs/promises";
+import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
@@ -40,6 +41,16 @@ interface TerminalSession extends TerminalSessionInfo {
 export interface TerminalServiceOptions {
   prepareSpawnHelper?: () => Promise<void>;
   spawnPty?: typeof spawn;
+  /**
+   * Ordered shell candidates. The first that exists and is executable wins.
+   * Exposed for tests; production resolves `$SHELL` then the macOS defaults.
+   */
+  shellCandidates?: () => string[];
+  /**
+   * Returns the `spawn-helper` paths node-pty will use. Exposed for tests so
+   * the chmod/verify path can be exercised without touching node_modules.
+   */
+  spawnHelperPaths?: () => Promise<string[]>;
 }
 
 function terminalId(): string {
@@ -51,9 +62,41 @@ function clamp(value: unknown, min: number, max: number, fallback: number): numb
   return Number.isFinite(numeric) ? Math.min(max, Math.max(min, Math.round(numeric))) : fallback;
 }
 
-function terminalShell(): string {
+/**
+ * Ordered candidate shells. `$SHELL` is honored first when it is absolute
+ * (Terminal.app and friends set it to the user's default), then the macOS
+ * default (`/bin/zsh`), then the POSIX fallbacks. The spawn-helper execs the
+ * shell via `execvp`, so every candidate must be verified executable before
+ * being handed to node-pty: a stale `$SHELL` pointing at a removed Homebrew
+ * install would otherwise surface as an opaque `posix_spawnp failed.`.
+ */
+function defaultShellCandidates(): string[] {
+  const candidates: string[] = [];
   const shell = process.env.SHELL;
-  return shell && path.isAbsolute(shell) ? shell : "/bin/zsh";
+  if (shell && path.isAbsolute(shell)) candidates.push(shell);
+  candidates.push("/bin/zsh", "/bin/bash", "/bin/sh");
+  // De-duplicate while preserving order (e.g. SHELL=/bin/zsh).
+  return [...new Set(candidates)];
+}
+
+function isExecutable(filePath: string): boolean {
+  try {
+    accessSync(filePath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveShell(candidates: string[]): Promise<string> {
+  for (const candidate of candidates) {
+    if (isExecutable(candidate)) return candidate;
+  }
+  throw new Error(
+    `No executable shell found on this Mac (checked ${candidates
+      .map((candidate) => JSON.stringify(candidate))
+      .join(", ")}). Set $SHELL to an installed shell, or reinstall macOS.`,
+  );
 }
 
 export class TerminalService {
@@ -93,7 +136,8 @@ export class TerminalService {
       );
     }
     const id = terminalId();
-    const pty = (this.options.spawnPty ?? spawn)(terminalShell(), [], {
+    const shell = await resolveShell((this.options.shellCandidates ?? defaultShellCandidates)());
+    const pty = (this.options.spawnPty ?? spawn)(shell, [], {
       name: "xterm-256color",
       cols: 120,
       rows: 30,
@@ -248,26 +292,87 @@ export class TerminalService {
   }
 
   // node-pty's macOS helper can be restored without its execute bit by npm's
-  // prebuilt archive. T3 Code guards this same boundary before opening a PTY.
+  // prebuilt archive, and `posix_spawn` of a non-executable file is exactly
+  // what surfaces to users as `posix_spawnp failed.`. Guard every helper that
+  // node-pty may load: chmod if needed, then verify (never assume). A failure
+  // here must be descriptive so the user can fix it, not opaque.
   private ensureSpawnHelperExecutable(): Promise<void> {
     if (this.options.prepareSpawnHelper) return this.options.prepareSpawnHelper();
+    const resolveHelpers = this.options.spawnHelperPaths ?? defaultSpawnHelperPaths;
     this.spawnHelperReady ??= (async () => {
-      const require = createRequire(import.meta.url);
-      const packageDir = path.dirname(require.resolve("node-pty/package.json"));
-      const helper = path.join(
-        packageDir,
-        "prebuilds",
-        `${process.platform}-${process.arch}`,
-        "spawn-helper",
-      );
-      try {
-        await fs.chmod(helper, 0o755);
-      } catch {
-        // Some package layouts do not ship a separate helper; node-pty then
-        // uses its own fallback path, so this stays a best-effort preparation.
-      }
+      const helpers = await resolveHelpers();
+      await Promise.all(helpers.map((helper) => ensureHelperExecutable(helper)));
     })();
     return this.spawnHelperReady;
+  }
+}
+
+/**
+ * Resolve every `spawn-helper` node-pty may load on this machine.
+ *
+ * node-pty 1.1.0 loads the helper from `prebuilds/<platform>-<arch>/spawn-helper`
+ * via `utils.loadNativeModule`, and in a packaged Electron app the same file
+ * lives under `app.asar.unpacked`. We resolve from `node-pty/package.json` and
+ * enumerate every `prebuilds/*` directory so a wrong-arch guess, a Rosetta run,
+ * or an extra prebuild still gets fixed up.
+ */
+async function defaultSpawnHelperPaths(): Promise<string[]> {
+  const require = createRequire(import.meta.url);
+  let packageDir: string;
+  try {
+    packageDir = path.dirname(require.resolve("node-pty/package.json"));
+  } catch {
+    // Without node-pty resolvable there is no helper to fix; node-pty's own
+    // spawn will surface the underlying error.
+    return [];
+  }
+  const prebuildsDir = path.join(packageDir, "prebuilds");
+  let entries: string[];
+  try {
+    entries = await fs.readdir(prebuildsDir);
+  } catch {
+    return [];
+  }
+  const helpers: string[] = [];
+  for (const entry of entries) {
+    helpers.push(path.join(prebuildsDir, entry, "spawn-helper"));
+    // Packaged apps unpack node-pty to app.asar.unpacked; mirror node-pty's
+    // own helperPath rewrite so the on-disk copy there is fixed too.
+    if (packageDir.includes("app.asar")) {
+      helpers.push(
+        path.join(prebuildsDir, entry, "spawn-helper").replace("app.asar", "app.asar.unpacked"),
+      );
+    }
+  }
+  return helpers;
+}
+
+async function ensureHelperExecutable(helper: string): Promise<void> {
+  let info;
+  try {
+    info = await fs.stat(helper);
+  } catch {
+    return; // This prebuild dir has no helper; node-pty picks another path.
+  }
+  if (!info.isFile()) return;
+  if ((info.mode & 0o111) === 0) {
+    try {
+      await fs.chmod(helper, 0o755);
+    } catch (error) {
+      throw new Error(
+        `Aiden could not make node-pty's spawn-helper executable (${helper}): ${
+          error instanceof Error ? error.message : String(error)
+        }. Run "chmod 755 ${helper}" or reinstall dependencies.`,
+      );
+    }
+  }
+  // Verify, never assume: a read-only packaged copy or a permission loss
+  // would otherwise leave the terminal broken with an opaque error.
+  const after = await fs.stat(helper);
+  if ((after.mode & 0o111) === 0) {
+    throw new Error(
+      `node-pty's spawn-helper is still not executable after chmod (${helper}). Run "chmod 755 ${helper}" or reinstall dependencies.`,
+    );
   }
 }
 
