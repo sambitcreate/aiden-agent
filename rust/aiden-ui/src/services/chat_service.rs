@@ -11,14 +11,16 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiden_core::appearance::{create_default_appearance_config, AppearanceConfig, Mode};
+use aiden_computer_use::FoundationModelsCancellationToken;
+use aiden_core::appearance::{AppearanceConfig, Mode};
+use aiden_core::chat_title::FoundationModelsConnectionStatus;
 use aiden_core::chat_title::{
-    build_chat_title_prompt, can_replace_generated_chat_title, sanitize_generated_chat_title,
-    ChatTitleInput,
+    build_chat_title_prompt, can_replace_generated_chat_title, resolve_chat_title_route,
+    sanitize_generated_chat_title, ChatTitleInput, ChatTitleProviderId, ChatTitleRoute,
 };
 use aiden_core::{
     meta_of, Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline, Message, UserContent,
@@ -29,7 +31,10 @@ use aiden_data::chat_store::{
 };
 use aiden_data::now_millis;
 use aiden_data::portable_config::{Workspace, WorkspacePermission};
-use aiden_data::usage_store::{UsageRequestRecord, UsageRequestStatus};
+use aiden_data::usage_store::{
+    UsageCostStatus, UsageRequestRecord, UsageRequestSource, UsageRequestStatus,
+};
+use aiden_mac::appearance::AppearanceEvent;
 use aiden_providers::catalog;
 use aiden_providers::live_discovery::{self, DiscoveryOptions, RuntimeKind};
 use aiden_providers::{StreamOptions, StreamRequest};
@@ -40,13 +45,23 @@ use tokio::sync::mpsc;
 
 use crate::services::appearance::{
     appearance_from_settings, appearance_to_settings, apply_appearance, resolve_scheme,
-    SETTINGS_APPEARANCE_KEY,
+    AidenSystemAccessibility, SETTINGS_APPEARANCE_KEY,
+};
+use crate::services::appearance_coordinator::{
+    AppearanceCoordinator, AppearanceFailure, AppearanceOperationKind, AppearanceSaveState,
+    NativeAppearanceIntent,
 };
 use crate::services::mcp_tools::McpStreamContext;
-use crate::services::provider_kit::{
-    chat_history_to_messages, drive_stream, enrich_provider, load_capabilities, resolve_api_key,
-    ConfiguredProvider, ModelSelection, StreamMsg, TurnSnapshot,
+use crate::services::native_appearance::{
+    NativeAppearance, NativeBootRestore, PreparedNativeAppearance,
 };
+use crate::services::provider_availability::require_available_selection;
+use crate::services::provider_kit::{
+    chat_history_to_messages, configured_codex_provider, drive_stream, enrich_provider,
+    load_capabilities, resolve_api_key, ConfiguredProvider, ModelSelection, StreamMsg,
+    TurnSnapshot,
+};
+use crate::services::skill_tools::{stream_context_for_mode, SkillRuntimeMode};
 use crate::services::stores::Stores;
 use crate::services::stream::{chat_usage_record, message_content};
 
@@ -60,12 +75,154 @@ const BOOT_DISCOVERY_TOTAL_TIMEOUT_MS: u64 = 5_000;
 /// Tool-free system prompt for the background first-turn title request.
 const TITLE_SYSTEM_PROMPT: &str =
     "You are a helpful assistant that summarizes chat conversations into short, concise titles.";
+const TITLE_REQUEST_TIMEOUT_MS: u64 = 15_000;
+
+fn configured_title_provider(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> ChatTitleProviderId {
+    settings
+        .get("chatTitleProviderId")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ChatTitleProviderId::from_str)
+        .unwrap_or(ChatTitleProviderId::Automatic)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TitleExecution {
+    SeedOnly,
+    AppleFoundationModels,
+    ChatModel {
+        provider: Box<ConfiguredProvider>,
+        selection: ModelSelection,
+    },
+}
+
+fn resolve_title_execution(
+    policy: ChatTitleProviderId,
+    foundation_status: Option<&FoundationModelsConnectionStatus>,
+    providers: &[ConfiguredProvider],
+    selection: Option<&ModelSelection>,
+) -> TitleExecution {
+    match resolve_chat_title_route(policy, foundation_status) {
+        ChatTitleRoute::SeedOnly => TitleExecution::SeedOnly,
+        ChatTitleRoute::AppleFoundationModels => TitleExecution::AppleFoundationModels,
+        ChatTitleRoute::ChatModel => {
+            let Some(selection) = selection else {
+                return TitleExecution::SeedOnly;
+            };
+            let Ok(provider) = require_available_selection(providers, selection) else {
+                return TitleExecution::SeedOnly;
+            };
+            if provider.needs_key && !provider.has_key {
+                return TitleExecution::SeedOnly;
+            }
+            TitleExecution::ChatModel {
+                provider: Box::new(provider),
+                selection: selection.clone(),
+            }
+        }
+    }
+}
+
+fn title_request_status(cancelled: bool, succeeded: bool) -> UsageRequestStatus {
+    if cancelled {
+        UsageRequestStatus::Cancelled
+    } else if succeeded {
+        UsageRequestStatus::Completed
+    } else {
+        UsageRequestStatus::Failed
+    }
+}
+
+fn title_error_is_timeout(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("timeout") || message.contains("timed out")
+}
+
+fn codex_status_refresh_required(provider_id: Option<&str>) -> bool {
+    provider_id == Some(aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID)
+}
+
+fn foundation_title_result_status(
+    cancel: &FoundationModelsCancellationToken,
+    result: &Result<String, aiden_computer_use::FoundationModelsConnectionError>,
+) -> UsageRequestStatus {
+    if result
+        .as_ref()
+        .is_err_and(|error| title_error_is_timeout(&error.code))
+    {
+        cancel.cancel();
+    }
+    title_request_status(cancel.is_cancelled(), result.is_ok())
+}
+
+fn chat_title_stream_error_status(
+    cancel: &FoundationModelsCancellationToken,
+    error: &aiden_providers::ProviderError,
+) -> UsageRequestStatus {
+    if title_error_is_timeout(&error.to_string()) {
+        cancel.cancel();
+        UsageRequestStatus::Cancelled
+    } else {
+        UsageRequestStatus::Failed
+    }
+}
+
+fn title_usage_record(
+    provider_id: &str,
+    provider_label: &str,
+    model_id: &str,
+    status: UsageRequestStatus,
+    local: bool,
+    usage: Option<&aiden_core::Usage>,
+) -> UsageRequestRecord {
+    if let Some(usage) = usage {
+        let mut record = chat_usage_record(
+            usage,
+            provider_id,
+            provider_label,
+            model_id,
+            model_id,
+            local,
+            status,
+            now_millis(),
+        );
+        record.source = UsageRequestSource::ChatTitle;
+        return record;
+    }
+    UsageRequestRecord {
+        timestamp: None,
+        source: UsageRequestSource::ChatTitle,
+        provider_id: provider_id.to_string(),
+        provider_label: provider_label.to_string(),
+        model_id: model_id.to_string(),
+        model_label: model_id.to_string(),
+        local,
+        status,
+        tokens: None,
+        cost_status: if local {
+            UsageCostStatus::NotApplicable
+        } else {
+            UsageCostStatus::Unavailable
+        },
+        cost_usd: None,
+    }
+}
+
+fn cancel_title_tasks(cancellations: &HashMap<String, (u64, FoundationModelsCancellationToken)>) {
+    for (_, cancel) in cancellations.values() {
+        cancel.cancel();
+    }
+}
 
 /// Live state of one generation (one assistant turn).
 #[derive(Debug, Clone)]
 pub struct GenerationState {
     pub chat_id: String,
     pub counter: u64,
+    /// Immutable provider identity captured when this request started. This
+    /// must not be inferred from the mutable picker selection at settlement.
+    pub provider_id: String,
     pub text: String,
     pub thinking: String,
     pub thinking_active: bool,
@@ -110,6 +267,15 @@ pub struct ChatService {
     pub active_chat: Option<Chat>,
     pub active_error: Option<String>,
     pub appearance: AppearanceConfig,
+    appearance_coordinator: AppearanceCoordinator,
+    appearance_write_revision: Arc<AtomicU64>,
+    appearance_debounce_revision: Arc<AtomicU64>,
+    native_appearance: NativeAppearance,
+    native_boot_restore: Option<NativeBootRestore>,
+    system_high_contrast: bool,
+    system_reduced_motion: bool,
+    native_observer_started: bool,
+    native_poll_started: bool,
     /// Generation for the *active* chat (only one stream at a time).
     pub generation: Option<GenerationState>,
     /// Per-chat intent counters: incrementing invalidates in-flight streams.
@@ -130,11 +296,20 @@ pub struct ChatService {
     /// aborts the provider stream (the token is replaced per generation, so a
     /// stale flag never leaks into the next turn).
     cancel_token: Option<Arc<AtomicBool>>,
+    title_revision: u64,
+    title_cancellations: HashMap<String, (u64, FoundationModelsCancellationToken)>,
 }
 
 impl ChatService {
-    pub fn new(stores: Stores, cx: &mut Context<Self>) -> Self {
-        let appearance = create_default_appearance_config();
+    pub fn new(
+        stores: Stores,
+        initial_appearance: AppearanceConfig,
+        prepared_native: PreparedNativeAppearance,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let appearance = initial_appearance;
+        let initial_effective = prepared_accessibility(prepared_native.restored);
+        let appearance_write_revision = stores.appearance_intent_revision.clone();
         let _ = cx;
         Self {
             stores,
@@ -146,7 +321,16 @@ impl ChatService {
             active_chat_id: None,
             active_chat: None,
             active_error: None,
-            appearance,
+            appearance: appearance.clone(),
+            appearance_coordinator: AppearanceCoordinator::new(appearance),
+            appearance_write_revision,
+            appearance_debounce_revision: Arc::new(AtomicU64::new(0)),
+            native_appearance: prepared_native.native,
+            native_boot_restore: prepared_native.restored,
+            system_high_contrast: initial_effective.high_contrast,
+            system_reduced_motion: initial_effective.reduce_motion,
+            native_observer_started: false,
+            native_poll_started: false,
             generation: None,
             generations: HashMap::new(),
             booted: false,
@@ -155,6 +339,8 @@ impl ChatService {
             _stream_task: None,
             _driver: None,
             cancel_token: None,
+            title_revision: 0,
+            title_cancellations: HashMap::new(),
         }
     }
 
@@ -173,7 +359,7 @@ impl ChatService {
                 .background_spawn(async move {
                     let chats = stores.chat.list(None).unwrap_or_default();
                     let capabilities = load_capabilities();
-                    let providers = stores
+                    let mut providers: Vec<ConfiguredProvider> = stores
                         .config
                         .list_providers()
                         .map(|list| {
@@ -186,6 +372,9 @@ impl ChatService {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    if let Some(codex) = configured_codex_provider(stores.codex_auth.as_ref()) {
+                        providers.push(codex);
+                    }
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let appearance = appearance_from_settings(&settings);
                     let workspaces = stores.config.list_workspaces().unwrap_or_default();
@@ -203,7 +392,12 @@ impl ChatService {
                 this.chat_list = chats;
                 this.providers = providers;
                 this.capabilities = capabilities;
-                this.appearance = appearance;
+                // The launch path already synchronously loaded and painted
+                // this value. Re-reading it here only covers an external edit
+                // made while the catalog was loading.
+                this.appearance = appearance.clone();
+                this.appearance_coordinator = AppearanceCoordinator::new(appearance);
+                this.restore_native_appearance(cx);
                 this.selection = this.resolve_selection(&settings);
                 this.workspaces = workspaces;
                 // The most recently used workspace is the active one (the TS
@@ -228,7 +422,7 @@ impl ChatService {
     ) -> Option<ModelSelection> {
         if let Some(value) = settings.get(MODEL_SELECTION_KEY) {
             if let Some(selection) = ModelSelection::from_settings(value) {
-                if self.provider_offers(&selection) {
+                if require_available_selection(&self.providers, &selection).is_ok() {
                     return Some(selection);
                 }
             }
@@ -242,12 +436,6 @@ impl ChatService {
             provider_id: provider.id.clone(),
             model,
         })
-    }
-
-    fn provider_offers(&self, selection: &ModelSelection) -> bool {
-        self.providers
-            .iter()
-            .any(|provider| provider.id == selection.provider_id)
     }
 
     /// The provider currently selected (or whose model is selected).
@@ -266,7 +454,7 @@ impl ChatService {
         cx.spawn(async move |this, cx| {
             let (providers, settings) = cx
                 .background_spawn(async move {
-                    let providers = stores
+                    let mut providers: Vec<ConfiguredProvider> = stores
                         .config
                         .list_providers()
                         .map(|list| {
@@ -279,6 +467,9 @@ impl ChatService {
                                 .collect()
                         })
                         .unwrap_or_default();
+                    if let Some(codex) = configured_codex_provider(stores.codex_auth.as_ref()) {
+                        providers.push(codex);
+                    }
                     let settings = stores.config.get_settings().unwrap_or_default();
                     (providers, settings)
                 })
@@ -701,28 +892,383 @@ impl ChatService {
         if self.appearance.mode == mode {
             return;
         }
-        self.appearance.mode = mode;
+        let mut appearance = self.appearance.clone();
+        appearance.mode = mode;
+        self.set_appearance_config(appearance, true, cx);
+    }
+
+    /// The only live appearance mutation path. Settings and command surfaces
+    /// both route here so preview, GPUI theme application, persistence,
+    /// failure, and stale-completion fencing share one coordinator.
+    pub fn set_appearance_config(
+        &mut self,
+        appearance: AppearanceConfig,
+        apply_native: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.appearance == appearance {
+            return;
+        }
+        let native_changed = NativeAppearanceIntent::from(&self.appearance)
+            != NativeAppearanceIntent::from(&appearance);
+        self.appearance_coordinator.preview(appearance.clone());
+        // One process-wide appearance intent fences every store publication,
+        // including previews that later fail native application.
+        self.next_appearance_intent();
+        self.appearance = appearance;
+        if self.native_appearance.is_supported() && (apply_native || native_changed) {
+            let operation = self.appearance_coordinator.begin_native_apply();
+            self.next_appearance_intent();
+            match self
+                .native_appearance
+                .apply(operation.intent.mode, operation.intent.dock_icon)
+            {
+                Ok(()) => {
+                    self.appearance_coordinator
+                        .complete_native_apply(operation.revision, Ok(()));
+                    self.apply_appearance(cx);
+                }
+                Err(message) => {
+                    self.appearance_coordinator.complete_native_apply(
+                        operation.revision,
+                        Err(AppearanceFailure::retryable(
+                            AppearanceOperationKind::NativeApply,
+                            message,
+                        )),
+                    );
+                    self.appearance = self.appearance_coordinator.effective().clone();
+                    self.apply_appearance(cx);
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        // Most preferences have no native side effect, but every safe
+        // mutation must still update the live GPUI projection immediately.
         self.apply_appearance(cx);
-        self.persist_appearance(cx);
+        self.schedule_appearance_persist(cx);
         cx.notify();
     }
 
-    pub fn apply_appearance(&self, cx: &mut Context<Self>) {
-        let scheme = resolve_scheme(self.appearance.mode, cx.window_appearance());
-        apply_appearance(cx, &self.appearance, scheme);
+    pub fn appearance_save_failure(&self) -> Option<&str> {
+        match self.appearance_coordinator.save_state() {
+            AppearanceSaveState::Failed { failure, .. } => Some(failure.message.as_str()),
+            _ => None,
+        }
     }
 
-    fn persist_appearance(&self, cx: &mut Context<Self>) {
+    pub fn appearance_native_failure(&self) -> Option<&str> {
+        match self.appearance_coordinator.native_state() {
+            crate::services::appearance_coordinator::NativeAppearanceState::Failed {
+                failure,
+                ..
+            } => Some(&failure.message),
+            _ => None,
+        }
+    }
+
+    pub fn appearance_for_editing(&self) -> &AppearanceConfig {
+        self.appearance_coordinator.editing()
+    }
+
+    pub fn native_appearance_supported(&self) -> bool {
+        self.native_appearance.is_supported()
+    }
+
+    /// The current OS accessibility snapshot, kept alongside the persisted
+    /// preference so secondary windows can make the same System decision.
+    pub fn system_reduced_motion(&self) -> bool {
+        self.system_reduced_motion
+    }
+
+    pub fn retry_native_appearance(&mut self, cx: &mut Context<Self>) {
+        let Some(operation) = self.appearance_coordinator.retry_native_apply() else {
+            return;
+        };
+        self.next_appearance_intent();
+        match self
+            .native_appearance
+            .apply(operation.intent.mode, operation.intent.dock_icon)
+        {
+            Ok(()) => {
+                self.appearance_coordinator
+                    .complete_native_apply(operation.revision, Ok(()));
+                self.appearance = self.appearance_coordinator.effective().clone();
+                self.apply_appearance(cx);
+                self.schedule_appearance_persist(cx);
+            }
+            Err(message) => {
+                self.appearance_coordinator.complete_native_apply(
+                    operation.revision,
+                    Err(AppearanceFailure::retryable(
+                        AppearanceOperationKind::NativeApply,
+                        message,
+                    )),
+                );
+                self.appearance = self.appearance_coordinator.effective().clone();
+                self.apply_appearance(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn retry_appearance_save(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.appearance_coordinator.save_state(),
+            AppearanceSaveState::Failed { failure, .. } if failure.retryable
+        ) {
+            self.persist_appearance(cx);
+            cx.notify();
+        }
+    }
+
+    /// Flush the newest preview immediately. The app lifecycle calls this at
+    /// shutdown; settings can use it before leaving the surface.
+    pub fn flush_appearance_save(&mut self, cx: &mut Context<Self>) {
+        self.appearance_debounce_revision
+            .fetch_add(1, Ordering::AcqRel);
+        if !matches!(
+            self.appearance_coordinator.save_state(),
+            AppearanceSaveState::Saving(_)
+        ) {
+            self.persist_appearance(cx);
+        }
+    }
+
+    /// Last-chance quit barrier. `DataStore::set_settings` is its atomic local
+    /// write, so doing it synchronously here ensures the current appearance
+    /// intent is durably published before GPUI tears down its executors.
+    /// Existing async writes are fenced first and cannot publish afterward.
+    pub fn flush_appearance_save_before_quit(&mut self) {
+        self.next_appearance_intent();
+        let mut patch = serde_json::Map::new();
+        patch.insert(
+            SETTINGS_APPEARANCE_KEY.to_string(),
+            appearance_to_settings(&self.appearance),
+        );
+        if let Err(error) = self.stores.config.set_settings(&patch, &|| true) {
+            tracing::error!("could not flush Appearance before quit: {error}");
+        }
+    }
+
+    fn next_appearance_intent(&self) -> u64 {
+        claim_appearance_intent(&self.appearance_write_revision)
+    }
+
+    pub fn apply_appearance(&self, cx: &mut Context<Self>) {
+        cx.set_global(AidenSystemAccessibility {
+            high_contrast: self.system_high_contrast,
+            reduced_motion: self.system_reduced_motion,
+        });
+        let scheme = resolve_scheme(self.appearance.mode, cx.window_appearance());
+        let high_contrast = crate::services::appearance::current_system_high_contrast(cx);
+        apply_appearance(
+            cx,
+            &self.appearance,
+            scheme,
+            high_contrast,
+            self.system_reduced_motion,
+        );
+    }
+
+    fn restore_native_appearance(&mut self, cx: &mut Context<Self>) {
+        if self.native_observer_started || !self.native_appearance.is_supported() {
+            return;
+        }
+        if let Some(restored) = self.native_boot_restore.take() {
+            self.native_observer_started = true;
+            let _ = self.native_appearance.ensure_observation();
+            if self.appearance.dock_icon != restored.dock_icon {
+                self.appearance.dock_icon = restored.dock_icon;
+                self.appearance_coordinator = AppearanceCoordinator::new(self.appearance.clone());
+                self.schedule_appearance_persist(cx);
+            }
+            self.system_high_contrast = restored.effective.high_contrast;
+            self.system_reduced_motion = restored.effective.reduce_motion;
+            self.apply_appearance(cx);
+            self.start_native_appearance_poll(cx);
+            return;
+        }
+        match self
+            .native_appearance
+            .restore_at_boot(self.appearance.mode, self.appearance.dock_icon)
+        {
+            Ok(restored) => {
+                self.native_observer_started = true;
+                // Observation is deliberately independent from restore. A
+                // registration failure leaves the restored native state valid
+                // and `poll_native_appearance_events` retries later.
+                let _ = self.native_appearance.ensure_observation();
+                if self.appearance.dock_icon != restored.dock_icon {
+                    // The native boundary fell back to the stable Aiden icon.
+                    // Persist the confirmed selection so Settings never shows
+                    // a Dock icon that the process could not actually apply.
+                    self.appearance.dock_icon = restored.dock_icon;
+                    self.appearance_coordinator =
+                        AppearanceCoordinator::new(self.appearance.clone());
+                    self.schedule_appearance_persist(cx);
+                }
+                self.system_high_contrast = restored.effective.high_contrast;
+                self.system_reduced_motion = restored.effective.reduce_motion;
+                self.apply_appearance(cx);
+            }
+            Err(message) => {
+                let operation = self.appearance_coordinator.begin_native_apply();
+                self.appearance_coordinator.complete_native_apply(
+                    operation.revision,
+                    Err(AppearanceFailure::retryable(
+                        AppearanceOperationKind::NativeApply,
+                        message,
+                    )),
+                );
+                self.appearance = self.appearance_coordinator.effective().clone();
+            }
+        }
+        // Accessibility notifications originate in AppKit. Polling the small
+        // channel on GPUI's foreground executor keeps entity mutation and
+        // theme application main-thread confined; the weak entity ends this
+        // task when the app shuts down.
+        self.start_native_appearance_poll(cx);
+    }
+
+    fn start_native_appearance_poll(&mut self, cx: &mut Context<Self>) {
+        if self.native_poll_started {
+            return;
+        }
+        self.native_poll_started = true;
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+            if this
+                .update(cx, |this, cx| this.poll_native_appearance_events(cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    pub fn poll_native_appearance_events(&mut self, cx: &mut Context<Self>) {
+        if native_restore_retry_needed(
+            self.native_observer_started,
+            self.native_appearance.is_supported(),
+        ) {
+            if let Ok(restored) = self
+                .native_appearance
+                .restore_at_boot(self.appearance.mode, self.appearance.dock_icon)
+            {
+                self.native_observer_started = true;
+                let recovery = self.appearance_coordinator.begin_native_apply();
+                self.appearance_coordinator
+                    .complete_native_apply(recovery.revision, Ok(()));
+                self.appearance = self.appearance_coordinator.effective().clone();
+                self.system_high_contrast = restored.effective.high_contrast;
+                self.system_reduced_motion = restored.effective.reduce_motion;
+                if self.appearance.dock_icon != restored.dock_icon {
+                    self.appearance.dock_icon = restored.dock_icon;
+                    self.appearance_coordinator =
+                        AppearanceCoordinator::new(self.appearance.clone());
+                    self.schedule_appearance_persist(cx);
+                }
+                self.apply_appearance(cx);
+                cx.notify();
+            }
+        }
+        if self.native_observer_started {
+            let _ = self.native_appearance.ensure_observation();
+        }
+        let events = self.native_appearance.take_events();
+        let mut changed = false;
+        for event in events {
+            match event {
+                AppearanceEvent::EffectiveChanged(effective) => {
+                    changed |= self.system_high_contrast != effective.high_contrast
+                        || self.system_reduced_motion != effective.reduce_motion;
+                    self.system_high_contrast = effective.high_contrast;
+                    self.system_reduced_motion = effective.reduce_motion;
+                }
+                AppearanceEvent::AccessibilityChanged(options) => {
+                    changed |= self.system_high_contrast != options.high_contrast
+                        || self.system_reduced_motion != options.reduce_motion;
+                    self.system_high_contrast = options.high_contrast;
+                    self.system_reduced_motion = options.reduce_motion;
+                }
+            }
+        }
+        if changed {
+            self.apply_appearance(cx);
+            cx.notify();
+        }
+    }
+
+    fn persist_appearance(&mut self, cx: &mut Context<Self>) {
         let stores = self.stores.clone();
-        let value = appearance_to_settings(&self.appearance);
-        cx.spawn(async move |_, cx| {
-            let _ = cx
+        let operation = self.appearance_coordinator.begin_save();
+        let revision = operation.revision;
+        let publication = self.next_appearance_intent();
+        let current_revision = self.appearance_write_revision.clone();
+        let value = appearance_to_settings(&operation.appearance);
+        cx.spawn(async move |this, cx| {
+            let result = cx
                 .background_spawn(async move {
                     let mut patch = serde_json::Map::new();
                     patch.insert(SETTINGS_APPEARANCE_KEY.to_string(), value);
-                    let _ = stores.config.set_settings(&patch, &|| true);
+                    stores
+                        .config
+                        .set_settings(&patch, &|| {
+                            appearance_intent_is_current(&current_revision, publication)
+                        })
+                        .map(|_| ())
                 })
                 .await;
+            this.update(cx, |this, cx| {
+                let result = result.map_err(|error| {
+                    AppearanceFailure::retryable(
+                        AppearanceOperationKind::Save,
+                        format!("Aiden couldn’t save Appearance: {error}"),
+                    )
+                });
+                let disposition = this.appearance_coordinator.complete_save(revision, result);
+                this.appearance = this.appearance_coordinator.effective().clone();
+                // A user may edit while the previous JSON write is in flight.
+                // Once that write settles, publish the newest retained intent
+                // rather than leaving it merely Dirty until another gesture.
+                if disposition
+                    == crate::services::appearance_coordinator::CompletionDisposition::Applied
+                    && matches!(
+                        this.appearance_coordinator.save_state(),
+                        AppearanceSaveState::Dirty
+                    )
+                {
+                    this.schedule_appearance_persist(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn schedule_appearance_persist(&mut self, cx: &mut Context<Self>) {
+        let scheduled = self
+            .appearance_debounce_revision
+            .fetch_add(1, Ordering::AcqRel)
+            + 1;
+        let revision = self.appearance_debounce_revision.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(220))
+                .await;
+            if revision.load(Ordering::Acquire) != scheduled {
+                return;
+            }
+            let _ = this.update(cx, |this, cx| {
+                if revision.load(Ordering::Acquire) == scheduled {
+                    this.persist_appearance(cx);
+                }
+            });
         })
         .detach();
     }
@@ -790,20 +1336,16 @@ impl ChatService {
         if enabled.is_empty() {
             return None;
         }
-        let keys = self.stores.keys.clone();
+        let authority = self.stores.mcp_mutation.clone();
+        let key_servers = enabled.clone();
         Some(McpStreamContext {
             manager: self.stores.mcp.clone(),
             servers: enabled,
             preset_key: Some(Arc::new(move |server_id| {
-                keys.get(&aiden_mcp::preset_secret_id(server_id))
-                    .ok()
-                    .flatten()
+                let server = key_servers.iter().find(|server| server.id == server_id)?;
+                authority.bound_preset_key(server).ok().flatten()
             })),
         })
-    }
-
-    pub fn send_message(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.send_message_with(text, Vec::new(), None, cx);
     }
 
     /// Send with attachments and optional edit target (rebranch).
@@ -823,10 +1365,13 @@ impl ChatService {
             cx.notify();
             return;
         };
-        let Some(provider) = self.selected_provider().cloned() else {
-            self.active_error = Some("The selected provider is no longer configured.".into());
-            cx.notify();
-            return;
+        let provider = match require_available_selection(&self.providers, &selection) {
+            Ok(provider) => provider,
+            Err(error) => {
+                self.active_error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
         };
         if provider.needs_key && !provider.has_key {
             self.active_error = Some(format!(
@@ -890,6 +1435,7 @@ impl ChatService {
         self.generation = Some(GenerationState {
             chat_id: chat_id.clone(),
             counter,
+            provider_id: selection.provider_id.clone(),
             text: String::new(),
             thinking: String::new(),
             thinking_active: false,
@@ -944,6 +1490,7 @@ impl ChatService {
         self.generation = Some(GenerationState {
             chat_id: chat_id.clone(),
             counter,
+            provider_id: selection.provider_id.clone(),
             text: String::new(),
             thinking: String::new(),
             thinking_active: false,
@@ -974,6 +1521,18 @@ impl ChatService {
             messages,
             catalog: self.capabilities.clone(),
             mcp: self.mcp_context(),
+            skills: stream_context_for_mode(
+                SkillRuntimeMode::Chat,
+                self.stores.config.clone(),
+                self.workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.folder_path.as_deref())
+                    .map(PathBuf::from),
+                self.workspace
+                    .as_ref()
+                    .map(|workspace| workspace.permission)
+                    .unwrap_or(WorkspacePermission::None),
+            ),
             // Grounds the coding system prompt (folder path, permission
             // posture, tool list, safety language).
             workspace: self.workspace.clone(),
@@ -985,11 +1544,12 @@ impl ChatService {
         self.cancel_token = Some(cancel.clone());
 
         // Keychain lookup happens inside the tokio driver (background thread).
-        let keys = self.stores.keys.clone();
+        let config = self.stores.config.clone();
+        let codex_auth = self.stores.codex_auth.clone();
         let (tx, rx) = mpsc::unbounded_channel::<StreamMsg>();
         let driver = Tokio::spawn(cx, async move {
-            let api_key = resolve_api_key(&keys, &snapshot.provider);
-            drive_stream(snapshot, api_key, cancel, tx).await;
+            let api_key = resolve_api_key(&config, &snapshot.provider);
+            drive_stream(snapshot, api_key, codex_auth, cancel, tx).await;
         });
 
         let watcher = cx.spawn(async move |this, cx| -> anyhow::Result<()> {
@@ -1028,8 +1588,13 @@ impl ChatService {
         let Some(selection) = self.selection.clone() else {
             return;
         };
-        let Some(provider) = self.selected_provider().cloned() else {
-            return;
+        let provider = match require_available_selection(&self.providers, &selection) {
+            Ok(provider) => provider,
+            Err(error) => {
+                self.active_error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
         };
         if provider.needs_key && !provider.has_key {
             return;
@@ -1232,6 +1797,11 @@ impl ChatService {
                 partial_thinking,
                 usage,
             } => {
+                let codex_needs_attention = codex_status_refresh_required(
+                    self.generation
+                        .as_ref()
+                        .map(|generation| generation.provider_id.as_str()),
+                );
                 let model = self
                     .generation
                     .as_ref()
@@ -1264,6 +1834,9 @@ impl ChatService {
                     self.build_usage_record(&usage, UsageRequestStatus::Failed),
                     cx,
                 );
+                if codex_needs_attention {
+                    self.refresh_providers(cx);
+                }
                 cx.notify();
             }
             StreamMsg::Cancelled {
@@ -1347,18 +1920,19 @@ impl ChatService {
     /// unsanitizable response silently keeps the seed already applied on the
     /// first user message (the first ~50 chars fallback). A manual rename
     /// always wins — the store's CAS rename only replaces the untouched seed.
-    fn maybe_generate_first_turn_title(&self, chat_id: &str, cx: &mut Context<Self>) {
-        let Some(selection) = self.selection.clone() else {
-            return;
-        };
-        let Some(provider) = self.selected_provider().cloned() else {
-            return;
-        };
-        if provider.needs_key && !provider.has_key {
-            return;
+    fn maybe_generate_first_turn_title(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        self.title_revision = self.title_revision.wrapping_add(1);
+        let title_revision = self.title_revision;
+        let title_cancel = FoundationModelsCancellationToken::new();
+        if let Some((_, previous)) = self
+            .title_cancellations
+            .insert(chat_id.to_string(), (title_revision, title_cancel.clone()))
+        {
+            previous.cancel();
         }
+        let selection = self.selection.clone();
+        let providers = self.providers.clone();
         let stores = self.stores.clone();
-        let keys = self.stores.keys.clone();
         let chat_id = chat_id.to_string();
         // The background read/rename closure moves its own copy; the outer
         // `chat_id` stays for the foreground refresh below.
@@ -1392,53 +1966,157 @@ impl ChatService {
                         attachments: first_user.attachments.clone(),
                     };
                     let prompt = build_chat_title_prompt(&input);
-                    let api_key = resolve_api_key(&keys, &provider);
-                    let request = StreamRequest {
-                        provider_id: selection.provider_id.clone(),
-                        api: provider.api_family(),
-                        model: selection.model.clone(),
-                        base_url: provider.base_url.clone(),
-                        messages: vec![Message::User(UserMessage {
-                            content: UserContent::Text(prompt),
-                            timestamp: aiden_data::now_millis(),
-                        })],
-                        system_prompt: Some(TITLE_SYSTEM_PROMPT.to_string()),
-                        max_tokens: Some(32),
-                        ..Default::default()
+                    let settings = stores.config.get_settings().unwrap_or_default();
+                    let title_provider = configured_title_provider(&settings);
+                    let foundation_status = if title_provider == ChatTitleProviderId::ChatModel {
+                        None
+                    } else {
+                        stores.foundation_models.status(false).await
                     };
-                    let transport = provider.transport();
-                    let stream = transport.stream_simple(
-                        &request,
-                        &StreamOptions {
-                            api_key,
-                            timeout_ms: Some(30_000),
-                            ..Default::default()
-                        },
+                    let execution = resolve_title_execution(
+                        title_provider,
+                        foundation_status.as_ref(),
+                        &providers,
+                        selection.as_ref(),
                     );
-                    let Ok(mut stream) = stream else {
-                        return None;
-                    };
-                    let mut text = String::new();
-                    while let Some(event) = stream.next().await {
-                        match event {
-                            Ok(aiden_core::AssistantMessageEvent::TextDelta { delta, .. }) => {
-                                text.push_str(&delta);
+                    match execution {
+                        TitleExecution::SeedOnly => None,
+                        TitleExecution::AppleFoundationModels => {
+                            let result = tokio::time::timeout(
+                                Duration::from_millis(TITLE_REQUEST_TIMEOUT_MS),
+                                stores
+                                    .foundation_models
+                                    .generate_title(&prompt, Some(&title_cancel)),
+                            )
+                            .await;
+                            let result = match result {
+                                Ok(result) => result,
+                                Err(_) => {
+                                    title_cancel.cancel();
+                                    Err(aiden_computer_use::FoundationModelsConnectionError::retryable(
+                                        "timeout",
+                                        "Apple Foundation Models title generation timed out.",
+                                    ))
+                                }
+                            };
+                            let status =
+                                foundation_title_result_status(&title_cancel, &result);
+                            let _ = stores.usage.record(&title_usage_record(
+                                "apple-foundation-models",
+                                "Apple Foundation Models",
+                                "apple-foundation-model",
+                                status,
+                                true,
+                                None,
+                            ));
+                            let title = sanitize_generated_chat_title(&result.ok()?)?;
+                            stores
+                                .chat
+                                .replace_auto_title(&chat_id_for_read, &seed, &title)
+                                .ok()
+                                .flatten()
+                        }
+                        TitleExecution::ChatModel {
+                            provider,
+                            selection,
+                        } => {
+                            let api_key = resolve_api_key(&stores.config, &provider);
+                            let request = StreamRequest {
+                                provider_id: selection.provider_id.clone(),
+                                api: provider.api_family(),
+                                model: selection.model.clone(),
+                                base_url: provider.base_url.clone(),
+                                messages: vec![Message::User(UserMessage {
+                                    content: UserContent::Text(prompt),
+                                    timestamp: aiden_data::now_millis(),
+                                })],
+                                system_prompt: Some(TITLE_SYSTEM_PROMPT.to_string()),
+                                max_tokens: Some(32),
+                                ..Default::default()
+                            };
+                            let transport =
+                                provider.transport_with_codex_auth(stores.codex_auth.clone());
+                            let stream = transport.stream_simple(
+                                &request,
+                                &StreamOptions {
+                                    api_key,
+                                    timeout_ms: Some(TITLE_REQUEST_TIMEOUT_MS),
+                                    ..Default::default()
+                                },
+                            );
+                            let Ok(mut stream) = stream else {
+                                let _ = stores.usage.record(&title_usage_record(
+                                    &provider.id,
+                                    &provider.label,
+                                    &selection.model,
+                                    UsageRequestStatus::Failed,
+                                    false,
+                                    None,
+                                ));
+                                return None;
+                            };
+                            let mut text = String::new();
+                            let deadline = tokio::time::sleep(Duration::from_millis(
+                                TITLE_REQUEST_TIMEOUT_MS,
+                            ));
+                            tokio::pin!(deadline);
+                            let mut status = UsageRequestStatus::Failed;
+                            let mut completed_usage = None;
+                            loop {
+                                let event = tokio::select! {
+                                    () = title_cancel.cancelled() => {
+                                        status = UsageRequestStatus::Cancelled;
+                                        None
+                                    }
+                                    () = &mut deadline => {
+                                        title_cancel.cancel();
+                                        status = UsageRequestStatus::Cancelled;
+                                        None
+                                    }
+                                    event = stream.next() => event,
+                                };
+                                let Some(event) = event else { break; };
+                                match event {
+                                    Ok(aiden_core::AssistantMessageEvent::TextDelta {
+                                        delta,
+                                        ..
+                                    }) => {
+                                        text.push_str(&delta);
+                                    }
+                                    Ok(aiden_core::AssistantMessageEvent::Done {
+                                        message, ..
+                                    }) => {
+                                        completed_usage = Some(message.usage);
+                                        text = message_content(&message).0;
+                                        status = UsageRequestStatus::Completed;
+                                        break;
+                                    }
+                                    Ok(_) => break,
+                                    Err(error) => {
+                                        status = chat_title_stream_error_status(
+                                            &title_cancel,
+                                            &error,
+                                        );
+                                        break;
+                                    }
+                                }
                             }
-                            Ok(aiden_core::AssistantMessageEvent::Done { message, .. }) => {
-                                text = message_content(&message).0;
-                                break;
-                            }
-                            Ok(_) | Err(_) => break,
+                            let _ = stores.usage.record(&title_usage_record(
+                                &provider.id,
+                                &provider.label,
+                                &selection.model,
+                                status,
+                                false,
+                                completed_usage.as_ref(),
+                            ));
+                            let title = sanitize_generated_chat_title(&text)?;
+                            stores
+                                .chat
+                                .replace_auto_title(&chat_id_for_read, &seed, &title)
+                                .ok()
+                                .flatten()
                         }
                     }
-                    let title = sanitize_generated_chat_title(&text)?;
-                    // CAS rename: never overwrite a manual rename that landed
-                    // while the background request was in flight.
-                    stores
-                        .chat
-                        .replace_auto_title(&chat_id_for_read, &seed, &title)
-                        .ok()
-                        .flatten()
                 })
                 .await;
             if let Some(updated) = applied {
@@ -1451,6 +2129,16 @@ impl ChatService {
                 })
                 .ok();
             }
+            this.update(cx, |this, _| {
+                if this
+                    .title_cancellations
+                    .get(&chat_id)
+                    .is_some_and(|(revision, _)| *revision == title_revision)
+                {
+                    this.title_cancellations.remove(&chat_id);
+                }
+            })
+            .ok();
         })
         .detach();
     }
@@ -1472,6 +2160,16 @@ impl ChatService {
             }
             cx.notify();
         }
+    }
+
+    /// Explicit shutdown path used before the GPUI executor is torn down.
+    pub(crate) fn dispose(&mut self, cx: &mut Context<Self>) {
+        self.flush_appearance_save_before_quit();
+        if self.generation_active() {
+            self.stop_generation(cx);
+        }
+        cancel_title_tasks(&self.title_cancellations);
+        self.title_cancellations.clear();
     }
 
     // -----------------------------------------------------------------------
@@ -1594,6 +2292,33 @@ impl ChatService {
     }
 }
 
+fn prepared_accessibility(
+    restored: Option<NativeBootRestore>,
+) -> aiden_mac::appearance::EffectiveAppearance {
+    restored.map(|value| value.effective).unwrap_or_default()
+}
+
+fn native_restore_retry_needed(restored: bool, supported: bool) -> bool {
+    supported && !restored
+}
+
+fn claim_appearance_intent(sequence: &AtomicU64) -> u64 {
+    sequence.fetch_add(1, Ordering::AcqRel).saturating_add(1)
+}
+
+fn appearance_intent_is_current(sequence: &AtomicU64, token: u64) -> bool {
+    sequence.load(Ordering::Acquire) == token
+}
+
+impl Drop for ChatService {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.cancel_token {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        cancel_title_tasks(&self.title_cancellations);
+    }
+}
+
 /// The chat the sidebar selects after the active chat is deleted: the most
 /// recent remaining chat (the list is newest-updated first), or none when the
 /// list is now empty. Pure so the fallback behavior is unit-testable.
@@ -1641,6 +2366,219 @@ pub fn relative_time(updated_at: u64, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepared_accessibility_is_used_before_the_first_service_frame() {
+        let effective = aiden_mac::appearance::EffectiveAppearance {
+            dark: true,
+            high_contrast: true,
+            reduce_motion: true,
+        };
+        let restored = NativeBootRestore {
+            effective,
+            dock_icon: aiden_core::appearance::DockIcon::Aiden,
+        };
+
+        assert_eq!(prepared_accessibility(Some(restored)), effective);
+    }
+
+    #[test]
+    fn failed_boot_restore_remains_retryable_until_success() {
+        assert!(native_restore_retry_needed(false, true));
+        assert!(!native_restore_retry_needed(true, true));
+        assert!(!native_restore_retry_needed(false, false));
+    }
+
+    #[test]
+    fn delayed_old_window_save_cannot_publish_after_reopen_intent() {
+        let process_sequence = Arc::new(AtomicU64::new(0));
+        let old_window = process_sequence.clone();
+        let reopened_window = process_sequence.clone();
+        let old_save = claim_appearance_intent(&old_window);
+        let new_save = claim_appearance_intent(&reopened_window);
+
+        assert!(!appearance_intent_is_current(&old_window, old_save));
+        assert!(appearance_intent_is_current(&reopened_window, new_save));
+    }
+
+    fn title_test_provider() -> ConfiguredProvider {
+        ConfiguredProvider {
+            id: "provider".to_string(),
+            label: "Provider".to_string(),
+            kind: aiden_data::portable_config::ProviderKind::Openai,
+            base_url: "https://example.invalid".to_string(),
+            deployment: None,
+            models: vec!["model".to_string()],
+            default_model: None,
+            model_metadata: Default::default(),
+            catalog_models: Vec::new(),
+            needs_key: false,
+            has_key: false,
+        }
+    }
+
+    fn foundation_status(
+        state: aiden_core::chat_title::FoundationModelsConnectionState,
+    ) -> FoundationModelsConnectionStatus {
+        FoundationModelsConnectionStatus {
+            id: "apple-foundation-models".to_string(),
+            label: "Apple Foundation Models".to_string(),
+            state,
+            detail: "status".to_string(),
+            local: true,
+            title_only: true,
+            retryable: false,
+        }
+    }
+
+    #[test]
+    fn title_execution_truth_table_checks_chat_selection_only_for_chat_route() {
+        use aiden_core::chat_title::FoundationModelsConnectionState;
+
+        let ready = foundation_status(FoundationModelsConnectionState::Ready);
+        let unavailable = foundation_status(FoundationModelsConnectionState::Unavailable);
+        let providers = vec![title_test_provider()];
+        let selection = ModelSelection {
+            provider_id: "provider".to_string(),
+            model: "model".to_string(),
+        };
+
+        assert_eq!(
+            resolve_title_execution(ChatTitleProviderId::Automatic, Some(&ready), &[], None,),
+            TitleExecution::AppleFoundationModels
+        );
+        assert!(matches!(
+            resolve_title_execution(
+                ChatTitleProviderId::Automatic,
+                Some(&unavailable),
+                &providers,
+                Some(&selection),
+            ),
+            TitleExecution::ChatModel { .. }
+        ));
+        assert_eq!(
+            resolve_title_execution(
+                ChatTitleProviderId::Automatic,
+                Some(&unavailable),
+                &[],
+                None,
+            ),
+            TitleExecution::SeedOnly
+        );
+        assert_eq!(
+            resolve_title_execution(
+                ChatTitleProviderId::AppleFoundationModels,
+                Some(&unavailable),
+                &providers,
+                Some(&selection),
+            ),
+            TitleExecution::SeedOnly
+        );
+        assert!(matches!(
+            resolve_title_execution(
+                ChatTitleProviderId::ChatModel,
+                Some(&ready),
+                &providers,
+                Some(&selection),
+            ),
+            TitleExecution::ChatModel { .. }
+        ));
+    }
+
+    #[test]
+    fn title_task_disposal_cancels_every_owned_route_and_usage_keeps_title_source() {
+        let apple = FoundationModelsCancellationToken::new();
+        let chat = FoundationModelsCancellationToken::new();
+        let cancellations = HashMap::from([
+            ("apple".to_string(), (1, apple.clone())),
+            ("chat".to_string(), (2, chat.clone())),
+        ]);
+
+        cancel_title_tasks(&cancellations);
+
+        assert!(apple.is_cancelled());
+        assert!(chat.is_cancelled());
+        for status in [
+            UsageRequestStatus::Completed,
+            UsageRequestStatus::Failed,
+            UsageRequestStatus::Cancelled,
+        ] {
+            let record = title_usage_record("provider", "Provider", "model", status, false, None);
+            assert_eq!(record.source, UsageRequestSource::ChatTitle);
+            assert_eq!(record.status, status);
+        }
+    }
+
+    #[test]
+    fn completed_chat_model_title_maps_done_usage_and_uses_canonical_timeout() {
+        let usage = aiden_core::Usage {
+            input: 19,
+            output: 5,
+            cache_read: 2,
+            cache_write: 0,
+            cache_write_1h: None,
+            reasoning: Some(1),
+            total_tokens: 26,
+            cost: aiden_core::UsageCost {
+                input: 0.001,
+                output: 0.002,
+                cache_read: 0.0,
+                cache_write: 0.0,
+                total: 0.003,
+            },
+        };
+        let record = title_usage_record(
+            "provider",
+            "Provider",
+            "model",
+            UsageRequestStatus::Completed,
+            false,
+            Some(&usage),
+        );
+
+        assert_eq!(TITLE_REQUEST_TIMEOUT_MS, 15_000);
+        assert_eq!(
+            title_request_status(true, false),
+            UsageRequestStatus::Cancelled
+        );
+        assert_eq!(record.source, UsageRequestSource::ChatTitle);
+        assert_eq!(record.tokens.expect("reported token usage").total, 26);
+        assert_eq!(record.cost_status, UsageCostStatus::Reported);
+        assert_eq!(record.cost_usd, Some(0.003));
+    }
+
+    #[test]
+    fn inner_apple_and_transport_timeouts_are_cancelled_even_before_owner_deadline() {
+        let apple_cancel = FoundationModelsCancellationToken::new();
+        let apple_timeout = Err(
+            aiden_computer_use::FoundationModelsConnectionError::retryable(
+                "timeout",
+                "The helper timed out.",
+            ),
+        );
+        assert_eq!(
+            foundation_title_result_status(&apple_cancel, &apple_timeout),
+            UsageRequestStatus::Cancelled
+        );
+        assert!(apple_cancel.is_cancelled());
+
+        let chat_cancel = FoundationModelsCancellationToken::new();
+        let transport_timeout =
+            aiden_providers::ProviderError::Request("The provider request timed out.".to_string());
+        assert_eq!(
+            chat_title_stream_error_status(&chat_cancel, &transport_timeout),
+            UsageRequestStatus::Cancelled
+        );
+        assert!(chat_cancel.is_cancelled());
+    }
+
+    #[test]
+    fn request_time_auth_rejection_triggers_live_provider_catalog_refresh() {
+        let in_flight_provider = aiden_providers::codex::OPENAI_CODEX_PROVIDER_ID;
+        let newer_picker_selection = "anthropic";
+        assert!(codex_status_refresh_required(Some(in_flight_provider)));
+        assert!(!codex_status_refresh_required(Some(newer_picker_selection)));
+    }
 
     #[test]
     fn relative_time_labels() {
@@ -1748,5 +2686,30 @@ mod tests {
         let mut orphan = vec![message(ChatRole::Assistant, "orphan", 1)];
         assert_eq!(truncate_failed_turn(&mut orphan), None);
         assert_eq!(orphan.len(), 1);
+    }
+
+    #[test]
+    fn title_provider_setting_defaults_unknown_values_to_automatic() {
+        let mut settings = serde_json::Map::new();
+        assert_eq!(
+            configured_title_provider(&settings),
+            ChatTitleProviderId::Automatic
+        );
+        settings.insert(
+            "chatTitleProviderId".to_string(),
+            serde_json::json!("future-provider"),
+        );
+        assert_eq!(
+            configured_title_provider(&settings),
+            ChatTitleProviderId::Automatic
+        );
+        settings.insert(
+            "chatTitleProviderId".to_string(),
+            serde_json::json!("chat-model"),
+        );
+        assert_eq!(
+            configured_title_provider(&settings),
+            ChatTitleProviderId::ChatModel
+        );
     }
 }
