@@ -39,6 +39,23 @@ test("composer context controls stay compact without exposing provider copy", ()
   assert.doesNotMatch(modelPicker, /\$\{selected\.label\} · \$\{selected\.providerLabel\}/u);
 });
 
+test("composer routes Finder drops and raster paste through the fixed preload bridge", () => {
+  const composer = source("./composer.tsx");
+  const preload = source("../preload-attachments.ts");
+  const ipc = source("../lib/ipc.ts");
+
+  assert.match(composer, /onDragOver=\{handleDragOver\}/u);
+  assert.match(composer, /onDrop=\{handleDrop\}/u);
+  assert.match(composer, /onPaste=\{handlePaste\}/u);
+  assert.match(composer, /attachmentOperationRef\.current \|\| attaching/u);
+  assert.match(composer, /Wait for the current attachments to finish loading/u);
+  assert.match(composer, /plannedBytes \+ file\.size > remainingInlineBytes/u);
+  assert.match(ipc, /window\.aidenAPI\.attachments\.readDroppedFiles/u);
+  assert.match(ipc, /window\.aidenAPI\.attachments\.readClipboardImages/u);
+  assert.match(preload, /getPathForFile\(file: File\): string/u);
+  assert.doesNotMatch(preload, /file\.path/u);
+});
+
 test("chat surfaces share the responsive centered chat-column contract", () => {
   const composer = source("./composer.tsx");
   const messages = source("./message-list.tsx");
