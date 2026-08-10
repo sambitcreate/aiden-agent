@@ -1,7 +1,9 @@
 import * as React from "react";
-import { Github, Loader2, RotateCcw } from "lucide-react";
+import { Download, Github, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
-import { appApi, type AppInfo } from "../../lib/ipc";
+import { appApi, appUpdatesApi, type AppInfo } from "../../lib/ipc";
+import { useAppUpdateSnapshot } from "../../lib/use-app-update-snapshot";
+import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../../shared/app-update";
 
 const APP_ICON_URL = new URL("../../../resources/app-icon.png", import.meta.url).href;
 const REPOSITORY_URL = "https://github.com/sambitcreate/aiden-agent";
@@ -12,13 +14,55 @@ function buildLabel(environment: string): string {
     : "Production build";
 }
 
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / (1_024 * 1_024)).toFixed(1)} MB`;
+}
+
+function updateDescription(snapshot: AppUpdateSnapshot): string {
+  switch (snapshot.status) {
+    case "idle":
+      return "Aiden checks automatically and downloads signed updates without interrupting your work.";
+    case "checking":
+      return "Checking the signed Aiden Agent update feed…";
+    case "downloading": {
+      const progress =
+        snapshot.transferred !== null && snapshot.total !== null
+          ? `${formatMegabytes(snapshot.transferred)} of ${formatMegabytes(snapshot.total)}`
+          : snapshot.percent !== null
+            ? `${Math.floor(snapshot.percent)}%`
+            : "Starting…";
+      return `Downloading Aiden Agent ${snapshot.version} · ${progress}`;
+    }
+    case "ready":
+      return `Aiden Agent ${snapshot.version} is ready. Restart to finish installing it.`;
+    case "error":
+      return snapshot.error === "download-failed"
+        ? `Aiden Agent${snapshot.version ? ` ${snapshot.version}` : ""} couldn’t finish downloading. Check your connection and try again.`
+        : "Aiden couldn’t reach the signed update feed. Check your connection and try again.";
+  }
+}
+
+function updateRestartError(result: AppUpdateRestartResult): string | null {
+  if (result.accepted) return null;
+  switch (result.reason) {
+    case "busy":
+      return "Aiden is already preparing another window action.";
+    case "not-ready":
+      return "That update is no longer ready. Check for updates again.";
+    case "unavailable":
+      return "Aiden could not restart into the update.";
+  }
+}
+
 export function AboutSettings() {
   const [appInfo, setAppInfo] = React.useState<AppInfo | null>(null);
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [confirmReset, setConfirmReset] = React.useState(false);
   const [resetting, setResetting] = React.useState(false);
   const [resetError, setResetError] = React.useState<string | null>(null);
+  const [updateActionBusy, setUpdateActionBusy] = React.useState(false);
   const resetButtonRef = React.useRef<HTMLButtonElement | null>(null);
+  const updateSnapshot = useAppUpdateSnapshot();
 
   React.useEffect(() => {
     let cancelled = false;
@@ -55,10 +99,50 @@ export function AboutSettings() {
     }
   };
 
+  const checkForUpdates = async () => {
+    if (updateActionBusy || updateSnapshot.status === "checking") return;
+    setUpdateActionBusy(true);
+    try {
+      const result = await appUpdatesApi.check();
+      if (result.outcome === "up-to-date") {
+        toast.success(
+          appInfo ? `Aiden Agent ${appInfo.version} is up to date.` : "Aiden Agent is up to date.",
+        );
+      } else if (result.outcome === "unavailable") {
+        toast.info("Automatic updates are available in signed production builds.");
+      }
+    } catch {
+      toast.error("Aiden could not start an update check.");
+    } finally {
+      setUpdateActionBusy(false);
+    }
+  };
+
+  const restartToUpdate = async () => {
+    if (updateActionBusy || updateSnapshot.status !== "ready") return;
+    setUpdateActionBusy(true);
+    try {
+      const result = await appUpdatesApi.restart();
+      const message = updateRestartError(result);
+      if (message) {
+        setUpdateActionBusy(false);
+        toast.error(message);
+      } else {
+        window.setTimeout(() => setUpdateActionBusy(false), 10_000);
+      }
+    } catch {
+      setUpdateActionBusy(false);
+      toast.error("Aiden could not restart into the update.");
+    }
+  };
+
+  const updateInProgress =
+    updateSnapshot.status === "checking" || updateSnapshot.status === "downloading";
+
   return (
     <>
       <FieldSet title="About">
-        <div className="flex items-center gap-4 p-4 max-[540px]:items-start">
+        <div className="settings-about-header flex items-center gap-4 p-4 max-[540px]:items-start">
           <img src={APP_ICON_URL} alt="" className="size-16 shrink-0" />
           <div className="min-w-0 flex-1">
             <h3 className="text-large-strong text-primary">{appInfo?.name ?? "Aiden Agent"}</h3>
@@ -89,10 +173,58 @@ export function AboutSettings() {
         </div>
         <Field
           className="border-t border-separator"
+          label="Software update"
+          description={updateDescription(updateSnapshot)}
+        >
+          <div className="flex flex-col items-end gap-2 max-[540px]:items-start">
+            {updateSnapshot.status === "downloading" && updateSnapshot.percent !== null ? (
+              <div
+                className="h-1 w-full max-w-48 overflow-hidden rounded-full bg-control"
+                role="progressbar"
+                aria-label="Update download progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.floor(updateSnapshot.percent)}
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-150"
+                  style={{ width: `${updateSnapshot.percent}%` }}
+                />
+              </div>
+            ) : null}
+            <Button
+              size="small"
+              variant={updateSnapshot.status === "ready" ? "accent" : "filled"}
+              disabled={updateActionBusy || updateInProgress}
+              onClick={() =>
+                void (updateSnapshot.status === "ready" ? restartToUpdate() : checkForUpdates())
+              }
+            >
+              {updateActionBusy || updateInProgress ? (
+                <Loader2 className="animate-spin" />
+              ) : updateSnapshot.status === "ready" ? (
+                <Download />
+              ) : (
+                <RefreshCw />
+              )}
+              {updateSnapshot.status === "ready"
+                ? "Update and restart"
+                : updateSnapshot.status === "checking"
+                  ? "Checking…"
+                  : updateSnapshot.status === "downloading"
+                    ? "Downloading…"
+                    : updateSnapshot.status === "error"
+                      ? "Try again"
+                      : "Check for updates"}
+            </Button>
+          </div>
+        </Field>
+        <Field
+          className="border-t border-separator"
           label="Reset onboarding"
           description="Clear this profile’s setup and preferences, restart Aiden, and return to the first onboarding step."
         >
-          <div className="flex justify-end max-[540px]:justify-start">
+          <div className="settings-action-align-narrow flex justify-end max-[540px]:justify-start">
             <Button
               ref={resetButtonRef}
               size="small"

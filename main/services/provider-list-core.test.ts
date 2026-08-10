@@ -93,6 +93,7 @@ test("exposes the virtual Codex provider only for configured OAuth", () => {
     needsKey: true,
     isPreset: true,
     hasKey: true,
+    canLogout: true,
   });
 });
 

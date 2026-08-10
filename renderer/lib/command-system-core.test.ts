@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  applyKeybindingMutation,
-  effectiveBindings,
-} from "../shared/keybindings";
+import { applyKeybindingMutation, effectiveBindings } from "../shared/keybindings";
 import {
   commandExecutionAllowed,
   resolveCommandForKeyEvent,
@@ -67,13 +64,12 @@ test("workspace-only commands are unavailable when their surfaces are unmounted"
 
 test("resolves exact app commands and rejects extra modifiers", () => {
   const bindings = effectiveBindings(undefined);
-  assert.equal(resolveCommandForKeyEvent(event("k", "KeyK"), bindings, base), "commandPalette.toggle");
   assert.equal(
-    resolveCommandForKeyEvent(
-      { ...event("k", "KeyK"), altKey: true },
-      bindings,
-      base,
-    ),
+    resolveCommandForKeyEvent(event("k", "KeyK"), bindings, base),
+    "commandPalette.toggle",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent({ ...event("k", "KeyK"), altKey: true }, bindings, base),
     null,
   );
 });
@@ -87,6 +83,10 @@ test("does not steal commands from editable controls except explicit commands", 
   assert.equal(
     resolveCommandForKeyEvent(event("k", "KeyK"), bindings, { ...base, editable: true }),
     "commandPalette.toggle",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("b", "KeyB"), bindings, { ...base, editable: true }),
+    "sidebar.toggle",
   );
   assert.equal(
     resolveCommandForKeyEvent(event("s", "KeyS"), bindings, {
@@ -105,10 +105,7 @@ test("same binding resolves to the command for the active non-overlapping scope"
   });
   const bindings = effectiveBindings(shared);
 
-  assert.equal(
-    resolveCommandForKeyEvent(event("s", "KeyS"), bindings, base),
-    "terminal.toggle",
-  );
+  assert.equal(resolveCommandForKeyEvent(event("s", "KeyS"), bindings, base), "terminal.toggle");
   assert.equal(
     resolveCommandForKeyEvent(event("s", "KeyS"), bindings, {
       ...base,

@@ -9,6 +9,7 @@ import {
   type McpTransport,
   type Skill,
 } from "../services/types.js";
+import { isConfiguredSkill } from "../services/skill-config-limits.js";
 
 function boundedId(value: unknown): string {
   const id = asString(value, "id");
@@ -24,13 +25,17 @@ function boundedId(value: unknown): string {
 export function parseSkill(value: unknown): Skill {
   if (typeof value !== "object" || value === null) throw new Error("Invalid skill payload.");
   const s = value as Record<string, unknown>;
-  return {
+  const skill: Skill = {
     id: boundedId(s.id),
     name: asString(s.name, "name"),
     description: typeof s.description === "string" ? s.description : "",
     instructions: typeof s.instructions === "string" ? s.instructions : "",
     enabled: typeof s.enabled === "boolean" ? s.enabled : true,
   };
+  if (!isConfiguredSkill(skill)) {
+    throw new Error("Skill payload exceeds Aiden's configured-skill safety limits.");
+  }
+  return skill;
 }
 
 export function parseStringRecord(value: unknown): Record<string, string> | undefined {

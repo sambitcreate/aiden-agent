@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { isModelSelectionAvailable } from "../../lib/use-model-selection.js";
 import type { Provider } from "../../lib/types.js";
 import {
@@ -11,6 +12,7 @@ import {
   enqueueAssistantApproval,
   isAssistantAutomationApproval,
   rollbackOptimisticAssistantTurn,
+  settleAssistantAppendFailure,
   settleFailedAssistantMessages,
   settleAssistantMessages,
   type AssistantMessage,
@@ -18,20 +20,35 @@ import {
 import type { ApprovalPrompt } from "../../lib/ipc.js";
 
 test("blocks empty and whitespace-only sends", () => {
-  assert.equal(canSendAssistantMessage("", { streaming: false, ready: true }), false);
-  assert.equal(canSendAssistantMessage("   \n ", { streaming: false, ready: true }), false);
+  assert.equal(
+    canSendAssistantMessage("", { streaming: false, ready: true }),
+    false,
+  );
+  assert.equal(
+    canSendAssistantMessage("   \n ", { streaming: false, ready: true }),
+    false,
+  );
 });
 
 test("blocks while a response is streaming", () => {
-  assert.equal(canSendAssistantMessage("hi", { streaming: true, ready: true }), false);
+  assert.equal(
+    canSendAssistantMessage("hi", { streaming: true, ready: true }),
+    false,
+  );
 });
 
 test("blocks until a provider and model are known", () => {
-  assert.equal(canSendAssistantMessage("hi", { streaming: false, ready: false }), false);
+  assert.equal(
+    canSendAssistantMessage("hi", { streaming: false, ready: false }),
+    false,
+  );
 });
 
 test("allows a real message when idle and ready", () => {
-  assert.equal(canSendAssistantMessage("hi", { streaming: false, ready: true }), true);
+  assert.equal(
+    canSendAssistantMessage("hi", { streaming: false, ready: true }),
+    true,
+  );
 });
 
 test("user stop remains active until the canceled generation settles", () => {
@@ -154,7 +171,11 @@ test("Assistant queues each automation approval once and rejects ambient tools",
     false,
   );
   assert.equal(
-    isAssistantAutomationApproval({ ...prompt, approvalId: "approval-2", toolName: "write_file" }),
+    isAssistantAutomationApproval({
+      ...prompt,
+      approvalId: "approval-2",
+      toolName: "write_file",
+    }),
     false,
   );
   assert.equal(
@@ -169,7 +190,11 @@ test("Assistant queues each automation approval once and rejects ambient tools",
     false,
   );
   assert.equal(
-    isAssistantAutomationApproval({ ...prompt, approvalId: "approval-4", details: undefined }),
+    isAssistantAutomationApproval({
+      ...prompt,
+      approvalId: "approval-4",
+      details: undefined,
+    }),
     false,
   );
 });
@@ -184,10 +209,13 @@ test("a terminal-only response fills the optimistic assistant row", () => {
     { role: "user", content: "What changed?" },
     { role: "assistant", content: "" },
   ];
-  assert.deepEqual(settleAssistantMessages(messages, "Here is the final response."), [
-    { role: "user", content: "What changed?" },
-    { role: "assistant", content: "Here is the final response." },
-  ]);
+  assert.deepEqual(
+    settleAssistantMessages(messages, "Here is the final response."),
+    [
+      { role: "user", content: "What changed?" },
+      { role: "assistant", content: "Here is the final response." },
+    ],
+  );
 });
 
 test("the terminal response is authoritative over streamed deltas", () => {
@@ -207,7 +235,11 @@ test("an error keeps its authoritative or not-yet-flushed partial reply", () => 
     { role: "assistant", content: "Persisted " },
   ];
   assert.deepEqual(
-    settleFailedAssistantMessages(messages, "Persisted partial response", "unflushed"),
+    settleFailedAssistantMessages(
+      messages,
+      "Persisted partial response",
+      "unflushed",
+    ),
     [
       { role: "user", content: "Summarize this." },
       { role: "assistant", content: "Persisted partial response" },
@@ -230,10 +262,16 @@ test("an error removes only an empty assistant placeholder when no partial exist
 });
 
 test("failed persistence removes the optimistic user turn and placeholder", () => {
-  const existing: AssistantMessage[] = [{ role: "assistant", content: "Earlier reply" }];
+  const existing: AssistantMessage[] = [
+    { role: "assistant", content: "Earlier reply" },
+  ];
   assert.deepEqual(
     rollbackOptimisticAssistantTurn(
-      [...existing, { role: "user", content: "Please retry" }, { role: "assistant", content: "" }],
+      [
+        ...existing,
+        { role: "user", content: "Please retry" },
+        { role: "assistant", content: "" },
+      ],
       "Please retry",
     ),
     existing,
@@ -244,6 +282,60 @@ test("failed persistence removes the optimistic user turn and placeholder", () =
       "Please retry",
     ),
     existing,
+  );
+});
+
+test("indeterminate persistence keeps the possibly durable user turn and drops only its placeholder", () => {
+  const optimistic: AssistantMessage[] = [
+    { role: "assistant", content: "Earlier" },
+    { role: "user", content: "Possibly committed" },
+    { role: "assistant", content: "" },
+  ];
+  assert.deepEqual(
+    settleAssistantAppendFailure(optimistic, "Possibly committed", true),
+    [
+      { role: "assistant", content: "Earlier" },
+      { role: "user", content: "Possibly committed" },
+    ],
+  );
+  assert.deepEqual(
+    settleAssistantAppendFailure(optimistic, "Possibly committed", false),
+    [{ role: "assistant", content: "Earlier" }],
+  );
+});
+
+test("Assistant distinguishes a current indeterminate append from a pre-fenced rejection", () => {
+  const hook = readFileSync(
+    new URL("./use-assistant-chat.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(hook, /appendReconciliationFailureKind\(cause\)/u);
+  assert.match(
+    hook,
+    /const reloadRequired =\s*appendReconciliationRequired \|\| documentAppendReconciliationRequired/u,
+  );
+  assert.match(hook, /chatsApi\.createAssistant\(\{/u);
+  assert.match(hook, /const mayBeDurable = reconciliationKind === "current"/u);
+  assert.match(hook, /if \(!mayBeDurable\) restoreDraft\?\.\(text\)/u);
+  assert.match(
+    hook,
+    /settleAssistantAppendFailure\(existing, content, mayBeDurable\)/u,
+  );
+});
+
+test("Assistant adopts a newly created thread when its first append fails", () => {
+  const hook = readFileSync(
+    new URL("./use-assistant-chat.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(hook, /let createdChatId: string \| undefined/u);
+  assert.match(
+    hook,
+    /createdChatId = created\.id;\s+persistenceChatId = created\.id/u,
+  );
+  assert.match(
+    hook,
+    /if \(createdChatId\) \{\s+setActiveChatId\(createdChatId\);\s+refreshThreads\(\);\s+\}/u,
   );
 });
 
@@ -258,11 +350,16 @@ test("readiness requires the selected model to exist on a usable live provider",
     hasKey: true,
   };
   assert.equal(
-    isModelSelectionAvailable({ providerId: "hosted", model: "model-a" }, [provider]),
+    isModelSelectionAvailable({ providerId: "hosted", model: "model-a" }, [
+      provider,
+    ]),
     true,
   );
   assert.equal(
-    isModelSelectionAvailable({ providerId: "hosted", model: "removed-model" }, [provider]),
+    isModelSelectionAvailable(
+      { providerId: "hosted", model: "removed-model" },
+      [provider],
+    ),
     false,
   );
   assert.equal(

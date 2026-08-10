@@ -79,6 +79,7 @@ export function mergeCodexProvider(
       needsKey: true,
       isPreset: true,
       hasKey: true,
+      canLogout: true,
     },
   ];
 }

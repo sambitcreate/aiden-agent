@@ -31,6 +31,16 @@ Restore automatic updates from the 0.27 beta line, make microphone capture relia
 
 ## Phase 4 — Release acceptance (pending)
 
-- Publish a new immutable release with the safe manifest/payload pair.
-- From an installed 0.27.0 build, verify download completion, the in-app Update ready banner, protected Update and Restart, and successful relaunch.
+- The safe 0.28.31 manifest/payload pair was published and direct artifact/range verification passed.
+- Installed 0.27.30 acceptance exposed a second updater defect: discovery succeeded, but a detached differential/full download reset and then stalled without progress or failure UI.
 - On a clean macOS TCC profile, verify both composer voice input and global dictation after granting microphone access.
+
+## Phase 5 — Observable full-download recovery (implemented; release acceptance pending)
+
+- Replace `checkForUpdatesAndNotify()` with an app-owned check and awaited full-package download.
+- Disable differential download because the immutable GitHub release set does not publish the old/new blockmaps required for that path.
+- Treat the update as ready only after Electron completes the macOS installer handoff.
+- Publish checking, bounded progress, recoverable error, and ready states to Settings → About and the chat sidebar.
+- Cancel downloads that make no progress for two minutes, retry with bounded backoff, and retain an explicit Try Again action.
+- Preserve the protected quit/restart barrier and ordinary install-on-normal-quit behavior.
+- Publish the next immutable release, manually install it on any old build whose updater remains stalled, then verify the following release updates through the repaired in-app path.

@@ -213,15 +213,15 @@ export function ComputerUseSettings() {
       </FieldSet>
 
       <FieldSet title="How it behaves">
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6 p-4 max-[640px]:grid-cols-1 max-[640px]:gap-3">
+        <div className="settings-computer-use-grid grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6 p-4 max-[640px]:grid-cols-1 max-[640px]:gap-3">
           <Text as="p" variant="small" color="secondary" className="max-w-[46rem] text-pretty">
             Only chats you turn on can use Computer Use. For those responses, your selected model
             may receive screenshots, window details, and accessibility text. Aiden doesn’t save that
             content; your provider handles it under its data policy. Read-only inspection runs
             without prompts, while every control action requires Allow once.
           </Text>
-          <div className="flex min-w-0 flex-col items-end gap-2 max-[640px]:items-start">
-            <div className="flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
+          <div className="settings-computer-use-actions flex min-w-0 flex-col items-end gap-2 max-[640px]:items-start">
+            <div className="settings-action-align flex flex-wrap justify-end gap-2 max-[640px]:justify-start">
               <Badge className="whitespace-nowrap">Per-chat opt-in</Badge>
               <Badge className="whitespace-nowrap">Actions ask first</Badge>
             </div>

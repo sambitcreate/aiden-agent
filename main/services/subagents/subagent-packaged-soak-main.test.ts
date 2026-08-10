@@ -34,7 +34,8 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
   assert.ok(sendEnabled > inputFill, "the Send readiness check follows the input event");
   assert.ok(sendClick > sendEnabled, "the fixed driver clicks only after Send becomes enabled");
   assert.match(main, /button\[aria-label="Stop generating"\]/u);
-  assert.match(main, /nav\[aria-label="Settings"\]/u);
+  // Source formatting may render the selector quotes literally or escape them inside a string.
+  assert.match(main, /nav\[aria-label=\\?"Settings\\?"\]/u);
   assert.match(main, /Generation failed/u);
   assert.match(soak, /SUBAGENT_PACKAGED_SOAK_CHAT_PATH/u);
   assert.match(soak, /SUBAGENT_PACKAGED_SOAK_SEND_SCRIPT/u);
