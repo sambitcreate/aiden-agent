@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, rm, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
