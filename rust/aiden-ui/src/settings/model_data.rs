@@ -1,14 +1,6 @@
 //! Model data settings (port of `model-data-settings.tsx`, reduced).
 //!
-//! Two surfaces:
-//!
-//! 1. **models.dev capability catalog** — whether the build-time snapshot
-//!    (`resources/model-capabilities.json`) is present, where it lives, and
-//!    how many model rows it carries. The **Refresh** button re-runs
-//!    `npm run models:refresh` (a **dev-only** action — per AGENTS.md the
-//!    packaged app never contacts models.dev; `npm run dist` refreshes at
-//!    packaging time).
-//! 2. **Artificial Analysis** — the optional benchmark source. The key is
+//! **Artificial Analysis** is the optional benchmark source. The key is
 //!    written to the keychain-backed pi credential store
 //!    (`pi-provider-credentials.json` + macOS Keychain), normalized data is
 //!    cached device-locally, and the pinned Free endpoint is contacted **only**
@@ -21,7 +13,6 @@
 //! bridge (its cache store reads through `tokio::fs` and the fetch uses
 //! timers + reqwest — see the runtime contract in `main.rs`).
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aiden_data::pi_credential_store::{
@@ -32,9 +23,10 @@ use aiden_providers::artificial_analysis::{
     run_artificial_analysis_action, ArtificialAnalysisActionResult,
     ArtificialAnalysisCredentialStore, ArtificialAnalysisRuntime,
     ArtificialAnalysisRuntimeDependencies, ArtificialAnalysisStatus,
-    ArtificialAnalysisStoredCredential, DefaultArtificialAnalysisCatalogFetcher,
-    FileArtificialAnalysisCacheStore, FileArtificialAnalysisCacheStoreOptions, UserInitiated,
-    ARTIFICIAL_ANALYSIS_CREDENTIAL_ID, LEGACY_UNBOUND_GENERATION,
+    ArtificialAnalysisStoredCredential, ArtificialAnalysisUserCache,
+    DefaultArtificialAnalysisCatalogFetcher, FileArtificialAnalysisCacheStore,
+    FileArtificialAnalysisCacheStoreOptions, UserInitiated, ARTIFICIAL_ANALYSIS_CREDENTIAL_ID,
+    LEGACY_UNBOUND_GENERATION,
 };
 use aiden_providers::model_capabilities::{self, ModelCapabilitiesCatalog};
 use async_trait::async_trait;
@@ -69,6 +61,7 @@ pub fn build_aa_runtime() -> AaRuntime {
         cipher: Arc::new(KeyringCredentialCipher::new(aiden_mac::KEYCHAIN_SERVICE)),
         sync_directory: None,
         on_durability_warning: None,
+        before_document_write: None,
     });
     let cache = FileArtificialAnalysisCacheStore::new(FileArtificialAnalysisCacheStoreOptions {
         file_path: root.join(AA_CACHE_FILE),
@@ -167,11 +160,7 @@ pub fn catalog_status_of(capabilities: Option<&ModelCapabilitiesCatalog>) -> Cat
             path: model_capabilities::default_capabilities_path()
                 .map(|path| path.display().to_string()),
             model_count: 0,
-            detail: Some(
-                "The models.dev snapshot is not present on this checkout. Run \
-                 `npm run models:refresh` (dev-only) to fetch it."
-                    .to_string(),
-            ),
+            detail: Some("The bundled model capability snapshot is unavailable.".to_string()),
         },
     }
 }
@@ -184,16 +173,18 @@ pub struct ModelDataState {
     pub aa: Option<ArtificialAnalysisStatus>,
     pub aa_error: Option<String>,
     pub aa_busy: bool,
-    pub refreshing: bool,
-    pub refresh_result: Option<String>,
+    pub(crate) aa_catalog: Option<ArtificialAnalysisUserCache>,
+    aa_load_generation: u64,
+    _aa_load_task: Option<gpui::Task<()>>,
     /// The key editor (opened by the user).
     pub key_editor: Option<Entity<InputState>>,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl SettingsView {
-    /// The Model data section: catalog status + refresh, then the Artificial
-    /// Analysis connection.
+    /// The Model data section. Bundled model metadata is deliberately not a
+    /// live-app surface: catalog refresh belongs to development/release tools.
+    #[allow(dead_code)]
     pub(crate) fn model_data_section(
         &self,
         _window: &mut Window,
@@ -218,107 +209,17 @@ impl SettingsView {
                             .text_color(theme.muted_foreground)
                             .mt_0p5()
                             .child(
-                                "Manage the models.dev catalog and the optional Artificial \
-                                 Analysis benchmark source used for model suggestions.",
+                                "Manage the optional Artificial Analysis benchmark source used \
+                                 for model suggestions.",
                             ),
                     ),
             )
-            .child(self.catalog_card(cx))
             .child(self.aa_card(cx))
-    }
-
-    /// The models.dev catalog status card + Refresh (dev-only) action.
-    fn catalog_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let state = &self.model_data;
-        let status = state.catalog.as_ref();
-        let (status_label, status_color) = match status {
-            Some(status) if status.loaded => ("Loaded", theme.success),
-            Some(_) => ("Not loaded", theme.muted_foreground),
-            None => ("Checking…", theme.muted_foreground),
-        };
-        v_flex()
-            .w_full()
-            .gap_2()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme.border)
-            .px_4()
-            .py_3()
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("models.dev catalog"),
-                            )
-                            .child(
-                                div()
-                                    .px_1p5()
-                                    .py_0p5()
-                                    .rounded_md()
-                                    .bg(status_color.opacity(0.14))
-                                    .text_xs()
-                                    .text_color(status_color)
-                                    .child(status_label),
-                            ),
-                    )
-                    .child(
-                        Button::new("model-data-refresh")
-                            .small()
-                            .icon(IconName::Redo)
-                            .label(if state.refreshing {
-                                "Refreshing…"
-                            } else {
-                                "Refresh"
-                            })
-                            .disabled(state.refreshing)
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.model_data.run_catalog_refresh(cx);
-                            })),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .w_full()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(catalog_detail_text(status)),
-                    )
-                    .when_some(state.refresh_result.clone(), |el, result| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .mt_0p5()
-                                .text_color(if result.starts_with("Refresh") {
-                                    theme.success
-                                } else {
-                                    theme.danger
-                                })
-                                .child(result),
-                        )
-                    }),
-            )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                "Refreshing runs `npm run models:refresh` and is a dev-only action; \
-                         packaged builds refresh the snapshot at packaging time.",
-            ))
     }
 
     /// The Artificial Analysis connection card: status callout + key editor +
     /// Fetch latest / Disconnect actions.
-    fn aa_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn aa_card(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let state = &self.model_data;
         let aa = state.aa.as_ref();
@@ -485,64 +386,13 @@ impl SettingsView {
 }
 
 impl ModelDataState {
-    /// Re-run `npm run models:refresh` on the background executor and report
-    /// the exit status. Dev-only: the packaged app never contacts models.dev
-    /// (AGENTS.md) — `npm run dist` refreshes at packaging time.
-    fn run_catalog_refresh(&mut self, cx: &mut Context<SettingsView>) {
-        if self.refreshing {
-            return;
-        }
-        self.refreshing = true;
-        self.refresh_result = None;
-        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../")
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../"));
-        cx.spawn(async move |this, cx| {
-            let outcome = cx
-                .background_spawn(async move {
-                    let output = std::process::Command::new("npm")
-                        .args(["run", "models:refresh"])
-                        .current_dir(&repo_root)
-                        .output();
-                    match output {
-                        Ok(output) => {
-                            if output.status.success() {
-                                Ok(())
-                            } else {
-                                Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-                            }
-                        }
-                        Err(error) => Err(error.to_string()),
-                    }
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                this.model_data.refreshing = false;
-                match outcome {
-                    Ok(()) => {
-                        this.model_data.refresh_result = Some(
-                            "Refresh succeeded. Re-open Providers to see updated models."
-                                .to_string(),
-                        );
-                        // Reload the catalog so the status row reflects the
-                        // new snapshot immediately.
-                        let capabilities = crate::services::provider_kit::load_capabilities();
-                        this.model_data.catalog = Some(catalog_status_of(capabilities.as_deref()));
-                        this.providers.capabilities = capabilities;
-                        this.refresh(cx);
-                    }
-                    Err(error) => {
-                        this.model_data.refresh_result = Some(format!(
-                            "Refresh failed: {error}. This action needs npm in the repo checkout."
-                        ));
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+    fn begin_aa_load(&mut self) -> u64 {
+        self.aa_load_generation = self.aa_load_generation.saturating_add(1);
+        self.aa_load_generation
+    }
+
+    fn aa_load_is_current(&self, generation: u64) -> bool {
+        self.aa_load_generation == generation
     }
 
     /// Open the key editor input (created with the window handle).
@@ -599,6 +449,8 @@ impl ModelDataState {
                     Ok(ArtificialAnalysisActionResult::Ok { status }) => {
                         this.model_data.aa = Some(status);
                         this.model_data.aa_error = None;
+                        let services = this.services.clone();
+                        this.model_data.load_aa_status(&services, cx);
                     }
                     Ok(ArtificialAnalysisActionResult::Err { message, .. }) => {
                         this.model_data.aa_error = Some(message);
@@ -640,6 +492,8 @@ impl ModelDataState {
                     Ok(ArtificialAnalysisActionResult::Ok { status }) => {
                         this.model_data.aa = Some(status);
                         this.model_data.aa_error = None;
+                        let services = this.services.clone();
+                        this.model_data.load_aa_status(&services, cx);
                     }
                     Ok(ArtificialAnalysisActionResult::Err { message, .. }) => {
                         this.model_data.aa_error = Some(message);
@@ -685,6 +539,8 @@ impl ModelDataState {
                     Ok(ArtificialAnalysisActionResult::Ok { status }) => {
                         this.model_data.aa = Some(status);
                         this.model_data.aa_error = None;
+                        let services = this.services.clone();
+                        this.model_data.load_aa_status(&services, cx);
                     }
                     Ok(ArtificialAnalysisActionResult::Err { message, .. }) => {
                         this.model_data.aa_error = Some(message);
@@ -708,31 +564,43 @@ impl ModelDataState {
         services: &super::SettingsServices,
         cx: &mut Context<SettingsView>,
     ) {
+        let generation = self.begin_aa_load();
         let services = services.clone();
-        let task = Tokio::spawn(cx, async move { services.aa.status().await });
-        cx.spawn(async move |this, cx| {
+        let task = Tokio::spawn(cx, async move {
+            let status = services.aa.status().await?;
+            let catalog = services.aa.catalog().await?;
+            Ok::<_, aiden_providers::artificial_analysis::ArtificialAnalysisError>((
+                status, catalog,
+            ))
+        });
+        self._aa_load_task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
+                if !this.model_data.aa_load_is_current(generation) {
+                    return;
+                }
                 match result {
-                    Ok(Ok(status)) => {
+                    Ok(Ok((status, catalog))) => {
                         this.model_data.aa = Some(status);
                         this.model_data.aa_error = None;
+                        this.model_data.aa_catalog = catalog;
                     }
                     Ok(Err(error)) => {
                         this.model_data.aa_error = Some(error.message().to_string());
+                        this.model_data.aa_catalog = None;
                     }
                     Err(_) => {
                         this.model_data.aa_error = Some(
                             "Aiden couldn't read the local Artificial Analysis connection."
                                 .to_string(),
                         );
+                        this.model_data.aa_catalog = None;
                     }
                 }
                 cx.notify();
             })
             .ok();
-        })
-        .detach();
+        }));
     }
 }
 
@@ -768,32 +636,6 @@ fn aa_detail_text(status: Option<&ArtificialAnalysisStatus>) -> String {
         }
         Some(_) => "Off. Your personal Model Pad works without Artificial Analysis.".to_string(),
         None => "Checking for cached suggestions on this Mac.".to_string(),
-    }
-}
-
-/// The models.dev catalog detail line.
-fn catalog_detail_text(status: Option<&CatalogStatus>) -> String {
-    match status {
-        Some(status) if status.loaded => format!(
-            "{} catalog model{} available offline.",
-            status.model_count,
-            if status.model_count == 1 {
-                " is"
-            } else {
-                "s are"
-            }
-        ),
-        Some(status) => {
-            if let Some(path) = &status.path {
-                format!("Snapshot present at {} but could not be parsed.", path)
-            } else {
-                status
-                    .detail
-                    .clone()
-                    .unwrap_or_else(|| "The models.dev snapshot is not loaded.".to_string())
-            }
-        }
-        None => "Checking the models.dev snapshot…".to_string(),
     }
 }
 
@@ -868,5 +710,26 @@ mod tests {
         let formatted = format_fetched_at("2026-01-02T03:04:05Z");
         assert!(formatted.contains("Jan 02"));
         assert_eq!(format_fetched_at("not-a-date"), "not-a-date");
+    }
+
+    #[test]
+    fn product_model_data_source_has_no_catalog_refresh_process_path() {
+        let source = include_str!("model_data.rs");
+        let forbidden_script = ["models:", "refresh"].concat();
+        let process_command = ["std::process::", "Command"].concat();
+        assert!(!source.contains(&forbidden_script));
+        assert!(!source.contains(&process_command));
+        let refresh_control = ["model-data-", "refresh"].concat();
+        assert!(!source.contains(&refresh_control));
+    }
+
+    #[test]
+    fn newer_offline_status_load_fences_an_older_completion() {
+        let mut state = ModelDataState::default();
+        let older = state.begin_aa_load();
+        let newer = state.begin_aa_load();
+
+        assert!(!state.aa_load_is_current(older));
+        assert!(state.aa_load_is_current(newer));
     }
 }
