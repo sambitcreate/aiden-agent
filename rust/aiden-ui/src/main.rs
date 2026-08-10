@@ -56,9 +56,11 @@
 //! foreground, and never inside a `cx.spawn`/`cx.background_spawn` body.
 
 mod app;
+mod app_assets;
 mod approvals;
 mod assistant;
 mod chat;
+mod environment;
 #[allow(dead_code)]
 mod onboarding;
 mod panels;
@@ -66,8 +68,8 @@ mod pill;
 mod services;
 mod settings;
 mod shell;
+mod shortcut_runtime;
 #[allow(dead_code)]
-mod skills;
 mod workspace;
 #[allow(dead_code)]
 mod workspace_files;
@@ -77,11 +79,131 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::{px, size, App, AppContext as _, Bounds, KeyBinding, WindowBounds, WindowOptions};
-use gpui_component::{Root, TitleBar};
+use gpui::{point, px, size, App, AppContext as _, Global, WindowBounds, WindowOptions};
+use gpui_component::{PixelsExt as _, Root, TitleBar};
 
 use app::AppState;
+use services::appearance::appearance_from_settings;
+use services::native_appearance::prepare_for_main_window;
+use services::native_appearance::NativeAppearance;
 use services::stores::Stores;
+
+struct MainWindowState(shortcut_runtime::MainWindowLifecycle);
+impl Global for MainWindowState {}
+
+struct OnboardingAccessibilityMonitor {
+    native: NativeAppearance,
+    active: bool,
+    mode: aiden_core::appearance::Mode,
+    dock_icon: aiden_core::appearance::DockIcon,
+    native_restored: bool,
+    effective: aiden_mac::appearance::EffectiveAppearance,
+}
+
+impl OnboardingAccessibilityMonitor {
+    fn poll(&mut self) -> bool {
+        let mut changed = false;
+        if !self.native_restored {
+            if let Ok(restored) = self.native.restore_at_boot(self.mode, self.dock_icon) {
+                changed |= self.effective != restored.effective;
+                self.effective = restored.effective;
+                self.dock_icon = restored.dock_icon;
+                self.native_restored = true;
+            }
+        }
+        // Registration is deliberately retried independently from native
+        // restore. A transient AppKit notification error must not freeze the
+        // System motion choice for the rest of onboarding.
+        let _ = self.native.ensure_observation();
+        for event in self.native.take_events() {
+            match event {
+                aiden_mac::appearance::AppearanceEvent::EffectiveChanged(effective) => {
+                    changed |= self.effective != effective;
+                    self.effective = effective;
+                }
+                aiden_mac::appearance::AppearanceEvent::AccessibilityChanged(options) => {
+                    changed |= self.effective.high_contrast != options.high_contrast
+                        || self.effective.reduce_motion != options.reduce_motion;
+                    self.effective.high_contrast = options.high_contrast;
+                    self.effective.reduce_motion = options.reduce_motion;
+                }
+            }
+        }
+        changed
+    }
+}
+
+fn start_onboarding_accessibility_monitor(
+    appearance: &aiden_core::appearance::AppearanceConfig,
+    cx: &mut App,
+) -> gpui::Entity<OnboardingAccessibilityMonitor> {
+    let mut native = NativeAppearance::new();
+    let restored = native
+        .restore_at_boot(appearance.mode, appearance.dock_icon)
+        .ok();
+    let effective = restored
+        .map(|restored| restored.effective)
+        .unwrap_or_default();
+    let _ = native.ensure_observation();
+    cx.set_global(services::appearance::AidenSystemAccessibility {
+        high_contrast: effective.high_contrast,
+        reduced_motion: effective.reduce_motion,
+    });
+    let monitor = cx.new(|_| OnboardingAccessibilityMonitor {
+        native,
+        active: true,
+        mode: appearance.mode,
+        dock_icon: appearance.dock_icon,
+        native_restored: restored.is_some(),
+        effective,
+    });
+    let watcher = monitor.clone();
+    cx.spawn(async move |cx| loop {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(150))
+            .await;
+        let keep_running = watcher
+            .update(cx, |monitor, cx| {
+                if monitor.poll() {
+                    cx.set_global(services::appearance::AidenSystemAccessibility {
+                        high_contrast: monitor.effective.high_contrast,
+                        reduced_motion: monitor.effective.reduce_motion,
+                    });
+                    cx.refresh_windows();
+                }
+                monitor.active
+            })
+            .unwrap_or(false);
+        if !keep_running {
+            break;
+        }
+    })
+    .detach();
+    monitor
+}
+
+fn set_main_window_state(state: shortcut_runtime::MainWindowLifecycle, cx: &mut App) {
+    cx.set_global(MainWindowState(state));
+}
+
+pub(crate) fn mark_main_window_closed(cx: &mut App) {
+    set_main_window_state(shortcut_runtime::MainWindowLifecycle::Windowless, cx);
+}
+
+fn ensure_main_window(stores: &Stores, cx: &mut App) -> bool {
+    match shortcut_runtime::main_window_preparation(cx.global::<MainWindowState>().0) {
+        shortcut_runtime::MainWindowPreparation::Ignore => false,
+        shortcut_runtime::MainWindowPreparation::Ready => true,
+        shortcut_runtime::MainWindowPreparation::Open => {
+            if let Err(error) = open_main_window(cx, stores.clone()) {
+                tracing::error!("global shortcut could not reopen Aiden: {error}");
+                false
+            } else {
+                true
+            }
+        }
+    }
+}
 
 fn main() {
     let dev = aiden_data::is_dev_mode();
@@ -150,20 +272,15 @@ fn main() {
         }
     };
 
-    let app = gpui::Application::new().with_assets(gpui_component_assets::Assets);
-    app.on_reopen(|cx| {
-        // Dock-click when the window was closed via ✕: reopen it.
-        if cx.windows().is_empty() {
-            let stores = match Stores::open() {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("failed to open stores on reopen: {e}");
-                    return;
-                }
-            };
-            if let Err(e) = open_main_window(cx, stores) {
-                eprintln!("failed to reopen the Aiden window: {e}");
-            }
+    let app = gpui::Application::new().with_assets(app_assets::AppAssets);
+    let process_stores = Rc::new(RefCell::new(None::<Stores>));
+    let reopen_stores = process_stores.clone();
+    app.on_reopen(move |cx| {
+        // Dock-click reuses the one process-lifetime store owner. Auxiliary
+        // pill/onboarding windows never count as a ready main AppState window.
+        let stores = reopen_stores.borrow().clone();
+        if let Some(stores) = stores {
+            let _ = ensure_main_window(&stores, cx);
         }
         cx.activate(true);
     });
@@ -171,57 +288,14 @@ fn main() {
         // gpui-component MUST be initialized first: theme global, i18n,
         // and component keybindings.
         gpui_component::init(cx);
+        cx.set_global(services::appearance::AidenSystemAccessibility {
+            high_contrast: false,
+            reduced_motion: app::system_reduced_motion(),
+        });
         // Tokio runtime for reqwest/SSE work (providers), bridged into
         // GPUI foreground tasks.
         gpui_tokio_bridge::init(cx);
-
-        // All 26 commands from the keybinding catalog
-        // (renderer/shared/keybindings.ts ↔ aiden-core::keybindings) are
-        // bound in-app where the target surface exists. The settings
-        // editor lists every catalog command; the bindings below are the
-        // catalog defaults mapped onto gpui's key syntax
-        // ("Command+K" → "cmd-k").
-        cx.bind_keys([
-            // Core (catalog defaults).
-            KeyBinding::new("cmd-q", app::Quit, Some("App")),
-            KeyBinding::new("cmd-n", app::NewChat, Some("App")),
-            KeyBinding::new("cmd-k", app::TogglePalette, Some("App")),
-            KeyBinding::new("cmd-j", app::ToggleTerminal, Some("App")),
-            // In-app pill toggle. A true global hotkey (active while
-            // another app is focused) comes with the aiden-mac wiring in
-            // a later phase.
-            KeyBinding::new("cmd-shift-d", app::TogglePill, Some("App")),
-            // Settings / navigation.
-            KeyBinding::new("cmd-,", app::OpenSettings, Some("App")),
-            KeyBinding::new("cmd-shift-f", app::SearchChats, Some("App")),
-            KeyBinding::new("cmd-shift-[", app::PreviousChat, Some("App")),
-            KeyBinding::new("cmd-shift-]", app::NextChat, Some("App")),
-            KeyBinding::new("cmd-1", app::ChatJump1, Some("App")),
-            KeyBinding::new("cmd-2", app::ChatJump2, Some("App")),
-            KeyBinding::new("cmd-3", app::ChatJump3, Some("App")),
-            KeyBinding::new("cmd-4", app::ChatJump4, Some("App")),
-            KeyBinding::new("cmd-5", app::ChatJump5, Some("App")),
-            KeyBinding::new("cmd-6", app::ChatJump6, Some("App")),
-            KeyBinding::new("cmd-7", app::ChatJump7, Some("App")),
-            KeyBinding::new("cmd-8", app::ChatJump8, Some("App")),
-            KeyBinding::new("cmd-9", app::ChatJump9, Some("App")),
-            KeyBinding::new("cmd-o", app::OpenWorkspaceFolder, Some("App")),
-            KeyBinding::new("cmd-shift-e", app::OpenInEditor, Some("App")),
-            KeyBinding::new("cmd-ctrl-s", app::ToggleSidebar, Some("App")),
-            // Panel toggles + composer (TS global bindings, in-app scope
-            // until the aiden-mac global hotkey wiring lands).
-            KeyBinding::new("cmd-shift-a", app::ToggleAssistant, Some("App")),
-            KeyBinding::new("cmd-shift-s", app::ToggleSubagents, Some("App")),
-            KeyBinding::new("cmd-shift-u", app::ToggleUsage, Some("App")),
-            KeyBinding::new("cmd-alt-space", app::FocusComposer, Some("App")),
-            KeyBinding::new("cmd-alt-a", app::ToggleAssistant, Some("App")),
-            // Aiden-specific conveniences beyond the TS catalog.
-            KeyBinding::new("cmd-shift-t", app::ToggleTerminal, Some("App")),
-            KeyBinding::new("cmd-enter", app::SendMessage, Some("App")),
-            KeyBinding::new("cmd-w", app::CloseWindow, Some("App")),
-            // file.save: accepted (no-op stub) so the catalog stays honest.
-            KeyBinding::new("cmd-s", app::SaveFile, Some("App")),
-        ]);
+        set_main_window_state(shortcut_runtime::MainWindowLifecycle::Windowless, cx);
 
         let stores = match Stores::open() {
             Ok(stores) => stores,
@@ -230,17 +304,25 @@ fn main() {
                 std::process::exit(1);
             }
         };
+        *process_stores.borrow_mut() = Some(stores.clone());
 
-        // Global dictation hotkey (parity audit config §12): a real
-        // OS-wide ⌘⇧D registration so the pill toggle works while another
-        // app is focused — not just inside Aiden. The port lives inside
-        // the app-lifetime listener task and is released at process exit.
-        // Without the macOS Accessibility permission the registration is
-        // refused (logged inside) and the in-app ⌘⇧D binding remains the
-        // only toggle path.
-        let global_dictation = app::register_global_dictation_hotkey(cx);
-        tracing::info!(
-            "dictation global hotkey: registered={global_dictation} (in-app ⌘⇧D always bound)"
+        // One app-lifetime runtime owns the effective GPUI map and all three
+        // OS-global claims. Dock reopen reuses this global entity.
+        let shortcut_runtime = cx.new(|cx| {
+            shortcut_runtime::ShortcutRuntime::new(
+                stores.config.clone(),
+                shortcut_runtime::platform_port(),
+                cx,
+            )
+        });
+        cx.set_global(shortcut_runtime::ShortcutRuntimeGlobal(
+            shortcut_runtime.clone(),
+        ));
+        let shortcut_window_stores = stores.clone();
+        shortcut_runtime::install_global_listener(
+            shortcut_runtime,
+            std::sync::Arc::new(move |cx| ensure_main_window(&shortcut_window_stores, cx)),
+            cx,
         );
 
         // First run: the onboarding flow owns the app until it completes;
@@ -249,16 +331,23 @@ fn main() {
         // exact TS key (`aiden:onboarding:v1:complete`).
         let settings = stores.config.get_settings().unwrap_or_default();
         if onboarding::should_show_onboarding(&settings) {
+            let onboarding_appearance = appearance_from_settings(&settings);
+            let onboarding_accessibility =
+                start_onboarding_accessibility_monitor(&onboarding_appearance, cx);
+            set_main_window_state(shortcut_runtime::MainWindowLifecycle::Onboarding, cx);
             let onboarding_handle = Rc::new(RefCell::new(
                 None::<gpui::WindowHandle<gpui_component::Root>>,
             ));
             let close_handle = onboarding_handle.clone();
             let stores_for_complete = stores.clone();
+            let complete_accessibility = onboarding_accessibility.clone();
             let services = onboarding::OnboardingServices::new(stores.clone()).with_on_complete(
                 Box::new(move |cx: &mut App| {
+                    complete_accessibility.update(cx, |monitor, _| monitor.active = false);
                     if let Some(handle) = close_handle.borrow().as_ref() {
                         let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
                     }
+                    set_main_window_state(shortcut_runtime::MainWindowLifecycle::Windowless, cx);
                     if let Err(error) = open_main_window(cx, stores_for_complete.clone()) {
                         eprintln!("failed to open the Aiden window: {error}");
                     }
@@ -267,8 +356,10 @@ fn main() {
             match onboarding::open_onboarding_window(cx, services) {
                 Ok(handle) => *onboarding_handle.borrow_mut() = Some(handle),
                 Err(error) => {
+                    onboarding_accessibility.update(cx, |monitor, _| monitor.active = false);
                     eprintln!("failed to open the onboarding window: {error}");
                     // Never strand the user: fall back to the main window.
+                    set_main_window_state(shortcut_runtime::MainWindowLifecycle::Windowless, cx);
                     if let Err(error) = open_main_window(cx, stores) {
                         eprintln!("failed to open the Aiden window: {error}");
                     }
@@ -400,30 +491,82 @@ fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::Window
         "aiden-main"
     };
 
+    let titlebar = gpui::TitlebarOptions {
+        traffic_light_position: Some(point(px(14.0), px(20.0))),
+        ..TitleBar::title_bar_options()
+    };
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            size(px(1000.0), px(700.0)),
-            cx,
-        ))),
-        // Parity audit UI §9: the TS renderer constrained its window
-        // (minWidth 390 / minHeight 456); the Rust port previously had no
-        // floor, so the app could be shrunk into unusability. 700×500 keeps
-        // the sidebar + composer legible at the smallest allowed size.
-        window_min_size: Some(size(px(700.0), px(500.0))),
-        titlebar: Some(TitleBar::title_bar_options()),
+        window_bounds: Some(WindowBounds::centered(size(px(1000.0), px(700.0)), cx)),
+        // Canonical Electron minimum. GPUI 0.2.2 exposes content-size bounds
+        // only; its full-size macOS titlebar keeps this aligned in practice.
+        window_min_size: Some(size(px(390.0), px(456.0))),
+        titlebar: Some(titlebar),
         window_background: gpui::WindowBackgroundAppearance::Blurred,
         app_id: Some(app_id.to_string()),
         tabbing_identifier: Some(tabbing_id.to_string()),
         ..Default::default()
     };
 
-    cx.open_window(options, |window, cx| {
-        // Red ✕ button: allow the window to close. The app process stays
-        // alive (macOS convention); the user can reopen via the dock icon
-        // (on_reopen handler below). ⌘Q / ⌘W still fully quit.
-        window.on_window_should_close(cx, |_window, _cx| true);
-        let view = cx.new(|cx| AppState::new(stores, window, cx));
+    // ConfigStore is local and atomic; reading it here avoids showing the
+    // default palette/Dock icon for a frame while ChatService's async catalog
+    // boot is still in flight.
+    let initial_appearance =
+        appearance_from_settings(&stores.config.get_settings().unwrap_or_default());
+    let prepared_native =
+        prepare_for_main_window(initial_appearance.mode, initial_appearance.dock_icon);
+    let handle = cx.open_window(options, |window, cx| {
+        let outer = window.bounds().size;
+        let content = window.viewport_size();
+        tracing::debug!(
+            outer_width = outer.width.as_f32(),
+            outer_height = outer.height.as_f32(),
+            content_width = content.width.as_f32(),
+            content_height = content.height.as_f32(),
+            "opened main window bounds"
+        );
+        let view =
+            cx.new(|cx| AppState::new(stores, initial_appearance, prepared_native, window, cx));
+        let weak_view = view.downgrade();
+        // Red ✕ follows the Files draft barrier before allowing the normal
+        // macOS windowless-app behavior. Saving hard-blocks; dirty state
+        // opens the same explicit discard confirmation as other navigation.
+        window.on_window_should_close(cx, move |window, cx| {
+            let allow = weak_view
+                .update(cx, |view, cx| view.request_native_close(window, cx))
+                .unwrap_or(true);
+            if allow {
+                mark_main_window_closed(cx);
+            }
+            allow
+        });
         cx.new(|cx| Root::new(view, window, cx))
-    })
+    })?;
+    set_main_window_state(shortcut_runtime::MainWindowLifecycle::Ready, cx);
+    Ok(handle)
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    #[test]
+    fn stores_are_opened_once_and_reused_for_every_reopen_path() {
+        let source = include_str!("main.rs");
+        assert_eq!(source.matches(concat!("Stores::", "open()")).count(), 1);
+        assert!(source.contains("process_stores"));
+        assert!(source.contains("ensure_main_window"));
+    }
+
+    #[test]
+    fn appearance_and_native_restore_are_prepared_before_opening_a_main_window() {
+        let source = include_str!("main.rs");
+        let prepared = source
+            .find("prepare_for_main_window(initial_appearance.mode")
+            .expect("main-window launch prepares native appearance");
+        let opened = source
+            .find("cx.open_window(options")
+            .expect("main window is opened");
+        assert!(
+            prepared < opened,
+            "restore must precede the first window frame"
+        );
+    }
 }
