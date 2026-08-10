@@ -24,10 +24,17 @@ visitors and installed apps can download GitHub Release assets without a GitHub 
   stable GitHub-safe characters, and release verification requires the manifest URL and path to
   equal the exact ZIP basename. Verification also recomputes the ZIP's SHA-512 digest and requires
   both the current file entry and legacy top-level manifest field to match it. The workflow
-  publishes that file and the exact verified DMG/ZIP pair together, plus `SHA256SUMS`, in one
-  public GitHub release in this repository. Each release includes GitHub-generated notes for
-  changes since the previous release. The DMG is the website download; the ZIP and YAML are the
-  updater payload.
+  publishes that file and the exact verified versioned DMG/ZIP pair together, plus `SHA256SUMS`,
+  in one public GitHub release in this repository. The workflow also uploads a byte-identical
+  `Aiden-Agent-Beta-arm64.dmg` alias so the website can use GitHub's stable
+  `releases/latest/download` URL without a per-release source edit. Each release includes
+  GitHub-generated notes for changes since the previous release. The DMGs are website and
+  Homebrew downloads; the ZIP and YAML are the updater payload.
+- Release-related pull requests run the separate release-consumer contract workflow. It verifies
+  the versioned DMG name against `sambitcreate/homebrew-tap`, verifies the deployed website points
+  at the stable alias, and confirms that alias resolves to a non-empty public DMG. The release job
+  repeats this check before spending signing/notarization resources. If the artifact contract must
+  change, update and deploy the consumers first, then change Aiden's release configuration.
 - Aiden checks shortly after launch and every six hours. It downloads a newer signed update in
   the background, notifies the user when ready, and installs only after Aiden exits normally.
   It never interrupts an open workspace or bypasses the existing quit barriers.

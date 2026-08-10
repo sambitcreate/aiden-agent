@@ -1,0 +1,52 @@
+name: Release consumer contract
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-consumers.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/check-release-consumers.mjs"
+      - "scripts/check-release-consumers.test.mjs"
+      - "scripts/run-macos-distribution.mjs"
+      - "scripts/run-macos-distribution.test.mjs"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-consumers.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/check-release-consumers.mjs"
+      - "scripts/check-release-consumers.test.mjs"
+      - "scripts/run-macos-distribution.mjs"
+      - "scripts/run-macos-distribution.test.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-consumers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+
+      - name: Verify contract logic
+        run: node --test scripts/check-release-consumers.test.mjs
+
+      - name: Verify deployed release consumers
+        run: npm run release:check-consumers

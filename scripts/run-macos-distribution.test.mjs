@@ -138,19 +138,40 @@ test("release artifact configuration uses stable GitHub-safe names", async () =>
 test("release assets stay draft-only until the complete update set is uploaded", async () => {
   const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
   const existingReleaseGuard = workflow.indexOf('gh release view "$RELEASE_TAG"');
+  const websiteAlias = workflow.indexOf(
+    'website_dmg="$RUNNER_TEMP/Aiden-Agent-Beta-arm64.dmg"',
+  );
   const createDraft = workflow.indexOf('gh release create "$RELEASE_TAG"');
   const publishDraft = workflow.indexOf('gh release edit "$RELEASE_TAG"');
 
   assert.ok(existingReleaseGuard >= 0, "release reruns must reject an existing tag or draft");
+  assert.ok(websiteAlias > existingReleaseGuard, "the website alias must follow the guard");
   assert.ok(createDraft > existingReleaseGuard, "draft creation must follow the immutability guard");
+  assert.ok(createDraft > websiteAlias, "the website alias must exist before draft upload");
   assert.ok(publishDraft > createDraft, "publication must happen only after draft asset upload");
 
+  const preparation = workflow.slice(websiteAlias, createDraft);
+  assert.match(preparation, /cp -- "\$\{dmg_assets\[0\]\}" "\$website_dmg"/u);
+  assert.match(preparation, /website_sha256=.*printf '%s {2}%s\\n'/su);
+
   const upload = workflow.slice(createDraft, publishDraft);
-  assert.match(upload, /--draft\s+\\\s+-- \*\.dmg \*\.zip latest-mac\.yml SHA256SUMS/u);
+  assert.match(
+    upload,
+    /--draft\s+\\\s+-- \*\.dmg \*\.zip latest-mac\.yml SHA256SUMS "\$website_dmg"/u,
+  );
   assert.doesNotMatch(upload, /--latest/u);
 
   const publish = workflow.slice(publishDraft);
   assert.match(publish, /--draft=false\s+\\\s+--latest/u);
+});
+
+test("release publication checks deployed consumers before building", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  const consumerCheck = workflow.indexOf("npm run release:check-consumers");
+  const distributionBuild = workflow.indexOf("npm run dist");
+
+  assert.ok(consumerCheck >= 0, "the release workflow must check Homebrew and the website");
+  assert.ok(distributionBuild > consumerCheck, "consumer drift must fail before signing and building");
 });
 
 test("update metadata is version-bound and requires a hashed ZIP payload", async () => {
