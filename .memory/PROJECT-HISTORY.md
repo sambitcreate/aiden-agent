@@ -1,4 +1,315 @@
-### 2026-08-07 — Provider/model catalog parity audit (TS Electron vs Rust GPUI port)
+### 2026-08-10 — GPUI provider credential and selection safety foundation
+
+- Bound every runtime provider credential to the exact provider connection
+  snapshot. Fixed-account Keychain writes and reads now share a path authority,
+  and a durable pending marker lands before staging begins so a crash or failed
+  write cannot activate a partially rotated key after restart.
+- Added one custom-provider mutation authority for config, selection,
+  credentials, discovered models, and removal. Builtin, preset, reserved, and
+  non-custom ids are immutable through the generic editor; removal revokes
+  first and cannot resurrect orphaned credentials after commit.
+- Chat, titles, and Assistant reject stale provider/model pairs before request
+  work and use bound lookup only. Onboarding creates a bound key, readiness is
+  exact instead of raw-slot based, and authenticated discovery errors are
+  status-only so reflected Authorization values never reach UI copy.
+- The final independent security review accepted the foundation after 195
+  data, 256 provider, and 449 UI tests plus strict workspace Clippy, rustfmt,
+  and diff gates. Native Pi auth/setup, Codex OAuth, Foundation title routing,
+  and broader provider/onboarding fidelity remain planned.
+
+### 2026-08-10 — GPUI shortcut runtime and truthful Assistant/About
+
+- Replaced boot-time hard-coded shortcut registration with one app-lifetime
+  runtime that owns the canonical effective catalog, GPUI keymap, macOS global
+  claims, actual availability status, recorder suspension, and serialized
+  apply-before-persist/rollback behavior. Dictation remains off by default.
+- Reset All is one document transaction. Malformed, future, and unreadable
+  settings fail closed without installing managed local bindings or claiming
+  globals; stored data remains untouched until an explicit repair.
+- Added explicit onboarding/ready/windowless main-window lifecycle routing.
+  Dock and global-shortcut reopen reuse the process Stores owner and dispatch
+  only after the main GPUI Root is ready. Recorder ownership suspends every
+  global claim and is released across blur, section/view changes, quit, native
+  close, reset, and entity drop.
+- Replaced speculative Assistant settings with truthful runtime facts and made
+  About use the real package version, build profile, app icon, and GitHub
+  action. Final gates passed 117 core, 76 macOS, and 437 UI tests plus strict
+  workspace Clippy and diff validation.
+
+### 2026-08-10 — GPUI Settings shell and end-to-end Skills parity
+
+- Replaced the nested fixed Settings rail with the app's canonical persisted
+  split shell. One 12-destination catalog now owns grouped navigation, search,
+  deep links, and command-palette routes; compact navigation has explicit
+  occlusion, Escape priority, and stable focus cycling.
+- Ported managed and discovered Skills settings with off-thread CRUD/scans,
+  workspace capability and generation fencing, virtualized stable rows, and
+  app-root editor/delete modals whose input subscriptions and return focus are
+  scoped to the active dialog.
+- Added secure global/workspace `SKILL.md` discovery, typed configured-Skill
+  validation, and an overflow-safe 8 MiB aggregate configured instruction
+  budget. Traversal and reads are descriptor-relative, bounded, cancellable,
+  and version-revalidated; cancelled scans never publish partial cache data.
+- Main chat now builds one fresh immutable Skills registry per turn, rejects
+  MCP/tool-name collisions before model I/O, treats Skill guidance as
+  user-controlled and untrusted, and loads instructions/supporting files only
+  on invocation. Ambient Skills remain disabled for Assistant, automations,
+  and subagents.
+- Onboarding distinguishes the names/descriptions disclosed as tool metadata
+  from detailed invoked content and reiterates that Skills cannot expand
+  workspace permissions or bypass approvals. Independent runtime and UI
+  reviews accepted the phase after focused, full-test, strict-Clippy,
+  rustfmt, and diff gates.
+
+### 2026-08-10 — GPUI chat toolbar and Environment workbench parity
+
+- Completed the centered 52rem transcript/composer contract and the single
+  52px chat toolbar, including responsive traffic-light insets, persisted
+  preferred-editor behavior, generation-safe composer context controls, and a
+  real workspace-gated terminal action. A disposable macOS smoke measured the
+  requested 1000×700 window bounds.
+- Added the persistent Environment workbench around the whole conversation
+  column: detached Overview summary, exact 480/560/720px responsive layout,
+  1040px inline threshold, modal overlay focus/occlusion, and persisted pointer
+  and keyboard resizing.
+- Replaced the prototype file listing with bounded, cancellable, descriptor-
+  relative workspace indexing and versioned reads. macOS saves now stage and
+  sync beside the destination, retain a recovery inode, use `RENAME_SWAP`,
+  validate held identities across the exchange, and fail closed on uncertain
+  outcomes instead of performing a pathname rollback.
+- Ported the retained Files tree/editor with scoped Cmd-S, optimistic-version
+  conflicts, root-level discard arbitration, compact navigation, stable roving
+  focus, and recovery warnings. Context-changing app actions now centrally
+  block saving and confirm dirty drafts before replay.
+- Ported Review/Compare with stale-safe keyed resources, live Overview polling,
+  full local/remote branch selection, virtualized file/diff rows, metadata-safe
+  diff parsing, honest loading/error/empty states, and repeatable Files handoff.
+  Multiple independent reviews closed containment, atomic-save, focus, entity
+  observation, stale-completion, and toolbar-fidelity defects.
+- Phase 4 acceptance gates: 167 `aiden-data` tests and 360 `aiden-ui` tests,
+  strict all-target/all-feature Clippy, rustfmt, and diff validation all pass.
+  Phase 5 begins with the shared Settings split shell, then Skills CRUD and a
+  canonical per-turn Skills tool registry.
+
+### 2026-08-10 — GPUI canonical shell/sidebar fidelity phase
+
+- Re-audited the current Electron renderer against the completed GPUI port and
+  established isolated Electron/Rust runtime launch protocols. Quartz measured
+  a remaining outer-window mismatch (Electron 1000×700, GPUI 960×680); pixel
+  capture remains blocked by macOS Screen Recording permission for the Codex
+  host.
+- Rebuilt the GPUI leading shell around the Electron split-view contract:
+  272px default width, 236–340px bounds, persisted pointer/keyboard resizing,
+  exact 700px compact breakpoint and 56px content margin, full-height compact
+  overlay, and independent sidebar/main 52px titlebar surfaces.
+- Replaced the invented brand/view/model/theme sidebar chrome with canonical
+  New Agent, Scheduled, workspace, time-bucketed chats, Profile, and Settings
+  ordering. The model picker now lives in the composer. Sidebar hover/selected
+  states use semantic list tokens instead of the accent fill.
+- Added compact modal correctness: GPUI mouse occlusion, propagation stops,
+  search-first Escape behavior, root-level focus cycling through the leading
+  toggle, focus-safe route dismissal, keyboard activation for rail rows, and
+  generation-fenced persistence so superseded detached writes cannot publish.
+  New Agent is disabled and shortcut-guarded without an active workspace.
+- Two independent reviews found and closed responsive-state, focus, pointer,
+  persistence-order, TitleBar identity, and stale-focus defects. Focused tests
+  grew to 279 passing; strict Clippy, rustfmt, diff validation, and an isolated
+  returning-user GPUI smoke all pass.
+- Active follow-through is tracked in
+  `docs/plans/gpui-ui-fidelity-plan.md`; the next phase centers the transcript
+  and composer on the shared 52rem control-plane contract.
+
+### 2026-08-09 — GPUI panic-source audit (settings double-lease cluster)
+
+- **Audit**: focused scan of `rust/aiden-ui/src/` for panic sources that fire
+  inside GPUI ObjC callbacks. Full findings in
+  `docs/gpui-port/crash-scan.md`. Root cause verified against
+  `gpui-0.2.2/src/app/entity_map.rs`: GPUI uses a **lease model** — during
+  `render`/`cx.listener`/`cx.observe`/`cx.subscribe` the owning entity is
+  removed from the entity map, so any `cx.entity().read(cx)` on it during the
+  callback hits `double_lease_panic("read")` → SIGABRT. (`notify()` is deferred,
+  so bounce-back re-entrancy is safe; only direct self-reads during an active
+  lease crash.)
+- **CRASH cluster (entire Settings surface)**: 13 `cx.entity().read(cx)` sites
+  in `settings/*.rs` — 8 identical `fn services(&self, cx)` helpers
+  (model_data/mcp/web_search/scheduled/voice/assistant/computer_use/providers)
+  + 5 direct reads (appearance ×3 in set_mode/set_reduce_motion/set_preset;
+  mcp ×2 in toggle_server/test_server). Reached synchronously from every
+  `on_click(cx.listener(..))` in every section (~30 triggers) **and** from
+  `SettingsView::boot` (`settings/mod.rs:279 load_key_state`,
+  `:281 load_aa_status`) inside `this.update` → crashes on opening Settings.
+  Correct pattern already exists (`scheduled.rs:775 reload_schedules`,
+  `voice.rs:231 download` use `self.services.clone()` field access); fix is to
+  thread `SettingsServices` as a param instead of re-reading the leased view.
+- **Verified SAFE**: all `open_window` (return Result, no unwrap); no
+  `WeakEntity::update().expect/unwrap` exist; `cx.listener` uses `.ok()`;
+  terminal/cron/initials indexing all bounds-checked; dialog builders are
+  deferred (`gpui-component root.rs:134`); `load_runtime`, `voice download`,
+  `reload_schedules` use field access.
+- **RISKY (poison-only)**: `services/stores.rs:228,230` `Mutex::lock().unwrap()`
+  in the portable-config watcher thread.
+
+### 2026-08-09 — Reduced motion probe, global dictation hotkey, min window size (parity audit UI §7 + config §12, Rust)
+
+- **Reduced motion OS probe (UI §7)**: `app.rs` now exposes a cached
+  `system_reduced_motion()` — runs `defaults read com.apple.universalaccess
+  reduceMotion` once (OnceLock) and returns whether the OS asks for reduced
+  motion. The pill's `PillDeps.system_reduced_motion` (previously hardcoded
+  `false` in `bridge_show_pill`) now gets the real probe. A pure
+  `motion_reduced(reduce_motion, system_reduced)` helper implements the
+  System/On/Off semantics shared with the pill's `MotionGate`; the streaming
+  cursor in `chat/message_list.rs` now gates its blink timer on it (solid
+  cursor under reduced motion). **Settings override**: the Appearance section
+  gained a "Reduced motion" System/On/Off segmented control that persists
+  `appearance.reduceMotion` through the config store (System shows the live
+  OS state, e.g. "System (reduced)"). Note: the pill's `MotionGate` still only
+  honors the OS probe (its `from_settings` path remains unwired — a pill/mod.rs
+  follow-up), and onboarding still hardcodes `system_reduced = false`.
+- **Global dictation hotkey (config §12)**: `main.rs` boot now calls
+  `app::register_global_dictation_hotkey(cx)` after the stores open. It
+  constructs `aiden_mac::hotkey::MacHotkeyPort` over a
+  `GlobalHotkeyManager::initialize()` (main thread), registers the catalog
+  default `Command+Shift+D`, and spawns a `global-hotkey` event-listener on the
+  tokio bridge that routes `Pressed` events (matched by hotkey id) through the
+  same `PILL_COORDINATOR` toggle as the in-app ⌘⇧D binding. The `MacHotkeyPort`
+  lives inside the app-lifetime listener task (released at process exit). Any
+  init/registration failure (e.g. missing Accessibility permission) logs a
+  warning and falls back to in-app-only. Added `global-hotkey = "0.8"` to
+  `aiden-ui` deps (same pin as aiden-mac). Custom accelerators from the
+  shortcuts editor are not yet consulted — a follow-up can route the persisted
+  effective binding through `aiden_core::keybindings::effective_binding`.
+- **Min window size (UI §9)**: main-window `WindowOptions` now sets
+  `window_min_size: 700×500` (GPUI 0.2.2 supports it — the pill already used
+  it), matching the TS renderer's `minWidth/minHeight` floor.
+- Tests: `motion_gate_resolves_the_override_and_the_os_probe` (app.rs) +
+  `reduce_motion_override_round_trips_through_the_settings_map`
+  (settings/appearance.rs). Verified: `cargo test -p aiden-ui --bin aiden`
+  (260 passed), `cargo clippy -p aiden-ui --all-targets -- -D warnings`
+  (clean), `cargo fmt -p aiden-ui` (clean).
+
+### 2026-08-09 — Chat attachments + message edit/retry UI (parity audit gaps 4 & 6, Rust)
+
+- **Composer attachments (gap 4)**: `rust/aiden-ui/src/chat/composer.rs` now owns a
+  `ComposerDraft` GPUI `Global` (pending attachments + edit target + attaching
+  flag) plus the pure attachment logic — `image_mime_for_path` (png/jpg/gif/webp),
+  `validate_image_attachment` (extension + 8 MB cap mirroring `attachments.ts`),
+  `attachment_from_image_bytes` (base64, no `data:` prefix), `read_image_attachment`
+  (I/O), `renderable_image_format`/`attachment_image_element` (inline `img` via the
+  GPUI asset cache), `format_bytes`. `chat_pane.rs` renders the attach (Plus)
+  button → `prompt_for_paths` (images, multi-select) → background read → thumbnail
+  chips above the input with remove buttons, and intercepts ⌘V via
+  `capture_action(Paste)` on the composer shell: image clips become attachments
+  and `stop_propagation` suppresses the input's text-paste; text clips fall
+  through. `message_list.rs` renders persisted user-message attachments inline
+  (max 400 px) with a file-chip fallback.
+- **Edit (gap 6)**: edit (Replace) button on user-bubble hover loads the message
+  text into the composer + marks the draft "editing" (banner + cancel in the
+  composer); the send button routes through `submit_composer`, which truncates the
+  in-memory transcript with `truncate_history_after` (target + everything after
+  dropped; `None` for stale targets → plain send) and re-sends the edited text.
+  **Stubbed:** the truncation is in-memory only — persisted truncation needs the
+  chat_service edit hook (same area the `retry_last` truncate fix landed), and
+  `send_message`/`chat_history_to_messages` still drop attachment payloads
+  (provider_kit maps user history to `UserContent::Text` only), so staged images
+  are preview-only on the wire. ⌘-Enter still routes through `app.rs::send_composer`
+  (text-only, no rebranch/attachments) — the send button is the full path.
+- **Retry (gap 6/8)**: retry (Undo2) button on assistant-bubble hover → existing
+  `service.retry_last(cx)` (the service now truncates the failed turn). Hover
+  actions were unified into `hover_reveal(...)` (copy + edit user, copy + retry
+  assistant).
+- Tests: 10 new unit tests in `composer.rs` (draft state machine, attachment
+  validation, base64 round-trip, renderable-format gating, truncate-history
+  cases). Verified: `cargo test -p aiden-ui --bin aiden` (258 passed),
+  `cargo clippy -p aiden-ui --all-targets -- -D warnings` (clean),
+  `cargo fmt -p aiden-ui` (clean). Note: `base64 = "0.22"` added to aiden-ui deps.
+
+### 2026-08-09 — Settings parity: five missing GPUI settings sections (parity audit #11, Rust)
+
+- `rust/aiden-ui/src/settings/` now ships the five missing sections (audit #11):
+  **model_data**, **assistant**, **web_search**, **voice**, **computer_use** —
+  each a state struct + render helpers on `SettingsView`, registered in the nav +
+  content router in `mod.rs` (order: Providers, Model data, Assistant, Web search,
+  Voice & dictation, Computer use, Appearance, …). All I/O runs off the GPUI
+  foreground (background executor; the Artificial Analysis + Parakeet download
+  paths run on the `gpui_tokio_bridge::Tokio` runtime per the `main.rs` runtime
+  contract).
+- **model_data.rs** — models.dev catalog status (loaded/path/model count from
+  `model_capabilities::load_default_capabilities`) + a **Refresh** button that runs
+  `npm run models:refresh` via `std::process::Command` in the repo root
+  (documented dev-only; packaged builds refresh at `npm run dist` per AGENTS.md)
+  and reloads the catalog into the Providers section; plus the **Artificial
+  Analysis** connection: key entry → keychain-backed `EncryptedPiCredentialStore`
+  (`pi-provider-credentials.json`, account `artificial-analysis`, generation bound
+  in `env.AIDEN_ARTIFICIAL_ANALYSIS_GENERATION`), device-local cache
+  (`artificial-analysis-model-cache.json`), Connect & fetch / Fetch latest /
+  Disconnect through `ArtificialAnalysisRuntime` with the `UserInitiated::explicit`
+  token gating every network path (the app only contacts the pinned Free endpoint
+  on explicit user action). Offline status/catalog reads never fetch.
+- **assistant.rs** — proactivity toggle (`assistant.enabled`), settings permission
+  Full/Ask/None (`assistant.settingsPermission`), workspace-scope toggles
+  (`watchUncommitted` / `watchUntouchedProjects` / `watchConfigChanges`); the
+  config store merges the `assistant` object field-by-field on `set_settings`.
+- **web_search.rs** — Exa key entry/remove via the provider-keys keychain store
+  (`exa` account), enable toggle (`exaEnabled`, disabled until a key exists,
+  removing a key disables search), and a **Test key** action that verifies the
+  stored key locally (presence + decryptability — no network; search requests only
+  go to Exa when the assistant uses the tool).
+- **voice.rs** — transcription provider (OpenAI / Google Gemini / on-device
+  Parakeet, `voiceProvider` + default `voiceModel`), Parakeet catalog from
+  `aiden_mac::local_models` with Download (live, via the download manager on the
+  tokio bridge, progress bar) / Delete (clears a stale `localVoiceModel` selection)
+  / select-for-dictation, and the microphone permission probe
+  (`aiden_mac::audio::microphone_permission`).
+- **computer_use.rs** — enable toggle persisted to `computerUseEnabled` (the flag
+  the chat service already reads) + the safety-posture explainer; the signed
+  cua-driver readiness check is **not wired** in the GPUI build yet, so that row
+  shows a "Coming soon" note instead of a fake status.
+- Tests: 12 new unit tests across the five modules (parse/present helpers +
+  catalog status), `mod.rs` unique-label test covers the new sections. Verified:
+  `cargo test -p aiden-ui --bin aiden` (258 passed), `cargo clippy -p aiden-ui
+  --all-targets -- -D warnings` (clean), `cargo fmt -p aiden-ui` (clean).
+  Note: `app.rs::settings_section_from_id` (palette/deep-link section ids) was not
+  extended — out of scope; the new sections are reachable via the left nav and the
+  palette's settings mode (which iterates `SettingsSection::ALL`).
+
+
+### 2026-08-09 — Provider credential binding + chat deletion reconciliation (parity audit #5/#8, Rust)
+
+- **`aiden-data::secret_map::ProviderKeysStore`**: `StoreSecretsPort::get_provider_key`
+  now honors the endpoint **binding** (TS `secrets.getProviderKey`): the stored
+  binding (`__aiden_internal_provider_binding_v1__:<id>` slot + keychain account
+  `provider-binding:<id>`) is compared against the caller's connection snapshot and
+  the key is refused (`None`) on mismatch/missing, forcing re-authentication when
+  a base URL/kind changes. Unreadable (legacy safeStorage) bindings/keys fail
+  closed to `None` instead of breaking provider listing. `migrate_keys` and
+  `migrate_provider_keys_with_bindings` are no longer no-ops: they actually
+  re-home keys when provider aliases change (gemini→google; alias id→current id)
+  and — because the keyring cipher scopes secrets by keychain account (unlike TS
+  safeStorage) — also move the backing keychain secret from the source account to
+  the target account (removed-account probe for `migrate_keys`, explicit source
+  for the alias path). `delete` now also removes the binding slot so a stale
+  binding can never block a freshly re-entered key.
+- **`aiden-data::chat_store`**: added `ChatStore::truncate_messages(id, keep)`
+  so the retry path can retract a failed assistant turn durably (a reload never
+  resurrects a hanging failed turn).
+- **`aiden-ui::services::stores`**: `Stores` now holds the production subagent
+  run store (`runs: Option<Arc<ProductionSubagentRunStore>>`, V1/V2 selection via
+  `AIDEN_SUBAGENT_V2`, best-effort at boot so a broken subagent store never
+  blocks the chat app). `StoreSecretsPort` delegates the migration methods to the
+  key store.
+- **`aiden-ui::services::chat_service`**: `delete_chat` is now the cross-store
+  TS `chats:remove` port — cancels any in-flight generation for the chat (even a
+  non-active one), calls `run_store.delete_chat` (removes subagent runs +
+  tombstones the pending marker), removes the chat, then
+  `run_store.complete_chat_deletion` clears the marker. `retry_last` retracts the
+  failed assistant turn (in-memory immediately, on disk before the generation
+  starts) and re-sends the last user message WITHOUT appending a duplicate user
+  turn (`start_generation` extracted from `send_message` for reuse).
+- Tests: secret_map (binding lifecycle, migrate re-home, alias migration +
+  conflict rejection, delete hygiene), chat_store truncation, StoreSecretsPort
+  binding/migrate through the port, run-store chat-deletion reconciliation, and
+  chat_service retry truncation helpers.
+
 
 - **`rust/aiden-providers/src/builtin.rs` (new)**: pi-exact builtin model snapshot
   for the native anthropic + google providers (ported from
@@ -1010,3 +1321,58 @@ Major milestones only. Day-to-day changelog noise lives in git.
 - Cargo: `aiden-ui` gains `aiden-agent`, `aiden-subagents`, `aiden-git` workspace deps (+ `tempfile` dev-dep); `aiden-subagents` added to `workspace.dependencies`.
 - Verified: `cargo test -p aiden-ui` (136 passed, incl. ~18 new), `cargo clippy -p aiden-ui --all-targets -- -D warnings` (clean), `cargo fmt -p aiden-ui --check` (clean), `cargo check --workspace` (passes). Remaining degraded behaviors: single-pass MCP tool loop (a second model tool-use round settles with the recorded timeline), usage is only recorded on terminal Done/Error (not user stops), and preset API-key MCP servers need the keychain resolver wired (keyless presets are skipped).
 - `rust/aiden-mac` dictation port (2026-08-07): new `audio` (AVAudioEngine input-tap capture via `objc2-avf-audio` → downmix + linear resample to mono 16 kHz Float32, `AudioCapture` trait + pure resampler unit tests), `dictation_coordinator` (exact port of `dictation-coordinator.ts` — serialized tokio-mutex queue, idle/starting/recording/transcribing/delivering, hide timers, 100k transcript cap; all four TS tests mirrored + 11 more), `sherpa` + `local_models` (Parakeet catalog, GitHub-release tar.bz2 download w/ progress 0–90/90–100 %, `/usr/bin/tar --strip-components=1` extraction, cancel-by-id registry, env-overridable models root) + `local_runtime_status` (Ollama/LM Studio load-state parsers) — all behind a new `dictation` cargo feature (default ON; `--no-default-features` builds clean). `aiden-ui` pill wiring: `pill/live_audio.rs` (`LiveAudioSource` — background-thread capture feeding a shared `CaptureBuffer` for the meter bars + transcription drain), `pill/coordinator.rs` (`PillCoordinator` — broadcast watcher drives capture → sherpa transcribe → paste via `paste.rs`; missing model → exact "Download it in Settings → Voice" error; fake-capture/fake-transcribe tests), and the app shell (`app.rs` `wire_pill_coordinator` — foreground window-command bridge over `PILL_WINDOW`, `PillCommand` channel, live appearance read at open, cancel button → coordinator). sherpa-onnx 1.13.4 verified: crates.io static feature downloads a prebuilt macOS lib at build time and the FFI links/runs. Verified: `cargo test -p aiden-mac` (72), `cargo test -p aiden-ui` (191), `cargo clippy -p aiden-mac --all-targets -- -D warnings` (clean), `cargo check --workspace` (passes). Live dictation is wired in-app (⌘⇧D → record → transcribe → paste); model download UI in Settings → Voice remains a later-phase surface.
+
+### 2026-08-10 — GPUI Model Pad and Appearance foundation
+
+- Added a device-local Model Pad store and retained Settings editor. Save
+  publication is fenced by store-issued process-monotonic intents, reports
+  explicit published/stale outcomes, and locks all layout edits while a write
+  is active so disk and UI cannot diverge across Settings lifetimes.
+- The Settings pad refreshes from usable non-embedding provider models,
+  preserves unavailable placements, supports centered pointer/keyboard
+  positioning and visible-label filtering, and applies Artificial Analysis
+  positions only from the validated offline cache after an explicit action.
+  Cache reads are retained, cancellable, and generation-fenced.
+- Appearance preview/persistence now has one revision-fenced authority shared
+  by Settings and command surfaces. System-mode windows follow GPUI appearance
+  changes, and the port truthfully omits native Dock application until a real
+  bridge exists. Independent review accepted the corrected foundation; the
+  full composer 2-D picker and full Appearance/native Dock surface remain open.
+
+### 2026-08-10 — GPUI native Codex auth and Apple chat titles
+
+- Replaced the placeholder Codex auth adapter with explicit Settings/onboarding
+  sign-in backed by the encrypted Pi credential store. Fixed-account Keychain
+  staging is guarded by a durable pending denial and process-wide authority;
+  refresh, sign-out, live reads, and `needs_attention` updates use exact
+  credential-generation CAS so stale work cannot revive or poison a newer
+  account.
+- OAuth work is bounded and cancellable, owns its exact GPUI dialog lease, and
+  is invalidated on Settings exit, quit, and native close. Late completions do
+  not pop replacement dialogs or restore focus into a hidden Settings surface.
+- Added native Apple Foundation Models title status/routing and the canonical
+  responsive title-provider selector. Apple and selected-chat-model routes use
+  a shared 15-second deadline, record cancellation consistently, and persist
+  actual terminal usage for completed remote title requests.
+- Hardened Foundation helper ownership with exclusive request directories,
+  cancellation markers, and owned child termination. Shutdown no longer keeps
+  or signals raw PIDs, closing the post-reap PID-reuse window. Independent
+  re-review accepted the tranche after 493 UI tests; dynamic Pi setup remains
+  deliberately separate from the immutable generic builtin editor.
+
+### 2026-08-10 — GPUI composer Model Picker parity
+
+- Replaced the composer model Select with a retained controlled picker whose
+  single typed commit remains subordinate to ChatService. List search, roving
+  focus, ordered device-local pins, inventory repair, staged Escape, exact
+  trigger restoration, generation gating, and Settings Model Pad handoff are
+  now implemented without letting hover/preview mutate the chat selection.
+- Ported the spatial Pad interaction with a bounds-aware GPUI hitbox, captured
+  outside drag, next-frame preview coalescing, 7–93% inverted coordinates,
+  cancel/leave rollback, dynamic highlighted lattice, separate model points and
+  puck, and pointer-up-only commit.
+- Added embedded provider assets and catalog metadata to the trigger, rows, and
+  details; corrected Local/Hosted classification, subtle row/check states,
+  Artificial Analysis attribution, and the trigger-independent 316 + 8 + 224px
+  shell geometry. Final independent review accepted the picker after the full
+  UI suite reached 519 tests.

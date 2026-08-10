@@ -1,5 +1,31 @@
 # Troubleshooting papercuts
 
+## 2026-08-10 — GPUI Environment and descriptor-relative file work
+
+- macOS exposes directory descriptors under `/dev/fd`, but `/dev/fd/N/child`
+  is not a traversable directory namespace. Use `openat`/`linkat` and
+  `fdopendir`/`readdir` against a held directory descriptor; composing child
+  paths under `/dev/fd` fails with `ENOTDIR`/`ENOENT` and is not a containment
+  primitive.
+- A GPUI child entity's `cx.notify()` does not automatically repaint a parent
+  that only reads that entity while rendering a helper surface. When the parent
+  owns the composition boundary, explicitly `cx.observe(&child, ...)` and
+  notify the parent; otherwise asynchronous list/search/diff updates may remain
+  invisible until an unrelated app-state change.
+- macOS window capture via `screencapture -l` requires Screen Recording access
+  for the Codex/terminal host even when Quartz can enumerate exact window IDs
+  and bounds. Treat source contracts, focused tests, strict Clippy, and isolated
+  runtime smoke as interim gates, then run pixel overlays after permission is
+  granted.
+
+## 2026-08-10 — Native helper shutdown ownership
+
+- A shutdown registry must not retain a numeric child PID after `waitpid` can
+  reap it. Output-drain awaits create a real PID-reuse window even when the
+  normal cancellation path is correct. Keep termination on the owned child
+  handle, make the synchronous shutdown callback write the request's
+  cancellation marker, and unregister before any post-wait await.
+
 ## 2026-08-06 — Unreferenced bounded-settlement timers
 
 Do not call `unref()` on a timer when that timer is the only completion path
@@ -227,3 +253,107 @@ same-lock recursion.
   `active_chat_id` is `None` — a UI-jank smell, not a race (the `ChatStore`
   lock serializes it against background writes).
 
+
+## 2026-08-08 — GPUI chat surface (message_list/chat_pane): four friction notes
+
+- **`SharedString` is `ArcCow<'static, str>`** in gpui 0.2.2. `SharedString::from(&str)`
+  requires a `'static` string (use `key.to_string()`), and
+  `Option<SharedString>::as_deref()` yields `Option<&ArcCow<str>>`, not
+  `Option<&str>` — map to `String` then `.as_deref()`.
+- **`Context::spawn` is a 2-arg `AsyncFnOnce(WeakEntity<T>, &mut AsyncApp)`** —
+  `async move |this, cx|`. Inside, `Entity::read(&App)` does NOT accept
+  `&mut AsyncApp` (no Deref); use `entity.read_with(cx, |v, cx| ...)` which
+  returns `Result<T, anyhow::Error>` (handle with `unwrap_or(false)` etc.).
+- **gpui-component `Button` has no `.shadow(bool)`** — that method lives on
+  `ButtonCustomVariant`; gpui's `Styled::shadow` takes `Vec<BoxShadow>`.
+  Floating buttons: use a small secondary button instead of shadow.
+- **Type errors in one module cascade into fake "cannot find value `X` in
+  module `app`" errors elsewhere** (the `actions!`-generated constants, and
+  `sidebar_visible`). Fix the root module first; the name-resolution errors
+  disappear. Also: the working tree can contain prior-session WIP that only
+  compiles once your own errors are fixed — check `git diff` scope before
+  chasing errors in files you didn't touch.
+
+## 2026-08-09 — GPUI settings surface: entity double-lease panic (`double_lease_panic`)
+
+- **`cx.entity().read(cx)` inside a `cx.listener` (or `this.update`) on the same
+  entity panics with SIGABRT** — GPUI leases the entity out during listener
+  dispatch, so any self-read through the context is a double lease. This made
+  EVERY settings control crash, plus the Settings boot path (sections that
+  fetched services during `boot`'s `this.update`).
+- **The fix pattern (from shortcuts.rs, commit 50e9fc5): never reach back into
+  the entity from a section-state method.** The listener has `this: &mut
+  SettingsView`; pass `&this.services` (a `&SettingsServices`) as an explicit
+  parameter instead of a `services(&self, cx)` helper doing
+  `cx.entity().read(cx).services.clone()`. Disjoint field borrows let
+  `this.section.method(..., &this.services, cx)` compile. The same applies to
+  reading sibling section state (`cx.entity().read(cx).mcp.servers`) — read the
+  field off `self` when the method lives on the section state.
+- **Boot path:** `SettingsView::boot`/`refresh` read `self.services` BEFORE
+  `cx.spawn`, then pass the clone into `this.update` — never read the entity
+  inside the update closure.
+
+## 2026-08-10 — GPUI split-shell fidelity and modal focus
+
+- `gpui-component::TitleBar` uses hard-coded internal element IDs. Rendering a
+  sidebar TitleBar and a main TitleBar under the same identified scope causes
+  duplicate identity/state churn; wrap each frame in a distinct identified
+  parent.
+- A painted backdrop is not automatically modal in GPUI. Use `.occlude()` to
+  install `HitboxBehavior::BlockMouse`, stop propagation on backdrop events,
+  and implement focus handoff/cycling/restoration explicitly.
+- Detached settings writes can acquire the serialized store out of launch
+  order. Fence high-frequency UI persistence (resize/toggle) with independent
+  generations passed through `is_current`, so a superseded write cannot become
+  durable after a newer one.
+## 2026-08-10 — GPUI modal and cancellable discovery lifecycle
+
+- Subscriptions created for temporary GPUI modal inputs must be owned by the
+  modal draft, not the long-lived parent view. Keeping them in a shared
+  Settings subscription vector leaks callbacks on every open/close cycle.
+- Cancelling a bounded filesystem traversal is not enough by itself: check the
+  token again before returning and immediately before publishing a cache entry,
+  otherwise a partial scan can look like a valid cached success.
+- Registry retention caps do not protect the earlier persistence load. Enforce
+  aggregate instruction budgets in raw portable validation and replacement-
+  aware ConfigStore mutations before avoidable typed cloning.
+
+## 2026-08-10 — App-lifetime shortcuts and window readiness
+
+- Global commands cannot infer main-window readiness from `App::windows()`:
+  onboarding and utility/pill windows also count. Track onboarding, ready-main,
+  and windowless states explicitly, and dispatch only after the main Root has
+  been constructed and drawn.
+- Shortcut recording is a runtime lease, not merely a focused row. Suspend the
+  full global-claim snapshot under a generation/owner token, retain the blur
+  subscription only for the active recorder, and funnel every view/window exit
+  through the same owner-checked release path.
+- Bulk shortcut reset must be a single persisted document transaction. Queuing
+  one mutation per command exposes partial durable state if a later write
+  fails, even when each individual mutation is rollback-safe.
+
+## 2026-08-10 — Fixed-account credential rotation
+
+- Publishing key and binding markers atomically is insufficient when the
+  secure-storage cipher writes plaintext into two fixed Keychain accounts:
+  concurrent staging can interleave before marker publication, and identical
+  marker bytes cannot reveal the mismatch. Serialize the complete two-account
+  stage plus marker publish and bound read under a path-shared authority.
+- An in-memory revocation does not survive a crash. Persist a deny/pending
+  marker before either Keychain write, keep it through config/selection commit,
+  and activate only as the final transaction step. `has_key`, status, and
+  request lookup must all treat pending as unavailable.
+- Never place arbitrary authenticated HTTP response bodies in user-visible
+  discovery errors; a hostile endpoint can reflect the Authorization header.
+  Status-only errors preserve diagnostics without risking secret disclosure.
+
+## 2026-08-10 — Async editor save identities
+
+- A view-local revision is not a durable-write identity when the backing store
+  outlives that view. Reopening Settings can restart revisions at zero and make
+  valid writes look stale. Issue the intent from the long-lived store and make
+  the publish result explicit.
+- Do not replace an in-flight save state with ordinary dirty/clean state. Lock
+  layout mutations (including reset) until publication settles, or explicitly
+  supersede the durable intent; otherwise disk may contain a layout the UI
+  still presents as the previous clean snapshot.
