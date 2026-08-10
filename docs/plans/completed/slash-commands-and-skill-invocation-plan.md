@@ -1,12 +1,12 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Active — Phases 0–4 are complete; Phase 5 hardening and release is next
+- **Status:** Complete — all delivery phases and release hardening passed final review
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
-  [Keyboard Command System](completed/keyboard-command-system-plan.md),
-  [Aiden Assistant](aiden-assistant-plan.md), and
-  [Pi Provider Integration](pi-provider-integration-plan.md)
+  [Keyboard Command System](keyboard-command-system-plan.md),
+  [Aiden Assistant](../aiden-assistant-plan.md), and
+  [Pi Provider Integration](../pi-provider-integration-plan.md)
 
 ## Outcome
 
@@ -646,6 +646,36 @@ suite, TypeScript, ESLint, diff checks, and three independent clean
 correctness, adversarial, and edge-case reviews.
 
 ### Phase 5 — Hardening and release
+
+**Release-candidate validation completed 2026-08-09.** The registered focused
+gate passes 289 tests. A mounted 500-skill benchmark executes the real ranking,
+presence, and fresh `ComposerSlashPalette` React mount path at a measured p95
+of 22.30 ms (28.37 ms maximum in the full focused gate), while traps on the production `aidenAPI`
+bridge and `fetch` prove that opening/filtering the palette performs no renderer
+IPC, MCP, or network call. TypeScript, ESLint,
+production builds, hardened Developer ID packaging, strict package
+verification, and formatting/diff checks pass. React Doctor reports no new
+feature-specific error; its changed-branch score is 79 with six previously
+reviewed structural/performance advisories.
+
+The signed packaged app was exercised in an isolated profile without touching
+the installed production app or its data. Direct checks covered light and dark
+themes, all four appearance presets, macOS Increase Contrast, reduced motion,
+wide and 592 px narrow layouts, a 499-skill catalog capped to 100 visible rows,
+keyboard selection and Escape focus restoration, Command-K parity, VoiceOver
+enabled with VO navigation and textarea focus recovery, safe configured-skill
+selection/provenance, native text attachment selection and returned focus,
+the dictation entry point, the model picker, an active/stop generation state,
+and a real Ask First approval card that was denied. The isolated local model
+used loopback only; the app also launched with that endpoint unavailable and
+kept the file UI operational. Automated main/renderer tests complement those
+direct checks for skill add/change/delete races, cancellation, workspace and
+config changes, append/create crash reconciliation, relaunch, legacy histories,
+and the invariant that skill instructions never reach renderer storage or
+change permission/approval authority.
+
+Three independent high-reasoning correctness, adversarial, and edge-case
+review lanes returned explicit clean verdicts on the corrected final snapshot.
 
 - Run full regression, packaged-app, accessibility, theme, and performance
   gates.

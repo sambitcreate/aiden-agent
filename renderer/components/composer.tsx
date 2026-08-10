@@ -857,6 +857,7 @@ export function Composer({
       toast.error(error instanceof Error ? error.message : "Couldn't read that file.");
     } finally {
       setAttaching(false);
+      requestAnimationFrame(() => inputRef?.current?.focus({ preventScroll: true }));
     }
   };
 

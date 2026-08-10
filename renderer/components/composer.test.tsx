@@ -69,6 +69,14 @@ test("composer slash palette is an overlaid textarea-owned accessible listbox", 
   assert.match(palette, /absolute inset-x-3 bottom-full/u);
   assert.match(palette, /onPointerDown=\{\(event\) => event\.preventDefault\(\)\}/u);
   assert.match(palette, /motion-reduce:animate-none/u);
+  assert.match(palette, /max-\[520px\]:hidden/u);
+  assert.match(palette, /min-w-0 truncate/u);
+  assert.match(styles, /\.composer-slash-palette\s*\{\s*container-type:\s*inline-size/u);
+  assert.match(styles, /@container \(width <= 520px\)[\s\S]{0,120}\.composer-slash-shortcuts/u);
+  assert.match(
+    composer,
+    /setAttaching\(false\);\s*requestAnimationFrame\(\(\) => inputRef\?\.current\?\.focus/u,
+  );
   assert.match(palette, /data-presence=\{presenceState\}/u);
   assert.match(styles, /@keyframes aiden-slash-palette-in/u);
   assert.match(styles, /@keyframes aiden-slash-palette-out/u);

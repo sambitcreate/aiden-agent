@@ -236,10 +236,12 @@ export function ComposerSlashPalette({
       data-presence={presenceState}
       aria-hidden={presenceState === "exiting" ? "true" : undefined}
     >
-      <div className="flex h-9 items-center gap-2 border-b border-separator px-3 text-small text-secondary">
-        <Search aria-hidden="true" className="size-3.5" />
-        <span>Commands and skills</span>
-        <span className="ml-auto text-mini text-tertiary">↑↓ navigate · ↩ run · esc close</span>
+      <div className="flex h-9 min-w-0 items-center gap-2 border-b border-separator px-3 text-small text-secondary">
+        <Search aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate">Commands and skills</span>
+        <span className="composer-slash-shortcuts ml-auto shrink-0 text-mini text-tertiary max-[520px]:hidden">
+          ↑↓ navigate · ↩ run · esc close
+        </span>
       </div>
       <div
         id={COMPOSER_SLASH_PALETTE_ID}

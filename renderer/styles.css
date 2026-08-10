@@ -1675,6 +1675,16 @@ textarea {
   margin-inline: auto;
 }
 
+.composer-slash-palette {
+  container-type: inline-size;
+}
+
+@container (width <= 520px) {
+  .composer-slash-shortcuts {
+    display: none;
+  }
+}
+
 /* ── Dictation pill window (renderer/pill) ─────────────────────────────── */
 /* The pill BrowserWindow is fully transparent; only the pill surface paints. */
 .aiden-pill-window,
