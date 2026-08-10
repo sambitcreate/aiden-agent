@@ -65,6 +65,8 @@ export interface StoredProvider {
 /** Provider as exposed to the renderer — `hasKey` is derived, the key itself never leaves the backend. */
 export interface Provider extends StoredProvider {
   hasKey: boolean;
+  /** True only when Aiden owns a stored credential it can remove. */
+  canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
   /** Pi-owned setup options. No credentials or provider environment values cross IPC. */

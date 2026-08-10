@@ -209,6 +209,14 @@ export function slashActionCommitIsCurrent(
   );
 }
 
+/** Session actions may own focus or navigation while still preserving the exact draft. */
+export function slashActionDraftCommitIsCurrent(
+  expected: { draft: string; epoch: number },
+  current: { draft: string; epoch: number },
+): boolean {
+  return expected.draft === current.draft && expected.epoch === current.epoch;
+}
+
 export function slashTabAcceptsSelection(selectableCount: number, actionPending: boolean): boolean {
   return selectableCount === 1 && !actionPending;
 }

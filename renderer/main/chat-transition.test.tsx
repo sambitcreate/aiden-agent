@@ -92,6 +92,34 @@ test("a stale send cannot clear the next chat's starting-generation guard", () =
   );
 });
 
+test("a completed chat copy cannot override newer navigation", () => {
+  const pane = source("./chat-pane.tsx");
+  const copy = between(pane, "const copyChat = React.useCallback(", "const exportChat");
+  const awaitCopy = copy.indexOf("await chatsApi.copyVisibleHistory(");
+  const staleGuard = copy.indexOf(
+    "if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;",
+  );
+  const navigate = copy.indexOf('await navigate({ to: "/chat/$chatId"');
+  assert.ok(awaitCopy >= 0 && staleGuard > awaitCopy && navigate > staleGuard);
+});
+
+test("session navigation seeds caches, respects route intent, and restores destination focus", () => {
+  const pane = source("./chat-pane.tsx");
+  const copy = between(pane, "const copyChat = React.useCallback(", "const exportChat");
+  assert.match(copy, /setQueryData<ChatMeta\[\]>/u);
+  assert.match(copy, /requestAnimationFrame\(\(\) => composerRef\.current\?\.focus/u);
+  const worktree = between(
+    pane,
+    "const createGitWorktree = React.useCallback(",
+    "React.useEffect(() => {\n    environmentPanel.setCreateWorktreeHandler",
+  );
+  assert.match(worktree, /setQueryData<Workspace\[\]>/u);
+  assert.match(worktree, /chatIdRef\.current !== sourceChatId/u);
+  assert.match(worktree, /The worktree was created, but its chat could not be created/u);
+  assert.match(worktree, /await navigate/u);
+  assert.match(worktree, /requestAnimationFrame\(\(\) => composerRef\.current\?\.focus/u);
+});
+
 test("a committed append is not presented as unsent when generation start later fails", () => {
   const pane = source("./chat-pane.tsx");
   const handleSend = between(

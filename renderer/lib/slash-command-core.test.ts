@@ -12,6 +12,7 @@ import {
   selectedSkillStatus,
   successfulSendAttachmentRemainder,
   slashActionCommitIsCurrent,
+  slashActionDraftCommitIsCurrent,
   slashPalettePresenceState,
   slashTabAcceptsSelection,
   updateSlashSessionTracker,
@@ -260,6 +261,15 @@ test("an async action only commits against the exact unblocked draft session it 
       ...expected,
       blocked: true,
     }),
+    false,
+  );
+});
+
+test("a session action may own focus while never consuming a changed draft", () => {
+  const expected = { draft: "/export", epoch: 4 };
+  assert.equal(slashActionDraftCommitIsCurrent(expected, expected), true);
+  assert.equal(
+    slashActionDraftCommitIsCurrent(expected, { draft: "/export later", epoch: 5 }),
     false,
   );
 });

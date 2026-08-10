@@ -244,6 +244,7 @@ const computerUseGenerationGate = new ComputerUseGenerationGate();
 const chatComputerUseMutationGate = new ChatComputerUseMutationGate();
 const chatDeletionGate = new ChatDeletionGate();
 const chatWorkspaceMutationGate = new ChatWorkspaceMutationGate();
+const chatCopyGate = new ChatWorkspaceMutationGate();
 const chatTurnAdmission = new ChatTurnAdmission();
 const geminiContextCache = new GeminiContextCache({
   onWarning: (message, error) => logger.warn("pi", message, error),
@@ -775,6 +776,9 @@ export const llmClient = {
         throw new Error(
           "This chat is changing workspaces. Try again in a moment.",
         );
+      }
+      if (chatCopyGate.isChanging(params.chatId)) {
+        throw new Error("This chat is being copied. Try again in a moment.");
       }
       if (initializing.has(streamId) || active.has(streamId)) {
         throw new Error("A generation with this stream id is already running.");
@@ -1993,6 +1997,16 @@ export const llmClient = {
     return chatWorkspaceMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
   },
 
+  beginChatCopy(chatId: string): (() => void) | null {
+    if (chatDeletionGate.isDeleting(chatId)) return null;
+    return chatCopyGate.tryBegin(chatId, this.isChatBusy(chatId));
+  },
+
+  beginChatExport(chatId: string): (() => void) | null {
+    if (chatDeletionGate.isDeleting(chatId)) return null;
+    return chatCopyGate.tryBegin(chatId, this.isChatBusy(chatId));
+  },
+
   /** Claim one append-to-generation turn before its first persistence await. */
   beginChatTurn(
     chatId: string,
@@ -2004,6 +2018,7 @@ export const llmClient = {
       !ownerId ||
       chatTurnAdmission.requiresAppendReconciliation(ownerId) ||
       chatDeletionGate.isDeleting(chatId) ||
+      chatCopyGate.isChanging(chatId) ||
       chatWorkspaceMutationGate.isChanging(chatId) ||
       chatComputerUseMutationGate.isChanging(chatId)
     ) {

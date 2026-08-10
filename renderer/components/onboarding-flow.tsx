@@ -320,7 +320,8 @@ const featureBentos: FeatureBento[] = [
     id: "commands",
     group: "control",
     title: "Command Palette",
-    description: "Jump to chats, models, providers, settings, and tools with Command-K.",
+    description:
+      "Use Command-K or slash commands to navigate, invoke skills, and manage chat sessions.",
     icon: Command,
     imageUrl: FEATURE_ILLUSTRATIONS.commands,
     size: "standard",

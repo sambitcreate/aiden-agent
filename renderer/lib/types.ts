@@ -46,6 +46,8 @@ export interface Provider {
   /** Pi owns this provider's endpoint, models, auth, and transport. */
   isBuiltin?: boolean;
   hasKey: boolean;
+  /** True only when Aiden owns a stored credential it can remove. */
+  canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
   /** Pi-owned setup options. Credential payloads never leave Electron main. */

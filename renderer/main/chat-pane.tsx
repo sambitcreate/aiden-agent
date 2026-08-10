@@ -36,6 +36,7 @@ import {
 } from "../lib/ipc";
 import {
   queryKeys,
+  logoutBuiltinProvider,
   refreshCodexProviderState,
   useChat,
   useComputerUseStatus,
@@ -53,6 +54,8 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   type Attachment,
   type Chat,
+  type ChatMeta,
+  type Workspace,
   type WorkspacePermission,
 } from "../lib/types";
 import { computerUseReadinessReady } from "../lib/computer-use-control";
@@ -115,8 +118,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const computerUseGloballyEnabled = settings.data?.computerUseEnabled === true;
   const computerUseStatus = useComputerUseStatus(computerUseGloballyEnabled);
   const { activeId, workspaces, select: selectWorkspace } = useActiveWorkspace();
-  const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] =
-    React.useState<ReadonlySet<string>>(() => new Set());
+  const [appendReconciliationRequiredChats, setAppendReconciliationRequiredChats] = React.useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const chatWorkspaceId = chat.data?.workspaceId;
   const effectiveWorkspaceId = chat.data ? persistedChatWorkspaceId(chatWorkspaceId) : undefined;
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
@@ -362,6 +366,86 @@ export function ChatPane({ chatId }: { chatId: string }) {
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
     },
     [chatId, qc],
+  );
+
+  const copyChat = React.useCallback(
+    async (throughAssistantMessageId?: string) => {
+      if (documentAppendReconciliationRequired) {
+        throw new Error("Reload Aiden before copying this chat.");
+      }
+      if (isGenerating || isStartingGeneration || approvals.length > 0) {
+        throw new Error("Finish the current response or approval before copying this chat.");
+      }
+      const sourceChatId = chatId;
+      const copied = await chatsApi.copyVisibleHistory(sourceChatId, throughAssistantMessageId);
+      const copiedWorkspaceId = persistedChatWorkspaceId(copied.workspaceId);
+      qc.setQueryData(queryKeys.chat(copied.id), copied);
+      qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(copiedWorkspaceId), (current) => [
+        {
+          id: copied.id,
+          title: copied.title,
+          workspaceId: copiedWorkspaceId,
+          providerId: copied.providerId,
+          model: copied.model,
+          createdAt: copied.createdAt,
+          updatedAt: copied.updatedAt,
+        },
+        ...(current ?? []).filter((entry) => entry.id !== copied.id),
+      ]);
+      void qc.invalidateQueries({ queryKey: queryKeys.chats }).catch(() => {
+        toast.info("The chat was copied, but chat history could not refresh yet.");
+      });
+      if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
+      selectWorkspace(copiedWorkspaceId);
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: copied.id } });
+        requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+      } catch {
+        toast.info("The chat was copied, but Aiden could not open it automatically.");
+      }
+    },
+    [
+      approvals.length,
+      chatId,
+      documentAppendReconciliationRequired,
+      isGenerating,
+      isStartingGeneration,
+      navigate,
+      qc,
+      selectWorkspace,
+    ],
+  );
+
+  const exportChat = React.useCallback(async () => {
+    const result = await chatsApi.export(chatId);
+    return result.status;
+  }, [chatId]);
+
+  const logoutProvider = React.useCallback(
+    async (providerId: string) => {
+      return logoutBuiltinProvider(qc, providerId);
+    },
+    [qc],
+  );
+
+  const authenticatedProviders = React.useMemo(
+    () =>
+      (providers.data ?? [])
+        .filter(
+          (provider) =>
+            provider.canLogout === true &&
+            (provider.isBuiltin === true || provider.id === OPENAI_CODEX_PROVIDER_ID),
+        )
+        .slice(0, 100)
+        .map((provider) => ({
+          id: provider.id,
+          label: provider.label,
+          detail:
+            provider.id === OPENAI_CODEX_PROVIDER_ID
+              ? "OpenAI Codex OAuth"
+              : "Aiden-managed Pi credential",
+        })),
+    [providers.data],
   );
 
   React.useLayoutEffect(() => {
@@ -962,6 +1046,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   const createGitWorktree = React.useCallback(
     async (branchName: string) => {
+      const sourceChatId = chatId;
       if (documentAppendReconciliationRequired) {
         throw new Error("Reload Aiden before creating a worktree from this chat.");
       }
@@ -977,18 +1062,64 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing Git workspaces.");
       const workspace = await gitApi.createWorktree(effectiveWorkspace.id, branchName);
-      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      qc.setQueryData<Workspace[]>(queryKeys.workspaces, (current) => [
+        workspace,
+        ...(current ?? []).filter((entry) => entry.id !== workspace.id),
+      ]);
+      void qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+      if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
       if (isNewChat) {
-        await moveNewChatToWorkspace(workspace.id);
+        try {
+          await moveNewChatToWorkspace(workspace.id);
+        } catch (error) {
+          toast.info(
+            error instanceof Error
+              ? `The worktree was created, but this chat could not move to it: ${error.message}`
+              : "The worktree was created, but this chat could not move to it.",
+          );
+        }
         return;
       }
-      const created = await chatsApi.create({ workspaceId: workspace.id });
+      let created: Chat;
+      try {
+        created = await chatsApi.create({ workspaceId: workspace.id });
+      } catch (error) {
+        toast.info(
+          error instanceof Error
+            ? `The worktree was created, but its chat could not be created: ${error.message}`
+            : "The worktree was created, but its chat could not be created.",
+        );
+        return;
+      }
+      qc.setQueryData(queryKeys.chat(created.id), created);
+      qc.setQueryData<ChatMeta[]>(queryKeys.chatsIn(workspace.id), (current) => [
+        {
+          id: created.id,
+          title: created.title,
+          workspaceId: workspace.id,
+          providerId: created.providerId,
+          model: created.model,
+          createdAt: created.createdAt,
+          updatedAt: created.updatedAt,
+        },
+        ...(current ?? []).filter((entry) => entry.id !== created.id),
+      ]);
+      if (!mountedRef.current || chatIdRef.current !== sourceChatId) return;
       selectWorkspace(workspace.id);
-      await qc.invalidateQueries({ queryKey: queryKeys.chats });
-      void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+      void qc.invalidateQueries({ queryKey: queryKeys.chats });
+      try {
+        await navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
+        requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+      } catch {
+        selectWorkspace(effectiveWorkspace.id);
+        toast.info(
+          "The worktree and chat were created, but Aiden could not open them automatically.",
+        );
+      }
     },
     [
       effectiveWorkspace,
+      chatId,
       documentAppendReconciliationRequired,
       environmentPanel.editorState.dirty,
       environmentPanel.editorState.saving,
@@ -1290,6 +1421,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             currentChatTitle={chat.data?.title}
             latestAssistantResponse={latestAssistantResponse}
             slashNavigationBlockedReason={settingsBlockedReason}
+            slashSessionBlockedReason={
+              documentAppendReconciliationRequired
+                ? "Reload Aiden before copying this chat."
+                : undefined
+            }
             slashPaletteBlocked={Boolean(pending)}
             slashActionBusy={isGenerating || isStartingGeneration}
             onOpenSettings={(section) =>
@@ -1300,6 +1436,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             onRenameChat={renameChat}
             onOpenReview={() => environmentPanel.openReview("changes")}
+            sessionChat={chat.data ?? undefined}
+            authenticatedProviders={authenticatedProviders}
+            onCloneChat={() => copyChat()}
+            onForkChat={(throughAssistantMessageId) => copyChat(throughAssistantMessageId)}
+            onExportChat={exportChat}
+            onLogoutProvider={logoutProvider}
             thinkingControl={
               googleThinkingSupported ? (
                 <ThinkingControl

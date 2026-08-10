@@ -34,6 +34,10 @@ interface GitBranchPickerProps {
   disabledReason?: string;
   detached?: boolean;
   unborn?: boolean;
+  /** Used with a keyed mount by `/worktree` to open the managed flow. */
+  openWorktreeOnMount?: boolean;
+  /** Restores focus to the slash-command origin instead of the untouched trigger. */
+  programmaticReturnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 type CreateMode = "branch" | "worktree" | null;
@@ -58,12 +62,19 @@ export function GitBranchPicker({
   disabledReason,
   detached: detachedProp = false,
   unborn: unbornProp = false,
+  openWorktreeOnMount = false,
+  programmaticReturnFocusRef,
 }: GitBranchPickerProps) {
   const qc = useQueryClient();
   const searchRef = React.useRef<HTMLInputElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = React.useState(false);
-  const [createMode, setCreateMode] = React.useState<CreateMode>(null);
+  const openManagedWorktree =
+    openWorktreeOnMount && Boolean(onCreateWorktree) && !disabled && !unbornProp;
+  const programmaticOriginRef = React.useRef(openManagedWorktree);
+  const [open, setOpen] = React.useState(openManagedWorktree);
+  const [createMode, setCreateMode] = React.useState<CreateMode>(
+    openManagedWorktree ? "worktree" : null,
+  );
   const [newName, setNewName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
@@ -109,6 +120,11 @@ export function GitBranchPicker({
   };
 
   const backToList = () => {
+    if (programmaticOriginRef.current) {
+      setOpen(false);
+      reset();
+      return;
+    }
     reset();
     requestAnimationFrame(() => searchRef.current?.focus());
   };
@@ -226,7 +242,13 @@ export function GitBranchPicker({
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           requestAnimationFrame(() => {
-            if (triggerRef.current?.isConnected && !triggerRef.current.disabled) triggerRef.current.focus();
+            const returnTarget = programmaticOriginRef.current
+              ? programmaticReturnFocusRef?.current
+              : triggerRef.current;
+            programmaticOriginRef.current = false;
+            if (returnTarget?.isConnected && !(returnTarget instanceof HTMLButtonElement && returnTarget.disabled)) {
+              returnTarget.focus();
+            }
           });
         }}
       >

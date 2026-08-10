@@ -21,6 +21,9 @@ const context = {
   hasChat: true,
   hasLatestAssistantResponse: true,
   hasWorkspace: true,
+  hasCompletedTurn: true,
+  hasAuthenticatedProvider: true,
+  hasManagedWorktreeFlow: true,
   idle: true,
   payloadAfterToken: false,
 };
@@ -82,6 +85,60 @@ test("slash availability combines the dispatcher with composer-specific state", 
     }).reason ?? "",
     /unavailable/iu,
   );
+  assert.match(
+    slashCommandAvailability(command("fork"), {
+      ...context,
+      hasCompletedTurn: false,
+    }).reason ?? "",
+    /complete an assistant turn/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("clone"), { ...context, idle: false }).reason ?? "",
+    /response or approval/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("export"), {
+      ...context,
+      idle: false,
+      idleBlockedReason: "Finish loading attachments.",
+    }).reason ?? "",
+    /loading attachments/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("clone"), {
+      ...context,
+      chatCloneBlockedReason: "Too many messages to clone.",
+    }).reason ?? "",
+    /too many messages/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("logout"), {
+      ...context,
+      hasAuthenticatedProvider: false,
+    }).reason ?? "",
+    /no authenticated provider/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("worktree"), {
+      ...context,
+      hasManagedWorktreeFlow: false,
+    }).reason ?? "",
+    /not an available Git worktree source/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("worktree"), {
+      ...context,
+      hasAttachmentsOrSelectedSkill: true,
+    }).reason ?? "",
+    /remove draft attachments/iu,
+  );
+  assert.match(
+    slashCommandAvailability(command("clone"), {
+      ...context,
+      payloadAfterToken: true,
+    }).reason ?? "",
+    /clear the draft/iu,
+  );
 });
 
 test("slash action adapters route canonical actions without interpreting draft text", () => {
@@ -103,6 +160,20 @@ test("slash action adapters route canonical actions without interpreting draft t
     openAccess: () => {
       calls.push("access");
     },
+    openFork: () => {
+      calls.push("fork");
+    },
+    cloneChat: () => {
+      calls.push("clone");
+    },
+    exportChat: () => {
+      calls.push("export");
+    },
+    openSessionDetails: () => calls.push("session"),
+    openLogout: () => calls.push("logout"),
+    openWorktree: (branchName) => {
+      calls.push(`worktree:${branchName ?? "picker"}`);
+    },
   };
 
   executeSlashCommandAction(command("model"), " ignored", handlers);
@@ -112,6 +183,12 @@ test("slash action adapters route canonical actions without interpreting draft t
   executeSlashCommandAction(command("review"), "", handlers);
   executeSlashCommandAction(command("access"), "", handlers);
   executeSlashCommandAction(command("theme"), "", handlers);
+  executeSlashCommandAction(command("fork"), "", handlers);
+  executeSlashCommandAction(command("clone"), "", handlers);
+  executeSlashCommandAction(command("export"), "", handlers);
+  executeSlashCommandAction(command("session"), "", handlers);
+  executeSlashCommandAction(command("logout"), "", handlers);
+  executeSlashCommandAction(command("worktree"), " feature/phase-four ", handlers);
 
   assert.deepEqual(calls, [
     "command:model.change",
@@ -121,6 +198,12 @@ test("slash action adapters route canonical actions without interpreting draft t
     "review",
     "access",
     "command:settings.search",
+    "fork",
+    "clone",
+    "export",
+    "session",
+    "logout",
+    "worktree:feature/phase-four",
   ]);
 });
 
@@ -135,6 +218,13 @@ test("argument actions validate bounded single-line titles before dispatch", () 
     /one line/iu,
   );
   assert.equal(validateSlashCommandArgument(command("name"), "x".repeat(121)).valid, false);
+  assert.deepEqual(
+    validateSlashCommandArgument(command("worktree"), " feature/session-commands "),
+    { valid: true, value: "feature/session-commands" },
+  );
+  for (const invalid of ["bad branch", "../escape", "refs//double", "branch.lock", "topic@{1}"]) {
+    assert.equal(validateSlashCommandArgument(command("worktree"), invalid).valid, false);
+  }
 });
 
 test("action attempts distinguish immediate UI dispatch from delayed clipboard work", async () => {

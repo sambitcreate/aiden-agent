@@ -1,6 +1,6 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Active — Phases 0–3 are complete; Phase 4 selected session commands are next
+- **Status:** Active — Phases 0–4 are complete; Phase 5 hardening and release is next
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
@@ -100,20 +100,20 @@ underlying product capability does not exist.
 | `/settings`      | Core              | Open Aiden Settings through the existing settings command.                     |
 | `/model`         | Core              | Open the existing model picker; alias `/models`.                               |
 | `/scoped-models` | Defer             | Aiden has no equivalent scoped-model editor yet.                               |
-| `/export`        | Later             | Use a main-owned save dialog and an Aiden export schema.                       |
+| `/export`        | Shipped (Phase 4) | Main-owned save dialog and a bounded, versioned Aiden export schema.           |
 | `/import`        | Defer             | Requires schema/version, attachment, duplicate, and trust policy.              |
 | `/share`         | Omit              | Aiden has no share service or privacy contract.                                |
 | `/copy`          | Core              | Copy the most recent assistant response, with a disabled reason when absent.   |
 | `/name`          | Core              | Rename the current chat; argument or small inline prompt.                      |
-| `/session`       | Later             | Open a truthful Aiden session-details view when that view exists.              |
+| `/session`       | Shipped (Phase 4) | Open a truthful Aiden session-details view.                                    |
 | `/changelog`     | Omit              | Do not inherit Pi release notes for an Aiden product surface.                  |
 | `/hotkeys`       | Core              | Open Keyboard Shortcuts; alias `/shortcuts`.                                   |
-| `/fork`          | Later             | Create a new chat from a selected completed turn using Aiden data rules.       |
-| `/clone`         | Later             | Clone the current linear chat using Aiden data rules.                          |
+| `/fork`          | Shipped (Phase 4) | Create a new chat from a selected completed turn using Aiden data rules.       |
+| `/clone`         | Shipped (Phase 4) | Clone the current linear chat using Aiden data rules.                          |
 | `/tree`          | Omit              | Aiden has no Pi session-tree UI or data model.                                 |
 | `/trust`         | Omit              | Workspace trust is not currently an Aiden capability.                          |
 | `/login`         | Core              | Open the canonical provider connection surface.                                |
-| `/logout`        | Later             | Requires provider selection, impact copy, and confirmation.                    |
+| `/logout`        | Shipped (Phase 4) | Choose a removable built-in credential, explain impact, and confirm.           |
 | `/new`           | Core              | Create a new chat through the existing canonical action.                       |
 | `/compact`       | Defer             | Compaction exists internally, but the user-facing contract remains unfinished. |
 | `/resume`        | Core              | Open chat search/history; alias `/chats`.                                      |
@@ -159,15 +159,15 @@ adapter, availability function, and behavior when the draft contains content.
 | `/skills`      | —              | Open skill management. This is distinct from invoking a skill row.               |
 | `/theme`       | `/appearance`  | Open the current appearance choices.                                             |
 
-### Later catalog additions
+### Selected session commands (Phase 4)
 
-| Command     | Preconditions                                                              |
+| Command     | Shipped contract                                                           |
 | ----------- | -------------------------------------------------------------------------- |
 | `/logout`   | Provider chooser, confirmation, truthful account-impact copy, and tests.   |
-| `/fork`     | Stable turn selection and an explicit copy contract.                       |
+| `/fork`     | Stable turn selection and an explicit visible-history copy contract.       |
 | `/clone`    | Stable current-chat cloning contract.                                      |
-| `/export`   | Main-owned save dialog and versioned Aiden export schema.                  |
-| `/session`  | A real Aiden session-details destination.                                  |
+| `/export`   | Main-owned save dialog and bounded, versioned Aiden export schema.         |
+| `/session`  | A truthful Aiden session-details destination.                              |
 | `/worktree` | A managed-worktree creation flow with branch/name input and safety checks. |
 
 The screenshot’s Chat, Cloud, Code review, Fast, Feedback, Goal, Init, MCP,
@@ -637,6 +637,13 @@ not be presented as complete slash-command support without active skills.
 
 **Exit:** each enabled row maps to a real, tested Aiden capability; unsupported
 Pi rows remain absent.
+
+**Completed 2026-08-09:** all six selected session commands ship with bounded
+main-process contracts, durable copy/export/worktree semantics, safe
+provider-credential removal, renderer draft/focus recovery, and deterministic
+large-history/Unicode behavior. The final snapshot passed the expanded focused
+suite, TypeScript, ESLint, diff checks, and three independent clean
+correctness, adversarial, and edge-case reviews.
 
 ### Phase 5 — Hardening and release
 

@@ -5,13 +5,21 @@ import type { SlashCommandDefinition } from "../shared/slash-commands";
 export interface SlashCommandActionContext {
   canExecuteCommand: (commandId: CommandId) => boolean;
   hasChat: boolean;
+  hasCompletedTurn?: boolean;
   hasLatestAssistantResponse: boolean;
+  hasAuthenticatedProvider?: boolean;
   hasWorkspace: boolean;
+  hasManagedWorktreeFlow?: boolean;
   idle: boolean;
+  idleBlockedReason?: string;
   navigationBlockedReason?: string;
   composerControlBlockedReason?: string;
   environmentBlockedReason?: string;
+  sessionActionBlockedReason?: string;
+  chatCloneBlockedReason?: string;
+  worktreeBlockedReason?: string;
   payloadAfterToken: boolean;
+  hasAttachmentsOrSelectedSkill?: boolean;
 }
 
 export interface SlashCommandAvailabilityResult {
@@ -32,6 +40,12 @@ export interface SlashCommandActionHandlers {
   copyLatestResponse: () => void | Promise<void>;
   openReview: () => void;
   openAccess: () => void;
+  openFork?: () => void;
+  cloneChat?: () => void | Promise<void>;
+  exportChat?: () => void | Promise<void>;
+  openSessionDetails?: () => void;
+  openLogout?: () => void;
+  openWorktree?: (branchName?: string) => void | Promise<void>;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -62,9 +76,38 @@ export function slashCommandAvailability(
         return unavailable("There is no assistant response to copy yet.");
       }
       break;
+    case "idle-chat-session":
+      if (!context.hasChat) return unavailable("Open a chat first.");
+      if (
+        command.action.kind === "session" &&
+        command.action.action === "fork" &&
+        !context.hasCompletedTurn
+      ) {
+        return unavailable("Complete an assistant turn before forking this chat.");
+      }
+      if (
+        command.action.kind === "session" &&
+        command.action.action === "clone" &&
+        context.chatCloneBlockedReason
+      ) {
+        return unavailable(context.chatCloneBlockedReason);
+      }
+      if (!context.idle) {
+        return unavailable(context.idleBlockedReason ?? "Finish the current response or approval first.");
+      }
+      if (context.sessionActionBlockedReason) {
+        return unavailable(context.sessionActionBlockedReason);
+      }
+      break;
+    case "authenticated-provider":
+      if (!context.hasAuthenticatedProvider) {
+        return unavailable("There is no authenticated provider to sign out.");
+      }
+      break;
     case "workspace-required":
     case "workspace-terminal":
     case "workspace-environment":
+    case "workspace-worktree":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
       break;
     case "always":
@@ -80,6 +123,20 @@ export function slashCommandAvailability(
     context.environmentBlockedReason
   ) {
     return unavailable(context.environmentBlockedReason);
+  }
+  if (command.availability === "workspace-worktree") {
+    if (context.hasAttachmentsOrSelectedSkill) {
+      return unavailable("Remove draft attachments and the selected skill first.");
+    }
+    if (!context.hasManagedWorktreeFlow) {
+      return unavailable("This workspace is not an available Git worktree source.");
+    }
+    if (!context.idle) {
+      return unavailable(context.idleBlockedReason ?? "Finish the current response first.");
+    }
+    if (context.worktreeBlockedReason) {
+      return unavailable(context.worktreeBlockedReason);
+    }
   }
   const navigatesAway =
     command.action.kind === "settings" ||
@@ -101,10 +158,33 @@ export function validateSlashCommandArgument(
   if (command.argument === "none") return { valid: true };
   const value = argument.trim();
   if (!value) return { valid: true };
-  if (/[\p{Cc}\p{Cf}]/u.test(value) || Array.from(value).length > 120) {
+  if (command.argument === "optional-title") {
+    if (!/[\p{Cc}\p{Cf}]/u.test(value) && Array.from(value).length <= 120) {
+      return { valid: true, value };
+    }
     return {
       valid: false,
       reason: "Chat titles must be one line and no longer than 120 characters.",
+    };
+  }
+  if (
+    value.length > 100 ||
+    /[\s~^:?*\\\p{Cc}\p{Cf}]/u.test(value) ||
+    value.includes("[") ||
+    value.includes("]") ||
+    value.startsWith("/") ||
+    value.startsWith(".") ||
+    value.startsWith("-") ||
+    value.endsWith("/") ||
+    value.endsWith(".") ||
+    value.endsWith(".lock") ||
+    value.includes("..") ||
+    value.includes("//") ||
+    value.includes("@{")
+  ) {
+    return {
+      valid: false,
+      reason: "Enter a valid Git branch name, such as feature/my-change.",
     };
   }
   return { valid: true, value };
@@ -136,6 +216,37 @@ export function executeSlashCommandAction(
     case "composer-control":
       handlers.openAccess();
       return true;
+    case "session":
+      switch (command.action.action) {
+        case "fork":
+          if (!handlers.openFork) return false;
+          handlers.openFork();
+          return true;
+        case "clone": {
+          if (!handlers.cloneChat) return false;
+          const result = handlers.cloneChat();
+          return result instanceof Promise ? result.then(() => true) : true;
+        }
+        case "export": {
+          if (!handlers.exportChat) return false;
+          const result = handlers.exportChat();
+          return result instanceof Promise ? result.then(() => true) : true;
+        }
+        case "details":
+          if (!handlers.openSessionDetails) return false;
+          handlers.openSessionDetails();
+          return true;
+        case "logout":
+          if (!handlers.openLogout) return false;
+          handlers.openLogout();
+          return true;
+        case "worktree": {
+          if (!handlers.openWorktree) return false;
+          const branchName = argument.trim() || undefined;
+          const result = handlers.openWorktree(branchName);
+          return result instanceof Promise ? result.then(() => true) : true;
+        }
+      }
   }
 }
 

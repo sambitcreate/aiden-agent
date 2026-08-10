@@ -190,8 +190,8 @@ export const providersApi = {
       "providers:auth:cancel",
       request,
     ),
-  logout: (providerId: "openai-codex") =>
-    invoke<CodexProviderSnapshot>("providers:logout", providerId),
+  logout: (providerId: string) =>
+    invoke<unknown>("providers:logout", providerId),
   onAuthPrompt: (handler: (prompt: ProviderAuthPrompt) => void) =>
     onNotification("providers:auth:prompt", handler),
   onAuthEvent: (handler: (event: ProviderAuthEvent) => void) =>
@@ -542,6 +542,13 @@ export const chatsApi = {
     invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
+  copyVisibleHistory: (chatId: string, throughMessageId?: string) =>
+    invokeChatMutation<Chat>("chats:copyVisibleHistory", {
+      chatId,
+      ...(throughMessageId ? { throughMessageId } : {}),
+    }),
+  export: (chatId: string) =>
+    invoke<{ status: "saved" | "cancelled" }>("chats:export", { chatId }),
   moveEmptyToWorkspace: (id: string, workspaceId: string) =>
     invoke<Chat>("chats:moveEmptyToWorkspace", id, workspaceId),
   setComputerUse: (id: string, enabled: boolean) =>

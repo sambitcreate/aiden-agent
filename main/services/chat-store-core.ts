@@ -17,9 +17,16 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import {
+  projectVisibleChatMessage,
+  projectVisibleChatMetadata,
+} from "./visible-chat-projection.js";
+import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contract.js";
+import { jsonStringBytesBounded } from "./json-representation.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
+const MAX_VISIBLE_COPY_BYTES = 64 * 1024 * 1024;
 const SAFE_CHAT_ID = /^[A-Za-z0-9._:-]+$/u;
 const CHAT_DELETE_STAGING =
   /^\.index\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.chat-delete\.tmp$/u;
@@ -505,6 +512,38 @@ export function createChatStore(
     for (const id of transactionIds) await clearChatTransaction(id);
   }
 
+  async function installNewChat(
+    chat: Chat,
+    assertCurrent?: () => void,
+  ): Promise<Chat> {
+    try {
+      await writeChatAndMeta(chat, () => assertCurrent?.());
+      return chat;
+    } catch (createError) {
+      let installed: Chat | null;
+      try {
+        installed = await readChat(chat.id);
+      } catch {
+        throw new ChatCreateReconciliationRequiredError(chat.id);
+      }
+      if (!installed) {
+        try {
+          await clearChatTransaction(chat.id);
+        } catch {
+          throw new ChatCreateReconciliationRequiredError(chat.id);
+        }
+        throw createError;
+      }
+      try {
+        await updateMeta(installed);
+        await clearChatTransaction(installed.id);
+        return installed;
+      } catch {
+        throw new ChatCreateReconciliationRequiredError(chat.id);
+      }
+    }
+  }
+
   return {
     /** List chats, newest first. Legacy chats without a workspace fall under the default one. */
     async list(workspaceId?: string): Promise<ChatMeta[]> {
@@ -545,32 +584,130 @@ export function createChatStore(
           updatedAt: now,
           messages: [],
         };
-        try {
-          await writeChatAndMeta(chat, () => input.assertCurrent?.());
-          return chat;
-        } catch (createError) {
-          let installed: Chat | null;
-          try {
-            installed = await readChat(chat.id);
-          } catch {
-            throw new ChatCreateReconciliationRequiredError(chat.id);
+        return installNewChat(chat, input.assertCurrent);
+      });
+    },
+
+    /** Copy only visible linear history; private runtime fields never enter the new payload. */
+    async copyVisibleHistory(input: {
+      sourceChatId: string;
+      expectedWorkspaceId?: string;
+      throughAssistantMessageId?: string;
+      assertCurrent?: () => void;
+    }): Promise<Chat> {
+      return serialized(async () => {
+        input.assertCurrent?.();
+        const source = await readChat(input.sourceChatId);
+        if (!source) throw new Error(`Chat ${input.sourceChatId} not found`);
+        if (
+          input.expectedWorkspaceId !== undefined &&
+          (source.workspaceId ?? DEFAULT_WORKSPACE_ID) !==
+            input.expectedWorkspaceId
+        ) {
+          throw new Error(
+            "The chat workspace changed before it could be copied.",
+          );
+        }
+
+        let throughIndex = source.messages.length - 1;
+        if (input.throughAssistantMessageId !== undefined) {
+          throughIndex = source.messages.findIndex(
+            (message) =>
+              message.id === input.throughAssistantMessageId &&
+              message.role === "assistant",
+          );
+          if (throughIndex < 0) {
+            throw new Error("Choose a completed assistant turn to fork from.");
           }
-          if (!installed) {
-            try {
-              await clearChatTransaction(chat.id);
-            } catch {
-              throw new ChatCreateReconciliationRequiredError(chat.id);
+          let hasVisibleUser = false;
+          for (let index = 0; index <= throughIndex; index += 1) {
+            if (source.messages[index]?.role === "user") {
+              hasVisibleUser = true;
+              break;
             }
-            throw createError;
           }
-          try {
-            await updateMeta(installed);
-            await clearChatTransaction(installed.id);
-            return installed;
-          } catch {
-            throw new ChatCreateReconciliationRequiredError(chat.id);
+          if (!hasVisibleUser) {
+            throw new Error("The selected turn has no user message to copy.");
           }
         }
+
+        const copiedMessages: ChatMessage[] = [];
+        let chargedBytes = 0;
+        const charge = (value: string | undefined) => {
+          if (value === undefined) return;
+          const remaining = MAX_VISIBLE_COPY_BYTES - chargedBytes;
+          if (value.length > remaining) {
+            throw new Error("This chat is too large to copy safely.");
+          }
+          chargedBytes += jsonStringBytesBounded(value, remaining);
+          if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
+            throw new Error("This chat is too large to copy safely.");
+          }
+        };
+        const metadata = projectVisibleChatMetadata(source);
+        const suffix = input.throughAssistantMessageId
+          ? " (fork)"
+          : " (copy)";
+        const maximumBaseLength = Math.max(1, 120 - suffix.length);
+        const title = `${Array.from(
+          metadata.title.slice(0, maximumBaseLength * 2),
+        )
+          .slice(0, maximumBaseLength)
+          .join("")}${suffix}`;
+        chargedBytes += 1_024;
+        charge(title);
+        charge(metadata.workspaceId);
+        charge(metadata.providerId);
+        charge(metadata.model);
+        for (let index = 0; index <= throughIndex; index += 1) {
+          const message = projectVisibleChatMessage(source.messages[index]);
+          if (!message) continue;
+          if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
+            throw new Error("This chat has too many messages to copy safely.");
+          }
+          chargedBytes += 512;
+          charge(message.content);
+          charge(message.model);
+          charge(message.skill?.name);
+          for (const attachment of message.attachments ?? []) {
+            chargedBytes += 256;
+            charge(attachment.id);
+            charge(attachment.name);
+            charge(attachment.mimeType);
+            charge(
+              attachment.kind === "image" ? attachment.data : attachment.text,
+            );
+          }
+          if (chargedBytes > MAX_VISIBLE_COPY_BYTES) {
+            throw new Error("This chat is too large to copy safely.");
+          }
+          copiedMessages.push({
+            id: randomUUID(),
+            role: message.role,
+            content: message.content,
+            createdAt: message.createdAt,
+            model: message.model,
+            attachments: safeStoredAttachments(message.attachments),
+            skill:
+              message.role === "user"
+                ? parseSkillProvenanceV1(message.skill)
+                : undefined,
+          });
+        }
+        const now = Date.now();
+        return installNewChat(
+          {
+            id: randomUUID(),
+            title,
+            workspaceId: metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            providerId: metadata.providerId,
+            model: metadata.model,
+            createdAt: now,
+            updatedAt: now,
+            messages: copiedMessages,
+          },
+          input.assertCurrent,
+        );
       });
     },
 

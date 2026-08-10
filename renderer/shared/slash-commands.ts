@@ -63,35 +63,48 @@ export type SlashCommandIcon =
   | "assistant"
   | "chat"
   | "copy"
+  | "clone"
   | "editor"
   | "environment"
+  | "export"
+  | "fork"
   | "hotkeys"
   | "mcp"
   | "model"
   | "new"
+  | "logout"
   | "providers"
   | "rename"
   | "review"
   | "settings"
   | "sidebar"
   | "skills"
-  | "terminal";
+  | "session"
+  | "terminal"
+  | "worktree";
 
 export type SlashCommandAction =
   | { kind: "command"; commandId: CommandId }
   | { kind: "settings"; section: SettingsSection }
   | { kind: "chat"; action: "copy-latest" | "rename" }
   | { kind: "environment"; destination: "review" }
-  | { kind: "composer-control"; control: "access" };
+  | { kind: "composer-control"; control: "access" }
+  | {
+      kind: "session";
+      action: "fork" | "clone" | "export" | "details" | "logout" | "worktree";
+    };
 
 export type SlashCommandAvailability =
   | "always"
   | "chat-required"
   | "idle-chat-navigation"
   | "latest-assistant-response"
+  | "idle-chat-session"
+  | "authenticated-provider"
   | "workspace-required"
   | "workspace-terminal"
-  | "workspace-environment";
+  | "workspace-environment"
+  | "workspace-worktree";
 
 export interface SlashCommandDefinition {
   name: string;
@@ -103,7 +116,7 @@ export interface SlashCommandDefinition {
   action: SlashCommandAction;
   behavior: "immediate" | "picker" | "argument" | "navigation";
   availability: SlashCommandAvailability;
-  argument: "none" | "optional";
+  argument: "none" | "optional-title" | "optional-branch";
   /** Commands such as New chat cannot silently discard meaningful composer state. */
   draftPolicy: "preserve" | "require-empty";
 }
@@ -179,7 +192,7 @@ export const SLASH_COMMANDS = Object.freeze([
     action: { kind: "chat", action: "rename" },
     behavior: "argument",
     availability: "chat-required",
-    argument: "optional",
+    argument: "optional-title",
     draftPolicy: "preserve",
   }),
   define({
@@ -192,6 +205,58 @@ export const SLASH_COMMANDS = Object.freeze([
     action: { kind: "chat", action: "copy-latest" },
     behavior: "immediate",
     availability: "latest-assistant-response",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "fork",
+    aliases: [],
+    title: "Fork from a turn",
+    description: "Start a new chat from a completed turn.",
+    keywords: ["branch", "conversation", "copy"],
+    icon: "fork",
+    action: { kind: "session", action: "fork" },
+    behavior: "picker",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "require-empty",
+  }),
+  define({
+    name: "clone",
+    aliases: [],
+    title: "Clone chat",
+    description: "Copy this visible conversation into a new chat.",
+    keywords: ["duplicate", "conversation"],
+    icon: "clone",
+    action: { kind: "session", action: "clone" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "require-empty",
+  }),
+  define({
+    name: "export",
+    aliases: [],
+    title: "Export chat",
+    description: "Save a versioned Aiden chat file.",
+    keywords: ["download", "json", "backup"],
+    icon: "export",
+    action: { kind: "session", action: "export" },
+    behavior: "immediate",
+    availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "session",
+    aliases: ["details"],
+    title: "Session details",
+    description: "Review stored details for this Aiden chat.",
+    keywords: ["info", "metadata", "summary"],
+    icon: "session",
+    action: { kind: "session", action: "details" },
+    behavior: "picker",
+    availability: "chat-required",
     argument: "none",
     draftPolicy: "preserve",
   }),
@@ -218,6 +283,19 @@ export const SLASH_COMMANDS = Object.freeze([
     action: { kind: "settings", section: "providers" },
     behavior: "navigation",
     availability: "always",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "logout",
+    aliases: ["signout"],
+    title: "Sign out of a provider",
+    description: "Choose an authenticated provider to disconnect.",
+    keywords: ["account", "disconnect", "oauth"],
+    icon: "logout",
+    action: { kind: "session", action: "logout" },
+    behavior: "picker",
+    availability: "authenticated-provider",
     argument: "none",
     draftPolicy: "preserve",
   }),
@@ -310,6 +388,19 @@ export const SLASH_COMMANDS = Object.freeze([
     behavior: "immediate",
     availability: "workspace-required",
     argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "worktree",
+    aliases: [],
+    title: "New isolated worktree",
+    description: "Create an Aiden-managed Git worktree and workspace.",
+    keywords: ["git", "branch", "workspace", "isolated"],
+    icon: "worktree",
+    action: { kind: "session", action: "worktree" },
+    behavior: "argument",
+    availability: "workspace-worktree",
+    argument: "optional-branch",
     draftPolicy: "preserve",
   }),
   define({
