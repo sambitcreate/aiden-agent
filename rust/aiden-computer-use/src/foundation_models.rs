@@ -10,7 +10,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use aiden_core::chat_title::{FoundationModelsConnectionState, FoundationModelsConnectionStatus};
@@ -18,6 +19,8 @@ use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
+
+pub type FoundationModelsCancellationToken = CancellationToken;
 
 pub const FOUNDATION_MODELS_PROTOCOL_VERSION: i64 = 1;
 const STATUS_TIMEOUT_MS: u64 = 5_000;
@@ -409,6 +412,8 @@ pub struct FoundationModelsConnection {
     run_request: NativeFoundationModelsRequestRunner,
     cached: std::sync::Mutex<Option<CachedFmStatus>>,
     in_flight: tokio::sync::Mutex<Option<Arc<InFlightFm>>>,
+    lifecycle: CancellationToken,
+    disposed: AtomicBool,
 }
 
 impl FoundationModelsConnection {
@@ -427,6 +432,8 @@ impl FoundationModelsConnection {
             run_request,
             cached: std::sync::Mutex::new(None),
             in_flight: tokio::sync::Mutex::new(None),
+            lifecycle: CancellationToken::new(),
+            disposed: AtomicBool::new(false),
         }
     }
 
@@ -435,6 +442,9 @@ impl FoundationModelsConnection {
     }
 
     async fn load_status(&self) -> Option<FoundationModelsConnectionStatus> {
+        if self.disposed.load(Ordering::SeqCst) {
+            return None;
+        }
         match self.platform_gate() {
             PlatformGate::NotApplicable => return None,
             PlatformGate::Blocked(status) => return Some(status),
@@ -444,7 +454,7 @@ impl FoundationModelsConnection {
             NativeFoundationModelsRequest::availability(),
             NativeFoundationModelsRunOptions {
                 timeout_ms: STATUS_TIMEOUT_MS,
-                signal: None,
+                signal: Some(self.lifecycle.child_token()),
             },
         )
         .await
@@ -488,6 +498,9 @@ impl FoundationModelsConnection {
 
     /// Read the connection status with a short cache and single-flight dedup.
     pub async fn status(&self, force: bool) -> Option<FoundationModelsConnectionStatus> {
+        if self.disposed.load(Ordering::SeqCst) {
+            return None;
+        }
         match self.platform_gate() {
             PlatformGate::NotApplicable => return None,
             PlatformGate::Blocked(status) => return Some(status),
@@ -563,6 +576,12 @@ impl FoundationModelsConnection {
         prompt: &str,
         signal: Option<&CancellationToken>,
     ) -> Result<String, FoundationModelsConnectionError> {
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(FoundationModelsConnectionError::new(
+                "cancelled",
+                "Title generation was cancelled.",
+            ));
+        }
         match self.platform_gate() {
             PlatformGate::NotApplicable => {
                 return Err(FoundationModelsConnectionError::new(
@@ -578,15 +597,26 @@ impl FoundationModelsConnection {
             }
             PlatformGate::Proceed => {}
         }
-        let response = match (self.run_request)(
+        let request_signal = self.lifecycle.child_token();
+        let request = (self.run_request)(
             NativeFoundationModelsRequest::generate_title(prompt),
             NativeFoundationModelsRunOptions {
                 timeout_ms: GENERATION_TIMEOUT_MS,
-                signal: signal.cloned(),
+                signal: Some(request_signal.clone()),
             },
-        )
-        .await
-        {
+        );
+        tokio::pin!(request);
+        let response = match signal {
+            Some(signal) => tokio::select! {
+                response = &mut request => response,
+                () = signal.cancelled() => {
+                    request_signal.cancel();
+                    request.await
+                }
+            },
+            None => request.await,
+        };
+        let response = match response {
             Ok(response) => response,
             Err(error) => {
                 if error.code != "cancelled" {
@@ -641,6 +671,14 @@ impl FoundationModelsConnection {
     pub fn clear_status(&self) {
         *self.cached.lock().unwrap() = None;
     }
+
+    /// Cancels every connection-owned request and synchronously asks all
+    /// trusted helper children spawned by this process to terminate.
+    pub fn dispose(&self) {
+        self.disposed.store(true, Ordering::SeqCst);
+        self.lifecycle.cancel();
+        terminate_active_foundation_helpers();
+    }
 }
 
 /// The connection factory mirroring `createFoundationModelsConnection`.
@@ -661,6 +699,70 @@ pub fn create_foundation_models_connection(
 const FORCED_FINISH_MS: u64 = 2_000;
 const MAX_HELPER_STDOUT_BYTES: u64 = 64 * 1024;
 const MAX_HELPER_STDERR_BYTES: u64 = 8 * 1024;
+#[derive(Clone)]
+struct HelperTermination {
+    active: Arc<Mutex<bool>>,
+    terminate: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl HelperTermination {
+    fn new(terminate: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            active: Arc::new(Mutex::new(true)),
+            terminate,
+        }
+    }
+
+    fn run(&self) {
+        // Hold the same guard used by `deactivate` through the callback. Once
+        // unregister returns, a callback cloned by a concurrent dispose has
+        // therefore either completed or observed the inactive state; it can
+        // never signal a PID after waitpid has made that number reusable.
+        if let Ok(active) = self.active.lock() {
+            if *active {
+                (self.terminate)();
+            }
+        }
+    }
+
+    fn deactivate(&self) {
+        if let Ok(mut active) = self.active.lock() {
+            *active = false;
+        }
+    }
+}
+
+fn active_helper_terminations() -> &'static Mutex<HashMap<u64, HelperTermination>> {
+    static ACTIVE: OnceLock<Mutex<HashMap<u64, HelperTermination>>> = OnceLock::new();
+    ACTIVE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_helper_termination(termination: Arc<dyn Fn() + Send + Sync>) -> u64 {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut active) = active_helper_terminations().lock() {
+        active.insert(id, HelperTermination::new(termination));
+    }
+    id
+}
+
+fn unregister_helper_termination(id: u64) {
+    if let Ok(mut active) = active_helper_terminations().lock() {
+        if let Some(termination) = active.remove(&id) {
+            termination.deactivate();
+        }
+    }
+}
+
+fn terminate_active_foundation_helpers() {
+    let terminations = active_helper_terminations()
+        .lock()
+        .map(|active| active.values().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for terminate in terminations {
+        terminate.run();
+    }
+}
 
 /// A spawned helper process the runner can wait on and terminate.
 pub trait FoundationHelperChild: Send {
@@ -720,11 +822,13 @@ impl OpenHelperSpawner {
 #[cfg(unix)]
 struct OpenHelperChild {
     child: tokio::process::Child,
+    termination_id: Arc<AtomicU64>,
 }
 
 #[cfg(unix)]
 impl FoundationHelperChild for OpenHelperChild {
     fn wait(&mut self) -> BoxFuture<'_, Result<Option<i32>, FoundationModelsConnectionError>> {
+        let termination_id = Arc::clone(&self.termination_id);
         let child = &mut self.child;
         Box::pin(async move {
             let stdout = child.stdout.take();
@@ -770,6 +874,10 @@ impl FoundationHelperChild for OpenHelperChild {
             let status = child.wait().await.map_err(|_| {
                 FoundationModelsConnectionError::new("helper_failed", "The native helper failed.")
             })?;
+            let id = termination_id.swap(0, Ordering::SeqCst);
+            if id != 0 {
+                unregister_helper_termination(id);
+            }
             if let Some(stdout_task) = stdout_task {
                 if let Ok(Err(message)) = stdout_task.await {
                     return Err(FoundationModelsConnectionError::new(
@@ -791,7 +899,18 @@ impl FoundationHelperChild for OpenHelperChild {
     }
 
     fn terminate(&mut self) {
+        let id = self.termination_id.swap(0, Ordering::SeqCst);
+        if id != 0 {
+            unregister_helper_termination(id);
+        }
         let _ = self.child.start_kill();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for OpenHelperChild {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 
@@ -822,6 +941,7 @@ impl FoundationHelperSpawner for OpenHelperSpawner {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound {
@@ -836,7 +956,20 @@ impl FoundationHelperSpawner for OpenHelperSpawner {
                     )
                 }
             })?;
-        Ok(Box::new(OpenHelperChild { child }))
+        let cancellation_path = cancellation_path.to_path_buf();
+        // The registry deliberately owns only the race-free cooperative
+        // cancellation marker. It must never retain a raw numeric PID: the OS
+        // may reuse that PID after waitpid reaps the launcher but before this
+        // future resumes to unregister. The live request path terminates via
+        // the owned `tokio::process::Child`, whose kill-on-drop remains the
+        // final best-effort fallback.
+        let termination_id = register_helper_termination(Arc::new(move || {
+            write_cancelled_file(&cancellation_path);
+        }));
+        Ok(Box::new(OpenHelperChild {
+            child,
+            termination_id: Arc::new(AtomicU64::new(termination_id)),
+        }))
     }
 }
 
@@ -846,17 +979,10 @@ fn write_cancelled_file(path: &Path) {
 
 #[cfg(unix)]
 fn terminate_helper(process_path: &Path, child: &mut dyn FoundationHelperChild) {
-    // The cancellation file was already written; killing the helper process by
-    // its published pid plus the child handle mirrors terminateHelper().
-    if let Ok(process_id) = std::fs::read_to_string(process_path) {
-        if let Ok(process_id) = process_id.trim().parse::<u32>() {
-            if process_id > 1 {
-                unsafe {
-                    libc::kill(process_id as libc::pid_t, libc::SIGTERM);
-                }
-            }
-        }
-    }
+    // The process-id file is helper-controlled and must never authorize a
+    // signal to an arbitrary process. Terminate only the child handle Aiden
+    // actually spawned; the cancellation file asks the helper to cooperate.
+    let _ = process_path;
     child.terminate();
 }
 
@@ -891,24 +1017,29 @@ pub async fn run_helper_request(
         ));
     }
 
-    let mut random = [0_u8; 6];
-    if getrandom::getrandom(&mut random).is_err() {
-        random = [0_u8; 6];
-    }
-    let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-    let exchange_directory = temp_root.join(format!(
-        "aiden-foundation-models-{}-{suffix}",
-        std::process::id()
-    ));
+    let exchange = tempfile::Builder::new()
+        .prefix("aiden-foundation-models-")
+        .tempdir_in(temp_root)
+        .map_err(|_| {
+            FoundationModelsConnectionError::new(
+                "helper_failed",
+                "The native title request could not be prepared.",
+            )
+        })?;
+    let exchange_directory = exchange.path().to_path_buf();
     let request_path = exchange_directory.join("request.json");
     let response_path = exchange_directory.join("response.json");
     let process_path = exchange_directory.join("process-id");
     let cancellation_path = exchange_directory.join("cancelled");
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::create_dir(&exchange_directory);
-        let _ =
-            std::fs::set_permissions(&exchange_directory, std::fs::Permissions::from_mode(0o700));
+        std::fs::set_permissions(&exchange_directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|_| {
+                FoundationModelsConnectionError::new(
+                    "helper_failed",
+                    "The native title request could not be prepared.",
+                )
+            })?;
         let write_result = std::fs::write(&request_path, &payload).and_then(|()| {
             std::fs::set_permissions(&request_path, std::fs::Permissions::from_mode(0o600))
         });
@@ -949,33 +1080,20 @@ pub async fn run_helper_request(
     // borrows `child`, so the timeout/cancellation arms only race the future
     // itself; termination happens after the wait future is dropped.
     let mut wait = Box::pin(child.wait());
-    let deadline = std::time::Instant::now() + Duration::from_millis(options.timeout_ms);
-    let mut stop: Option<&'static str> = None;
-    let mut wait_result: Option<Result<Option<i32>, FoundationModelsConnectionError>> = None;
-    loop {
-        if options
-            .signal
-            .as_ref()
-            .is_some_and(|token| token.is_cancelled())
-        {
-            stop = Some("cancelled");
-            break;
+    let timeout = tokio::time::sleep(Duration::from_millis(options.timeout_ms));
+    tokio::pin!(timeout);
+    let cancellation = async {
+        match options.signal.as_ref() {
+            Some(signal) => signal.cancelled().await,
+            None => std::future::pending::<()>().await,
         }
-        let now = std::time::Instant::now();
-        if now >= deadline {
-            stop = Some("timeout");
-            break;
-        }
-        match tokio::time::timeout(deadline - now, &mut wait).await {
-            Ok(result) => {
-                wait_result = Some(result);
-                break;
-            }
-            Err(_) => {
-                // Deadline elapsed between checks; the loop re-evaluates.
-            }
-        }
-    }
+    };
+    tokio::pin!(cancellation);
+    let (stop, wait_result) = tokio::select! {
+        result = &mut wait => (None, Some(result)),
+        () = &mut timeout => (Some("timeout"), None),
+        () = &mut cancellation => (Some("cancelled"), None),
+    };
     drop(wait);
 
     let error = match stop {
@@ -995,7 +1113,9 @@ pub async fn run_helper_request(
         terminate_helper(&process_path, child.as_mut());
         #[cfg(not(unix))]
         child.terminate();
-        tokio::time::sleep(Duration::from_millis(FORCED_FINISH_MS)).await;
+        if stop == Some("timeout") {
+            tokio::time::sleep(Duration::from_millis(FORCED_FINISH_MS)).await;
+        }
         let _ = std::fs::remove_dir_all(&exchange_directory);
         return Err(error);
     }
@@ -1053,7 +1173,7 @@ pub fn default_temp_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     fn run(now: u64) -> Arc<dyn Fn() -> u64 + Send + Sync> {
         let now = Arc::new(AtomicU64::new(now));
@@ -1459,5 +1579,207 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.code, "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn file_exchange_fails_closed_when_exclusive_tempdir_cannot_be_created() {
+        struct NeverSpawner;
+        impl FoundationHelperSpawner for NeverSpawner {
+            fn spawn(
+                &self,
+                _: &Path,
+                _: &Path,
+                _: &Path,
+                _: &Path,
+            ) -> Result<Box<dyn FoundationHelperChild>, FoundationModelsConnectionError>
+            {
+                panic!("helper must not spawn without an exclusively owned exchange directory")
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let not_a_directory = temp.path().join("occupied");
+        std::fs::write(&not_a_directory, b"attacker-controlled").unwrap();
+        let error = run_helper_request(
+            &NativeFoundationModelsRequest::availability(),
+            &NativeFoundationModelsRunOptions {
+                timeout_ms: 100,
+                signal: None,
+            },
+            &NeverSpawner,
+            &not_a_directory,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "helper_failed");
+        assert_eq!(
+            std::fs::read(&not_a_directory).unwrap(),
+            b"attacker-controlled"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_exchange_cancellation_wakes_and_terminates_without_waiting_for_deadline() {
+        struct PendingChild {
+            terminated: Arc<AtomicBool>,
+        }
+        impl FoundationHelperChild for PendingChild {
+            fn wait(
+                &mut self,
+            ) -> BoxFuture<'_, Result<Option<i32>, FoundationModelsConnectionError>> {
+                Box::pin(std::future::pending())
+            }
+
+            fn terminate(&mut self) {
+                self.terminated.store(true, Ordering::SeqCst);
+            }
+        }
+        struct PendingSpawner {
+            terminated: Arc<AtomicBool>,
+        }
+        impl FoundationHelperSpawner for PendingSpawner {
+            fn spawn(
+                &self,
+                _: &Path,
+                _: &Path,
+                _: &Path,
+                _: &Path,
+            ) -> Result<Box<dyn FoundationHelperChild>, FoundationModelsConnectionError>
+            {
+                Ok(Box::new(PendingChild {
+                    terminated: Arc::clone(&self.terminated),
+                }))
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let signal = CancellationToken::new();
+        let cancel = signal.clone();
+        let terminated = Arc::new(AtomicBool::new(false));
+        let start = tokio::time::Instant::now();
+        let cancellation = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            cancel.cancel();
+        });
+        let error = run_helper_request(
+            &NativeFoundationModelsRequest::availability(),
+            &NativeFoundationModelsRunOptions {
+                timeout_ms: 15_000,
+                signal: Some(signal),
+            },
+            &PendingSpawner {
+                terminated: Arc::clone(&terminated),
+            },
+            temp.path(),
+        )
+        .await
+        .unwrap_err();
+        cancellation.await.unwrap();
+
+        assert_eq!(error.code, "cancelled");
+        assert!(terminated.load(Ordering::SeqCst));
+        assert!(start.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn connection_dispose_synchronously_terminates_an_active_owned_helper() {
+        let terminated = Arc::new(AtomicBool::new(false));
+        let terminated_for_callback = Arc::clone(&terminated);
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("cancelled");
+        let marker_for_callback = marker.clone();
+        let id = register_helper_termination(Arc::new(move || {
+            write_cancelled_file(&marker_for_callback);
+            terminated_for_callback.store(true, Ordering::SeqCst);
+        }));
+        let runner: NativeFoundationModelsRequestRunner = Arc::new(|_, _| {
+            Box::pin(std::future::pending::<
+                Result<FoundationModelsResponse, FoundationModelsConnectionError>,
+            >())
+        });
+        let connection =
+            create_foundation_models_connection("darwin", "arm64", "26.0", run(1_000), runner);
+
+        connection.dispose();
+
+        unregister_helper_termination(id);
+        assert!(terminated.load(Ordering::SeqCst));
+        assert!(marker.is_file());
+    }
+
+    #[test]
+    fn a_dispose_callback_captured_before_reap_is_inert_after_unregister() {
+        let signalled_after_reap = Arc::new(AtomicBool::new(false));
+        let signalled = Arc::clone(&signalled_after_reap);
+        let id = register_helper_termination(Arc::new(move || {
+            signalled.store(true, Ordering::SeqCst);
+        }));
+        let stale_dispose_callback = active_helper_terminations()
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .expect("registered helper termination");
+
+        // `OpenHelperChild::wait` performs this unregister immediately after
+        // wait returns, before it awaits either output-drain task. Force the
+        // stronger schedule where dispose already captured the entry but does
+        // not run it until after the helper was reaped and unregistered.
+        unregister_helper_termination(id);
+        stale_dispose_callback.run();
+
+        assert!(!signalled_after_reap.load(Ordering::SeqCst));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reaped_open_child_is_unregistered_while_output_is_still_draining() {
+        use std::process::Stdio;
+
+        let signalled_after_reap = Arc::new(AtomicBool::new(false));
+        let signalled = Arc::clone(&signalled_after_reap);
+        let id = register_helper_termination(Arc::new(move || {
+            signalled.store(true, Ordering::SeqCst);
+        }));
+        // The shell exits immediately while its background child retains the
+        // stdout/stderr pipes, creating the real waitpid-reaped/output-drain
+        // interval that previously made a captured numeric PID unsafe.
+        let mut process = tokio::process::Command::new("/bin/sh");
+        process
+            .arg("-c")
+            .arg("sleep 0.25 & exit 0")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = process.spawn().expect("spawn controlled test child");
+        let mut helper = OpenHelperChild {
+            child,
+            termination_id: Arc::new(AtomicU64::new(id)),
+        };
+        let wait_task = tokio::spawn(async move { helper.wait().await });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let registered = active_helper_terminations()
+                    .lock()
+                    .unwrap()
+                    .contains_key(&id);
+                if !registered {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("wait should unregister before output drain completes");
+        assert!(
+            !wait_task.is_finished(),
+            "output drain should still be pending"
+        );
+
+        terminate_active_foundation_helpers();
+        assert!(!signalled_after_reap.load(Ordering::SeqCst));
+        assert_eq!(wait_task.await.unwrap().unwrap(), Some(0));
     }
 }
