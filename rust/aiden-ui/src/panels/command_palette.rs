@@ -22,6 +22,8 @@ use gpui::{
 };
 use gpui_component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _};
 
+use crate::settings::catalog::SETTINGS_DESTINATIONS;
+
 /// `COMMAND_PALETTE_RECENT_LIMIT` in the renderer.
 pub const PALETTE_RECENT_LIMIT: usize = 12;
 /// The `settings.json` key used by the real persistence adapter
@@ -1026,17 +1028,17 @@ impl CommandPalette {
                         rows.push(PaletteRow::Appearance(mode));
                     }
                 }
-                for destination in settings_destinations() {
+                for destination in &SETTINGS_DESTINATIONS {
                     if fuzzy_score(
                         &self.query,
-                        &format!("{} {}", destination.title, destination.keywords.join(" ")),
+                        &format!("{} {}", destination.label, destination.keywords.join(" ")),
                     )
                     .is_some()
                     {
                         rows.push(PaletteRow::SettingsDestination {
-                            id: destination.id.to_string(),
-                            title: destination.title.to_string(),
-                            group: destination.group,
+                            id: destination.id.as_str().to_string(),
+                            title: destination.label.to_string(),
+                            group: destination.group.label(),
                         });
                     }
                 }
@@ -1152,42 +1154,6 @@ impl Render for CommandPalette {
 // ===========================================================================
 // Dialog content
 // ===========================================================================
-
-struct SettingsDestination {
-    id: &'static str,
-    title: &'static str,
-    group: &'static str,
-    keywords: &'static [&'static str],
-}
-
-fn settings_destinations() -> Vec<SettingsDestination> {
-    vec![
-        SettingsDestination {
-            id: "appearance",
-            title: "Appearance",
-            group: "Appearance",
-            keywords: &["theme", "mode"],
-        },
-        SettingsDestination {
-            id: "providers",
-            title: "Providers",
-            group: "Models",
-            keywords: &["api", "key", "catalog"],
-        },
-        SettingsDestination {
-            id: "scheduled-tasks",
-            title: "Scheduled tasks",
-            group: "Automation",
-            keywords: &["schedule", "cron", "automation"],
-        },
-        SettingsDestination {
-            id: "usage",
-            title: "Usage & profile",
-            group: "Profile",
-            keywords: &["tokens", "cost", "activity"],
-        },
-    ]
-}
 
 fn category_icon(category: PaletteCategory) -> IconName {
     match category {
@@ -1509,10 +1475,16 @@ fn palette_row(
         .gap_2()
         .items_center()
         .rounded_md()
-        .cursor_pointer()
+        .when(
+            !busy && crate::services::appearance::pointer_cursors_enabled(cx),
+            |el| el.cursor_pointer(),
+        )
         .bg(bg)
         .text_color(fg)
         .on_click(move |_event, window, cx| {
+            if busy {
+                return;
+            }
             let still_open = row_entity.update(cx, |this, cx| {
                 if let Some(position) = this.rows().iter().position(|candidate| candidate == &row) {
                     this.selected = position;
@@ -1665,6 +1637,27 @@ mod tests {
         let rows = palette.rows();
         assert_eq!(rows.len(), PALETTE_COMMANDS.len());
         assert!(matches!(rows[0], PaletteRow::Command(_)));
+    }
+
+    #[test]
+    fn settings_mode_routes_every_catalog_destination_in_catalog_order() {
+        let mut palette = CommandPalette::new_demo();
+        palette.mode = PaletteMode::Settings;
+        let ids = palette
+            .rows()
+            .into_iter()
+            .filter_map(|row| match row {
+                PaletteRow::SettingsDestination { id, .. } => Some(id),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let expected = SETTINGS_DESTINATIONS
+            .iter()
+            .map(|destination| destination.id.as_str().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, expected);
+        assert_eq!(ids.len(), 12);
     }
 
     #[test]
