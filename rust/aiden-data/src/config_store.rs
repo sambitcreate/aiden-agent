@@ -40,6 +40,20 @@ pub enum ConfigStoreError {
     MalformedPortable,
     #[error("The requested change would create an invalid portable config.")]
     InvalidResult,
+    #[error("Skill IDs must be 1 to 128 bytes after trimming.")]
+    InvalidSkillId,
+    #[error("Skill names must be 1 to 128 characters after trimming.")]
+    InvalidSkillName,
+    #[error("Skill descriptions may contain at most 512 characters.")]
+    InvalidSkillDescription,
+    #[error("Skill instructions must contain non-whitespace text and be at most 1 MiB.")]
+    InvalidSkillInstructions,
+    #[error("A skill with the same case-insensitive name already exists.")]
+    DuplicateSkillName,
+    #[error("At most 500 configured skills may be saved.")]
+    SkillCatalogLimit,
+    #[error("Configured skill instructions may total at most 8 MiB.")]
+    SkillInstructionsBudget,
     #[error("\"assistant\" is reserved and cannot be a workspace id.")]
     ReservedWorkspaceId,
     #[error("The renderer document is no longer active.")]
@@ -330,6 +344,9 @@ impl ConfigStore {
             .map(str::to_string);
 
         let before = self.stores.portable.load()?;
+        if !configured_skill_instructions_fit(&before.skills) {
+            return Err(ConfigStoreError::SkillInstructionsBudget);
+        }
         let (config, unsafe_config) = normalize_portable_config(&serde_json::to_value(&before)?);
         if unsafe_config {
             return Ok(false);
@@ -549,6 +566,10 @@ impl ConfigStore {
 
     fn require_seeded_for_write(&self) -> Result<(), ConfigStoreError> {
         if !self.ensure_seeded()? {
+            let config = self.stores.portable.load()?;
+            if !configured_skill_instructions_fit(&config.skills) {
+                return Err(ConfigStoreError::SkillInstructionsBudget);
+            }
             return Err(ConfigStoreError::MigrationDeferred);
         }
         Ok(())
@@ -574,6 +595,9 @@ impl ConfigStore {
         // draft, runs the mutation (which may reject), and publishes only on
         // success.
         let mut draft = self.stores.portable.load()?;
+        if !configured_skill_instructions_fit(&draft.skills) {
+            return Err(ConfigStoreError::SkillInstructionsBudget);
+        }
         let (normalized, unsafe_config) = normalize_portable_config(&serde_json::to_value(&draft)?);
         if unsafe_config {
             return Err(ConfigStoreError::MalformedPortable);
@@ -611,13 +635,10 @@ impl ConfigStore {
         provider: &StoredProvider,
         aliases: &Map<String, Value>,
     ) -> Result<Provider, ConfigStoreError> {
-        let has_key = match self
+        let has_key = self
             .secrets
             .get_provider_key(&provider.id, &provider_connection_snapshot(provider))?
-        {
-            Some(_) => true,
-            None => self.secrets.has_key(&provider.id)?,
-        };
+            .is_some();
         let legacy_ids: Vec<String> = aliases
             .keys()
             .filter(|legacy_id| {
@@ -716,6 +737,21 @@ impl ConfigStore {
                 intent,
                 cache.by_provider.get(id),
             )))
+        })
+    }
+
+    /// Resolve the API key bound to this exact provider connection snapshot.
+    ///
+    /// A key saved for a different endpoint, API kind, or authentication
+    /// posture is deliberately treated as absent.
+    pub fn get_bound_provider_key(
+        &self,
+        provider: &StoredProvider,
+    ) -> Result<Option<String>, ConfigStoreError> {
+        self.serialized(|store| {
+            store
+                .secrets
+                .get_provider_key(&provider.id, &provider_connection_snapshot(provider))
         })
     }
 
@@ -866,6 +902,24 @@ impl ConfigStore {
         })
     }
 
+    /// Remove one machine-local setting atomically. This is used for durable
+    /// transaction journals where `null` must not be confused with absence.
+    pub fn remove_setting(
+        &self,
+        key: &str,
+        is_current: &dyn Fn() -> bool,
+    ) -> Result<(), ConfigStoreError> {
+        self.serialized(|store| {
+            store.mutate_settings(
+                |document| {
+                    document.settings.remove(key);
+                    Ok(())
+                },
+                is_current,
+            )
+        })
+    }
+
     pub fn set_google_thinking_level(
         &self,
         model_id: &str,
@@ -961,6 +1015,9 @@ impl ConfigStore {
         server: &McpServer,
         is_current: &dyn Fn() -> bool,
     ) -> Result<McpServer, ConfigStoreError> {
+        if !is_mcp_server(&serde_json::to_value(server)?) {
+            return Err(ConfigStoreError::InvalidResult);
+        }
         self.serialized(|store| {
             store.mutate_portable(
                 |config| {
@@ -976,6 +1033,9 @@ impl ConfigStore {
                             Ok(merged)
                         }
                         None => {
+                            if config.mcp_servers.len() >= MAX_MCP_SERVERS {
+                                return Err(ConfigStoreError::InvalidResult);
+                            }
                             config.mcp_servers.push(server.clone());
                             Ok(server.clone())
                         }
@@ -1005,25 +1065,44 @@ impl ConfigStore {
     // -- Skills -------------------------------------------------------------
 
     pub fn list_skills(&self) -> Result<Vec<Skill>, ConfigStoreError> {
-        self.serialized(|store| Ok(store.read_portable()?.skills))
+        self.serialized(|store| {
+            store.ensure_seeded()?;
+            let config = store.stores.portable.load()?;
+            if !configured_skill_instructions_fit(&config.skills) {
+                return Err(ConfigStoreError::SkillInstructionsBudget);
+            }
+            let (normalized, unsafe_config) =
+                normalize_portable_config(&serde_json::to_value(&config)?);
+            if unsafe_config {
+                return Err(ConfigStoreError::MalformedPortable);
+            }
+            Ok(normalized.skills)
+        })
     }
 
     pub fn save_skill(&self, skill: &Skill) -> Result<Skill, ConfigStoreError> {
+        let mut skill = skill.clone();
+        skill.id = skill.id.trim().to_string();
+        skill.name = skill.name.trim().to_string();
         self.serialized(|store| {
             store.mutate_portable(
                 |config| {
+                    validate_skill_for_save(&skill, &config.skills)?;
                     let index = config
                         .skills
                         .iter()
-                        .position(|candidate| candidate.id == skill.id);
+                        .position(|candidate| candidate.id.trim() == skill.id);
                     match index {
                         Some(index) => {
                             let mut merged = config.skills[index].clone();
-                            merged = merge_skill(merged, skill);
+                            merged = merge_skill(merged, &skill);
                             config.skills[index] = merged.clone();
                             Ok(merged)
                         }
                         None => {
+                            if config.skills.len() >= MAX_CONFIGURED_SKILLS {
+                                return Err(ConfigStoreError::SkillCatalogLimit);
+                            }
                             config.skills.push(skill.clone());
                             Ok(skill.clone())
                         }
@@ -1114,6 +1193,59 @@ impl ConfigStore {
     }
 }
 
+fn validate_skill_for_save(skill: &Skill, existing: &[Skill]) -> Result<(), ConfigStoreError> {
+    let id = skill.id.trim();
+    if id.is_empty() || id.len() > MAX_SKILL_ID_LENGTH {
+        return Err(ConfigStoreError::InvalidSkillId);
+    }
+    let name = skill.name.trim();
+    if name.is_empty() || name.chars().count() > MAX_SKILL_NAME_LENGTH {
+        return Err(ConfigStoreError::InvalidSkillName);
+    }
+    if skill.description.chars().count() > MAX_SKILL_DESCRIPTION_LENGTH {
+        return Err(ConfigStoreError::InvalidSkillDescription);
+    }
+    let instructions = skill.instructions.trim();
+    if instructions.is_empty() || skill.instructions.len() > MAX_SKILL_INSTRUCTIONS_LENGTH {
+        return Err(ConfigStoreError::InvalidSkillInstructions);
+    }
+    if existing.iter().any(|candidate| {
+        candidate.id.trim() != skill.id.trim()
+            && candidate.name.trim().to_lowercase() == name.to_lowercase()
+    }) {
+        return Err(ConfigStoreError::DuplicateSkillName);
+    }
+    if existing.len() >= MAX_CONFIGURED_SKILLS
+        && !existing
+            .iter()
+            .any(|candidate| candidate.id.trim() == skill.id.trim())
+    {
+        return Err(ConfigStoreError::SkillCatalogLimit);
+    }
+    let mut total = 0usize;
+    let mut replaced = false;
+    for candidate in existing {
+        let instructions = if candidate.id.trim() == id {
+            replaced = true;
+            skill.instructions.len()
+        } else {
+            candidate.instructions.len()
+        };
+        total = total
+            .checked_add(instructions)
+            .ok_or(ConfigStoreError::SkillInstructionsBudget)?;
+    }
+    if !replaced {
+        total = total
+            .checked_add(skill.instructions.len())
+            .ok_or(ConfigStoreError::SkillInstructionsBudget)?;
+    }
+    if total > MAX_CONFIGURED_SKILL_INSTRUCTIONS_BYTES {
+        return Err(ConfigStoreError::SkillInstructionsBudget);
+    }
+    Ok(())
+}
+
 /// Merging helpers mirror the TS `{ ...existing, ...incoming }` upserts.
 fn merge_portable_provider(
     mut existing: PortableProvider,
@@ -1168,11 +1300,14 @@ fn provider_alias_routes(aliases: &Map<String, Value>) -> Vec<(String, String, u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex as StdMutex;
 
     #[derive(Default)]
     struct FakeSecrets {
         keys: StdMutex<SecretKeyMap>,
+        bindings: StdMutex<HashMap<String, String>>,
+        pending: StdMutex<HashSet<String>>,
     }
 
     impl SecretsPort for FakeSecrets {
@@ -1183,8 +1318,19 @@ mod tests {
         fn get_provider_key(
             &self,
             provider_id: &str,
-            _binding: &str,
+            binding: &str,
         ) -> Result<Option<String>, ConfigStoreError> {
+            if self.pending.lock().unwrap().contains(provider_id)
+                || self
+                    .bindings
+                    .lock()
+                    .unwrap()
+                    .get(provider_id)
+                    .map(String::as_str)
+                    != Some(binding)
+            {
+                return Ok(None);
+            }
             Ok(self
                 .keys
                 .lock()
@@ -1217,6 +1363,16 @@ mod tests {
     }
 
     fn fixture() -> (tempfile::TempDir, tempfile::TempDir, ConfigStore) {
+        let (portable, local, _, store) = fixture_with_secrets();
+        (portable, local, store)
+    }
+
+    fn fixture_with_secrets() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Arc<FakeSecrets>,
+        ConfigStore,
+    ) {
         let portable = tempfile::tempdir().unwrap();
         let local = tempfile::tempdir().unwrap();
         let stores = create_portable_config_stores(
@@ -1224,8 +1380,41 @@ mod tests {
             Some(local.path().to_path_buf()),
             PortableConfigTestHooks::default(),
         );
-        let store = ConfigStore::new(stores, Arc::new(FakeSecrets::default()), None);
-        (portable, local, store)
+        let secrets = Arc::new(FakeSecrets::default());
+        let store = ConfigStore::new(stores, secrets.clone(), None);
+        (portable, local, secrets, store)
+    }
+
+    #[test]
+    fn remove_setting_publishes_absence_across_reopen_instead_of_null() {
+        let portable = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let make = || {
+            ConfigStore::new(
+                create_portable_config_stores(
+                    portable.path().to_path_buf(),
+                    Some(local.path().to_path_buf()),
+                    PortableConfigTestHooks::default(),
+                ),
+                Arc::new(FakeSecrets::default()),
+                None,
+            )
+        };
+        let store = make();
+        let mut patch = Map::new();
+        patch.insert(
+            "pendingMcpCredentialCleanup".into(),
+            serde_json::json!({"version": 1}),
+        );
+        store.set_settings(&patch, &|| true).unwrap();
+        store
+            .remove_setting("pendingMcpCredentialCleanup", &|| true)
+            .unwrap();
+        drop(store);
+        assert!(!make()
+            .get_settings()
+            .unwrap()
+            .contains_key("pendingMcpCredentialCleanup"));
     }
 
     fn intent_provider(id: &str, label: &str) -> StoredProvider {
@@ -1275,6 +1464,37 @@ mod tests {
     }
 
     #[test]
+    fn provider_readiness_requires_an_exact_active_bound_credential() {
+        let (_portable, _local, secrets, store) = fixture_with_secrets();
+        let provider = intent_provider("custom:test", "Test");
+        store.save_provider(&provider, &|| true).unwrap();
+        secrets
+            .keys
+            .lock()
+            .unwrap()
+            .insert(provider.id.clone(), Value::String("raw-key".into()));
+        assert!(!store.list_providers().unwrap()[0].has_key);
+
+        secrets
+            .bindings
+            .lock()
+            .unwrap()
+            .insert(provider.id.clone(), "wrong-binding".into());
+        assert!(!store.list_providers().unwrap()[0].has_key);
+
+        secrets
+            .bindings
+            .lock()
+            .unwrap()
+            .insert(provider.id.clone(), provider_connection_snapshot(&provider));
+        secrets.pending.lock().unwrap().insert(provider.id.clone());
+        assert!(!store.list_providers().unwrap()[0].has_key);
+
+        secrets.pending.lock().unwrap().remove(&provider.id);
+        assert!(store.list_providers().unwrap()[0].has_key);
+    }
+
+    #[test]
     fn mcp_servers_and_skills_upsert_into_the_portable_file() {
         let (_portable, _local, store) = fixture();
         let server = McpServer {
@@ -1308,6 +1528,326 @@ mod tests {
     }
 
     #[test]
+    fn configured_skill_validation_enforces_exact_limits_and_normalized_duplicates() {
+        let valid = Skill {
+            id: "skill-1".into(),
+            name: "Résumé".into(),
+            description: "d".repeat(MAX_SKILL_DESCRIPTION_LENGTH),
+            instructions: "i".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+            enabled: true,
+        };
+        assert!(validate_skill_for_save(&valid, &[]).is_ok());
+
+        let invalid_cases = [
+            (
+                Skill {
+                    id: String::new(),
+                    ..valid.clone()
+                },
+                ConfigStoreError::InvalidSkillId,
+            ),
+            (
+                Skill {
+                    id: "x".repeat(MAX_SKILL_ID_LENGTH + 1),
+                    ..valid.clone()
+                },
+                ConfigStoreError::InvalidSkillId,
+            ),
+            (
+                Skill {
+                    name: "x".repeat(MAX_SKILL_NAME_LENGTH + 1),
+                    ..valid.clone()
+                },
+                ConfigStoreError::InvalidSkillName,
+            ),
+            (
+                Skill {
+                    description: "x".repeat(MAX_SKILL_DESCRIPTION_LENGTH + 1),
+                    ..valid.clone()
+                },
+                ConfigStoreError::InvalidSkillDescription,
+            ),
+            (
+                Skill {
+                    instructions: " ".into(),
+                    ..valid.clone()
+                },
+                ConfigStoreError::InvalidSkillInstructions,
+            ),
+            (
+                Skill {
+                    instructions: "x".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH + 1),
+                    ..valid.clone()
+                },
+                ConfigStoreError::InvalidSkillInstructions,
+            ),
+        ];
+        for (skill, expected) in invalid_cases {
+            assert_eq!(
+                validate_skill_for_save(&skill, &[])
+                    .unwrap_err()
+                    .to_string(),
+                expected.to_string()
+            );
+        }
+
+        let duplicate = Skill {
+            id: "other".into(),
+            name: "  RÉSUMÉ  ".into(),
+            ..valid.clone()
+        };
+        assert!(matches!(
+            validate_skill_for_save(&duplicate, &[valid]),
+            Err(ConfigStoreError::DuplicateSkillName)
+        ));
+
+        let full = (0..MAX_CONFIGURED_SKILLS)
+            .map(|index| Skill {
+                id: format!("id-{index}"),
+                name: format!("Name {index}"),
+                description: String::new(),
+                instructions: "i".into(),
+                enabled: true,
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            validate_skill_for_save(
+                &Skill {
+                    id: "overflow".into(),
+                    name: "Overflow".into(),
+                    description: String::new(),
+                    instructions: "i".into(),
+                    enabled: true,
+                },
+                &full
+            ),
+            Err(ConfigStoreError::SkillCatalogLimit)
+        ));
+
+        let unicode_name = Skill {
+            id: "unicode".into(),
+            name: "界".repeat(MAX_SKILL_NAME_LENGTH),
+            description: String::new(),
+            instructions: "i".into(),
+            enabled: true,
+        };
+        assert!(validate_skill_for_save(&unicode_name, &[]).is_ok());
+    }
+
+    #[test]
+    fn configured_skill_save_trims_identity_without_forking_an_edit() {
+        let (_portable, _local, store) = fixture();
+        let initial = Skill {
+            id: "skill-1".into(),
+            name: "Review".into(),
+            description: String::new(),
+            instructions: "First".into(),
+            enabled: true,
+        };
+        store.save_skill(&initial).unwrap();
+        let edited = Skill {
+            id: "  skill-1  ".into(),
+            name: "  Review  ".into(),
+            instructions: "Second".into(),
+            ..initial
+        };
+        let saved = store.save_skill(&edited).unwrap();
+        assert_eq!(
+            (saved.id.as_str(), saved.name.as_str()),
+            ("skill-1", "Review")
+        );
+        assert_eq!(store.list_skills().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn configured_skill_aggregate_budget_checks_post_replacement_list() {
+        let existing = (0..8)
+            .map(|index| Skill {
+                id: format!("skill-{index}"),
+                name: format!("Skill {index}"),
+                description: String::new(),
+                instructions: "i".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+                enabled: true,
+            })
+            .collect::<Vec<_>>();
+        assert!(configured_skill_instructions_fit(&existing));
+
+        let overflow = Skill {
+            id: "overflow".into(),
+            name: "Overflow".into(),
+            description: String::new(),
+            instructions: "x".into(),
+            enabled: true,
+        };
+        assert!(matches!(
+            validate_skill_for_save(&overflow, &existing),
+            Err(ConfigStoreError::SkillInstructionsBudget)
+        ));
+
+        let shrinking = Skill {
+            instructions: "short".into(),
+            ..existing[0].clone()
+        };
+        assert!(validate_skill_for_save(&shrinking, &existing).is_ok());
+
+        let mut below_limit = existing.clone();
+        below_limit[0].instructions = "short".into();
+        let growing = Skill {
+            instructions: "g".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+            ..below_limit[0].clone()
+        };
+        assert!(validate_skill_for_save(&growing, &below_limit).is_ok());
+        let growing_over = Skill {
+            instructions: "g".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+            ..Skill {
+                id: "ninth".into(),
+                name: "Ninth".into(),
+                description: String::new(),
+                instructions: String::new(),
+                enabled: true,
+            }
+        };
+        assert!(matches!(
+            validate_skill_for_save(&growing_over, &below_limit),
+            Err(ConfigStoreError::SkillInstructionsBudget)
+        ));
+    }
+
+    #[test]
+    fn configured_skill_validation_orders_fields_identity_catalog_then_aggregate() {
+        let full_budget = (0..8)
+            .map(|index| Skill {
+                id: format!("id-{index}"),
+                name: format!("Name {index}"),
+                description: String::new(),
+                instructions: "i".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+                enabled: true,
+            })
+            .collect::<Vec<_>>();
+        let invalid_duplicate = Skill {
+            id: "other".into(),
+            name: "Name 0".into(),
+            description: String::new(),
+            instructions: "x".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH + 1),
+            enabled: true,
+        };
+        assert!(matches!(
+            validate_skill_for_save(&invalid_duplicate, &full_budget),
+            Err(ConfigStoreError::InvalidSkillInstructions)
+        ));
+
+        let duplicate = Skill {
+            instructions: "x".into(),
+            ..invalid_duplicate
+        };
+        assert!(matches!(
+            validate_skill_for_save(&duplicate, &full_budget),
+            Err(ConfigStoreError::DuplicateSkillName)
+        ));
+
+        let catalog = (0..MAX_CONFIGURED_SKILLS)
+            .map(|index| Skill {
+                id: format!("catalog-{index}"),
+                name: format!("Catalog {index}"),
+                description: String::new(),
+                instructions: "i".into(),
+                enabled: true,
+            })
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            validate_skill_for_save(
+                &Skill {
+                    id: "extra".into(),
+                    name: "Extra".into(),
+                    description: String::new(),
+                    instructions: "x".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+                    enabled: true,
+                },
+                &catalog,
+            ),
+            Err(ConfigStoreError::SkillCatalogLimit)
+        ));
+    }
+
+    #[test]
+    fn legacy_over_budget_skill_lists_fail_closed_with_typed_error() {
+        let (_portable, _local, store) = fixture();
+        let mut config = store.stores.portable.load().unwrap();
+        config.skills = (0..9)
+            .map(|index| Skill {
+                id: format!("legacy-{index}"),
+                name: format!("Legacy {index}"),
+                description: String::new(),
+                instructions: "i".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+                enabled: true,
+            })
+            .collect();
+        store.stores.portable.save(&config).unwrap();
+
+        assert!(matches!(
+            store.list_skills(),
+            Err(ConfigStoreError::SkillInstructionsBudget)
+        ));
+        assert!(matches!(
+            store.save_skill(&Skill {
+                id: "new".into(),
+                name: "New".into(),
+                description: String::new(),
+                instructions: "i".into(),
+                enabled: true,
+            }),
+            Err(ConfigStoreError::SkillInstructionsBudget)
+        ));
+    }
+
+    #[test]
+    fn configured_skill_persistence_applies_budget_after_replacement() {
+        let (_portable, _local, store) = fixture();
+        store.list_skills().unwrap();
+        let mut config = store.stores.portable.load().unwrap();
+        config.skills = (0..8)
+            .map(|index| Skill {
+                id: format!("stored-{index}"),
+                name: format!("Stored {index}"),
+                description: String::new(),
+                instructions: "i".repeat(MAX_SKILL_INSTRUCTIONS_LENGTH),
+                enabled: true,
+            })
+            .collect();
+        store.stores.portable.save(&config).unwrap();
+
+        assert!(matches!(
+            store.save_skill(&Skill {
+                id: "overflow".into(),
+                name: "Overflow".into(),
+                description: String::new(),
+                instructions: "x".into(),
+                enabled: true,
+            }),
+            Err(ConfigStoreError::SkillInstructionsBudget)
+        ));
+        store
+            .save_skill(&Skill {
+                instructions: "short".into(),
+                ..config.skills[0].clone()
+            })
+            .unwrap();
+        store
+            .save_skill(&Skill {
+                id: "new".into(),
+                name: "New".into(),
+                description: String::new(),
+                instructions: "x".into(),
+                enabled: true,
+            })
+            .unwrap();
+        assert!(matches!(
+            store.save_skill(&config.skills[0]),
+            Err(ConfigStoreError::SkillInstructionsBudget)
+        ));
+    }
+
+    #[test]
     fn settings_merge_preserves_unknown_fields_and_resolves_aliases() {
         let (_portable, _local, store) = fixture();
         let mut patch = Map::new();
@@ -1322,6 +1862,45 @@ mod tests {
         // A pending alias resolves to its terminal id at write time.
         let saved = store.set_settings(&patch, &|| true).unwrap();
         assert_eq!(saved["lastProviderId"], "custom:new");
+    }
+
+    #[test]
+    fn reversed_appearance_publications_reload_the_newest_intent() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let (portable, local, store) = fixture();
+        let current = AtomicU64::new(2);
+
+        let mut newest = Map::new();
+        newest.insert(
+            "appearance".into(),
+            serde_json::json!({ "mode": "dark", "preset": "graphite" }),
+        );
+        store
+            .set_settings(&newest, &|| current.load(Ordering::Acquire) == 2)
+            .unwrap();
+
+        let mut older = Map::new();
+        older.insert(
+            "appearance".into(),
+            serde_json::json!({ "mode": "light", "preset": "blue" }),
+        );
+        assert!(store
+            .set_settings(&older, &|| current.load(Ordering::Acquire) == 1)
+            .is_err());
+
+        let reloaded = ConfigStore::new(
+            create_portable_config_stores(
+                portable.path().to_path_buf(),
+                Some(local.path().to_path_buf()),
+                PortableConfigTestHooks::default(),
+            ),
+            Arc::new(FakeSecrets::default()),
+            None,
+        );
+        let settings = reloaded.get_settings().unwrap();
+        assert_eq!(settings["appearance"]["mode"], "dark");
+        assert_eq!(settings["appearance"]["preset"], "graphite");
     }
 
     #[test]
