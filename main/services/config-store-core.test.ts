@@ -417,6 +417,35 @@ test("an untouched legacy preset is still retired when seeding follows the split
   );
 });
 
+test("released onboarding local identity migration re-homes cache and remembered provider", async (t) => {
+  const releasedId = "custom:onboarding-lmstudio";
+  const h = await harness(t, {
+    providers: [
+      {
+        ...provider,
+        id: releasedId,
+        defaultModel: "qwen3-8b",
+      },
+    ],
+    settings: { lastProviderId: releasedId },
+    seeded: true,
+  });
+
+  const [listed] = await h.store.listProviders();
+
+  assert.equal(listed.id, "custom:lmstudio");
+  assert.deepEqual(listed.legacyIds, [releasedId]);
+  assert.deepEqual(listed.models, provider.models);
+  assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
+  assert.equal((await h.store.getSettings()).lastProviderId, "custom:lmstudio");
+  const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
+  assert.equal(cache.byProvider[releasedId], undefined);
+  assert.deepEqual(cache.byProvider["custom:lmstudio"], {
+    models: provider.models,
+    modelMetadata: provider.modelMetadata,
+  });
+});
+
 test("an edited legacy preset is retained under a reserved ID with its cache re-homed", async (t) => {
   const h = await harness(t, {
     providers: [{ ...untouchedPreset, baseUrl: "https://proxy.internal/v1" }],
