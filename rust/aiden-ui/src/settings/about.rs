@@ -1,34 +1,78 @@
-//! About settings (port of `about-settings.tsx`).
+//! Truthful About settings.
 //!
-//! App name/version (compile-time constants), the config directory with a
-//! reveal-in-Finder action (runs `open` on the background thread), the
-//! repository link, and the "data stays local" privacy note.
+//! Product metadata comes from the package manifest used by the shipping
+//! application. The repository action always opens the one audited URL and
+//! reports launch failures in the settings surface.
+
+use std::sync::Arc;
 
 use gpui::{
-    div, AppContext as _, Context, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Styled as _, Window,
+    div, img, prelude::FluentBuilder as _, AppContext as _, Context, FontWeight, Image,
+    ImageFormat, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _, Window,
 };
-use gpui_component::{
-    button::Button, h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _, WindowExt,
-};
+use gpui_component::{button::Button, h_flex, v_flex, ActiveTheme, IconName, Sizable as _};
 
 use super::SettingsView;
 
-/// The app name shown in About.
 pub const APP_NAME: &str = "Aiden Agent";
-/// The repository URL from the workspace manifest.
 pub const REPOSITORY_URL: &str = "https://github.com/sambitcreate/aiden-agent";
 
+const PACKAGE_JSON: &str = include_str!("../../../../package.json");
+const APP_ICON_PNG: &[u8] = include_bytes!("../../../../resources/app-icon.png");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeEnvironment {
+    Development,
+    Release,
+}
+
+impl RuntimeEnvironment {
+    pub fn current() -> Self {
+        if aiden_data::is_dev_mode() {
+            Self::Development
+        } else {
+            Self::Release
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Development => "Development build",
+            Self::Release => "Production build",
+        }
+    }
+}
+
+/// Read the desktop product version from the root package metadata. Keeping
+/// this as a function makes malformed build inputs testable without creating
+/// another version constant that can drift.
+pub fn product_version_from(package_json: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(package_json)
+        .ok()?
+        .get("version")?
+        .as_str()
+        .filter(|version| !version.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+pub fn product_version() -> String {
+    product_version_from(PACKAGE_JSON).unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn launch_repository_with(launch: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
+    launch(REPOSITORY_URL)
+}
+
 impl SettingsView {
-    /// The About section.
     pub(crate) fn about_section(
         &self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let version = env!("CARGO_PKG_VERSION");
-        let config_dir = self.services.config_dir.clone();
+        let version = product_version();
+        let environment = RuntimeEnvironment::current().label();
+        let inline_error = self.error.clone();
 
         v_flex()
             .id("about-section")
@@ -41,12 +85,16 @@ impl SettingsView {
                     .items_start()
                     .child(
                         div()
-                            .size(gpui::px(56.))
+                            .size(gpui::px(64.))
                             .rounded_xl()
-                            .bg(theme.muted)
-                            .items_center()
-                            .justify_center()
-                            .child(Icon::new(IconName::Bot).text_color(theme.muted_foreground)),
+                            .overflow_hidden()
+                            .child(
+                                img(Arc::new(Image::from_bytes(
+                                    ImageFormat::Png,
+                                    APP_ICON_PNG.to_vec(),
+                                )))
+                                .size_full(),
+                            ),
                     )
                     .child(
                         v_flex()
@@ -63,93 +111,60 @@ impl SettingsView {
                                     .text_sm()
                                     .text_color(theme.muted_foreground)
                                     .mt_0p5()
-                                    .child(format!("Version {version} · Beta · Production build")),
+                                    .child(format!("Version {version} · Beta · {environment}")),
                             )
                             .child(
-                                h_flex()
-                                    .mt_2()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("about-github")
-                                            .small()
-                                            .icon(IconName::GitHub)
-                                            .label("GitHub")
-                                            .on_click(cx.listener(|this, _event, window, cx| {
-                                                let _ = this;
-                                                window.push_notification(
-                                                    format!("Project: {REPOSITORY_URL}"),
-                                                    cx,
-                                                );
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("about-reveal-config")
-                                            .small()
-                                            .icon(IconName::FolderOpen)
-                                            .label("Reveal config folder in Finder")
-                                            .on_click(cx.listener({
-                                                let config_dir = config_dir.clone();
-                                                move |this, _event, _window, cx| {
-                                                    this.reveal_in_finder(&config_dir, cx);
-                                                }
-                                            })),
-                                    ),
+                                h_flex().mt_2().child(
+                                    Button::new("about-github")
+                                        .small()
+                                        .icon(IconName::GitHub)
+                                        .label("GitHub")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.open_repository(cx);
+                                        })),
+                                ),
                             ),
                     ),
             )
-            .child(
-                v_flex()
-                    .w_full()
-                    .gap_2()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(theme.border)
-                    .px_4()
-                    .py_3()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Where your data lives"),
-                    )
-                    .child(div().text_sm().text_color(theme.muted_foreground).child(
-                        "Your chats, provider connections, and settings are stored on this \
-                                 Mac. API keys are kept in the macOS keychain and are never sent \
-                                 anywhere except the provider you configured.",
-                    ))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .mt_1()
-                            .child(config_dir.display().to_string()),
-                    ),
-            )
+            .when_some(inline_error, |view, message| {
+                view.child(
+                    div()
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(theme.danger.opacity(0.12))
+                        .text_sm()
+                        .text_color(theme.danger)
+                        .child(message),
+                )
+            })
     }
 
-    /// Reveal a path in Finder via the `open` command (background thread).
-    fn reveal_in_finder(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
-        let path = path.to_path_buf();
+    fn open_repository(&mut self, cx: &mut Context<Self>) {
+        self.error = None;
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    std::process::Command::new("open")
-                        .arg("-R")
-                        .arg(&path)
-                        .spawn()
-                        .map(|_| ())
-                        .map_err(|error| error.to_string())
+                    launch_repository_with(|url| {
+                        std::process::Command::new("/usr/bin/open")
+                            .arg(url)
+                            .spawn()
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
+                    })
                 })
                 .await;
-            if let Err(error) = result {
-                this.update(cx, |this, cx| {
-                    this.error = Some(format!("Could not reveal the config folder: {error}"));
-                    cx.notify();
-                })
-                .ok();
-            }
+            this.update(cx, |this, cx| {
+                if let Err(error) = result {
+                    this.error = Some(format!("Could not open the GitHub repository: {error}"));
+                }
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
+        cx.notify();
     }
 }
 
@@ -158,10 +173,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn about_constants_are_filled_in() {
-        assert!(!APP_NAME.is_empty());
-        assert!(!REPOSITORY_URL.is_empty());
-        assert!(REPOSITORY_URL.starts_with("https://github.com/"));
-        assert!(!env!("CARGO_PKG_VERSION").is_empty());
+    fn product_version_comes_from_root_package_metadata() {
+        assert_eq!(product_version(), "0.27.0");
+        assert_eq!(
+            product_version_from(r#"{"version":"1.2.3"}"#).as_deref(),
+            Some("1.2.3")
+        );
+        assert_eq!(product_version_from("{}"), None);
+    }
+
+    #[test]
+    fn runtime_environment_uses_the_aiden_dev_profile() {
+        assert_eq!(
+            RuntimeEnvironment::current(),
+            if aiden_data::is_dev_mode() {
+                RuntimeEnvironment::Development
+            } else {
+                RuntimeEnvironment::Release
+            }
+        );
+    }
+
+    #[test]
+    fn repository_opener_receives_only_the_fixed_url_and_surfaces_failure() {
+        let mut observed = None;
+        let result = launch_repository_with(|url| {
+            observed = Some(url.to_string());
+            Err("launcher unavailable".to_string())
+        });
+        assert_eq!(observed.as_deref(), Some(REPOSITORY_URL));
+        assert_eq!(result.unwrap_err(), "launcher unavailable");
     }
 }
