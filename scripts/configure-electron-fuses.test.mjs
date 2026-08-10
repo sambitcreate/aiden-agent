@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { URL } from "node:url";
 import { FuseState, FuseV1Options, FuseVersion } from "@electron/fuses";
@@ -7,6 +10,7 @@ import {
   AIDEN_FUSE_CONFIG,
   AIDEN_FUSE_VALUES,
   assertAidenFuseWire,
+  makeSpawnHelpersExecutable,
 } from "./configure-electron-fuses.mjs";
 
 const packageJson = JSON.parse(
@@ -38,4 +42,64 @@ test("fuse verifier rejects missing, added, and incorrectly flipped fuses", () =
   delete missing[FuseV1Options.WasmTrapHandlers];
   assert.throws(() => assertAidenFuseWire(missing), /schema drifted/);
   assert.throws(() => assertAidenFuseWire({ ...wire, 9: FuseState.ENABLE }), /schema drifted/);
+});
+
+async function buildFakeAppWithHelper(helperMode) {
+  const appDir = await mkdtemp(path.join(tmpdir(), "fuses-pty-"));
+  const prebuilds = path.join(
+    appDir,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "darwin-arm64",
+  );
+  await mkdir(prebuilds, { recursive: true });
+  const helper = path.join(prebuilds, "spawn-helper");
+  const handle = await open(helper, "w", helperMode);
+  await handle.close();
+  return { appDir, helper };
+}
+
+test("makeSpawnHelpersExecutable chmods a non-executable spawn-helper to 0755", async () => {
+  const { appDir, helper } = await buildFakeAppWithHelper(0o644);
+  try {
+    await makeSpawnHelpersExecutable(appDir);
+    const { mode } = await stat(helper);
+    assert.notEqual(mode & 0o111, 0, "helper should be executable after afterPack");
+  } finally {
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("makeSpawnHelpersExecutable throws when no spawn-helper ships", async () => {
+  const appDir = await mkdtemp(path.join(tmpdir(), "fuses-pty-empty-"));
+  const prebuilds = path.join(
+    appDir,
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "darwin-arm64",
+  );
+  await mkdir(prebuilds, { recursive: true });
+  try {
+    await assert.rejects(makeSpawnHelpersExecutable(appDir), /No node-pty spawn-helper/u);
+  } finally {
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("makeSpawnHelpersExecutable is a no-op when node-pty is absent", async () => {
+  const appDir = await mkdtemp(path.join(tmpdir(), "fuses-pty-noop-"));
+  try {
+    // No app.asar.unpacked tree at all: must not throw.
+    await makeSpawnHelpersExecutable(appDir);
+  } finally {
+    await rm(appDir, { recursive: true, force: true });
+  }
 });
