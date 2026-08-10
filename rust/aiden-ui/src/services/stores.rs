@@ -22,12 +22,15 @@ use std::time::Duration;
 
 use aiden_data::chat_store::{create_chat_store, ChatStore, ChatStoreDurability};
 use aiden_data::config_store::{ConfigStore, ConfigStoreError, SecretsPort};
+use aiden_data::pi_credential_store::{
+    EncryptedPiCredentialStore, EncryptedPiCredentialStoreOptions,
+};
 use aiden_data::portable_config::{create_portable_config_stores, PortableConfigTestHooks};
 use aiden_data::portable_watch::{
     create_last_safe_snapshot_reload, create_portable_config_watcher, PortableConfigWatcher,
 };
 use aiden_data::schedule_store::{
-    create_schedule_store, DataStorePersistence, ScheduleStore, ScheduledRunResult, ScheduledTask,
+    create_schedule_store, DataStorePersistence, ScheduleStore, ScheduledTask,
 };
 use aiden_data::secret_map::{KeyringCredentialCipher, ProviderKeysError, ProviderKeysStore};
 use aiden_data::usage_store::UsageStore;
@@ -40,6 +43,10 @@ use aiden_subagents::run_store_production::{
     ProductionSubagentRunStore, ProductionSubagentRunStoreOptions,
 };
 use async_trait::async_trait;
+
+use crate::services::codex_auth::PiCodexAuthStore;
+use crate::services::foundation_titles::production_foundation_models_connection;
+use crate::services::mcp_mutation::McpMutationAuthority;
 
 /// The keychain service name used for provider credentials.
 const KEYCHAIN_SERVICE: &str = "com.sambitcreate.aiden-agent.provider-keys";
@@ -55,7 +62,18 @@ const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub struct Stores {
     pub chat: Arc<ChatStore>,
     pub config: Arc<ConfigStore>,
+    /// Process-lifetime Appearance publication sequence. Every window shares
+    /// this fence, so a delayed write from a closed/replaced window can never
+    /// publish after a newer reopened-window intent.
+    pub appearance_intent_revision: Arc<AtomicU64>,
     pub keys: Arc<ProviderKeysStore>,
+    /// Pi-native provider credentials. Values are encrypted into distinct
+    /// Keychain accounts and never copied into portable provider config.
+    /// The exact adapter shared by Codex setup and request-time token refresh.
+    pub codex_auth: Arc<PiCodexAuthStore>,
+    /// Truthful Apple Foundation Models status/title connection. It probes the
+    /// signed helper only when title routing asks for it.
+    pub foundation_models: Arc<aiden_computer_use::FoundationModelsConnection>,
     /// Scheduled tasks + run history (machine-local `schedules.json` /
     /// `schedule-runs.json`). Shared with the settings surface and the
     /// scheduled-tasks panel so both see the same task list.
@@ -65,6 +83,8 @@ pub struct Stores {
     /// One shared MCP client manager (per-server connections with generations).
     /// Chat generations connect through it when enabled servers are configured.
     pub mcp: Arc<McpClientManager>,
+    /// The sole configuration/credential mutation authority for MCP servers.
+    pub mcp_mutation: Arc<McpMutationAuthority>,
     /// The scheduled-task runtime: a 30 s tokio tick loop that dispatches due
     /// tasks through a `TaskExecutor` and records runs in the schedule store.
     /// Started by the shell on boot; stopped on quit so no tokio task leaks.
@@ -108,6 +128,17 @@ impl Stores {
             KEYCHAIN_SERVICE,
             Arc::new(KeyringCredentialCipher::new(KEYCHAIN_SERVICE)),
         ));
+        let pi_credentials = Arc::new(EncryptedPiCredentialStore::new(
+            EncryptedPiCredentialStoreOptions {
+                file_path: local_root.join("pi-provider-credentials.json"),
+                cipher: Arc::new(KeyringCredentialCipher::new(KEYCHAIN_SERVICE)),
+                sync_directory: None,
+                on_durability_warning: None,
+                before_document_write: None,
+            },
+        ));
+        let codex_auth = Arc::new(PiCodexAuthStore::new(pi_credentials.clone()));
+        let foundation_models = Arc::new(production_foundation_models_connection());
         let config = Arc::new(ConfigStore::new(
             stores,
             Arc::new(StoreSecretsPort::new(keys.clone())),
@@ -118,10 +149,9 @@ impl Stores {
             None,
             ChatStoreDurability::default(),
         ));
-        // The schedule store shared by settings + the scheduled panel. The
-        // scheduler runtime gets its own instance over the same persistence
-        // files (its mutations are runtime patches + run records; the store's
-        // own tail lock serializes within each instance).
+        // The schedule store is the single authority for settings, the panel,
+        // tools, and the runtime. Never construct another cached instance over
+        // these files: a second cache can overwrite newer task state.
         let schedules = Arc::new(create_schedule_store(
             DataStorePersistence::new("schedules.json", Some(local_root.clone())),
             DataStorePersistence::new("schedule-runs.json", Some(local_root.clone())),
@@ -130,21 +160,26 @@ impl Stores {
         ));
         let usage = Arc::new(UsageStore::new_data_store(Some(local_root.clone())));
         let mcp = Arc::new(McpClientManager::new());
+        let mcp_mutation = Arc::new(McpMutationAuthority::new(
+            config.clone(),
+            keys.clone(),
+            mcp.clone(),
+        ));
+        // A crash between portable publication and credential cleanup leaves a
+        // durable journal. Reconcile it before any watcher/chat can reconnect.
+        if let Err(error) = mcp_mutation.reconcile_boot() {
+            tracing::warn!(%error, "MCP cleanup journal reconciliation failed; affected credentials remain unavailable");
+        }
 
         let scheduler = create_scheduler(
-            create_schedule_store(
-                DataStorePersistence::new("schedules.json", Some(local_root.clone())),
-                DataStorePersistence::new("schedule-runs.json", Some(local_root.clone())),
-                Box::new(aiden_data::now_millis),
-                None,
-            ),
-            Arc::new(LoggingTaskExecutor),
+            schedules.clone(),
+            Arc::new(DisabledTaskExecutor),
             None,
             Box::new(aiden_data::now_millis),
         );
 
         let (config_changed, config_watcher) =
-            Self::build_portable_config_watch(config.clone(), portable_root);
+            Self::build_portable_config_watch(config.clone(), mcp_mutation.clone(), portable_root);
         let watcher = Arc::new(config_watcher);
         spawn_config_poll_thread(watcher.clone());
 
@@ -157,10 +192,14 @@ impl Stores {
         Ok(Self {
             chat,
             config,
+            appearance_intent_revision: Arc::new(AtomicU64::new(0)),
             keys,
+            codex_auth,
+            foundation_models,
             schedules,
             usage,
             mcp,
+            mcp_mutation,
             scheduler,
             quit_barrier: Arc::new(aiden_mac::quit_barrier::QuitBarrier::new()),
             config_watcher: Some(watcher),
@@ -184,12 +223,11 @@ impl Stores {
     /// unsafe (corrupt/malformed) file never replaces the reconciled baseline.
     ///
     /// `on_changed` bumps the version channel the shell watches. External
-    /// credential/MCP reconciliation (items 5 + 7 of the parity audit) is a
-    /// follow-up; the shell already re-reads providers per turn and MCP
-    /// connections are fingerprint-checked on reconnect, so a change is
-    /// observed at least as fast as the next turn.
+    /// credential/MCP reconciliation fences and disconnects changed server
+    /// records before the shell announces the new snapshot.
     fn build_portable_config_watch(
         config: Arc<ConfigStore>,
+        mcp_mutation: Arc<McpMutationAuthority>,
         portable_root: PathBuf,
     ) -> (Arc<tokio::sync::watch::Sender<u64>>, PortableConfigWatcher) {
         let (version_tx, _) = tokio::sync::watch::channel(0u64);
@@ -236,14 +274,38 @@ impl Stores {
                 changed
             })
         };
-        // Reconcile: for now the change is announced and the shell refreshes
-        // providers. The credential/MCP reconcile side effects land with the
-        // rotation-journal port (parity audit item 5/7).
-        let reconcile = Box::new(|_previous: &String, current: &String| {
-            tracing::info!(
-                snapshot = %current,
-                "reconciling externally changed portable config"
-            );
+        // External edits bypass the mutation authority, so disconnect every
+        // server whose runtime snapshot changed before announcing the edit.
+        // The next chat turn reconnects only from the newly reloaded record.
+        let reconcile = Box::new(move |previous: &String, current: &String| {
+            let parse = |snapshot: &str| -> Vec<aiden_data::portable_config::McpServer> {
+                serde_json::from_str::<(
+                    Vec<aiden_data::config_store::Provider>,
+                    Vec<aiden_data::portable_config::McpServer>,
+                )>(snapshot)
+                .map(|(_, servers)| servers)
+                .unwrap_or_default()
+            };
+            let previous = parse(previous);
+            let current = parse(current);
+            let mut ids = std::collections::BTreeSet::new();
+            ids.extend(previous.iter().map(|server| server.id.clone()));
+            ids.extend(current.iter().map(|server| server.id.clone()));
+            for id in ids {
+                let before = previous.iter().find(|server| server.id == id);
+                let after = current.iter().find(|server| server.id == id);
+                if before.map(aiden_mcp::credential_cleanup::mcp_runtime_connection_snapshot)
+                    != after.map(aiden_mcp::credential_cleanup::mcp_runtime_connection_snapshot)
+                {
+                    mcp_mutation
+                        .reconcile_external(before, after)
+                        .map_err(|error| {
+                            aiden_data::portable_watch::PortableWatchError::Message(
+                                error.to_string(),
+                            )
+                        })?;
+                }
+            }
             Ok(())
         });
         let reload =
@@ -324,25 +386,18 @@ fn open_subagent_run_store(local_root: PathBuf) -> Option<Arc<ProductionSubagent
     }
 }
 
-/// The scheduler's execution seam until real chat generation lands: logs what
-/// would run and returns a success outcome so the schedule store records a
-/// run for every due task the tick loop dispatches (parity audit item 4:
-/// "evaluate due tasks and record runs").
-pub struct LoggingTaskExecutor;
+/// Explicitly fail closed until the app wires a bounded, cancellation-aware
+/// executor. In particular, a scheduled task must never report success merely
+/// because a placeholder saw it.
+pub struct DisabledTaskExecutor;
 
 #[async_trait]
-impl TaskExecutor for LoggingTaskExecutor {
+impl TaskExecutor for DisabledTaskExecutor {
     async fn run(&self, task: &ScheduledTask) -> Result<TaskRunOutcome, TaskRunError> {
-        tracing::info!(
-            "scheduled task would execute: {task:?} (real chat execution lands with the scheduler executor follow-up)"
-        );
-        Ok(TaskRunOutcome {
-            result: ScheduledRunResult::Success,
-            output: "Evaluated by the scheduler runtime; execution lands in a follow-up."
-                .to_string(),
-            error: None,
-            chat_id: None,
-        })
+        Err(TaskRunError(format!(
+            "Scheduled execution is unavailable for task {} until a real executor is configured.",
+            task.id
+        )))
     }
 
     fn cancel(&self, _task_id: &str) -> bool {
@@ -385,25 +440,9 @@ impl SecretsPort for StoreSecretsPort {
         // mismatched binding means the credential belongs to a DIFFERENT
         // provider config (e.g. the base URL changed), so the key is refused
         // and the user must re-authenticate.
-        let stored = match self.keys.get_binding(provider_id) {
-            Ok(Some(stored)) => stored,
-            Ok(None) => return Ok(None),
-            // A legacy/unreadable binding fails closed: the key's endpoint
-            // provenance cannot be verified, so it is never handed out.
-            Err(ProviderKeysError::NeedsRotation { .. }) => return Ok(None),
-            Err(error) => return Err(Self::map_err(error)),
-        };
-        if stored != binding {
-            return Ok(None);
-        }
-        match self.keys.get(provider_id) {
-            Ok(key) => Ok(key),
-            // A legacy key blob cannot be decrypted: degrade to `None` rather
-            // than breaking provider listing; the settings surface flags the
-            // slot for re-entry via `ProviderKeysStore::status`.
-            Err(ProviderKeysError::NeedsRotation { .. }) => Ok(None),
-            Err(error) => Err(Self::map_err(error)),
-        }
+        self.keys
+            .get_bound(provider_id, binding)
+            .map_err(Self::map_err)
     }
 
     fn delete_key(&self, provider_id: &str) -> Result<(), ConfigStoreError> {
@@ -433,6 +472,8 @@ impl SecretsPort for StoreSecretsPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiden_data::portable_config::{McpServer, McpTransport, PORTABLE_CONFIG_FILENAME};
+    use aiden_data::schedule_store::{ScheduledTaskMode, ScheduledTaskPermission};
     use aiden_data::secret_map::{SecretCipher, SecretCipherError};
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
@@ -479,6 +520,176 @@ mod tests {
             cipher,
         ));
         (dir, store)
+    }
+
+    fn mcp_watch_fixture() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Arc<ConfigStore>,
+        Arc<McpMutationAuthority>,
+    ) {
+        let portable = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let keys = Arc::new(ProviderKeysStore::new(
+            local.path().to_path_buf(),
+            "aiden-mcp-watch-test",
+            cipher,
+        ));
+        let config = Arc::new(ConfigStore::new(
+            create_portable_config_stores(
+                portable.path().to_path_buf(),
+                Some(local.path().to_path_buf()),
+                PortableConfigTestHooks::default(),
+            ),
+            Arc::new(StoreSecretsPort::new(keys.clone())),
+            None,
+        ));
+        let authority = Arc::new(McpMutationAuthority::new(
+            config.clone(),
+            keys,
+            Arc::new(McpClientManager::new()),
+        ));
+        (portable, local, config, authority)
+    }
+
+    fn watched_server() -> McpServer {
+        McpServer {
+            id: "mcp-watch".into(),
+            name: "Watch".into(),
+            transport: McpTransport::Http,
+            command: None,
+            args: None,
+            env: None,
+            url: Some("https://first.example/mcp".into()),
+            headers: None,
+            oauth: None,
+            preset_id: None,
+            enabled: true,
+        }
+    }
+
+    fn edit_portable_mcp(portable: &tempfile::TempDir, edit: impl FnOnce(&mut serde_json::Value)) {
+        let path = portable.path().join(PORTABLE_CONFIG_FILENAME);
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        edit(&mut document["mcpServers"][0]);
+        std::fs::write(path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn malformed_mcp_args_stay_unsafe_without_reconciliation_or_credential_revoke() {
+        let (portable, _local, config, authority) = mcp_watch_fixture();
+        config.save_mcp_server(&watched_server(), &|| true).unwrap();
+        let (changed, watcher) = Stores::build_portable_config_watch(
+            config.clone(),
+            authority.clone(),
+            portable.path().to_path_buf(),
+        );
+        let version = changed.subscribe();
+        watcher.refresh();
+        let epoch = authority.epoch();
+
+        edit_portable_mcp(&portable, |server| {
+            server["args"] = serde_json::json!("--not-an-array");
+        });
+        watcher.refresh();
+
+        assert!(config
+            .cached_portable_config_safe_for_credential_reconciliation()
+            .is_err());
+        assert_eq!(authority.epoch(), epoch, "unsafe input cannot revoke");
+        assert_eq!(*version.borrow(), 0, "unsafe input is not announced");
+        assert!(!config
+            .get_settings()
+            .unwrap()
+            .contains_key("pendingMcpCredentialCleanup"));
+
+        edit_portable_mcp(&portable, |server| {
+            server.as_object_mut().unwrap().remove("args");
+        });
+        watcher.refresh();
+        assert!(config
+            .cached_portable_config_safe_for_credential_reconciliation()
+            .unwrap());
+        assert_eq!(authority.epoch(), epoch);
+        assert_eq!(*version.borrow(), 1);
+    }
+
+    #[test]
+    fn watcher_cleanup_failure_keeps_baseline_pending_and_unchanged_retry_commits() {
+        let (portable, _local, config, authority) = mcp_watch_fixture();
+        config.save_mcp_server(&watched_server(), &|| true).unwrap();
+        let (changed, watcher) = Stores::build_portable_config_watch(
+            config.clone(),
+            authority.clone(),
+            portable.path().to_path_buf(),
+        );
+        let version = changed.subscribe();
+        watcher.refresh();
+
+        edit_portable_mcp(&portable, |server| {
+            server["url"] = serde_json::json!("https://second.example/mcp");
+        });
+        authority.set_cleanup_failure_for_test(true);
+        watcher.refresh();
+        assert_eq!(
+            *version.borrow(),
+            0,
+            "failed cleanup cannot commit baseline"
+        );
+        assert!(config
+            .get_settings()
+            .unwrap()
+            .contains_key("pendingMcpCredentialCleanup"));
+
+        authority.set_cleanup_failure_for_test(false);
+        watcher.refresh();
+        assert_eq!(
+            *version.borrow(),
+            1,
+            "the unchanged disk transition is retried and committed"
+        );
+        assert!(!config
+            .get_settings()
+            .unwrap()
+            .contains_key("pendingMcpCredentialCleanup"));
+        watcher.refresh();
+        assert_eq!(*version.borrow(), 1, "committed baseline is not replayed");
+    }
+
+    #[tokio::test]
+    async fn placeholder_scheduled_executor_never_reports_success() {
+        let task = ScheduledTask {
+            id: "task-1".to_string(),
+            name: "Test".to_string(),
+            enabled: true,
+            mode: ScheduledTaskMode::Llm,
+            cron: "0 9 * * *".to_string(),
+            timezone: "UTC".to_string(),
+            next_run_at: None,
+            last_run_at: None,
+            workspace_id: None,
+            provider_id: None,
+            model: None,
+            provider_fingerprint: None,
+            prompt: Some("test".to_string()),
+            script: None,
+            permission: ScheduledTaskPermission::ReadOnly,
+            mcp_server_ids: None,
+            mcp_server_bindings: None,
+            execution_profile: None,
+            chat_id: None,
+            notify: false,
+            last_result: None,
+            last_error: None,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let result = DisabledTaskExecutor.run(&task).await;
+
+        assert!(result.is_err());
     }
 
     fn binding_for(id: &str, base_url: &str) -> String {
