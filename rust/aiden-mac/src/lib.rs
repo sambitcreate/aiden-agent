@@ -43,6 +43,7 @@
 //! macOS-only APIs are behind `#[cfg(target_os = "macos")]`; the rest of the
 //! crate provides graceful stubs so `cargo test` passes on any host.
 
+pub mod appearance;
 pub mod audio;
 pub mod dictation_coordinator;
 pub mod hotkey;
