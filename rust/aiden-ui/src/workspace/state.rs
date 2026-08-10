@@ -8,9 +8,11 @@
 //! [`gpui_tokio_bridge::Tokio`]), never on the GPUI foreground thread.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use aiden_data::config_store::ConfigStore;
 use aiden_data::external_editors::{EditorCache, ResolvedExternalEditor, SystemEditorDiscovery};
 use aiden_data::portable_config::Workspace;
 use aiden_git::error::GitError;
@@ -34,6 +36,10 @@ use super::{bar, editors};
 
 /// How often the git chip refreshes while the chat view is visible.
 pub const GIT_POLL_INTERVAL: Duration = Duration::from_secs(15);
+/// Portable settings key matching Electron's app-scoped editor preference.
+pub const PREFERRED_EDITOR_SETTINGS_KEY: &str = "aiden-agent.preferredEditorId";
+
+static PREFERRED_EDITOR_WRITE_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// The overlay currently open from the workspace bar (one at a time — the
 /// gpui-component dialog layer holds a single top dialog).
@@ -88,6 +94,7 @@ pub(crate) struct WorkspaceBarSnapshot {
     pub(crate) git_busy: bool,
     pub(crate) editors: Vec<ResolvedExternalEditor>,
     pub(crate) editors_loading: bool,
+    pub(crate) preferred_editor_id: Option<String>,
 }
 
 /// The git poll driver (tokio) + foreground watcher pair. The tasks are held
@@ -103,6 +110,7 @@ struct Poll {
 pub struct WorkspaceState {
     git: GitService,
     editor_cache: Arc<EditorCache>,
+    config: Arc<ConfigStore>,
 
     // Mirrored from the chat service (pushed by AppState on every notify).
     pub(crate) active_id: Option<String>,
@@ -117,10 +125,14 @@ pub struct WorkspaceState {
     pub(crate) push_capability: Option<GitPushCapability>,
     /// A git mutation (checkout / create / commit / push) is in flight.
     pub(crate) git_busy: bool,
+    /// Authoritative gate while a model response is active. Dialog actions
+    /// also consult this so an already-open overlay cannot mutate state.
+    pub(crate) interaction_blocked: bool,
 
     // Detected editors.
     pub(crate) editors: Vec<ResolvedExternalEditor>,
     pub(crate) editors_loading: bool,
+    pub(crate) preferred_editor_id: Option<String>,
 
     // Overlay + dialog state.
     pub(crate) overlay: Overlay,
@@ -148,7 +160,11 @@ pub struct WorkspaceState {
 }
 
 impl WorkspaceState {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn git_service(&self) -> GitService {
+        self.git.clone()
+    }
+
+    pub fn new(config: Arc<ConfigStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search…"));
         let branch_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("feature/my-branch"));
@@ -161,9 +177,11 @@ impl WorkspaceState {
         let confirm_input = cx
             .new(|cx| InputState::new(window, cx).placeholder("Type the destination branch name"));
 
+        let preferred_editor_id = load_preferred_editor_id(&config);
         let mut this = Self {
             git: GitService::new(GitServiceOptions::default()),
             editor_cache: Arc::new(EditorCache::default()),
+            config,
             active_id: None,
             active_folder: None,
             workspaces: Vec::new(),
@@ -173,8 +191,10 @@ impl WorkspaceState {
             review: None,
             push_capability: None,
             git_busy: false,
+            interaction_blocked: false,
             editors: Vec::new(),
             editors_loading: false,
+            preferred_editor_id,
             overlay: Overlay::None,
             pending_close: false,
             search_input,
@@ -257,10 +277,19 @@ impl WorkspaceState {
         self.visible = visible;
         if visible {
             self.refresh_git_info(cx);
+            self.refresh_editors(cx, false);
             self.start_poll(cx);
         } else {
             self.stop_poll();
         }
+        cx.notify();
+    }
+
+    pub fn set_interaction_blocked(&mut self, blocked: bool, cx: &mut Context<Self>) {
+        if self.interaction_blocked == blocked {
+            return;
+        }
+        self.interaction_blocked = blocked;
         cx.notify();
     }
 
@@ -279,6 +308,9 @@ impl WorkspaceState {
 
     /// Open one of the bar's overlays, loading the data it needs first.
     pub fn open_overlay(&mut self, overlay: Overlay, window: &mut Window, cx: &mut Context<Self>) {
+        if self.interaction_blocked && overlay != Overlay::None {
+            return;
+        }
         if self.overlay == overlay {
             return;
         }
@@ -410,6 +442,7 @@ impl WorkspaceState {
             git_busy: self.git_busy,
             editors: self.editors.clone(),
             editors_loading: self.editors_loading,
+            preferred_editor_id: self.preferred_editor_id.clone(),
         }
     }
 
@@ -568,7 +601,7 @@ impl WorkspaceState {
 
     /// Switch to an existing local branch (`git switch --no-guess`).
     pub fn checkout_branch(&mut self, name: &str, cx: &mut Context<Self>) {
-        if self.git_busy {
+        if !workspace_mutation_allowed(self.git_busy, self.interaction_blocked) {
             return;
         }
         let Some(folder) = self.active_folder.clone() else {
@@ -620,7 +653,7 @@ impl WorkspaceState {
 
     /// Create and switch to a new local branch (`git switch -c`).
     pub fn create_branch(&mut self, cx: &mut Context<Self>) {
-        if self.git_busy {
+        if !workspace_mutation_allowed(self.git_busy, self.interaction_blocked) {
             return;
         }
         let Some(folder) = self.active_folder.clone() else {
@@ -673,7 +706,7 @@ impl WorkspaceState {
 
     /// Commit the reviewed snapshot (staged-only or all changes).
     pub fn commit_changes(&mut self, cx: &mut Context<Self>) {
-        if self.git_busy {
+        if !workspace_mutation_allowed(self.git_busy, self.interaction_blocked) {
             return;
         }
         let Some(folder) = self.active_folder.clone() else {
@@ -752,7 +785,7 @@ impl WorkspaceState {
     /// Push the current branch (reviewed, never-fetch; `--force-with-lease`
     /// only when the user enabled it and typed the destination branch name).
     pub fn push_changes(&mut self, cx: &mut Context<Self>) {
-        if self.git_busy {
+        if !workspace_mutation_allowed(self.git_busy, self.interaction_blocked) {
             return;
         }
         let Some(folder) = self.active_folder.clone() else {
@@ -902,6 +935,9 @@ impl WorkspaceState {
 
     /// Open the macOS folder panel and emit [`WorkspaceEvent::AdoptFolder`].
     pub fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.interaction_blocked {
+            return;
+        }
         self.close_dialog(window, cx);
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -942,18 +978,57 @@ impl WorkspaceState {
             let result = task.await;
             let editors = result.unwrap_or_default();
             this.update(cx, |this, cx| {
-                this.editors = editors;
-                this.editors_loading = false;
-                cx.notify();
+                this.apply_editor_discovery(editors, cx);
             })
             .ok();
         })
         .detach();
     }
 
+    fn apply_editor_discovery(
+        &mut self,
+        editors: Vec<ResolvedExternalEditor>,
+        cx: &mut Context<Self>,
+    ) {
+        self.editors = editors;
+        self.editors_loading = false;
+        let resolved =
+            resolve_preferred_editor_id(&self.editors, self.preferred_editor_id.as_deref())
+                .map(str::to_owned);
+        if resolved.is_some() && resolved != self.preferred_editor_id {
+            self.preferred_editor_id = resolved.clone();
+            if let Some(editor_id) = resolved {
+                persist_preferred_editor_id(self.config.clone(), editor_id, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn remember_editor(&mut self, editor_id: &str, cx: &mut Context<Self>) {
+        if self.preferred_editor_id.as_deref() == Some(editor_id) {
+            return;
+        }
+        self.preferred_editor_id = Some(editor_id.to_owned());
+        persist_preferred_editor_id(self.config.clone(), editor_id.to_owned(), cx);
+        cx.notify();
+    }
+
+    /// Remember an explicit picker selection before launching it, matching
+    /// Electron's selection semantics even if launching later fails.
+    pub fn select_editor(&mut self, editor_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.interaction_blocked || !self.editors.iter().any(|editor| editor.id == editor_id) {
+            return;
+        }
+        self.remember_editor(editor_id, cx);
+        self.open_in_editor(editor_id, window, cx);
+    }
+
     /// Launch the workspace folder in the given editor (`open -b <bundleId>`
     /// via `aiden-data`); failures surface as error notifications.
     pub fn open_in_editor(&mut self, editor_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.interaction_blocked {
+            return;
+        }
         let Some(folder) = self.active_folder.clone() else {
             return;
         };
@@ -989,7 +1064,7 @@ impl WorkspaceState {
                 Ok(Ok(Err(error))) => Some(error.to_string()),
                 _ => Some("The editor launch was interrupted.".to_string()),
             };
-            this.update(cx, |_this, cx| {
+            this.update(cx, |this, cx| {
                 if let Some(message) = message {
                     cx.emit(WorkspaceEvent::Notify {
                         kind: NotificationKind::Error,
@@ -997,6 +1072,46 @@ impl WorkspaceState {
                             "Couldn't open this workspace in {editor_label}: {message}"
                         ),
                     });
+                    this.refresh_editors(cx, true);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Resolve against the latest discovery snapshot at activation time, then
+    /// delegate to the ID-revalidating launcher.
+    pub fn open_preferred_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.interaction_blocked {
+            return;
+        }
+        if let Some(editor_id) =
+            resolve_preferred_editor_id(&self.editors, self.preferred_editor_id.as_deref())
+                .map(str::to_owned)
+        {
+            self.remember_editor(&editor_id, cx);
+            self.open_in_editor(&editor_id, window, cx);
+            return;
+        }
+
+        self.editors_loading = true;
+        cx.notify();
+        let cache = self.editor_cache.clone();
+        let task = Tokio::spawn(cx, async move {
+            tokio::task::spawn_blocking(move || cache.get(true, &SystemEditorDiscovery))
+                .await
+                .unwrap_or_default()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let editors = task.await.unwrap_or_default();
+            this.update_in(cx, |this, window, cx| {
+                this.apply_editor_discovery(editors, cx);
+                if let Some(editor_id) =
+                    resolve_preferred_editor_id(&this.editors, this.preferred_editor_id.as_deref())
+                        .map(str::to_owned)
+                {
+                    this.open_in_editor(&editor_id, window, cx);
                 }
             })
             .ok();
@@ -1184,14 +1299,68 @@ pub fn commit_selection_description(review: &GitReview, mode: GitCommitMode) -> 
     }
 }
 
-/// The editor the open-in-editor chip should launch by default (priority
-/// order, Finder last — the ranking is a passthrough of `aiden-data`'s
-/// priority sort).
-pub fn preferred_editor(editors: &[ResolvedExternalEditor]) -> Option<&ResolvedExternalEditor> {
-    editors
-        .iter()
-        .find(|editor| editor.id != "finder")
-        .or_else(|| editors.first())
+/// Resolve the stored choice when it is still installed, otherwise use the
+/// deterministic discovery order (which already ranks Finder last).
+pub fn resolve_preferred_editor_id<'a>(
+    editors: &'a [ResolvedExternalEditor],
+    stored_editor_id: Option<&str>,
+) -> Option<&'a str> {
+    stored_editor_id
+        .and_then(|stored_id| {
+            editors
+                .iter()
+                .find(|editor| editor.id == stored_id)
+                .map(|editor| editor.id.as_str())
+        })
+        .or_else(|| editors.first().map(|editor| editor.id.as_str()))
+}
+
+pub fn preferred_editor<'a>(
+    editors: &'a [ResolvedExternalEditor],
+    stored_editor_id: Option<&str>,
+) -> Option<&'a ResolvedExternalEditor> {
+    let editor_id = resolve_preferred_editor_id(editors, stored_editor_id)?;
+    editors.iter().find(|editor| editor.id == editor_id)
+}
+
+fn load_preferred_editor_id(config: &ConfigStore) -> Option<String> {
+    config
+        .get_settings()
+        .ok()
+        .and_then(|settings| preferred_editor_id_from_settings(&settings))
+}
+
+fn preferred_editor_id_from_settings(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    settings
+        .get(PREFERRED_EDITOR_SETTINGS_KEY)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn persist_preferred_editor_id(config: Arc<ConfigStore>, editor_id: String, cx: &mut App) {
+    let generation = PREFERRED_EDITOR_WRITE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    cx.background_spawn(async move {
+        let mut patch = serde_json::Map::new();
+        patch.insert(
+            PREFERRED_EDITOR_SETTINGS_KEY.to_owned(),
+            serde_json::Value::String(editor_id),
+        );
+        let is_current = || PREFERRED_EDITOR_WRITE_GENERATION.load(Ordering::SeqCst) == generation;
+        if let Err(error) = config.set_settings(&patch, &is_current) {
+            if is_current() {
+                tracing::warn!(%error, "failed to persist preferred editor");
+            }
+        }
+    })
+    .detach();
+}
+
+fn workspace_mutation_allowed(git_busy: bool, interaction_blocked: bool) -> bool {
+    !git_busy && !interaction_blocked
 }
 
 /// Case-insensitive workspace picker filter (name or folder path).
@@ -1361,6 +1530,16 @@ fn format_path_ends(
 mod tests {
     use super::*;
 
+    fn editor(id: &str, label: &str) -> ResolvedExternalEditor {
+        ResolvedExternalEditor {
+            id: id.into(),
+            label: label.into(),
+            app_path: format!("/Applications/{label}.app"),
+            bundle_id: format!("com.example.{id}"),
+            icon_data_url: String::new(),
+        }
+    }
+
     fn info(branch: &str, uncommitted: u64, ahead: u64, behind: u64) -> GitInfo {
         GitInfo {
             is_repo: true,
@@ -1505,27 +1684,47 @@ mod tests {
     }
 
     #[test]
-    fn preferred_editor_skips_finder_and_keeps_priority_order() {
-        let editors = vec![
-            ResolvedExternalEditor {
-                id: "cursor".into(),
-                label: "Cursor".into(),
-                app_path: "/Applications/Cursor.app".into(),
-                bundle_id: "com.todesktop.230313mzl4w4u92".into(),
-                icon_data_url: String::new(),
-            },
-            ResolvedExternalEditor {
-                id: "finder".into(),
-                label: "Finder".into(),
-                app_path: "/System/Library/CoreServices/Finder.app".into(),
-                bundle_id: "com.apple.finder".into(),
-                icon_data_url: String::new(),
-            },
-        ];
-        // Ranking passthrough: definition priority order, Finder last.
-        assert_eq!(editors.last().unwrap().id, "finder");
-        assert_eq!(preferred_editor(&editors).unwrap().id, "cursor");
-        assert_eq!(preferred_editor(&[]), None);
+    fn preferred_editor_honors_an_installed_stored_choice() {
+        let editors = vec![editor("cursor", "Cursor"), editor("zed", "Zed")];
+        assert_eq!(
+            resolve_preferred_editor_id(&editors, Some("zed")),
+            Some("zed")
+        );
+    }
+
+    #[test]
+    fn preferred_editor_falls_back_to_discovery_order_when_choice_is_missing() {
+        let editors = vec![editor("cursor", "Cursor"), editor("finder", "Finder")];
+        assert_eq!(
+            resolve_preferred_editor_id(&editors, Some("uninstalled")),
+            Some("cursor")
+        );
+    }
+
+    #[test]
+    fn preferred_editor_is_unavailable_before_discovery() {
+        assert_eq!(resolve_preferred_editor_id(&[], Some("cursor")), None);
+    }
+
+    #[test]
+    fn preferred_editor_setting_reads_the_electron_compatible_key() {
+        let mut settings = serde_json::Map::new();
+        settings.insert(
+            PREFERRED_EDITOR_SETTINGS_KEY.into(),
+            serde_json::Value::String("  zed  ".into()),
+        );
+        assert_eq!(
+            preferred_editor_id_from_settings(&settings).as_deref(),
+            Some("zed")
+        );
+    }
+
+    #[test]
+    fn workspace_mutations_require_idle_git_and_generation_state() {
+        assert!(workspace_mutation_allowed(false, false));
+        assert!(!workspace_mutation_allowed(true, false));
+        assert!(!workspace_mutation_allowed(false, true));
+        assert!(!workspace_mutation_allowed(true, true));
     }
 
     #[test]
