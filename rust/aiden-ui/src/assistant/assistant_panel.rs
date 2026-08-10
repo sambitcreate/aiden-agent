@@ -53,6 +53,7 @@ use crate::assistant::view_state::{
     can_send, history_to_messages, AssistantPhase, AssistantViewState,
 };
 use crate::services::mcp_tools::{ChatMcpTools, McpStreamContext};
+use crate::services::provider_availability::require_available_selection;
 use crate::services::provider_kit::{resolve_api_key, ConfiguredProvider, ModelSelection};
 use crate::services::stores::Stores;
 
@@ -205,7 +206,7 @@ impl AssistantPanel {
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let recent = stores.schedules.list().unwrap_or_default();
                     let enabled = enabled_mcp_servers(&stores.config);
-                    let preset_key = preset_key_resolver(&stores.keys);
+                    let preset_key = preset_key_resolver(&stores.mcp_mutation, &enabled);
                     let context = McpStreamContext {
                         manager: stores.mcp.clone(),
                         servers: enabled.clone(),
@@ -239,7 +240,7 @@ impl AssistantPanel {
             let (servers, tools) = cx
                 .background_spawn(async move {
                     let enabled = enabled_mcp_servers(&stores.config);
-                    let preset_key = preset_key_resolver(&stores.keys);
+                    let preset_key = preset_key_resolver(&stores.mcp_mutation, &enabled);
                     let context = McpStreamContext {
                         manager: stores.mcp.clone(),
                         servers: enabled.clone(),
@@ -329,23 +330,18 @@ impl AssistantPanel {
     /// Assemble the runner inputs and spawn the background agent run + the
     /// foreground watcher. Mirrors the chat service's driver/watcher split.
     fn start_turn(&mut self, text: &str, cx: &mut Context<Self>) {
-        self.turn += 1;
-        let turn = self.turn;
-
         let Some(selection) = self.selection.clone() else {
             self.state.error = Some("Choose a provider and model before chatting here.".into());
             cx.notify();
             return;
         };
-        let Some(provider) = self
-            .providers
-            .iter()
-            .find(|provider| provider.id == selection.provider_id)
-            .cloned()
-        else {
-            self.state.error = Some("The selected provider is no longer configured.".into());
-            cx.notify();
-            return;
+        let provider = match require_available_selection(&self.providers, &selection) {
+            Ok(provider) => provider,
+            Err(error) => {
+                self.state.error = Some(error.to_string());
+                cx.notify();
+                return;
+            }
         };
         if provider.needs_key && !provider.has_key {
             self.state.error = Some(format!(
@@ -356,6 +352,8 @@ impl AssistantPanel {
             return;
         }
 
+        self.turn += 1;
+        let turn = self.turn;
         self.state.start_turn(text);
         cx.notify();
 
@@ -367,7 +365,7 @@ impl AssistantPanel {
             Arc::new(StoreWorkspaceLister(stores.config.clone())),
             stores.mcp.clone(),
             mcp_tools,
-            Arc::new(StoreScheduleSource(stores.schedules.clone())),
+            Arc::new(StoreScheduleSource(stores.scheduler.clone())),
         ));
         let system_prompt =
             aiden_agent::build_assistant_system_prompt(&self.prompt_input(&executor));
@@ -388,12 +386,12 @@ impl AssistantPanel {
         );
 
         let (tx, rx) = mpsc::channel(128);
-        let keys = stores.keys.clone();
-        let transport = provider.transport();
+        let provider_config = stores.config.clone();
+        let transport = provider.transport_with_codex_auth(stores.codex_auth.clone());
         let driver = Tokio::spawn(cx, async move {
             // Keychain access + the provider stream run on the background
             // driver thread, never the GPUI foreground.
-            let api_key = resolve_api_key(&keys, &provider);
+            let api_key = resolve_api_key(&provider_config, &provider);
             let config = RunnerConfig { api_key, ..config };
             let _ = run_agent(
                 transport.as_ref(),
@@ -497,13 +495,14 @@ impl AssistantPanel {
 /// on the background executor only).
 #[allow(clippy::type_complexity)] // shared with the chat driver's context shape
 fn preset_key_resolver(
-    keys: &Arc<aiden_data::secret_map::ProviderKeysStore>,
+    authority: &Arc<crate::services::mcp_mutation::McpMutationAuthority>,
+    servers: &[aiden_data::portable_config::McpServer],
 ) -> Arc<dyn Fn(&str) -> Option<String> + Send + Sync> {
-    let keys = keys.clone();
+    let authority = authority.clone();
+    let servers = servers.to_vec();
     Arc::new(move |server_id: &str| {
-        keys.get(&aiden_mcp::preset_secret_id(server_id))
-            .ok()
-            .flatten()
+        let server = servers.iter().find(|server| server.id == server_id)?;
+        authority.bound_preset_key(server).ok().flatten()
     })
 }
 
@@ -515,10 +514,7 @@ fn resolve_selection(
 ) -> Option<ModelSelection> {
     if let Some(value) = settings.get(MODEL_SELECTION_KEY) {
         if let Some(selection) = ModelSelection::from_settings(value) {
-            if providers
-                .iter()
-                .any(|provider| provider.id == selection.provider_id)
-            {
+            if require_available_selection(providers, &selection).is_ok() {
                 return Some(selection);
             }
         }
@@ -538,9 +534,8 @@ fn selection_ready(selection: &Option<ModelSelection>, providers: &[ConfiguredPr
     let Some(selection) = selection else {
         return false;
     };
-    providers
-        .iter()
-        .find(|provider| provider.id == selection.provider_id)
+    require_available_selection(providers, selection)
+        .ok()
         .is_some_and(|provider| !provider.needs_key || provider.has_key)
 }
 
@@ -913,5 +908,59 @@ impl AssistantPanel {
                         },
                     )),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aiden_data::portable_config::ProviderKind;
+    use std::collections::HashMap;
+
+    fn provider() -> ConfiguredProvider {
+        ConfiguredProvider {
+            id: "custom:test".into(),
+            label: "Test".into(),
+            kind: ProviderKind::Openai,
+            base_url: "https://example.test/v1".into(),
+            deployment: None,
+            models: vec!["current-model".into()],
+            default_model: Some("current-model".into()),
+            model_metadata: HashMap::new(),
+            catalog_models: Vec::new(),
+            needs_key: false,
+            has_key: false,
+        }
+    }
+
+    #[test]
+    fn stale_assistant_selection_is_not_ready_to_start() {
+        let selection = Some(ModelSelection {
+            provider_id: "custom:test".into(),
+            model: "removed-model".into(),
+        });
+
+        assert!(!selection_ready(&selection, &[provider()]));
+    }
+
+    #[test]
+    fn stale_persisted_assistant_selection_falls_back_to_an_available_model() {
+        let settings = serde_json::json!({
+            (MODEL_SELECTION_KEY): {
+                "providerId": "custom:test",
+                "model": "removed-model"
+            }
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        assert_eq!(
+            resolve_selection(&settings, &[provider()]),
+            Some(ModelSelection {
+                provider_id: "custom:test".into(),
+                model: "current-model".into(),
+            })
+        );
     }
 }
