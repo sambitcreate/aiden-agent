@@ -177,6 +177,15 @@ impl SettingsView {
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.mcp.open_draft(window, cx);
                             })),
+                    )
+                    .child(
+                        Button::new("reset-mcp-connections")
+                            .small()
+                            .ghost()
+                            .label("Reset connections")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.mcp.reset_connections(&this.services, cx);
+                            })),
                     ),
             )
             .when_some(state.error.clone(), |el, message| {
@@ -578,6 +587,30 @@ impl SettingsView {
 }
 
 impl McpState {
+    fn reset_connections(&mut self, services: &SettingsServices, cx: &mut Context<SettingsView>) {
+        let services = services.clone();
+        cx.spawn(async move |this, cx| {
+            let ok = cx
+                .background_spawn(async move {
+                    debug_assert!(std::sync::Arc::ptr_eq(
+                        &services.mcp,
+                        services.mcp_mutation.manager(),
+                    ));
+                    services.mcp_mutation.reset_connections().await;
+                    true
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.mcp.statuses.clear();
+                this.mcp.testing = None;
+                this.mcp.error = (!ok).then_some("Connections could not be reset.".to_string());
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Open the add-stdio-server form.
     fn open_draft(&mut self, window: &mut Window, cx: &mut Context<SettingsView>) {
         let make_input =
@@ -622,15 +655,14 @@ impl McpState {
     ) {
         let services = services.clone();
         let server_id = server_id.to_string();
-        let servers = self.servers.clone();
-        let Some(row) = servers.iter().find(|row| row.id == server_id) else {
-            return;
-        };
-        let record = mcp_server_from_row(row, enabled);
         cx.spawn(async move |this, cx| {
             let ok = cx
                 .background_spawn(async move {
-                    services.config.save_mcp_server(&record, &|| true).is_ok()
+                    services
+                        .mcp_mutation
+                        .toggle(&server_id, enabled)
+                        .await
+                        .is_ok()
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -676,12 +708,14 @@ impl McpState {
         };
         cx.spawn(async move |this, cx| {
             let ok = cx
-                .background_spawn(async move {
-                    services.config.save_mcp_server(&record, &|| true).is_ok()
-                })
+                .background_spawn(async move { services.mcp_mutation.save(record).await.is_ok() })
                 .await;
             this.update(cx, |this, cx| {
-                this.mcp.adding = None;
+                if ok {
+                    this.mcp.adding = None;
+                } else if let Some(draft) = this.mcp.adding.as_mut() {
+                    draft.saving = false;
+                }
                 this.mcp.error = if ok {
                     None
                 } else {
@@ -706,15 +740,14 @@ impl McpState {
         let server_id = server_id.to_string();
         cx.spawn(async move |this, cx| {
             let ok = cx
-                .background_spawn(async move {
-                    services
-                        .config
-                        .remove_mcp_server(&server_id, &|| true)
-                        .is_ok()
-                })
+                .background_spawn(
+                    async move { services.mcp_mutation.remove(&server_id).await.is_ok() },
+                )
                 .await;
             this.update(cx, |this, cx| {
-                this.mcp.removing = None;
+                if ok {
+                    this.mcp.removing = None;
+                }
                 this.mcp.error = if ok {
                     None
                 } else {
@@ -743,21 +776,13 @@ impl McpState {
             return;
         };
         let record = mcp_server_from_row(row, row.enabled);
-        let manager = services.mcp.clone();
         self.testing = Some(server_id.clone());
         self.statuses.remove(&server_id);
 
-        let task = Tokio::spawn(cx, async move {
-            match aiden_mcp::resolve_mcp_server(&record) {
-                Ok(spec) => manager.status(&spec).await,
-                Err(error) => aiden_mcp::McpStatus {
-                    connected: false,
-                    tool_count: 0,
-                    tools: Vec::new(),
-                    error: Some(error.to_string()),
-                },
-            }
-        });
+        let task = Tokio::spawn(
+            cx,
+            async move { services.mcp_mutation.status(&record).await },
+        );
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let status = match result {
@@ -798,6 +823,178 @@ fn mcp_server_from_row(row: &McpServerRow, enabled: bool) -> McpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use aiden_computer_use::foundation_models::FoundationModelsConnection;
+    use aiden_core::appearance::create_default_appearance_config;
+    use aiden_data::chat_store::{create_chat_store, ChatStoreDurability};
+    use aiden_data::config_store::ConfigStore;
+    use aiden_data::pi_credential_store::{
+        EncryptedPiCredentialStore, EncryptedPiCredentialStoreOptions,
+    };
+    use aiden_data::portable_config::{create_portable_config_stores, PortableConfigTestHooks};
+    use aiden_data::schedule_store::{create_schedule_store, DataStorePersistence};
+    use aiden_data::secret_map::{ProviderKeysStore, SecretCipher, SecretCipherError};
+    use aiden_data::usage_store::UsageStore;
+    use aiden_mac::hotkey::ShortcutRegistrationPort;
+    use aiden_scheduler::runtime::create_scheduler;
+    use gpui::TestAppContext;
+
+    use crate::services::chat_service::ChatService;
+    use crate::services::codex_auth::PiCodexAuthStore;
+    use crate::services::mcp_mutation::McpMutationAuthority;
+    use crate::services::native_appearance::{NativeAppearance, PreparedNativeAppearance};
+    use crate::services::stores::{DisabledTaskExecutor, StoreSecretsPort, Stores};
+    use crate::shortcut_runtime::ShortcutRuntime;
+
+    #[derive(Default)]
+    struct MemoryCipher {
+        vault: std::sync::Mutex<HashMap<String, String>>,
+    }
+
+    impl SecretCipher for MemoryCipher {
+        fn is_encryption_available(&self) -> bool {
+            true
+        }
+
+        fn encrypt_string(&self, account: &str, value: &str) -> Result<Vec<u8>, SecretCipherError> {
+            self.vault
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            Ok(format!("encrypted:{value}").into_bytes())
+        }
+
+        fn decrypt_string(&self, account: &str, value: &[u8]) -> Result<String, SecretCipherError> {
+            let value = String::from_utf8_lossy(value);
+            let Some(plaintext) = value.strip_prefix("encrypted:") else {
+                return Err(SecretCipherError::NeedsRotation);
+            };
+            match self.vault.lock().unwrap().get(account) {
+                Some(stored) if stored == plaintext => Ok(plaintext.to_string()),
+                _ => Err(SecretCipherError::UnrecognizedFormat),
+            }
+        }
+    }
+
+    struct NoopShortcutPort;
+
+    impl ShortcutRegistrationPort for NoopShortcutPort {
+        fn register(&self, _accelerator: &str) -> bool {
+            true
+        }
+
+        fn unregister(&self, _accelerator: &str) {}
+    }
+
+    fn test_stores(portable: &tempfile::TempDir, local: &tempfile::TempDir) -> Stores {
+        let cipher: Arc<dyn SecretCipher> = Arc::new(MemoryCipher::default());
+        let keys = Arc::new(ProviderKeysStore::new(
+            local.path().to_path_buf(),
+            "aiden-settings-mcp-test",
+            cipher.clone(),
+        ));
+        let config = Arc::new(ConfigStore::new(
+            create_portable_config_stores(
+                portable.path().to_path_buf(),
+                Some(local.path().to_path_buf()),
+                PortableConfigTestHooks::default(),
+            ),
+            Arc::new(StoreSecretsPort::new(keys.clone())),
+            None,
+        ));
+        let credentials = Arc::new(EncryptedPiCredentialStore::new(
+            EncryptedPiCredentialStoreOptions {
+                file_path: local.path().join("pi-provider-credentials.json"),
+                cipher,
+                sync_directory: None,
+                on_durability_warning: None,
+                before_document_write: None,
+            },
+        ));
+        let codex_auth = Arc::new(PiCodexAuthStore::new(credentials));
+        let foundation_models = Arc::new(FoundationModelsConnection::new(
+            "linux",
+            "x86_64",
+            "0",
+            Arc::new(|| 0),
+            Arc::new(|_, _| Box::pin(async { unreachable!("platform gate") })),
+        ));
+        let schedules = Arc::new(create_schedule_store(
+            DataStorePersistence::new("schedules.json", Some(local.path().to_path_buf())),
+            DataStorePersistence::new("schedule-runs.json", Some(local.path().to_path_buf())),
+            Box::new(aiden_data::now_millis),
+            None,
+        ));
+        let mcp = Arc::new(aiden_mcp::McpClientManager::new());
+        let mcp_mutation = Arc::new(McpMutationAuthority::new(
+            config.clone(),
+            keys.clone(),
+            mcp.clone(),
+        ));
+        let scheduler = create_scheduler(
+            schedules.clone(),
+            Arc::new(DisabledTaskExecutor),
+            None,
+            Box::new(aiden_data::now_millis),
+        );
+        let chats_path = local.path().join("chats");
+        let (config_changed, _) = tokio::sync::watch::channel(0);
+        Stores {
+            chat: Arc::new(create_chat_store(
+                Box::new(move || chats_path.clone()),
+                None,
+                ChatStoreDurability::default(),
+            )),
+            config,
+            appearance_intent_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            keys,
+            codex_auth,
+            foundation_models,
+            schedules,
+            usage: Arc::new(UsageStore::new_data_store(Some(local.path().to_path_buf()))),
+            mcp,
+            mcp_mutation,
+            scheduler,
+            quit_barrier: Arc::new(aiden_mac::quit_barrier::QuitBarrier::new()),
+            config_watcher: None,
+            config_changed: Arc::new(config_changed),
+            runs: None,
+        }
+    }
+
+    fn test_settings_view(
+        services: SettingsServices,
+        cx: &mut Context<SettingsView>,
+    ) -> SettingsView {
+        let shortcuts = crate::settings::shortcuts::ShortcutsState::default();
+        let recorder_drop_guard = crate::settings::shortcuts::RecorderDropGuard::new(
+            services.shortcuts.clone(),
+            shortcuts.owner_signal(),
+            cx.to_async(),
+        );
+        SettingsView {
+            services,
+            active: crate::settings::SettingsSection::Mcp,
+            booted: true,
+            error: None,
+            _subscriptions: Vec::new(),
+            _recorder_drop_guard: recorder_drop_guard,
+            providers: crate::settings::providers::ProvidersState::default(),
+            model_data: crate::settings::model_data::ModelDataState::default(),
+            model_pad: crate::settings::model_pad::ModelPadState::default(),
+            assistant: crate::settings::assistant::AssistantState::default(),
+            web_search: crate::settings::web_search::WebSearchState::default(),
+            voice: crate::settings::voice::VoiceState::default(),
+            computer_use: crate::settings::computer_use::ComputerUseState::default(),
+            appearance: crate::settings::appearance::AppearanceState::default(),
+            shortcuts,
+            mcp: McpState::default(),
+            scheduled: crate::settings::scheduled::ScheduledState::default(),
+            skills: crate::settings::skills::SkillsState::new(cx, None),
+        }
+    }
 
     #[test]
     fn parses_key_value_env_lines() {
@@ -856,5 +1053,98 @@ mod tests {
         assert!(!rebuilt.enabled);
         assert_eq!(rebuilt.oauth, Some(true));
         assert_eq!(rebuilt.headers, None);
+    }
+
+    #[gpui::test]
+    fn failed_add_keeps_inputs_and_real_async_retry_succeeds(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(gpui_tokio_bridge::init);
+        let portable = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let stores = test_stores(&portable, &local);
+        let config = stores.config.clone();
+        let shortcuts =
+            cx.new(|cx| ShortcutRuntime::new(config.clone(), Arc::new(NoopShortcutPort), cx));
+        let appearance_service = {
+            let stores = stores.clone();
+            cx.new(|cx| {
+                ChatService::new(
+                    stores,
+                    create_default_appearance_config(),
+                    PreparedNativeAppearance {
+                        native: NativeAppearance::new(),
+                        restored: None,
+                    },
+                    cx,
+                )
+            })
+        };
+        let services = SettingsServices::from_stores(&stores, shortcuts, appearance_service);
+        let (view, cx) = cx.add_window_view(move |_window, cx| test_settings_view(services, cx));
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.mcp.open_draft(window, cx);
+                let draft = this.mcp.adding.as_ref().unwrap();
+                let name = draft.name.clone();
+                let command = draft.command.clone();
+                let args = draft.args.clone();
+                let env = draft.env.clone();
+                name.update(cx, |input, cx| input.set_value("n".repeat(257), window, cx));
+                command.update(cx, |input, cx| input.set_value("npx", window, cx));
+                args.update(cx, |input, cx| input.set_value("-y package", window, cx));
+                env.update(cx, |input, cx| input.set_value("TOKEN=value", window, cx));
+                let services = this.services.clone();
+                this.mcp.save_draft(&services, cx);
+                assert!(this.mcp.adding.as_ref().unwrap().saving);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.read(|app| {
+            let this = view.read(app);
+            let draft = this.mcp.adding.as_ref().expect("failed draft remains open");
+            assert!(!draft.saving);
+            assert_eq!(
+                this.mcp.error.as_deref(),
+                Some("The MCP server could not be saved.")
+            );
+            assert_eq!(draft.name.read(app).value().len(), 257);
+            assert_eq!(draft.command.read(app).value(), "npx");
+            assert_eq!(draft.args.read(app).value(), "-y package");
+            assert_eq!(draft.env.read(app).value(), "TOKEN=value");
+        });
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                let name = this.mcp.adding.as_ref().unwrap().name.clone();
+                name.update(cx, |input, cx| input.set_value("Retry server", window, cx));
+                let services = this.services.clone();
+                this.mcp.save_draft(&services, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.read(|app| {
+            let this = view.read(app);
+            assert!(this.mcp.adding.is_none());
+            assert!(this.mcp.error.is_none());
+        });
+        let saved = stores.config.list_mcp_servers().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "Retry server");
+        assert_eq!(saved[0].command.as_deref(), Some("npx"));
+        assert_eq!(
+            saved[0].args.as_deref(),
+            Some(&["-y".into(), "package".into()][..])
+        );
+        assert_eq!(
+            saved[0]
+                .env
+                .as_ref()
+                .unwrap()
+                .get("TOKEN")
+                .map(String::as_str),
+            Some("value")
+        );
     }
 }
