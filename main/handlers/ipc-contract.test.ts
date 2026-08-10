@@ -12,6 +12,19 @@ import {
   NATIVE_INVOKE_CHANNELS,
   NOTIFICATION_CHANNELS,
 } from "../../renderer/preload-channels.js";
+import {
+  createAttachmentPreloadBridge,
+  PRELOAD_MAX_ATTACHMENT_BYTES,
+  PRELOAD_MAX_ATTACHMENT_PATHS,
+  PRELOAD_MAX_CLIPBOARD_IMAGES,
+  PRELOAD_MAX_IMAGE_BYTES,
+} from "../../renderer/preload-attachments.js";
+import {
+  MAX_ATTACHMENT_BATCH_BYTES,
+  MAX_CLIPBOARD_IMAGES,
+  MAX_IMAGE_BYTES,
+} from "../services/attachments.js";
+import { MAX_ATTACHMENTS_PER_MESSAGE } from "../../renderer/shared/attachment-contract.js";
 
 interface IpcInventory {
   handlers: Set<string>;
@@ -20,6 +33,9 @@ interface IpcInventory {
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MAIN_ROOT = path.join(REPO_ROOT, "main");
+const PRELOAD_PATH = path.join(REPO_ROOT, "renderer", "preload.ts");
+const RENDERER_IPC_PATH = path.join(REPO_ROOT, "renderer", "lib", "ipc.ts");
+const ATTACHMENT_HANDLER_PATH = path.join(MAIN_ROOT, "handlers", "attachments.ts");
 
 function calleeName(expression: ts.LeftHandSideExpression): string | undefined {
   if (ts.isIdentifier(expression)) return expression.text;
@@ -152,6 +168,96 @@ test("dedicated native bridge channels exactly match the live native handlers", 
     sorted(nativeChannels),
     "native preload methods and native main handlers drifted",
   );
+});
+
+test("fixed attachment bridge preserves OS drop and bounded clipboard flows", async () => {
+  const calls: Array<{ channel: string; args: unknown[] }> = [];
+  const trustedFile = {} as File;
+  const onePixelPng = new Uint8Array(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+  const bridge = createAttachmentPreloadBridge({
+    invoke: async <T>(channel: string, ...args: unknown[]) => {
+      calls.push({ channel, args });
+      return [] as unknown as T;
+    },
+    getPathForFile: (file) => {
+      if (file === trustedFile) return "/trusted/from-finder.png";
+      throw new Error("not an OS-backed File");
+    },
+  });
+
+  const beforeForgedDrop = calls.length;
+  assert.deepEqual(
+    await bridge.readDroppedFiles(
+      ["/private/renderer-authored" as unknown as File],
+      1,
+      true,
+      PRELOAD_MAX_ATTACHMENT_BYTES,
+    ),
+    [],
+  );
+  assert.equal(calls.length, beforeForgedDrop, "arbitrary path strings must not reach IPC");
+
+  await bridge.readDroppedFiles([trustedFile], 1, true, PRELOAD_MAX_ATTACHMENT_BYTES);
+  assert.deepEqual(calls[calls.length - 1], {
+    channel: NATIVE_INVOKE_CHANNELS.attachmentDroppedRead,
+    args: [["/trusted/from-finder.png"], 1, true, PRELOAD_MAX_ATTACHMENT_BYTES],
+  });
+
+  const clipboard = [{ mimeType: "image/png", bytes: onePixelPng }];
+  await bridge.readClipboardImages(clipboard, 1, PRELOAD_MAX_ATTACHMENT_BYTES);
+  assert.deepEqual(calls[calls.length - 1], {
+    channel: NATIVE_INVOKE_CHANNELS.attachmentClipboardRead,
+    args: [clipboard, 1, PRELOAD_MAX_ATTACHMENT_BYTES],
+  });
+
+  const maximumImage = new Uint8Array(PRELOAD_MAX_IMAGE_BYTES);
+  maximumImage.set(onePixelPng);
+  const beforeOversizedClipboard = calls.length;
+  await assert.rejects(
+    bridge.readClipboardImages(
+      Array.from({ length: 5 }, () => ({ mimeType: "image/png", bytes: maximumImage })),
+      5,
+      PRELOAD_MAX_ATTACHMENT_BYTES,
+    ),
+    /aggregate byte limit/u,
+  );
+  assert.equal(calls.length, beforeOversizedClipboard, "oversized bytes must not reach IPC");
+  await assert.rejects(
+    bridge.readDroppedFiles(
+      Array.from({ length: PRELOAD_MAX_ATTACHMENT_PATHS + 1 }, () => trustedFile),
+      PRELOAD_MAX_ATTACHMENT_PATHS,
+      true,
+      PRELOAD_MAX_ATTACHMENT_BYTES,
+    ),
+    /Invalid dropped file selection/u,
+  );
+
+  assert.equal(PRELOAD_MAX_ATTACHMENT_PATHS, MAX_ATTACHMENTS_PER_MESSAGE);
+  assert.equal(PRELOAD_MAX_CLIPBOARD_IMAGES, MAX_CLIPBOARD_IMAGES);
+  assert.equal(PRELOAD_MAX_IMAGE_BYTES, MAX_IMAGE_BYTES);
+  assert.equal(PRELOAD_MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_BATCH_BYTES);
+});
+
+test("generic renderer IPC exposes only the main-owned picker, never path reads", async () => {
+  const [preload, rendererIpc, attachmentHandler] = await Promise.all([
+    fs.readFile(PRELOAD_PATH, "utf8"),
+    fs.readFile(RENDERER_IPC_PATH, "utf8"),
+    fs.readFile(ATTACHMENT_HANDLER_PATH, "utf8"),
+  ]);
+  assert.match(preload, /import \{ contextBridge, ipcRenderer, webUtils \} from "electron"/u);
+  assert.match(preload, /getPathForFile: \(file: File\) => webUtils\.getPathForFile\(file\)/u);
+  assert.doesNotMatch(preload, /file\.path/u);
+  assert.equal(INVOKE_PREFIXES.includes("attachments:"), true);
+  assert.match(rendererIpc, /"attachments:pickAndRead"/u);
+  assert.doesNotMatch(rendererIpc, /attachments:(?:drop|read|clipboard)/u);
+  assert.match(attachmentHandler, /"attachments:pickAndRead"/u);
+  assert.match(attachmentHandler, /"aiden:attachments:dropped-read"/u);
+  assert.match(attachmentHandler, /"aiden:attachments:clipboard-read"/u);
 });
 
 test("live notification sites exactly match the preload notification allowlist", () => {
