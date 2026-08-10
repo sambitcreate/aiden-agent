@@ -1,10 +1,11 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { OpenDialogOptions, OpenDialogReturnValue } from "electron";
 import {
   INVOKE_PREFIXES,
   NATIVE_INVOKE_CHANNELS,
   NOTIFICATION_CHANNELS,
 } from "./preload-channels.js";
+import { createAttachmentPreloadBridge } from "./preload-attachments.js";
 
 // Re-exported so the contract test can assert coverage without importing this
 // Electron-bound module.
@@ -49,6 +50,11 @@ const aidenAPI = {
         options,
       ) as Promise<OpenDialogReturnValue>,
   },
+  attachments: createAttachmentPreloadBridge({
+    invoke: <T>(channel: string, ...args: unknown[]) =>
+      ipcRenderer.invoke(channel, ...args) as Promise<T>,
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  }),
   nativeTheme: {
     getInfo: (): Promise<NativeThemeInfo> =>
       ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.themeGet) as Promise<NativeThemeInfo>,
