@@ -7,6 +7,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use aiden_core::app_update::AppUpdateSnapshot;
 use aiden_data::config_store::ConfigStore;
 use chrono::{Datelike as _, Local, TimeZone as _};
 use gpui::{
@@ -595,6 +596,7 @@ impl AppState {
             .pb_2()
             .pt_1()
             .gap_0p5()
+            .child(self.sidebar_update_banner(cx))
             .child(self.sidebar_destination(
                 "sidebar-profile",
                 "Profile",
@@ -617,6 +619,83 @@ impl AppState {
                 }),
                 cx,
             ))
+    }
+
+    fn sidebar_update_banner(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let AppUpdateSnapshot::Ready { version } = &self.app_update_snapshot else {
+            return h_flex()
+                .id("sidebar-update-check")
+                .w_full()
+                .justify_end()
+                .child(
+                    Button::new("sidebar-update-check-button")
+                        .ghost()
+                        .xsmall()
+                        .label("Check for updates")
+                        .on_click(cx.listener(|this, _event, window, cx| {
+                            this.check_for_app_update(window, cx);
+                        })),
+                )
+                .into_any_element();
+        };
+        if self.app_update_dismissed_version.as_deref() == Some(version.as_str()) {
+            return div().id("sidebar-update-dismissed").into_any_element();
+        }
+        let theme = cx.theme().clone();
+        let version = version.clone();
+        v_flex()
+            .id("sidebar-update-banner")
+            .w_full()
+            .mb_1()
+            .p_2p5()
+            .gap_1p5()
+            .rounded(px(11.))
+            .bg(theme.secondary)
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(IconName::ArrowDown).small())
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Update ready"),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("Aiden Agent {version}")),
+            )
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_1()
+                    .child(
+                        Button::new("sidebar-update-later")
+                            .ghost()
+                            .xsmall()
+                            .label("Later")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.dismiss_app_update(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("sidebar-update-open")
+                            .primary()
+                            .xsmall()
+                            .label("Open installer")
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.open_app_update(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
     }
 
     fn sidebar_destination(

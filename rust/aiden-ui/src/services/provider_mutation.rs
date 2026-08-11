@@ -93,6 +93,26 @@ impl ProviderMutationService {
         save_custom_with(&backend, &provider, None, None)
     }
 
+    /// Remove a custom provider's credential under the same mutation
+    /// coordinator as save/replace. Callers fence their editor operation
+    /// while this runs so a replacement key cannot be deleted by a late clear.
+    pub fn remove_custom_key(&self, provider_id: &str) -> Result<(), ProviderMutationError> {
+        let _authority = mutation_authority().lock().map_err(|_| {
+            ProviderMutationError::Persistence("provider mutation coordinator unavailable".into())
+        })?;
+        let provider = self
+            .config
+            .get_provider(provider_id)
+            .map_err(|error| ProviderMutationError::Persistence(error.to_string()))?
+            .ok_or_else(|| {
+                ProviderMutationError::Persistence("The provider record could not be read.".into())
+            })?;
+        ensure_mutable(&provider, Some(&provider))?;
+        self.keys
+            .delete(provider_id)
+            .map_err(|error| ProviderMutationError::Persistence(error.to_string()))
+    }
+
     /// Remove a custom provider through the same mutation authority.
     pub fn remove_custom(&self, provider_id: &str) -> Result<(), ProviderMutationError> {
         let _authority = mutation_authority().lock().map_err(|_| {

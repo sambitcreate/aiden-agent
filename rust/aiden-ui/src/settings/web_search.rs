@@ -37,6 +37,50 @@ pub fn exa_enabled_from_settings(settings: &serde_json::Map<String, serde_json::
         .unwrap_or(false)
 }
 
+/// Return whether an asynchronous completion still belongs to the current
+/// settings lifecycle. Settings can be rehydrated while a keychain/config
+/// operation is in flight, so the operation revision alone is not sufficient.
+fn operation_is_current(
+    current_operation_revision: u64,
+    expected_operation_revision: u64,
+    current_lifecycle_revision: u64,
+    expected_lifecycle_revision: u64,
+) -> bool {
+    current_operation_revision == expected_operation_revision
+        && current_lifecycle_revision == expected_lifecycle_revision
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WebSearchFence {
+    operation_revision: u64,
+    lifecycle_revision: u64,
+    busy_revision: u64,
+    editor_revision: u64,
+    editor_id: Option<u64>,
+}
+
+/// Return whether a key-save completion still belongs to the exact editor
+/// that submitted it. A reopened editor gets a new entity id and revision.
+fn key_editor_operation_is_current(current: WebSearchFence, expected: WebSearchFence) -> bool {
+    operation_is_current(
+        current.operation_revision,
+        expected.operation_revision,
+        current.lifecycle_revision,
+        expected.lifecycle_revision,
+    ) && current.busy_revision == expected.busy_revision
+        && current.editor_revision == expected.editor_revision
+        && current.editor_id == expected.editor_id
+}
+
+/// Keep an optimistic toggle truthful when the durable write fails.
+fn enabled_after_write(previous: bool, requested: bool, persisted: bool) -> bool {
+    if persisted {
+        requested
+    } else {
+        previous
+    }
+}
+
 #[derive(Default)]
 pub struct WebSearchState {
     pub enabled: bool,
@@ -47,12 +91,45 @@ pub struct WebSearchState {
     pub busy: bool,
     /// The key editor (opened by the user).
     pub key_editor: Option<Entity<InputState>>,
+    /// Monotonic settings-write revision. Completions from an older toggle
+    /// must never publish over a newer settings snapshot.
+    settings_revision: u64,
+    /// Monotonic keychain/load revision. This invalidates an older keychain
+    /// probe as soon as a save/remove or a newer probe begins.
+    key_revision: u64,
+    /// Monotonic editor lifecycle revision. Opening or completing an editor
+    /// creates a new identity so late callbacks cannot clear a reopened draft.
+    editor_revision: u64,
+    /// Identifies the one foreground key/config operation allowed at a time.
+    /// Lifecycle rehydration invalidates publication but never permits a second
+    /// write to overlap the first one.
+    busy_revision: u64,
+    /// Bumped when settings are rehydrated, fencing callbacks started against
+    /// an older section/navigation lifecycle.
+    lifecycle_revision: u64,
     _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl WebSearchState {
     pub fn hydrate(&mut self, settings: &serde_json::Map<String, serde_json::Value>) {
+        self.lifecycle_revision = self.lifecycle_revision.wrapping_add(1);
+        self.busy_revision = self.busy_revision.wrapping_add(1);
+        self.busy = false;
         self.enabled = exa_enabled_from_settings(settings);
+    }
+
+    /// Invalidate work owned by a section that is no longer visible. The
+    /// background operation may still finish, but it must not publish into a
+    /// later visit or clear a newly opened key editor.
+    pub(crate) fn leave_section(&mut self) {
+        self.lifecycle_revision = self.lifecycle_revision.wrapping_add(1);
+        self.key_revision = self.key_revision.wrapping_add(1);
+        self.settings_revision = self.settings_revision.wrapping_add(1);
+        self.busy_revision = self.busy_revision.wrapping_add(1);
+        self.editor_revision = self.editor_revision.wrapping_add(1);
+        self.busy = false;
+        self.key_editor = None;
+        self.notice = None;
     }
 
     /// Read the keychain presence on the background executor.
@@ -61,12 +138,24 @@ impl WebSearchState {
         services: &SettingsServices,
         cx: &mut Context<SettingsView>,
     ) {
+        if self.busy {
+            return;
+        }
+        self.key_revision = self.key_revision.wrapping_add(1);
+        let key_revision = self.key_revision;
+        let lifecycle_revision = self.lifecycle_revision;
+        self.has_key = None;
         let services = services.clone();
         cx.spawn(async move |this, cx| {
             let has_key = cx
                 .background_spawn(async move { services.keys.has_key(EXA_KEYCHAIN_ID).ok() })
                 .await;
             this.update(cx, |this, cx| {
+                if this.web_search.key_revision != key_revision
+                    || this.web_search.lifecycle_revision != lifecycle_revision
+                {
+                    return;
+                }
                 this.web_search.has_key = has_key;
                 cx.notify();
             })
@@ -89,6 +178,7 @@ impl WebSearchState {
                 }
             });
         self._subscriptions.push(subscription);
+        self.editor_revision = self.editor_revision.wrapping_add(1);
         self.key_editor = Some(editor);
         self.notice = None;
         cx.notify();
@@ -104,35 +194,74 @@ impl WebSearchState {
             return;
         };
         let value = editor.read(cx).value().trim().to_string();
+        let editor_id = editor.entity_id().as_u64();
+        let editor_revision = self.editor_revision;
+        let lifecycle_revision = self.lifecycle_revision;
+        self.key_revision = self.key_revision.wrapping_add(1);
+        let key_revision = self.key_revision;
+        self.busy_revision = self.busy_revision.wrapping_add(1);
+        let busy_revision = self.busy_revision;
         self.busy = true;
         let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let wrote = if value.is_empty() {
+                    let has_key = if value.is_empty() {
                         services.keys.delete(EXA_KEYCHAIN_ID).map(|_| false)
                     } else {
                         services.keys.set(EXA_KEYCHAIN_ID, &value).map(|_| true)
-                    };
-                    if wrote.as_ref().is_ok_and(|has_key| !*has_key) {
+                    }
+                    .map_err(|_| ())?;
+                    let disabled_persisted = if !has_key {
                         let mut patch = serde_json::Map::new();
                         patch.insert(EXA_ENABLED_KEY.to_string(), serde_json::json!(false));
-                        let _ = services.config.set_settings(&patch, &|| true);
-                    }
-                    wrote
+                        services.config.set_settings(&patch, &|| true).is_ok()
+                    } else {
+                        true
+                    };
+                    Ok::<_, ()>((has_key, disabled_persisted))
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !key_editor_operation_is_current(
+                    WebSearchFence {
+                        operation_revision: this.web_search.key_revision,
+                        lifecycle_revision: this.web_search.lifecycle_revision,
+                        busy_revision: this.web_search.busy_revision,
+                        editor_revision: this.web_search.editor_revision,
+                        editor_id: this
+                            .web_search
+                            .key_editor
+                            .as_ref()
+                            .map(|editor| editor.entity_id().as_u64()),
+                    },
+                    WebSearchFence {
+                        operation_revision: key_revision,
+                        lifecycle_revision,
+                        busy_revision,
+                        editor_revision,
+                        editor_id: Some(editor_id),
+                    },
+                ) {
+                    if this.web_search.busy_revision == busy_revision {
+                        this.web_search.busy = false;
+                    }
+                    return;
+                }
                 this.web_search.busy = false;
-                this.web_search.key_editor = None;
                 match result {
-                    Ok(has_key) => {
+                    Ok((has_key, disabled_persisted)) => {
+                        this.web_search.key_editor = None;
+                        this.web_search.editor_revision =
+                            this.web_search.editor_revision.wrapping_add(1);
                         this.web_search.has_key = Some(has_key);
                         if !has_key {
                             this.web_search.enabled = false;
                         }
                         this.web_search.notice = Some(if has_key {
                             "Exa API key saved.".to_string()
+                        } else if !disabled_persisted {
+                            "Exa API key removed, but web search could not be disabled durably; retry the settings change.".to_string()
                         } else {
                             "Exa API key removed; web search is disabled.".to_string()
                         });
@@ -157,6 +286,11 @@ impl WebSearchState {
             return;
         }
         self.busy = true;
+        self.key_revision = self.key_revision.wrapping_add(1);
+        let key_revision = self.key_revision;
+        let lifecycle_revision = self.lifecycle_revision;
+        self.busy_revision = self.busy_revision.wrapping_add(1);
+        let busy_revision = self.busy_revision;
         self.notice = None;
         let services = services.clone();
         cx.spawn(async move |this, cx| {
@@ -166,6 +300,17 @@ impl WebSearchState {
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if !operation_is_current(
+                    this.web_search.key_revision,
+                    key_revision,
+                    this.web_search.lifecycle_revision,
+                    lifecycle_revision,
+                ) {
+                    if this.web_search.busy_revision == busy_revision {
+                        this.web_search.busy = false;
+                    }
+                    return;
+                }
                 this.web_search.busy = false;
                 this.web_search.notice = Some(match result {
                     Ok(true) => {
@@ -195,7 +340,15 @@ impl WebSearchState {
         if self.busy {
             return;
         }
+        let previous_enabled = self.enabled;
+        self.settings_revision = self.settings_revision.wrapping_add(1);
+        let settings_revision = self.settings_revision;
+        let lifecycle_revision = self.lifecycle_revision;
+        self.busy_revision = self.busy_revision.wrapping_add(1);
+        let busy_revision = self.busy_revision;
+        self.busy = true;
         self.enabled = enabled;
+        self.notice = None;
         let services = services.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -206,7 +359,20 @@ impl WebSearchState {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !result {
+                if !operation_is_current(
+                    this.web_search.settings_revision,
+                    settings_revision,
+                    this.web_search.lifecycle_revision,
+                    lifecycle_revision,
+                ) {
+                    if this.web_search.busy_revision == busy_revision {
+                        this.web_search.busy = false;
+                    }
+                    return;
+                }
+                this.web_search.busy = false;
+                this.web_search.enabled = enabled_after_write(previous_enabled, enabled, result);
+                if !result && this.active == super::SettingsSection::WebSearch {
                     this.web_search.notice =
                         Some("Web search settings could not be saved.".to_string());
                 }
@@ -400,5 +566,93 @@ mod tests {
         assert!(exa_enabled_from_settings(&settings));
         settings.insert(EXA_ENABLED_KEY.to_string(), serde_json::json!("yes"));
         assert!(!exa_enabled_from_settings(&settings));
+    }
+
+    #[test]
+    fn stale_completion_is_rejected_after_a_newer_operation_or_hydration() {
+        assert!(operation_is_current(4, 4, 9, 9));
+        assert!(!operation_is_current(5, 4, 9, 9));
+        assert!(!operation_is_current(4, 4, 10, 9));
+    }
+
+    #[test]
+    fn key_save_completion_requires_the_same_editor_instance() {
+        let current = WebSearchFence {
+            operation_revision: 7,
+            lifecycle_revision: 2,
+            busy_revision: 5,
+            editor_revision: 3,
+            editor_id: Some(41),
+        };
+        assert!(key_editor_operation_is_current(current, current));
+        assert!(!key_editor_operation_is_current(
+            WebSearchFence {
+                editor_revision: 4,
+                ..current
+            },
+            current,
+        ));
+        assert!(!key_editor_operation_is_current(
+            WebSearchFence {
+                editor_id: Some(42),
+                ..current
+            },
+            current,
+        ));
+        assert!(!key_editor_operation_is_current(
+            WebSearchFence {
+                editor_id: None,
+                ..current
+            },
+            current,
+        ));
+    }
+
+    #[test]
+    fn failed_enable_write_restores_the_previous_persisted_state() {
+        assert!(enabled_after_write(true, false, false));
+        assert!(!enabled_after_write(false, true, false));
+        assert!(enabled_after_write(false, true, true));
+        assert!(!enabled_after_write(true, false, true));
+    }
+
+    #[test]
+    fn hydration_invalidates_busy_state_and_fails_closed() {
+        let mut state = WebSearchState {
+            enabled: true,
+            busy: true,
+            ..WebSearchState::default()
+        };
+        let lifecycle_before = state.lifecycle_revision;
+        state.hydrate(&serde_json::Map::new());
+        assert!(!state.enabled);
+        assert!(!state.busy);
+        assert!(state.lifecycle_revision > lifecycle_before);
+    }
+
+    #[test]
+    fn leaving_the_section_invalidates_editor_and_in_flight_work() {
+        let mut state = WebSearchState {
+            busy: true,
+            notice: Some("stale".into()),
+            key_editor: None,
+            ..WebSearchState::default()
+        };
+        let before = (
+            state.lifecycle_revision,
+            state.key_revision,
+            state.settings_revision,
+            state.busy_revision,
+            state.editor_revision,
+        );
+        state.leave_section();
+        assert!(!state.busy);
+        assert!(state.notice.is_none());
+        assert_eq!(state.key_editor, None);
+        assert!(state.lifecycle_revision > before.0);
+        assert!(state.key_revision > before.1);
+        assert!(state.settings_revision > before.2);
+        assert!(state.busy_revision > before.3);
+        assert!(state.editor_revision > before.4);
     }
 }

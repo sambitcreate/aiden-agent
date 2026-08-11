@@ -701,6 +701,7 @@ impl SettingsView {
         );
         let unavailable = editor.unavailable_model_ids().len();
         let save_state = editor.save_state().clone();
+        let pointer_cursors = crate::services::appearance::pointer_cursors_enabled(cx);
         let content_width = model_pad_content_width(window.viewport_size().width.as_f32());
         let layout = inventory_layout(content_width);
         let pad_size = if layout == InventoryLayout::BesidePad {
@@ -894,7 +895,7 @@ impl SettingsView {
                                                         theme.foreground
                                                     })
                                                     .text_xs()
-                                                    .cursor_pointer()
+                                                    .when(pointer_cursors, |el| el.cursor_pointer())
                                                     .tab_stop(true)
                                                     .tooltip(move |window, cx| Tooltip::new(accessible_label.clone()).build(window, cx))
                                                     .focus(|style| style.border_color(theme.ring).bg(theme.list_active))
@@ -1125,6 +1126,8 @@ mod tests {
             is_preset: false,
             deployment: aiden_data::portable_config::ProviderDeployment::Hosted,
             catalog_models: Vec::new(),
+            auth_methods: Vec::new(),
+            authority_revision: None,
         }
     }
 

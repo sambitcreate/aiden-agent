@@ -16,6 +16,57 @@ use gpui_component::{
 use super::{SettingsSection, SettingsView};
 use aiden_core::keybindings::GlobalShortcutState;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssistantBadgeTone {
+    Neutral,
+    Positive,
+    Caution,
+    Negative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AssistantFactCopy {
+    id: &'static str,
+    title: &'static str,
+    value: &'static str,
+    detail: &'static str,
+    tone: AssistantBadgeTone,
+}
+
+/// Copy is kept as one static contract so the settings surface cannot drift
+/// from the retained Assistant panel's actual boundaries. These are facts,
+/// not persisted Assistant preferences.
+const ASSISTANT_FACTS: [AssistantFactCopy; 4] = [
+    AssistantFactCopy {
+        id: "assistant-model",
+        title: "Chat model",
+        value: "Follows composer",
+        detail: "Uses the provider and model selected in the main composer and follows live readiness while the dock is open.",
+        tone: AssistantBadgeTone::Positive,
+    },
+    AssistantFactCopy {
+        id: "assistant-history",
+        title: "History",
+        value: "Current app session",
+        detail: "The transcript stays local to this Assistant session; New conversation or resetting the panel clears it.",
+        tone: AssistantBadgeTone::Neutral,
+    },
+    AssistantFactCopy {
+        id: "assistant-access",
+        title: "Access boundaries",
+        value: "Attended tools",
+        detail: "Can list configured project and MCP server identities, list scheduled automations, propose new ones, and edit existing ones, plus use configured MCP tools for remote data with per-call approval. It cannot inspect or change app settings, read or write files, run commands, monitor projects in the background, or delegate work.",
+        tone: AssistantBadgeTone::Caution,
+    },
+    AssistantFactCopy {
+        id: "assistant-background",
+        title: "Background suggestions",
+        value: "Not active",
+        detail: "Workspace monitoring, proactive suggestions, background runs, and notifications are not active in this build.",
+        tone: AssistantBadgeTone::Neutral,
+    },
+];
+
 #[derive(Default)]
 pub struct AssistantState {
     _runtime_facts: (),
@@ -43,38 +94,43 @@ impl SettingsView {
             .iter()
             .find(|status| status.command_id == aiden_core::CommandId::AssistantOpen)
             .cloned();
-        let (shortcut_value, shortcut_detail, can_retry) = match global_status {
-            Some(status) => match status.state {
-                GlobalShortcutState::Active => (
-                    format!(
-                        "{} · Active",
+        let (shortcut_value, shortcut_badge, shortcut_tone, shortcut_detail, can_retry) =
+            match global_status {
+                Some(status) => match status.state {
+                    GlobalShortcutState::Active => (
                         aiden_core::keybindings::pretty_accelerator(status.binding.as_deref())
+                            .to_string(),
+                        "Active",
+                        AssistantBadgeTone::Positive,
+                        "Available while Aiden is running.".to_string(),
+                        false,
                     ),
-                    "Available while Aiden is running.".to_string(),
-                    false,
-                ),
-                GlobalShortcutState::Unavailable => (
-                    format!(
-                        "{} · Unavailable",
+                    GlobalShortcutState::Unavailable => (
                         aiden_core::keybindings::pretty_accelerator(status.binding.as_deref())
+                            .to_string(),
+                        "Unavailable",
+                        AssistantBadgeTone::Negative,
+                        status.message.unwrap_or_else(|| {
+                            "The global shortcut could not be registered.".to_string()
+                        }),
+                        true,
                     ),
-                    status.message.unwrap_or_else(|| {
-                        "The global shortcut could not be registered.".to_string()
-                    }),
+                    GlobalShortcutState::Disabled => (
+                        "—".to_string(),
+                        "Off",
+                        AssistantBadgeTone::Neutral,
+                        "The global Assistant shortcut is disabled.".to_string(),
+                        false,
+                    ),
+                },
+                None => (
+                    "—".to_string(),
+                    "Unavailable",
+                    AssistantBadgeTone::Negative,
+                    "Shortcut runtime status is unavailable.".to_string(),
                     true,
                 ),
-                GlobalShortcutState::Disabled => (
-                    "Off".to_string(),
-                    "The global Assistant shortcut is disabled.".to_string(),
-                    false,
-                ),
-            },
-            None => (
-                "Unavailable".to_string(),
-                "Shortcut runtime status is unavailable.".to_string(),
-                true,
-            ),
-        };
+            };
 
         v_flex()
             .id("assistant-section")
@@ -102,36 +158,7 @@ impl SettingsView {
                     .rounded_lg()
                     .border_1()
                     .border_color(theme.border)
-                    .children([
-                        assistant_fact_row(
-                            "assistant-model",
-                            "Chat model",
-                            "Loaded when Assistant opens",
-                            "Uses the composer selection captured when this Assistant panel was created. Reopen Aiden to reload a later model change.",
-                            &theme,
-                        ),
-                        assistant_fact_row(
-                            "assistant-history",
-                            "History",
-                            "Current app session",
-                            "Closing or resetting the Assistant panel clears its conversation.",
-                            &theme,
-                        ),
-                        assistant_fact_row(
-                            "assistant-access",
-                            "Access boundaries",
-                            "Attended tools only",
-                            "Can list configured projects and servers, propose scheduled automations, and call enabled MCP connector tools. It has no direct app-settings tool.",
-                            &theme,
-                        ),
-                        assistant_fact_row(
-                            "assistant-background",
-                            "Background suggestions",
-                            "Not active",
-                            "The Assistant does not watch the workspace or send proactive suggestions.",
-                            &theme,
-                        ),
-                    ])
+                    .children(ASSISTANT_FACTS.iter().map(|fact| assistant_fact_row(*fact, &theme)))
                     .child(
                         h_flex()
                             .id("assistant-global-shortcut")
@@ -157,6 +184,11 @@ impl SettingsView {
                                                     .font_weight(FontWeight::MEDIUM)
                                                     .child("Global shortcut"),
                                             )
+                                            .child(assistant_badge(
+                                                shortcut_badge,
+                                                shortcut_tone,
+                                                &theme,
+                                            ))
                                             .child(
                                                 div()
                                                     .text_sm()
@@ -198,15 +230,9 @@ impl SettingsView {
     }
 }
 
-fn assistant_fact_row(
-    id: &'static str,
-    title: &'static str,
-    value: &'static str,
-    detail: &'static str,
-    theme: &gpui_component::Theme,
-) -> impl IntoElement {
+fn assistant_fact_row(fact: AssistantFactCopy, theme: &gpui_component::Theme) -> impl IntoElement {
     h_flex()
-        .id(SharedString::from(id))
+        .id(SharedString::from(fact.id))
         .w_full()
         .items_start()
         .justify_between()
@@ -220,24 +246,48 @@ fn assistant_fact_row(
                 .flex_1()
                 .min_w(gpui::px(0.))
                 .gap_0p5()
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(title))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(fact.title),
+                )
                 .child(
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(detail),
+                        .child(fact.detail),
                 ),
         )
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(value),
-        )
+        .child(assistant_badge(fact.value, fact.tone, theme))
+}
+
+fn assistant_badge(
+    label: &'static str,
+    tone: AssistantBadgeTone,
+    theme: &gpui_component::Theme,
+) -> impl IntoElement {
+    let (background, foreground) = match tone {
+        AssistantBadgeTone::Neutral => (theme.muted_foreground, theme.muted_foreground),
+        AssistantBadgeTone::Positive => (theme.success, theme.success),
+        AssistantBadgeTone::Caution => (theme.warning, theme.warning),
+        AssistantBadgeTone::Negative => (theme.danger, theme.danger),
+    };
+    div()
+        .rounded_full()
+        .bg(background.opacity(0.14))
+        .text_color(foreground)
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .px_2()
+        .py_0p5()
+        .child(label)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     const SOURCE: &str = include_str!("assistant.rs");
 
     #[test]
@@ -259,15 +309,64 @@ mod tests {
     #[test]
     fn history_and_background_copy_match_runtime_behavior() {
         assert!(SOURCE.contains("Current app session"));
+        assert!(SOURCE.contains("stays local to this Assistant session"));
         assert!(SOURCE.contains("Background suggestions"));
         assert!(SOURCE.contains("Not active"));
+        assert!(SOURCE.contains("background runs"));
         assert!(!SOURCE.contains(concat!("device-local", " history")));
         assert!(!SOURCE.contains(concat!("Changes are saved", " automatically")));
     }
 
     #[test]
-    fn model_copy_does_not_claim_live_following() {
-        assert!(SOURCE.contains("Loaded when Assistant opens"));
-        assert!(!SOURCE.contains(concat!("Follows", " composer")));
+    fn model_copy_tracks_live_composer_selection() {
+        assert!(SOURCE.contains("Follows composer"));
+        assert!(SOURCE.contains("follows live readiness"));
+        assert!(!SOURCE.contains(concat!("Loaded when ", "Assistant opens")));
+        assert!(!SOURCE.contains(concat!("Reopen Aiden to ", "reload")));
+    }
+
+    #[test]
+    fn access_copy_names_the_attended_boundary_without_false_capabilities() {
+        assert!(SOURCE.contains("Attended tools"));
+        assert!(SOURCE.contains("configured project and MCP server identities"));
+        assert!(SOURCE.contains("scheduled automations"));
+        assert!(SOURCE.contains("configured MCP tools for remote data"));
+        assert!(SOURCE.contains("per-call approval"));
+        for unavailable in [
+            "inspect or change app settings",
+            "read or write files",
+            "run commands",
+            "monitor projects in the background",
+            "delegate work",
+        ] {
+            assert!(
+                SOURCE.contains(unavailable),
+                "missing boundary: {unavailable}"
+            );
+        }
+        assert!(!SOURCE.contains(concat!("Automations", " only")));
+        assert!(!SOURCE.contains(concat!("cannot use ", "connected tools")));
+    }
+
+    #[test]
+    fn fact_rows_have_stable_ids_and_semantic_badges() {
+        assert_eq!(ASSISTANT_FACTS.len(), 4);
+        assert!(ASSISTANT_FACTS.iter().all(|fact| {
+            !fact.id.is_empty() && !fact.title.is_empty() && !fact.value.is_empty()
+        }));
+        assert_eq!(
+            ASSISTANT_FACTS
+                .iter()
+                .find(|fact| fact.id == "assistant-model")
+                .map(|fact| fact.tone),
+            Some(AssistantBadgeTone::Positive)
+        );
+        assert_eq!(
+            ASSISTANT_FACTS
+                .iter()
+                .find(|fact| fact.id == "assistant-access")
+                .map(|fact| fact.tone),
+            Some(AssistantBadgeTone::Caution)
+        );
     }
 }

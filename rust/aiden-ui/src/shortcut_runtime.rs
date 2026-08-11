@@ -762,8 +762,25 @@ pub fn runtime(cx: &App) -> Option<Entity<ShortcutRuntime>> {
         .map(|global| global.0.clone())
 }
 
+/// Global commands that target an external application must not prepare or
+/// activate Aiden first. Dictation is intentionally non-activating: its pill
+/// records over the frontmost app and the eventual paste is delivered back to
+/// that same app. Other global commands retain the normal app-window behavior.
+pub const fn global_command_requires_main_window(command: CommandId) -> bool {
+    !matches!(command, CommandId::DictationToggle)
+}
+
+pub const fn global_command_activates_app(command: CommandId) -> bool {
+    !matches!(command, CommandId::DictationToggle)
+}
+
 pub fn dispatch_global_command(command: CommandId, cx: &mut App) {
-    cx.activate(true);
+    if command == CommandId::DictationToggle && crate::app::toggle_global_dictation(cx) {
+        return;
+    }
+    if global_command_activates_app(command) {
+        cx.activate(true);
+    }
     cx.dispatch_action(action_for(action_route(command)).as_ref());
 }
 
@@ -849,6 +866,19 @@ impl ShortcutRuntime {
 /// Bridge the process-wide hotkey receiver onto GPUI's foreground before
 /// dispatching the action. The runtime entity remains the registration truth.
 #[cfg(target_os = "macos")]
+fn prepare_for_global_command(
+    command: CommandId,
+    prepare_main_window: &dyn Fn(&mut App) -> bool,
+    app: &mut App,
+) -> bool {
+    if global_command_requires_main_window(command) {
+        prepare_main_window(app)
+    } else {
+        true
+    }
+}
+
+#[cfg(target_os = "macos")]
 pub fn install_global_listener(
     runtime: Entity<ShortcutRuntime>,
     prepare_main_window: Arc<dyn Fn(&mut App) -> bool + Send + Sync>,
@@ -891,7 +921,11 @@ pub fn install_global_listener(
                             .update({
                                 let prepare_main_window = prepare_main_window.clone();
                                 move |app| {
-                                    if prepare_main_window(app) {
+                                    if prepare_for_global_command(
+                                        command,
+                                        prepare_main_window.as_ref(),
+                                        app,
+                                    ) {
                                         dispatch_global_command(command, app);
                                     } else {
                                         tracing::debug!(
@@ -997,6 +1031,21 @@ mod tests {
             main_window_preparation(MainWindowLifecycle::Windowless),
             MainWindowPreparation::Open
         );
+    }
+
+    #[test]
+    fn dictation_global_dispatch_never_prepares_or_activates_a_window() {
+        assert!(!global_command_requires_main_window(
+            CommandId::DictationToggle
+        ));
+        assert!(!global_command_activates_app(CommandId::DictationToggle));
+
+        // Commands whose destination is Aiden itself retain the normal
+        // window/activation contract.
+        for command in [CommandId::ComposerFocus, CommandId::AssistantOpen] {
+            assert!(global_command_requires_main_window(command));
+            assert!(global_command_activates_app(command));
+        }
     }
 
     #[test]

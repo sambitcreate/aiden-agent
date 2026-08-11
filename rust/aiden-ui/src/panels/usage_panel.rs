@@ -5,17 +5,24 @@
 //! in-memory impl with demo data is provided). All aggregation/formatting
 //! helpers are pure and unit-tested against the renderer contract.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::FluentBuilder as _, px, AppContext as _, Context, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    div, prelude::FluentBuilder as _, px, AppContext as _, Context, Entity, FocusHandle,
+    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex, ActiveTheme, IconName, Sizable as _,
+    dialog::DialogButtonProps,
+    h_flex,
+    input::{Input, InputState},
+    scroll::ScrollableElement as _,
+    v_flex, ActiveTheme, Disableable as _, IconName, PixelsExt as _, Sizable as _, WindowExt as _,
 };
+
+use super::profile_share::{render_profile_share_png_with_timeout, ProfileShareData};
 
 // ===========================================================================
 // Data types (mirror of renderer/lib/types.ts usage surface)
@@ -58,6 +65,14 @@ pub struct UsageModelSummary {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UsageTotals {
     pub requests: u64,
+    pub completed_requests: u64,
+    pub failed_requests: u64,
+    pub cancelled_requests: u64,
+    pub reported_token_requests: u64,
+    pub unmetered_requests: u64,
+    pub local_requests: u64,
+    pub costed_requests: u64,
+    pub unpriced_hosted_requests: u64,
     pub active_days: u64,
     pub current_streak: u64,
     pub longest_streak: u64,
@@ -67,11 +82,66 @@ pub struct UsageTotals {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct UsageSummary {
+    pub range: UsageDateRange,
     pub start_date: String,
     pub end_date: String,
     pub totals: UsageTotals,
     pub days: Vec<UsageDaySummary>,
     pub models: Vec<UsageModelSummary>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsageDateRange {
+    Days7,
+    Days30,
+    Days90,
+    #[default]
+    Year1,
+    All,
+}
+
+impl UsageDateRange {
+    pub const ALL: [Self; 5] = [
+        Self::Days7,
+        Self::Days30,
+        Self::Days90,
+        Self::Year1,
+        Self::All,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Days7 => "7 days",
+            Self::Days30 => "30 days",
+            Self::Days90 => "90 days",
+            Self::Year1 => "Past year",
+            Self::All => "All time",
+        }
+    }
+}
+
+impl From<UsageDateRange> for aiden_data::usage_store::UsageDateRange {
+    fn from(value: UsageDateRange) -> Self {
+        match value {
+            UsageDateRange::Days7 => Self::Days7,
+            UsageDateRange::Days30 => Self::Days30,
+            UsageDateRange::Days90 => Self::Days90,
+            UsageDateRange::Year1 => Self::Year1,
+            UsageDateRange::All => Self::All,
+        }
+    }
+}
+
+impl UsageDateRange {
+    fn from_store(value: &str) -> Self {
+        match value {
+            "7d" => Self::Days7,
+            "30d" => Self::Days30,
+            "90d" => Self::Days90,
+            "all" => Self::All,
+            _ => Self::Year1,
+        }
+    }
 }
 
 // ===========================================================================
@@ -342,9 +412,11 @@ pub fn profile_initials(name: &str) -> String {
 // Service dependencies
 // ===========================================================================
 
-/// Read-only source of the usage summary for this Mac.
+/// Device-local profile and aggregate usage authority for this Mac.
 pub trait UsageDataSource: Send + Sync {
-    fn summary(&self) -> UsageSummary;
+    fn profile_name(&self) -> Result<String, String>;
+    fn set_profile_name(&self, value: &str) -> Result<String, String>;
+    fn summary(&self, range: UsageDateRange) -> Result<UsageSummary, String>;
 }
 
 /// Store-backed adapter over `aiden_data::usage_store::UsageStore`. The
@@ -353,26 +425,47 @@ pub trait UsageDataSource: Send + Sync {
 /// impls below).
 pub struct StoreUsageSource {
     store: Arc<aiden_data::usage_store::UsageStore>,
+    config: Arc<aiden_data::config_store::ConfigStore>,
 }
 
 impl StoreUsageSource {
-    pub fn new(store: Arc<aiden_data::usage_store::UsageStore>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<aiden_data::usage_store::UsageStore>,
+        config: Arc<aiden_data::config_store::ConfigStore>,
+    ) -> Self {
+        Self { store, config }
     }
 }
 
 impl UsageDataSource for StoreUsageSource {
-    fn summary(&self) -> UsageSummary {
+    fn profile_name(&self) -> Result<String, String> {
+        aiden_data::profile::ProfileService::new(
+            aiden_data::profile::ConfigStoreProfileSettings::new(&self.config),
+        )
+        .get()
+        .map_err(|error| error.to_string())
+    }
+
+    fn set_profile_name(&self, value: &str) -> Result<String, String> {
+        aiden_data::profile::ProfileService::new(
+            aiden_data::profile::ConfigStoreProfileSettings::new(&self.config),
+        )
+        .set_name(value)
+        .map_err(|error| error.to_string())
+    }
+
+    fn summary(&self, range: UsageDateRange) -> Result<UsageSummary, String> {
         self.store
-            .summary(aiden_data::usage_store::UsageDateRange::Days30)
+            .summary(range.into())
             .map(Into::into)
-            .unwrap_or_default()
+            .map_err(|error| error.to_string())
     }
 }
 
 impl From<aiden_data::usage_store::UsageSummary> for UsageSummary {
     fn from(summary: aiden_data::usage_store::UsageSummary) -> Self {
         Self {
+            range: UsageDateRange::from_store(&summary.range),
             start_date: summary.start_date,
             end_date: summary.end_date,
             totals: summary.totals.into(),
@@ -386,6 +479,14 @@ impl From<aiden_data::usage_store::UsageTotals> for UsageTotals {
     fn from(totals: aiden_data::usage_store::UsageTotals) -> Self {
         Self {
             requests: totals.requests,
+            completed_requests: totals.completed_requests,
+            failed_requests: totals.failed_requests,
+            cancelled_requests: totals.cancelled_requests,
+            reported_token_requests: totals.reported_token_requests,
+            unmetered_requests: totals.unmetered_requests,
+            local_requests: totals.local_requests,
+            costed_requests: totals.costed_requests,
+            unpriced_hosted_requests: totals.unpriced_hosted_requests,
             active_days: totals.active_days,
             current_streak: totals.current_streak,
             longest_streak: totals.longest_streak,
@@ -443,12 +544,35 @@ impl From<aiden_data::usage_store::UsageModelSummary> for UsageModelSummary {
 #[derive(Debug, Default)]
 pub struct MemoryUsageSource {
     pub summary: std::sync::Mutex<UsageSummary>,
+    pub profile_name: std::sync::Mutex<String>,
 }
 
 impl UsageDataSource for MemoryUsageSource {
-    fn summary(&self) -> UsageSummary {
-        let guard = self.summary.lock();
-        guard.map(|summary| summary.clone()).unwrap_or_default()
+    fn profile_name(&self) -> Result<String, String> {
+        self.profile_name
+            .lock()
+            .map(|name| name.clone())
+            .map_err(|_| "Profile unavailable".to_string())
+    }
+
+    fn set_profile_name(&self, value: &str) -> Result<String, String> {
+        let name =
+            aiden_data::profile::validate_profile_name(value).map_err(|error| error.to_string())?;
+        *self
+            .profile_name
+            .lock()
+            .map_err(|_| "Profile unavailable".to_string())? = name.clone();
+        Ok(name)
+    }
+
+    fn summary(&self, range: UsageDateRange) -> Result<UsageSummary, String> {
+        let guard = self
+            .summary
+            .lock()
+            .map_err(|_| "Usage unavailable".to_string())?;
+        let mut summary = guard.clone();
+        summary.range = range;
+        Ok(summary)
     }
 }
 
@@ -504,15 +628,19 @@ impl MemoryUsageSource {
         let start = end - chrono::Duration::days(27);
         Self {
             summary: std::sync::Mutex::new(UsageSummary {
+                range: UsageDateRange::Year1,
                 start_date: start.format("%Y-%m-%d").to_string(),
                 end_date: end.format("%Y-%m-%d").to_string(),
                 totals: UsageTotals {
                     requests: requests_total,
+                    reported_token_requests: requests_total,
+                    completed_requests: requests_total,
                     active_days,
                     current_streak: 3,
                     longest_streak: 9,
                     hosted_cost_usd: requests_total as f64 * 0.004,
                     tokens: tokens_total,
+                    ..UsageTotals::default()
                 },
                 days,
                 models: vec![
@@ -542,6 +670,7 @@ impl MemoryUsageSource {
                     },
                 ],
             }),
+            profile_name: std::sync::Mutex::new("Sambit Biswas".to_string()),
         }
     }
 }
@@ -568,17 +697,36 @@ pub struct UsagePanel {
     pub(crate) source: Arc<dyn UsageDataSource>,
     pub(crate) summary: Option<UsageSummary>,
     pub(crate) metric: UsageScoreMetric,
-    pub(crate) loaded: bool,
+    pub(crate) range: UsageDateRange,
+    pub(crate) profile_name: Option<String>,
+    pub(crate) profile_input: Option<Entity<InputState>>,
+    pub(crate) editing_profile: bool,
+    pub(crate) loading: bool,
+    pub(crate) saving_profile: bool,
+    pub(crate) range_menu_open: bool,
+    pub(crate) error: Option<String>,
+    pub(crate) profile_error: Option<String>,
+    pub(crate) share_error: Option<String>,
+    pub(crate) share_busy_revision: Option<u64>,
+    pub(crate) load_revision: Arc<AtomicU64>,
+    pub(crate) profile_revision: Arc<AtomicU64>,
+    pub(crate) share_revision: Arc<AtomicU64>,
+    pub(crate) share: Arc<aiden_mac::profile_share::ProfileShareAuthority>,
+    pub(crate) range_focus: Vec<FocusHandle>,
 }
 
 /// Dependencies for [`UsagePanel::new`].
 pub struct UsagePanelDeps {
     pub source: Arc<dyn UsageDataSource>,
+    pub share: Arc<aiden_mac::profile_share::ProfileShareAuthority>,
 }
 
 impl UsagePanelDeps {
     pub fn new(source: Arc<dyn UsageDataSource>) -> Self {
-        Self { source }
+        Self {
+            source,
+            share: Arc::new(aiden_mac::profile_share::ProfileShareAuthority::new()),
+        }
     }
 
     /// Demo wiring for standalone use and tests.
@@ -594,7 +742,24 @@ impl UsagePanel {
             source: deps.source,
             summary: None,
             metric: UsageScoreMetric::Requests,
-            loaded: false,
+            range: UsageDateRange::Year1,
+            profile_name: None,
+            profile_input: None,
+            editing_profile: false,
+            loading: false,
+            saving_profile: false,
+            range_menu_open: false,
+            error: None,
+            profile_error: None,
+            share_error: None,
+            share_busy_revision: None,
+            load_revision: Arc::new(AtomicU64::new(0)),
+            profile_revision: Arc::new(AtomicU64::new(0)),
+            share_revision: Arc::new(AtomicU64::new(0)),
+            share: deps.share,
+            range_focus: (0..UsageDateRange::ALL.len())
+                .map(|_| cx.focus_handle().tab_stop(true))
+                .collect(),
         };
         this.refresh(cx);
         this
@@ -602,17 +767,248 @@ impl UsagePanel {
 
     /// Load the summary from the source on the background executor.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_share_render();
+        let revision = self.load_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = self.load_revision.clone();
+        let range = self.range;
+        self.loading = true;
+        self.error = None;
+        cx.notify();
         let source = self.source.clone();
         cx.spawn(async move |this, cx| {
-            let summary = cx.background_spawn(async move { source.summary() }).await;
+            let result = cx
+                .background_spawn(async move {
+                    let profile = source.profile_name();
+                    let summary = source.summary(range);
+                    profile.and_then(|profile| summary.map(|summary| (profile, summary)))
+                })
+                .await;
             this.update(cx, |this, cx| {
-                this.summary = Some(summary);
-                this.loaded = true;
+                if current.load(Ordering::SeqCst) != revision || this.range != range {
+                    return;
+                }
+                this.loading = false;
+                match result {
+                    Ok((profile, summary)) => {
+                        this.profile_name = Some(profile);
+                        this.summary = Some(summary);
+                    }
+                    Err(error) => this.error = Some(error),
+                }
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    pub fn set_range(&mut self, range: UsageDateRange, cx: &mut Context<Self>) {
+        if self.range == range {
+            self.range_menu_open = false;
+            cx.notify();
+            return;
+        }
+        self.range = range;
+        self.range_menu_open = false;
+        self.refresh(cx);
+    }
+
+    fn begin_profile_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.profile_name.clone().unwrap_or_default();
+        let input = self.profile_input.get_or_insert_with(|| {
+            cx.new(|cx| InputState::new(window, cx).default_value(value.clone()))
+        });
+        input.update(cx, |input, cx| {
+            input.set_value(value, window, cx);
+            input.focus(window, cx);
+        });
+        self.editing_profile = true;
+        self.profile_error = None;
+        cx.notify();
+    }
+
+    fn cancel_profile_edit(&mut self, cx: &mut Context<Self>) {
+        if !profile_edit_can_cancel(self.saving_profile) {
+            return;
+        }
+        self.profile_revision.fetch_add(1, Ordering::SeqCst);
+        self.editing_profile = false;
+        self.saving_profile = false;
+        self.profile_error = None;
+        cx.notify();
+    }
+
+    fn save_profile_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving_profile {
+            return;
+        }
+        let Some(input) = self.profile_input.as_ref() else {
+            return;
+        };
+        let value = input.read(cx).value().to_string();
+        if let Err(error) = aiden_data::profile::validate_profile_name(&value) {
+            self.profile_error = Some(error.to_string());
+            cx.notify();
+            return;
+        }
+        let revision = self.profile_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = self.profile_revision.clone();
+        let source = self.source.clone();
+        self.saving_profile = true;
+        self.profile_error = None;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { source.set_profile_name(&value) })
+                .await;
+            this.update_in(cx, |this, _window, cx| {
+                if current.load(Ordering::SeqCst) != revision {
+                    return;
+                }
+                this.saving_profile = false;
+                match result {
+                    Ok(name) => {
+                        this.profile_name = Some(name);
+                        this.editing_profile = false;
+                    }
+                    Err(error) => this.profile_error = Some(error),
+                }
+                cx.notify();
+            })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+
+    fn move_range_focus(
+        &mut self,
+        index: usize,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let count = UsageDateRange::ALL.len();
+        let next = match key {
+            "arrowleft" => (index + count - 1) % count,
+            "arrowright" => (index + 1) % count,
+            "home" => 0,
+            "end" => count - 1,
+            _ => return,
+        };
+        self.range_focus[next].focus(window);
+        self.set_range(UsageDateRange::ALL[next], cx);
+    }
+
+    fn open_share_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.share_busy_revision.is_some() {
+            return;
+        }
+        let (Some(name), Some(summary)) = (self.profile_name.clone(), self.summary.clone()) else {
+            return;
+        };
+        let revision = self.share_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = self.share_revision.clone();
+        let data = ProfileShareData::from_summary(&name, &summary);
+        let render_data = data.clone();
+        let dark = matches!(cx.theme().mode, gpui_component::theme::ThemeMode::Dark);
+        self.share_busy_revision = Some(revision);
+        self.share_error = None;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    render_profile_share_png_with_timeout(render_data, dark)
+                        .map_err(|error| error.to_string())
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if current.load(Ordering::SeqCst) != revision {
+                    if settle_owned_revision(&mut this.share_busy_revision, revision) {
+                        cx.notify();
+                    }
+                    return;
+                }
+                let png = match result {
+                    Ok(png) => png,
+                    Err(error) => {
+                        if settle_owned_revision(&mut this.share_busy_revision, revision) {
+                            this.share_error = Some(error);
+                            cx.notify();
+                        }
+                        return;
+                    }
+                };
+                let entity = cx.entity();
+                let share = this.share.clone();
+                let confirm_entity = entity.clone();
+                let cancel_entity = entity.clone();
+                let close_entity = entity;
+                window.open_dialog(cx, move |dialog, _window, cx| {
+                    let share = share.clone();
+                    let png = png.clone();
+                    let confirm_entity = confirm_entity.clone();
+                    let cancel_entity = cancel_entity.clone();
+                    let close_entity = close_entity.clone();
+                    dialog
+                        .title("Share profile")
+                        .w(px(430.))
+                        .overlay_closable(false)
+                        .button_props(
+                            DialogButtonProps::default()
+                                .ok_text("Share…")
+                                .cancel_text("Cancel"),
+                        )
+                        .confirm()
+                        .child(share_preview_card(&data, cx))
+                        .on_ok(move |_, _, cx| match share.share_png(&png) {
+                            Ok(()) => {
+                                confirm_entity.update(cx, |this, cx| {
+                                    if settle_owned_revision(
+                                        &mut this.share_busy_revision,
+                                        revision,
+                                    ) {
+                                        this.share_error = None;
+                                        cx.notify();
+                                    }
+                                });
+                                true
+                            }
+                            Err(error) => {
+                                confirm_entity.update(cx, |this, cx| {
+                                    if this.share_busy_revision == Some(revision) {
+                                        this.share_error = Some(error.to_string());
+                                        cx.notify();
+                                    }
+                                });
+                                false
+                            }
+                        })
+                        .on_cancel(move |_, _, cx| {
+                            cancel_entity.update(cx, |this, cx| {
+                                this.share_revision.fetch_add(1, Ordering::SeqCst);
+                                if settle_owned_revision(&mut this.share_busy_revision, revision) {
+                                    cx.notify();
+                                }
+                            });
+                            true
+                        })
+                        .on_close(move |_, _, cx| {
+                            close_entity.update(cx, |this, cx| {
+                                this.share_revision.fetch_add(1, Ordering::SeqCst);
+                                if settle_owned_revision(&mut this.share_busy_revision, revision) {
+                                    cx.notify();
+                                }
+                            });
+                        })
+                });
+                cx.notify();
+            })?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .detach();
+    }
+
+    fn invalidate_share_render(&mut self) {
+        self.share_revision.fetch_add(1, Ordering::SeqCst);
+        self.share_busy_revision = None;
     }
 
     pub fn set_metric(&mut self, metric: UsageScoreMetric, cx: &mut Context<Self>) {
@@ -622,7 +1018,8 @@ impl UsagePanel {
 
     fn heatmap_section(&self, summary: &UsageSummary, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let calendar = build_activity_calendar(summary);
+        let display = bounded_activity_summary(summary);
+        let calendar = build_activity_calendar(&display);
         let weeks: Vec<Vec<&ActivityCell>> = calendar
             .cells
             .chunks(7)
@@ -659,42 +1056,44 @@ impl UsagePanel {
                     ),
             )
             .child(
-                h_flex()
-                    .gap_2()
-                    .items_start()
-                    .child(
-                        // Weekday gutter.
-                        v_flex()
-                            .h(px(7.0 * 12.0))
-                            .justify_between()
-                            .py(px(10.))
-                            .child(
+                div().w_full().overflow_x_scrollbar().child(
+                    h_flex()
+                        .gap_2()
+                        .items_start()
+                        .child(
+                            // Weekday gutter.
+                            v_flex()
+                                .h(px(7.0 * 12.0))
+                                .justify_between()
+                                .py(px(10.))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Mon"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Wed"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.muted_foreground)
+                                        .child("Fri"),
+                                ),
+                        )
+                        .child(h_flex().gap_1().children(weeks.into_iter().map(|week| {
+                            v_flex().gap_1().children(week.into_iter().map(|cell| {
                                 div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Mon"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Wed"),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Fri"),
-                            ),
-                    )
-                    .child(h_flex().gap_1().children(weeks.into_iter().map(|week| {
-                        v_flex().gap_1().children(week.into_iter().map(|cell| {
-                            div()
-                                .size(px(9.))
-                                .rounded_sm()
-                                .bg(heat_color(&theme, cell.level))
-                        }))
-                    }))),
+                                    .size(px(9.))
+                                    .rounded_sm()
+                                    .bg(heat_color(&theme, cell.level))
+                            }))
+                        }))),
+                ),
             )
             .child(
                 h_flex()
@@ -994,32 +1393,489 @@ impl UsagePanel {
             UsageScoreMetric::Cost => format_tracked_usd(model.hosted_cost_usd),
         }
     }
+
+    fn range_selector(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex().id("usage-range-selector").gap_0p5().children(
+            UsageDateRange::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(index, range)| {
+                    let selected = self.range == range;
+                    let focus = self.range_focus[index].clone();
+                    let mut button = Button::new(("usage-range", index))
+                        .xsmall()
+                        .tab_stop(false)
+                        .label(match range {
+                            UsageDateRange::Days7 => "7d",
+                            UsageDateRange::Days30 => "30d",
+                            UsageDateRange::Days90 => "90d",
+                            UsageDateRange::Year1 => "1y",
+                            UsageDateRange::All => "All",
+                        })
+                        .tooltip(range.label())
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_range(range, cx)));
+                    button = if selected {
+                        button.primary()
+                    } else {
+                        button.ghost()
+                    };
+                    div()
+                        .track_focus(&focus)
+                        .tab_stop(selected)
+                        .on_key_down(cx.listener(
+                            move |this, event: &gpui::KeyDownEvent, window, cx| {
+                                let key = event.keystroke.key.as_str();
+                                if matches!(key, "arrowleft" | "arrowright" | "home" | "end") {
+                                    cx.stop_propagation();
+                                    this.move_range_focus(index, key, window, cx);
+                                } else if matches!(key, "enter" | "space") {
+                                    cx.stop_propagation();
+                                    this.set_range(range, cx);
+                                }
+                            },
+                        ))
+                        .child(button)
+                }),
+        )
+    }
+
+    fn profile_identity(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let name = self
+            .profile_name
+            .clone()
+            .unwrap_or_else(|| "Loading profile…".to_string());
+        let editing = self.editing_profile;
+        let saving = self.saving_profile;
+        let error = self.profile_error.clone();
+        h_flex()
+            .id("usage-profile-identity")
+            .w_full()
+            .min_h(px(96.))
+            .items_center()
+            .gap_4()
+            .child(
+                div()
+                    .size(px(52.))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(theme.accent.opacity(0.12))
+                    .text_color(theme.accent)
+                    .items_center()
+                    .justify_center()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(profile_initials(&name)),
+            )
+            .child(
+                v_flex()
+                    .min_w(px(0.))
+                    .flex_1()
+                    .gap_1()
+                    .child(if editing {
+                        h_flex()
+                            .w_full()
+                            .max_w(px(480.))
+                            .gap_1()
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui::KeyDownEvent, window, cx| {
+                                    match event.keystroke.key.as_str() {
+                                        "enter" => {
+                                            cx.stop_propagation();
+                                            this.save_profile_name(window, cx);
+                                        }
+                                        "escape" => {
+                                            cx.stop_propagation();
+                                            this.cancel_profile_edit(cx);
+                                        }
+                                        _ => {}
+                                    }
+                                },
+                            ))
+                            .when_some(self.profile_input.clone(), |row, input| {
+                                row.child(
+                                    div()
+                                        .min_w(px(160.))
+                                        .flex_1()
+                                        .child(Input::new(&input).small().disabled(saving)),
+                                )
+                            })
+                            .child(
+                                Button::new("profile-save-name")
+                                    .small()
+                                    .primary()
+                                    .label(if saving { "Saving…" } else { "Save" })
+                                    .disabled(saving)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.save_profile_name(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("profile-cancel-name")
+                                    .small()
+                                    .ghost()
+                                    .label("Cancel")
+                                    .disabled(saving)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.cancel_profile_edit(cx)),
+                                    ),
+                            )
+                            .into_any_element()
+                    } else {
+                        h_flex()
+                            .gap_1()
+                            .min_w(px(0.))
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .truncate()
+                                    .child(name),
+                            )
+                            .child(
+                                Button::new("profile-edit-name")
+                                    .xsmall()
+                                    .ghost()
+                                    .label("Edit")
+                                    .tooltip("Edit profile name")
+                                    .disabled(self.profile_name.is_none())
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.begin_profile_edit(window, cx)
+                                    })),
+                            )
+                            .into_any_element()
+                    })
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Only on this Mac"),
+                    )
+                    .when_some(error, |column, error| {
+                        column.child(div().text_xs().text_color(theme.danger).child(error))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn summary_metrics(&self, summary: &UsageSummary, cx: &mut Context<Self>) -> impl IntoElement {
+        let totals = summary.totals;
+        h_flex()
+            .id("usage-summary-metrics")
+            .w_full()
+            .flex_wrap()
+            .py_4()
+            .children([
+                summary_metric(
+                    "Reported tokens",
+                    compact_number(totals.tokens.total),
+                    (totals.unmetered_requests > 0).then(|| {
+                        format!(
+                            "{} unmetered requests",
+                            compact_number(totals.unmetered_requests)
+                        )
+                    }),
+                    cx,
+                ),
+                summary_metric("Requests", compact_number(totals.requests), None, cx),
+                summary_metric(
+                    "Current streak",
+                    totals.current_streak.to_string(),
+                    Some(
+                        if totals.current_streak == 1 {
+                            "day"
+                        } else {
+                            "days"
+                        }
+                        .to_string(),
+                    ),
+                    cx,
+                ),
+                summary_metric(
+                    "Active days",
+                    compact_number(totals.active_days),
+                    Some(format!(
+                        "Best streak {} {}",
+                        totals.longest_streak,
+                        if totals.longest_streak == 1 {
+                            "day"
+                        } else {
+                            "days"
+                        }
+                    )),
+                    cx,
+                ),
+            ])
+    }
+}
+
+fn profile_edit_can_cancel(saving: bool) -> bool {
+    !saving
+}
+
+fn settle_owned_revision(active: &mut Option<u64>, revision: u64) -> bool {
+    if *active != Some(revision) {
+        return false;
+    }
+    *active = None;
+    true
+}
+
+fn bounded_activity_summary(summary: &UsageSummary) -> UsageSummary {
+    let Ok(end) = chrono::NaiveDate::parse_from_str(&summary.end_date, "%Y-%m-%d") else {
+        return summary.clone();
+    };
+    let latest_start = end - chrono::Duration::days(364);
+    let Ok(start) = chrono::NaiveDate::parse_from_str(&summary.start_date, "%Y-%m-%d") else {
+        return summary.clone();
+    };
+    if start >= latest_start {
+        return summary.clone();
+    }
+    let start_key = latest_start.format("%Y-%m-%d").to_string();
+    let mut bounded = summary.clone();
+    bounded.start_date = start_key.clone();
+    bounded.days.retain(|day| day.date >= start_key);
+    bounded
+}
+
+fn summary_metric(
+    label: &'static str,
+    value: String,
+    detail: Option<String>,
+    cx: &mut Context<UsagePanel>,
+) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+    v_flex()
+        .min_w(px(150.))
+        .flex_1()
+        .px_3()
+        .py_1()
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.muted_foreground)
+                .child(label.to_uppercase()),
+        )
+        .child(
+            div()
+                .text_xl()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(value),
+        )
+        .when_some(detail, |column, detail| {
+            column.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(detail),
+            )
+        })
+        .into_any_element()
+}
+
+fn share_preview_card(data: &ProfileShareData, cx: &mut gpui::App) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+    v_flex()
+        .w_full()
+        .gap_3()
+        .child(
+            v_flex()
+                .w_full()
+                .rounded_xl()
+                .p_4()
+                .gap_3()
+                .bg(theme.muted)
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme.muted_foreground)
+                                .child("AIDEN AGENT · MODEL USAGE"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(data.range_label),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xl()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(data.name.clone()),
+                )
+                .child(
+                    v_flex()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child("REPORTED TOKENS"),
+                        )
+                        .child(
+                            div()
+                                .text_3xl()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(data.reported_tokens.clone()),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(format!("{} requests", data.requests))
+                        .child(format!("{} active days", data.active_days))
+                        .child(format!("{} coverage", data.token_coverage)),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("The 3:4 PNG includes your name and aggregate usage only—never prompts, chats, workspaces, file paths, credentials, or account identifiers."),
+        )
+        .into_any_element()
 }
 
 impl Render for UsagePanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
-        let Some(summary) = self.summary.as_ref() else {
-            return v_flex()
-                .id("usage-panel")
-                .size_full()
-                .bg(theme.background)
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(if self.loaded {
-                            "No usage data yet."
-                        } else {
-                            "Loading usage…"
-                        }),
-                )
-                .into_any_element();
-        };
+        let compact = window.viewport_size().width.as_f64() < 760.0;
+        let identity = self.profile_identity(cx);
+        let summary = self.summary.clone();
+        let share_busy = self.share_busy_revision.is_some();
+        let share_disabled = summary.is_none() || self.profile_name.is_none() || share_busy;
 
-        let totals = summary.totals;
+        let body =
+            if let Some(summary) = summary {
+                let totals = summary.totals;
+                let coverage = if totals.requests == 0 {
+                    0.0
+                } else {
+                    totals.reported_token_requests as f64 / totals.requests as f64 * 100.0
+                };
+                let coverage_copy = if totals.requests == 0 {
+                    "Tracking begins with your next model call.".to_string()
+                } else {
+                    format!("{coverage:.0}% of requests reported token usage.")
+                };
+                let mut cost_copy = if totals.costed_requests > 0 {
+                    format!(
+                        "Tracked hosted cost {}",
+                        format_tracked_usd(totals.hosted_cost_usd)
+                    )
+                } else {
+                    "No tracked hosted cost".to_string()
+                };
+                if totals.unpriced_hosted_requests > 0 {
+                    cost_copy.push_str(&format!(
+                        " · Cost unavailable for {} hosted requests",
+                        totals.unpriced_hosted_requests
+                    ));
+                }
+                if totals.local_requests > 0 {
+                    cost_copy.push_str(&format!(
+                        " · {} local excluded from cost",
+                        totals.local_requests
+                    ));
+                }
+
+                let lower = if compact {
+                    v_flex()
+                        .w_full()
+                        .gap_5()
+                        .py_5()
+                        .child(self.token_mix_section(&summary, cx))
+                        .child(div().h(px(1.)).w_full().bg(theme.border))
+                        .child(self.scoreboard_section(&summary, cx))
+                        .into_any_element()
+                } else {
+                    h_flex()
+                        .w_full()
+                        .items_start()
+                        .py_5()
+                        .child(
+                            div()
+                                .w_1_2()
+                                .pr_5()
+                                .child(self.token_mix_section(&summary, cx)),
+                        )
+                        .child(
+                            div()
+                                .w_1_2()
+                                .pl_5()
+                                .border_l_1()
+                                .border_color(theme.border)
+                                .child(self.scoreboard_section(&summary, cx)),
+                        )
+                        .into_any_element()
+                };
+
+                v_flex()
+                    .w_full()
+                    .child(self.heatmap_section(&summary, cx))
+                    .child(div().h(px(1.)).w_full().my_5().bg(theme.border))
+                    .child(self.summary_metrics(&summary, cx))
+                    .child(div().h(px(1.)).w_full().my_5().bg(theme.border))
+                    .child(lower)
+                    .child(div().h(px(1.)).w_full().my_5().bg(theme.border))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .items_start()
+                            .justify_between()
+                            .gap_3()
+                            .pb_5()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(coverage_copy),
+                            )
+                            .child(
+                                div()
+                                    .max_w(px(560.))
+                                    .text_right()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(cost_copy),
+                            ),
+                    )
+                    .into_any_element()
+            } else {
+                let error = self.error.clone();
+                v_flex()
+                    .w_full()
+                    .min_h(px(288.))
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(
+                        if self.loading {
+                            "Loading usage…".to_string()
+                        } else {
+                            error.unwrap_or_else(|| "No usage data yet.".to_string())
+                        },
+                    ))
+                    .when(!self.loading, |column| {
+                        column.child(
+                            Button::new("usage-retry")
+                                .small()
+                                .primary()
+                                .label("Try again")
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                        )
+                    })
+                    .into_any_element()
+            };
+
         v_flex()
             .id("usage-panel")
             .size_full()
@@ -1028,48 +1884,40 @@ impl Render for UsagePanel {
                 h_flex()
                     .id("usage-header")
                     .w_full()
-                    .px_3()
+                    .min_h(px(48.))
+                    .px_4()
                     .py_2()
-                    .gap_4()
+                    .gap_2()
                     .items_center()
+                    .border_b_1()
+                    .border_color(theme.border)
                     .child(
                         div()
-                            .size(px(32.))
-                            .rounded_md()
-                            .bg(theme.accent)
-                            .text_color(theme.accent_foreground)
-                            .items_center()
-                            .justify_center()
-                            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("A")),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Usage & profile"),
-                            )
-                            .child(div().text_xs().text_color(theme.muted_foreground).child(
-                                format!(
-                                    "{} requests · {} active days · {}",
-                                    totals.requests,
-                                    totals.active_days,
-                                    format_tracked_usd(totals.hosted_cost_usd)
-                                ),
-                            )),
+                            .text_base()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Profile"),
                     )
                     .child(div().flex_1())
+                    .child(
+                        Button::new("usage-share")
+                            .small()
+                            .ghost()
+                            .label(if share_busy { "Preparing…" } else { "Share" })
+                            .tooltip("Share profile snapshot")
+                            .disabled(share_disabled)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_share_preview(window, cx)
+                            })),
+                    )
+                    .child(self.range_selector(cx))
                     .child(
                         Button::new("usage-refresh")
                             .small()
                             .ghost()
                             .icon(IconName::LoaderCircle)
                             .tooltip("Reload usage")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.refresh(cx);
-                            })),
+                            .disabled(self.loading)
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     ),
             )
             .child(
@@ -1078,15 +1926,21 @@ impl Render for UsagePanel {
                     .flex_1()
                     .w_full()
                     .overflow_y_scroll()
-                    .px_4()
-                    .py_2()
                     .child(
                         v_flex()
+                            .mx_auto()
                             .w_full()
-                            .gap_4()
-                            .child(self.heatmap_section(summary, cx))
-                            .child(self.token_mix_section(summary, cx))
-                            .child(self.scoreboard_section(summary, cx)),
+                            .max_w(px(980.))
+                            .px_6()
+                            .pb_8()
+                            .child(identity)
+                            .child(div().h(px(1.)).w_full().bg(theme.border))
+                            .when_some(self.share_error.clone(), |column, error| {
+                                column.child(
+                                    div().py_2().text_xs().text_color(theme.danger).child(error),
+                                )
+                            })
+                            .child(body),
                     ),
             )
             .into_any_element()
@@ -1191,10 +2045,61 @@ mod tests {
     }
 
     #[test]
+    fn every_usage_range_round_trips_and_the_session_default_is_one_year() {
+        assert_eq!(UsageDateRange::default(), UsageDateRange::Year1);
+        let cases = [
+            (UsageDateRange::Days7, "7d", "7 days"),
+            (UsageDateRange::Days30, "30d", "30 days"),
+            (UsageDateRange::Days90, "90d", "90 days"),
+            (UsageDateRange::Year1, "1y", "Past year"),
+            (UsageDateRange::All, "all", "All time"),
+        ];
+        let source = MemoryUsageSource::default();
+        for (range, key, label) in cases {
+            let store_range: aiden_data::usage_store::UsageDateRange = range.into();
+            assert_eq!(store_range.as_str(), key);
+            assert_eq!(UsageDateRange::from_store(key), range);
+            assert_eq!(range.label(), label);
+            assert_eq!(source.summary(range).unwrap().range, range);
+        }
+    }
+
+    #[test]
+    fn profile_editor_cannot_cancel_after_the_durable_write_starts() {
+        assert!(profile_edit_can_cancel(false));
+        assert!(!profile_edit_can_cancel(true));
+    }
+
+    #[test]
+    fn stale_share_completion_cannot_settle_a_newer_render() {
+        let mut active = Some(42);
+        assert!(!settle_owned_revision(&mut active, 41));
+        assert_eq!(active, Some(42));
+        assert!(settle_owned_revision(&mut active, 42));
+        assert_eq!(active, None);
+        assert!(!settle_owned_revision(&mut active, 42));
+    }
+
+    #[test]
+    fn zero_usage_calendar_is_bounded_and_contains_no_active_cells() {
+        let summary = UsageSummary {
+            range: UsageDateRange::Days7,
+            start_date: "2026-08-04".into(),
+            end_date: "2026-08-10".into(),
+            ..UsageSummary::default()
+        };
+        let calendar = build_activity_calendar(&summary);
+        assert_eq!(calendar.week_count, 2);
+        assert!(calendar.cells.iter().all(|cell| cell.level == 0));
+        assert!(calendar.cells.iter().all(|cell| cell.requests == 0));
+    }
+
+    #[test]
     fn activity_calendar_builds_a_sunday_started_grid() {
         // 2026-07-23 is a Thursday (renderer test reference date).
         let day = demo_day("2026-07-23", 5);
         let summary = UsageSummary {
+            range: UsageDateRange::Year1,
             start_date: "2026-07-20".into(),
             end_date: "2026-07-23".into(),
             totals: UsageTotals {
@@ -1316,6 +2221,14 @@ mod tests {
             end_date: "2026-07-21".into(),
             totals: aiden_data::usage_store::UsageTotals {
                 requests: 7,
+                completed_requests: 4,
+                failed_requests: 2,
+                cancelled_requests: 1,
+                reported_token_requests: 5,
+                unmetered_requests: 2,
+                local_requests: 3,
+                costed_requests: 2,
+                unpriced_hosted_requests: 2,
                 active_days: 3,
                 current_streak: 2,
                 longest_streak: 4,
@@ -1328,7 +2241,6 @@ mod tests {
                     reasoning: 20,
                     total: 185,
                 },
-                ..aiden_data::usage_store::UsageTotals::default()
             },
             days: vec![aiden_data::usage_store::UsageDaySummary {
                 date: "2026-07-21".into(),
@@ -1364,6 +2276,14 @@ mod tests {
         let converted: UsageSummary = store.into();
         assert_eq!(converted.start_date, "2026-06-22");
         assert_eq!(converted.totals.requests, 7);
+        assert_eq!(converted.totals.completed_requests, 4);
+        assert_eq!(converted.totals.failed_requests, 2);
+        assert_eq!(converted.totals.cancelled_requests, 1);
+        assert_eq!(converted.totals.reported_token_requests, 5);
+        assert_eq!(converted.totals.unmetered_requests, 2);
+        assert_eq!(converted.totals.local_requests, 3);
+        assert_eq!(converted.totals.costed_requests, 2);
+        assert_eq!(converted.totals.unpriced_hosted_requests, 2);
         assert_eq!(converted.totals.current_streak, 2);
         assert_eq!(converted.totals.longest_streak, 4);
         assert_eq!(converted.totals.tokens.total, 185);

@@ -7,20 +7,26 @@
 //! command ordering persists to `settings.json` through the injected
 //! [`RecentCommandsStore`]; persistence runs on the background executor.
 //!
-//! Keyboard handling lives on a custom focusable input (`query_focus`) rather
-//! than a gpui-component `InputState`, because the palette needs to intercept
-//! Up/Down/Escape/Backspace before the editor's own cursor-movement bindings.
+//! Keyboard handling uses a gpui-component `InputState` for native text
+//! selection, IME, clipboard, and focus behavior. The surrounding palette
+//! container intercepts Up/Down/Escape/Backspace before the editor's own
+//! cursor-movement bindings.
 
 use std::sync::Arc;
 
 use aiden_core::appearance::Mode;
 use aiden_core::ChatMeta;
 use gpui::{
-    div, prelude::FluentBuilder as _, px, AppContext as _, Context, ElementId, FocusHandle,
-    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px, AppContext as _, Context, ElementId, Entity, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _};
+use gpui_component::{
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    v_flex, ActiveTheme, Icon, IconName, Sizable as _, WindowExt as _,
+};
 
 use crate::settings::catalog::SETTINGS_DESTINATIONS;
 
@@ -689,9 +695,11 @@ pub struct CommandPalette {
     pub(crate) selected: usize,
     pub(crate) busy: bool,
     pub(crate) recents: Vec<String>,
-    /// Focus handle for the query input; created when the dialog opens
-    /// (a `FocusHandle` can only be created with a context).
-    pub(crate) query_focus: Option<FocusHandle>,
+    /// The real text input backing the query. Keeping an `InputState` entity
+    /// gives the palette native selection, IME, clipboard, and tab/focus
+    /// semantics instead of a painted faux-div.
+    pub(crate) query_input: Option<Entity<InputState>>,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// Dependencies for [`CommandPalette::new`]. The orchestrator provides the
@@ -733,7 +741,8 @@ impl CommandPalette {
             selected: 0,
             busy: false,
             recents,
-            query_focus: None,
+            query_input: None,
+            _subscriptions: Vec::new(),
         }
     }
 
@@ -752,6 +761,46 @@ impl CommandPalette {
         .detach();
     }
 
+    /// Create the query input once per palette entity and keep the Rust query
+    /// state synchronized with its native editing events. The subscription is
+    /// retained for the entity lifetime so a dialog reopen cannot leave an
+    /// orphaned input listener behind.
+    fn ensure_query_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(input) = &self.query_input {
+            return input.clone();
+        }
+        let placeholder = if self.mode == PaletteMode::Root {
+            "Search commands, chats, models, providers, or settings…"
+        } else {
+            "Search…"
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        self._subscriptions.push(cx.subscribe_in(
+            &input,
+            window,
+            |this, input, event, window, cx| match event {
+                InputEvent::Change => {
+                    this.query = input.read(cx).value().to_string();
+                    this.selected = 0;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.run_selected(cx);
+                    if !this.open {
+                        window.close_dialog(cx);
+                    }
+                }
+                _ => {}
+            },
+        ));
+        self.query_input = Some(input.clone());
+        input
+    }
+
     /// Open (or re-open) the palette in the root mode.
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open {
@@ -761,6 +810,9 @@ impl CommandPalette {
         self.mode = PaletteMode::Root;
         self.query.clear();
         self.selected = 0;
+        if let Some(input) = self.query_input.clone() {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
         self.open_dialog(window, cx);
     }
 
@@ -789,10 +841,12 @@ impl CommandPalette {
 
     fn open_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let entity = cx.entity();
-        let focus_handle = cx.focus_handle();
-        self.query_focus = Some(focus_handle.clone());
+        let query_input = self.ensure_query_input(window, cx);
         window.open_dialog(cx, move |dialog, window, cx| {
             dialog
+                // Keep a real dialog title for assistive technology and the
+                // compact modal layer even though the palette also renders a
+                // mode breadcrumb in its own header.
                 .title("Command palette")
                 .close_button(false)
                 .keyboard(false)
@@ -814,8 +868,9 @@ impl CommandPalette {
                 .child(palette_content(&entity, window, cx))
         });
         // Focus the query field once the dialog content has rendered.
+        let query_input = query_input.clone();
         cx.defer_in(window, move |_this, window, _cx| {
-            focus_handle.focus(window);
+            query_input.update(_cx, |input, cx| input.focus(window, cx));
         });
     }
 
@@ -825,6 +880,12 @@ impl CommandPalette {
         self.query.clear();
         self.selected = 0;
         cx.notify();
+    }
+
+    fn reset_to_root_state(&mut self) {
+        self.mode = PaletteMode::Root;
+        self.query.clear();
+        self.selected = 0;
     }
 
     /// Persist a command execution to the recency history (background write).
@@ -1079,8 +1140,7 @@ impl CommandPalette {
         match key {
             "escape" => {
                 if self.mode != PaletteMode::Root {
-                    self.mode = PaletteMode::Root;
-                    self.query.clear();
+                    self.reset_to_root_state();
                 }
             }
             "up" => {
@@ -1094,7 +1154,7 @@ impl CommandPalette {
             }
             "backspace" => {
                 if self.query.is_empty() && self.mode != PaletteMode::Root {
-                    self.mode = PaletteMode::Root;
+                    self.reset_to_root_state();
                 } else {
                     self.query.pop();
                     self.selected = 0;
@@ -1102,7 +1162,7 @@ impl CommandPalette {
             }
             "left" | "right" => {
                 if self.query.is_empty() && self.mode != PaletteMode::Root {
-                    self.mode = PaletteMode::Root;
+                    self.reset_to_root_state();
                 }
             }
             _ => {
@@ -1167,24 +1227,41 @@ fn category_icon(category: PaletteCategory) -> IconName {
 
 fn palette_content(
     entity: &gpui::Entity<CommandPalette>,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut gpui::App,
 ) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let palette = entity.read(cx);
-    let mode = palette.mode;
-    let query = palette.query.clone();
-    let rows = palette.rows();
-    let selected = palette.selected.min(rows.len().saturating_sub(1));
-    let appearance = palette.data.appearance_mode();
-    let busy = palette.busy;
-    let query_focus = palette.query_focus.clone();
-
-    let placeholder = if mode == PaletteMode::Root {
-        "Search commands, chats, models, providers, or settings…"
-    } else {
-        "Search {mode.lowercase()}…"
+    let (mode, query, rows, appearance, busy, query_input) = {
+        let palette = entity.read(cx);
+        (
+            palette.mode,
+            palette.query.clone(),
+            palette.rows(),
+            palette.data.appearance_mode(),
+            palette.busy,
+            palette.query_input.clone(),
+        )
     };
+    let selected = entity.read(cx).selected.min(rows.len().saturating_sub(1));
+
+    // `enter_mode` intentionally remains window-free for command handlers and
+    // tests. Reconcile the native InputState during render so a mode change
+    // always clears the visible text and updates the mode-specific placeholder.
+    let query_input =
+        query_input.expect("command palette query input is created before dialog content");
+    let placeholder: SharedString = if mode == PaletteMode::Root {
+        "Search commands, chats, models, providers, or settings…".into()
+    } else {
+        format!("Search {}…", mode.lowercase()).into()
+    };
+    let input_value = query_input.read(cx).value();
+    if input_value.as_str() != query {
+        let query_value = query.clone();
+        query_input.update(cx, |input, cx| input.set_value(query_value, window, cx));
+    }
+    query_input.update(cx, |input, cx| {
+        input.set_placeholder(placeholder, window, cx)
+    });
 
     let input_entity = entity.clone();
     let list_children: Vec<gpui::AnyElement> = if rows.is_empty() {
@@ -1236,6 +1313,22 @@ fn palette_content(
                 .items_center()
                 .border_b_1()
                 .border_color(theme.border)
+                .when(mode != PaletteMode::Root, |el| {
+                    let entity = entity.clone();
+                    el.child(
+                        Button::new("palette-back")
+                            .small()
+                            .ghost()
+                            .icon(IconName::ChevronLeft)
+                            .label("Back")
+                            .tooltip("Back to commands")
+                            .on_click(move |_event, _window, cx| {
+                                entity.update(cx, |palette, cx| {
+                                    palette.enter_mode(PaletteMode::Root, cx);
+                                });
+                            }),
+                    )
+                })
                 .child(
                     div()
                         .size(px(22.))
@@ -1279,41 +1372,43 @@ fn palette_content(
                 ),
         )
         .child(
-            // Query input (custom, so the palette owns Up/Down/Escape).
+            // Native InputState keeps text selection, IME, clipboard, and
+            // focus semantics. The surrounding key handler only intercepts
+            // palette navigation keys that a single-line editor does not own.
             div()
                 .id("palette-input")
                 .w_full()
                 .h(px(44.))
                 .px_3()
                 .items_center()
-                .focusable()
-                .when_some(query_focus, |el, handle| el.track_focus(&handle))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(if query.is_empty() {
-                            theme.muted_foreground
-                        } else {
-                            theme.foreground
-                        })
-                        .child(if query.is_empty() {
-                            placeholder.to_string()
-                        } else {
-                            query.clone()
-                        }),
-                )
                 .on_key_down(move |event, window, cx| {
+                    let key = event.keystroke.key.as_str();
+                    let (mode, query_empty) = {
+                        let palette = input_entity.read(cx);
+                        (palette.mode, palette.query.is_empty())
+                    };
+                    let intercept = matches!(key, "up" | "down" | "escape")
+                        || (query_empty
+                            && mode != PaletteMode::Root
+                            && matches!(key, "backspace" | "left"));
+                    if !intercept {
+                        return;
+                    }
+                    cx.stop_propagation();
                     let still_open = input_entity.update(cx, |this, cx| {
-                        this.handle_key(
-                            &event.keystroke.key,
-                            event.keystroke.key_char.as_deref(),
-                            cx,
-                        )
+                        this.handle_key(key, event.keystroke.key_char.as_deref(), cx)
                     });
                     if !still_open {
                         window.close_dialog(cx);
                     }
-                }),
+                })
+                .child(
+                    Input::new(&query_input)
+                        .small()
+                        .appearance(false)
+                        .bordered(false)
+                        .focus_bordered(true),
+                ),
         )
         .child(
             // Result list.
@@ -1464,6 +1559,8 @@ fn palette_row(
     let row = row.clone();
     let is_current = matches!(&row, PaletteRow::Appearance(mode) if appearance == Some(*mode))
         || matches!(&row, PaletteRow::Model { selected: true, .. });
+    let keyboard_row_entity = entity.clone();
+    let keyboard_row = row.clone();
 
     h_flex()
         .id(ElementId::Name(SharedString::from(format!(
@@ -1476,11 +1573,34 @@ fn palette_row(
         .items_center()
         .rounded_md()
         .when(
-            !busy && crate::services::appearance::pointer_cursors_enabled(cx),
+            crate::services::appearance::pointer_cursor_for_interaction(cx, !busy),
             |el| el.cursor_pointer(),
         )
+        .focus(|style| style.bg(theme.list_active).border_color(theme.ring))
+        .focusable()
+        .tab_stop(!busy)
         .bg(bg)
         .text_color(fg)
+        .on_key_down(move |event, window, cx| {
+            if busy || !matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                return;
+            }
+            cx.stop_propagation();
+            let still_open = keyboard_row_entity.update(cx, |this, cx| {
+                if let Some(position) = this
+                    .rows()
+                    .iter()
+                    .position(|candidate| candidate == &keyboard_row)
+                {
+                    this.selected = position;
+                }
+                this.run_selected(cx);
+                this.open
+            });
+            if !still_open {
+                window.close_dialog(cx);
+            }
+        })
         .on_click(move |_event, window, cx| {
             if busy {
                 return;
@@ -1682,6 +1802,45 @@ mod tests {
         palette.handle_key_state("z", Some("z"));
         let rows = palette.rows();
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn submode_back_keys_restore_root_and_reset_query_selection() {
+        let mut palette = CommandPalette::new_demo();
+        palette.mode = PaletteMode::Chats;
+        palette.query = "meeting".into();
+        palette.selected = 4;
+
+        // Escape is the native dialog back affordance while a sub-mode is
+        // active. It must return to the root search, not close the dialog.
+        palette.handle_key_state("escape", None);
+        assert_eq!(palette.mode, PaletteMode::Root);
+        assert!(palette.query.is_empty());
+        assert_eq!(palette.selected, 0);
+
+        // Backspace/left are also accepted as Back when the sub-mode query is
+        // empty (matching the renderer's compact keyboard path).
+        for key in ["backspace", "left"] {
+            palette.mode = PaletteMode::Models;
+            palette.query.clear();
+            palette.selected = 3;
+            palette.handle_key_state(key, None);
+            assert_eq!(palette.mode, PaletteMode::Root, "{key} returns to root");
+            assert!(palette.query.is_empty());
+            assert_eq!(palette.selected, 0);
+        }
+    }
+
+    #[test]
+    fn palette_view_keeps_native_input_and_keyboard_row_contract() {
+        let source = include_str!("command_palette.rs");
+        assert!(source.contains("Input::new(&query_input)"));
+        assert!(source.contains("InputEvent::Change"));
+        assert!(source.contains("palette-back"));
+        assert!(source.contains(".focusable()"));
+        assert!(source.contains(".tab_stop(!busy)"));
+        assert!(source.contains("\"enter\" | \"space\""));
+        assert!(source.contains(".title(\"Command palette\")"));
     }
 
     #[test]

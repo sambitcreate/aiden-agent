@@ -24,8 +24,9 @@ use aiden_data::secret_map::ProviderKeysStore;
 use aiden_mcp::client::McpClientManager;
 use aiden_scheduler::runtime::SchedulerCore;
 use gpui::{
-    div, prelude::FluentBuilder as _, AppContext as _, Context, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window,
+    div, prelude::FluentBuilder as _, AppContext as _, Context, EventEmitter,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{v_flex, ActiveTheme};
 
@@ -39,7 +40,7 @@ mod model_data;
 #[allow(dead_code)]
 mod model_pad;
 pub(crate) mod navigation;
-mod providers;
+pub(crate) mod providers;
 mod scheduled;
 mod shortcuts;
 pub(crate) mod skills;
@@ -49,6 +50,21 @@ mod web_search;
 use providers::enrich_provider_row;
 
 pub use catalog::SettingsDestinationId as SettingsSection;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsEvent {
+    PiProviderSetupRequested {
+        provider_id: String,
+        label: String,
+        authority_revision: u64,
+    },
+    /// The Computer Use settings surface cleared the durable privacy-notice
+    /// acknowledgement; the app-root reducer must reopen it for the next
+    /// per-chat opt-in in this running session.
+    ComputerUsePrivacyNoticeRestored,
+}
+
+impl EventEmitter<SettingsEvent> for SettingsView {}
 
 const SETTINGS_CONTENT_MAX_WIDTH_PX: f32 = 672.0;
 
@@ -60,10 +76,16 @@ pub struct SettingsServices {
     pub config: Arc<ConfigStore>,
     pub keys: Arc<ProviderKeysStore>,
     pub codex_auth: Arc<crate::services::codex_auth::PiCodexAuthStore>,
+    pub pi_providers: Arc<crate::services::pi_provider_setup::PiProviderSetupAuthority>,
     pub foundation_models: Arc<aiden_computer_use::FoundationModelsConnection>,
+    /// The exact app-owned Computer Use authority used by chat generations.
+    pub computer_use: Arc<crate::services::computer_use::ComputerUseAuthority>,
+    /// The exact app-owned Voice authority used by the dictation pill.
+    pub voice: Arc<crate::services::voice::VoiceAuthority>,
     pub schedules: Arc<ScheduleStore<DataStorePersistence, DataStorePersistence>>,
     /// The shared lifecycle authority for every schedule mutation.
     pub scheduler: Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>,
+    pub scheduler_executor: Arc<crate::services::scheduled_execution::ProductionScheduledExecutor>,
     pub mcp: Arc<McpClientManager>,
     pub mcp_mutation: Arc<crate::services::mcp_mutation::McpMutationAuthority>,
     pub shortcuts: gpui::Entity<crate::shortcut_runtime::ShortcutRuntime>,
@@ -91,9 +113,13 @@ impl SettingsServices {
             config: stores.config.clone(),
             keys: stores.keys.clone(),
             codex_auth: stores.codex_auth.clone(),
+            pi_providers: stores.pi_providers.clone(),
             foundation_models: stores.foundation_models.clone(),
+            computer_use: stores.computer_use.clone(),
+            voice: stores.voice.clone(),
             schedules: stores.schedules.clone(),
             scheduler: stores.scheduler.clone(),
+            scheduler_executor: stores.scheduler_executor.clone(),
             mcp: stores.mcp.clone(),
             mcp_mutation: stores.mcp_mutation.clone(),
             shortcuts,
@@ -201,7 +227,7 @@ impl SettingsView {
                 .background_spawn(async move {
                     let capabilities = crate::services::provider_kit::load_capabilities();
                     let catalog_status = model_data::catalog_status_of(capabilities.as_deref());
-                    let providers = services
+                    let mut providers = services
                         .config
                         .list_providers()
                         .map(|list| {
@@ -211,7 +237,21 @@ impl SettingsView {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let settings = services.config.get_settings().unwrap_or_default();
+                    providers.extend(
+                        services
+                            .pi_providers
+                            .list()
+                            .iter()
+                            .map(providers::ProviderRow::from),
+                    );
+                    let voice_error = services.voice.reconcile_boot().err().map(|_| {
+                        "Voice settings could not be migrated; dictation remains unavailable."
+                            .to_string()
+                    });
+                    let (settings, settings_error) = match services.config.get_settings() {
+                        Ok(settings) => (settings, None),
+                        Err(_) => (serde_json::Map::new(), Some(())),
+                    };
                     let model_pad = services.model_pad.load();
                     let codex_status = services.codex_auth.account_status();
                     let foundation_status = services.foundation_models.status(false).await;
@@ -231,6 +271,8 @@ impl SettingsView {
                         .iter()
                         .map(mcp::McpServerRow::from)
                         .collect::<Vec<_>>();
+                    let scheduled_mcp_servers =
+                        services.config.list_mcp_servers().unwrap_or_default();
                     let workspaces = services
                         .config
                         .list_workspaces()
@@ -243,6 +285,8 @@ impl SettingsView {
                     (
                         providers,
                         settings,
+                        settings_error,
+                        voice_error,
                         schedules,
                         mcp_servers,
                         workspaces,
@@ -251,6 +295,7 @@ impl SettingsView {
                         model_pad,
                         codex_status,
                         foundation_status,
+                        scheduled_mcp_servers,
                     )
                 })
                 .await;
@@ -258,6 +303,8 @@ impl SettingsView {
                 let (
                     providers,
                     settings,
+                    settings_error,
+                    voice_error,
                     schedules,
                     mcp_servers,
                     workspaces,
@@ -266,7 +313,21 @@ impl SettingsView {
                     model_pad,
                     codex_status,
                     foundation_status,
+                    scheduled_mcp_servers,
                 ) = snapshot;
+                this.scheduled.providers = providers
+                    .iter()
+                    .filter(|provider| {
+                        !provider.models.is_empty() && (!provider.needs_key || provider.has_key)
+                    })
+                    .map(|provider| {
+                        (
+                            provider.id.clone(),
+                            provider.label.clone(),
+                            provider.models.clone(),
+                        )
+                    })
+                    .collect();
                 this.providers.providers = providers;
                 this.providers.settings = settings;
                 this.providers.capabilities = capabilities;
@@ -288,7 +349,20 @@ impl SettingsView {
                 this.providers.foundation_status = foundation_status;
                 this.scheduled.schedules = schedules;
                 this.scheduled.workspaces = workspaces;
+                this.scheduled.hydrate_defaults(
+                    &this.providers.settings,
+                    settings_error.map(|_| "settings read failed".to_string()),
+                );
+                this.scheduled.global_enabled = this
+                    .providers
+                    .settings
+                    .get(crate::services::scheduled_execution::SCHEDULED_TASKS_ENABLED_KEY)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false);
+                this.scheduled.executor_ready = this.services.scheduler_executor.is_ready();
+                this.scheduled.mcp_servers = scheduled_mcp_servers;
                 this.mcp.servers = mcp_servers;
+                this.mcp.statuses_loaded = false;
                 let settings = this.providers.settings.clone();
                 this.appearance.hydrate(&settings, cx);
                 this.shortcuts.hydrate(&this.providers.settings);
@@ -302,13 +376,14 @@ impl SettingsView {
                 this.assistant.hydrate(&settings);
                 this.web_search.hydrate(&settings);
                 this.voice.hydrate(&settings);
+                this.voice.error = voice_error;
                 this.computer_use.hydrate(&settings);
                 // Background loads that need more than the settings map:
                 // keychain checks (web search), the Parakeet catalog + mic
                 // permission (voice), and the Artificial Analysis status (its
                 // cache store reads through tokio, so it runs on the bridge).
                 this.web_search.load_key_state(&this.services, cx);
-                this.voice.load_runtime(cx);
+                this.voice.load_runtime(&this.services, cx);
                 this.model_data.load_aa_status(&this.services, cx);
                 cx.notify();
             })
@@ -330,6 +405,19 @@ impl SettingsView {
             if self.active == SettingsSection::Providers {
                 self.cancel_codex_sign_in();
             }
+            if self.active == SettingsSection::Mcp {
+                let services = self.services.clone();
+                self.mcp.leave_section(&services, cx);
+            }
+            if self.active == SettingsSection::ComputerUse {
+                self.computer_use.leave_section();
+            }
+            if self.active == SettingsSection::WebSearch {
+                self.web_search.leave_section();
+            }
+            if self.active == SettingsSection::Voice {
+                self.voice.leave_section();
+            }
         }
         self.active = section;
         self.error = None;
@@ -344,13 +432,13 @@ impl SettingsView {
     }
     /// Refresh the provider + settings snapshots after a mutation (all section
     /// mutations run on the background and then call this).
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         let services = self.services.clone();
         let capabilities = self.providers.capabilities.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_spawn(async move {
-                    let providers = services
+                    let mut providers = services
                         .config
                         .list_providers()
                         .map(|list| {
@@ -360,7 +448,17 @@ impl SettingsView {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    let settings = services.config.get_settings().unwrap_or_default();
+                    providers.extend(
+                        services
+                            .pi_providers
+                            .list()
+                            .iter()
+                            .map(providers::ProviderRow::from),
+                    );
+                    let (settings, settings_error) = match services.config.get_settings() {
+                        Ok(settings) => (settings, None),
+                        Err(_) => (serde_json::Map::new(), Some(())),
+                    };
                     let mcp_servers = services
                         .config
                         .list_mcp_servers()
@@ -368,11 +466,20 @@ impl SettingsView {
                         .iter()
                         .map(mcp::McpServerRow::from)
                         .collect::<Vec<_>>();
-                    (providers, settings, mcp_servers)
+                    let cloud_voice_options = services.voice.cloud_options();
+                    (
+                        providers,
+                        settings,
+                        settings_error,
+                        mcp_servers,
+                        cloud_voice_options,
+                    )
                 })
                 .await;
             this.update(cx, |this, cx| {
-                let (providers, settings, mcp_servers) = snapshot;
+                let (providers, settings, settings_error, mcp_servers, cloud_voice_options) =
+                    snapshot;
+                this.providers.refreshing = false;
                 this.providers.providers = providers;
                 this.model_pad.set_available_models(
                     model_pad::available_model_inventory(&this.providers.providers)
@@ -380,7 +487,14 @@ impl SettingsView {
                         .map(|entry| entry.value),
                 );
                 this.providers.settings = settings;
+                this.scheduled.hydrate_defaults(
+                    &this.providers.settings,
+                    settings_error.map(|_| "settings read failed".to_string()),
+                );
+                this.voice.hydrate(&this.providers.settings);
+                this.voice.cloud_options = cloud_voice_options;
                 this.mcp.servers = mcp_servers;
+                this.mcp.statuses_loaded = false;
                 this.shortcuts.hydrate(&this.providers.settings);
                 let services = this.services.clone();
                 this.model_data.load_aa_status(&services, cx);

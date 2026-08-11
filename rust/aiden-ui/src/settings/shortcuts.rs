@@ -14,14 +14,15 @@ use std::sync::Arc;
 #[cfg(test)]
 use aiden_core::keybindings::normalize_keybinding_overrides;
 use aiden_core::keybindings::{
-    accelerator_from_keyboard_event, apply_keybinding_mutation, effective_bindings,
-    pretty_accelerator, GlobalShortcutState, GlobalShortcutStatus, KeybindingErrorCode,
-    KeybindingMutation, KeyboardEventLike,
+    accelerator_from_keyboard_event, apply_keybinding_mutation, aria_key_shortcut,
+    effective_bindings, pretty_accelerator, GlobalShortcutState, GlobalShortcutStatus,
+    KeybindingErrorCode, KeybindingMutation, KeyboardEventLike,
 };
 use aiden_core::CommandId;
 use gpui::{
-    div, prelude::FluentBuilder as _, AppContext as _, Context, Entity, FocusHandle, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
+    div, prelude::FluentBuilder as _, px, AppContext as _, Context, Entity, FocusHandle,
+    FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    Styled as _, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
@@ -171,6 +172,68 @@ fn catalog() -> &'static [(CommandId, &'static str, &'static str)] {
     ]
 }
 
+fn is_global_command(command: CommandId) -> bool {
+    crate::shortcut_runtime::GLOBAL_COMMANDS.contains(&command)
+}
+
+fn recording_cancel_key(key: &str) -> bool {
+    matches!(key, "escape" | "esc" | "tab")
+}
+
+/// Search metadata mirrors the Electron command catalog. Keeping these terms
+/// beside the native renderer means category, keyword, and ARIA accelerator
+/// searches remain useful even though the row catalog only stores display copy.
+fn command_search_metadata(command: CommandId) -> (&'static str, &'static str) {
+    match command {
+        CommandId::ComposerFocus => ("Aiden", "write message input"),
+        CommandId::DictationToggle => ("Aiden", "voice microphone transcribe"),
+        CommandId::AssistantOpen => ("Aiden", "assistant companion dock"),
+        CommandId::CommandPaletteToggle => ("Navigate", "search quick actions"),
+        CommandId::ChatNew => ("Chat", "conversation compose"),
+        CommandId::ChatSearch => ("Chat", "history conversation find"),
+        CommandId::ChatPrevious => ("Chat", "back older"),
+        CommandId::ChatNext => ("Chat", "forward newer"),
+        CommandId::ChatJump1
+        | CommandId::ChatJump2
+        | CommandId::ChatJump3
+        | CommandId::ChatJump4
+        | CommandId::ChatJump5
+        | CommandId::ChatJump6
+        | CommandId::ChatJump7
+        | CommandId::ChatJump8
+        | CommandId::ChatJump9 => ("Chat", "recent sidebar"),
+        CommandId::ModelChange => ("Navigate", "llm provider select"),
+        CommandId::ProviderManage => ("Settings", "api connection models"),
+        CommandId::SettingsSearch | CommandId::SettingsOpen => {
+            ("Settings", "preferences configure")
+        }
+        CommandId::WorkspaceOpenPreferredEditor => ("Tools", "vscode cursor finder folder"),
+        CommandId::SidebarToggle => ("Navigate", "collapse navigation"),
+        CommandId::TerminalToggle => ("Tools", "shell console"),
+        CommandId::EnvironmentToggle => ("Tools", "files git changes"),
+        CommandId::FileSave => ("Tools", "write editor"),
+    }
+}
+
+fn shortcut_matches_query(
+    command: CommandId,
+    title: &str,
+    description: &str,
+    binding: Option<&str>,
+    query: &str,
+) -> bool {
+    let (category, keywords) = command_search_metadata(command);
+    let pretty = pretty_accelerator(binding);
+    let aria = aria_key_shortcut(binding).unwrap_or_default();
+    let haystack = format!(
+        "{title} {description} {} {category} {keywords} {pretty} {aria}",
+        command.as_str()
+    )
+    .to_lowercase();
+    let query = query.trim().to_lowercase();
+    query.is_empty() || haystack.contains(&query)
+}
+
 /// Pure encoder for the shortcut recorder: maps a captured keystroke
 /// (key + modifier booleans) onto a normalized accelerator via the shared
 /// aiden-core pipeline.
@@ -304,26 +367,49 @@ impl SettingsView {
         let pending_replacement = self.shortcuts.pending_replacement.clone();
         let recording = self.shortcuts.recording;
         let global = self.shortcuts.global.clone();
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
 
         let rows: Vec<(CommandId, &'static str, &'static str)> = catalog()
             .iter()
             .copied()
             .filter(|(id, title, description)| {
-                let binding = effective.get(id.as_str()).cloned().flatten();
-                let haystack = format!(
-                    "{} {} {} {}",
-                    title,
-                    description,
-                    id.as_str(),
-                    binding
-                        .map(|b| pretty_accelerator(Some(&b)))
-                        .unwrap_or_default()
-                )
-                .to_lowercase();
-                query.is_empty() || haystack.contains(&query)
+                let binding = effective
+                    .get(id.as_str())
+                    .and_then(|binding| binding.as_deref());
+                shortcut_matches_query(*id, title, description, binding, &query)
             })
             .collect();
+
+        let global_rows = rows
+            .iter()
+            .copied()
+            .filter(|(id, _, _)| is_global_command(*id))
+            .collect::<Vec<_>>();
+        let app_rows = rows
+            .iter()
+            .copied()
+            .filter(|(id, _, _)| !is_global_command(*id))
+            .collect::<Vec<_>>();
+        let global_group = self.shortcut_group(
+            "global-shortcuts-group",
+            "Global shortcuts",
+            global_rows,
+            &effective,
+            &global,
+            recording,
+            recorder_focus.clone(),
+            cx,
+        );
+        let app_group = self.shortcut_group(
+            "in-app-shortcuts-group",
+            "In-app shortcuts",
+            app_rows,
+            &effective,
+            &global,
+            recording,
+            recorder_focus.clone(),
+            cx,
+        );
 
         v_flex()
             .id("shortcuts-section")
@@ -352,7 +438,37 @@ impl SettingsView {
                 v_flex()
                     .w_full()
                     .gap_3()
-                    .child(Input::new(&search_input).small())
+                    .child(
+                        h_flex()
+                            .id("shortcuts-search")
+                            .w_full()
+                            .h(px(36.))
+                            .gap_2()
+                            .items_center()
+                            .px_3()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.background)
+                            .child(
+                                Icon::new(IconName::Search)
+                                    .small()
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Search"),
+                            )
+                            .child(
+                                Input::new(&search_input)
+                                    .small()
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .focus_bordered(true),
+                            ),
+                    )
                     .child(
                         h_flex().w_full().justify_end().child(
                             Button::new("reset-all-shortcuts")
@@ -438,12 +554,41 @@ impl SettingsView {
                         ),
                 )
             })
+            .child(global_group)
+            .child(app_group)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shortcut_group(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        rows: Vec<(CommandId, &'static str, &'static str)>,
+        effective: &BTreeMap<String, Option<String>>,
+        global: &[GlobalShortcutStatus],
+        recording: Option<CommandId>,
+        recorder_focus: Option<FocusHandle>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if rows.is_empty() {
+            return div().into_any_element();
+        }
+        v_flex()
+            .id(id)
+            .w_full()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
             .child(
                 v_flex()
                     .w_full()
                     .rounded_lg()
                     .border_1()
-                    .border_color(theme.border)
+                    .border_color(cx.theme().border)
                     .children(rows.into_iter().map(|(id, title, description)| {
                         let binding = effective.get(id.as_str()).cloned().flatten();
                         let overridden = self.shortcuts.overridden(id);
@@ -462,6 +607,7 @@ impl SettingsView {
                         )
                     })),
             )
+            .into_any_element()
     }
 
     /// One shortcut row.
@@ -555,11 +701,21 @@ impl SettingsView {
                     .child(
                         Button::new(SharedString::from(format!("shortcut-record-{id}")))
                             .small()
-                            .icon(IconName::Check)
+                            .icon(if recording {
+                                IconName::LoaderCircle
+                            } else {
+                                IconName::Settings2
+                            })
                             .label(if recording {
                                 "Press keys…".to_string()
                             } else {
                                 pretty_accelerator(binding)
+                            })
+                            .loading(recording)
+                            .tooltip(if recording {
+                                "Recording shortcut — Escape cancels; Tab moves on"
+                            } else {
+                                "Change shortcut"
                             })
                             .disabled(self.shortcuts.applying)
                             .on_click(cx.listener(move |this, _event, window, cx| {
@@ -614,6 +770,14 @@ impl SettingsView {
                             })),
                     ),
             )
+            .when(recording, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Press a modifier and key. Escape cancels; Tab moves on."),
+                )
+            })
     }
 }
 
@@ -686,7 +850,8 @@ impl ShortcutsState {
             return;
         }
         let key = event.keystroke.key.clone();
-        if key == "escape" || key == "esc" {
+        if recording_cancel_key(&key) {
+            cx.stop_propagation();
             self.cancel_recording(services, cx);
             return;
         }
@@ -699,8 +864,10 @@ impl ShortcutsState {
             shift: modifiers.shift,
         };
         let Some(binding) = encode_shortcut(&capture) else {
+            cx.stop_propagation();
             return;
         };
+        cx.stop_propagation();
         self.cancel_recording(services, cx);
         self.apply(
             KeybindingMutation::SetBinding {
@@ -897,5 +1064,70 @@ mod tests {
         assert!(recording.contains("self.recorder_blur = Some(subscription)"));
         assert!(recording.matches("self.recorder_blur = None").count() >= 2);
         assert!(!recording.contains("self._subscriptions.push(subscription)"));
+    }
+
+    #[test]
+    fn global_and_in_app_groups_follow_the_runtime_command_scope() {
+        assert!(is_global_command(CommandId::ComposerFocus));
+        assert!(is_global_command(CommandId::DictationToggle));
+        assert!(is_global_command(CommandId::AssistantOpen));
+        assert!(!is_global_command(CommandId::ChatNew));
+        assert!(!is_global_command(CommandId::FileSave));
+    }
+
+    #[test]
+    fn shortcut_search_matches_category_keyword_and_aria_accelerator() {
+        let command = CommandId::ComposerFocus;
+        let title = "Focus composer";
+        let description = "Bring Aiden forward and focus the message composer.";
+        let binding = Some("Command+Alt+Space");
+        assert!(shortcut_matches_query(
+            command,
+            title,
+            description,
+            binding,
+            "Aiden"
+        ));
+        assert!(shortcut_matches_query(
+            command,
+            title,
+            description,
+            binding,
+            "input"
+        ));
+        assert!(shortcut_matches_query(
+            command,
+            title,
+            description,
+            binding,
+            "Meta+Alt+Space"
+        ));
+        assert!(!shortcut_matches_query(
+            command,
+            title,
+            description,
+            binding,
+            "unrelated"
+        ));
+    }
+
+    #[test]
+    fn tab_and_escape_cancel_recording_without_becoming_bindings() {
+        assert!(recording_cancel_key("tab"));
+        assert!(recording_cancel_key("escape"));
+        assert!(recording_cancel_key("esc"));
+        assert!(!recording_cancel_key("k"));
+    }
+
+    #[test]
+    fn shortcuts_view_exposes_grouped_search_and_recording_status_contract() {
+        let source = include_str!("shortcuts.rs");
+        assert!(source.contains("global-shortcuts-group"));
+        assert!(source.contains("in-app-shortcuts-group"));
+        assert!(source.contains("shortcuts-search"));
+        assert!(source.contains("IconName::Search"));
+        assert!(source.contains("IconName::LoaderCircle"));
+        assert!(source.contains("Escape cancels; Tab moves on."));
+        assert!(source.contains("recording_cancel_key"));
     }
 }
