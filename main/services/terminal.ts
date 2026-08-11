@@ -8,6 +8,7 @@ import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
+import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -478,9 +479,10 @@ export class TerminalService {
  *
  * node-pty 1.1.0 loads the helper from `prebuilds/<platform>-<arch>/spawn-helper`
  * via `utils.loadNativeModule`, and in a packaged Electron app the same file
- * lives under `app.asar.unpacked`. We resolve from `node-pty/package.json` and
- * enumerate every `prebuilds/*` directory so a wrong-arch guess, a Rosetta run,
- * or an extra prebuild still gets fixed up.
+ * lives under `app.asar.unpacked`. We resolve from `node-pty/package.json`, move
+ * to the real unpacked directory before any filesystem operation, and enumerate
+ * every `prebuilds/*` directory so a wrong-arch guess, a Rosetta run, or an extra
+ * prebuild still gets fixed up.
  */
 async function defaultSpawnHelperPaths(): Promise<string[]> {
   const require = createRequire(import.meta.url);
@@ -492,25 +494,7 @@ async function defaultSpawnHelperPaths(): Promise<string[]> {
     // spawn will surface the underlying error.
     return [];
   }
-  const prebuildsDir = path.join(packageDir, "prebuilds");
-  let entries: string[];
-  try {
-    entries = await fs.readdir(prebuildsDir);
-  } catch {
-    return [];
-  }
-  const helpers: string[] = [];
-  for (const entry of entries) {
-    helpers.push(path.join(prebuildsDir, entry, "spawn-helper"));
-    // Packaged apps unpack node-pty to app.asar.unpacked; mirror node-pty's
-    // own helperPath rewrite so the on-disk copy there is fixed too.
-    if (packageDir.includes("app.asar")) {
-      helpers.push(
-        path.join(prebuildsDir, entry, "spawn-helper").replace("app.asar", "app.asar.unpacked"),
-      );
-    }
-  }
-  return helpers;
+  return resolveNodePtySpawnHelperPaths(packageDir);
 }
 
 async function ensureHelperExecutable(helper: string): Promise<void> {
