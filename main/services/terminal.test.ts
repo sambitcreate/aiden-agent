@@ -256,6 +256,7 @@ test("shell retry loop falls back when the preferred shell fails to spawn", asyn
     // Both candidates must be "executable" so they enter the spawn loop; the
     // spawn itself is what throws here.
     shellCandidates: () => ["/bin/zsh", "/bin/sh"],
+    shellIsExecutable: () => true,
     spawnPty: ((file: string) => {
       if (file === "/bin/zsh") throw new Error("posix_spawnp failed.");
       spawnedShell = file;
@@ -275,6 +276,7 @@ test("a non-retryable spawn error surfaces immediately instead of falling back",
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
     shellCandidates: () => ["/bin/zsh", "/bin/sh"],
+    shellIsExecutable: () => true,
     spawnPty: (() => {
       attempts += 1;
       // EINVAL is NOT a "missing shell" error — it must not be masked.
@@ -294,6 +296,7 @@ test("all shells failing to spawn throws a descriptive error listing attempts", 
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
     shellCandidates: () => ["/bin/zsh", "/bin/bash"],
+    shellIsExecutable: () => true,
     spawnPty: (() => {
       throw new Error("posix_spawnp failed.");
     }) as typeof spawn,
@@ -311,6 +314,7 @@ test("the first candidate succeeding reports preferredShellSkipped false", async
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
     shellCandidates: () => ["/bin/zsh", "/bin/sh"],
+    shellIsExecutable: () => true,
     spawnPty: ((file: string) => {
       spawnedShell = file;
       return fakePty().pty;

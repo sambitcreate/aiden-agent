@@ -55,6 +55,8 @@ export interface TerminalServiceOptions {
    * Exposed for tests; production resolves `$SHELL` then the macOS defaults.
    */
   shellCandidates?: () => string[];
+  /** Test seam for candidate executability checks. */
+  shellIsExecutable?: (filePath: string) => boolean;
   /**
    * Returns the `spawn-helper` paths node-pty will use. Exposed for tests so
    * the chmod/verify path can be exercised without touching node_modules.
@@ -247,7 +249,8 @@ export class TerminalService {
     const candidates = (this.options.shellCandidates ?? defaultShellCandidates)();
     // Verify each candidate exists+is executable before spawning, so the retry
     // loop below only fights launch failures (not obvious "no such file" ones).
-    const executableCandidates = candidates.filter(isExecutable);
+    const shellIsExecutable = this.options.shellIsExecutable ?? isExecutable;
+    const executableCandidates = candidates.filter(shellIsExecutable);
     if (executableCandidates.length === 0) {
       throw new Error(
         `No executable shell found on this Mac (checked ${candidates

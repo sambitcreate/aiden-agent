@@ -28,7 +28,6 @@ export interface TerminalHistoryStoreOptions {
   /** Test seam for the debounce window. */
   debounceMs?: number;
   /** Test seam: custom timers. */
-  now?: () => number;
   schedule?: (fn: () => void, ms: number) => () => void;
 }
 
