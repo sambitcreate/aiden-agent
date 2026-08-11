@@ -8,6 +8,7 @@
 //! instead of touching the store directly. All formatting/countdown logic is
 //! pure and unit-tested against the renderer's contract.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use aiden_data::schedule_store::{
@@ -260,15 +261,33 @@ pub fn format_schedule(cron: &str, timezone: &str) -> String {
 /// in-memory demo lets the panel run standalone and drives the tests.
 pub trait ScheduledTaskSource: Send + Sync {
     fn tasks(&self) -> Vec<ScheduledTask>;
+    fn runs(&self, _task_id: &str) -> Vec<aiden_data::schedule_store::ScheduledRun> {
+        Vec::new()
+    }
+    fn global_enabled(&self) -> bool {
+        false
+    }
+    fn executor_ready(&self) -> bool {
+        false
+    }
+    fn runtime_started(&self) -> bool {
+        false
+    }
+    fn is_running(&self, _task_id: &str) -> bool {
+        false
+    }
 }
 
 /// Store-backed adapter over `aiden_data::schedule_store::ScheduleStore`.
 pub struct StoreScheduledSource<T, U>
 where
-    T: aiden_data::schedule_store::Persistence<Vec<serde_json::Value>> + Send + Sync,
-    U: aiden_data::schedule_store::Persistence<Vec<serde_json::Value>> + Send + Sync,
+    T: aiden_data::schedule_store::Persistence<Vec<serde_json::Value>> + Send + Sync + 'static,
+    U: aiden_data::schedule_store::Persistence<Vec<serde_json::Value>> + Send + Sync + 'static,
 {
     store: Arc<aiden_data::schedule_store::ScheduleStore<T, U>>,
+    config: Arc<aiden_data::config_store::ConfigStore>,
+    scheduler: Arc<aiden_scheduler::runtime::SchedulerCore<T, U>>,
+    executor: Arc<crate::services::scheduled_execution::ProductionScheduledExecutor>,
 }
 
 impl<T, U> StoreScheduledSource<T, U>
@@ -276,8 +295,18 @@ where
     T: aiden_data::schedule_store::Persistence<Vec<serde_json::Value>> + Send + Sync,
     U: aiden_data::schedule_store::Persistence<Vec<serde_json::Value>> + Send + Sync,
 {
-    pub fn new(store: Arc<aiden_data::schedule_store::ScheduleStore<T, U>>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<aiden_data::schedule_store::ScheduleStore<T, U>>,
+        config: Arc<aiden_data::config_store::ConfigStore>,
+        scheduler: Arc<aiden_scheduler::runtime::SchedulerCore<T, U>>,
+        executor: Arc<crate::services::scheduled_execution::ProductionScheduledExecutor>,
+    ) -> Self {
+        Self {
+            store,
+            config,
+            scheduler,
+            executor,
+        }
     }
 }
 
@@ -288,6 +317,26 @@ where
 {
     fn tasks(&self) -> Vec<ScheduledTask> {
         self.store.list().unwrap_or_default()
+    }
+
+    fn runs(&self, task_id: &str) -> Vec<aiden_data::schedule_store::ScheduledRun> {
+        self.store.runs(task_id).unwrap_or_default()
+    }
+
+    fn global_enabled(&self) -> bool {
+        crate::services::scheduled_execution::global_enabled(&self.config)
+    }
+
+    fn executor_ready(&self) -> bool {
+        self.executor.is_ready()
+    }
+
+    fn runtime_started(&self) -> bool {
+        self.scheduler.is_started()
+    }
+
+    fn is_running(&self, task_id: &str) -> bool {
+        self.scheduler.is_running(task_id)
     }
 }
 
@@ -373,10 +422,13 @@ impl MemoryScheduledSource {
 pub struct ScheduledPanel {
     pub(crate) source: Arc<dyn ScheduledTaskSource>,
     pub(crate) tasks: Vec<ScheduledTask>,
+    pub(crate) runs: HashMap<String, Vec<aiden_data::schedule_store::ScheduledRun>>,
     pub(crate) query: String,
     pub(crate) tab: TaskTab,
     pub(crate) now: u64,
     pub(crate) loaded: bool,
+    tick_count: u8,
+    pub(crate) error: Option<String>,
     filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     _subscriptions: Vec<gpui::Subscription>,
     _tick: Option<gpui::Task<()>>,
@@ -405,10 +457,13 @@ impl ScheduledPanel {
         let mut this = Self {
             source: deps.source,
             tasks: Vec::new(),
+            runs: HashMap::new(),
             query: String::new(),
             tab: TaskTab::All,
             now,
             loaded: false,
+            tick_count: 0,
+            error: None,
             filter_input: None,
             _subscriptions: Vec::new(),
             _tick: None,
@@ -456,9 +511,19 @@ impl ScheduledPanel {
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         let source = self.source.clone();
         cx.spawn(async move |this, cx| {
-            let tasks = cx.background_spawn(async move { source.tasks() }).await;
+            let (tasks, runs) = cx
+                .background_spawn(async move {
+                    let tasks = source.tasks();
+                    let runs = tasks
+                        .iter()
+                        .map(|task| (task.id.clone(), source.runs(&task.id)))
+                        .collect();
+                    (tasks, runs)
+                })
+                .await;
             this.update(cx, |this, cx| {
                 this.tasks = tasks;
+                this.runs = runs;
                 this.loaded = true;
                 cx.notify();
             })
@@ -475,6 +540,11 @@ impl ScheduledPanel {
                 .await;
             this.update(cx, |this, cx| {
                 this.now = aiden_data::now_millis();
+                this.tick_count = this.tick_count.wrapping_add(1);
+                if this.tick_count >= 5 {
+                    this.tick_count = 0;
+                    this.refresh(cx);
+                }
                 cx.notify();
             })
             .ok();
@@ -508,6 +578,11 @@ impl ScheduledPanel {
         cx.emit(ScheduledPanelEvent::RunNow { id: id.to_string() });
     }
 
+    pub fn set_error(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        self.error = error;
+        cx.notify();
+    }
+
     fn task_row(&self, task: &ScheduledTask, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let cadence = format_schedule(&task.cron, &task.timezone);
@@ -521,8 +596,47 @@ impl ScheduledPanel {
             })
             .unwrap_or_else(|| "Never run".to_string());
 
-        let status_icon = IconName::CircleX;
-        let status_color = theme.muted_foreground;
+        let global_enabled = self.source.global_enabled();
+        let ready = self.source.executor_ready() && self.source.runtime_started();
+        let running = self.source.is_running(&task.id);
+        let status_icon = if running {
+            IconName::LoaderCircle
+        } else if task.enabled && global_enabled && ready {
+            IconName::CircleCheck
+        } else {
+            IconName::CircleX
+        };
+        let status_color = if task.last_result == Some(ScheduledRunResult::Error) {
+            theme.danger
+        } else if task.enabled && global_enabled && ready {
+            theme.success
+        } else {
+            theme.muted_foreground
+        };
+        let status = if running {
+            "Running now".to_string()
+        } else if !global_enabled {
+            "Paused by global setting".to_string()
+        } else if !ready {
+            "Executor unavailable".to_string()
+        } else if !task.enabled {
+            "Paused".to_string()
+        } else if let Some(next) = task.next_run_at {
+            format!(
+                "Next run {}",
+                crate::services::chat_service::relative_time(next, self.now)
+            )
+        } else {
+            "Enabled · awaiting next schedule".to_string()
+        };
+        let recent_runs = self
+            .runs
+            .get(&task.id)
+            .into_iter()
+            .flatten()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>();
 
         let id = task.id.clone();
         let toggle_id = id.clone();
@@ -558,22 +672,49 @@ impl ScheduledPanel {
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .truncate()
-                            .child(format!("Dormant · {cadence} · execution unsupported")),
+                            .child(format!("{status} · {cadence}")),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(last_run),
-                    ),
+                    )
+                    .children(recent_runs.into_iter().map(|run| {
+                        let detail = run
+                            .error
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or(run.output);
+                        div()
+                            .text_xs()
+                            .text_color(if run.result == ScheduledRunResult::Error {
+                                theme.danger
+                            } else {
+                                theme.muted_foreground
+                            })
+                            .truncate()
+                            .child(format!(
+                                "{:?} · {}",
+                                run.result,
+                                if detail.trim().is_empty() {
+                                    "No output"
+                                } else {
+                                    detail.trim()
+                                }
+                            ))
+                    })),
             )
             .child(
                 gpui_component::switch::Switch::new(ElementId::Name(SharedString::from(format!(
                     "scheduled-enabled-{id}"
                 ))))
-                .checked(false)
-                .disabled(true)
-                .tooltip("Scheduled execution is unsupported")
+                .checked(task.enabled)
+                .disabled(!global_enabled || !ready || running)
+                .tooltip(if global_enabled {
+                    "Enable or pause this task"
+                } else {
+                    "Enable Scheduled tasks in Settings first"
+                })
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     let target = this
                         .tasks
@@ -591,8 +732,8 @@ impl ScheduledPanel {
                 .small()
                 .ghost()
                 .icon(IconName::SquareTerminal)
-                .disabled(true)
-                .tooltip("Run now is unavailable until scheduled execution is configured")
+                .disabled(!global_enabled || !ready || !task.enabled || running)
+                .tooltip("Run this enabled task now")
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     this.run_now(&run_now_id, cx);
                 })),
@@ -668,6 +809,20 @@ impl Render for ScheduledPanel {
                         .appearance(false),
                 ),
             )
+            .when_some(self.error.clone(), |el, error| {
+                el.child(
+                    div()
+                        .mx_3()
+                        .mb_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(theme.danger.opacity(0.12))
+                        .text_xs()
+                        .text_color(theme.danger)
+                        .child(error),
+                )
+            })
             .child(
                 div()
                     .id("scheduled-list")

@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use aiden_data::config_dir::AIDEN_DIR_NAME;
 use aiden_data::schedule_store::validate_script_name;
+use tokio_util::sync::CancellationToken;
 
 /// `SCRIPT_TIMEOUT_MS`
 pub const SCRIPT_TIMEOUT_MS: u64 = 60_000;
@@ -46,6 +47,7 @@ pub struct ScriptProcessResult {
     pub signal: Option<i32>,
     pub timed_out: bool,
     pub output_limit_exceeded: bool,
+    pub cancelled: bool,
 }
 
 /// `scriptRoots` — workspace first, then global. An explicitly injected home
@@ -185,6 +187,25 @@ pub async fn run_scheduled_script(
     timeout_ms: Option<u64>,
     output_limit: Option<usize>,
 ) -> Result<ScriptProcessResult, ScriptError> {
+    run_scheduled_script_with_cancel(
+        script_path,
+        cwd,
+        timeout_ms,
+        output_limit,
+        CancellationToken::new(),
+    )
+    .await
+}
+
+/// Cancellation-aware production entry point. Cancellation terminates the
+/// whole detached process group, so descendants cannot outlive the task.
+pub async fn run_scheduled_script_with_cancel(
+    script_path: &Path,
+    cwd: &Path,
+    timeout_ms: Option<u64>,
+    output_limit: Option<usize>,
+    cancellation: CancellationToken,
+) -> Result<ScriptProcessResult, ScriptError> {
     let timeout_ms = timeout_ms.unwrap_or(SCRIPT_TIMEOUT_MS);
     let output_limit = output_limit.unwrap_or(SCRIPT_OUTPUT_LIMIT);
     let (command, args) = script_command(script_path);
@@ -208,18 +229,39 @@ pub async fn run_scheduled_script(
     let stderr = child.stderr.take().expect("stderr piped");
 
     let shared: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
-    let stdout_task = tokio::spawn(capture_stream(stdout, shared.clone(), output_limit));
-    let stderr_task = tokio::spawn(capture_stream(stderr, shared.clone(), output_limit));
+    let overflow = CancellationToken::new();
+    let stdout_task = tokio::spawn(capture_stream(
+        stdout,
+        shared.clone(),
+        output_limit,
+        overflow.clone(),
+    ));
+    let stderr_task = tokio::spawn(capture_stream(
+        stderr,
+        shared.clone(),
+        output_limit,
+        overflow.clone(),
+    ));
 
-    // Wait for the process with a timeout; on timeout terminate the group.
-    let wait = child.wait();
+    // Wait for completion, cancellation, or timeout. Both exceptional paths
+    // terminate the process group before any captured output is returned.
     let mut timed_out = false;
-    if tokio::time::timeout(Duration::from_millis(timeout_ms), wait)
-        .await
-        .is_err()
-    {
-        timed_out = true;
-        terminate_group(&mut child).await;
+    let mut cancelled = false;
+    tokio::select! {
+        status = child.wait() => {
+            status?;
+        }
+        _ = tokio::time::sleep(Duration::from_millis(timeout_ms)) => {
+            timed_out = true;
+            terminate_group(&mut child).await;
+        }
+        _ = cancellation.cancelled() => {
+            cancelled = true;
+            terminate_group(&mut child).await;
+        }
+        _ = overflow.cancelled() => {
+            terminate_group(&mut child).await;
+        }
     }
 
     // The stream tasks finish when the child closes its pipes.
@@ -245,6 +287,7 @@ pub async fn run_scheduled_script(
         signal: signal_of(&status),
         timed_out,
         output_limit_exceeded,
+        cancelled,
     };
     Ok(result)
 }
@@ -261,7 +304,12 @@ fn signal_of(_status: &std::process::ExitStatus) -> Option<i32> {
 }
 
 /// Read one stream, honoring the shared combined output cap.
-async fn capture_stream<S>(mut stream: S, shared: Arc<AtomicUsize>, limit: usize) -> (Vec<u8>, bool)
+async fn capture_stream<S>(
+    mut stream: S,
+    shared: Arc<AtomicUsize>,
+    limit: usize,
+    overflow_signal: CancellationToken,
+) -> (Vec<u8>, bool)
 where
     S: tokio::io::AsyncRead + Unpin + Send,
 {
@@ -281,6 +329,7 @@ where
                 bytes.extend_from_slice(&buffer[..stored]);
                 if shared.fetch_add(raw, Ordering::SeqCst) + raw > limit {
                     overflow = true;
+                    overflow_signal.cancel();
                 }
             }
             Err(_) => break,
@@ -447,5 +496,26 @@ mod tests {
             .unwrap();
         assert!(result.output_limit_exceeded);
         assert!(result.stdout.len() <= 4096);
+    }
+
+    #[tokio::test]
+    async fn cancellation_terminates_the_process_group_and_reports_cancelled() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("sleep.sh");
+        std::fs::write(&script, "#!/bin/bash\nsleep 30 &\nwait\n").unwrap();
+        let cancellation = CancellationToken::new();
+        let cancelling = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            cancelling.cancel();
+        });
+        let started = std::time::Instant::now();
+        let result =
+            run_scheduled_script_with_cancel(&script, dir.path(), Some(10_000), None, cancellation)
+                .await
+                .unwrap();
+        assert!(result.cancelled);
+        assert!(!result.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 }

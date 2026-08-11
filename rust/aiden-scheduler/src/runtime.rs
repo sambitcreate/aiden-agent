@@ -502,6 +502,18 @@ where
 
     /// `runNow` — start a manual dispatch and return its shared completion.
     pub fn run_now(self: &Arc<Self>, task_id: &str) -> Result<SharedRun, SchedulerError> {
+        let state = self.state.lock();
+        if !state.started || !state.globally_enabled {
+            return Err(SchedulerError::NotRunning);
+        }
+        drop(state);
+        let task = self
+            .store
+            .get(task_id)?
+            .ok_or_else(|| SchedulerError::TaskNotFound(task_id.to_string()))?;
+        if !task.enabled {
+            return Err(SchedulerError::Paused);
+        }
         self.dispatch_shared(task_id, false)
     }
 
@@ -591,7 +603,7 @@ where
             return Err(SchedulerError::Cancelled);
         }
         let started_at = self.now_ms();
-        let outcome = match self.executor.run(&claimed).await {
+        let mut outcome = match self.executor.run(&claimed).await {
             Ok(outcome) => outcome,
             Err(run_error) => TaskRunOutcome {
                 result: ScheduledRunResult::Error,
@@ -600,6 +612,10 @@ where
                 chat_id: claimed.chat_id.clone(),
             },
         };
+        if state.cancel_requested.load(Ordering::SeqCst) {
+            outcome = TaskRunOutcome::blocked("Scheduled task was cancelled.");
+            outcome.chat_id = claimed.chat_id.clone();
+        }
         let finished_at = self.now_ms();
         let run = self.store.record_run(ScheduledRunInput {
             id: None,
@@ -1631,6 +1647,29 @@ mod tests {
         harness.wait_pending(&task.id).await;
         harness.core.stop();
         assert_eq!(manual.await.unwrap().result, ScheduledRunResult::Blocked);
+    }
+
+    #[tokio::test]
+    async fn run_now_requires_started_global_gate_and_enabled_task() {
+        let harness = Harness::new();
+        let task = harness.add_task(&daily_input("Manual gates")).await;
+        assert!(matches!(
+            harness.core.run_now(&task.id),
+            Err(SchedulerError::NotRunning)
+        ));
+        harness.core.start().await.unwrap();
+        harness.core.pause(&task.id).await.unwrap();
+        assert!(matches!(
+            harness.core.run_now(&task.id),
+            Err(SchedulerError::Paused)
+        ));
+        harness.core.resume(&task.id).await.unwrap();
+        harness.core.set_global_enabled(false).await.unwrap();
+        assert!(matches!(
+            harness.core.run_now(&task.id),
+            Err(SchedulerError::NotRunning)
+        ));
+        assert_eq!(harness.executor.pending_count(), 0);
     }
 
     #[tokio::test]
