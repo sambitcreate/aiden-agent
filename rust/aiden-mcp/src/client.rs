@@ -28,11 +28,8 @@
 //! moved, so a stale result from a superseded server process is discarded
 //! instead of being fed to the model.
 //!
-//! SSE transport: rmcp 3.x removed the SSE *client* transport (only SSE
-//! *responses* for streamable HTTP remain), so `transport == "sse"` fails
-//! with [`McpError::SseUnsupported`]. Porting the TS `SSEClientTransport`
-//! would require `reqwest-eventsource` + a hand-rolled JSON-RPC request
-//! channel — deferred.
+//! Legacy SSE servers use the crate-owned bounded transport in [`crate::sse`]:
+//! one authenticated event stream plus same-origin JSON-RPC POST routing.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -348,12 +345,39 @@ pub async fn connect_remote(spec: &McpServerSpec) -> Result<McpClient, McpError>
     })
 }
 
+/// Connect to a legacy MCP SSE server. The transport validates the address,
+/// headers, same-origin endpoint event, event framing, reconnects, and message
+/// bounds before rmcp receives any JSON-RPC value.
+pub async fn connect_sse(spec: &McpServerSpec) -> Result<McpClient, McpError> {
+    let remote = spec.remote.as_ref().ok_or(McpError::MissingUrl)?;
+    let transport = crate::sse::connect(&remote.url, &remote.headers)
+        .await
+        .map_err(|error| McpError::Transport(error.to_string()))?;
+    let running = tokio::time::timeout(
+        Duration::from_secs(20),
+        AidenClientHandler::default().serve(transport),
+    )
+    .await
+    .map_err(|_| McpError::Timeout("MCP SSE initialize".into(), 20_000))?
+    .map_err(|error| McpError::Unavailable {
+        name: spec.server.name.clone(),
+        cause: error.to_string(),
+    })?;
+    Ok(McpClient {
+        server_id: spec.server.id.clone(),
+        server_name: spec.server.name.clone(),
+        transport: McpTransport::Sse,
+        fingerprint: spec_fingerprint(spec),
+        running,
+    })
+}
+
 /// Connect a resolved server spec, dispatching on its transport.
 pub async fn connect(spec: &McpServerSpec) -> Result<McpClient, McpError> {
     match spec.transport {
         McpTransport::Stdio => connect_stdio(spec).await,
         McpTransport::Http => connect_remote(spec).await,
-        McpTransport::Sse => Err(McpError::SseUnsupported),
+        McpTransport::Sse => connect_sse(spec).await,
     }
 }
 
@@ -459,13 +483,35 @@ impl McpClientManager {
     /// killing the stdio child), so a reconfigured command, URL, env, header,
     /// or preset key always takes effect.
     pub async fn ensure_connected(&self, spec: &McpServerSpec) -> Result<(), McpError> {
+        self.ensure_connected_with_current(spec, &|| true).await
+    }
+
+    /// Establish and immediately close an uncached connection. Interactive
+    /// OAuth uses this to prove staged credentials without replacing the
+    /// app-owned runtime client before the encrypted transaction commits.
+    pub async fn verify_connection(&self, spec: &McpServerSpec) -> Result<(), McpError> {
+        let client = self.connect_spec(spec).await?;
+        drop(client);
+        Ok(())
+    }
+
+    /// Like [`Self::ensure_connected`], with an owning authority lease checked
+    /// before a cached-client hit and again at final client publication.
+    pub async fn ensure_connected_with_current(
+        &self,
+        spec: &McpServerSpec,
+        is_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<(), McpError> {
+        if !is_current() {
+            return Err(McpError::StaleGeneration);
+        }
         let admitted_generation = self.config_generation();
         let fingerprint = spec_fingerprint(spec);
         {
             let clients = self.clients.lock().await;
             if let Some(existing) = clients.get(&spec.server.id) {
                 if existing.fingerprint == fingerprint {
-                    return Ok(());
+                    return is_current().then_some(()).ok_or(McpError::StaleGeneration);
                 }
             }
         }
@@ -473,12 +519,12 @@ impl McpClientManager {
         // serialize unrelated servers or block a second chat generation.
         let client = Arc::new(self.connect_spec(spec).await?);
         let mut clients = self.clients.lock().await;
-        if self.config_generation() != admitted_generation {
+        if !is_current() || self.config_generation() != admitted_generation {
             if clients
                 .get(&spec.server.id)
                 .is_some_and(|existing| existing.fingerprint == fingerprint)
             {
-                return Ok(());
+                return is_current().then_some(()).ok_or(McpError::StaleGeneration);
             }
             return Err(McpError::StaleGeneration);
         }
@@ -486,8 +532,11 @@ impl McpClientManager {
             if existing.fingerprint == fingerprint {
                 // A concurrent connect won; the loser's transport is dropped
                 // (cancelling its service and killing the child).
-                return Ok(());
+                return is_current().then_some(()).ok_or(McpError::StaleGeneration);
             }
+        }
+        if !is_current() {
+            return Err(McpError::StaleGeneration);
         }
         clients.insert(spec.server.id.clone(), client);
         drop(clients);
@@ -722,6 +771,11 @@ impl From<Tool> for McpToolInfo {
             annotations: tool.annotations.map(|annotations| {
                 serde_json::to_value(annotations).unwrap_or(serde_json::Value::Null)
             }),
+            // rmcp 3.1 does not retain the top-level MCP `execution` field.
+            // Mark this conversion task-required so it can never accidentally
+            // qualify for the isolated child read lane. That lane uses a raw,
+            // bounded protocol parser which observes the field exactly.
+            execution: Some(serde_json::json!({ "taskSupport": "required" })),
         }
     }
 }
@@ -1074,6 +1128,20 @@ mod tests {
             manager.cached_fingerprint(&server.id).await.as_deref(),
             Some(spec_fingerprint(&keyed_b).as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_verification_connects_ephemerally_without_publishing_runtime_cache() {
+        let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let manager = McpClientManager::with_connect(counting_connect(connects.clone(), 0));
+        let spec = remote_spec("oauth-verify");
+
+        manager.verify_connection(&spec).await.unwrap();
+
+        assert_eq!(connects.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!manager.is_connected("oauth-verify").await);
+        assert_eq!(manager.config_generation(), 0);
+        assert!(manager.cached_fingerprint("oauth-verify").await.is_none());
     }
 
     // ---------------------------------------------------------------------

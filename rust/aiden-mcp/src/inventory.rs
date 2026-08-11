@@ -53,9 +53,54 @@ pub struct McpToolInfo {
     /// Only an explicit, non-conflicting MCP read-only hint qualifies for the
     /// read-only lane.
     pub annotations: Option<serde_json::Value>,
+    /// Raw MCP tool execution metadata. Subagent inventory must observe this
+    /// field before deserialization discards unknown protocol extensions so a
+    /// task-required tool can never be exposed as an ordinary foreground call.
+    pub execution: Option<serde_json::Value>,
 }
 
 impl McpToolInfo {
+    /// Parse the exact raw `tools/list` record before a protocol model can
+    /// discard newer fields such as `execution`. Structural and credential
+    /// validation remains centralized in [`normalize_subagent_mcp_inventory`].
+    pub fn from_raw_value(value: &serde_json::Value) -> Result<Self, McpReadError> {
+        let record = value.as_object().ok_or_else(|| {
+            McpReadError::new(
+                McpReadErrorCode::InvalidBinding,
+                "MCP tool inventory was invalid.",
+            )
+        })?;
+        let name = record
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                McpReadError::new(
+                    McpReadErrorCode::InvalidBinding,
+                    "MCP tool inventory was invalid.",
+                )
+            })?;
+        let description = match record.get("description") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(value) => Some(value.as_str().ok_or_else(|| {
+                McpReadError::new(
+                    McpReadErrorCode::InvalidBinding,
+                    "MCP tool inventory was invalid.",
+                )
+            })?),
+        };
+        Ok(Self {
+            name: name.to_string(),
+            description: description.map(str::to_string),
+            input_schema: record
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+            output_schema: record.get("outputSchema").cloned(),
+            annotations: record.get("annotations").cloned(),
+            execution: record.get("execution").cloned(),
+        })
+    }
+
     /// The agent-facing tool definition for a namespaced tool.
     pub fn to_tool_def(&self, server: &McpServer, label: &str) -> crate::McpAgentTool {
         crate::McpAgentTool {
@@ -269,6 +314,55 @@ pub struct InspectedSubagentMcpTool {
     pub tool_name: String,
     pub schema_hash: String,
     pub effect: McpToolEffect,
+    /// The credential-scrubbed structural input schema retained by the host
+    /// for the exact positive model-facing tool definition.
+    pub input_schema: serde_json::Value,
+    /// The bounded mutation profile derived from the same raw annotations and
+    /// execution metadata used for effect classification.  It intentionally
+    /// stays a plain-data record in `aiden-mcp`; the app maps it into the
+    /// authority-owned V2 enum before issuing a child authority.
+    pub mutation_profile: Option<McpMutationEffectProfile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpMutationEffectProfile {
+    pub classification: McpMutationClassification,
+    pub destructive: McpDestructiveProfile,
+    pub idempotency: McpIdempotencyProfile,
+    pub open_world: McpOpenWorldProfile,
+    pub task_support: McpTaskSupport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpMutationClassification {
+    DeclaredMutating,
+    UnprovenMutating,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpDestructiveProfile {
+    Destructive,
+    Additive,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpIdempotencyProfile {
+    Idempotent,
+    NotDeclared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpOpenWorldProfile {
+    Open,
+    Closed,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpTaskSupport {
+    Forbidden,
+    Optional,
 }
 
 /// One inspected server.
@@ -287,24 +381,175 @@ pub struct SubagentMcpScope {
     pub tools: Vec<InspectedSubagentMcpTool>,
 }
 
-/// `classifySubagentMcpToolEffect` — only an explicit, non-conflicting
-/// `readOnlyHint: true` (with `destructiveHint !== true`) is read-only.
-pub fn classify_subagent_mcp_tool_effect(annotations: Option<&serde_json::Value>) -> McpToolEffect {
-    let Some(annotations) = annotations else {
-        return McpToolEffect::Mutating;
+/// Exact plain-data classifier for the read-only tranche. `None` means the
+/// server requires task execution and the tool must be omitted entirely.
+fn classify_subagent_mcp_tool(
+    annotations: Option<&serde_json::Value>,
+    execution: Option<&serde_json::Value>,
+) -> Option<McpToolEffect> {
+    const ANNOTATION_KEYS: &[&str] = &[
+        "title",
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint",
+    ];
+    let Some(record) = annotations.and_then(serde_json::Value::as_object) else {
+        return Some(McpToolEffect::Mutating);
     };
-    let Some(record) = annotations.as_object() else {
-        return McpToolEffect::Mutating;
+    if record
+        .keys()
+        .any(|key| !ANNOTATION_KEYS.contains(&key.as_str()))
+    {
+        return Some(McpToolEffect::Mutating);
+    }
+    if record.get("title").is_some_and(|value| !value.is_string()) {
+        return Some(McpToolEffect::Mutating);
+    }
+    for hint in [
+        "readOnlyHint",
+        "destructiveHint",
+        "idempotentHint",
+        "openWorldHint",
+    ] {
+        if record.get(hint).is_some_and(|value| !value.is_boolean()) {
+            return Some(McpToolEffect::Mutating);
+        }
+    }
+
+    let task_support = match execution {
+        None => "forbidden",
+        Some(value) => {
+            let Some(execution) = value.as_object() else {
+                return Some(McpToolEffect::Mutating);
+            };
+            if execution.keys().any(|key| key != "taskSupport") {
+                return Some(McpToolEffect::Mutating);
+            }
+            match execution.get("taskSupport") {
+                None => "forbidden",
+                Some(value) => match value.as_str() {
+                    Some("forbidden") => "forbidden",
+                    Some("optional") => "optional",
+                    Some("required") => return None,
+                    _ => return Some(McpToolEffect::Mutating),
+                },
+            }
+        }
     };
-    let hint = |key: &str| record.get(key).and_then(serde_json::Value::as_bool);
-    let read_only = hint("readOnlyHint");
-    if read_only != Some(true) {
-        return McpToolEffect::Mutating;
+    debug_assert!(matches!(task_support, "forbidden" | "optional"));
+
+    if record
+        .get("readOnlyHint")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return Some(McpToolEffect::Mutating);
     }
-    if record.contains_key("destructiveHint") && hint("destructiveHint") != Some(false) {
-        return McpToolEffect::Mutating;
+    if record.contains_key("destructiveHint")
+        && record
+            .get("destructiveHint")
+            .and_then(serde_json::Value::as_bool)
+            != Some(false)
+    {
+        return Some(McpToolEffect::Mutating);
     }
-    McpToolEffect::Read
+    Some(McpToolEffect::Read)
+}
+
+/// Derive the mutation-only metadata after the strict classifier has decided
+/// that a tool is not read-only.  Task-required tools intentionally return
+/// `None`: the isolated foreground client has no task-polling capability and
+/// must not expose an asynchronous effect as a one-shot call.
+pub fn mutation_effect_profile(
+    annotations: Option<&serde_json::Value>,
+    execution: Option<&serde_json::Value>,
+) -> Option<McpMutationEffectProfile> {
+    let task_support = match execution {
+        None => McpTaskSupport::Forbidden,
+        Some(value) => {
+            let record = value.as_object()?;
+            if record.keys().any(|key| key != "taskSupport") {
+                // The strict classifier treats malformed execution metadata as
+                // mutating, but the profile cannot safely describe it.
+                return Some(McpMutationEffectProfile {
+                    classification: McpMutationClassification::UnprovenMutating,
+                    destructive: McpDestructiveProfile::Unknown,
+                    idempotency: McpIdempotencyProfile::NotDeclared,
+                    open_world: McpOpenWorldProfile::Unknown,
+                    task_support: McpTaskSupport::Forbidden,
+                });
+            }
+            match record
+                .get("taskSupport")
+                .and_then(serde_json::Value::as_str)
+            {
+                None | Some("forbidden") => McpTaskSupport::Forbidden,
+                Some("optional") => McpTaskSupport::Optional,
+                // The strict classifier omits required tasks entirely.
+                Some("required") => return None,
+                _ => {
+                    return Some(McpMutationEffectProfile {
+                        classification: McpMutationClassification::UnprovenMutating,
+                        destructive: McpDestructiveProfile::Unknown,
+                        idempotency: McpIdempotencyProfile::NotDeclared,
+                        open_world: McpOpenWorldProfile::Unknown,
+                        task_support: McpTaskSupport::Forbidden,
+                    })
+                }
+            }
+        }
+    };
+    let record = annotations.and_then(serde_json::Value::as_object);
+    let classification = if record
+        .and_then(|record| record.get("readOnlyHint"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        McpMutationClassification::DeclaredMutating
+    } else {
+        McpMutationClassification::UnprovenMutating
+    };
+    let destructive = match record
+        .and_then(|record| record.get("destructiveHint"))
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(true) => McpDestructiveProfile::Destructive,
+        Some(false) => McpDestructiveProfile::Additive,
+        None => McpDestructiveProfile::Unknown,
+    };
+    let idempotency = match record
+        .and_then(|record| record.get("idempotentHint"))
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(true) => McpIdempotencyProfile::Idempotent,
+        _ => McpIdempotencyProfile::NotDeclared,
+    };
+    let open_world = match record
+        .and_then(|record| record.get("openWorldHint"))
+        .and_then(serde_json::Value::as_bool)
+    {
+        Some(true) => McpOpenWorldProfile::Open,
+        Some(false) => McpOpenWorldProfile::Closed,
+        None => McpOpenWorldProfile::Unknown,
+    };
+    Some(McpMutationEffectProfile {
+        classification,
+        destructive,
+        idempotency,
+        open_world,
+        task_support,
+    })
+}
+
+/// Public effect helper. Task-required and malformed tools fail closed to the
+/// mutating classification; normalization separately omits task-required
+/// tools from the foreground inventory.
+pub fn classify_subagent_mcp_tool_effect(
+    annotations: Option<&serde_json::Value>,
+    execution: Option<&serde_json::Value>,
+) -> McpToolEffect {
+    classify_subagent_mcp_tool(annotations, execution).unwrap_or(McpToolEffect::Mutating)
 }
 
 /// Normalize a remote tool inventory: validate identities, classify effects,
@@ -337,14 +582,16 @@ pub fn normalize_subagent_mcp_inventory(
                 "MCP tool inventory was invalid.",
             ));
         }
-        let effect = classify_subagent_mcp_tool_effect(tool.annotations.as_ref());
-        if effect == McpToolEffect::Mutating {
-            // The mutating lane is out of scope for the read-only inventory
-            // (TS `classifySubagentMcpToolV2` returns undefined for
-            // `taskSupport: "required"`; effect profiles land in a later
-            // phase). Mutating tools are still recorded so the scope carries
-            // the full tool surface.
-        }
+        let Some(effect) =
+            classify_subagent_mcp_tool(tool.annotations.as_ref(), tool.execution.as_ref())
+        else {
+            continue;
+        };
+        let mutation_profile = if effect == McpToolEffect::Mutating {
+            mutation_effect_profile(tool.annotations.as_ref(), tool.execution.as_ref())
+        } else {
+            None
+        };
         let input = if tool.input_schema.is_object() {
             &tool.input_schema
         } else {
@@ -377,6 +624,13 @@ pub fn normalize_subagent_mcp_inventory(
             tool_name: tool.name.clone(),
             schema_hash: format!("{:x}", hasher.finalize()),
             effect,
+            input_schema: serde_json::from_str(&canonical_input).map_err(|_| {
+                McpReadError::new(
+                    McpReadErrorCode::InvalidBinding,
+                    "MCP tool schema was invalid.",
+                )
+            })?,
+            mutation_profile,
         });
     }
     Ok(result)
@@ -662,12 +916,15 @@ impl SubagentMcpInventoryCache {
 /// The read-only client port subagent discovery drives.
 pub trait SubagentMcpClientPort: Send + Sync {
     fn credential_revision(&self) -> &str;
-    fn credential_revision_is_current(&self, cancel: &CancellationToken) -> BoxFuture<'_, bool>;
+    fn credential_revision_is_current<'a>(
+        &'a self,
+        cancel: &'a CancellationToken,
+    ) -> BoxFuture<'a, bool>;
     fn redact_credential_text(&self, text: &str) -> String;
-    fn list_tools(
-        &self,
-        cancel: &CancellationToken,
-    ) -> BoxFuture<'_, Result<Vec<McpToolInfo>, McpError>>;
+    fn list_tools<'a>(
+        &'a self,
+        cancel: &'a CancellationToken,
+    ) -> BoxFuture<'a, Result<Vec<McpToolInfo>, McpError>>;
 }
 
 /// One bounded inspection of a fresh client: receives the client port and
@@ -916,6 +1173,7 @@ mod tests {
             input_schema: serde_json::json!({ "type": "object", "properties": {} }),
             output_schema: None,
             annotations: Some(serde_json::json!({ "readOnlyHint": true })),
+            execution: None,
         }
     }
 
@@ -995,6 +1253,7 @@ mod tests {
             input_schema: serde_json::Value::Null,
             output_schema: None,
             annotations: None,
+            execution: None,
         };
         assert_eq!(
             bare.to_tool_def(&server, "bare").parameters,
@@ -1083,6 +1342,7 @@ mod tests {
             input_schema: serde_json::json!({ "type": "object" }),
             output_schema: None,
             annotations: None,
+            execution: None,
         });
         tools.push(McpToolInfo {
             name: "declared_mutating".into(),
@@ -1092,6 +1352,7 @@ mod tests {
             annotations: Some(
                 serde_json::json!({ "readOnlyHint": false, "destructiveHint": true }),
             ),
+            execution: None,
         });
         let normalized =
             normalize_subagent_mcp_inventory(&tools, &|text| text.to_string()).unwrap();
@@ -1099,9 +1360,140 @@ mod tests {
         assert_eq!(normalized[0].effect, McpToolEffect::Read);
         assert_eq!(normalized[1].effect, McpToolEffect::Mutating);
         assert_eq!(normalized[2].effect, McpToolEffect::Mutating);
+        assert_eq!(
+            normalized[1].mutation_profile,
+            Some(McpMutationEffectProfile {
+                classification: McpMutationClassification::UnprovenMutating,
+                destructive: McpDestructiveProfile::Unknown,
+                idempotency: McpIdempotencyProfile::NotDeclared,
+                open_world: McpOpenWorldProfile::Unknown,
+                task_support: McpTaskSupport::Forbidden,
+            })
+        );
+        assert_eq!(
+            normalized[2].mutation_profile,
+            Some(McpMutationEffectProfile {
+                classification: McpMutationClassification::DeclaredMutating,
+                destructive: McpDestructiveProfile::Destructive,
+                idempotency: McpIdempotencyProfile::NotDeclared,
+                open_world: McpOpenWorldProfile::Unknown,
+                task_support: McpTaskSupport::Forbidden,
+            })
+        );
         // Schema hashes are stable.
         let again = normalize_subagent_mcp_inventory(&tools, &|text| text.to_string()).unwrap();
         assert_eq!(normalized[0].schema_hash, again[0].schema_hash);
+        assert_eq!(
+            normalized[0].input_schema,
+            serde_json::json!({ "properties": {}, "type": "object" })
+        );
+    }
+
+    #[test]
+    fn classification_is_strict_and_omits_task_required_tools() {
+        let mut candidate = tool("candidate");
+        assert_eq!(
+            classify_subagent_mcp_tool_effect(
+                candidate.annotations.as_ref(),
+                candidate.execution.as_ref()
+            ),
+            McpToolEffect::Read
+        );
+
+        candidate.execution = Some(serde_json::json!({ "taskSupport": "optional" }));
+        assert_eq!(
+            classify_subagent_mcp_tool_effect(
+                candidate.annotations.as_ref(),
+                candidate.execution.as_ref()
+            ),
+            McpToolEffect::Read
+        );
+
+        for annotations in [
+            serde_json::json!({ "readOnlyHint": true, "destructiveHint": true }),
+            serde_json::json!({ "readOnlyHint": true, "destructiveHint": "false" }),
+            serde_json::json!({ "readOnlyHint": true, "unknownHint": false }),
+            serde_json::json!({ "readOnlyHint": true, "title": 7 }),
+            serde_json::json!([{"readOnlyHint": true}]),
+        ] {
+            assert_eq!(
+                classify_subagent_mcp_tool_effect(Some(&annotations), None),
+                McpToolEffect::Mutating
+            );
+        }
+        for execution in [
+            serde_json::json!({ "taskSupport": "sometimes" }),
+            serde_json::json!({ "taskSupport": "optional", "extra": true }),
+            serde_json::json!("optional"),
+        ] {
+            assert_eq!(
+                classify_subagent_mcp_tool_effect(candidate.annotations.as_ref(), Some(&execution)),
+                McpToolEffect::Mutating
+            );
+        }
+
+        candidate.execution = Some(serde_json::json!({ "taskSupport": "required" }));
+        let normalized = normalize_subagent_mcp_inventory(&[candidate], &|text| text.to_string())
+            .expect("task-required tools are safely omitted");
+        assert!(normalized.is_empty());
+    }
+
+    #[test]
+    fn mutation_profile_preserves_optional_task_and_effect_hints() {
+        let candidate = McpToolInfo {
+            name: "mutate_optional".into(),
+            description: None,
+            input_schema: serde_json::json!({ "type": "object" }),
+            output_schema: None,
+            annotations: Some(serde_json::json!({
+                "readOnlyHint": false,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": true,
+            })),
+            execution: Some(serde_json::json!({ "taskSupport": "optional" })),
+        };
+        let normalized = normalize_subagent_mcp_inventory(&[candidate], &|text| text.to_string())
+            .expect("optional task tools remain bounded foreground candidates");
+        assert_eq!(
+            normalized[0].mutation_profile,
+            Some(McpMutationEffectProfile {
+                classification: McpMutationClassification::DeclaredMutating,
+                destructive: McpDestructiveProfile::Additive,
+                idempotency: McpIdempotencyProfile::Idempotent,
+                open_world: McpOpenWorldProfile::Open,
+                task_support: McpTaskSupport::Optional,
+            })
+        );
+    }
+
+    #[test]
+    fn raw_tool_parser_preserves_execution_before_protocol_lowering() {
+        let raw = serde_json::json!({
+            "name": "lookup",
+            "description": "Look up documentation",
+            "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } } },
+            "outputSchema": { "type": "object" },
+            "annotations": { "readOnlyHint": true },
+            "execution": { "taskSupport": "required" },
+            "futureField": { "ignored": true }
+        });
+        let parsed = McpToolInfo::from_raw_value(&raw).unwrap();
+        assert_eq!(parsed.name, "lookup");
+        assert_eq!(
+            parsed.execution,
+            Some(serde_json::json!({ "taskSupport": "required" }))
+        );
+        assert!(
+            normalize_subagent_mcp_inventory(&[parsed], &|text| text.to_string())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(McpToolInfo::from_raw_value(&serde_json::json!({
+            "name": "lookup",
+            "description": 7
+        }))
+        .is_err());
     }
 
     #[test]
@@ -1112,6 +1504,7 @@ mod tests {
             input_schema: serde_json::json!({ "type": "object" }),
             output_schema: None,
             annotations: None,
+            execution: None,
         }];
         assert!(normalize_subagent_mcp_inventory(&bad_name, &|text| text.to_string()).is_err());
 
@@ -1263,6 +1656,7 @@ mod tests {
                     input_schema: serde_json::json!({ "type": "object", "properties": {} }),
                     output_schema: None,
                     annotations: Some(serde_json::json!({ "readOnlyHint": true })),
+                    execution: None,
                 }])
             })
         }

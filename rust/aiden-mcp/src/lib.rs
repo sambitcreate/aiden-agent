@@ -33,6 +33,8 @@ pub mod error;
 pub mod identity;
 pub mod inventory;
 pub mod oauth;
+pub mod sse;
+pub mod subagent_remote;
 
 pub use aiden_data::portable_config::{McpServer, McpTransport};
 pub use client::{
@@ -74,6 +76,12 @@ impl McpAgentTool {
 }
 
 use serde::{Deserialize, Serialize};
+
+/// Fresh process-private key for binding subagent MCP credential revisions.
+/// It is never persisted or exposed to model/UI surfaces.
+pub fn subagent_credential_revision_key() -> Result<Vec<u8>, McpError> {
+    util::random_bytes(32)
+}
 
 // ===========================================================================
 // Shared helpers (hashing, base64url, randomness)

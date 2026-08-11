@@ -117,11 +117,6 @@ pub enum McpError {
     Transport(String),
     #[error("MCP protocol error: {0}")]
     Protocol(String),
-    #[error(
-        "SSE transports are not supported by the Rust MCP client (rmcp 3.x removed the SSE \
-         client transport); port pending."
-    )]
-    SseUnsupported,
     #[error("MCP HTTP error: {0}")]
     Http(String),
 }
