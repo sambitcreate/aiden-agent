@@ -281,7 +281,59 @@ enum DiscoveryCacheState {
     Ready {
         expires_at: Instant,
         skills: Vec<DiscoveredSkill>,
+        roots: DiscoveryRootIdentity,
     },
+}
+
+/// Identity of the roots used to produce a cached catalog. Paths are not
+/// enough here: a workspace can be removed and recreated at the same path
+/// while an older five-second catalog is still live.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DiscoveryRootIdentity {
+    home: RootIdentity,
+    aiden_dir: RootIdentity,
+    workspace_root: Option<RootIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RootIdentity {
+    present: bool,
+    directory: bool,
+    device: u64,
+    inode: u64,
+}
+
+impl DiscoveryRootIdentity {
+    fn for_key(key: &DiscoveryCacheKey) -> Self {
+        Self {
+            home: root_identity(&key.home),
+            aiden_dir: root_identity(&key.aiden_dir),
+            workspace_root: key.workspace_root.as_deref().map(root_identity),
+        }
+    }
+}
+
+fn root_identity(path: &Path) -> RootIdentity {
+    let Ok(metadata) = fs::metadata(path) else {
+        return RootIdentity {
+            present: false,
+            directory: false,
+            device: 0,
+            inode: 0,
+        };
+    };
+
+    #[cfg(unix)]
+    let (device, inode) = (metadata.dev(), metadata.ino());
+    #[cfg(not(unix))]
+    let (device, inode) = (0, 0);
+
+    RootIdentity {
+        present: true,
+        directory: metadata.is_dir(),
+        device,
+        inode,
+    }
 }
 
 #[derive(Default)]
@@ -295,7 +347,18 @@ impl DiscoveryCache {
             return (Arc::clone(entry), false);
         }
         if self.entries.len() >= DISCOVERY_CACHE_LIMIT {
-            self.entries.clear();
+            // Never evict an active scan: waiters retain an Arc to that entry,
+            // and clearing it here would allow a second scan for the same key
+            // while the first one is still publishing. If every entry is
+            // active, tolerate the bounded in-flight overflow and evict a
+            // completed entry on the next reservation.
+            let evict_key = self.entries.iter().find_map(|(entry_key, entry)| {
+                let state = entry.state.try_lock()?;
+                (!matches!(*state, DiscoveryCacheState::Scanning)).then(|| entry_key.clone())
+            });
+            if let Some(evict_key) = evict_key {
+                self.entries.remove(&evict_key);
+            }
         }
         let entry = Arc::new(DiscoveryCacheEntry {
             state: Mutex::new(DiscoveryCacheState::Scanning),
@@ -347,13 +410,18 @@ fn discover_skills_cached_with_cancel(
     scan: impl FnOnce() -> Result<Vec<DiscoveredSkill>, SkillsDiscoveryError>,
 ) -> Result<Vec<DiscoveredSkill>, SkillsDiscoveryError> {
     check_discovery_cancel(cancel)?;
+    let roots = DiscoveryRootIdentity::for_key(&key);
     let (entry, mut owns_scan) = DISCOVERY_CACHE.lock().reserve(key.clone());
     if !owns_scan {
         let mut state = entry.state.lock();
         loop {
             check_discovery_cancel(cancel)?;
             match &*state {
-                DiscoveryCacheState::Ready { expires_at, skills } if *expires_at > now => {
+                DiscoveryCacheState::Ready {
+                    expires_at,
+                    skills,
+                    roots: cached_roots,
+                } if *expires_at > now && *cached_roots == roots => {
                     return Ok(skills.clone());
                 }
                 DiscoveryCacheState::Ready { .. } | DiscoveryCacheState::Retry => {
@@ -378,6 +446,7 @@ fn discover_skills_cached_with_cancel(
     *entry.state.lock() = DiscoveryCacheState::Ready {
         expires_at: now + DISCOVERY_CACHE_TTL,
         skills: skills.clone(),
+        roots,
     };
     entry.ready.notify_all();
     Ok(skills)
@@ -407,12 +476,17 @@ fn discover_skills_cached_with(
     now: Instant,
     scan: impl FnOnce() -> Vec<DiscoveredSkill>,
 ) -> Vec<DiscoveredSkill> {
+    let roots = DiscoveryRootIdentity::for_key(&key);
     let (entry, mut owns_scan) = DISCOVERY_CACHE.lock().reserve(key);
     if !owns_scan {
         let mut state = entry.state.lock();
         loop {
             match &*state {
-                DiscoveryCacheState::Ready { expires_at, skills } if *expires_at > now => {
+                DiscoveryCacheState::Ready {
+                    expires_at,
+                    skills,
+                    roots: cached_roots,
+                } if *expires_at > now && *cached_roots == roots => {
                     return skills.clone();
                 }
                 DiscoveryCacheState::Ready { .. } | DiscoveryCacheState::Retry => {
@@ -429,6 +503,7 @@ fn discover_skills_cached_with(
     *entry.state.lock() = DiscoveryCacheState::Ready {
         expires_at: now + DISCOVERY_CACHE_TTL,
         skills: skills.clone(),
+        roots,
     };
     entry.ready.notify_all();
     skills
@@ -1740,6 +1815,36 @@ mod tests {
     }
 
     #[test]
+    fn replacing_a_root_invalidates_its_cached_catalog() {
+        let parent = TempDir::new().unwrap();
+        let home = parent.path().join("home");
+        fs::create_dir(&home).unwrap();
+        write_skill(
+            &home.join(".agents/skills"),
+            "before-replacement",
+            "---\nname: before-replacement\ndescription: Before.\n---\n# Instructions\n",
+        )
+        .unwrap();
+        let first = discover(&home, None);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].name, "before-replacement");
+
+        let moved = parent.path().join("moved-home");
+        fs::rename(&home, &moved).unwrap();
+        fs::create_dir(&home).unwrap();
+        write_skill(
+            &home.join(".agents/skills"),
+            "after-replacement",
+            "---\nname: after-replacement\ndescription: After.\n---\n# Instructions\n",
+        )
+        .unwrap();
+
+        let refreshed = discover(&home, None);
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].name, "after-replacement");
+    }
+
+    #[test]
     fn returns_empty_when_no_skill_directories_exist() {
         let home = TempDir::new().unwrap();
 
@@ -2007,14 +2112,21 @@ mod tests {
     }
 
     #[test]
-    fn cache_clears_before_inserting_the_fifty_first_key() {
+    fn cache_evicts_completed_entries_before_inserting_the_fifty_first_key() {
         let mut cache = DiscoveryCache::default();
         for index in 0..DISCOVERY_CACHE_LIMIT {
-            let _ = cache.reserve(DiscoveryCacheKey {
+            let key = DiscoveryCacheKey {
                 home: PathBuf::from(format!("/home/{index}")),
                 aiden_dir: PathBuf::from(format!("/home/{index}/.aiden")),
                 workspace_root: None,
-            });
+            };
+            let (entry, owns_scan) = cache.reserve(key);
+            assert!(owns_scan);
+            *entry.state.lock() = DiscoveryCacheState::Ready {
+                expires_at: Instant::now() + DISCOVERY_CACHE_TTL,
+                skills: Vec::new(),
+                roots: DiscoveryRootIdentity::default(),
+            };
         }
         assert_eq!(cache.entries.len(), DISCOVERY_CACHE_LIMIT);
 
@@ -2024,7 +2136,7 @@ mod tests {
             workspace_root: None,
         });
 
-        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.entries.len(), DISCOVERY_CACHE_LIMIT);
     }
 
     #[test]
@@ -2252,8 +2364,9 @@ mod tests {
         assert!(owns_scan);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
+        let worker_key = key.clone();
         let worker = thread::spawn(move || {
-            discover_skills_cached_with_cancel(key, Instant::now(), &worker_cancel, || {
+            discover_skills_cached_with_cancel(worker_key, Instant::now(), &worker_cancel, || {
                 panic!("a waiter must not start the owned scan")
             })
         });
@@ -2263,7 +2376,7 @@ mod tests {
             worker.join().unwrap(),
             Err(SkillsDiscoveryError::Cancelled)
         ));
-        DISCOVERY_CACHE.lock().entries.clear();
+        DISCOVERY_CACHE.lock().entries.remove(&key);
     }
 
     #[test]

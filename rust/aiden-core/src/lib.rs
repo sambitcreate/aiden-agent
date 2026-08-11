@@ -176,6 +176,57 @@ pub struct Attachment {
     pub text: Option<String>,
 }
 
+/// Safe provenance for an explicitly selected slash skill.
+///
+/// Only the opaque catalog identity and bounded display metadata are persisted;
+/// expanded instructions, supporting-file paths, and workspace internals stay
+/// in the in-memory turn lease.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillProvenance {
+    pub id: String,
+    pub name: String,
+    pub source: SkillProvenanceSource,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillProvenanceSource {
+    Configured,
+    Workspace,
+    Global,
+}
+
+impl SkillProvenance {
+    pub const MAX_ID_CHARS: usize = 256;
+    pub const MAX_NAME_CHARS: usize = 128;
+    pub const MAX_REVISION_CHARS: usize = 128;
+
+    pub fn is_bounded(&self) -> bool {
+        fn safe(value: &str, max: usize) -> bool {
+            !value.is_empty()
+                && value.trim() == value
+                && value.chars().count() <= max
+                && value.chars().all(|character| {
+                    let code = character as u32;
+                    code > 31 && code != 127 && !character.is_control()
+                })
+        }
+
+        safe(&self.id, Self::MAX_ID_CHARS)
+            && safe(&self.name, Self::MAX_NAME_CHARS)
+            && safe(&self.revision, Self::MAX_REVISION_CHARS)
+    }
+
+    /// Parse only a bounded provenance object. Unknown fields are discarded by
+    /// callers when they canonicalize the value before persistence.
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let provenance = serde_json::from_value::<Self>(value.clone()).ok()?;
+        provenance.is_bounded().then_some(provenance)
+    }
+}
+
 /// One persisted message. Persistence is a lossy projection: tool calls survive
 /// only via the renderer-safe `timeline`, and provider thinking text only when
 /// the provider family exposes it.
@@ -196,6 +247,9 @@ pub struct ChatMessage {
     /// User messages only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<Attachment>>,
+    /// Safe provenance for an explicitly selected user-message skill.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_provenance: Option<SkillProvenance>,
     /// Renderer-safe tool milestones (assistant only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeline: Option<GenerationTimeline>,
@@ -862,6 +916,7 @@ mod tests {
             model: Some("claude-sonnet-5".into()),
             reasoning: Some("thinking...".into()),
             attachments: None,
+            skill_provenance: None,
             timeline: Some(timeline_fixture()),
             subagents: None,
         };
@@ -872,6 +927,28 @@ mod tests {
         assert!(!json.contains("created_at"));
         let back: ChatMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back, message);
+    }
+
+    #[test]
+    fn skill_provenance_is_bounded_and_round_trips_in_camel_case() {
+        let provenance = SkillProvenance {
+            id: "workspace:review".into(),
+            name: "review".into(),
+            source: SkillProvenanceSource::Workspace,
+            revision: "sha256:abc123".into(),
+        };
+        assert!(provenance.is_bounded());
+        let value = serde_json::to_value(&provenance).unwrap();
+        assert_eq!(value["source"], "workspace");
+        assert_eq!(value["revision"], "sha256:abc123");
+        assert_eq!(SkillProvenance::from_value(&value), Some(provenance));
+        assert!(!SkillProvenance::from_value(&serde_json::json!({
+            "id": "workspace:review",
+            "name": "review",
+            "source": "workspace",
+            "revision": "\u{0}secret"
+        }))
+        .is_some());
     }
 
     #[test]

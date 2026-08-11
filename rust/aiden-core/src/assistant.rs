@@ -386,9 +386,9 @@ pub fn is_assistant_automation_approval_details(value: &Value) -> bool {
     let get = |key: &str| object.get(key).unwrap_or(&Value::Null);
     let action = get("action").as_str();
     let action_ok = match action {
-        Some("create") => !object.contains_key("taskId") && !object.contains_key("enabled"),
+        Some("create") => !object.contains_key("taskId") && get("enabled") == &Value::Bool(false),
         Some("edit") => {
-            safe_approval_text(get("taskId"), 160, false) && get("enabled").as_bool().is_some()
+            safe_approval_text(get("taskId"), 160, false) && get("enabled") == &Value::Bool(false)
         }
         _ => false,
     };
@@ -417,7 +417,7 @@ pub fn is_assistant_automation_approval_details(value: &Value) -> bool {
         && mcp_server_names
             .iter()
             .all(|name| safe_approval_text(name, 120, false));
-    let next_run_ok = get("nextRunAt").as_u64().is_some();
+    let next_run_ok = get("nextRunAt").is_null();
     get("kind").as_str() == Some("assistant-automation")
         && action_ok
         && safe_approval_text(get("name"), 120, false)
@@ -439,7 +439,7 @@ pub fn is_assistant_automation_approval_details(value: &Value) -> bool {
         && (get("permission").as_str() != Some("full")
             || !get("workspaceId").is_null()
             || !mcp_server_ids.is_empty())
-        && get("schedulerEnabled").as_bool().is_some()
+        && get("schedulerEnabled") == &Value::Bool(false)
 }
 
 #[cfg(test)]
@@ -478,7 +478,7 @@ mod tests {
             "prompt": "Update the report.",
             "cron": "0 9 * * *",
             "timezone": "UTC",
-            "nextRunAt": 1_800_000_000_000_i64,
+            "nextRunAt": null,
             "notify": true,
             "mode": "llm",
             "permission": "read-only",
@@ -490,7 +490,8 @@ mod tests {
             "providerName": "Local Provider",
             "model": "local-model",
             "modelName": "Local Model",
-            "schedulerEnabled": true,
+            "schedulerEnabled": false,
+            "enabled": false,
         })
     }
 
@@ -572,12 +573,17 @@ mod tests {
             let mut value = base();
             value["action"] = json!("edit");
             value["taskId"] = json!("task-1");
-            value["enabled"] = json!(true);
             value
         }));
         assert!(!is_assistant_automation_approval_details(&{
             let mut value = base();
             value["action"] = json!("edit");
+            value
+        }));
+        assert!(!is_assistant_automation_approval_details(&{
+            let mut value = base();
+            value["action"] = json!("edit");
+            value["taskId"] = json!("task-1");
             value["enabled"] = json!(true);
             value
         }));
@@ -585,6 +591,7 @@ mod tests {
             let mut value = base();
             value["action"] = json!("edit");
             value["taskId"] = json!("task-1");
+            value.as_object_mut().unwrap().remove("enabled");
             value
         }));
         assert!(!is_assistant_automation_approval_details(&{

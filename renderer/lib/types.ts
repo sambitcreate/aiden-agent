@@ -389,6 +389,16 @@ export interface Attachment {
   text?: string;
 }
 
+export type SkillProvenanceSource = "configured" | "workspace" | "global";
+
+/** Safe provenance for one explicitly selected slash skill. */
+export interface SkillProvenance {
+  id: string;
+  name: string;
+  source: SkillProvenanceSource;
+  revision: string;
+}
+
 export interface ModelRanking {
   capabilityPercentile: number;
   responseTimePercentile: number;
@@ -461,6 +471,7 @@ export interface ChatMessage {
   model?: string;
   reasoning?: string;
   attachments?: Attachment[];
+  skillProvenance?: SkillProvenance;
   timeline?: GenerationTimeline;
   subagents?: SubagentMessageReferenceV1;
 }

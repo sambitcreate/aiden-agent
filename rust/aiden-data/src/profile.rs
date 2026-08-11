@@ -334,17 +334,26 @@ pub fn decode_profile_share_png(data_url: &str) -> Result<Vec<u8>, ProfileError>
         return Err(ProfileError::InvalidBase64);
     }
     let decoded = crate::base64::decode(encoded).ok_or(ProfileError::InvalidBase64)?;
-    if decoded.len() < 24 || decoded.len() > MAX_SHARE_IMAGE_BYTES {
-        return Err(ProfileError::InvalidSize);
-    }
-    if decoded.get(..PNG_SIGNATURE.len()) != Some(&PNG_SIGNATURE[..]) {
-        return Err(ProfileError::InvalidPngSignature);
-    }
+    validate_profile_share_png(&decoded)?;
     if crate::base64::encode(&decoded) != encoded {
         return Err(ProfileError::NonCanonicalBase64);
     }
-    validate_png_structure(&decoded)?;
     Ok(decoded)
+}
+
+/// Validate an already-decoded renderer-generated share PNG.
+///
+/// Native surfaces use this before any bytes reach disk or AppKit so callers
+/// cannot bypass the same size, integrity, format, and 1200×1600 contract as
+/// the Electron data-URL boundary.
+pub fn validate_profile_share_png(image: &[u8]) -> Result<(), ProfileError> {
+    if image.len() < 24 || image.len() > MAX_SHARE_IMAGE_BYTES {
+        return Err(ProfileError::InvalidSize);
+    }
+    if image.get(..PNG_SIGNATURE.len()) != Some(&PNG_SIGNATURE[..]) {
+        return Err(ProfileError::InvalidPngSignature);
+    }
+    validate_png_structure(image)
 }
 
 // ---------------------------------------------------------------------------

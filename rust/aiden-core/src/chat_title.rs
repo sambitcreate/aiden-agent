@@ -628,6 +628,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         }

@@ -11,7 +11,7 @@ import {
   canReplaceGeneratedChatTitle,
   deriveChatTitleSeed,
 } from "./chat-title-policy.js";
-import type { Chat, ChatMessage, ChatMeta } from "./types.js";
+import type { Chat, ChatMessage, ChatMeta, SkillProvenance } from "./types.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
@@ -26,6 +26,36 @@ const INDEX_WRITE_STAGING =
 const CHAT_WRITE_STAGING =
   /^\.[A-Za-z0-9._:-]+\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.chat-write\.tmp$/u;
 const CHAT_TRANSACTION = /^\.chat-transaction\.([A-Za-z0-9._:-]+)\.pending$/u;
+const MAX_SKILL_PROVENANCE_ID = 256;
+const MAX_SKILL_PROVENANCE_NAME = 128;
+const MAX_SKILL_PROVENANCE_REVISION = 128;
+
+function parseSkillProvenance(value: unknown): SkillProvenance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const id = candidate.id;
+  const name = candidate.name;
+  const source = candidate.source;
+  const revision = candidate.revision;
+  const safe = (field: unknown, max: number): field is string =>
+    typeof field === "string" &&
+    field.length > 0 &&
+    field.length <= max &&
+    field.trim() === field &&
+    [...field].every((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code > 31 && code !== 127 && !/\p{Cc}|\p{Cf}/u.test(character);
+    });
+  if (
+    !safe(id, MAX_SKILL_PROVENANCE_ID) ||
+    !safe(name, MAX_SKILL_PROVENANCE_NAME) ||
+    !safe(revision, MAX_SKILL_PROVENANCE_REVISION) ||
+    (source !== "configured" && source !== "workspace" && source !== "global")
+  ) {
+    return undefined;
+  }
+  return { id, name, source, revision };
+}
 
 async function syncPath(target: string): Promise<void> {
   const handle = await fs.open(target, "r");
@@ -353,6 +383,8 @@ export function createChatStore(
         message.role === "assistant"
           ? parseSubagentMessageReferenceV1(message.subagents)
           : undefined,
+      skillProvenance:
+        message.role === "user" ? parseSkillProvenance(message.skillProvenance) : undefined,
     }));
     if (migratedProvider) await writeChat(chat).catch(() => undefined);
     return chat;
@@ -598,6 +630,8 @@ export function createChatStore(
               ? message.reasoning
               : undefined,
           attachments: message.attachments,
+          skillProvenance:
+            message.role === "user" ? parseSkillProvenance(message.skillProvenance) : undefined,
           timeline:
             message.role === "assistant" ? parseGenerationTimeline(message.timeline) : undefined,
           subagents:

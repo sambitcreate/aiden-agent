@@ -30,6 +30,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
+use aiden_core::{Attachment, AttachmentKind, SkillProvenance, SkillProvenanceSource};
 use aiden_core::{
     Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline, GenerationTimelineStatus,
 };
@@ -59,6 +61,8 @@ pub enum ChatStoreError {
     DocumentInactive,
     #[error("The chat workspace changed before the message could be saved.")]
     WorkspaceChanged,
+    #[error("A message with this id already exists but has different content.")]
+    MessageIdentityConflict,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
@@ -71,6 +75,29 @@ pub struct ChatStoreDurability {
     pub read_file: Option<Box<dyn Fn(&Path) -> std::io::Result<Vec<u8>> + Send + Sync>>,
     pub sync_directory: Option<Box<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>>,
     pub sync_file: Option<Box<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>>,
+}
+
+/// Narrow boundary for testing the three persistence operations that admit a
+/// chat submission. Production uses [`NoopChatSubmissionPersistence`]; callers
+/// never need to emulate the rest of `ChatStore` to exercise a real failure.
+pub trait ChatSubmissionPersistence: Send + Sync {
+    fn before_create(&self) -> Result<(), ChatStoreError>;
+    fn before_append(&self) -> Result<(), ChatStoreError>;
+    fn before_replace_tail_and_append(&self) -> Result<(), ChatStoreError>;
+}
+
+struct NoopChatSubmissionPersistence;
+
+impl ChatSubmissionPersistence for NoopChatSubmissionPersistence {
+    fn before_create(&self) -> Result<(), ChatStoreError> {
+        Ok(())
+    }
+    fn before_append(&self) -> Result<(), ChatStoreError> {
+        Ok(())
+    }
+    fn before_replace_tail_and_append(&self) -> Result<(), ChatStoreError> {
+        Ok(())
+    }
 }
 
 fn sync_path(target: &Path) -> std::io::Result<()> {
@@ -670,6 +697,7 @@ struct StoreInner {
     read_file: Box<dyn Fn(&Path) -> std::io::Result<Vec<u8>> + Send + Sync>,
     sync_directory: Box<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>,
     sync_file: Box<dyn Fn(&Path) -> std::io::Result<()> + Send + Sync>,
+    submission_persistence: std::sync::Arc<dyn ChatSubmissionPersistence>,
     /// Directory sync owed from a previous write whose fsync failed; retried
     /// before the next operation (never contended: only the tail lock touches it).
     pending_directory_sync: std::sync::Mutex<Option<PathBuf>>,
@@ -703,9 +731,24 @@ pub fn create_chat_store(
                 .sync_directory
                 .unwrap_or_else(|| Box::new(sync_path)),
             sync_file: durability.sync_file.unwrap_or_else(|| Box::new(sync_path)),
+            submission_persistence: std::sync::Arc::new(NoopChatSubmissionPersistence),
             pending_directory_sync: std::sync::Mutex::new(None),
         }),
     }
+}
+
+/// Construct a chat store with a submission-persistence boundary. This is
+/// intentionally separate from durability hooks: it models admission failure
+/// without replacing filesystem transaction behavior.
+pub fn create_chat_store_with_submission_persistence(
+    resolve_chats_dir: Box<dyn Fn() -> PathBuf + Send + Sync>,
+    resolve_provider_id: Option<Box<dyn Fn(Option<&str>) -> Option<String> + Send + Sync>>,
+    durability: ChatStoreDurability,
+    submission_persistence: std::sync::Arc<dyn ChatSubmissionPersistence>,
+) -> ChatStore {
+    let mut store = create_chat_store(resolve_chats_dir, resolve_provider_id, durability);
+    store.inner.get_mut().submission_persistence = submission_persistence;
+    store
 }
 
 impl ChatStore {
@@ -1060,6 +1103,13 @@ impl ChatStore {
             message.timeline = None;
             message.subagents = None;
         }
+        message.skill_provenance = if message.role == aiden_core::ChatRole::User {
+            message
+                .skill_provenance
+                .filter(aiden_core::SkillProvenance::is_bounded)
+        } else {
+            None
+        };
         message
     }
 
@@ -1072,10 +1122,28 @@ impl ChatStore {
             }
             Err(error) => return Err(error),
         };
-        let parsed: Value = match serde_json::from_str(&data) {
+        let mut parsed: Value = match serde_json::from_str(&data) {
             Ok(parsed) => parsed,
             Err(_) => return Ok(None),
         };
+        if let Some(Value::Array(messages)) = parsed.get_mut("messages") {
+            for message in messages {
+                let Some(object) = message.as_object_mut() else {
+                    continue;
+                };
+                let Some(raw_provenance) = object.get("skillProvenance").cloned() else {
+                    continue;
+                };
+                if let Some(provenance) = aiden_core::SkillProvenance::from_value(&raw_provenance) {
+                    object.insert(
+                        "skillProvenance".to_string(),
+                        serde_json::to_value(provenance).map_err(ChatStoreError::Json)?,
+                    );
+                } else {
+                    object.remove("skillProvenance");
+                }
+            }
+        }
         let raw_messages = match parsed.get("messages") {
             Some(Value::Array(messages)) if messages.iter().all(Value::is_object) => {
                 messages.clone()
@@ -1269,7 +1337,26 @@ impl ChatStore {
     }
 
     pub fn create(&self, input: ChatStoreInput<'_>) -> Result<Chat, ChatStoreError> {
+        let id = new_id();
+        self.create_with_id(&id, input)
+    }
+
+    /// Create a chat with a caller-owned random identity. Repeating the exact
+    /// call after a post-rename error returns the already durable chat instead
+    /// of orphaning a second empty transcript.
+    pub fn create_with_id(
+        &self,
+        id: &str,
+        input: ChatStoreInput<'_>,
+    ) -> Result<Chat, ChatStoreError> {
+        if !is_valid_chat_id(id) {
+            return Err(ChatStoreError::InvalidChatId);
+        }
+        self.inner.lock().submission_persistence.before_create()?;
         self.serialized(|inner| {
+            if let Some(existing) = self.read_chat(inner, id)? {
+                return Ok(existing);
+            }
             let now = now_millis();
             let title = input
                 .title
@@ -1278,7 +1365,7 @@ impl ChatStore {
                 .map(str::to_string)
                 .unwrap_or_else(|| DEFAULT_CHAT_TITLE.to_string());
             let chat = Chat {
-                id: new_id(),
+                id: id.to_string(),
                 title,
                 workspace_id: Some(
                     input
@@ -1440,6 +1527,17 @@ impl ChatStore {
         message: ChatMessageInput,
         meta: Option<AppendMessageMeta<'_>>,
     ) -> Result<Chat, ChatStoreError> {
+        self.append_message_with_skill_provenance(id, message, None, meta)
+    }
+
+    pub fn append_message_with_skill_provenance(
+        &self,
+        id: &str,
+        message: ChatMessageInput,
+        skill_provenance: Option<aiden_core::SkillProvenance>,
+        meta: Option<AppendMessageMeta<'_>>,
+    ) -> Result<Chat, ChatStoreError> {
+        self.inner.lock().submission_persistence.before_append()?;
         self.serialized(|inner| {
             let mut chat = self
                 .read_chat(inner, id)?
@@ -1463,11 +1561,22 @@ impl ChatStore {
                 model: message.model,
                 reasoning: message.reasoning,
                 attachments: message.attachments,
+                skill_provenance,
                 timeline: None,
                 subagents: None,
                 created_at: message.created_at.unwrap_or_else(now_millis),
             };
             full = self.normalize_message(&full, &raw_message);
+            if let Some(existing) = chat.messages.iter().find(|entry| entry.id == full.id) {
+                return if existing == &full {
+                    // An uncertain post-rename result may be retried. The
+                    // caller supplies a deterministic turn id, so an exact
+                    // existing turn is already the successful operation.
+                    Ok(chat)
+                } else {
+                    Err(ChatStoreError::MessageIdentityConflict)
+                };
+            }
             let is_first_user_message = full.role == ChatRole::User
                 && !chat
                     .messages
@@ -1496,6 +1605,111 @@ impl ChatStore {
             }
             self.write_chat_and_meta(inner, &chat)?;
             Ok(chat)
+        })
+    }
+
+    /// Replace a transcript tail and append its replacement in one durable
+    /// chat/index transaction. A failed write leaves the previous transcript
+    /// intact; callers must not compose this from detached truncate + append
+    /// operations.
+    pub fn replace_tail_and_append_message(
+        &self,
+        id: &str,
+        keep_count: usize,
+        message: ChatMessageInput,
+        meta: Option<AppendMessageMeta<'_>>,
+    ) -> Result<Chat, ChatStoreError> {
+        self.replace_tail_and_append_message_with_skill_provenance(
+            id, keep_count, message, None, meta,
+        )
+    }
+
+    pub fn replace_tail_and_append_message_with_skill_provenance(
+        &self,
+        id: &str,
+        keep_count: usize,
+        message: ChatMessageInput,
+        skill_provenance: Option<aiden_core::SkillProvenance>,
+        meta: Option<AppendMessageMeta<'_>>,
+    ) -> Result<Chat, ChatStoreError> {
+        self.inner
+            .lock()
+            .submission_persistence
+            .before_replace_tail_and_append()?;
+        self.serialized(|inner| {
+            let mut chat = self
+                .read_chat(inner, id)?
+                .ok_or_else(|| ChatStoreError::ChatNotFound(id.to_string()))?;
+            if let Some(expected_workspace_id) =
+                meta.as_ref().and_then(|meta| meta.expected_workspace_id)
+            {
+                let actual = chat.workspace_id.as_deref().unwrap_or(DEFAULT_WORKSPACE_ID);
+                if actual != expected_workspace_id {
+                    return Err(ChatStoreError::WorkspaceChanged);
+                }
+            }
+            let raw_message = serde_json::json!({
+                "timeline": message.timeline,
+                "subagents": message.subagents,
+            });
+            let full = self.normalize_message(
+                &ChatMessage {
+                    id: message.id.unwrap_or_else(new_id),
+                    role: message.role,
+                    content: message.content,
+                    model: message.model,
+                    reasoning: message.reasoning,
+                    attachments: message.attachments,
+                    skill_provenance,
+                    timeline: None,
+                    subagents: None,
+                    created_at: message.created_at.unwrap_or_else(now_millis),
+                },
+                &raw_message,
+            );
+            if let Some(existing) = chat.messages.iter().find(|entry| entry.id == full.id) {
+                return if existing == &full {
+                    // Do not truncate an already committed replacement branch
+                    // (which may now have an assistant reply after it).
+                    Ok(chat)
+                } else {
+                    Err(ChatStoreError::MessageIdentityConflict)
+                };
+            }
+            chat.messages.truncate(keep_count);
+            chat.messages.push(full);
+            chat.updated_at = now_millis();
+            if let Some(meta) = meta {
+                if let Some(provider_id) = meta.provider_id {
+                    chat.provider_id = Some(provider_id.to_string());
+                }
+                if let Some(model) = meta.model {
+                    chat.model = Some(model.to_string());
+                }
+            }
+            self.write_chat_and_meta(inner, &chat)?;
+            Ok(chat)
+        })
+    }
+
+    /// Reconcile an uncertain submission result by reading the canonical
+    /// transcript and locating its deterministic user-turn identity. `Ok(None)`
+    /// means the turn is definitely absent; an error means visibility is
+    /// indeterminate and callers must not blindly retry.
+    pub fn reconcile_submission(
+        &self,
+        id: &str,
+        message: &ChatMessage,
+    ) -> Result<Option<Chat>, ChatStoreError> {
+        self.serialized(|inner| {
+            let Some(chat) = self.read_chat(inner, id)? else {
+                return Ok(None);
+            };
+            Ok(chat
+                .messages
+                .iter()
+                .any(|entry| entry == message)
+                .then_some(chat))
         })
     }
 
@@ -1610,6 +1824,46 @@ pub fn new_uuid_like() -> String {
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum SubmissionOperation {
+        Create,
+        Append,
+        Replace,
+    }
+
+    struct FailingSubmissionPersistence {
+        failures: Mutex<Vec<SubmissionOperation>>,
+    }
+
+    impl FailingSubmissionPersistence {
+        fn fail_next(operation: SubmissionOperation) -> Self {
+            Self {
+                failures: Mutex::new(vec![operation]),
+            }
+        }
+
+        fn check(&self, operation: SubmissionOperation) -> Result<(), ChatStoreError> {
+            let mut failures = self.failures.lock();
+            if failures.first() == Some(&operation) {
+                failures.remove(0);
+                return Err(std::io::Error::other("forced submission failure").into());
+            }
+            Ok(())
+        }
+    }
+
+    impl ChatSubmissionPersistence for FailingSubmissionPersistence {
+        fn before_create(&self) -> Result<(), ChatStoreError> {
+            self.check(SubmissionOperation::Create)
+        }
+        fn before_append(&self) -> Result<(), ChatStoreError> {
+            self.check(SubmissionOperation::Append)
+        }
+        fn before_replace_tail_and_append(&self) -> Result<(), ChatStoreError> {
+            self.check(SubmissionOperation::Replace)
+        }
+    }
+
     fn store_in(dir: &Path) -> ChatStore {
         let dir = dir.to_path_buf();
         create_chat_store(
@@ -1617,6 +1871,231 @@ mod tests {
             None,
             ChatStoreDurability::default(),
         )
+    }
+
+    fn store_with_failure(dir: &Path, operation: SubmissionOperation) -> ChatStore {
+        let dir = dir.to_path_buf();
+        create_chat_store_with_submission_persistence(
+            Box::new(move || dir.clone()),
+            None,
+            ChatStoreDurability::default(),
+            std::sync::Arc::new(FailingSubmissionPersistence::fail_next(operation)),
+        )
+    }
+
+    fn store_with_post_rename_sync_failure(dir: &Path, fail_ordinal: usize) -> ChatStore {
+        let dir = dir.to_path_buf();
+        let syncs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        create_chat_store(
+            Box::new(move || dir.clone()),
+            None,
+            ChatStoreDurability {
+                read_file: None,
+                sync_directory: Some(Box::new({
+                    let syncs = syncs.clone();
+                    move |path| {
+                        // #1 begins the marker, #2 publishes the payload,
+                        // #3 publishes index metadata, and #4 clears marker.
+                        // Every ordinal after #2 is post-payload durable.
+                        if syncs.fetch_add(1, Ordering::SeqCst) + 1 == fail_ordinal {
+                            Err(std::io::Error::other("forced post-rename sync failure"))
+                        } else {
+                            sync_path(path)
+                        }
+                    }
+                })),
+                sync_file: None,
+            },
+        )
+    }
+
+    fn submission_input(id: &str, content: &str) -> ChatMessageInput {
+        ChatMessageInput {
+            id: Some(id.into()),
+            role: ChatRole::User,
+            content: content.into(),
+            model: None,
+            reasoning: None,
+            attachments: None,
+            timeline: None,
+            subagents: None,
+            created_at: Some(42),
+        }
+    }
+
+    fn expected_submission(id: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            role: ChatRole::User,
+            content: content.into(),
+            created_at: 42,
+            model: None,
+            reasoning: None,
+            attachments: None,
+            skill_provenance: None,
+            timeline: None,
+            subagents: None,
+        }
+    }
+
+    #[test]
+    fn post_rename_append_and_rebranch_reconcile_without_duplicate_turns() {
+        for rebranch in [false, true] {
+            for fail_ordinal in [2, 3, 4] {
+                let dir = tempfile::tempdir().unwrap();
+                let seed = store_in(dir.path());
+                let chat = seed.create(ChatStoreInput::default()).unwrap();
+                if rebranch {
+                    seed.append_message(&chat.id, submission_input("old", "old"), None)
+                        .unwrap();
+                }
+                let store = store_with_post_rename_sync_failure(dir.path(), fail_ordinal);
+                let id = if rebranch { "replacement" } else { "append" };
+                let content = if rebranch { "replacement" } else { "append" };
+                let result = if rebranch {
+                    store.replace_tail_and_append_message(
+                        &chat.id,
+                        0,
+                        submission_input(id, content),
+                        None,
+                    )
+                } else {
+                    store.append_message(&chat.id, submission_input(id, content), None)
+                };
+                assert!(result.is_err());
+                let expected = expected_submission(id, content);
+                let reconciled = store
+                    .reconcile_submission(&chat.id, &expected)
+                    .unwrap()
+                    .expect("post-rename payload is visible after recovery");
+                assert_eq!(
+                    reconciled
+                        .messages
+                        .iter()
+                        .filter(|message| message.id == id)
+                        .count(),
+                    1
+                );
+                // A retry with the same caller-supplied id is idempotent; it must
+                // not append a second user turn or re-truncate a completed branch.
+                let retried = if rebranch {
+                    store.replace_tail_and_append_message(
+                        &chat.id,
+                        0,
+                        submission_input(id, content),
+                        None,
+                    )
+                } else {
+                    store.append_message(&chat.id, submission_input(id, content), None)
+                }
+                .unwrap();
+                assert_eq!(
+                    retried
+                        .messages
+                        .iter()
+                        .filter(|message| message.id == id)
+                        .count(),
+                    1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn post_rename_create_reuses_the_caller_owned_chat_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_post_rename_sync_failure(dir.path(), 2);
+        assert!(store
+            .create_with_id("new-chat-id", ChatStoreInput::default())
+            .is_err());
+        let reconciled = store
+            .get("new-chat-id")
+            .unwrap()
+            .expect("post-rename chat payload is visible after recovery");
+        let retried = store
+            .create_with_id("new-chat-id", ChatStoreInput::default())
+            .unwrap();
+        assert_eq!(reconciled.id, retried.id);
+        assert_eq!(store.list(None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn submission_faults_leave_create_append_and_rebranch_transcripts_unchanged() {
+        let create_dir = tempfile::tempdir().unwrap();
+        let create_store = store_with_failure(create_dir.path(), SubmissionOperation::Create);
+        assert!(create_store.create(ChatStoreInput::default()).is_err());
+        assert!(create_store.list(None).unwrap().is_empty());
+
+        let append_dir = tempfile::tempdir().unwrap();
+        let seed = store_in(append_dir.path());
+        let chat = seed.create(ChatStoreInput::default()).unwrap();
+        let append_store = store_with_failure(append_dir.path(), SubmissionOperation::Append);
+        assert!(append_store
+            .append_message(
+                &chat.id,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::User,
+                    content: "lost".into(),
+                    model: None,
+                    reasoning: None,
+                    attachments: None,
+                    timeline: None,
+                    subagents: None,
+                    created_at: None
+                },
+                None
+            )
+            .is_err());
+        assert!(append_store
+            .get(&chat.id)
+            .unwrap()
+            .unwrap()
+            .messages
+            .is_empty());
+
+        let rebranch_dir = tempfile::tempdir().unwrap();
+        let seed = store_in(rebranch_dir.path());
+        let chat = seed.create(ChatStoreInput::default()).unwrap();
+        seed.append_message(
+            &chat.id,
+            ChatMessageInput {
+                id: None,
+                role: ChatRole::User,
+                content: "old".into(),
+                model: None,
+                reasoning: None,
+                attachments: None,
+                timeline: None,
+                subagents: None,
+                created_at: None,
+            },
+            None,
+        )
+        .unwrap();
+        let replace_store = store_with_failure(rebranch_dir.path(), SubmissionOperation::Replace);
+        assert!(replace_store
+            .replace_tail_and_append_message(
+                &chat.id,
+                0,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::User,
+                    content: "replacement".into(),
+                    model: None,
+                    reasoning: None,
+                    attachments: None,
+                    timeline: None,
+                    subagents: None,
+                    created_at: None
+                },
+                None
+            )
+            .is_err());
+        assert_eq!(
+            replace_store.get(&chat.id).unwrap().unwrap().messages[0].content,
+            "old"
+        );
     }
 
     #[test]
@@ -1673,6 +2152,65 @@ mod tests {
         // Legacy gemini is migrated to google on write.
         assert_eq!(chat.provider_id.as_deref(), Some("google"));
         assert_eq!(chat.model.as_deref(), Some("gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn replace_tail_and_append_commits_the_rebranch_as_one_visible_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let chat = store.create(ChatStoreInput::default()).unwrap();
+        for content in ["old user", "old assistant"] {
+            store
+                .append_message(
+                    &chat.id,
+                    ChatMessageInput {
+                        id: None,
+                        role: ChatRole::User,
+                        content: content.into(),
+                        model: None,
+                        reasoning: None,
+                        attachments: None,
+                        timeline: None,
+                        subagents: None,
+                        created_at: None,
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        let replaced = store
+            .replace_tail_and_append_message(
+                &chat.id,
+                0,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::User,
+                    content: "replacement".into(),
+                    model: None,
+                    reasoning: None,
+                    attachments: Some(vec![Attachment {
+                        id: "image".into(),
+                        name: "image.png".into(),
+                        mime_type: "image/png".into(),
+                        kind: AttachmentKind::Image,
+                        size: 1,
+                        data: Some("YQ==".into()),
+                        text: None,
+                    }]),
+                    timeline: None,
+                    subagents: None,
+                    created_at: None,
+                },
+                None,
+            )
+            .unwrap();
+        assert_eq!(replaced.messages.len(), 1);
+        assert_eq!(replaced.messages[0].content, "replacement");
+        assert_eq!(replaced.messages[0].attachments.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            store.get(&chat.id).unwrap().unwrap().messages,
+            replaced.messages
+        );
     }
 
     #[test]
@@ -1745,6 +2283,61 @@ mod tests {
         assert!(store
             .move_empty_chat_to_workspace(&chat.id, "other")
             .is_err());
+    }
+
+    #[test]
+    fn skill_provenance_is_persisted_only_for_bounded_user_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path());
+        let chat = store.create(ChatStoreInput::default()).unwrap();
+        let provenance = SkillProvenance {
+            id: "workspace:review".into(),
+            name: "review".into(),
+            source: SkillProvenanceSource::Workspace,
+            revision: "sha256:abc123".into(),
+        };
+        store
+            .append_message_with_skill_provenance(
+                &chat.id,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::User,
+                    content: "Review the changes".into(),
+                    model: None,
+                    reasoning: None,
+                    attachments: None,
+                    timeline: None,
+                    subagents: None,
+                    created_at: None,
+                },
+                Some(provenance.clone()),
+                None,
+            )
+            .unwrap();
+        store
+            .append_message_with_skill_provenance(
+                &chat.id,
+                ChatMessageInput {
+                    id: None,
+                    role: ChatRole::Assistant,
+                    content: "Done".into(),
+                    model: Some("model".into()),
+                    reasoning: None,
+                    attachments: None,
+                    timeline: None,
+                    subagents: None,
+                    created_at: None,
+                },
+                Some(provenance),
+                None,
+            )
+            .unwrap();
+        let updated = store.get(&chat.id).unwrap().unwrap();
+        assert_eq!(
+            updated.messages[0].skill_provenance.as_ref().unwrap().name,
+            "review"
+        );
+        assert!(updated.messages[1].skill_provenance.is_none());
     }
 
     /// The chat service persists the user message, the assistant turn, and a

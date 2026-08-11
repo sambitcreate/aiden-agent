@@ -176,6 +176,16 @@ export interface Attachment {
   text?: string;
 }
 
+export type SkillProvenanceSource = "configured" | "workspace" | "global";
+
+/** Safe provenance for one explicitly selected slash skill. */
+export interface SkillProvenance {
+  id: string;
+  name: string;
+  source: SkillProvenanceSource;
+  revision: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -187,6 +197,8 @@ export interface ChatMessage {
   reasoning?: string;
   /** Files attached to a user message. */
   attachments?: Attachment[];
+  /** Bounded provenance for an explicitly selected user-message skill. */
+  skillProvenance?: SkillProvenance;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Bounded references to separately persisted renderer-safe child run records. */

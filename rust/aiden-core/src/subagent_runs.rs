@@ -329,6 +329,7 @@ impl SubagentContextModeV2 {
 )]
 #[serde(rename_all = "camelCase")]
 pub enum SubagentEffectActivityKindV1 {
+    WorkspaceWrite,
     McpMutation,
     Shell,
 }
@@ -1409,6 +1410,7 @@ pub fn parse_subagent_effect_activity_v1(value: &Value) -> Option<SubagentEffect
         return None;
     }
     let kind = require_string(value.as_object()?, "kind").and_then(|value| match value {
+        "workspace_write" => Some(SubagentEffectActivityKindV1::WorkspaceWrite),
         "mcp_mutation" => Some(SubagentEffectActivityKindV1::McpMutation),
         "shell" => Some(SubagentEffectActivityKindV1::Shell),
         _ => None,
@@ -1654,6 +1656,17 @@ mod tests {
             }],
         });
         assert!(parse_subagent_history_detail_v1(&detail).is_some());
+        let mut workspace_write = detail.clone();
+        workspace_write["effects"][0]["kind"] = json!("workspace_write");
+        workspace_write["effects"][0]["state"] = json!("prepared");
+        workspace_write["effects"][0]["label"] = json!("Workspace change waiting for approval");
+        assert_eq!(
+            parse_subagent_history_detail_v1(&workspace_write)
+                .unwrap()
+                .effects[0]
+                .kind,
+            SubagentEffectActivityKindV1::WorkspaceWrite
+        );
         let mut extra_effect = detail.clone();
         extra_effect["effects"][0]["terminalDigest"] = json!("a".repeat(64));
         assert_eq!(parse_subagent_history_detail_v1(&extra_effect), None);

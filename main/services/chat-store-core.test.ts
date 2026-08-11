@@ -333,6 +333,40 @@ test("persists reasoning only on assistant messages", async (t) => {
   assert.equal(updated?.messages[1]?.reasoning, undefined);
 });
 
+test("persists bounded skill provenance only on user messages", async (t) => {
+  const store = await testStore(t);
+  const chat = await store.create({});
+  const provenance = {
+    id: "workspace:review",
+    name: "review",
+    source: "workspace" as const,
+    revision: "sha256:abc123",
+  };
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Review the changed files.",
+    skillProvenance: provenance,
+  });
+  await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Done.",
+    skillProvenance: provenance,
+  });
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Malformed selection.",
+    skillProvenance: {
+      ...provenance,
+      revision: "\u0000secret",
+    },
+  });
+
+  const updated = await store.get(chat.id);
+  assert.deepEqual(updated?.messages[0]?.skillProvenance, provenance);
+  assert.equal(updated?.messages[1]?.skillProvenance, undefined);
+  assert.equal(updated?.messages[2]?.skillProvenance, undefined);
+});
+
 test("persists only strict bounded subagent references on assistant messages", async (t) => {
   const store = await testStore(t);
   const chat = await store.create({});
