@@ -150,6 +150,24 @@ pub async fn run_atomic_mac_paste(text: &str) -> Result<bool, PasteIoError> {
 pub struct MacPasteDeps;
 
 impl MacPasteDeps {
+    /// Return whether this app currently has macOS Accessibility trust.
+    ///
+    /// The probe is deliberately local-only and never prompts. Settings uses
+    /// it to render the current delivery capability without changing system
+    /// state during app startup.
+    pub fn accessibility_trusted() -> bool {
+        Self::probe_trusted(false)
+    }
+
+    /// Ask macOS to show the Accessibility preference pane when trust is not
+    /// present, then return the trust value observed at that instant. The
+    /// preference pane may remain open while the user grants access, so the
+    /// caller should offer a refresh action rather than assuming `false` is
+    /// final.
+    pub fn request_accessibility() -> bool {
+        Self::probe_trusted(true)
+    }
+
     fn probe_trusted(prompt: bool) -> bool {
         #[cfg(target_os = "macos")]
         {

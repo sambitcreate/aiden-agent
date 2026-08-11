@@ -10,6 +10,7 @@
 //! exercise and tests.
 
 pub mod command_palette;
+mod profile_share;
 pub mod scheduled_panel;
 pub mod subagents_panel;
 pub mod terminal_drawer;

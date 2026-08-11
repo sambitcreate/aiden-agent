@@ -3,7 +3,9 @@
 //! codifies in `main/services/app-updater.ts`).
 //!
 //! electron-updater's generic provider reads `latest-mac.yml` next to the
-//! app; the Rust feed contract is the JSON equivalent:
+//! app. Release builds use Electron Builder's YAML shape (relative artifact
+//! URLs and base64-encoded SHA-512 digests); the JSON shape below remains a
+//! bounded compatibility format for injected providers and tests:
 //!
 //! ```json
 //! {
@@ -14,15 +16,15 @@
 //! }
 //! ```
 //!
-//! Parsing is strict and fail-closed; verification is sha-256 of the exact
-//! downloaded bytes; channel policy (prerelease rejection, no-downgrade)
-//! reuses `crate::updater` (`should_offer_update`). The install step is a
-//! trait method the binary wires later — replacing a running `.app` is
-//! inherently distribution glue.
+//! Parsing is strict and fail-closed; verification uses the digest declared by
+//! the feed (Electron Builder's SHA-512 or the compatibility JSON SHA-256) on
+//! the exact downloaded bytes. Channel policy (prerelease rejection,
+//! no-downgrade) reuses `crate::updater` (`should_offer_update`).
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 
 /// Cap for the feed document itself (bytes).
 pub const MAX_FEED_BYTES: u64 = 1 << 20;
@@ -37,8 +39,12 @@ pub const APP_UPDATE_CONFIG_FILENAME: &str = "app-update.yml";
 #[serde(rename_all = "camelCase")]
 pub struct UpdateFeedFile {
     pub url: String,
-    /// hex sha-256 of the exact artifact bytes.
+    /// hex sha-256 of the exact artifact bytes (compatibility JSON feeds).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sha256: String,
+    /// base64 sha-512 of the exact artifact bytes (Electron Builder feeds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha512: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
 }
@@ -57,10 +63,76 @@ fn is_hex64(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn is_base64_sha512(value: &str) -> bool {
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .map(|bytes| bytes.len() == 64)
+        .or_else(|_| {
+            base64::engine::general_purpose::STANDARD_NO_PAD
+                .decode(value)
+                .map(|bytes| bytes.len() == 64)
+        })
+        .unwrap_or(false)
+}
+
+fn safe_https_url(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 8_192
+        || !value.starts_with("https://")
+        || value.chars().any(char::is_control)
+    {
+        return false;
+    }
+    let authority = value
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .unwrap_or_default();
+    !authority.is_empty() && !authority.contains('@')
+}
+
+/// Resolve one Electron Builder artifact URL against the feed directory.
+/// Relative file names are the normal latest-mac.yml form. Traversal,
+/// protocol-relative URLs, credentials, fragments, and non-HTTPS inputs fail
+/// closed before any artifact request is made.
+fn resolve_artifact_url(raw: &str, feed_url: Option<&str>) -> Option<String> {
+    let raw = raw.trim();
+    if safe_https_url(raw) {
+        return Some(raw.to_string());
+    }
+    let base = feed_url?;
+    if !safe_https_url(base)
+        || raw.is_empty()
+        || raw.starts_with('/')
+        || raw.starts_with("//")
+        || raw.contains('#')
+        || raw.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let path = raw.split('?').next().unwrap_or(raw);
+    if path.is_empty()
+        || path
+            .split('/')
+            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return None;
+    }
+    let base_directory = base.rsplit_once('/')?.0;
+    let resolved = format!("{base_directory}/{raw}");
+    safe_https_url(&resolved).then_some(resolved)
+}
+
 /// `parseUpdateFeed` — strict, fail-closed manifest parsing. Unknown keys are
 /// tolerated; a missing/oversized/duplicate artifact set or a malformed digest
 /// rejects the whole feed.
 pub fn parse_update_feed(value: &Value) -> Option<UpdateFeedManifest> {
+    parse_update_feed_with_base(value, None)
+}
+
+fn parse_update_feed_with_base(
+    value: &Value,
+    feed_url: Option<&str>,
+) -> Option<UpdateFeedManifest> {
     let record = value.as_object()?;
     let version = record.get("version")?.as_str()?;
     if version.trim().is_empty() || version.chars().count() > 128 {
@@ -78,16 +150,25 @@ pub fn parse_update_feed(value: &Value) -> Option<UpdateFeedManifest> {
     let mut parsed = Vec::with_capacity(files.len());
     for file in files {
         let file = file.as_object()?;
-        let url = file.get("url")?.as_str()?;
-        if url.is_empty()
-            || url.len() > 8_192
-            || !url.starts_with("https://")
-            || !seen_urls.insert(url.to_string())
-        {
+        let raw_url = file.get("url")?.as_str()?;
+        let url = resolve_artifact_url(raw_url, feed_url)?;
+        if !seen_urls.insert(url.clone()) {
             return None;
         }
-        let sha256 = file.get("sha256")?.as_str()?;
-        if !is_hex64(sha256) {
+        let sha256 = file
+            .get("sha256")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let sha512 = file
+            .get("sha512")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if (sha256.is_empty() && sha512.is_none())
+            || (!sha256.is_empty() && !is_hex64(sha256))
+            || sha512
+                .as_deref()
+                .is_some_and(|digest| !is_base64_sha512(digest))
+        {
             return None;
         }
         let size = file
@@ -95,8 +176,9 @@ pub fn parse_update_feed(value: &Value) -> Option<UpdateFeedManifest> {
             .and_then(Value::as_u64)
             .filter(|size| *size > 0);
         parsed.push(UpdateFeedFile {
-            url: url.to_string(),
+            url,
             sha256: sha256.to_string(),
+            sha512,
             size,
         });
     }
@@ -105,6 +187,16 @@ pub fn parse_update_feed(value: &Value) -> Option<UpdateFeedManifest> {
         release_date,
         files: parsed,
     })
+}
+
+/// Parse either Electron Builder's release YAML or the bounded JSON
+/// compatibility shape used by injected providers. The feed URL is used to
+/// resolve normal relative artifact paths from latest-mac.yml.
+pub fn parse_update_feed_bytes(bytes: &[u8], feed_url: &str) -> Option<UpdateFeedManifest> {
+    let value = serde_json::from_slice::<Value>(bytes)
+        .or_else(|_| serde_yaml::from_slice::<Value>(bytes))
+        .ok()?;
+    parse_update_feed_with_base(&value, Some(feed_url))
 }
 
 /// `chooseUpdateFile` — the artifact to install. The first entry wins, mirroring
@@ -129,6 +221,30 @@ pub fn verify_download_sha256(downloaded: &[u8], expected_sha256: &str) -> bool 
     encoded == expected_sha256
 }
 
+/// Verify Electron Builder's base64-encoded SHA-512 digest.
+pub fn verify_download_sha512(downloaded: &[u8], expected_sha512: &str) -> bool {
+    let expected = base64::engine::general_purpose::STANDARD
+        .decode(expected_sha512)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(expected_sha512));
+    let Ok(expected) = expected else {
+        return false;
+    };
+    if expected.len() != 64 {
+        return false;
+    }
+    let mut hasher = Sha512::new();
+    hasher.update(downloaded);
+    hasher.finalize().as_slice() == expected.as_slice()
+}
+
+/// Verify the exact digest declared by one normalized feed entry.
+pub fn verify_download(downloaded: &[u8], file: &UpdateFeedFile) -> bool {
+    file.sha512.as_deref().map_or_else(
+        || verify_download_sha256(downloaded, &file.sha256),
+        |digest| verify_download_sha512(downloaded, digest),
+    )
+}
+
 /// The artifact-selection step of one check: the feed must declare exactly one
 /// downloadable artifact for the current channel.
 pub fn download_decision(
@@ -151,7 +267,7 @@ pub enum FeedUpdateError {
 mod tests {
     use super::*;
     use serde_json::{json, Map};
-    use sha2::{Digest, Sha256};
+    use sha2::{Digest, Sha256, Sha512};
 
     fn feed() -> Value {
         json!({
@@ -174,6 +290,12 @@ mod tests {
             encoded.push_str(&format!("{byte:02x}"));
         }
         encoded
+    }
+
+    fn sha512_base64_of(bytes: &[u8]) -> String {
+        let mut hasher = Sha512::new();
+        hasher.update(bytes);
+        base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
     }
 
     #[test]
@@ -220,6 +342,49 @@ mod tests {
         assert!(!verify_download_sha256(b"tampered bytes", &digest));
         assert!(!verify_download_sha256(bytes, "not-a-digest"));
         assert!(!verify_download_sha256(bytes, "A".repeat(64).as_str()));
+    }
+
+    #[test]
+    fn parses_electron_builder_yaml_relative_urls_and_sha512() {
+        let bytes = b"release artifact";
+        let digest = sha512_base64_of(bytes);
+        let yaml = format!(
+            "version: 0.28.0\nreleaseDate: '2026-08-11T00:00:00Z'\nfiles:\n  - url: Aiden-Agent-Beta-0.28.0-arm64.zip\n    sha512: {digest}\n    size: {}\npath: Aiden-Agent-Beta-0.28.0-arm64.zip\nsha512: {digest}\n",
+            bytes.len()
+        );
+        let manifest = parse_update_feed_bytes(
+            yaml.as_bytes(),
+            "https://updates.example.test/aiden/latest-mac.yml",
+        )
+        .expect("electron builder feed");
+        let file = choose_update_file(&manifest).expect("artifact");
+        assert_eq!(
+            file.url,
+            "https://updates.example.test/aiden/Aiden-Agent-Beta-0.28.0-arm64.zip"
+        );
+        assert_eq!(file.sha256, "");
+        assert_eq!(file.sha512.as_deref(), Some(digest.as_str()));
+        assert!(verify_download(bytes, file));
+    }
+
+    #[test]
+    fn relative_feed_traversal_and_non_https_artifacts_fail_closed() {
+        let digest = sha512_base64_of(b"bytes");
+        let traversal =
+            format!("version: 0.28.0\nfiles:\n  - url: ../outside.zip\n    sha512: {digest}\n");
+        assert!(parse_update_feed_bytes(
+            traversal.as_bytes(),
+            "https://updates.example.test/aiden/latest-mac.yml"
+        )
+        .is_none());
+        let http = format!(
+            "version: 0.28.0\nfiles:\n  - url: http://cdn.example.test/aiden.zip\n    sha512: {digest}\n"
+        );
+        assert!(parse_update_feed_bytes(
+            http.as_bytes(),
+            "https://updates.example.test/aiden/latest-mac.yml"
+        )
+        .is_none());
     }
 
     #[test]

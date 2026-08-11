@@ -5,14 +5,17 @@
 //! [`FeedUpdateProvider`] implements the existing [`UpdateProvider`] seam from
 //! `crate::updater`:
 //!
-//! 1. Fetch the feed manifest (JSON, see `crate::updater_feed`), strict-parse.
+//! 1. Fetch the Electron Builder `latest-mac.yml` manifest (with bounded JSON
+//!    compatibility for injected providers), strict-parse.
 //! 2. Apply channel policy (`should_offer_update`: semver compare, prerelease
 //!    rejection, no-downgrade).
 //! 3. Download the artifact, verify its exact bytes against the feed's
-//!    sha-256, and stage it to a temp file.
-//! 4. The **install step is a trait method** ([`UpdateInstaller`]) the GPUI
-//!    binary wires later — replacing a running `.app` and relaunching is
-//!    inherently distribution glue (the TS `autoUpdater.quitAndInstall`).
+//!    SHA-512/SHA-256 digest, and stage it to a temp file.
+//! 4. The **manual installer-open step is a trait method**
+//!    ([`UpdateInstaller`]) owned by the GPUI binary. The current macOS bridge
+//!    opens the verified installer artifact; replacing a running `.app` and
+//!    relaunching remains distribution-specific glue (the TS
+//!    `autoUpdater.quitAndInstall`).
 //!
 //! The network surface is injectable ([`FeedClient`]); tests never touch the
 //! network.
@@ -25,7 +28,7 @@ use futures::{future::BoxFuture, FutureExt};
 
 use crate::updater::{should_offer_update, UpdateCheckError, UpdateCheckOutcome, UpdateProvider};
 use crate::updater_feed::{
-    choose_update_file, parse_update_feed, verify_download_sha256, MAX_FEED_BYTES, MAX_UPDATE_BYTES,
+    choose_update_file, parse_update_feed_bytes, verify_download, MAX_FEED_BYTES, MAX_UPDATE_BYTES,
 };
 use aiden_core::app_update::{AppUpdateSnapshot, IDLE_APP_UPDATE_SNAPSHOT};
 
@@ -78,18 +81,55 @@ impl FeedClient for ReqwestFeedClient {
     }
 }
 
-/// The install step the binary wires later: quit-and-replace the running app
-/// with the staged update. `false` when the app cannot restart right now.
+/// The explicit-user-action installer-open step the binary owns. `false` when
+/// the app cannot safely act on the staged artifact right now.
+///
+/// This trait intentionally has no automatic quit/restart operation. A safe
+/// implementation would need a signed, external macOS updater helper (or the
+/// Electron/Squirrel.Mac native updater) to replace the running bundle after
+/// the GPUI quit barrier settles; neither contract is present in this binary.
 pub trait UpdateInstaller: Send + Sync {
-    fn install_and_restart(&self, downloaded: &Path) -> bool;
+    fn open_verified_installer(&self, downloaded: &Path) -> bool;
 }
 
-/// A no-op installer used until the GPUI app wires the real one.
+/// A no-op installer used by tests and non-macOS builds.
 pub struct NoopUpdateInstaller;
 
 impl UpdateInstaller for NoopUpdateInstaller {
-    fn install_and_restart(&self, _downloaded: &Path) -> bool {
+    fn open_verified_installer(&self, _downloaded: &Path) -> bool {
         false
+    }
+}
+
+/// macOS's generic feed artifacts are user-installable disk images or package
+/// archives. Opening the verified, private staged artifact is the only native
+/// action this crate can safely perform without claiming to replace a running
+/// signed `.app`; the GPUI surface labels this as opening the installer rather
+/// than pretending it performed an automatic restart.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OpenInstaller;
+
+impl UpdateInstaller for OpenInstaller {
+    fn open_verified_installer(&self, downloaded: &Path) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let extension = downloaded
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| extension.to_ascii_lowercase());
+            if !matches!(extension.as_deref(), Some("dmg" | "pkg" | "zip")) {
+                return false;
+            }
+            std::process::Command::new("/usr/bin/open")
+                .arg(downloaded)
+                .spawn()
+                .is_ok()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = downloaded;
+            false
+        }
     }
 }
 
@@ -132,7 +172,7 @@ impl FeedUpdateProvider {
             feed_url,
             current_version,
             std::sync::Arc::new(ReqwestFeedClient::default()),
-            std::sync::Arc::new(NoopUpdateInstaller),
+            std::sync::Arc::new(OpenInstaller),
         )
     }
 
@@ -166,10 +206,7 @@ impl FeedUpdateProvider {
                 "update feed exceeded its size limit".to_string(),
             ));
         }
-        let feed_value = serde_json::from_slice(&feed_bytes).map_err(|error| {
-            UpdateCheckError::Network(format!("malformed update feed: {error}"))
-        })?;
-        let Some(manifest) = parse_update_feed(&feed_value) else {
+        let Some(manifest) = parse_update_feed_bytes(&feed_bytes, &self.shared.feed_url) else {
             return Err(UpdateCheckError::Network(
                 "update feed failed its integrity validation".to_string(),
             ));
@@ -180,6 +217,11 @@ impl FeedUpdateProvider {
                 let Some(file) = choose_update_file(&manifest) else {
                     return Err(UpdateCheckError::Network(
                         "update feed declared no downloadable artifact".to_string(),
+                    ));
+                };
+                let Some(artifact_extension) = installer_artifact_extension(&file.url) else {
+                    return Err(UpdateCheckError::Network(
+                        "update feed declared an unsupported installer artifact".to_string(),
                     ));
                 };
                 let bytes = self
@@ -193,12 +235,14 @@ impl FeedUpdateProvider {
                         "update artifact exceeded its size limit".to_string(),
                     ));
                 }
-                if !verify_download_sha256(&bytes, &file.sha256) {
-                    return Err(UpdateCheckError::Network(
-                        "downloaded update failed its SHA-256 integrity check".to_string(),
-                    ));
+                if !verify_download(&bytes, file) {
+                    return Err(UpdateCheckError::Network(if file.sha512.is_some() {
+                        "downloaded update failed its SHA-512 integrity check".to_string()
+                    } else {
+                        "downloaded update failed its SHA-256 integrity check".to_string()
+                    }));
                 }
-                let staged = stage_download(&latest, &bytes)?;
+                let staged = stage_download(artifact_extension, &bytes)?;
                 let mut state = self.shared.state.lock().unwrap();
                 state.downloaded_path = Some(staged);
                 state.downloaded_version = Some(latest.clone());
@@ -236,12 +280,12 @@ impl UpdateProvider for FeedUpdateProvider {
         async move { this.check_inner(manual).await }.boxed()
     }
 
-    fn install_downloaded(&self) -> bool {
+    fn open_downloaded_installer(&self) -> bool {
         let path = self.shared.state.lock().unwrap().downloaded_path.clone();
         let Some(path) = path else {
             return false;
         };
-        self.shared.installer.install_and_restart(&path)
+        self.shared.installer.open_verified_installer(&path)
     }
 
     fn start(&self) {
@@ -266,12 +310,34 @@ impl UpdateProvider for FeedUpdateProvider {
     }
 }
 
-fn stage_download(version: &str, bytes: &[u8]) -> Result<PathBuf, UpdateCheckError> {
+/// Return the only artifact suffix the native installer can safely open.
+/// Query strings and fragments are ignored; the feed URL itself remains the
+/// authority for the download while the suffix is only used for the staged
+/// filename and installer admission.
+fn installer_artifact_extension(url: &str) -> Option<&'static str> {
+    let path = url.split(['?', '#']).next()?;
+    let file_name = path.rsplit('/').next()?;
+    let extension = file_name.rsplit_once('.')?.1;
+    if extension.eq_ignore_ascii_case("dmg") {
+        Some("dmg")
+    } else if extension.eq_ignore_ascii_case("pkg") {
+        Some("pkg")
+    } else if extension.eq_ignore_ascii_case("zip") {
+        Some("zip")
+    } else {
+        None
+    }
+}
+
+fn stage_download(extension: &str, bytes: &[u8]) -> Result<PathBuf, UpdateCheckError> {
     let directory = tempfile::Builder::new()
         .prefix(STAGED_UPDATE_PREFIX)
         .tempdir()
         .map_err(|error| UpdateCheckError::Network(format!("could not stage update: {error}")))?;
-    let path = directory.path().join(format!("Aiden-{version}.update"));
+    // Keep untrusted feed version text out of the path. The private directory
+    // is unique per download, and the allowlisted extension preserves the
+    // native installer contract without opening traversal or separator paths.
+    let path = directory.path().join(format!("Aiden-update.{extension}"));
     // Write synchronously to a private temp dir, then leak the directory so
     // the staged file survives until the installer consumes it (the install
     // step owns cleanup of the staged payload).
@@ -285,6 +351,7 @@ fn stage_download(version: &str, bytes: &[u8]) -> Result<PathBuf, UpdateCheckErr
 mod tests {
     use super::*;
     use crate::updater::UpdateProvider;
+    use base64::Engine as _;
     use sha2::Digest;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -299,11 +366,21 @@ mod tests {
         encoded
     }
 
+    fn sha512_base64_of(bytes: &[u8]) -> String {
+        let mut hasher = sha2::Sha512::new();
+        hasher.update(bytes);
+        base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+    }
+
     fn feed_json(version: &str, sha256: &str) -> String {
+        feed_json_with_url(version, sha256, "https://cdn.example.com/Aiden-Agent.dmg")
+    }
+
+    fn feed_json_with_url(version: &str, sha256: &str, url: &str) -> String {
         serde_json::json!({
             "version": version,
             "files": [{
-                "url": "https://cdn.example.com/Aiden-Agent.dmg",
+                "url": url,
                 "sha256": sha256,
                 "size": 4,
             }],
@@ -377,8 +454,36 @@ mod tests {
                 version: "0.28.0".to_string()
             }
         );
-        // The install step delegates to the installer (no-op by default).
-        assert!(!provider.install_downloaded());
+        // The explicit installer-open step delegates to the installer (no-op
+        // by default); no automatic quit/restart path exists here.
+        assert!(!provider.open_downloaded_installer());
+    }
+
+    #[tokio::test]
+    async fn downloads_the_real_electron_builder_yaml_feed() {
+        let feed_url = "https://updates.example.com/aiden/latest-mac.yml";
+        let artifact = b"the exact zip bytes".to_vec();
+        let digest = sha512_base64_of(&artifact);
+        let feed = format!(
+            "version: 0.28.0\nfiles:\n  - url: Aiden-Agent-Beta-0.28.0-arm64.zip\n    sha512: {digest}\n    size: {}\npath: Aiden-Agent-Beta-0.28.0-arm64.zip\nsha512: {digest}\n",
+            artifact.len()
+        );
+        let (client, requests) = fake_client_with_feed_url(feed_url, feed, artifact);
+        let provider = FeedUpdateProvider::with_client_and_installer(
+            feed_url,
+            "0.27.25",
+            client,
+            std::sync::Arc::new(NoopUpdateInstaller),
+        );
+        let outcome = provider.check_now(false).await.unwrap();
+        assert!(outcome.is_update_available);
+        assert_eq!(requests.load(AtomicOrdering::SeqCst), 2);
+        assert_eq!(
+            provider.snapshot(),
+            AppUpdateSnapshot::Ready {
+                version: "0.28.0".to_string()
+            }
+        );
     }
 
     #[tokio::test]
@@ -434,6 +539,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsupported_artifact_is_rejected_before_download() {
+        let artifact = b"bytes".to_vec();
+        let digest = sha256_of(&artifact);
+        let feed = feed_json_with_url(
+            "0.28.0",
+            &digest,
+            "https://cdn.example.com/Aiden-Agent.tar.gz",
+        );
+        let (client, requests) = fake_client(feed, artifact);
+        let provider = FeedUpdateProvider::with_client_and_installer(
+            "feed",
+            "0.27.25",
+            client,
+            std::sync::Arc::new(NoopUpdateInstaller),
+        );
+        let error = provider.check_now(false).await.unwrap_err();
+        assert!(
+            matches!(error, UpdateCheckError::Network(message) if message.contains("unsupported installer"))
+        );
+        assert_eq!(requests.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(provider.snapshot(), IDLE_APP_UPDATE_SNAPSHOT);
+    }
+
+    #[tokio::test]
     async fn a_malformed_feed_fails_closed() {
         let (client, _requests) = fake_client("{ not json".to_string(), Vec::new());
         let provider = FeedUpdateProvider::with_client_and_installer(
@@ -467,32 +596,44 @@ mod tests {
 
     struct RecordInstaller {
         called: std::sync::Arc<AtomicUsize>,
+        path: std::sync::Arc<std::sync::Mutex<Option<PathBuf>>>,
     }
 
     impl UpdateInstaller for RecordInstaller {
-        fn install_and_restart(&self, _downloaded: &Path) -> bool {
+        fn open_verified_installer(&self, downloaded: &Path) -> bool {
             self.called.fetch_add(1, AtomicOrdering::SeqCst);
+            *self.path.lock().unwrap() = Some(downloaded.to_path_buf());
             true
         }
     }
 
     #[tokio::test]
-    async fn install_downloaded_hands_the_staged_path_to_the_installer() {
+    async fn open_downloaded_installer_hands_the_staged_path_to_the_installer() {
         let artifact = b"the exact artifact bytes".to_vec();
         let digest = sha256_of(&artifact);
         let (client, _requests) = fake_client(feed_json("0.28.0", &digest), artifact);
         let called = std::sync::Arc::new(AtomicUsize::new(0));
+        let path = std::sync::Arc::new(std::sync::Mutex::new(None));
         let provider = FeedUpdateProvider::with_client_and_installer(
             "feed",
             "0.27.25",
             client,
             std::sync::Arc::new(RecordInstaller {
                 called: called.clone(),
+                path: path.clone(),
             }),
         );
         provider.check_now(false).await.unwrap();
-        assert!(provider.install_downloaded());
+        assert!(provider.open_downloaded_installer());
         assert_eq!(called.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(
+            path.lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|path| path.extension())
+                .and_then(|extension| extension.to_str()),
+            Some("dmg")
+        );
         // Without a staged update, the installer is never invoked.
         let (client2, _) = fake_client(feed_json("0.27.24", &digest), b"bytes".to_vec());
         let provider2 = FeedUpdateProvider::with_client_and_installer(
@@ -501,9 +642,10 @@ mod tests {
             client2,
             std::sync::Arc::new(RecordInstaller {
                 called: called.clone(),
+                path,
             }),
         );
-        assert!(!provider2.install_downloaded());
+        assert!(!provider2.open_downloaded_installer());
         assert_eq!(called.load(AtomicOrdering::SeqCst), 1);
     }
 
@@ -517,5 +659,29 @@ mod tests {
             std::sync::Arc::new(NoopUpdateInstaller),
         );
         assert_eq!(provider.snapshot(), IDLE_APP_UPDATE_SNAPSHOT);
+    }
+
+    #[test]
+    fn installer_artifact_extension_is_allowlisted_and_ignores_query_or_fragment() {
+        assert_eq!(
+            installer_artifact_extension("https://cdn.example/Aiden.DMG?sig=abc#download"),
+            Some("dmg")
+        );
+        assert_eq!(
+            installer_artifact_extension("https://cdn.example/Aiden.pkg"),
+            Some("pkg")
+        );
+        assert_eq!(
+            installer_artifact_extension("https://cdn.example/Aiden.zip"),
+            Some("zip")
+        );
+        assert_eq!(
+            installer_artifact_extension("https://cdn.example/Aiden.tar"),
+            None
+        );
+        assert_eq!(
+            installer_artifact_extension("https://cdn.example/no-extension"),
+            None
+        );
     }
 }

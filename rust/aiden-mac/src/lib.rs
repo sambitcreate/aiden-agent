@@ -19,15 +19,17 @@
 //! - **`updater`** — pure port of `app-updater-core.ts` (enablement decision),
 //!   electron-updater's semver-ish version comparison + channel policy, and the
 //!   `UpdateProvider` trait (with the `NoopUpdateProvider` fallback).
-//! - **`updater_feed`** — the real update feed core: strict JSON feed
-//!   parsing, artifact selection, and sha-256 download verification (the pure
-//!   logic electron-updater's generic provider codifies). Always compiled and
+//! - **`updater_feed`** — the real update feed core: strict Electron Builder
+//!   `latest-mac.yml` YAML parsing (plus bounded JSON compatibility), artifact
+//!   selection, and SHA-512/SHA-256 download verification (the pure logic
+//!   electron-updater's generic provider codifies). Always compiled and
 //!   unit-tested; no network.
 //! - **`feed_update_provider`** (feature `update-feed`) — `FeedUpdateProvider`,
 //!   a real `UpdateProvider` that fetches the feed, applies channel policy,
-//!   downloads + verifies + stages the artifact, and delegates the
-//!   quit-and-install step to an [`UpdateInstaller`] the GPUI app wires later
-//!   (the TS `autoUpdater.quitAndInstall`).
+//!   downloads + verifies + stages the artifact, and delegates the explicit
+//!   user-action installer-opening step to an [`UpdateInstaller`] owned by the
+//!   GPUI app. Automatic quit-and-restart replacement is deliberately absent
+//!   until a signed external updater contract exists.
 //! - **`menu`** — the native-menu command contract (`native-menu-command-contract`):
 //!   which commands the app menu owns and the accelerator ownership assertion.
 //! - **`audio`** — microphone capture (AVAudioEngine input tap → mono 16 kHz
@@ -43,6 +45,7 @@
 //! macOS-only APIs are behind `#[cfg(target_os = "macos")]`; the rest of the
 //! crate provides graceful stubs so `cargo test` passes on any host.
 
+pub mod accessibility;
 pub mod appearance;
 pub mod audio;
 pub mod dictation_coordinator;
@@ -51,6 +54,8 @@ pub mod local_runtime_status;
 pub mod menu;
 pub mod notify;
 pub mod paste;
+pub mod pill_display;
+pub mod profile_share;
 pub mod quit_barrier;
 pub mod readiness;
 pub mod tray;
@@ -84,6 +89,52 @@ pub fn is_bundled_app() -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve the generic update feed embedded in a signed `.app` bundle.
+///
+/// Electron-builder writes a small `app-update.yml` beside the packaged
+/// resources. We intentionally parse only the bounded `provider: generic`
+/// and HTTPS `url:` fields we need; no YAML engine or caller-controlled path
+/// is introduced. Development/unpacked binaries return `None`, so ordinary
+/// runs never contact an update feed.
+pub fn packaged_update_feed_url() -> Option<String> {
+    if !is_bundled_app() || aiden_data::is_dev_mode() {
+        return None;
+    }
+    let executable = std::env::current_exe().ok()?;
+    let resources = executable.parent()?.parent()?.join("Resources");
+    let marker = resources.join("app-update.yml");
+    let bytes = std::fs::read(marker).ok()?;
+    if bytes.len() > 64 * 1024 {
+        return None;
+    }
+    let text = std::str::from_utf8(&bytes).ok()?;
+    parse_packaged_update_feed_url(text)
+}
+
+fn parse_packaged_update_feed_url(text: &str) -> Option<String> {
+    let mut generic = false;
+    let mut base_url = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("provider:") {
+            generic = value.trim() == "generic";
+        } else if let Some(value) = line.strip_prefix("url:") {
+            let value = value.trim();
+            if value.starts_with("https://")
+                && value.len() <= 2_048
+                && !value.chars().any(|character| character.is_control())
+            {
+                base_url = Some(value.trim_end_matches('/').to_string());
+            }
+        }
+    }
+    if !generic {
+        return None;
+    }
+    let base_url = base_url?;
+    Some(format!("{base_url}/latest-mac.yml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +142,26 @@ mod tests {
     #[test]
     fn keychain_service_matches_app_id() {
         assert_eq!(KEYCHAIN_SERVICE, APP_BUNDLE_ID);
+    }
+
+    #[test]
+    fn packaged_update_marker_accepts_only_generic_https_feeds() {
+        assert_eq!(
+            parse_packaged_update_feed_url(
+                "provider: generic\nurl: https://updates.example.test/aiden\n"
+            )
+            .as_deref(),
+            Some("https://updates.example.test/aiden/latest-mac.yml")
+        );
+        assert_eq!(
+            parse_packaged_update_feed_url(
+                "provider: github\nurl: https://updates.example.test/aiden\n"
+            ),
+            None
+        );
+        assert_eq!(
+            parse_packaged_update_feed_url("provider: generic\nurl: http://localhost\n"),
+            None
+        );
     }
 }

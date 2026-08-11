@@ -49,9 +49,12 @@
 
 #![allow(clippy::type_complexity)]
 
+pub mod approval_core;
 #[cfg(target_os = "macos")]
 pub mod binary;
 pub mod contract;
+pub mod controller_runtime;
+pub mod controller_state;
 #[cfg(unix)]
 pub mod foundation_models;
 pub mod generation_gate;
@@ -59,17 +62,24 @@ pub mod generation_gate;
 pub mod host;
 pub mod jsonrpc;
 pub mod lines;
+pub mod privacy_notice;
 #[cfg(unix)]
 pub mod process;
 pub mod safety;
 pub mod session;
 pub mod settings_core;
+pub mod settings_state;
 #[cfg(unix)]
 pub mod socket;
 pub mod status_core;
+pub mod tool;
 
 pub use aiden_core::chat_title::{
     FoundationModelsConnectionState, FoundationModelsConnectionStatus,
+};
+pub use approval_core::{
+    ComputerUseApprovalDecision, ComputerUseApprovalError, ComputerUseApprovalFacts,
+    ComputerUseApprovalGate, ComputerUseApprovalRequest, ComputerUseApprovalWaiter,
 };
 pub use contract::{
     build_cua_driver_environment, computer_use_platform_supported,
@@ -78,6 +88,16 @@ pub use contract::{
     CUA_DRIVER_BROKER_BUNDLE_ID, CUA_DRIVER_BROKER_EXECUTABLE, CUA_DRIVER_CAPABILITY_VERSION,
     CUA_DRIVER_HOST_BUNDLE_ID, CUA_DRIVER_REQUIRED_TOOLS, CUA_DRIVER_TCC_HOST_BUNDLE_ID,
     CUA_DRIVER_TOOL_SCHEMA, CUA_DRIVER_VERSION,
+};
+#[cfg(target_os = "macos")]
+pub use controller_runtime::{create_computer_use_controller, CuaSessionDriver};
+pub use controller_runtime::{
+    ComputerUseController, ComputerUseDriver, ComputerUseExecutionError,
+    ComputerUseExecutionResult, ComputerUseResultContent,
+};
+pub use controller_state::{
+    ComputerUseApprovalDescriptor, ComputerUseControllerState, ComputerUseControllerStateError,
+    ComputerUseTargetSnapshot,
 };
 #[cfg(unix)]
 pub use foundation_models::{
@@ -98,6 +118,10 @@ pub use jsonrpc::{
     process_client_message, process_driver_message, ClientMessage, JsonRpcErrorObject, JsonRpcId,
     JsonRpcMessage, MAX_CLIENT_MESSAGE_BYTES, MAX_DRIVER_MESSAGE_BYTES,
 };
+pub use privacy_notice::{
+    ComputerUseEnableIntent, ComputerUseNoticeDismissal, ComputerUsePrivacyNoticeState,
+    COMPUTER_USE_NOTICE_DISMISSED_KEY, COMPUTER_USE_NOTICE_VERSION,
+};
 pub use safety::{
     computer_use_needs_approval, normalize_computer_use_args, parse_computer_use_key_chord,
     summarize_computer_use_approval, summarize_typed_approval_payload, ComputerUseBoundTarget,
@@ -112,6 +136,10 @@ pub use settings_core::{
     computer_use_settings_dependencies_from_store, ComputerUseSettingsCoordinator,
     ComputerUseSettingsDependencies, ComputerUseSettingsError,
 };
+pub use settings_state::{
+    ComputerUseSettingsOperation, ComputerUseSettingsRequest, ComputerUseSettingsState,
+    ComputerUseStatusPresentation, ComputerUseStatusTone,
+};
 #[cfg(unix)]
 pub use socket::{
     connect_socket_with_retry, validate_control_connect_target,
@@ -121,4 +149,8 @@ pub use socket::{
 pub use status_core::{
     ComputerUseStatus, ComputerUseStatusDependencies, ComputerUseStatusService,
     ComputerUseStatusState, REQUIRED_HEALTH_CHECKS,
+};
+pub use tool::{
+    computer_use_parameters_schema, COMPUTER_USE_ACTIONS, COMPUTER_USE_TOOL_DESCRIPTION,
+    COMPUTER_USE_TOOL_NAME,
 };

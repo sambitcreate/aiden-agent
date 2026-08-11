@@ -1,7 +1,7 @@
-//! App updates — pure port of `main/services/app-updater-core.ts` plus the
-//! `UpdateProvider` seam. **No electron-updater replacement yet**: the provided
-//! [`NoopUpdateProvider`] never contacts a feed; a real provider (Sparkle or a
-//! custom feed) can implement the trait later.
+//! App updates — port of `main/services/app-updater-core.ts` plus the
+//! `UpdateProvider` seam. Unpackaged builds use the inert
+//! [`NoopUpdateProvider`]; packaged macOS builds may provide the generic-feed
+//! implementation from `feed_update_provider`.
 
 use std::cmp::Ordering;
 
@@ -133,8 +133,14 @@ pub trait UpdateProvider: Send + Sync {
         &self,
         manual: bool,
     ) -> BoxFuture<'static, Result<UpdateCheckOutcome, UpdateCheckError>>;
-    /// Quit-and-install the downloaded update (`false` when none is ready).
-    fn install_downloaded(&self) -> bool;
+    /// Open a previously verified downloaded installer after an explicit user
+    /// action (`false` when none is ready).
+    ///
+    /// This seam is deliberately manual-only. The standalone GPUI process has
+    /// no signed external updater/Squirrel.Mac handoff that can replace its
+    /// running `.app` and relaunch it safely on quit, so callers must not treat
+    /// this as an automatic install-on-quit operation.
+    fn open_downloaded_installer(&self) -> bool;
     /// Start the background check schedule (15s initial delay + 6h interval).
     fn start(&self);
 }
@@ -153,7 +159,7 @@ impl UpdateProvider for NoopUpdateProvider {
     ) -> BoxFuture<'static, Result<UpdateCheckOutcome, UpdateCheckError>> {
         async { Err(UpdateCheckError::Unavailable) }.boxed()
     }
-    fn install_downloaded(&self) -> bool {
+    fn open_downloaded_installer(&self) -> bool {
         false
     }
     fn start(&self) {}
@@ -186,7 +192,7 @@ where
     ) -> BoxFuture<'static, Result<UpdateCheckOutcome, UpdateCheckError>> {
         async { Err(UpdateCheckError::Unavailable) }.boxed()
     }
-    fn install_downloaded(&self) -> bool {
+    fn open_downloaded_installer(&self) -> bool {
         false
     }
     fn start(&self) {}
@@ -280,7 +286,7 @@ mod tests {
     fn noop_provider_never_contacts_a_feed() {
         let provider = NoopUpdateProvider;
         assert_eq!(provider.snapshot(), IDLE_APP_UPDATE_SNAPSHOT);
-        assert!(!provider.install_downloaded());
+        assert!(!provider.open_downloaded_installer());
         let result = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(provider.check_now(false));
