@@ -246,3 +246,103 @@ test("a spawn-helper that is already executable is left untouched", async () => 
 
   await rm(dir, { recursive: true, force: true });
 });
+
+test("shell retry loop falls back when the preferred shell fails to spawn", async () => {
+  const owner = ownerState();
+  let spawnedShell = "";
+  // The first candidate throws the exact retryable error; the second wins.
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    // Both candidates must be "executable" so they enter the spawn loop; the
+    // spawn itself is what throws here.
+    shellCandidates: () => ["/bin/zsh", "/bin/sh"],
+    spawnPty: ((file: string) => {
+      if (file === "/bin/zsh") throw new Error("posix_spawnp failed.");
+      spawnedShell = file;
+      return fakePty().pty;
+    }) as typeof spawn,
+  });
+
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  assert.equal(spawnedShell, "/bin/sh");
+  assert.equal(session.resolvedShell, "/bin/sh");
+  assert.equal(session.preferredShellSkipped, true);
+});
+
+test("a non-retryable spawn error surfaces immediately instead of falling back", async () => {
+  const owner = ownerState();
+  let attempts = 0;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    shellCandidates: () => ["/bin/zsh", "/bin/sh"],
+    spawnPty: (() => {
+      attempts += 1;
+      // EINVAL is NOT a "missing shell" error — it must not be masked.
+      const error = new Error("EINVAL");
+      (error as Error & { code?: string }).code = "EINVAL";
+      throw error;
+    }) as typeof spawn,
+  });
+
+  await assert.rejects(service.create("workspace-1", "/tmp", owner.owner), /EINVAL/u);
+  // Only the first candidate was tried; no fallback.
+  assert.equal(attempts, 1);
+});
+
+test("all shells failing to spawn throws a descriptive error listing attempts", async () => {
+  const owner = ownerState();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    shellCandidates: () => ["/bin/zsh", "/bin/bash"],
+    spawnPty: (() => {
+      throw new Error("posix_spawnp failed.");
+    }) as typeof spawn,
+  });
+
+  await assert.rejects(
+    service.create("workspace-1", "/tmp", owner.owner),
+    /Could not launch any shell.*\/bin\/zsh.*\/bin\/bash/u,
+  );
+});
+
+test("the first candidate succeeding reports preferredShellSkipped false", async () => {
+  const owner = ownerState();
+  let spawnedShell = "";
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    shellCandidates: () => ["/bin/zsh", "/bin/sh"],
+    spawnPty: ((file: string) => {
+      spawnedShell = file;
+      return fakePty().pty;
+    }) as typeof spawn,
+  });
+
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  assert.equal(spawnedShell, "/bin/zsh");
+  assert.equal(session.resolvedShell, "/bin/zsh");
+  assert.equal(session.preferredShellSkipped, false);
+});
+
+test("persisted history seeds a reopened terminal buffer", async () => {
+  const owner = ownerState();
+  let history = "prior output\n";
+  // A minimal in-memory history store stub.
+  const historyStore = {
+    read: async () => history,
+    append: (_ws: string, data: string) => {
+      history += data;
+    },
+    flush: async () => undefined,
+  };
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => fakePty().pty) as typeof spawn,
+    historyStore,
+  });
+
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+  // The restored history is available via snapshot, so the renderer can
+  // re-hydrate xterm with the prior session's output.
+  const snapshot = service.snapshot(session.id, owner.owner);
+  assert.equal(snapshot.buffer, "prior output\n");
+});
