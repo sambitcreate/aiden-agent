@@ -55,6 +55,7 @@ import type {
 } from "../renderer/shared/app-update.js";
 import { devLogPath, initDevLog } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import { effectiveBindings, migrateLegacyKeybindings } from "../renderer/shared/keybindings.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
@@ -236,6 +237,7 @@ function cleanupApplication(): void {
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
+  telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   void mcpManager.closeAll();
 }
@@ -321,6 +323,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       shutdownProviderAuthFlow(),
       computerUseStatus.shutdown(),
       scheduleService.stopAndSettle(),
+      telegramService.stopAndSettle(),
       (async () => {
         await subagentRunStore.flush();
         await subagentRunStore.close();
@@ -1340,6 +1343,7 @@ if (!ownsSingleInstanceLock) {
         return;
       }
       await scheduleService.start();
+      await telegramService.start();
       appUpdateService.start();
     })
     .catch((error: unknown) => {

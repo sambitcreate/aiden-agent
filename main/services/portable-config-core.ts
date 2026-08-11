@@ -480,6 +480,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
   }
   for (const key of [
     "exaEnabled",
+    "telegramEnabled",
     "shortcutEnabled",
     "dictationEnabled",
     "computerUseEnabled",

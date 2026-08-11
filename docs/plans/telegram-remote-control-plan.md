@@ -1,6 +1,6 @@
 # Telegram Remote Control Plan
 
-Status: planned on 2026-08-11; not yet implemented
+Status: implemented on 2026-08-11; Phases 0–5 complete; Phase 6 (onboarding bento) deferred pending a 1024×1024 PNG asset
 Date: 2026-08-11
 UI reference: ChatGPT/Codex settings surfaces and Aiden's existing settings tokens; the Telegram operator UI is provided by the ported `pi-telegram` adapter (menus rendered as Telegram inline keyboards, not Aiden UI).
 License basis: `pi-telegram` is MIT-licensed (a fork of `badlogic/pi-telegram`). Vendor with attribution.
@@ -214,3 +214,39 @@ Threaded Mode + multi-instance bus; compaction menu; activity/thinking/tool rend
 - **Delta-capture extension** to `createBackgroundOwner`'s `send()` is a real code change, not a copy, if streaming previews ship in v1 (otherwise defer previews to v2 and keep `send()` as-is).
 - **Bundling**: the vendored TypeScript must esbuild cleanly into the main-process bundle (no native deps; `pi-telegram` is pure TS). Verify in Phase 5 packaged smoke.
 - **Chat visibility**: the persistent backing chat is created from main without renderer involvement; emit the existing `chats:metadata-updated` broadcast so the sidebar reflects it.
+
+## Implementation summary (2026-08-11)
+
+Phases 0–5 shipped as a clean-slate port on branch `feature/text-control`.
+Rather than vendoring pi-telegram's 57-file, ~1.5 MB tree (deeply entangled
+with Threaded-Mode, Pi-SDK, and companion-extension code), we wrote a focused
+implementation that captures the same behaviour with MIT attribution.
+
+**Files created** (`main/services/telegram/`):
+- `telegram-bot-api.ts` — Bot API HTTP client (getUpdates, sendMessage, getMe, etc.)
+- `telegram-markdown.ts` — Markdown → Telegram HTML conversion + 4096-char chunking
+- `telegram-queue.ts` — control/priority/default lane queue with dispatch gates
+- `telegram-turn.ts` — headless turn injection shim (createTelegramBackgroundOwner, sendTelegramTurn)
+- `telegram-config.ts` — runtime config store (lastUpdateId via DataStore, settings bridge)
+- `telegram-service-core.ts` — pure service factory (polling loop, pairing, dispatch, delivery)
+- `telegram-service.ts` — production singleton with DI wiring
+
+**Files modified**:
+- `main/handlers/telegram.ts` — IPC handlers (telegram:get/setKey/setEnabled/connect/disconnect/resetPairing)
+- `main/handlers/index.ts` — registerTelegramHandlers
+- `main/index.ts` — lifecycle anchors (start/stop/stopAndSettle)
+- `main/services/types.ts` — AppSettings: telegramEnabled, telegramAllowedUserId
+- `main/services/usage-store-core.ts` — UsageRequestSource: "telegram"
+- `main/services/portable-config-core.ts` — keepBoolean: telegramEnabled
+- `renderer/preload-channels.ts` — INVOKE_PREFIXES: "telegram:"
+- `renderer/lib/ipc.ts` — telegramApi
+- `renderer/lib/queries.ts` — queryKeys.telegram, useTelegramSettings
+- `renderer/components/settings/telegram-settings.tsx` — settings UI
+- `renderer/shared/settings-section.ts` — nav entry
+- `renderer/main/settings-view.tsx` — NAV_ICONS + CONTENT binding
+- `package.json` — test:telegram script
+- `resources/telegram/LICENSE.pi-telegram.md` — MIT attribution
+
+**Tests** (50 passing): bot API (10), turn injection (9), queue (10), markdown (10), service core (11).
+
+**Phase 6 (onboarding)** deferred: requires a 1024×1024 transparent PNG asset for the bento gallery tile.

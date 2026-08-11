@@ -490,6 +490,10 @@ export interface AppSettings {
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
+  /** Telegram remote-control enable flag; gates long-poll polling. */
+  telegramEnabled?: boolean;
+  /** Paired Telegram owner chat id; undefined until first /start pairs. */
+  telegramAllowedUserId?: number;
 }
 
 export type ComputerUseStatusState =

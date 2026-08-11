@@ -26,6 +26,7 @@ export const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "telegram:",
   "subagents:",
   "terminal:",
   "titleProviders:",

@@ -10,7 +10,8 @@ export type UsageRequestSource =
   | "chat-title"
   | "voice-transcription"
   | "scheduled"
-  | "subagent";
+  | "subagent"
+  | "telegram";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
 
@@ -75,6 +76,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "voice-transcription",
   "scheduled",
   "subagent",
+  "telegram",
 ]);
 
 export function emptyUsageTokens(): UsageTokenBreakdown {

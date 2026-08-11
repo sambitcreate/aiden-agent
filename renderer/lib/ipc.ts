@@ -333,6 +333,24 @@ export const exaApi = {
     invoke<AppSettings>("exa:setEnabled", enabled),
 };
 
+// ── Telegram remote control ──────────────────────────────────────────
+export interface TelegramStatus {
+  enabled: boolean;
+  hasToken: boolean;
+  allowedUserId?: number;
+  polling: boolean;
+  queuedCount: number;
+  lastError?: string;
+}
+export const telegramApi = {
+  get: () => invoke<TelegramStatus>("telegram:get"),
+  setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
+  setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
+  connect: () => invoke<{ connected: boolean }>("telegram:connect"),
+  disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
+  resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
+};
+
 // ── Voice + shortcut ──────────────────────────────────────────────────
 export const voiceApi = {
   transcribe: (audioBase64: string, mimeType: string) =>
