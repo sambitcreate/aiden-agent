@@ -180,6 +180,13 @@ export function WorkspaceTerminalProvider({ children }: { children: React.ReactN
       }
       try {
         const session = await terminalApi.create(active.id);
+        // Surface once when the preferred shell was unavailable and a fallback
+        // launched the terminal — the user should know their $SHELL is broken.
+        if (session.preferredShellSkipped) {
+          toast.info(
+            `Used ${session.resolvedShell} because $SHELL was unavailable. Check your shell preference if this is unexpected.`,
+          );
+        }
         setSessions((previous) => [...previous, session]);
         setActiveId(session.id);
         setOpen(true);
