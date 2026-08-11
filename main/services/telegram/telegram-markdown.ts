@@ -21,6 +21,11 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
+/** Escape a URL for safe placement inside an HTML attribute value. */
+function escapeHref(url: string): string {
+  return url.replace(/"/g, "&quot;");
+}
+
 /** Convert inline Markdown to Telegram HTML (no block-level handling). */
 function convertInline(markdown: string): string {
   // Protect fenced code spans first so their content is not reformatted.
@@ -50,10 +55,11 @@ function convertInline(markdown: string): string {
   // Strikethrough: ~~text~~
   working = working.replace(/~~(.+?)~~/g, "<s>$1</s>");
 
-  // Links: [text](url)
+  // Links: [text](url) — escape quotes in the URL for safe attribute injection.
   working = working.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2">$1</a>',
+    (_m, text: string, url: string) =>
+      `<a href="${escapeHref(url)}">${text}</a>`,
   );
 
   // Restore code spans.
@@ -99,7 +105,9 @@ export function markdownToTelegramHtml(markdown: string): string {
     }
     if (inFencedBlock) {
       codeLines.push(line);
-      if (line.startsWith(fenceMarker) || line.trim() === fenceMarker.slice(0, 3)) {
+      // Closing fence: backticks-only line, at least as long as the opening.
+      const trimmed = line.trim();
+      if (trimmed.length >= fenceMarker.length && /^`+$/.test(trimmed)) {
         inFencedBlock = false;
         output.push(convertFencedBlock(codeLines.join("\n")));
       }
@@ -114,9 +122,8 @@ export function markdownToTelegramHtml(markdown: string): string {
     }
 
     // Blockquote.
-    if (line.startsWith("&gt; ") || line.startsWith("> ")) {
-      const text = line.startsWith("&gt; ") ? line.slice(5) : line.slice(2);
-      output.push(`<blockquote>${convertInline(text)}</blockquote>`);
+    if (line.startsWith("> ")) {
+      output.push(`<blockquote>${convertInline(line.slice(2))}</blockquote>`);
       continue;
     }
 
@@ -146,6 +153,7 @@ export function markdownToTelegramHtml(markdown: string): string {
  * Split HTML text into chunks under the Telegram message limit.
  * Prefers splitting at double-newline boundaries (paragraph breaks);
  * falls back to hard splits if a single paragraph exceeds the limit.
+ * Tracks <pre> state across chunk boundaries so tags stay balanced.
  */
 export function chunkForTelegram(html: string): string[] {
   const limit = TELEGRAM_MESSAGE_LIMIT - CHUNK_HEADROOM;
@@ -157,12 +165,10 @@ export function chunkForTelegram(html: string): string[] {
 
   for (const para of paragraphs) {
     if (para.length > limit) {
-      // Flush current chunk first.
       if (current) {
         chunks.push(current.trim());
         current = "";
       }
-      // Hard-split the oversized paragraph at line boundaries.
       for (const piece of hardSplit(para, limit)) chunks.push(piece);
       continue;
     }
@@ -176,7 +182,20 @@ export function chunkForTelegram(html: string): string[] {
   }
 
   if (current.trim()) chunks.push(current.trim());
-  return chunks;
+  return chunks.map(balancePreTags);
+}
+
+/**
+ * Ensure each chunk has balanced <pre> tags. If a chunk opens <pre>
+ * without closing it, append </pre>; if it closes </pre> without
+ * opening one, prepend <pre>.
+ */
+function balancePreTags(chunk: string): string {
+  const opens = (chunk.match(/<pre[^>]*>/g) ?? []).length;
+  const closes = (chunk.match(/<\/pre>/g) ?? []).length;
+  if (opens === closes) return chunk;
+  if (opens > closes) return chunk + "\n</pre>".repeat(opens - closes);
+  return "<pre>".repeat(closes - opens) + chunk;
 }
 
 /** Hard-split a long block at newline boundaries, then by char count. */
@@ -189,7 +208,6 @@ function hardSplit(text: string, limit: number): string[] {
     if ((current + "\n" + line).length > limit) {
       if (current) chunks.push(current.trim());
       if (line.length > limit) {
-        // Char-level split for pathologically long lines.
         for (let i = 0; i < line.length; i += limit) {
           chunks.push(line.slice(i, i + limit));
         }

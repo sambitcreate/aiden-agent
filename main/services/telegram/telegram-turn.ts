@@ -182,12 +182,15 @@ export async function sendTelegramTurn(
   }
 
   try {
-    await deps.chatStore.appendMessage(
-      chatId,
-      { role: "user", content },
-      { providerId: provider.providerId, model: provider.model },
-    );
-    turn.settleAsyncWork();
+    try {
+      await deps.chatStore.appendMessage(
+        chatId,
+        { role: "user", content },
+        { providerId: provider.providerId, model: provider.model },
+      );
+    } finally {
+      turn.settleAsyncWork();
+    }
 
     const started = await deps.llmClient.start(
       streamId,

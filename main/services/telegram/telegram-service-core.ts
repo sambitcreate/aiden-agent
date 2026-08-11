@@ -35,14 +35,10 @@ export type TelegramServiceStatus =
   | "disabled"
   | "idle"
   | "polling"
-  | "paired"
   | "error";
 
 export interface TelegramServiceState {
   status: TelegramServiceStatus;
-  enabled: boolean;
-  hasToken: boolean;
-  allowedUserId?: number;
   botUsername?: string;
   lastError?: string;
   queuedCount: number;
@@ -75,20 +71,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   function getStatus(): TelegramServiceState {
     return {
-      status: deriveStatus(),
-      enabled: false, // set by caller via snapshot
-      hasToken: false,
-      allowedUserId: undefined,
+      status: started ? (lastError ? "error" : "polling") : "disabled",
       botUsername,
       lastError,
       queuedCount: queue.size(),
     };
-  }
-
-  function deriveStatus(): TelegramServiceStatus {
-    if (lastError) return "error";
-    if (!started) return "disabled";
-    return "idle";
   }
 
   async function start(): Promise<void> {
@@ -107,13 +94,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     abortController?.abort();
     abortController = undefined;
     queue.clear();
-    activeTurn = false;
-    dispatchPending = false;
+    // Do NOT reset activeTurn/dispatchPending here — the in-flight
+    // dispatchTurn's finally block owns those. Resetting mid-turn
+    // would allow a concurrent dispatch on the same chat.
   }
 
   async function stopAndSettle(): Promise<void> {
     stop();
-    // Give in-flight turns a brief grace period to settle.
     // The abort signal cancels polling; active LLM turns settle on their own.
   }
 
@@ -138,7 +125,6 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   async function runPollLoop(signal: AbortSignal): Promise<void> {
     try {
-      // Verify bot identity on connect.
       const me = await deps.api.getMe();
       botUsername = me.username;
       deps.info(`Telegram bot connected as @${me.username}.`);
@@ -166,21 +152,25 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       lastError = undefined;
 
       for (const update of updates) {
-        // Persist offset ONLY after successful handling (pi-telegram rule).
+        let handled = false;
         try {
           await handleUpdate(update);
+          handled = true;
         } catch (cause) {
           deps.error(
             `Telegram handleUpdate failed for ${update.update_id}.`,
             cause,
           );
         }
-        // Monotonic max: always advance past this update.
-        offset = update.update_id + 1;
-        await deps.config.persistOffset(update.update_id);
+        // Persist the resume offset (update_id + 1) ONLY after successful
+        // handling. On failure the update will be retried on the next poll.
+        // Monotonic max is enforced inside persistOffset.
+        if (handled) {
+          offset = update.update_id + 1;
+          await deps.config.persistOffset(update.update_id + 1);
+        }
       }
 
-      // Try dispatching after each batch.
       tryDispatch();
     }
   }
@@ -190,21 +180,23 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const from = update.message?.from ?? update.callback_query?.from;
     if (!message || !from) return;
 
-    // Answer callback queries immediately.
-    if (update.callback_query) {
-      await deps.api.answerCallbackQuery(update.callback_query.id);
-    }
+    // Restrict to private chats — group/supergroup messages are ignored.
+    if (message.chat.type !== "private") return;
 
     const snap = await deps.config.snapshot();
 
-    // Authorization / pairing gate.
+    // Authorization / pairing gate (checked before answering callbacks).
     if (snap.allowedUserId === undefined) {
       // First non-bot user to message becomes the owner.
       if (from.is_bot) return;
       await deps.config.setSettings({ telegramAllowedUserId: from.id });
+      // Answer any pending callback after pairing.
+      if (update.callback_query) {
+        await deps.api.answerCallbackQuery(update.callback_query.id);
+      }
       await deps.api.sendMessage({
         chatId: message.chat.id,
-        text: "✅ Telegram bridge paired with this account.\n\nSend any message and I'll respond. Use /stop to abort an in-flight turn.",
+        text: "✅ Telegram bridge paired with this account.\n\nSend any message and I'll respond. Use /stop to clear queued messages.",
       });
       return;
     }
@@ -213,6 +205,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (from.id !== snap.allowedUserId) {
       deps.warn(`Telegram: unauthorized user ${from.id} ignored.`);
       return;
+    }
+
+    // Answer callback queries after the authorization gate.
+    if (update.callback_query) {
+      await deps.api.answerCallbackQuery(update.callback_query.id);
     }
 
     const text = extractText(message);
@@ -232,7 +229,6 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       fromUsername: from.username,
     });
 
-    // Try dispatching.
     tryDispatch();
   }
 
@@ -243,19 +239,19 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (cmd === "/start") {
       await deps.api.sendMessage({
         chatId,
-        text: "🤖 Aiden Telegram Bridge\n\nSend any message and I'll respond as Aiden.\n\nCommands:\n/start — show this help\n/stop — abort the current turn\n/status — show bridge status",
+        text: "🤖 Aiden Telegram Bridge\n\nSend any message and I'll respond as Aiden.\n\nCommands:\n/start — show this help\n/stop — clear queued messages\n/status — show bridge status",
       });
       return;
     }
 
     if (cmd === "/stop" || cmd === "/cancel") {
-      stop();
-      // Restart polling after abort.
-      await connect();
-      await deps.api.sendMessage({
-        chatId,
-        text: "⏹ Turn aborted. Polling resumed.",
-      });
+      const hadQueued = queue.size();
+      queue.clear();
+      const lines = [hadQueued > 0 ? `🧹 Cleared ${hadQueued} queued message(s).` : "No messages were queued."];
+      if (activeTurn) {
+        lines.push("The current turn is still running — it will finish on its own.");
+      }
+      await deps.api.sendMessage({ chatId, text: lines.join("\n") });
       return;
     }
 
@@ -284,7 +280,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   /** Attempt to dispatch the next queued turn. No-op if gates block. */
   function tryDispatch(): void {
-    if (activeTurn || dispatchPending) return;
+    if (!started || activeTurn || dispatchPending) return;
     const next = queue.dequeue();
     if (!next) return;
     void dispatchTurn(next);
@@ -308,11 +304,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       deps.error("Telegram: failed to ensure chat for turn.", cause);
     }
 
-    // Send typing indicator.
-    void sendTypingIndicator(turn.chatId).catch(() => undefined);
-
     activeTurn = true;
     dispatchPending = false;
+
+    // Start typing indicator AFTER activeTurn is set so the loop condition
+    // evaluates true on its first iteration.
+    void sendTypingIndicator(turn.chatId).catch(() => undefined);
 
     try {
       const result: TelegramTurnResult = await sendTelegramTurn(
@@ -329,7 +326,6 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         .catch(() => undefined);
     } finally {
       activeTurn = false;
-      // Try dispatching the next queued turn.
       tryDispatch();
     }
   }
@@ -364,7 +360,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (typingActive) return;
     typingActive = true;
     try {
-      while (activeTurn) {
+      while (activeTurn && started) {
         await deps.api.sendChatAction(chatId, "typing").catch(() => undefined);
         await deps.sleep(TYPING_INTERVAL_MS).catch(() => undefined);
       }

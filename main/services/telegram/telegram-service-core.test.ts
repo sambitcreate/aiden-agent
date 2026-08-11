@@ -318,6 +318,8 @@ function createMockSleep() {
   const sleep = async (ms: number, _signal?: AbortSignal): Promise<void> => {
     calls += 1;
     lastArgs.push(ms);
+    // Yield to the event loop so concurrent loops (typing indicator) don't starve macrotasks.
+    await new Promise<void>((resolve) => setImmediate(resolve));
   };
   return { sleep, calls: () => calls, lastArgs: () => lastArgs };
 }
@@ -472,7 +474,9 @@ test("stop() halts polling and clears the queue", async () => {
   service.stop();
 
   assert.equal(service.queueSize, 0, "queue cleared");
-  assert.equal(service.isActive, false, "active turn flag cleared");
+  // activeTurn stays true while the in-flight turn is running — stop() must
+  // not reset it, or a concurrent dispatch on the same chat would be allowed.
+  assert.equal(service.isActive, true, "in-flight turn still tracked as active");
   assert.equal(service.getStatus().status, "disabled");
 });
 
