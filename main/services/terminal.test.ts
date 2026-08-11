@@ -4,7 +4,11 @@ import { mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { IPty, spawn } from "node-pty";
-import { resolveNodePtyDiskPackageDir, TerminalService } from "./terminal.js";
+import {
+  resolveNodePtyDiskPackageDir,
+  resolveNodePtySpawnHelperPaths,
+} from "./terminal-spawn-helper.js";
+import { TerminalService } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -15,14 +19,17 @@ function deferred() {
   return { promise, resolve };
 }
 
-function ownerState(documentId = "document-1") {
+function ownerState(documentId = "document-1", id = 42) {
   let destroyed = false;
   const listeners = new Set<() => void>();
+  const sent: Array<{ channel: string; payload: unknown }> = [];
   const owner: RendererDocumentOwner = {
-    id: 42,
+    id,
     documentId,
     isDestroyed: () => destroyed,
-    send: () => undefined,
+    send: (channel, payload) => {
+      sent.push({ channel, payload });
+    },
     onInvalidated: (listener) => {
       listeners.add(listener);
       if (destroyed) listener();
@@ -31,6 +38,7 @@ function ownerState(documentId = "document-1") {
   };
   return {
     owner,
+    sent,
     destroy: () => {
       destroyed = true;
       for (const listener of [...listeners]) listener();
@@ -40,17 +48,38 @@ function ownerState(documentId = "document-1") {
 
 function fakePty() {
   let killed = false;
+  let dataListener: ((data: string) => void) | undefined;
+  let exitListener: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+  const writes: string[] = [];
+  const resizes: Array<{ cols: number; rows: number }> = [];
   const pty = {
     pid: 999_999,
     kill: () => {
       killed = true;
     },
-    onData: () => ({ dispose: () => undefined }),
-    onExit: () => ({ dispose: () => undefined }),
-    resize: () => undefined,
-    write: () => undefined,
+    onData: (listener: (data: string) => void) => {
+      dataListener = listener;
+      return { dispose: () => undefined };
+    },
+    onExit: (listener: (event: { exitCode: number; signal?: number }) => void) => {
+      exitListener = listener;
+      return { dispose: () => undefined };
+    },
+    resize: (cols: number, rows: number) => {
+      resizes.push({ cols, rows });
+    },
+    write: (data: string) => {
+      writes.push(data);
+    },
   } as unknown as IPty;
-  return { pty, killed: () => killed };
+  return {
+    pty,
+    killed: () => killed,
+    writes,
+    resizes,
+    emitData: (data: string) => dataListener?.(data),
+    emitExit: (exitCode = 0, signal?: number) => exitListener?.({ exitCode, signal }),
+  };
 }
 
 test("renderer destruction during terminal revalidation prevents spawn", async () => {
@@ -252,6 +281,72 @@ test("packaged spawn-helper checks target the unpacked filesystem path", () => {
   assert.equal(resolveNodePtyDiskPackageDir(unpacked), unpacked, "rewrite must be idempotent");
 });
 
+test("production spawn-helper discovery reads only the unpacked ASAR directory", async () => {
+  const packaged = path.join(
+    "/Applications",
+    "Aiden Agent.app",
+    "Contents",
+    "Resources",
+    "app.asar",
+    "node_modules",
+    "node-pty",
+  );
+  const reads: string[] = [];
+  const helpers = await resolveNodePtySpawnHelperPaths(packaged, async (directory) => {
+    reads.push(directory);
+    return ["darwin-arm64", "darwin-x64"];
+  });
+  const unpackedPrebuilds = path.join(
+    "/Applications",
+    "Aiden Agent.app",
+    "Contents",
+    "Resources",
+    "app.asar.unpacked",
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+  );
+
+  assert.deepEqual(reads, [unpackedPrebuilds]);
+  assert.deepEqual(helpers, [
+    path.join(unpackedPrebuilds, "darwin-arm64", "spawn-helper"),
+    path.join(unpackedPrebuilds, "darwin-x64", "spawn-helper"),
+  ]);
+  assert.equal(
+    helpers.some((helper) => /app\.asar[/\\]/u.test(helper)),
+    false,
+  );
+});
+
+test("spawn-helper discovery handles node_modules.asar and absent prebuilds", async () => {
+  const packaged = path.join(
+    "/Applications",
+    "Aiden Agent.app",
+    "Contents",
+    "Resources",
+    "node_modules.asar",
+    "node-pty",
+  );
+  const reads: string[] = [];
+  const helpers = await resolveNodePtySpawnHelperPaths(packaged, async (directory) => {
+    reads.push(directory);
+    throw new Error("missing");
+  });
+
+  assert.deepEqual(helpers, []);
+  assert.deepEqual(reads, [
+    path.join(
+      "/Applications",
+      "Aiden Agent.app",
+      "Contents",
+      "Resources",
+      "node_modules.asar.unpacked",
+      "node-pty",
+      "prebuilds",
+    ),
+  ]);
+});
+
 test("a spawn-helper that is already executable is left untouched", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "pty-helper-ok-"));
   const helper = path.join(dir, "spawn-helper");
@@ -383,4 +478,135 @@ test("persisted history seeds a reopened terminal buffer", async () => {
   assert.equal(snapshot.buffer, "prior output\n");
   await service.flushHistory();
   assert.equal(flushAllCount, 1);
+});
+
+test("terminal sessions cover input, resize, output, snapshot, history, and natural exit", async () => {
+  const owner = ownerState();
+  const child = fakePty();
+  const appended: Array<{ workspaceId: string; data: string }> = [];
+  let flushCount = 0;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => child.pty) as typeof spawn,
+    historyStore: {
+      read: async () => "restored\n",
+      append: (workspaceId, data) => appended.push({ workspaceId, data }),
+      flush: async () => {
+        flushCount += 1;
+      },
+    },
+  });
+  const session = await service.create("workspace-1", "/tmp", owner.owner);
+
+  assert.deepEqual(service.snapshot(session.id, owner.owner), {
+    buffer: "restored\n",
+    sequence: 1,
+  });
+  service.write(session.id, "printf ready\\n", owner.owner);
+  assert.deepEqual(child.writes, ["printf ready\\n"]);
+  assert.throws(() => service.write(session.id, "", owner.owner), /non-empty message/u);
+  assert.throws(
+    () => service.write(session.id, "x".repeat(64_001), owner.owner),
+    /smaller than 64 KB/u,
+  );
+  service.resize(session.id, 999, "invalid", owner.owner);
+  assert.deepEqual(child.resizes, [{ cols: 500, rows: 30 }]);
+
+  child.emitData("live output\n");
+  assert.deepEqual(service.snapshot(session.id, owner.owner), {
+    buffer: "restored\nlive output\n",
+    sequence: 2,
+  });
+  assert.deepEqual(appended, [{ workspaceId: "workspace-1", data: "live output\n" }]);
+  assert.deepEqual(owner.sent[owner.sent.length - 1], {
+    channel: "terminal:data",
+    payload: { sessionId: session.id, sequence: 2, data: "live output\n" },
+  });
+
+  child.emitExit(7, 15);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(flushCount, 1);
+  assert.deepEqual(owner.sent[owner.sent.length - 1], {
+    channel: "terminal:exit",
+    payload: { sessionId: session.id, exitCode: 7, signal: 15 },
+  });
+  assert.throws(() => service.workspaceId(session.id, owner.owner), /unavailable/u);
+});
+
+test("terminal teardown is scoped by workspace and renderer web contents", async () => {
+  const firstOwner = ownerState("document-1", 41);
+  const secondOwner = ownerState("document-2", 42);
+  const children = [fakePty(), fakePty(), fakePty()];
+  let spawnIndex = 0;
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => children[spawnIndex++]!.pty) as typeof spawn,
+  });
+  const first = await service.create("workspace-a", "/tmp", firstOwner.owner);
+  const second = await service.create("workspace-b", "/tmp", firstOwner.owner);
+  const third = await service.create("workspace-b", "/tmp", secondOwner.owner);
+
+  service.closeForWorkspace("workspace-a");
+  assert.equal(children[0]!.killed(), true);
+  assert.equal(children[1]!.killed(), false);
+  assert.equal(children[2]!.killed(), false);
+  assert.throws(() => service.snapshot(first.id, firstOwner.owner), /unavailable/u);
+  assert.equal(service.workspaceId(second.id, firstOwner.owner), "workspace-b");
+  assert.equal(service.workspaceId(third.id, secondOwner.owner), "workspace-b");
+
+  service.closeForWebContents(firstOwner.owner.id);
+  assert.equal(children[1]!.killed(), true);
+  assert.equal(children[2]!.killed(), false);
+  service.close(third.id, secondOwner.owner);
+  assert.equal(children[2]!.killed(), true);
+  assert.deepEqual(secondOwner.sent[secondOwner.sent.length - 1], {
+    channel: "terminal:exit",
+    payload: { sessionId: third.id, exitCode: null, signal: "SIGHUP" },
+  });
+});
+
+test("terminal enforces the per-document session cap and history initialization order", async () => {
+  const owner = ownerState();
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => fakePty().pty) as typeof spawn,
+  });
+  for (let index = 0; index < 8; index += 1) {
+    await service.create(`workspace-${index}`, "/tmp", owner.owner);
+  }
+  await assert.rejects(
+    service.create("workspace-over-limit", "/tmp", owner.owner),
+    /maximum of 8 terminal sessions/u,
+  );
+  assert.throws(
+    () =>
+      service.installHistoryStore({
+        read: async () => "",
+        append: () => undefined,
+        flush: async () => undefined,
+      }),
+    /before opening a terminal/u,
+  );
+});
+
+test("history flush falls back to one flush per active workspace", async () => {
+  const owner = ownerState();
+  const flushed: string[] = [];
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+    spawnPty: (() => fakePty().pty) as typeof spawn,
+    historyStore: {
+      read: async () => "",
+      append: () => undefined,
+      flush: async (workspaceId) => {
+        flushed.push(workspaceId);
+      },
+    },
+  });
+  await service.create("workspace-1", "/tmp", owner.owner);
+  await service.create("workspace-1", "/tmp", owner.owner);
+  await service.create("workspace-2", "/tmp", owner.owner);
+
+  await service.flushHistory();
+  assert.deepEqual(flushed.sort(), ["workspace-1", "workspace-2"]);
 });

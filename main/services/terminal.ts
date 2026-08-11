@@ -8,6 +8,7 @@ import { accessSync, constants as fsConstants } from "node:fs";
 import { createRequire } from "module";
 import { spawn, type IPty } from "node-pty";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
+import { resolveNodePtySpawnHelperPaths } from "./terminal-spawn-helper.js";
 
 const MAX_INPUT_CHARS = 64_000;
 const MAX_BUFFER_CHARS = 200_000;
@@ -493,31 +494,7 @@ async function defaultSpawnHelperPaths(): Promise<string[]> {
     // spawn will surface the underlying error.
     return [];
   }
-  packageDir = resolveNodePtyDiskPackageDir(packageDir);
-  const prebuildsDir = path.join(packageDir, "prebuilds");
-  let entries: string[];
-  try {
-    entries = await fs.readdir(prebuildsDir);
-  } catch {
-    return [];
-  }
-  const helpers: string[] = [];
-  for (const entry of entries) {
-    helpers.push(path.join(prebuildsDir, entry, "spawn-helper"));
-  }
-  return helpers;
-}
-
-/**
- * Mirror node-pty's runtime rewrite from Electron's virtual ASAR path to the
- * real unpacked directory. Electron's patched `stat` can report an unpacked
- * placeholder inside `app.asar` as a regular non-executable file, but `chmod`
- * on that virtual path fails with ENOTDIR. Normalize before either operation.
- */
-export function resolveNodePtyDiskPackageDir(packageDir: string): string {
-  return packageDir
-    .replace(/([/\\])app\.asar([/\\])/u, "$1app.asar.unpacked$2")
-    .replace(/([/\\])node_modules\.asar([/\\])/u, "$1node_modules.asar.unpacked$2");
+  return resolveNodePtySpawnHelperPaths(packageDir);
 }
 
 async function ensureHelperExecutable(helper: string): Promise<void> {
