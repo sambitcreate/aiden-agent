@@ -455,6 +455,10 @@ export interface TerminalSession {
   id: string;
   workspaceId: string;
   cwd: string;
+  /** The shell that actually launched this session (e.g. `/bin/zsh`). */
+  resolvedShell: string;
+  /** True when the preferred shell was skipped and a fallback launched it. */
+  preferredShellSkipped: boolean;
 }
 
 export interface TerminalSnapshot {
