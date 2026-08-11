@@ -1,5 +1,10 @@
 import type { Attachment } from "./types.js";
-import { MAX_IMAGE_BYTES, MAX_TEXT_CHARS } from "./attachments.js";
+import {
+  imageBytesMatchMime,
+  isCanonicalRasterImageMimeType,
+  MAX_IMAGE_BYTES,
+  MAX_TEXT_CHARS,
+} from "./attachments.js";
 import {
   MAX_ATTACHMENT_INLINE_BYTES,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -11,6 +16,11 @@ const MAX_MIME_TYPE_CHARS = 128;
 const MAX_LEGACY_TEXT_CHARS = MAX_TEXT_CHARS + "\n… [truncated]".length;
 const MAX_IMAGE_BASE64_CHARS = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
 const MAX_LEGACY_ATTACHMENT_INLINE_BYTES = MAX_ATTACHMENTS_PER_MESSAGE * MAX_IMAGE_BYTES;
+const MAX_IMAGE_SIGNATURE_BYTES = 4096;
+const IMAGE_ATTACHMENT_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "data"]);
+const TEXT_ATTACHMENT_KEYS = new Set(["id", "name", "mimeType", "kind", "size", "text"]);
+
+type AttachmentParseMode = "append" | "stored";
 
 function base64DecodedBytes(value: string): number | undefined {
   if (value.length === 0 || value.length % 4 !== 0) return undefined;
@@ -55,11 +65,33 @@ function boundedString(
   return value;
 }
 
-function parseAttachment(value: unknown, index: number): Attachment {
+function hasExactKeys(value: Record<string, unknown>, expected: ReadonlySet<string>): boolean {
+  let count = 0;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    count += 1;
+    if (count > expected.size || !expected.has(key)) return false;
+  }
+  return count === expected.size;
+}
+
+function decodedBase64Prefix(value: string): Buffer {
+  const encodedChars = Math.min(value.length, Math.ceil(MAX_IMAGE_SIGNATURE_BYTES / 3) * 4);
+  return Buffer.from(value.slice(0, encodedChars), "base64");
+}
+
+function parseAttachment(value: unknown, index: number, mode: AttachmentParseMode): Attachment {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Invalid attachment at index ${index}.`);
   }
   const attachment = value as Record<string, unknown>;
+  if (
+    mode === "append" &&
+    ((attachment.kind === "text" && !hasExactKeys(attachment, TEXT_ATTACHMENT_KEYS)) ||
+      (attachment.kind === "image" && !hasExactKeys(attachment, IMAGE_ATTACHMENT_KEYS)))
+  ) {
+    throw new Error(`Invalid attachment fields at index ${index}.`);
+  }
   const id = boundedString(attachment.id, "id", MAX_ATTACHMENT_ID_CHARS);
   const name = boundedString(attachment.name, "name", MAX_ATTACHMENT_NAME_CHARS);
   const mimeType = boundedString(attachment.mimeType, "mimeType", MAX_MIME_TYPE_CHARS);
@@ -73,12 +105,15 @@ function parseAttachment(value: unknown, index: number): Attachment {
     return { id, name, mimeType, kind: "text", size, text };
   }
   if (attachment.kind === "image") {
+    const data = attachment.data;
     const decodedBytes =
-      typeof attachment.data === "string" && attachment.data.length <= MAX_IMAGE_BASE64_CHARS
-        ? base64DecodedBytes(attachment.data)
+      typeof data === "string" && data.length <= MAX_IMAGE_BASE64_CHARS
+        ? base64DecodedBytes(data)
         : undefined;
     if (
-      !mimeType.startsWith("image/") ||
+      (mode === "append"
+        ? !isCanonicalRasterImageMimeType(mimeType)
+        : !mimeType.startsWith("image/")) ||
       decodedBytes === undefined
     ) {
       throw new Error("Invalid image attachment data.");
@@ -86,7 +121,14 @@ function parseAttachment(value: unknown, index: number): Attachment {
     if (decodedBytes > MAX_IMAGE_BYTES || decodedBytes !== size) {
       throw new Error("Invalid image attachment size.");
     }
-    return { id, name, mimeType, kind: "image", size, data: attachment.data as string };
+    if (
+      mode === "append" &&
+      isCanonicalRasterImageMimeType(mimeType) &&
+      !imageBytesMatchMime(decodedBase64Prefix(data as string), mimeType)
+    ) {
+      throw new Error("Image attachment bytes do not match the declared image type.");
+    }
+    return { id, name, mimeType, kind: "image", size, data: data as string };
   }
   throw new Error("Invalid attachment kind.");
 }
@@ -94,6 +136,7 @@ function parseAttachment(value: unknown, index: number): Attachment {
 function parseAttachmentsWithLimit(
   value: unknown,
   aggregateLimit: number,
+  mode: AttachmentParseMode,
 ): Attachment[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length > MAX_ATTACHMENTS_PER_MESSAGE) {
@@ -112,7 +155,7 @@ function parseAttachmentsWithLimit(
   const parsed: Attachment[] = [];
   let inlineBytes = 0;
   for (let index = 0; index < value.length; index += 1) {
-    const attachment = parseAttachment(value[index], index);
+    const attachment = parseAttachment(value[index], index, mode);
     inlineBytes +=
       attachment.kind === "image"
         ? attachment.size
@@ -126,15 +169,16 @@ function parseAttachmentsWithLimit(
 }
 
 export function parseAttachments(value: unknown): Attachment[] | undefined {
-  return parseAttachmentsWithLimit(value, MAX_ATTACHMENT_INLINE_BYTES);
+  return parseAttachmentsWithLimit(value, MAX_ATTACHMENT_INLINE_BYTES, "append");
 }
 
 export function safeStoredAttachments(value: unknown): Attachment[] | undefined {
   try {
-    // Histories created before aggregate admission shipped may contain up to
-    // twenty individually valid 8 MiB images. Preserve those bytes on reads
-    // and unrelated rewrites; only new renderer appends use the stricter cap.
-    return parseAttachmentsWithLimit(value, MAX_LEGACY_ATTACHMENT_INLINE_BYTES);
+    // Histories created before aggregate and raster admission shipped may use
+    // the former image envelope or contain up to twenty individually valid
+    // 8 MiB images. Preserve those bytes on reads and unrelated rewrites; only
+    // new renderer appends use the exact raster contract and stricter cap.
+    return parseAttachmentsWithLimit(value, MAX_LEGACY_ATTACHMENT_INLINE_BYTES, "stored");
   } catch {
     return undefined;
   }

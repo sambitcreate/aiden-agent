@@ -51,3 +51,34 @@ jobs:
 
       - name: Build production bundles
         run: npm run build
+
+  e2e:
+    name: Deterministic Electron E2E
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.22.3
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run deterministic Electron E2E gate
+        run: npm run test:e2e
+
+      - name: Upload Playwright failure artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-e2e-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/e2e
+            playwright-report/e2e
+          if-no-files-found: warn
+          retention-days: 14

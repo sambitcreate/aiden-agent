@@ -21,6 +21,12 @@ const LEGACY_PI_PROVIDER_IDS = new Set([
   "moonshot",
 ]);
 
+/** IDs shipped briefly by onboarding before local presets adopted their reserved identities. */
+const RELEASED_ONBOARDING_LOCAL_PROVIDER_IDS = new Map<string, string>([
+  ["custom:onboarding-lmstudio", "custom:lmstudio"],
+  ["custom:onboarding-ollama", "custom:ollama"],
+]);
+
 const LEGACY_PI_BASE_URLS: Readonly<Record<string, string>> = {
   openai: "https://api.openai.com/v1",
   anthropic: "https://api.anthropic.com/v1",
@@ -189,6 +195,24 @@ export function migratePiProviderConfig(config: ProviderConfigMigrationShape): b
   ]);
 
   config.providers = config.providers.flatMap((provider) => {
+    const releasedLocalTarget = RELEASED_ONBOARDING_LOCAL_PROVIDER_IDS.get(provider.id);
+    if (releasedLocalTarget) {
+      const sourceId = provider.id;
+      // The canonical ID normally wins. If it is already an active provider or
+      // reserved anywhere in the alias graph, retain both connections under a
+      // collision-safe sibling instead of overwriting either endpoint intent.
+      const targetId = uniqueCustomId(releasedLocalTarget.slice("custom:".length), usedIds);
+      setAlias(aliases, sourceId, targetId);
+      return [
+        {
+          ...provider,
+          id: targetId,
+          isPreset: false,
+          isBuiltin: false,
+        },
+      ];
+    }
+
     const isLegacyPiProvider = LEGACY_PI_PROVIDER_IDS.has(provider.id);
     if (isLegacyPiProvider && isUntouchedPiPreset(provider)) return [];
 

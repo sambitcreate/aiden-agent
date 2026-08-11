@@ -7,6 +7,7 @@ import {
 } from "./provider-config-migration-core.js";
 import type { StoredProvider } from "./types.js";
 import { MAX_CONFIG_ID_LENGTH } from "./types.js";
+import { isLmStudioProviderId, isOllamaProviderId } from "./custom-provider-id.js";
 
 function provider(
   id: string,
@@ -71,6 +72,78 @@ test("removes only untouched cloud presets and namespaces legacy local connectio
     config.providers.map((item) => item.id),
     ["custom:lmstudio", "custom:ollama"],
   );
+  assert.equal(migratePiProviderConfig(config), false);
+});
+
+test("moves released onboarding local IDs onto their canonical aliases", () => {
+  const config: ProviderConfigMigrationShape = {
+    providers: [
+      provider("custom:onboarding-lmstudio", "http://localhost:1234/v1", {
+        label: "LM Studio (local)",
+        models: ["loaded-model"],
+        defaultModel: "loaded-model",
+        needsKey: false,
+        deployment: "local",
+      }),
+      provider("custom:onboarding-ollama", "http://localhost:11434/v1", {
+        label: "Ollama (local)",
+        models: ["qwen3:latest"],
+        defaultModel: "qwen3:latest",
+        needsKey: false,
+        deployment: "local",
+      }),
+    ],
+    settings: { lastProviderId: "custom:onboarding-lmstudio" },
+  };
+
+  assert.equal(migratePiProviderConfig(config), true);
+  assert.deepEqual(
+    config.providers.map(({ id }) => id),
+    ["custom:lmstudio", "custom:ollama"],
+  );
+  assert.deepEqual(config.providerIdAliases, {
+    "custom:onboarding-lmstudio": "custom:lmstudio",
+    "custom:onboarding-ollama": "custom:ollama",
+  });
+  assert.equal(config.settings.lastProviderId, "custom:lmstudio");
+  assert.deepEqual(config.providers[0]?.models, ["loaded-model"]);
+  assert.equal(migratePiProviderConfig(config), false);
+});
+
+test("keeps both local connections when a released onboarding ID collides with canonical intent", () => {
+  const released = provider("custom:onboarding-lmstudio", "http://old-mac.example.test:1234/v1", {
+    label: "Remote LM Studio",
+    models: ["remote-model"],
+    defaultModel: "remote-model",
+    needsKey: false,
+    deployment: "local",
+  });
+  const canonical = provider("custom:lmstudio", "http://127.0.0.1:1234/v1", {
+    label: "This Mac",
+    models: ["local-model"],
+    defaultModel: "local-model",
+    needsKey: false,
+    deployment: "local",
+  });
+  const config: ProviderConfigMigrationShape = {
+    providers: [released, canonical],
+    settings: { lastProviderId: released.id },
+  };
+
+  assert.equal(migratePiProviderConfig(config), true);
+  assert.deepEqual(
+    config.providers.map(({ id }) => id),
+    ["custom:lmstudio-2", "custom:lmstudio"],
+  );
+  assert.equal(config.providers[0]?.baseUrl, released.baseUrl);
+  assert.equal(config.providers[1]?.baseUrl, canonical.baseUrl);
+  assert.deepEqual(config.providerIdAliases, {
+    "custom:onboarding-lmstudio": "custom:lmstudio-2",
+  });
+  assert.equal(config.settings.lastProviderId, "custom:lmstudio-2");
+  assert.equal(isLmStudioProviderId("custom:lmstudio-2"), true);
+  assert.equal(isOllamaProviderId("custom:ollama-2"), true);
+  assert.equal(isLmStudioProviderId("custom:lmstudio-work"), false);
   assert.equal(migratePiProviderConfig(config), false);
 });
 

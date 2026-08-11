@@ -15,7 +15,232 @@ export const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB
 export const MAX_TEXT_CHARS = 100_000;
 export const MAX_TEXT_READ_BYTES = MAX_TEXT_CHARS * 4;
 export const MAX_ATTACHMENT_BATCH_BYTES = MAX_ATTACHMENT_INLINE_BYTES;
+export const MAX_CLIPBOARD_IMAGES = MAX_ATTACHMENTS_PER_MESSAGE;
+const ATTACHMENT_REPRESENTATION_OVERHEAD_BYTES = 1024;
+export const MAX_ATTACHMENT_INGESTION_REPRESENTATION_BYTES =
+  Math.ceil(MAX_ATTACHMENT_BATCH_BYTES / 3) * 4 +
+  MAX_ATTACHMENTS_PER_MESSAGE * ATTACHMENT_REPRESENTATION_OVERHEAD_BYTES;
 const TEXT_TRUNCATION_SUFFIX = "\n… [truncated]";
+
+export const CANONICAL_RASTER_IMAGE_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/heic",
+  "image/heif",
+] as const;
+
+export type CanonicalRasterImageMimeType = (typeof CANONICAL_RASTER_IMAGE_MIME_TYPES)[number];
+
+const CANONICAL_RASTER_IMAGE_MIME_TYPE_SET = new Set<string>(CANONICAL_RASTER_IMAGE_MIME_TYPES);
+
+export function isCanonicalRasterImageMimeType(
+  value: unknown,
+): value is CanonicalRasterImageMimeType {
+  return typeof value === "string" && CANONICAL_RASTER_IMAGE_MIME_TYPE_SET.has(value);
+}
+
+function ascii(bytes: Uint8Array, offset: number, length: number): string {
+  if (offset < 0 || length < 0 || offset + length > bytes.byteLength) return "";
+  return String.fromCharCode(...bytes.subarray(offset, offset + length));
+}
+
+function isoBaseMediaBrands(bytes: Uint8Array): Set<string> {
+  if (bytes.byteLength < 12 || ascii(bytes, 4, 4) !== "ftyp") return new Set();
+  const brands = new Set<string>([ascii(bytes, 8, 4)]);
+  const declaredBoxBytes =
+    bytes[0]! * 0x1000000 + bytes[1]! * 0x10000 + bytes[2]! * 0x100 + bytes[3]!;
+  const availableBoxBytes = Math.min(
+    bytes.byteLength,
+    declaredBoxBytes >= 16 ? declaredBoxBytes : bytes.byteLength,
+  );
+  for (let offset = 16; offset + 4 <= availableBoxBytes; offset += 4) {
+    brands.add(ascii(bytes, offset, 4));
+  }
+  return brands;
+}
+
+/** Match the canonical raster MIME to the bytes that main will retain and later generate with. */
+export function imageBytesMatchMime(
+  bytes: Uint8Array,
+  mimeType: CanonicalRasterImageMimeType,
+): boolean {
+  switch (mimeType) {
+    case "image/png":
+      return (
+        bytes.byteLength >= 8 &&
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47 &&
+        bytes[4] === 0x0d &&
+        bytes[5] === 0x0a &&
+        bytes[6] === 0x1a &&
+        bytes[7] === 0x0a
+      );
+    case "image/jpeg":
+      return bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    case "image/gif":
+      return ascii(bytes, 0, 6) === "GIF87a" || ascii(bytes, 0, 6) === "GIF89a";
+    case "image/webp":
+      return ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WEBP";
+    case "image/bmp":
+      return bytes.byteLength >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d;
+    case "image/heic": {
+      const brands = isoBaseMediaBrands(bytes);
+      return ["heic", "heix", "hevc", "hevx", "heim", "heis"].some((brand) => brands.has(brand));
+    }
+    case "image/heif": {
+      const brands = isoBaseMediaBrands(bytes);
+      return ["mif1", "msf1", "heif"].some((brand) => brands.has(brand));
+    }
+  }
+}
+
+export function attachmentIngestionRepresentationBytes(
+  inlineBytes: number,
+  attachmentCount: number,
+): number {
+  if (
+    !Number.isSafeInteger(inlineBytes) ||
+    inlineBytes < 1 ||
+    inlineBytes > MAX_ATTACHMENT_BATCH_BYTES ||
+    !Number.isSafeInteger(attachmentCount) ||
+    attachmentCount < 1 ||
+    attachmentCount > MAX_ATTACHMENTS_PER_MESSAGE
+  ) {
+    throw new Error("Invalid attachment ingestion reservation.");
+  }
+  return (
+    Math.ceil(inlineBytes / 3) * 4 + attachmentCount * ATTACHMENT_REPRESENTATION_OVERHEAD_BYTES
+  );
+}
+
+export interface AttachmentIngestionAdmissionOptions {
+  maxActivePerDocument?: number;
+  maxGlobalActive?: number;
+  maxGlobalAttachments?: number;
+  maxGlobalRepresentationBytes?: number;
+}
+
+export interface AttachmentIngestionLease {
+  isActive(): boolean;
+  cancel(): void;
+  release(): void;
+}
+
+interface AttachmentIngestionRecord {
+  documentId: string;
+  attachmentCount: number;
+  representationBytes: number;
+  cancelled: boolean;
+}
+
+function positiveSafeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`Invalid attachment admission ${name}.`);
+  }
+  return value;
+}
+
+function hasExactObjectKeys(
+  value: Record<string, unknown>,
+  expected: ReadonlySet<string>,
+): boolean {
+  let count = 0;
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+    count += 1;
+    if (count > expected.size || !expected.has(key)) return false;
+  }
+  return count === expected.size;
+}
+
+/** Process-owned accounting for renderer-triggered picker, drop, and clipboard ingestion. */
+export class AttachmentIngestionAdmission {
+  private readonly records = new Set<AttachmentIngestionRecord>();
+  private readonly activeByDocument = new Map<string, number>();
+  private readonly maxActivePerDocument: number;
+  private readonly maxGlobalActive: number;
+  private readonly maxGlobalAttachments: number;
+  private readonly maxGlobalRepresentationBytes: number;
+  private activeAttachments = 0;
+  private activeRepresentationBytes = 0;
+
+  constructor(options: AttachmentIngestionAdmissionOptions = {}) {
+    this.maxActivePerDocument = positiveSafeInteger(
+      options.maxActivePerDocument ?? 1,
+      "per-document limit",
+    );
+    this.maxGlobalActive = positiveSafeInteger(options.maxGlobalActive ?? 2, "global limit");
+    this.maxGlobalAttachments = positiveSafeInteger(
+      options.maxGlobalAttachments ?? MAX_ATTACHMENTS_PER_MESSAGE * 2,
+      "attachment limit",
+    );
+    this.maxGlobalRepresentationBytes = positiveSafeInteger(
+      options.maxGlobalRepresentationBytes ?? MAX_ATTACHMENT_INGESTION_REPRESENTATION_BYTES * 2,
+      "representation limit",
+    );
+  }
+
+  acquire(
+    documentId: string,
+    attachmentCount: number,
+    representationBytes: number,
+  ): AttachmentIngestionLease {
+    if (
+      typeof documentId !== "string" ||
+      documentId.length === 0 ||
+      !Number.isSafeInteger(attachmentCount) ||
+      attachmentCount < 1 ||
+      attachmentCount > MAX_ATTACHMENTS_PER_MESSAGE ||
+      !Number.isSafeInteger(representationBytes) ||
+      representationBytes < 1 ||
+      representationBytes > MAX_ATTACHMENT_INGESTION_REPRESENTATION_BYTES
+    ) {
+      throw new Error("Invalid attachment ingestion reservation.");
+    }
+    if ((this.activeByDocument.get(documentId) ?? 0) >= this.maxActivePerDocument) {
+      throw new Error("Another attachment request is already running for this window.");
+    }
+    if (
+      this.records.size >= this.maxGlobalActive ||
+      attachmentCount > this.maxGlobalAttachments - this.activeAttachments ||
+      representationBytes > this.maxGlobalRepresentationBytes - this.activeRepresentationBytes
+    ) {
+      throw new Error("Too many attachment requests are in progress. Try again in a moment.");
+    }
+
+    const record: AttachmentIngestionRecord = {
+      documentId,
+      attachmentCount,
+      representationBytes,
+      cancelled: false,
+    };
+    this.records.add(record);
+    this.activeByDocument.set(documentId, (this.activeByDocument.get(documentId) ?? 0) + 1);
+    this.activeAttachments += attachmentCount;
+    this.activeRepresentationBytes += representationBytes;
+
+    const release = (): void => {
+      if (!this.records.delete(record)) return;
+      const remainingForDocument = (this.activeByDocument.get(documentId) ?? 1) - 1;
+      if (remainingForDocument === 0) this.activeByDocument.delete(documentId);
+      else this.activeByDocument.set(documentId, remainingForDocument);
+      this.activeAttachments -= attachmentCount;
+      this.activeRepresentationBytes -= representationBytes;
+    };
+    return {
+      isActive: () => this.records.has(record) && !record.cancelled,
+      cancel: () => {
+        if (this.records.has(record)) record.cancelled = true;
+      },
+      release,
+    };
+  }
+}
 
 interface PathIdentityEntry {
   path: string;
@@ -43,7 +268,7 @@ const FIXED_SYSTEM_ALIASES = new Map<string, string>([
   ["/var", "/private/var"],
 ]);
 
-const IMAGE_MIME: Record<string, string> = {
+const IMAGE_MIME: Record<string, CanonicalRasterImageMimeType> = {
   png: "image/png",
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
@@ -52,6 +277,16 @@ const IMAGE_MIME: Record<string, string> = {
   bmp: "image/bmp",
   heic: "image/heic",
   heif: "image/heif",
+};
+
+const CLIPBOARD_IMAGE_NAME: Record<CanonicalRasterImageMimeType, string> = {
+  "image/png": "Pasted image.png",
+  "image/jpeg": "Pasted image.jpg",
+  "image/gif": "Pasted image.gif",
+  "image/webp": "Pasted image.webp",
+  "image/bmp": "Pasted image.bmp",
+  "image/heic": "Pasted image.heic",
+  "image/heif": "Pasted image.heif",
 };
 
 export function isImageAttachmentPath(filePath: string): boolean {
@@ -192,6 +427,7 @@ async function assertPickedPathIdentity(
 async function readOne(
   filePath: string,
   remainingBatchBytes: number,
+  isActive: () => boolean,
   afterLexicalCapture?: (filePath: string) => void | Promise<void>,
   beforeOpen?: (filePath: string) => void | Promise<void>,
   beforeConsistencyCheck?: (filePath: string) => void | Promise<void>,
@@ -205,6 +441,7 @@ async function readOne(
   } catch {
     throw new Error(`${name || "The selected file"} couldn't be read safely.`);
   }
+  if (!isActive()) throw new Error("The renderer document is no longer active.");
   let handle: fs.FileHandle;
   try {
     handle = await fs.open(
@@ -218,6 +455,7 @@ async function readOne(
     const stat = await handle.stat();
     if (!stat.isFile()) throw new Error(`${name || "The selected file"} isn't a regular file.`);
     await assertPickedPathIdentity(identity, stat);
+    if (!isActive()) throw new Error("The renderer document is no longer active.");
 
     const imageMime = IMAGE_MIME[ext];
     if (imageMime) {
@@ -234,9 +472,14 @@ async function readOne(
       if (buf.length !== stat.size) {
         throw new Error(`${name} changed while it was being attached. Please select it again.`);
       }
+      if (!isActive()) throw new Error("The renderer document is no longer active.");
       await beforeConsistencyCheck?.(filePath);
       await assertFileUnchanged(handle, stat, name);
       await assertPickedPathIdentity(identity, stat);
+      if (!isActive()) throw new Error("The renderer document is no longer active.");
+      if (!imageBytesMatchMime(buf, imageMime)) {
+        throw new Error(`${name} doesn't match its image file type.`);
+      }
       return {
         attachment: {
           id: newId(),
@@ -260,9 +503,11 @@ async function readOne(
     if (buf.length !== Math.min(stat.size, textReadLimit)) {
       throw new Error(`${name} changed while it was being attached. Please select it again.`);
     }
+    if (!isActive()) throw new Error("The renderer document is no longer active.");
     await beforeConsistencyCheck?.(filePath);
     await assertFileUnchanged(handle, stat, name);
     await assertPickedPathIdentity(identity, stat);
+    if (!isActive()) throw new Error("The renderer document is no longer active.");
     if (buf.includes(0)) {
       throw new Error(`${name} isn't a supported text or image file.`);
     }
@@ -333,6 +578,7 @@ export async function readPickedAttachments(
     const result = await readOne(
       filePath,
       maxBatchBytes - bytesRead,
+      isActive,
       options.afterLexicalCapture,
       options.beforeOpen,
       options.beforeConsistencyCheck,
@@ -342,4 +588,104 @@ export async function readPickedAttachments(
   }
   if (!isActive()) throw new Error("The renderer document is no longer active.");
   return attachments;
+}
+
+interface ValidatedClipboardImage {
+  mimeType: CanonicalRasterImageMimeType;
+  bytes: Uint8Array;
+}
+
+const CLIPBOARD_IMAGE_KEYS = new Set(["mimeType", "bytes"]);
+
+export interface ValidatedClipboardAttachmentPayload {
+  images: readonly ValidatedClipboardImage[];
+  inlineBytes: number;
+  representationBytes: number;
+}
+
+/** Validate renderer-cloned clipboard metadata before reserving conversion capacity. */
+export function validateClipboardAttachmentPayload(
+  value: unknown,
+  remainingSlots: unknown,
+  remainingInlineBytes: unknown,
+): ValidatedClipboardAttachmentPayload {
+  if (
+    !Number.isSafeInteger(remainingSlots) ||
+    (remainingSlots as number) < 1 ||
+    (remainingSlots as number) > MAX_CLIPBOARD_IMAGES ||
+    !Number.isSafeInteger(remainingInlineBytes) ||
+    (remainingInlineBytes as number) < 1 ||
+    (remainingInlineBytes as number) > MAX_ATTACHMENT_BATCH_BYTES ||
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > (remainingSlots as number)
+  ) {
+    throw new Error("Invalid clipboard image payload.");
+  }
+
+  const images: ValidatedClipboardImage[] = [];
+  let totalBytes = 0;
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error("Invalid clipboard image payload.");
+    }
+    const record = candidate as Record<string, unknown>;
+    if (
+      !hasExactObjectKeys(record, CLIPBOARD_IMAGE_KEYS) ||
+      !isCanonicalRasterImageMimeType(record.mimeType) ||
+      !(record.bytes instanceof Uint8Array) ||
+      record.bytes.byteLength === 0 ||
+      record.bytes.byteLength > MAX_IMAGE_BYTES
+    ) {
+      throw new Error("Invalid clipboard image payload.");
+    }
+    totalBytes += record.bytes.byteLength;
+    if (totalBytes > (remainingInlineBytes as number)) {
+      throw new Error("Clipboard images exceed the remaining attachment data limit.");
+    }
+    images.push({ mimeType: record.mimeType, bytes: record.bytes });
+  }
+  return {
+    images,
+    inlineBytes: totalBytes,
+    representationBytes: attachmentIngestionRepresentationBytes(totalBytes, images.length),
+  };
+}
+
+/** Convert admitted in-memory clipboard images without granting filesystem authority. */
+export function materializeClipboardAttachments(
+  payload: ValidatedClipboardAttachmentPayload,
+  isActive: () => boolean = () => true,
+): Attachment[] {
+  const attachments: Attachment[] = [];
+  for (const image of payload.images) {
+    if (!isActive()) throw new Error("The renderer document is no longer active.");
+    const bytes = Buffer.from(image.bytes);
+    if (bytes.byteLength === 0 || !imageBytesMatchMime(bytes, image.mimeType)) {
+      throw new Error("Clipboard image bytes do not match the declared image type.");
+    }
+    attachments.push({
+      id: newId(),
+      name: CLIPBOARD_IMAGE_NAME[image.mimeType],
+      mimeType: image.mimeType,
+      kind: "image",
+      size: bytes.byteLength,
+      data: bytes.toString("base64"),
+    });
+  }
+  if (!isActive()) throw new Error("The renderer document is no longer active.");
+  return attachments;
+}
+
+/** Validate and convert bounded clipboard images for non-IPC callers and focused tests. */
+export function readClipboardAttachments(
+  value: unknown,
+  remainingSlots: unknown,
+  remainingInlineBytes: unknown,
+  isActive: () => boolean = () => true,
+): Attachment[] {
+  return materializeClipboardAttachments(
+    validateClipboardAttachmentPayload(value, remainingSlots, remainingInlineBytes),
+    isActive,
+  );
 }

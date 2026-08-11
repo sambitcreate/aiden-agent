@@ -68,6 +68,20 @@ jobs:
       - name: Run Apple Foundation Models tests
         run: npm run test:native
 
+      - name: Run deterministic Electron E2E gate
+        run: npm run test:e2e
+
+      - name: Upload Playwright failure artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-e2e-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/e2e
+            playwright-report/e2e
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Prepare App Store Connect key
         shell: bash
         env:

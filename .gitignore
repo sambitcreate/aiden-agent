@@ -23,6 +23,11 @@ Thumbs.db
 # Logs
 *.log
 
+# Playwright artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+
 # Temporary files
 tmp/*
 

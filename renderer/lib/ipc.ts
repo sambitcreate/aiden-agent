@@ -171,6 +171,7 @@ export const providersApi = {
       modelCount: number;
       models: string[];
       modelMetadata: Record<string, ProviderModelMetadata>;
+      recommendedModel?: string;
     }>("providers:test", provider, keyOverride),
   listModels: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<string[]>("providers:listModels", provider, keyOverride),
@@ -402,6 +403,28 @@ export const attachmentsApi = {
       includeImages,
       remainingInlineBytes,
     ),
+  readDroppedFiles: (
+    files: readonly File[],
+    remainingSlots: number,
+    includeImages: boolean,
+    remainingInlineBytes: number,
+  ) =>
+    window.aidenAPI.attachments.readDroppedFiles(
+      files,
+      remainingSlots,
+      includeImages,
+      remainingInlineBytes,
+    ),
+  readClipboardImages: (
+    images: Array<{ mimeType: string; bytes: Uint8Array }>,
+    remainingSlots: number,
+    remainingInlineBytes: number,
+  ) =>
+    window.aidenAPI.attachments.readClipboardImages(
+      images,
+      remainingSlots,
+      remainingInlineBytes,
+    ),
 };
 
 export const modelsApi = {
@@ -455,6 +478,10 @@ export interface TerminalSession {
   id: string;
   workspaceId: string;
   cwd: string;
+  /** The shell that actually launched this session (e.g. `/bin/zsh`). */
+  resolvedShell: string;
+  /** True when the preferred shell was skipped and a fallback launched it. */
+  preferredShellSkipped: boolean;
 }
 
 export interface TerminalSnapshot {

@@ -38,19 +38,18 @@ import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
 import { Button, Input, Text, toast } from "./ui";
 import { providersApi, profileApi } from "../lib/ipc";
 import { markOnboardingComplete, shouldShowOnboarding } from "../lib/onboarding-state";
+import {
+  discoveredDefaultModel,
+  fieldsAfterProviderChoiceChange,
+  makeOnboardingProvider,
+  type OnboardingProviderChoice,
+} from "../lib/onboarding-provider";
 import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
 import { queryKeys, useProviders } from "../lib/queries";
+import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
 
 type Step = "profile" | "provider" | "tour";
-type ProviderChoice =
-  | "openai-key"
-  | "openai-signin"
-  | "anthropic"
-  | "lmstudio"
-  | "ollama"
-  | "tailscale";
-
 const steps: Step[] = ["profile", "provider", "tour"];
 const stepLabels: Readonly<Record<Step, string>> = {
   profile: "Your profile",
@@ -88,7 +87,7 @@ const FEATURE_ILLUSTRATIONS = {
 } as const;
 
 const providerChoices: Array<{
-  id: ProviderChoice;
+  id: OnboardingProviderChoice;
   title: string;
   description: string;
   iconProviderId?: string;
@@ -203,7 +202,8 @@ const featureBentos: FeatureBento[] = [
     id: "terminal",
     group: "create",
     title: "Integrated Terminal",
-    description: "Run a workspace shell in a resizable drawer with tabs and split panes.",
+    description:
+      "Run a workspace shell in tabs or split panes, then reopen it with sanitized local history.",
     icon: SquareTerminal,
     imageUrl: FEATURE_ILLUSTRATIONS.terminal,
     size: "standard",
@@ -401,65 +401,6 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
   );
 }
 
-function makeProvider(choice: ProviderChoice, baseUrl: string): Omit<Provider, "hasKey"> | null {
-  if (choice === "openai-signin") return null;
-  if (choice === "openai-key") {
-    return {
-      id: "custom:onboarding-openai",
-      kind: "openai",
-      label: "OpenAI",
-      baseUrl: baseUrl || "https://api.openai.com/v1",
-      models: ["gpt-4.1", "gpt-4.1-mini"],
-      defaultModel: "gpt-4.1-mini",
-      needsKey: true,
-      deployment: "hosted",
-    };
-  }
-  if (choice === "anthropic") {
-    return {
-      id: "custom:onboarding-anthropic",
-      kind: "anthropic",
-      label: "Anthropic",
-      baseUrl: baseUrl || "https://api.anthropic.com/v1",
-      models: ["claude-sonnet-4-5", "claude-haiku-4-5"],
-      defaultModel: "claude-sonnet-4-5",
-      needsKey: true,
-      deployment: "hosted",
-    };
-  }
-  if (choice === "lmstudio") {
-    return {
-      id: "custom:onboarding-lmstudio",
-      kind: "openai",
-      label: "LM Studio (local)",
-      baseUrl: baseUrl || "http://127.0.0.1:1234/v1",
-      models: [],
-      needsKey: false,
-      deployment: "local",
-    };
-  }
-  if (choice === "ollama") {
-    return {
-      id: "custom:onboarding-ollama",
-      kind: "openai",
-      label: "Ollama (local)",
-      baseUrl: baseUrl || "http://127.0.0.1:11434/v1",
-      models: [],
-      needsKey: false,
-      deployment: "local",
-    };
-  }
-  return {
-    id: "custom:onboarding-tailscale",
-    kind: "openai",
-    label: "Tailscale model",
-    baseUrl,
-    models: [],
-    needsKey: false,
-    deployment: "local",
-  };
-}
-
 function builtinProviderSetupLabel(provider: Provider): string {
   if (provider.hasKey) return "Ready on this Mac";
   const methods = (provider.authMethods ?? [])
@@ -479,13 +420,15 @@ export function OnboardingFlow() {
   const [open, setOpen] = React.useState(() => shouldShowOnboarding());
   const [index, setIndex] = React.useState(0);
   const [name, setName] = React.useState("");
-  const [choice, setChoice] = React.useState<ProviderChoice | null>("openai-signin");
+  const [choice, setChoice] = React.useState<OnboardingProviderChoice | null>("openai-signin");
   const [builtinChoiceId, setBuiltinChoiceId] = React.useState<string | null>(null);
   const [showMoreProviders, setShowMoreProviders] = React.useState(false);
   const [settingUpProvider, setSettingUpProvider] = React.useState<Provider | null>(null);
   const [apiKey, setApiKey] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const [discovering, setDiscovering] = React.useState(false);
+  const [providerError, setProviderError] = React.useState<string | null>(null);
   const savingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
 
@@ -504,6 +447,14 @@ export function OnboardingFlow() {
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
   const canContinue =
     step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
+
+  const selectProviderChoice = (nextChoice: OnboardingProviderChoice | null) => {
+    const nextFields = fieldsAfterProviderChoiceChange(choice, nextChoice, { apiKey, baseUrl });
+    setApiKey(nextFields.apiKey);
+    setBaseUrl(nextFields.baseUrl);
+    setChoice(nextChoice);
+    setProviderError(null);
+  };
 
   const next = async () => {
     if (!canContinue || savingRef.current) return;
@@ -550,7 +501,6 @@ export function OnboardingFlow() {
         else setSettingUpProvider(chatGptProvider);
         return;
       }
-      const provider = makeProvider(choice, baseUrl.trim());
       if (choice === "tailscale" && !baseUrl.trim()) {
         toast.error("Enter the Tailscale model server URL before continuing.");
         return;
@@ -561,21 +511,65 @@ export function OnboardingFlow() {
       }
       savingRef.current = true;
       setSaving(true);
+      setProviderError(null);
       try {
-        if (provider) {
+        const isLocalRuntime = choice === "lmstudio" || choice === "ollama";
+        // Resolve reserved local identities from a fresh main-process snapshot.
+        // The query cache may still be loading or stale when the user clicks Next.
+        const currentProviders = isLocalRuntime
+          ? await providersApi.list()
+          : (providers.data ?? []);
+        if (isLocalRuntime) {
+          queryClient.setQueryData(queryKeys.providers, currentProviders);
+        }
+        let providerToSave = makeOnboardingProvider(choice, baseUrl.trim(), currentProviders);
+        if (providerToSave && isLocalRuntime) {
+          let discovery: Awaited<ReturnType<typeof providersApi.test>>;
+          try {
+            setDiscovering(true);
+            discovery = await providersApi.test(providerToSave);
+          } catch (error) {
+            const message = `Couldn't reach ${selected.title}: ${error instanceof Error ? error.message : String(error)}`;
+            setProviderError(message);
+            toast.error(message);
+            return;
+          } finally {
+            setDiscovering(false);
+          }
+          const defaultModel = discoveredDefaultModel(providerToSave, discovery);
+          if (!defaultModel) {
+            const message =
+              "Endpoint reached, but no chat models were found. Load one in the server, then try again.";
+            setProviderError(message);
+            toast.info(message);
+            return;
+          }
+          providerToSave = {
+            ...providerToSave,
+            models: discovery.models,
+            modelMetadata: discovery.modelMetadata,
+            defaultModel,
+          };
+        }
+        if (providerToSave) {
           const saved = await providersApi.save(
-            provider,
+            providerToSave,
             selected.requiresKey ? apiKey.trim() : undefined,
           );
           queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) => {
             const without = (current ?? []).filter((item) => item.id !== saved.id);
             return [...without, saved];
           });
+          if (isLocalRuntime) {
+            persistModelSelection(saved.id, saved.defaultModel ?? providerToSave.defaultModel!);
+          }
           toast.success(`${saved.label} added.`);
         }
         setIndex(2);
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Couldn't add that provider.");
+        const message = error instanceof Error ? error.message : "Couldn't add that provider.";
+        setProviderError(message);
+        toast.error(message);
       } finally {
         savingRef.current = false;
         setSaving(false);
@@ -722,7 +716,7 @@ export function OnboardingFlow() {
                       aria-pressed={choice === item.id}
                       className={`flex min-h-[68px] items-start gap-2.5 rounded-control border px-3 py-2.5 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring ${choice === item.id ? "border-accent bg-accent/10" : "border-field bg-well hover:bg-control"}`}
                       onClick={() => {
-                        setChoice(item.id);
+                        selectProviderChoice(item.id);
                         setBuiltinChoiceId(null);
                       }}
                     >
@@ -826,7 +820,7 @@ export function OnboardingFlow() {
                               aria-pressed={isSelected}
                               className={`flex min-h-14 items-center gap-2.5 rounded-control border px-2.5 py-2 text-left transition-[background-color,border-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${isSelected ? "border-accent bg-accent/10" : "border-transparent bg-transparent hover:border-field hover:bg-control"}`}
                               onClick={() => {
-                                setChoice(null);
+                                selectProviderChoice(null);
                                 setBuiltinChoiceId(provider.id);
                               }}
                             >
@@ -894,6 +888,11 @@ export function OnboardingFlow() {
                     </label>
                   ) : null}
                 </div>
+                {providerError ? (
+                  <Text role="alert" variant="small" color="red" className="mt-3 block">
+                    {providerError}
+                  </Text>
+                ) : null}
               </div>
             ) : null}
 
@@ -1004,7 +1003,14 @@ export function OnboardingFlow() {
               <ChevronLeft /> Back
             </Button>
             <Button variant="accent" disabled={!canContinue || saving} onClick={() => void next()}>
-              {step === "tour" ? "Start using Aiden" : "Next"} <ChevronRight />
+              {discovering
+                ? "Discovering models…"
+                : saving && step === "provider"
+                  ? "Adding provider…"
+                  : step === "tour"
+                    ? "Start using Aiden"
+                    : "Next"}{" "}
+              <ChevronRight />
             </Button>
           </footer>
         </div>

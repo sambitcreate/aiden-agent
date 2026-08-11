@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  discoveredDefaultModel,
+  fieldsAfterProviderChoiceChange,
+  makeOnboardingProvider,
+  type OnboardingProviderChoice,
+} from "../lib/onboarding-provider.js";
+import type { Provider } from "../lib/types.js";
 
 const source = readFileSync(new URL("./onboarding-flow.tsx", import.meta.url), "utf8");
 const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.url), "utf8");
@@ -30,11 +37,11 @@ const featureAssetPaths = [
 ] as const;
 const providerPresentation = source.slice(
   source.indexOf("const providerChoices"),
-  source.indexOf("function makeProvider"),
+  source.indexOf("function builtinProviderSetupLabel"),
 );
 const featurePresentation = source.slice(
   source.indexOf("const featureBentos"),
-  source.indexOf("function makeProvider"),
+  source.indexOf("function builtinProviderSetupLabel"),
 );
 
 test("onboarding uses the Aiden mark and the existing provider icon system", () => {
@@ -44,6 +51,119 @@ test("onboarding uses the Aiden mark and the existing provider icon system", () 
     assert.match(providerPresentation, new RegExp(`iconProviderId: "${providerId}"`, "u"));
   }
   assert.match(source, /aria-pressed=\{choice === item\.id\}/u);
+});
+
+test("local onboarding reuses canonical intent and never applies another choice's hidden URL", () => {
+  const existing: Provider = {
+    id: "custom:lmstudio",
+    kind: "anthropic",
+    label: "Studio over Tailnet",
+    baseUrl: "https://studio.example.ts.net/custom-api",
+    models: ["kept-model"],
+    modelMetadata: { "kept-model": { source: "provider", reasoning: true } },
+    defaultModel: "kept-model",
+    needsKey: true,
+    deployment: "hosted",
+    isPreset: false,
+    isBuiltin: false,
+    hasKey: true,
+    legacyIds: ["old-studio"],
+  };
+
+  assert.deepEqual(makeOnboardingProvider("lmstudio", "https://hidden.example/v1", [existing]), {
+    id: existing.id,
+    kind: existing.kind,
+    label: existing.label,
+    baseUrl: existing.baseUrl,
+    models: existing.models,
+    modelMetadata: existing.modelMetadata,
+    defaultModel: existing.defaultModel,
+    needsKey: existing.needsKey,
+    deployment: existing.deployment,
+    isPreset: existing.isPreset,
+    isBuiltin: existing.isBuiltin,
+  });
+  assert.equal(
+    makeOnboardingProvider("ollama", "https://hidden.example/v1")?.baseUrl,
+    "http://127.0.0.1:11434/v1",
+  );
+  assert.equal(makeOnboardingProvider("lmstudio", "")?.id, "custom:lmstudio");
+  assert.equal(makeOnboardingProvider("ollama", "")?.id, "custom:ollama");
+});
+
+test("switching provider choices clears API-key and URL drafts before they become hidden", () => {
+  const populated = { apiKey: "secret", baseUrl: "https://gateway.example/v1" };
+  const choices: OnboardingProviderChoice[] = [
+    "openai-key",
+    "openai-signin",
+    "anthropic",
+    "lmstudio",
+    "ollama",
+    "tailscale",
+  ];
+  for (const current of choices) {
+    for (const next of choices) {
+      assert.deepEqual(
+        fieldsAfterProviderChoiceChange(current, next, populated),
+        current === next ? populated : { apiKey: "", baseUrl: "" },
+        `${current} -> ${next}`,
+      );
+    }
+  }
+  assert.deepEqual(fieldsAfterProviderChoiceChange("anthropic", null, populated), {
+    apiKey: "",
+    baseUrl: "",
+  });
+});
+
+test("local discovery preserves a still-usable default before transient recommendations", () => {
+  const provider = makeOnboardingProvider("lmstudio", "");
+  assert.ok(provider);
+  provider.defaultModel = "already-selected";
+  assert.equal(
+    discoveredDefaultModel(provider, {
+      models: ["recommended", "already-selected"],
+      recommendedModel: "recommended",
+    }),
+    "already-selected",
+  );
+  provider.defaultModel = "gone";
+  assert.equal(
+    discoveredDefaultModel(provider, {
+      models: ["recommended", "fallback"],
+      recommendedModel: "recommended",
+    }),
+    "recommended",
+  );
+});
+
+test("local onboarding discovers and selects a usable default model before continuing", () => {
+  const providerStep = source.slice(
+    source.indexOf('if (step === "provider")'),
+    source.indexOf("markOnboardingComplete()"),
+  );
+  const freshList = providerStep.indexOf("await providersApi.list()");
+  const providerBuild = providerStep.indexOf("makeOnboardingProvider(choice");
+  const discovery = providerStep.indexOf("await providersApi.test(providerToSave)");
+  const save = providerStep.indexOf("await providersApi.save(");
+  const cache = providerStep.indexOf("queryClient.setQueryData<Provider[]>");
+  const selection = providerStep.indexOf("persistModelSelection(saved.id");
+
+  assert.ok(freshList >= 0 && freshList < providerBuild, "resolve live intent before building");
+  assert.ok(providerBuild >= 0 && providerBuild < discovery, "reuse intent before discovery");
+  assert.ok(discovery >= 0 && discovery < save, "discover before saving a local provider");
+  assert.match(providerStep, /models: discovery\.models/u);
+  assert.match(providerStep, /modelMetadata: discovery\.modelMetadata/u);
+  assert.match(providerStep, /discoveredDefaultModel\(providerToSave, discovery\)/u);
+  assert.match(providerStep, /defaultModel,/u);
+  assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
+  assert.ok(cache >= 0 && cache < selection, "publish the provider before selecting its model");
+  assert.match(
+    providerStep,
+    /persistModelSelection\(saved\.id, saved\.defaultModel \?\? providerToSave\.defaultModel!\)/u,
+  );
+  assert.match(source, /\{discovering[\s\S]*?Discovering models…/u);
+  assert.match(source, /providerError[\s\S]*?role="alert"/u);
 });
 
 test("onboarding keeps navigation fixed while its content scrolls", () => {
@@ -148,6 +268,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
   ]) {
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
+  assert.match(featurePresentation, /reopen it with sanitized local history/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 22);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });

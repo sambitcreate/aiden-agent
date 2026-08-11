@@ -25,6 +25,7 @@ import {
 import { ChevronDown, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ProviderIcon } from "../provider-icon";
 import { ProviderEditor } from "./provider-editor";
+import { ProviderEditorFocusTarget } from "./provider-editor-focus";
 import { BuiltinProviderEditor } from "./builtin-provider-editor";
 import { CodexProviderSettings } from "./codex-provider-settings";
 import { providersApi, settingsApi, titleProvidersApi } from "../../lib/ipc";
@@ -112,6 +113,8 @@ export function ProvidersSettings() {
   const settings = useSettings();
   const foundationModels = useFoundationModelsConnection();
   const [editing, setEditing] = React.useState<Provider | null>(null);
+  const editingFocusTarget = React.useRef(new ProviderEditorFocusTarget());
+  const addProviderTriggerRef = React.useRef<HTMLButtonElement | null>(null);
   const [settingUp, setSettingUp] = React.useState<Provider | null>(null);
   const [removing, setRemoving] = React.useState<Provider | null>(null);
   const [savingTitleProvider, setSavingTitleProvider] = React.useState(false);
@@ -170,6 +173,7 @@ export function ProvidersSettings() {
   };
 
   const addCustom = (template: "lmstudio" | "ollama" | "custom" | "tailnet") => {
+    editingFocusTarget.current.capture(addProviderTriggerRef.current);
     const id =
       template === "lmstudio" || template === "ollama"
         ? `custom:${template}`
@@ -235,7 +239,7 @@ export function ProvidersSettings() {
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="filled" size="small">
+              <Button ref={addProviderTriggerRef} variant="filled" size="small">
                 <Plus className="size-4" />
                 Add provider
                 <ChevronDown className="size-3.5" />
@@ -447,7 +451,14 @@ export function ProvidersSettings() {
                       {p.baseUrl}
                     </Text>
                   </div>
-                  <Button variant="filled" size="small" onClick={() => setEditing(p)}>
+                  <Button
+                    variant="filled"
+                    size="small"
+                    onClick={(event) => {
+                      editingFocusTarget.current.capture(event.currentTarget);
+                      setEditing(p);
+                    }}
+                  >
                     Configure
                   </Button>
                   <Button
@@ -472,6 +483,7 @@ export function ProvidersSettings() {
           open={editing !== null}
           onOpenChange={(open) => !open && setEditing(null)}
           onSaved={invalidate}
+          returnFocus={() => editingFocusTarget.current.take() as HTMLElement | null}
         />
       ) : null}
 

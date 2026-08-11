@@ -163,7 +163,9 @@ test("append envelopes reject many extra properties without materializing Object
 });
 
 test("append admission charges encoded image representation and metadata", () => {
-  const data = Buffer.alloc(3).toString("base64");
+  const data =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const size = Buffer.byteLength(data, "base64");
   const parsed = parseChatAppend(
     "chat-1",
     {
@@ -175,15 +177,12 @@ test("append admission charges encoded image representation and metadata", () =>
           name: "a.png",
           mimeType: "image/png",
           kind: "image",
-          size: 3,
+          size,
           data,
         },
       ],
     },
     { turnId: "turn-1", providerId: "provider", model: "model" },
   );
-  assert.ok(
-    parsed.retainedBytes >=
-      data.length + Buffer.byteLength("providermodel", "utf8"),
-  );
+  assert.ok(parsed.retainedBytes >= data.length + Buffer.byteLength("providermodel", "utf8"));
 });
