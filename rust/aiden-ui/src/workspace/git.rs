@@ -574,6 +574,7 @@ pub(crate) fn commit_content(
     let busy = state.git_busy || state.interaction_blocked;
     let error = state.commit_error.clone();
     let mode = state.commit_mode;
+    let pointer_cursors = crate::services::appearance::pointer_cursor_for_interaction(cx, true);
     let message = state.commit_input.read(cx).value().to_string();
 
     let Some(review) = review else {
@@ -666,6 +667,7 @@ pub(crate) fn commit_content(
                                     !staged_available || busy,
                                     set_staged,
                                     false,
+                                    pointer_cursors,
                                     &theme,
                                 ),
                             )
@@ -678,6 +680,7 @@ pub(crate) fn commit_content(
                                     busy,
                                     set_all,
                                     true,
+                                    pointer_cursors,
                                     &theme,
                                 ),
                             ),
@@ -791,6 +794,7 @@ fn mode_row(
     disabled: bool,
     entity: Entity<WorkspaceState>,
     all: bool,
+    pointer_cursors: bool,
     theme: &Theme,
 ) -> impl IntoElement {
     let theme = theme.clone();
@@ -805,7 +809,7 @@ fn mode_row(
         .rounded_md()
         .border_1()
         .border_color(theme.border)
-        .cursor_pointer()
+        .when(pointer_cursors && !disabled, |el| el.cursor_pointer())
         .bg(if selected {
             theme.list_active
         } else {

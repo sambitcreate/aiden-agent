@@ -12,10 +12,15 @@ name = "aiden"
 path = "src/main.rs"
 
 [features]
-default = ["dictation"]
+default = ["dictation", "update-feed"]
 # On-device dictation (aiden-mac sherpa + model management). Keep in sync
 # with aiden-mac's `dictation` feature.
 dictation = ["aiden-mac/dictation"]
+# The real generic-feed updater is still runtime-gated to signed, packaged
+# macOS builds. Keeping the feature on in release/default builds makes the
+# app capable of consuming the embedded feed without adding any development
+# network traffic.
+update-feed = ["aiden-mac/update-feed"]
 
 [dependencies]
 gpui.workspace = true
@@ -34,6 +39,7 @@ aiden-mac.workspace = true
 aiden-computer-use.workspace = true
 tokio.workspace = true
 tokio-util = "0.7"
+parking_lot.workspace = true
 reqwest.workspace = true
 futures.workspace = true
 tracing.workspace = true
@@ -47,8 +53,12 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+resvg = "0.45"
+tiny-skia = "0.11"
+usvg = "0.45"
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
+libc = "0.2"
 # OS-global hotkey event delivery (dictation pill toggle while another app is
 # focused; parity audit config §12). Same pin as aiden-mac.
 global-hotkey = "0.8"

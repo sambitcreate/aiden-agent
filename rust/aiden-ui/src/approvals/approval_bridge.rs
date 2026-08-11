@@ -266,9 +266,9 @@ pub fn tool_approval_details(call: &ToolCall) -> serde_json::Value {
 /// Renderer-safe details for an automation proposal (`schedule_task` /
 /// `edit_automation`). Returns `None` when the call does not carry a valid
 /// proposal shape (name/cron are required) — such a request renders the
-/// fail-closed invalid card and can never be confirmed. `now` drives the
-/// `nextRunAt` computation so tests are deterministic.
-pub fn automation_approval_details(call: &ToolCall, now: u64) -> Option<serde_json::Value> {
+/// fail-closed invalid card and can never be confirmed. Scheduled execution
+/// is dormant, so approval details never advertise a future run.
+pub fn automation_approval_details(call: &ToolCall, _now: u64) -> Option<serde_json::Value> {
     let args = call.arguments.as_object()?;
     let action = if call.name == "schedule_task" {
         "create"
@@ -328,9 +328,11 @@ pub fn automation_approval_details(call: &ToolCall, now: u64) -> Option<serde_js
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let enabled = args.get("enabled").and_then(serde_json::Value::as_bool);
+    let enabled = args
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let task_id = args.get("taskId").and_then(serde_json::Value::as_str);
-    let next_run_at = aiden_data::schedule_store::next_scheduled_run(&cron, &timezone, now).ok();
 
     Some(serde_json::json!({
         "kind": AUTOMATION_DETAILS_KIND,
@@ -339,7 +341,7 @@ pub fn automation_approval_details(call: &ToolCall, now: u64) -> Option<serde_js
         "prompt": prompt,
         "cron": cron,
         "timezone": timezone,
-        "nextRunAt": next_run_at,
+        "nextRunAt": null,
         "permission": permission,
         "workspaceId": workspace_id,
         "workspaceName": workspace_name,
@@ -353,35 +355,8 @@ pub fn automation_approval_details(call: &ToolCall, now: u64) -> Option<serde_js
         "taskId": task_id,
         "notify": true,
         "mode": "llm",
-        "schedulerEnabled": true,
+        "schedulerEnabled": false,
     }))
-}
-
-/// A human "schedule" label for the automation card, mirroring the renderer's
-/// `formatSchedule` intent: "Every day at 9:00 AM" style. Falls back to the
-/// raw cron when the expression is unparseable (or not a plain daily schedule).
-pub fn format_schedule(cron: &str, timezone: &str, next_run_at: Option<u64>) -> String {
-    let parts: Vec<&str> = cron.split_whitespace().collect();
-    if parts.len() == 5 {
-        let minute = parts[0];
-        let hour = parts[1];
-        let dom = parts[2];
-        let month = parts[3];
-        let dow = parts[4];
-        if minute == "0" && hour.parse::<u32>().is_ok() && dom == "*" && month == "*" && dow == "*"
-        {
-            let hour: u32 = hour.parse().unwrap_or(0);
-            let (display, suffix) = match hour % 12 {
-                0 => (12, "AM"),
-                h if hour < 12 => (h, "AM"),
-                h => (h, "PM"),
-            };
-            return format!("Every day at {display}:00 {suffix}");
-        }
-    }
-    let _ = timezone;
-    let _ = next_run_at;
-    format!("Cron {cron}")
 }
 
 #[cfg(test)]
@@ -587,6 +562,9 @@ mod tests {
         assert_eq!(details["permission"], "full");
         assert_eq!(details["workspaceId"], "w-1");
         assert_eq!(details["mcpServerIds"][0], "gmail");
+        assert_eq!(details["schedulerEnabled"], false);
+        assert_eq!(details["enabled"], false);
+        assert!(details["nextRunAt"].is_null());
         // Missing name/cron → None (cannot be confirmed).
         assert!(automation_approval_details(
             &call("schedule_task", serde_json::json!({ "name": "only" })),
@@ -617,22 +595,19 @@ mod tests {
         .expect("valid edit");
         assert_eq!(details["action"], "edit");
         assert_eq!(details["taskId"], "task-1");
-    }
-
-    #[test]
-    fn schedule_labels_read_human_time_and_fall_back_to_cron() {
-        assert_eq!(
-            format_schedule("0 9 * * *", "UTC", None),
-            "Every day at 9:00 AM"
-        );
-        assert_eq!(
-            format_schedule("0 0 * * *", "UTC", None),
-            "Every day at 12:00 AM"
-        );
-        assert_eq!(
-            format_schedule("0 15 * * *", "UTC", None),
-            "Every day at 3:00 PM"
-        );
-        assert_eq!(format_schedule("0 9 * * 1", "UTC", None), "Cron 0 9 * * 1");
+        let enabled = automation_approval_details(
+            &call(
+                "edit_automation",
+                serde_json::json!({
+                    "taskId": "task-1",
+                    "name": "Morning brief",
+                    "cron": "30 7 * * *",
+                    "enabled": true,
+                }),
+            ),
+            1_700_000_000_000,
+        )
+        .expect("enabled edit remains attended");
+        assert_eq!(enabled["enabled"], true);
     }
 }
