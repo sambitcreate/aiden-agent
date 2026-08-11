@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  MAX_HISTORY_CHARS,
   TerminalHistoryStore,
   capHistory,
   sanitizeTerminalHistoryChunk,
@@ -79,6 +80,11 @@ test("capHistory preserves a trailing newline", () => {
   assert.equal(capped, "line8\nline9\n");
 });
 
+test("capHistory bounds a long history without line breaks", () => {
+  const capped = capHistory("x".repeat(MAX_HISTORY_CHARS + 100), 5_000);
+  assert.equal(capped.length, MAX_HISTORY_CHARS);
+});
+
 test("TerminalHistoryStore round-trips appended chunks after flush", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "pty-history-"));
   const store = new TerminalHistoryStore({ logsDir: dir, debounceMs: 0 });
@@ -91,6 +97,72 @@ test("TerminalHistoryStore round-trips appended chunks after flush", async () =>
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("TerminalHistoryStore preserves restored history when appending after restart", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "pty-history-restart-"));
+  try {
+    const first = new TerminalHistoryStore({ logsDir: dir, debounceMs: 0 });
+    first.append("ws-1", "before restart\n");
+    await first.flush("ws-1");
+
+    const restarted = new TerminalHistoryStore({ logsDir: dir, debounceMs: 0 });
+    assert.equal(await restarted.read("ws-1"), "before restart\n");
+    restarted.append("ws-1", "after restart\n");
+    await restarted.flush("ws-1");
+
+    const verified = new TerminalHistoryStore({ logsDir: dir });
+    assert.equal(await verified.read("ws-1"), "before restart\nafter restart\n");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("TerminalHistoryStore flushAll settles every workspace before shutdown", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "pty-history-flush-all-"));
+  const store = new TerminalHistoryStore({ logsDir: dir, debounceMs: 60_000 });
+  try {
+    store.append("ws-1", "alpha");
+    store.append("ws-2", "beta");
+    await store.flushAll();
+
+    const verified = new TerminalHistoryStore({ logsDir: dir });
+    assert.equal(await verified.read("ws-1"), "alpha");
+    assert.equal(await verified.read("ws-2"), "beta");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("TerminalHistoryStore flushAll retains output appended during an active write", async () => {
+  const writes: string[] = [];
+  let fire: () => void = () => {};
+  let releaseFirstWrite: () => void = () => {};
+  const firstWriteBlocked = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  const store = new TerminalHistoryStore({
+    logsDir: "/unused-test-history",
+    schedule: (fn) => {
+      fire = fn;
+      return () => {
+        fire = () => {};
+      };
+    },
+    writeFile: async (_filePath, history) => {
+      writes.push(history);
+      if (writes.length === 1) await firstWriteBlocked;
+    },
+  });
+
+  store.append("ws-1", "alpha");
+  fire();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  store.append("ws-1", " beta");
+  releaseFirstWrite();
+  await store.flushAll();
+
+  assert.deepEqual(writes, ["alpha", "alpha beta"]);
 });
 
 test("TerminalHistoryStore persists sanitized output to disk", async () => {
@@ -166,4 +238,14 @@ test("TerminalHistoryStore coalesces rapid appends into one debounced write", as
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("production startup installs and flushes persisted terminal history", async () => {
+  const main = await readFile(new URL("../index.ts", import.meta.url), "utf8");
+  assert.match(main, /TerminalHistoryStore/u);
+  assert.match(
+    main,
+    /terminalService\.installHistoryStore\(await TerminalHistoryStore\.create\(\)\)/u,
+  );
+  assert.match(main, /terminalService\.flushHistory\(\)/u);
 });

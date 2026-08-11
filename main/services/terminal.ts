@@ -79,6 +79,7 @@ export interface TerminalHistoryStoreLike {
   read(workspaceId: string): Promise<string>;
   append(workspaceId: string, data: string): void;
   flush(workspaceId: string): Promise<void>;
+  flushAll?(): Promise<void>;
 }
 
 function terminalId(): string {
@@ -213,8 +214,33 @@ export class TerminalService {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly webContentsEpochs = new Map<number, number>();
   private spawnHelperReady: Promise<void> | undefined;
+  private historyStore: TerminalHistoryStoreLike | undefined;
 
-  constructor(private readonly options: TerminalServiceOptions = {}) {}
+  constructor(private readonly options: TerminalServiceOptions = {}) {
+    this.historyStore = options.historyStore;
+  }
+
+  /** Install the production history store before any renderer can open a terminal. */
+  installHistoryStore(historyStore: TerminalHistoryStoreLike): void {
+    if (this.historyStore) throw new Error("Terminal history is already initialized.");
+    if (this.sessions.size > 0) {
+      throw new Error("Terminal history must be initialized before opening a terminal.");
+    }
+    this.historyStore = historyStore;
+  }
+
+  /** Settle every pending history write before application shutdown. */
+  async flushHistory(): Promise<void> {
+    if (!this.historyStore) return;
+    if (this.historyStore.flushAll) {
+      await this.historyStore.flushAll();
+      return;
+    }
+    const workspaceIds = new Set(
+      [...this.sessions.values()].map((session) => session.historyWorkspaceId),
+    );
+    await Promise.all([...workspaceIds].map((workspaceId) => this.historyStore!.flush(workspaceId)));
+  }
 
   async create(
     workspaceId: string,
@@ -273,7 +299,7 @@ export class TerminalService {
     // Restore the sanitized prior-session output so the terminal reopens with
     // its history. The renderer writes this buffer to xterm on hydrate, so no
     // renderer change is required for the seed.
-    const restoredHistory = await this.options.historyStore?.read(workspaceId);
+    const restoredHistory = await this.historyStore?.read(workspaceId);
     if (ownerInvalidated()) {
       this.terminatePty(pty);
       throw new Error("The workspace changed before the terminal could start.");
@@ -314,7 +340,7 @@ export class TerminalService {
       current.buffer = `${current.buffer}${data}`.slice(-MAX_BUFFER_CHARS);
       current.sequence += 1;
       // Persist new output (the store sanitizes and debounces the disk write).
-      this.options.historyStore?.append(workspaceId, data);
+      this.historyStore?.append(workspaceId, data);
       try {
         owner.send("terminal:data", { sessionId: id, sequence: current.sequence, data });
       } catch {
@@ -327,7 +353,7 @@ export class TerminalService {
       this.sessions.delete(id);
       current.removeOwnerInvalidation();
       // Flush the final chunk before the session goes away.
-      void this.options.historyStore?.flush(workspaceId);
+      void this.historyStore?.flush(workspaceId);
       try {
         owner.send("terminal:exit", { sessionId: id, exitCode, signal });
       } catch {
@@ -400,7 +426,7 @@ export class TerminalService {
     this.terminatePty(session.pty);
     // Best-effort flush so the last output chunk is on disk before the session
     // is torn down (window close, workspace switch, quit). Never block on it.
-    void this.options.historyStore?.flush(session.historyWorkspaceId);
+    void this.historyStore?.flush(session.historyWorkspaceId);
     try {
       session.owner.send("terminal:exit", {
         sessionId: id,

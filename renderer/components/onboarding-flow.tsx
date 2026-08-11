@@ -202,7 +202,8 @@ const featureBentos: FeatureBento[] = [
     id: "terminal",
     group: "create",
     title: "Integrated Terminal",
-    description: "Run a workspace shell in a resizable drawer with tabs and split panes.",
+    description:
+      "Run a workspace shell in tabs or split panes, then reopen it with sanitized local history.",
     icon: SquareTerminal,
     imageUrl: FEATURE_ILLUSTRATIONS.terminal,
     size: "standard",

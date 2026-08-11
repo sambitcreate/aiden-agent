@@ -13,6 +13,7 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { terminalService } from "./services/terminal.js";
+import { TerminalHistoryStore } from "./services/terminal-history.js";
 import { getPreloadPath, getWindowUrl } from "./windows/window-paths.js";
 import {
   initShortcut,
@@ -324,6 +325,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         await subagentRunStore.flush();
         await subagentRunStore.close();
       })(),
+      terminalService.flushHistory(),
     ]);
   } catch (error) {
     logger.error("main", "Application service shutdown did not complete cleanly.", error);
@@ -1202,6 +1204,15 @@ if (!ownsSingleInstanceLock) {
       if (!isPackagedRuntime()) {
         initDevLog(path.join(runtimeProfile.logsPath, "aiden-dev.log"));
         logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
+      }
+      try {
+        terminalService.installHistoryStore(await TerminalHistoryStore.create());
+      } catch (error) {
+        logger.warn(
+          "terminal",
+          "Persisted terminal history is unavailable; terminals will remain session-only.",
+          error,
+        );
       }
       // Reconcile every persisted active child at the actual restart boundary,
       // before a renderer can read or append run history.

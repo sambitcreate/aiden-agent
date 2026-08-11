@@ -18,6 +18,7 @@ import { ensureUserDataDir } from "./data-store.js";
 import type { TerminalHistoryStoreLike } from "./terminal.js";
 
 export const MAX_HISTORY_LINES = 5_000;
+export const MAX_HISTORY_CHARS = 200_000;
 const PERSIST_DEBOUNCE_MS = 40;
 
 export interface TerminalHistoryStoreOptions {
@@ -25,10 +26,14 @@ export interface TerminalHistoryStoreOptions {
   logsDir: string;
   /** Override for tests; production resolves via ensureUserDataDir. */
   maxLines?: number;
+  /** Hard memory and disk bound, including histories without line breaks. */
+  maxChars?: number;
   /** Test seam for the debounce window. */
   debounceMs?: number;
   /** Test seam: custom timers. */
   schedule?: (fn: () => void, ms: number) => () => void;
+  /** Test seam for deterministic write-race coverage. */
+  writeFile?: (filePath: string, history: string) => Promise<void>;
 }
 
 /**
@@ -240,14 +245,20 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
  * Keep only the most recent `maxLines` lines so a long-running terminal does
  * not grow without bound. A trailing newline is preserved if present.
  */
-export function capHistory(history: string, maxLines: number): string {
+export function capHistory(
+  history: string,
+  maxLines: number,
+  maxChars = MAX_HISTORY_CHARS,
+): string {
   if (history.length === 0) return history;
   const hasTrailingNewline = history.endsWith("\n");
   const lines = history.split("\n");
   if (hasTrailingNewline) lines.pop();
-  if (lines.length <= maxLines) return history;
-  const capped = lines.slice(lines.length - maxLines).join("\n");
-  return hasTrailingNewline ? `${capped}\n` : capped;
+  const lineCapped =
+    lines.length <= maxLines ? history : lines.slice(lines.length - maxLines).join("\n");
+  const withTrailingNewline =
+    lines.length > maxLines && hasTrailingNewline ? `${lineCapped}\n` : lineCapped;
+  return withTrailingNewline.slice(-maxChars);
 }
 
 function safeWorkspaceId(workspaceId: string): string {
@@ -263,21 +274,32 @@ interface PendingWorkspaceState {
   cancel: () => void;
   /** True when a write is scheduled but has not fired yet. */
   writeScheduled: boolean;
+  /** Monotonic in-memory content revision. */
+  revision: number;
+  /** Latest revision handed to the best-effort disk writer. */
+  persistedRevision: number;
+  /** The one serialized disk write, if any. */
+  writeInFlight?: Promise<void>;
 }
 
 export class TerminalHistoryStore implements TerminalHistoryStoreLike {
   private readonly maxLines: number;
+  private readonly maxChars: number;
   private readonly debounceMs: number;
   private readonly schedule: (fn: () => void, ms: number) => () => void;
+  private readonly writeFile: (filePath: string, history: string) => Promise<void>;
   private readonly pending = new Map<string, PendingWorkspaceState>();
 
   constructor(private readonly options: TerminalHistoryStoreOptions) {
     this.maxLines = options.maxLines ?? MAX_HISTORY_LINES;
+    this.maxChars = options.maxChars ?? MAX_HISTORY_CHARS;
     this.debounceMs = options.debounceMs ?? PERSIST_DEBOUNCE_MS;
     this.schedule = options.schedule ?? ((fn, ms) => {
       const handle = setTimeout(fn, ms);
       return () => clearTimeout(handle);
     });
+    this.writeFile =
+      options.writeFile ?? ((filePath, history) => fs.writeFile(filePath, history, "utf8"));
   }
 
   /** Create the default store rooted at `<userData>/terminal-history`. */
@@ -289,13 +311,25 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
   async read(workspaceId: string): Promise<string> {
     const state = this.pending.get(workspaceId);
     if (state) return state.history;
+    let history = "";
     try {
       const file = path.join(this.options.logsDir, `${safeWorkspaceId(workspaceId)}.log`);
       const raw = await fs.readFile(file, "utf8");
-      return capHistory(raw, this.maxLines);
+      history = capHistory(raw, this.maxLines, this.maxChars);
     } catch {
-      return "";
+      // Missing or unreadable history is a safe empty starting point.
     }
+    const existing = this.pending.get(workspaceId);
+    if (existing) return existing.history;
+    this.pending.set(workspaceId, {
+      history,
+      pendingControlSequence: "",
+      cancel: () => {},
+      writeScheduled: false,
+      revision: 0,
+      persistedRevision: 0,
+    });
+    return history;
   }
 
   append(workspaceId: string, data: string): void {
@@ -306,23 +340,45 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
         pendingControlSequence: "",
         cancel: () => {},
         writeScheduled: false,
+        revision: 0,
+        persistedRevision: 0,
       };
       this.pending.set(workspaceId, state);
     }
     const sanitized = sanitizeTerminalHistoryChunk(state.pendingControlSequence, data);
     state.pendingControlSequence = sanitized.pendingControlSequence;
     if (sanitized.visibleText.length > 0) {
-      state.history = capHistory(`${state.history}${sanitized.visibleText}`, this.maxLines);
+      state.history = capHistory(
+        `${state.history}${sanitized.visibleText}`,
+        this.maxLines,
+        this.maxChars,
+      );
+      state.revision += 1;
+      this.scheduleDebouncedWrite(workspaceId);
     }
-    this.scheduleDebouncedWrite(workspaceId);
   }
 
   async flush(workspaceId: string): Promise<void> {
     const state = this.pending.get(workspaceId);
-    if (!state?.writeScheduled) return;
-    state.cancel();
-    state.writeScheduled = false;
-    await this.persist(workspaceId);
+    if (!state) return;
+    while (this.pending.get(workspaceId) === state) {
+      if (state.writeScheduled) {
+        state.cancel();
+        state.writeScheduled = false;
+      }
+      await this.persist(workspaceId);
+      if (
+        !state.writeScheduled &&
+        !state.writeInFlight &&
+        state.persistedRevision >= state.revision
+      ) {
+        return;
+      }
+    }
+  }
+
+  async flushAll(): Promise<void> {
+    await Promise.all([...this.pending.keys()].map((workspaceId) => this.flush(workspaceId)));
   }
 
   async clear(workspaceId: string): Promise<void> {
@@ -330,6 +386,7 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
     if (state) {
       state.cancel();
       this.pending.delete(workspaceId);
+      await state.writeInFlight;
     }
     try {
       await fs.unlink(path.join(this.options.logsDir, `${safeWorkspaceId(workspaceId)}.log`));
@@ -343,6 +400,7 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
     if (!state || state.writeScheduled) return;
     state.writeScheduled = true;
     state.cancel = this.schedule(() => {
+      state.writeScheduled = false;
       void this.persist(workspaceId);
     }, this.debounceMs);
   }
@@ -350,13 +408,31 @@ export class TerminalHistoryStore implements TerminalHistoryStoreLike {
   private async persist(workspaceId: string): Promise<void> {
     const state = this.pending.get(workspaceId);
     if (!state) return;
-    try {
-      const file = path.join(this.options.logsDir, `${safeWorkspaceId(workspaceId)}.log`);
-      await fs.writeFile(file, state.history, "utf8");
-    } catch {
-      // A terminal must never fail or block on history-disk trouble.
-    } finally {
-      if (state) state.writeScheduled = false;
+    if (state.writeInFlight) {
+      await state.writeInFlight;
+      return;
     }
+    if (state.persistedRevision >= state.revision) return;
+    const revision = state.revision;
+    const history = state.history;
+    const file = path.join(this.options.logsDir, `${safeWorkspaceId(workspaceId)}.log`);
+    const operation = Promise.resolve()
+      .then(() => this.writeFile(file, history))
+      .catch(() => {
+        // A terminal must never fail or block on history-disk trouble.
+      })
+      .finally(() => {
+        state.persistedRevision = Math.max(state.persistedRevision, revision);
+        if (state.writeInFlight === operation) state.writeInFlight = undefined;
+        if (
+          this.pending.get(workspaceId) === state &&
+          state.revision > state.persistedRevision &&
+          !state.writeScheduled
+        ) {
+          this.scheduleDebouncedWrite(workspaceId);
+        }
+      });
+    state.writeInFlight = operation;
+    await operation;
   }
 }

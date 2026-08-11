@@ -330,6 +330,7 @@ test("the first candidate succeeding reports preferredShellSkipped false", async
 test("persisted history seeds a reopened terminal buffer", async () => {
   const owner = ownerState();
   let history = "prior output\n";
+  let flushAllCount = 0;
   // A minimal in-memory history store stub.
   const historyStore = {
     read: async () => history,
@@ -337,16 +338,22 @@ test("persisted history seeds a reopened terminal buffer", async () => {
       history += data;
     },
     flush: async () => undefined,
+    flushAll: async () => {
+      flushAllCount += 1;
+    },
   };
   const service = new TerminalService({
     prepareSpawnHelper: async () => undefined,
     spawnPty: (() => fakePty().pty) as typeof spawn,
-    historyStore,
   });
+  service.installHistoryStore(historyStore);
+  assert.throws(() => service.installHistoryStore(historyStore), /already initialized/u);
 
   const session = await service.create("workspace-1", "/tmp", owner.owner);
   // The restored history is available via snapshot, so the renderer can
   // re-hydrate xterm with the prior session's output.
   const snapshot = service.snapshot(session.id, owner.owner);
   assert.equal(snapshot.buffer, "prior output\n");
+  await service.flushHistory();
+  assert.equal(flushAllCount, 1);
 });
