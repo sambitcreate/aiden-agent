@@ -215,8 +215,16 @@ fn diff_preview(before: &str, after: &str) -> (String, bool) {
     let available = SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT - marker.len();
     let head = available / 2;
     let tail = available - head;
+    let mut head_end = head.min(full.len());
+    while head_end > 0 && !full.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = full.len().saturating_sub(tail);
+    while tail_start < full.len() && !full.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
     (
-        format!("{}{marker}{}", &full[..head], &full[full.len() - tail..]),
+        format!("{}{marker}{}", &full[..head_end], &full[tail_start..]),
         true,
     )
 }
@@ -538,6 +546,20 @@ mod tests {
         let long_before = "x".repeat(10_000);
         let (_, truncated) = diff_preview(&long_before, "");
         assert!(truncated);
+    }
+
+    #[test]
+    fn diff_preview_truncates_multibyte_text_only_at_utf8_boundaries() {
+        let before = format!("{}{}", "🙂e\u{301}".repeat(2_000), "\u{202e}\u{1b}");
+        let after = "漢字🚀".repeat(2_000);
+        let (preview, truncated) = diff_preview(&before, &after);
+        assert!(truncated);
+        assert!(preview.len() <= SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT);
+        assert!(preview.chars().count() <= SUBAGENT_WORKSPACE_WRITE_DIFF_PREVIEW_LIMIT);
+        assert!(preview.is_char_boundary(preview.len()));
+        assert!(!preview.contains('\u{202e}'));
+        assert!(!preview.contains('\u{1b}'));
+        assert!(preview.contains("preview truncated"));
     }
 
     #[test]

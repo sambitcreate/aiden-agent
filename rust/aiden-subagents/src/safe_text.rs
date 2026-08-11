@@ -25,7 +25,6 @@ pub fn is_safe_subagent_identifier_str(value: &str) -> bool {
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
-        || sanitize_subagent_snapshot_text(value) != value
     {
         return false;
     }
@@ -37,5 +36,17 @@ pub fn is_safe_subagent_identifier_value(value: &serde_json::Value) -> bool {
     match value.as_str() {
         Some(value) => is_safe_subagent_identifier_str(value),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_ascii_mcp_tool_identity_is_not_treated_as_displayable_secret_text() {
+        assert!(is_safe_subagent_identifier_str("docs__lookup_4c874d8299d7"));
+        assert!(!is_safe_subagent_identifier_str("docs/lookup"));
+        assert!(!is_safe_subagent_identifier_str("docs\u{202e}lookup"));
     }
 }

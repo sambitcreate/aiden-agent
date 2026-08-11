@@ -156,15 +156,63 @@ impl ProductionSubagentRunStore {
         self.dispatcher.initialize()
     }
 
-    /// Port of `subagentV2Enabled` selection helper.
+    /// Port of `subagentV2Enabled`: V2 is the production default and the
+    /// environment variables are emergency rollback switches. Only exact `0`
+    /// disables the whole feature or V2, matching Electron's packaged
+    /// behavior and canonical variable names.
     pub fn subagent_v2_enabled(environment: &std::collections::HashMap<String, String>) -> bool {
-        matches!(
-            environment
-                .get("AIDEN_SUBAGENT_V2")
-                .map(|value| value.as_str()),
-            Some("1" | "true" | "yes")
-        )
+        rollout_enabled(environment, "AIDEN_SUBAGENTS_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENTS_V2_ENABLED")
     }
+
+    /// Independent emergency rollback for attended child workspace writes.
+    /// The capability defaults on, only exact `0` disables it, and the global
+    /// Subagents rollback remains the parent gate.
+    pub fn subagent_child_write_enabled(
+        environment: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        rollout_enabled(environment, "AIDEN_SUBAGENTS_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENTS_V2_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENT_CHILD_WRITE_ENABLED")
+    }
+
+    /// Independent emergency rollback for attended foreground child shell.
+    /// It never authorizes shell alone: production admission must additionally
+    /// prove the V2 authority, workspace authority, and approval channel.
+    pub fn subagent_child_shell_enabled(
+        environment: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        rollout_enabled(environment, "AIDEN_SUBAGENTS_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENTS_V2_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENT_CHILD_SHELL_ENABLED")
+    }
+
+    /// Independent emergency rollback for foreground remote child MCP reads.
+    /// Stdio servers and every actual call remain subject to the exact V2
+    /// authority, bounded inventory, network budget, and one-use egress
+    /// approval; this flag alone grants nothing.
+    pub fn subagent_child_mcp_enabled(
+        environment: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        rollout_enabled(environment, "AIDEN_SUBAGENTS_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENTS_V2_ENABLED")
+            && rollout_enabled(environment, "AIDEN_SUBAGENT_CHILD_MCP_ENABLED")
+    }
+
+    /// Separate subordinate rollback for attended child MCP mutations. A
+    /// disabled base read lane always disables mutations as well.
+    pub fn subagent_child_mcp_mutations_enabled(
+        environment: &std::collections::HashMap<String, String>,
+    ) -> bool {
+        Self::subagent_child_mcp_enabled(environment)
+            && rollout_enabled(environment, "AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED")
+    }
+}
+
+fn rollout_enabled(environment: &std::collections::HashMap<String, String>, name: &str) -> bool {
+    environment
+        .get(name)
+        .is_none_or(|value| value.trim() != "0")
 }
 
 fn now_millis() -> u64 {
@@ -182,13 +230,135 @@ mod tests {
     #[test]
     fn v2_flag_selection() {
         let mut environment = HashMap::new();
-        assert!(!ProductionSubagentRunStore::subagent_v2_enabled(
-            &environment
-        ));
-        environment.insert("AIDEN_SUBAGENT_V2".to_string(), "1".to_string());
         assert!(ProductionSubagentRunStore::subagent_v2_enabled(
             &environment
         ));
+        environment.insert("AIDEN_SUBAGENTS_V2_ENABLED".to_string(), "0".to_string());
+        assert!(!ProductionSubagentRunStore::subagent_v2_enabled(
+            &environment
+        ));
+        environment.insert("AIDEN_SUBAGENTS_V2_ENABLED".to_string(), "1".to_string());
+        assert!(ProductionSubagentRunStore::subagent_v2_enabled(
+            &environment
+        ));
+        environment.insert("AIDEN_SUBAGENTS_ENABLED".to_string(), "0".to_string());
+        assert!(!ProductionSubagentRunStore::subagent_v2_enabled(
+            &environment
+        ));
+    }
+
+    #[test]
+    fn child_write_flag_defaults_on_and_exact_zero_or_global_zero_disables() {
+        let mut environment = HashMap::new();
+        assert!(ProductionSubagentRunStore::subagent_child_write_enabled(
+            &environment
+        ));
+
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_WRITE_ENABLED".to_string(),
+            "1".to_string(),
+        );
+        assert!(ProductionSubagentRunStore::subagent_child_write_enabled(
+            &environment
+        ));
+
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_WRITE_ENABLED".to_string(),
+            "0".to_string(),
+        );
+        assert!(!ProductionSubagentRunStore::subagent_child_write_enabled(
+            &environment
+        ));
+
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_WRITE_ENABLED".to_string(),
+            "1".to_string(),
+        );
+        environment.insert("AIDEN_SUBAGENTS_V2_ENABLED".to_string(), "0".to_string());
+        assert!(!ProductionSubagentRunStore::subagent_child_write_enabled(
+            &environment
+        ));
+
+        environment.insert("AIDEN_SUBAGENTS_V2_ENABLED".to_string(), "1".to_string());
+        environment.insert("AIDEN_SUBAGENTS_ENABLED".to_string(), "0".to_string());
+        assert!(!ProductionSubagentRunStore::subagent_child_write_enabled(
+            &environment
+        ));
+    }
+
+    #[test]
+    fn child_shell_flag_defaults_on_and_exact_zero_or_global_zero_disables() {
+        let mut environment = HashMap::new();
+        assert!(ProductionSubagentRunStore::subagent_child_shell_enabled(
+            &environment
+        ));
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_SHELL_ENABLED".to_string(),
+            "false".to_string(),
+        );
+        assert!(ProductionSubagentRunStore::subagent_child_shell_enabled(
+            &environment
+        ));
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_SHELL_ENABLED".to_string(),
+            "0".to_string(),
+        );
+        assert!(!ProductionSubagentRunStore::subagent_child_shell_enabled(
+            &environment
+        ));
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_SHELL_ENABLED".to_string(),
+            "1".to_string(),
+        );
+        environment.insert("AIDEN_SUBAGENTS_V2_ENABLED".to_string(), "0".to_string());
+        assert!(!ProductionSubagentRunStore::subagent_child_shell_enabled(
+            &environment
+        ));
+        environment.insert("AIDEN_SUBAGENTS_V2_ENABLED".to_string(), "1".to_string());
+        environment.insert("AIDEN_SUBAGENTS_ENABLED".to_string(), "0".to_string());
+        assert!(!ProductionSubagentRunStore::subagent_child_shell_enabled(
+            &environment
+        ));
+    }
+
+    #[test]
+    fn child_mcp_flags_default_on_and_mutation_is_subordinate_to_base() {
+        let mut environment = HashMap::new();
+        assert!(ProductionSubagentRunStore::subagent_child_mcp_enabled(
+            &environment
+        ));
+        assert!(ProductionSubagentRunStore::subagent_child_mcp_mutations_enabled(&environment));
+
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED".to_string(),
+            "0".to_string(),
+        );
+        assert!(ProductionSubagentRunStore::subagent_child_mcp_enabled(
+            &environment
+        ));
+        assert!(!ProductionSubagentRunStore::subagent_child_mcp_mutations_enabled(&environment));
+
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_MCP_MUTATIONS_ENABLED".to_string(),
+            "1".to_string(),
+        );
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_MCP_ENABLED".to_string(),
+            "0".to_string(),
+        );
+        assert!(!ProductionSubagentRunStore::subagent_child_mcp_enabled(
+            &environment
+        ));
+        assert!(!ProductionSubagentRunStore::subagent_child_mcp_mutations_enabled(&environment));
+
+        environment.insert(
+            "AIDEN_SUBAGENT_CHILD_MCP_ENABLED".to_string(),
+            "false".to_string(),
+        );
+        assert!(ProductionSubagentRunStore::subagent_child_mcp_enabled(
+            &environment
+        ));
+        assert!(ProductionSubagentRunStore::subagent_child_mcp_mutations_enabled(&environment));
     }
 
     #[test]

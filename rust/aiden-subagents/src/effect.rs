@@ -96,6 +96,7 @@ impl DurableSubagentEffectStateV2 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentEffectKindV2 {
+    WorkspaceWrite,
     McpMutation,
     Shell,
 }
@@ -103,6 +104,7 @@ pub enum SubagentEffectKindV2 {
 impl SubagentEffectKindV2 {
     pub fn as_str(self) -> &'static str {
         match self {
+            SubagentEffectKindV2::WorkspaceWrite => "workspace_write",
             SubagentEffectKindV2::McpMutation => "mcp_mutation",
             SubagentEffectKindV2::Shell => "shell",
         }
@@ -110,6 +112,7 @@ impl SubagentEffectKindV2 {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
+            "workspace_write" => Some(SubagentEffectKindV2::WorkspaceWrite),
             "mcp_mutation" => Some(SubagentEffectKindV2::McpMutation),
             "shell" => Some(SubagentEffectKindV2::Shell),
             _ => None,
@@ -560,6 +563,28 @@ fn effect_activity_label(
     state: DurableSubagentEffectStateV2,
 ) -> &'static str {
     match (kind, state) {
+        (SubagentEffectKindV2::WorkspaceWrite, DurableSubagentEffectStateV2::Prepared) => {
+            "Workspace change waiting for approval"
+        }
+        (SubagentEffectKindV2::WorkspaceWrite, DurableSubagentEffectStateV2::Authorized) => {
+            "Workspace change authorized"
+        }
+        (SubagentEffectKindV2::WorkspaceWrite, DurableSubagentEffectStateV2::DispatchStarted) => {
+            "Workspace change started"
+        }
+        (SubagentEffectKindV2::WorkspaceWrite, DurableSubagentEffectStateV2::Completed) => {
+            "Workspace change completed"
+        }
+        (SubagentEffectKindV2::WorkspaceWrite, DurableSubagentEffectStateV2::RemoteError) => {
+            "Workspace change failed"
+        }
+        (
+            SubagentEffectKindV2::WorkspaceWrite,
+            DurableSubagentEffectStateV2::CancelledBeforeDispatch,
+        ) => "Workspace change denied or cancelled",
+        (SubagentEffectKindV2::WorkspaceWrite, DurableSubagentEffectStateV2::Unknown) => {
+            "Workspace change outcome unknown. Check the file before retrying."
+        }
         (SubagentEffectKindV2::McpMutation, DurableSubagentEffectStateV2::Prepared) => {
             "Remote change prepared"
         }
@@ -609,6 +634,7 @@ pub fn project_durable_subagent_effect_activity_v1(
     effect: &DurableSubagentEffectV2,
 ) -> SubagentEffectActivityV1 {
     let kind = match effect.effect_kind {
+        SubagentEffectKindV2::WorkspaceWrite => SubagentEffectActivityKindV1::WorkspaceWrite,
         SubagentEffectKindV2::McpMutation => SubagentEffectActivityKindV1::McpMutation,
         SubagentEffectKindV2::Shell => SubagentEffectActivityKindV1::Shell,
     };
@@ -796,5 +822,17 @@ mod tests {
             project_durable_subagent_effect_activity_v1(&unknown).label,
             "Command outcome unknown. Check the workspace before retrying."
         );
+    }
+
+    #[test]
+    fn workspace_write_effect_kind_round_trips_with_truthful_activity() {
+        let mut value = effect("prepared");
+        value["toolName"] = json!("write_file");
+        value["effectKind"] = json!("workspace_write");
+        let parsed = parse_durable_subagent_effect_v2(&value).unwrap();
+        assert_eq!(parsed.effect_kind, SubagentEffectKindV2::WorkspaceWrite);
+        let activity = project_durable_subagent_effect_activity_v1(&parsed);
+        assert_eq!(activity.kind, SubagentEffectActivityKindV1::WorkspaceWrite);
+        assert_eq!(activity.label, "Workspace change waiting for approval");
     }
 }

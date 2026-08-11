@@ -190,6 +190,7 @@ pub struct SubagentOutboundApprovalGateV2 {
     pub ledger: SubagentApprovalLedgerV2,
     pub now: Box<dyn Fn() -> u64 + Send + Sync>,
     pub allocate_id: Box<dyn Fn() -> String + Send + Sync>,
+    tools: std::collections::HashMap<String, SubagentOutboundToolBindingV2>,
     authorized: std::collections::HashMap<String, AuthorizedEntry>,
 }
 
@@ -212,13 +213,13 @@ impl SubagentOutboundApprovalGateV2 {
             }
             tools.insert(tool.tool_name.clone(), tool);
         }
-        let _ = tools;
         Ok(SubagentOutboundApprovalGateV2 {
             authority: input.authority,
             child_id: input.child_id,
             ledger: input.ledger,
             now: input.now,
             allocate_id: input.allocate_id,
+            tools,
             authorized: std::collections::HashMap::new(),
         })
     }
@@ -232,11 +233,11 @@ impl SubagentOutboundApprovalGateV2 {
         current_authority: &dyn Fn(&str) -> Option<SubagentAuthorityV2>,
         request_approval: &mut dyn FnMut(&str, &str) -> Result<bool, String>,
     ) -> Result<Option<Blocked>, String> {
-        if tool_name == "web_search" || tool_name.starts_with("mcp_") {
-            // The binding inventory is resolved by the host; the gate keys on
-            // the exact binding table. Without a binding, block.
-        }
-        let _ = tool_name;
+        let Some(binding) = self.tools.get(tool_name).cloned() else {
+            return Ok(Some(blocked(
+                "This subagent outbound tool is outside its approved authority.",
+            )));
+        };
         let authority = current_authority(&self.authority.run_id);
         if !same_subagent_authority_binding_v2(&self.authority, authority.as_ref())
             || authority
@@ -275,15 +276,6 @@ impl SubagentOutboundApprovalGateV2 {
                     "This subagent action could not be prepared for approval.",
                 )))
             }
-        };
-        let binding = SubagentOutboundToolBindingV2 {
-            tool_name: tool_name.to_string(),
-            kind: if tool_name == "web_search" {
-                "web"
-            } else {
-                "mcp"
-            },
-            mcp: None,
         };
         let summary = subagent_outbound_approval_summary_v2(&binding, args);
         let summary = match summary {
@@ -540,6 +532,76 @@ mod tests {
                 } else {
                     None
                 },
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn mcp_read_gate_retains_the_exact_binding_and_consumes_once() {
+        let mut authority = authority();
+        authority.capabilities.web = false;
+        let tool = SubagentMcpToolScopeV2::Read(crate::authority::SubagentMcpReadToolScopeV2 {
+            tool_name: "lookup".to_string(),
+            schema_hash: "ab".repeat(32),
+            effect: crate::authority::SubagentMcpEffectV2::Read,
+        });
+        authority.capabilities.mcp = vec![crate::authority::SubagentMcpScopeV2 {
+            server_id: "docs".to_string(),
+            connection_fingerprint: "cd".repeat(32),
+            tools: vec![tool.clone()],
+        }];
+        let binding = SubagentOutboundToolBindingV2 {
+            tool_name: "mcp_docs_lookup".to_string(),
+            kind: "mcp",
+            mcp: Some(SubagentOutboundMcpBinding {
+                server_id: "docs".to_string(),
+                connection_fingerprint: "cd".repeat(32),
+                tool,
+            }),
+        };
+        let mut gate = SubagentOutboundApprovalGateV2::new(SubagentOutboundApprovalBrokerV2Input {
+            authority: authority.clone(),
+            child_id: "child-1".to_string(),
+            tools: vec![binding],
+            ledger: SubagentApprovalLedgerV2::new(),
+            current_authority: Box::new(|_| None),
+            request_approval: Box::new(|_, _| Ok(true)),
+            now: Box::new(|| 1_000),
+            allocate_id: Box::new(|| "approval-mcp-1".to_string()),
+        })
+        .unwrap();
+
+        let current = authority.clone();
+        let mut summary = String::new();
+        let blocked = gate
+            .before_tool_call(
+                "mcp_docs_lookup",
+                "call-mcp-1",
+                &json!({ "query": "Aiden" }),
+                &|_| Some(current.clone()),
+                &mut |_, value| {
+                    summary = value.to_string();
+                    Ok(true)
+                },
+            )
+            .unwrap();
+        assert!(blocked.is_none());
+        assert!(summary.contains("docs:lookup"));
+
+        let current = authority.clone();
+        gate.consume(
+            "call-mcp-1",
+            "mcp_docs_lookup",
+            &json!({ "query": "Aiden" }),
+            &|_| Some(current.clone()),
+        )
+        .unwrap();
+        assert!(gate
+            .consume(
+                "call-mcp-1",
+                "mcp_docs_lookup",
+                &json!({ "query": "Aiden" }),
+                &|_| Some(authority.clone()),
             )
             .is_err());
     }

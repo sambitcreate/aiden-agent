@@ -19,6 +19,13 @@
 //! process-group cleanup with 1s grace, and the eight-outcome taxonomy.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::io::{AsRawFd, FromRawFd};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -149,6 +156,49 @@ fn valid_command(command: &str) -> Result<(), ShellError> {
     Ok(())
 }
 
+/// Open the verified root once and retain its descriptor until the child has
+/// changed directory. Path-based `current_dir` would otherwise permit a
+/// rename/symlink swap between the identity check and process launch.
+#[cfg(unix)]
+fn open_pinned_workspace_root(
+    root: &SubagentShellWorkspaceRoot,
+) -> Result<std::fs::File, ShellError> {
+    use std::ffi::CString;
+    use std::os::unix::fs::MetadataExt;
+
+    let path = CString::new(root.path.as_bytes())
+        .map_err(|_| ShellError("The shell workspace root must be a directory.".to_string()))?;
+    // SAFETY: `path` is a NUL-terminated CString and the returned descriptor
+    // is immediately adopted by File for one-owner close semantics.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        return Err(ShellError(
+            "The shell workspace root could not be pinned safely.".to_string(),
+        ));
+    }
+    // SAFETY: `fd` is newly owned after successful libc::open above.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let metadata = file.metadata().map_err(|_| {
+        ShellError("The shell workspace root could not be pinned safely.".to_string())
+    })?;
+    let expected_device = root.device.parse::<u64>().ok();
+    let expected_inode = root.inode.parse::<u64>().ok();
+    if !metadata.is_dir()
+        || Some(metadata.dev()) != expected_device
+        || Some(metadata.ino()) != expected_inode
+    {
+        return Err(ShellError(
+            "The shell workspace root could not be pinned safely.".to_string(),
+        ));
+    }
+    Ok(file)
+}
+
 /// `encodeSubagentShellRequest` — exact AIDSH001 framing.
 pub fn encode_subagent_shell_request(input: &SubagentShellRequest) -> Result<Vec<u8>, ShellError> {
     valid_command(&input.command)?;
@@ -267,20 +317,115 @@ pub struct SubagentShellResponseIdentity {
 /// may have backgrounded children that inherited the output pipes; killing
 /// only the direct child would leave them running (and the pipes open).
 #[cfg(unix)]
-fn kill_process_group(child: &tokio::process::Child) -> bool {
-    match child.id() {
+fn signal_process_group_id(pid: Option<u32>, signal: libc::c_int) -> bool {
+    match pid {
         Some(pid) => {
-            // SAFETY: `killpg` with a valid pid; failure (ESRCH etc.) is
+            // SAFETY: `killpg` with the owned child's process-group id; failure (ESRCH etc.) is
             // best-effort and reported as false.
-            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) == 0 }
+            unsafe { libc::killpg(pid as libc::pid_t, signal) == 0 }
         }
         None => false,
     }
 }
 
+#[cfg(unix)]
+fn process_group_exists(pid: Option<u32>) -> bool {
+    let Some(pid) = pid else {
+        return false;
+    };
+    // SAFETY: signal zero only probes the owned process group and changes no
+    // process state. EPERM still proves that a member exists.
+    unsafe {
+        libc::killpg(pid as libc::pid_t, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+}
+
+/// Apply the canonical TERM/grace/KILL sequence to the retained owned pgid.
+/// Direct-child reaping is deliberately independent of group existence: a
+/// shell may exit while a same-group descendant remains alive with all stdio
+/// redirected away from the runner.
+#[cfg(unix)]
+async fn cleanup_owned_process_group(
+    child: &mut tokio::process::Child,
+    process_group: Option<u32>,
+    mut child_reaped: bool,
+) -> Result<bool, ShellError> {
+    let mut group_exists = process_group_exists(process_group);
+    if group_exists {
+        let _ = signal_process_group_id(process_group, libc::SIGTERM);
+        let grace_deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(CLEANUP_GRACE_MS);
+        loop {
+            if !child_reaped {
+                child_reaped = child
+                    .try_wait()
+                    .map_err(|_| ShellError("protocol failed".to_string()))?
+                    .is_some();
+            }
+            group_exists = process_group_exists(process_group);
+            if !group_exists || tokio::time::Instant::now() >= grace_deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+    // Once absence is observed, never signal this numeric pgid again: it is
+    // no longer demonstrably owned and could be reused by the host.
+    if group_exists {
+        let _ = signal_process_group_id(process_group, libc::SIGKILL);
+        let kill_deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_millis(CLEANUP_GRACE_MS);
+        loop {
+            if !child_reaped {
+                child_reaped = child
+                    .try_wait()
+                    .map_err(|_| ShellError("protocol failed".to_string()))?
+                    .is_some();
+            }
+            group_exists = process_group_exists(process_group);
+            if !group_exists || tokio::time::Instant::now() >= kill_deadline {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+    let direct_reaped = if child_reaped {
+        true
+    } else {
+        matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(CLEANUP_GRACE_MS),
+                child.wait(),
+            )
+            .await,
+            Ok(Ok(_))
+        )
+    };
+    Ok(direct_reaped && !group_exists)
+}
+
 #[cfg(not(unix))]
-fn kill_process_group(_child: &tokio::process::Child) -> bool {
+fn signal_process_group_id(_pid: Option<u32>, _signal: i32) -> bool {
     false
+}
+
+#[cfg(not(unix))]
+fn process_group_exists(_pid: Option<u32>) -> bool {
+    false
+}
+
+#[cfg(not(unix))]
+async fn cleanup_owned_process_group(
+    child: &mut tokio::process::Child,
+    _process_group: Option<u32>,
+    child_reaped: bool,
+) -> Result<bool, ShellError> {
+    if child_reaped {
+        Ok(true)
+    } else {
+        Ok(child.wait().await.is_ok())
+    }
 }
 
 /// The in-process execution boundary. Spawns `/bin/zsh -f -c` through tokio
@@ -307,13 +452,34 @@ pub struct SubagentShellRunInput {
     pub nonce: String,
     pub timeout_ms: u64,
     pub cancelled: bool,
+    /// Live lifecycle fence. A caller must cancel this on child/run/
+    /// generation/chat/workspace/provider/window/quit invalidation.
+    pub cancellation: Option<Arc<AtomicBool>>,
+    /// A synchronous composite lifecycle probe. It is evaluated by the runner
+    /// on its bounded (20ms) cancellation cadence, so callers do not need to
+    /// spawn a detached bridge task just to mirror cancellation tokens.
+    pub cancellation_probe: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+}
+
+impl SubagentShellRunInput {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled
+            || self
+                .cancellation
+                .as_ref()
+                .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+            || self
+                .cancellation_probe
+                .as_ref()
+                .is_some_and(|probe| probe())
+    }
 }
 
 async fn run_shell_impl(
     input: &SubagentShellRunInput,
     root: &SubagentShellWorkspaceRoot,
 ) -> Result<Vec<u8>, ShellError> {
-    if input.cancelled {
+    if input.is_cancelled() {
         return Err(ShellError("The shell request was cancelled.".to_string()));
     }
     // Build the minimal private 0700 tree.
@@ -326,7 +492,19 @@ async fn run_shell_impl(
             "The shell helper failed before returning a verified outcome.".to_string(),
         ));
     }
+    #[cfg(unix)]
+    let root_handle = match open_pinned_workspace_root(root) {
+        Ok(handle) => handle,
+        Err(_) => {
+            remove_tree(&private_root);
+            return Err(ShellError(
+                "The shell helper failed before returning a verified outcome.".to_string(),
+            ));
+        }
+    };
+    #[cfg(not(unix))]
     let root_identity = pin_subagent_shell_workspace_root(&root.path)?;
+    #[cfg(not(unix))]
     if root_identity.device != root.device || root_identity.inode != root.inode {
         remove_tree(&private_root);
         return Err(ShellError(
@@ -335,8 +513,10 @@ async fn run_shell_impl(
     }
     let mut command = tokio::process::Command::new(zsh);
     command
+        // A shell command must never inherit a provider credential, proxy, or
+        // user startup setting. The explicit list below is the whole contract.
+        .env_clear()
         .args(["-f", "-c", &input.command, "aiden-subagent"])
-        .current_dir(&root.path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -367,7 +547,28 @@ async fn run_shell_impl(
         .env("ZDOTDIR", "/dev/null")
         .kill_on_drop(true);
     #[cfg(unix)]
-    command.process_group(0);
+    {
+        let root_fd = root_handle.as_raw_fd();
+        // SAFETY: the descriptor remains owned by `root_handle` through
+        // `spawn`; pre_exec runs in the child between fork and exec and only
+        // performs the async-signal-safe fchdir call.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::fchdir(root_fd) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        command.process_group(0);
+    }
+    // Recheck at the last synchronous point before process creation. A caller
+    // can revoke the shared cancellation fence while the private environment
+    // and descriptor-pinned root are being prepared.
+    if input.is_cancelled() {
+        remove_tree(&private_root);
+        return Err(ShellError("The shell request was cancelled.".to_string()));
+    }
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(_) => {
@@ -383,6 +584,9 @@ async fn run_shell_impl(
             ));
         }
     };
+    // Keep the owned group id before `wait` clears the child's pid. A normal
+    // shell exit can leave same-group descendants holding the output pipes.
+    let process_group = child.id();
     let mut stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
     let mut out_bytes: Vec<u8> = Vec::new();
@@ -392,9 +596,10 @@ async fn run_shell_impl(
     let mut signal: Option<u32> = None;
     let mut overflow = false;
     let mut timed_out = false;
+    let mut child_reaped = false;
     let (mut out_open, mut err_open) = (true, true);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(input.timeout_ms);
-    let cancelled = input.cancelled;
+    let mut cancelled = input.is_cancelled();
     loop {
         let mut out_buf = [0u8; 16 * 1024];
         let mut err_buf = [0u8; 16 * 1024];
@@ -403,6 +608,29 @@ async fn run_shell_impl(
                 timed_out = true;
                 outcome = SubagentShellOutcome::TimedOut;
                 break;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {
+                if input.is_cancelled() {
+                    cancelled = true;
+                    break;
+                }
+                // A normal shell exit may leave a same-group background child
+                // holding both inherited output pipes. Poll the direct child
+                // independently of pipe readability so that case reaches the
+                // owned-group cleanup path rather than being misreported as a
+                // command timeout.
+                let status = child.try_wait().map_err(|_| ShellError("protocol failed".to_string()))?;
+                if let Some(status) = status {
+                    child_reaped = true;
+                    if let Some(code) = status.code() {
+                        outcome = SubagentShellOutcome::Exited;
+                        exit_code = Some(code as u32);
+                    } else {
+                        outcome = SubagentShellOutcome::Signaled;
+                        signal = Some(status.signal().unwrap_or(0) as u32);
+                    }
+                    break;
+                }
             }
             result = async {
                 if out_open && err_open {
@@ -442,6 +670,7 @@ async fn run_shell_impl(
                 if overflow { break; }
                 let status = child.try_wait().map_err(|_| ShellError("protocol failed".to_string()))?;
                 if let Some(status) = status {
+                    child_reaped = true;
                     if let Some(code) = status.code() {
                         outcome = SubagentShellOutcome::Exited;
                         exit_code = Some(code as u32);
@@ -466,32 +695,55 @@ async fn run_shell_impl(
         } else if cancelled {
             outcome = SubagentShellOutcome::Cancelled;
         }
-        if !kill_process_group(&child) {
-            let _ = child.kill().await;
-        }
-        let _ = child.wait().await;
-        true
+        cleanup_owned_process_group(&mut child, process_group, child_reaped).await?
     } else {
-        child.wait().await.is_ok()
+        // A zero-status direct shell is not sufficient cleanup evidence. Its
+        // descendants can close/redirect both pipes and remain in the owned
+        // process group after the shell has reaped.
+        cleanup_owned_process_group(&mut child, process_group, child_reaped).await?
     };
     // Drain any remaining output after the child exits — bounded, so a
     // backgrounded grandchild that inherited the output pipes and survived the
     // group kill can never stall the caller past the grace period.
-    let mut remaining = Vec::new();
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_millis(CLEANUP_GRACE_MS),
-        stdout.read_to_end(&mut remaining),
-    )
-    .await;
-    for byte in remaining {
+    let mut remaining_stdout = Vec::new();
+    let mut remaining_stderr = Vec::new();
+    let drains = async {
+        tokio::join!(
+            stdout.read_to_end(&mut remaining_stdout),
+            stderr.read_to_end(&mut remaining_stderr),
+        )
+    };
+    let drained = tokio::time::timeout(std::time::Duration::from_millis(CLEANUP_GRACE_MS), drains)
+        .await
+        .is_ok();
+    for byte in remaining_stdout {
         if out_bytes.len() < SUBAGENT_SHELL_STREAM_BYTES {
             out_bytes.push(byte);
         } else {
             outcome = SubagentShellOutcome::OutputLimit;
         }
     }
+    for byte in remaining_stderr {
+        if err_bytes.len() < SUBAGENT_SHELL_STREAM_BYTES {
+            err_bytes.push(byte);
+        } else {
+            outcome = SubagentShellOutcome::OutputLimit;
+        }
+    }
     remove_tree(&private_root);
-    let cleaned = cleanup;
+    // A held inherited pipe means descendants may still be alive. Do not
+    // claim cleanup confirmation merely because the direct child reaped.
+    let cleaned = cleanup && drained;
+    if !cleaned
+        && !matches!(
+            outcome,
+            SubagentShellOutcome::TimedOut
+                | SubagentShellOutcome::Cancelled
+                | SubagentShellOutcome::OutputLimit
+        )
+    {
+        outcome = SubagentShellOutcome::CleanupUnconfirmed;
+    }
     let frame = response_frame(
         input, outcome, exit_code, signal, cleaned, &out_bytes, &err_bytes,
     );
@@ -539,12 +791,21 @@ fn response_frame(
 }
 
 fn create_private_tree() -> Result<String, ShellError> {
-    let base = std::env::temp_dir().join("aiden-subagent-shell");
-    std::fs::create_dir_all(&base).map_err(|_| ShellError("private tree failed".to_string()))?;
-    let root = base.join(uuid_like());
-    std::fs::create_dir(&root).map_err(|_| ShellError("private tree failed".to_string()))?;
+    // `tempdir_in` allocates a new random directory directly below the system
+    // temp directory. Never create/traverse a predictable shared parent.
+    let root = tempfile::Builder::new()
+        .prefix("aiden-subagent-shell.")
+        .tempdir_in(std::env::temp_dir())
+        .map_err(|_| ShellError("private tree failed".to_string()))?
+        .keep();
+    #[cfg(unix)]
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|_| ShellError("private tree failed".to_string()))?;
     for child in ["home", "tmp", "config", "cache", "data"] {
-        std::fs::create_dir(root.join(child))
+        let child = root.join(child);
+        std::fs::create_dir(&child).map_err(|_| ShellError("private tree failed".to_string()))?;
+        #[cfg(unix)]
+        std::fs::set_permissions(&child, std::fs::Permissions::from_mode(0o700))
             .map_err(|_| ShellError("private tree failed".to_string()))?;
     }
     Ok(root.to_string_lossy().into_owned())
@@ -552,46 +813,6 @@ fn create_private_tree() -> Result<String, ShellError> {
 
 fn remove_tree(path: &str) {
     let _ = std::fs::remove_dir_all(path);
-}
-
-fn uuid_like() -> String {
-    // Mix a process-wide monotonic counter into the time seed so concurrent
-    // callers (two subagent shells running in parallel) never derive the same
-    // id from an equal clock reading. A collision would make the second
-    // `create_dir` fail with "private tree failed".
-    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let mut bytes = [0u8; 16];
-    let mut state = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0x9e37_79b9_7f4a_7c15)
-        ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-    for chunk in bytes.chunks_mut(8) {
-        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        let value = (z ^ (z >> 31)).to_le_bytes();
-        chunk.copy_from_slice(&value[..chunk.len()]);
-    }
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(36);
-    let mut byte_index = 0usize;
-    let mut output_index = 0usize;
-    while byte_index < 16 {
-        if matches!(output_index, 8 | 13 | 18 | 23) {
-            output.push('-');
-            output_index += 1;
-        }
-        output.push(HEX[(bytes[byte_index] >> 4) as usize] as char);
-        output.push(HEX[(bytes[byte_index] & 0x0f) as usize] as char);
-        byte_index += 1;
-        output_index += 2;
-    }
-    output
 }
 
 /// sha256 for the shell argument/effect digests (`fieldsDigest` framing).
@@ -746,6 +967,8 @@ mod tests {
             nonce: nonce(),
             timeout_ms: 30_000,
             cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
         };
         let frame = run_subagent_shell(&input, &pinned).await.unwrap();
         let result = decode_subagent_shell_response(
@@ -780,6 +1003,8 @@ mod tests {
             nonce: nonce(),
             timeout_ms: 100,
             cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
         };
         let started = std::time::Instant::now();
         let frame = run_subagent_shell(&input, &pinned).await.unwrap();
@@ -803,6 +1028,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_cancellation_terminates_the_owned_process_group() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let input = SubagentShellRunInput {
+            command: "sleep 60 & wait".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 30_000,
+            cancelled: false,
+            cancellation: Some(cancellation.clone()),
+            cancellation_probe: None,
+        };
+        let trigger = cancellation.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+            trigger.store(true, Ordering::Release);
+        });
+        let started = std::time::Instant::now();
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        assert_eq!(result.outcome, SubagentShellOutcome::Cancelled);
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    }
+
+    #[tokio::test]
     async fn a_backgrounded_grandchild_cannot_stall_the_runner() {
         // Regression: a timed-out command with a backgrounded child inheriting
         // the output pipes must still return promptly. Killing only the direct
@@ -820,6 +1082,8 @@ mod tests {
             nonce: nonce(),
             timeout_ms: 100,
             cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
         };
         let started = std::time::Instant::now();
         let frame = run_subagent_shell(&input, &pinned).await.unwrap();
@@ -839,6 +1103,240 @@ mod tests {
             "runner stalled behind an orphaned grandchild: {:?}",
             started.elapsed()
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn normal_shell_exit_cleans_up_a_same_group_background_child() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        let input = SubagentShellRunInput {
+            command: "sleep 60 & echo $! > child.pid".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 30_000,
+            cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
+        };
+        let started = std::time::Instant::now();
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        let pid = std::fs::read_to_string(root.path().join("child.pid"))
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let status = std::process::Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let status = String::from_utf8_lossy(&status.stdout).trim().to_string();
+        assert!(
+            status.is_empty() || status.starts_with('Z'),
+            "background child {pid} survived cleanup with state {status}"
+        );
+        assert!(
+            (result.outcome == SubagentShellOutcome::Exited
+                && result.cleanup_confirmed
+                && status.is_empty())
+                || (result.outcome == SubagentShellOutcome::CleanupUnconfirmed
+                    && !result.cleanup_confirmed),
+            "normal exit reported untruthful cleanup: {result:?}, child state {status}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn normal_exit_cleans_up_a_redirected_same_group_background_child() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        let input = SubagentShellRunInput {
+            command:
+                "(trap '' HUP; exec sleep 60) </dev/null >/dev/null 2>&1 & echo $! > redirected.pid"
+                    .to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 30_000,
+            cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
+        };
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        let pid = std::fs::read_to_string(root.path().join("redirected.pid"))
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let status = std::process::Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let status = String::from_utf8_lossy(&status.stdout).trim().to_string();
+        assert!(
+            status.is_empty() || status.starts_with('Z'),
+            "redirected background child {pid} survived cleanup with state {status}"
+        );
+        assert!(
+            (result.outcome == SubagentShellOutcome::Exited
+                && result.cleanup_confirmed
+                && status.is_empty())
+                || (result.outcome == SubagentShellOutcome::CleanupUnconfirmed
+                    && !result.cleanup_confirmed),
+            "normal exit reported untruthful cleanup: {result:?}, child state {status}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_preserves_term_grace_for_a_cooperative_descendant() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        let input = SubagentShellRunInput {
+            command: "echo $$ > cooperative-group.pid; (trap 'sleep 0.2; printf cleaned > cooperative.sentinel; exit 0' TERM; while :; do sleep 1; done) & wait".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 100,
+            cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
+        };
+        let started = std::time::Instant::now();
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        let elapsed = started.elapsed();
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        let process_group = std::fs::read_to_string(root.path().join("cooperative-group.pid"))
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("cooperative.sentinel")).unwrap(),
+            "cleaned"
+        );
+        assert!(
+            elapsed >= std::time::Duration::from_millis(200)
+                && elapsed < std::time::Duration::from_secs(1),
+            "cooperative TERM cleanup did not receive the bounded grace: {elapsed:?}"
+        );
+        assert!(!process_group_exists(Some(process_group)));
+        assert_eq!(result.outcome, SubagentShellOutcome::TimedOut);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_a_term_resistant_same_group_descendant() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        let input = SubagentShellRunInput {
+            command: "(trap '' TERM; while :; do sleep 1; done) & echo $! > resistant.pid; wait"
+                .to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 100,
+            cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
+        };
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        let pid = std::fs::read_to_string(root.path().join("resistant.pid"))
+            .unwrap()
+            .trim()
+            .parse::<libc::pid_t>()
+            .unwrap();
+        let status = std::process::Command::new("/bin/ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let status = String::from_utf8_lossy(&status.stdout).trim().to_string();
+        assert!(
+            status.is_empty() || status.starts_with('Z'),
+            "TERM-resistant descendant {pid} survived the mandatory KILL with state {status}"
+        );
+        assert_eq!(result.outcome, SubagentShellOutcome::TimedOut);
+        // `cleanup_confirmed` remains conservative when inherited pipes or a
+        // zombie prevent a definitive group probe; the executable descendant
+        // itself must nevertheless be gone.
+    }
+
+    #[tokio::test]
+    async fn runner_clears_ambient_secret_and_proxy_environment() {
+        if !Path::new("/bin/zsh").exists() {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        let pinned = pin_subagent_shell_workspace_root(canonical_root.to_str().unwrap()).unwrap();
+        std::env::set_var("AIDEN_TEST_INHERITED_SECRET", "must-not-leak");
+        std::env::set_var("HTTPS_PROXY", "http://must-not-leak.invalid");
+        let input = SubagentShellRunInput {
+            command: "printf '%s|%s|%s' \"${AIDEN_TEST_INHERITED_SECRET-unset}\" \"${HTTPS_PROXY-unset}\" \"$PATH\"".to_string(),
+            effect_digest: digest(),
+            nonce: nonce(),
+            timeout_ms: 1_000,
+            cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
+        };
+        let frame = run_subagent_shell(&input, &pinned).await.unwrap();
+        std::env::remove_var("AIDEN_TEST_INHERITED_SECRET");
+        std::env::remove_var("HTTPS_PROXY");
+        let result = decode_subagent_shell_response(
+            &frame,
+            &SubagentShellResponseIdentity {
+                nonce: nonce(),
+                effect_digest: digest(),
+            },
+        )
+        .unwrap();
+        assert_eq!(result.stdout, "unset|unset|/usr/bin:/bin:/usr/sbin:/sbin");
     }
 
     #[test]

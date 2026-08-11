@@ -82,6 +82,20 @@ impl ForegroundSubagentPersistenceV2 {
         }
     }
 
+    /// Install the generation-start inventory exactly once before any child
+    /// authority exists. Discovery is asynchronous in the app host, while
+    /// authority issuance remains synchronous and immutable thereafter.
+    pub fn install_mcp_inventory_before_launch(
+        &mut self,
+        inventory: Vec<crate::authority::SubagentMcpScopeV2>,
+    ) -> Result<(), String> {
+        if !self.authorities.is_empty() || !self.revoked_runs.is_empty() {
+            return Err("Subagent MCP inventory changed after launch.".to_string());
+        }
+        self.input.mcp_inventory = inventory;
+        Ok(())
+    }
+
     fn workspace_binding(&self) -> String {
         subagent_workspace_revision_v2(&self.input.workspace)
     }
@@ -189,6 +203,7 @@ impl ForegroundSubagentPersistenceV2 {
             shell: shell_available,
             web: self.input.web_enabled,
             delegation: self.input.delegation_enabled,
+            mcp: available_mcp_inventory.clone(),
             ..read_only
         };
         let capabilities = resolve_subagent_capabilities_v2(&ResolveSubagentCapabilitiesV2Input {

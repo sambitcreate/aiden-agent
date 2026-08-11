@@ -412,6 +412,8 @@ impl SubagentShellGateV2 {
             nonce: nonce.clone(),
             timeout_ms: SUBAGENT_SHELL_TIMEOUT_MS,
             cancelled: false,
+            cancellation: None,
+            cancellation_probe: None,
         };
         let frame = match run_subagent_shell(&input, &prepared.root).await {
             Ok(frame) => frame,
