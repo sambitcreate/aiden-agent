@@ -365,6 +365,7 @@ pub struct OnboardingMachine {
     pub name: String,
     pub choice: ProviderChoice,
     pub api_key: String,
+    pub defer_pi_setup: bool,
     pub base_url: String,
     pub selected_model: Option<String>,
     pub preset: PresetId,
@@ -389,6 +390,7 @@ impl Default for OnboardingMachine {
             // explicitly chooses the networked ChatGPT sign-in action.
             choice: ProviderChoice::Anthropic,
             api_key: String::new(),
+            defer_pi_setup: false,
             base_url: String::new(),
             selected_model: None,
             preset: PresetId::Aiden,
@@ -426,6 +428,18 @@ impl OnboardingMachine {
         self.completed
     }
 
+    /// The provider persisted by the provider step, if any. The view uses
+    /// this only to offer an explicit handoff to the app-owned setup modal.
+    pub fn saved_provider(&self) -> Option<&OnboardingProvider> {
+        self.saved_provider.as_ref()
+    }
+
+    pub fn defer_pi_provider_setup(&mut self) {
+        self.defer_pi_setup = self.choice.requires_key();
+        self.api_key.clear();
+        self.error = None;
+    }
+
     /// The blocking validation error for the current step, if any. Copy is
     /// taken from the TS toasts / profile-core messages.
     pub fn validate(&self) -> Option<&'static str> {
@@ -443,7 +457,10 @@ impl OnboardingMachine {
                 if self.choice == ProviderChoice::ChatGpt && !self.codex_configured {
                     return Some("Sign in to ChatGPT, or choose another provider.");
                 }
-                if self.choice.requires_key() && self.api_key.trim().is_empty() {
+                if self.choice.requires_key()
+                    && !self.defer_pi_setup
+                    && self.api_key.trim().is_empty()
+                {
                     return Some("Paste an API key or choose a local option.");
                 }
                 None
@@ -941,6 +958,23 @@ mod tests {
     }
 
     #[test]
+    fn explicit_pi_setup_handoff_allows_progress_without_portable_key_material() {
+        let mut machine = OnboardingMachine::new();
+        machine.name = "Ada".into();
+        assert_eq!(machine.next(), NextOutcome::Advanced);
+        machine.choice = ProviderChoice::Anthropic;
+        assert!(machine.validate().is_some());
+        machine.defer_pi_provider_setup();
+        assert_eq!(machine.validate(), None);
+        let pending = machine.pending_provider_save();
+        assert_eq!(pending.api_key, None);
+        assert_eq!(
+            pending.provider.map(|provider| provider.id),
+            Some("anthropic".to_string())
+        );
+    }
+
+    #[test]
     fn pending_provider_save_carries_the_trimmed_key() {
         let mut machine = OnboardingMachine::new();
         machine.name = "Ada".into();
@@ -981,6 +1015,12 @@ mod tests {
             .provider
             .expect("anthropic provider");
         machine.record_provider_saved(provider);
+        assert_eq!(
+            machine
+                .saved_provider()
+                .map(|provider| provider.id.as_str()),
+            Some("anthropic")
+        );
         assert_eq!(machine.current(), Step::Provider);
         assert_eq!(machine.next(), NextOutcome::Advanced);
         assert_eq!(machine.current(), Step::Model);

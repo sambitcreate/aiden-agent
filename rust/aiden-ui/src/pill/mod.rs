@@ -27,11 +27,10 @@
 //! - **Window reuse**: the Electron pill was created once and hidden/shown.
 //!   GPUI has no public hide API, so Escape closes the window and the
 //!   coordinator re-opens it via [`open_pill_window`].
-//! - **Dock-aware positioning**: Electron used
-//!   `screen.getDisplayNearestPoint(...).workArea`. GPUI exposes only display
-//!   frames, so positioning approximates the bottom-center of the primary
-//!   display (TODO: nearest-display + work area when the platform layer
-//!   exposes it).
+//! - **Dock-aware positioning**: the macOS bridge now asks AppKit for the
+//!   cursor display's visible frame on every new show and passes the matching
+//!   GPUI display id to the window. Non-macOS hosts and transient AppKit
+//!   failures fall back to GPUI's primary display frame.
 //! - **`cmd+.` toggle**: a placeholder binding ([`TogglePill`]) that logs; the
 //!   global hotkey coordinator lands in a later phase.
 
@@ -51,7 +50,7 @@ pub use live_audio::LiveAudioSource;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use aiden_core::appearance::AppearanceConfig;
 use aiden_core::dictation::DictationStatePayload;
@@ -71,10 +70,28 @@ use state::{
     PILL_BOTTOM_OFFSET, PILL_HEIGHT, PILL_WIDTH, WAVEFORM_BARS,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PillWorkArea {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+fn pill_origin_for_work_area(area: PillWorkArea) -> (f32, f32) {
+    let x = area.x + ((area.width - PILL_WIDTH) / 2.0).max(0.0);
+    let y = area.y + (area.height - PILL_HEIGHT - PILL_BOTTOM_OFFSET).max(0.0);
+    (x, y)
+}
+
 actions!(pill, [ClosePill, TogglePill]);
 
-fn meter_should_continue(phase: Phase, motion: MotionGate) -> bool {
-    phase == Phase::Listening && motion.allow()
+/// Bound catch-up work when the foreground task is delayed. The recording
+/// timer is intentionally derived from elapsed monotonic time rather than
+/// assuming every 60ms meter frame arrived; a stalled UI therefore catches up
+/// at most one minute of display ticks per pass and never spins unboundedly.
+fn timer_ticks_due(elapsed_seconds: u64, emitted_ticks: u64) -> u64 {
+    elapsed_seconds.saturating_sub(emitted_ticks).min(60)
 }
 
 /// Everything the pill needs from its creator. The coordinator constructs this
@@ -101,6 +118,10 @@ pub struct PillView {
     meter_levels: Vec<f32>,
     appearance: AppearanceSyncState,
     on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Monotonic start of the current recording. The meter task compares this
+    /// identity before applying levels/ticks so a stale task cannot advance a
+    /// newer recording after a rapid stop/start transition.
+    recording_started_at: Option<Instant>,
     _meter_task: Option<Task<anyhow::Result<()>>>,
 }
 
@@ -126,6 +147,7 @@ impl PillView {
             meter_levels: vec![0.0; WAVEFORM_BARS],
             appearance,
             on_cancel: deps.on_cancel,
+            recording_started_at: None,
             _meter_task: None,
         }
     }
@@ -136,6 +158,13 @@ impl PillView {
     #[allow(dead_code)] // coordinator-facing; the aiden-mac hotkey wiring lands later
     pub fn push_dictation(&mut self, payload: &DictationStatePayload, cx: &mut Context<Self>) {
         let event = PillEvent::from_payload(payload);
+        match &event {
+            PillEvent::Recording => self.recording_started_at = Some(Instant::now()),
+            PillEvent::Stopping | PillEvent::Error { .. } | PillEvent::Cancelled => {
+                self.recording_started_at = None
+            }
+            PillEvent::Copied | PillEvent::Pasted | PillEvent::Tick => {}
+        }
         self.state.reduce(&event);
         if self.state.phase == Phase::Listening {
             self.start_meter(cx);
@@ -148,7 +177,7 @@ impl PillView {
     pub fn update_appearance(&mut self, config: AppearanceConfig, cx: &mut Context<Self>) {
         self.motion.reduce_motion = config.reduce_motion;
         self.appearance.adopt(config);
-        if self.state.phase == Phase::Listening && self.motion.allow() {
+        if self.state.phase == Phase::Listening {
             self.start_meter(cx);
         }
         cx.notify();
@@ -158,35 +187,58 @@ impl PillView {
     #[allow(dead_code)] // coordinator-facing; the platform probe lands later
     pub fn set_system_reduced_motion(&mut self, reduced: bool, cx: &mut Context<Self>) {
         self.motion = self.motion.with_system_reduced(reduced);
-        if self.state.phase == Phase::Listening && self.motion.allow() {
+        if self.state.phase == Phase::Listening {
             self.start_meter(cx);
         }
         cx.notify();
     }
 
-    /// Drive the level meter while `Listening`: poll the injected source on
-    /// the foreground at the renderer's rAF cadence and re-render. Gated by
-    /// the motion gate (reduced motion renders a static meter — matching the
-    /// design docs' "freeze to a static state").
+    /// Drive the level meter and elapsed timer while `Listening`: poll the
+    /// injected source on the foreground at the renderer's rAF cadence and
+    /// re-render. Reduced motion freezes only the animated level bars; the
+    /// elapsed timer remains live, matching the renderer's independent clock.
     fn start_meter(&mut self, cx: &mut Context<Self>) {
-        if self._meter_task.is_some() || !self.motion.allow() {
+        if self._meter_task.is_some() {
             return;
         }
         let audio = self.audio.clone();
         let task = cx.spawn(async move |this, cx| -> anyhow::Result<()> {
+            let mut recording_started_at = None;
+            let mut emitted_ticks = 0u64;
             loop {
-                if !this.read_with(cx, |this, _| {
-                    meter_should_continue(this.state.phase, this.motion)
-                })? {
+                let current = this.read_with(cx, |this, _| {
+                    (
+                        this.state.phase == Phase::Listening,
+                        this.motion.allow(),
+                        this.recording_started_at,
+                    )
+                })?;
+                if !current.0 {
                     break;
                 }
-                let levels = audio.borrow_mut().levels(WAVEFORM_BARS);
+                let Some(current_started_at) = current.2 else {
+                    break;
+                };
+                if recording_started_at != Some(current_started_at) {
+                    recording_started_at = Some(current_started_at);
+                    emitted_ticks = 0;
+                }
+                let levels = current.1.then(|| audio.borrow_mut().levels(WAVEFORM_BARS));
                 cx.background_executor()
                     .timer(Duration::from_millis(METER_POLL_MS))
                     .await;
+                let ticks = timer_ticks_due(current_started_at.elapsed().as_secs(), emitted_ticks);
                 this.update(cx, |this, cx| {
-                    if this.state.phase == Phase::Listening {
-                        this.meter_levels = levels;
+                    if this.state.phase == Phase::Listening
+                        && this.recording_started_at == Some(current_started_at)
+                    {
+                        for _ in 0..ticks {
+                            this.state.reduce(&PillEvent::Tick);
+                        }
+                        emitted_ticks = emitted_ticks.saturating_add(ticks);
+                        if let Some(levels) = levels {
+                            this.meter_levels = levels;
+                        }
                         cx.notify();
                     }
                 })?;
@@ -404,6 +456,7 @@ impl PillView {
                         if let Some(on_cancel) = this.on_cancel.as_ref() {
                             on_cancel();
                         }
+                        this.recording_started_at = None;
                         this.state.reduce(&PillEvent::Cancelled);
                         cx.notify();
                     })),
@@ -433,22 +486,11 @@ fn quiet_pulse(progress: f32) -> f32 {
 /// lets the coordinator drive the state machine through the returned handle.
 pub fn open_pill_window(cx: &mut App, deps: PillDeps) -> anyhow::Result<WindowHandle<PillView>> {
     let pill_size = size(px(PILL_WIDTH), px(PILL_HEIGHT));
-    let bounds = match cx.primary_display() {
-        Some(display) => {
-            let frame = display.bounds();
-            let origin = point(
-                px(frame.origin.x.as_f32() + (frame.size.width.as_f32() - PILL_WIDTH) / 2.0),
-                px(frame.origin.y.as_f32() + frame.size.height.as_f32()
-                    - PILL_HEIGHT
-                    - PILL_BOTTOM_OFFSET),
-            );
-            Bounds::new(origin, pill_size)
-        }
-        None => Bounds::centered(None, pill_size, cx),
-    };
+    let (bounds, display_id) = pill_window_bounds(cx, pill_size);
 
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        display_id,
         titlebar: None,
         focus: false,
         show: true,
@@ -464,23 +506,103 @@ pub fn open_pill_window(cx: &mut App, deps: PillDeps) -> anyhow::Result<WindowHa
     cx.open_window(options, |_window, cx| cx.new(|cx| PillView::new(cx, deps)))
 }
 
+fn pill_window_bounds(
+    cx: &App,
+    pill_size: gpui::Size<gpui::Pixels>,
+) -> (Bounds<gpui::Pixels>, Option<gpui::DisplayId>) {
+    if let Some(native_area) = aiden_mac::pill_display::cursor_work_area() {
+        if let Some(display) = cx
+            .displays()
+            .into_iter()
+            .find(|display| u32::from(display.id()) == native_area.display_id)
+        {
+            let (x, y) = pill_origin_for_work_area(PillWorkArea {
+                x: native_area.x,
+                y: native_area.y,
+                width: native_area.width,
+                height: native_area.height,
+            });
+            return (
+                Bounds::new(point(px(x), px(y)), pill_size),
+                Some(display.id()),
+            );
+        }
+    }
+
+    match cx.primary_display() {
+        Some(display) => {
+            let frame = display.bounds();
+            let (x, y) = pill_origin_for_work_area(PillWorkArea {
+                x: frame.origin.x.as_f32(),
+                y: frame.origin.y.as_f32(),
+                width: frame.size.width.as_f32(),
+                height: frame.size.height.as_f32(),
+            });
+            (
+                Bounds::new(point(px(x), px(y)), pill_size),
+                Some(display.id()),
+            )
+        }
+        None => (Bounds::centered(None, pill_size, cx), None),
+    }
+}
+
 #[cfg(test)]
 mod appearance_tests {
     use super::*;
-    use aiden_core::appearance::ReduceMotion;
 
     #[test]
-    fn live_motion_update_stops_the_listening_meter() {
-        let allowed = MotionGate {
-            reduce_motion: ReduceMotion::Off,
-            system_reduced: false,
-        };
-        let reduced = MotionGate {
-            reduce_motion: ReduceMotion::On,
-            system_reduced: false,
-        };
+    fn timer_ticks_are_monotonic_and_bounded_when_meter_frames_lag() {
+        assert_eq!(timer_ticks_due(0, 0), 0);
+        assert_eq!(timer_ticks_due(2, 0), 2);
+        assert_eq!(timer_ticks_due(2, 2), 0);
+        assert_eq!(timer_ticks_due(10_000, 0), 60);
+        let source = include_str!("mod.rs");
+        let meter = source
+            .split_once("let task = cx.spawn")
+            .and_then(|(_, rest)| rest.split_once("self._meter_task = Some(task)"))
+            .map(|(body, _)| body)
+            .expect("meter task source boundary");
+        assert!(meter.contains("PillEvent::Tick"));
+        assert!(meter.contains("recording_started_at == Some(current_started_at)"));
+        assert!(meter.contains("this.state.phase == Phase::Listening"));
+        assert!(meter.contains("current.1.then"));
+    }
 
-        assert!(meter_should_continue(Phase::Listening, allowed));
-        assert!(!meter_should_continue(Phase::Listening, reduced));
+    #[test]
+    fn pill_geometry_follows_cursor_work_area_and_reserved_insets() {
+        let (x, y) = pill_origin_for_work_area(PillWorkArea {
+            x: 1440.0,
+            y: 36.0,
+            width: 1920.0,
+            height: 1040.0,
+        });
+        assert_eq!(x, 2260.0);
+        assert_eq!(y, 1005.0);
+    }
+
+    #[test]
+    fn pill_geometry_clamps_when_a_work_area_is_smaller_than_the_window() {
+        let (x, y) = pill_origin_for_work_area(PillWorkArea {
+            x: -12.0,
+            y: 4.0,
+            width: 160.0,
+            height: 40.0,
+        });
+        assert_eq!(x, -12.0);
+        assert_eq!(y, 4.0);
+    }
+
+    #[test]
+    fn pill_window_prefers_native_cursor_display_before_primary_fallback() {
+        let source = include_str!("mod.rs");
+        let open = source
+            .split_once("pub fn open_pill_window(")
+            .and_then(|(_, rest)| rest.split_once("#[cfg(test)]"))
+            .map(|(body, _)| body)
+            .expect("pill window function boundary");
+        assert!(open.contains("aiden_mac::pill_display::cursor_work_area()"));
+        assert!(open.contains("display_id"));
+        assert!(open.contains("cx.primary_display()"));
     }
 }

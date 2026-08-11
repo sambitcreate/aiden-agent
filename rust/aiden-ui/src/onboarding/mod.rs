@@ -65,7 +65,18 @@ pub enum OnboardingEvent {
 
 /// Foreground completion callback invoked (with `&mut App`) when the flow
 /// completes, in addition to the [`OnboardingEvent`] emission.
-pub type CompletionCallback = Box<dyn Fn(&mut App)>;
+pub type PiProviderSetupRequest = (String, String, u64);
+pub type CompletionCallback = Box<dyn Fn(Option<PiProviderSetupRequest>, &mut App)>;
+
+/// Native close is never allowed while the onboarding window is retained.
+/// Completion removes this window programmatically after the durable marker
+/// and main-window handoff are queued. Keeping the platform close vetoed even
+/// after `completed_emitted` avoids a race where a red-✕ click lands between
+/// the marker write and that deferred handoff, which would strand the process
+/// with an invalid retained window handle.
+pub(crate) const fn onboarding_native_close_allowed(_completed_emitted: bool) -> bool {
+    false
+}
 
 /// Everything the flow needs from its creator.
 pub struct OnboardingServices {
@@ -103,6 +114,7 @@ pub struct OnboardingView {
     busy: bool,
     booted: bool,
     completed_emitted: bool,
+    open_pi_provider_setup_on_complete: bool,
     /// Last step the view focused, so focus moves only on step changes.
     focused_step: usize,
     /// Focus target for the primary action on non-Welcome steps.
@@ -146,6 +158,7 @@ impl OnboardingView {
             busy: false,
             booted: false,
             completed_emitted: false,
+            open_pi_provider_setup_on_complete: false,
             focused_step: usize::MAX,
             next_focus: cx.focus_handle(),
             codex_revision: 0,
@@ -354,6 +367,7 @@ impl OnboardingView {
         self.busy = true;
         cx.notify();
         let pending = self.machine.pending_provider_save();
+        let deferred_pi_setup = self.machine.defer_pi_setup;
         let stores = self.stores.clone();
         cx.spawn(async move |this, cx| {
             let result: Result<Option<OnboardingProvider>, String> = cx
@@ -361,6 +375,9 @@ impl OnboardingView {
                     let Some(provider) = &pending.provider else {
                         return Ok(None);
                     };
+                    if deferred_pi_setup {
+                        return Ok(Some(provider.clone()));
+                    }
                     let stored = StoredProvider {
                         id: provider.id.clone(),
                         kind: provider.kind,
@@ -587,6 +604,24 @@ impl OnboardingView {
         self.complete_onboarding(cx);
     }
 
+    fn finish_with_pi_provider_setup(&mut self, cx: &mut Context<Self>) {
+        if self.busy || self.completed_emitted || self.pi_provider_setup_target().is_none() {
+            return;
+        }
+        self.open_pi_provider_setup_on_complete = true;
+        self.complete_onboarding(cx);
+    }
+
+    fn pi_provider_setup_target(&self) -> Option<PiProviderSetupRequest> {
+        let provider = self.machine.saved_provider()?;
+        self.stores
+            .pi_providers
+            .list()
+            .iter()
+            .find(|status| status.provider.id == provider.id)
+            .map(|status| (provider.id.clone(), provider.label.clone(), status.revision))
+    }
+
     /// Queue the first-run marker into settings.json, then run the completion
     /// callback and emit the event.
     ///
@@ -611,6 +646,10 @@ impl OnboardingView {
             return;
         }
         self.completed_emitted = true;
+        let pi_provider_setup = self
+            .open_pi_provider_setup_on_complete
+            .then(|| self.pi_provider_setup_target())
+            .flatten();
         let stores = self.stores.clone();
         cx.spawn(async move |this, cx| {
             let _ = cx
@@ -625,7 +664,7 @@ impl OnboardingView {
                 .await;
             this.update(cx, |this, cx| {
                 if let Some(callback) = this.on_complete.take() {
-                    cx.defer(move |cx| callback(cx));
+                    cx.defer(move |cx| callback(pi_provider_setup, cx));
                 }
                 cx.emit(OnboardingEvent::Completed);
                 cx.notify();
@@ -677,6 +716,21 @@ pub fn open_onboarding_window(
 
     cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| OnboardingView::new(window, cx, services));
+        let weak_view = view.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let allow = weak_view
+                .update(cx, |view, _cx| {
+                    onboarding_native_close_allowed(view.completed_emitted)
+                })
+                .unwrap_or(false);
+            if !allow {
+                // Keep the incomplete flow visible and make a Dock click or
+                // native close attempt an activation rather than a teardown.
+                window.activate_window();
+                cx.activate(true);
+            }
+            allow
+        });
         cx.new(|cx| Root::new(view, window, cx))
     })
 }
@@ -685,3 +739,31 @@ pub fn open_onboarding_window(
 pub use state::should_show_onboarding;
 /// Re-exported for the orchestrator and tests.
 pub use state::OnboardingMachine;
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{onboarding_native_close_allowed, OnboardingMachine};
+    use crate::onboarding::state::{NextOutcome, Step};
+
+    #[test]
+    fn incomplete_native_close_is_vetoed_without_completing_or_losing_draft() {
+        let mut machine = OnboardingMachine::new();
+        machine.name = "Ada".to_string();
+        assert_eq!(machine.next(), NextOutcome::Advanced);
+        machine.api_key = "draft-key".to_string();
+        let retained = machine.clone();
+
+        assert!(!onboarding_native_close_allowed(false));
+        assert!(!machine.is_complete());
+        assert_eq!(retained.current(), Step::Provider);
+        assert_eq!(retained.step_index(), machine.step_index());
+        assert_eq!(retained.name, "Ada");
+        assert_eq!(retained.api_key, "draft-key");
+    }
+
+    #[test]
+    fn native_close_remains_vetoed_until_programmatic_completion_handoff() {
+        assert!(!onboarding_native_close_allowed(false));
+        assert!(!onboarding_native_close_allowed(true));
+    }
+}

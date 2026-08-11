@@ -205,6 +205,32 @@ fn ensure_main_window(stores: &Stores, cx: &mut App) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReopenTarget {
+    Onboarding,
+    Main,
+}
+
+const fn reopen_target(state: shortcut_runtime::MainWindowLifecycle) -> ReopenTarget {
+    match state {
+        shortcut_runtime::MainWindowLifecycle::Onboarding => ReopenTarget::Onboarding,
+        shortcut_runtime::MainWindowLifecycle::Ready
+        | shortcut_runtime::MainWindowLifecycle::Windowless => ReopenTarget::Main,
+    }
+}
+
+fn activate_onboarding_window(
+    handle: &Rc<RefCell<Option<gpui::WindowHandle<gpui_component::Root>>>>,
+    cx: &mut App,
+) -> bool {
+    let Some(handle) = handle.borrow().as_ref().copied() else {
+        return false;
+    };
+    handle
+        .update(cx, |_view, window, _cx| window.activate_window())
+        .is_ok()
+}
+
 fn main() {
     let dev = aiden_data::is_dev_mode();
 
@@ -274,8 +300,22 @@ fn main() {
 
     let app = gpui::Application::new().with_assets(app_assets::AppAssets);
     let process_stores = Rc::new(RefCell::new(None::<Stores>));
+    let process_onboarding = Rc::new(RefCell::new(
+        None::<gpui::WindowHandle<gpui_component::Root>>,
+    ));
     let reopen_stores = process_stores.clone();
+    let reopen_onboarding = process_onboarding.clone();
     app.on_reopen(move |cx| {
+        if reopen_target(cx.global::<MainWindowState>().0) == ReopenTarget::Onboarding {
+            if activate_onboarding_window(&reopen_onboarding, cx) {
+                cx.activate(true);
+            } else {
+                tracing::warn!(
+                    "onboarding is active but its retained window handle is unavailable"
+                );
+            }
+            return;
+        }
         // Dock-click reuses the one process-lifetime store owner. Auxiliary
         // pill/onboarding windows never count as a ready main AppState window.
         let stores = reopen_stores.borrow().clone();
@@ -335,26 +375,28 @@ fn main() {
             let onboarding_accessibility =
                 start_onboarding_accessibility_monitor(&onboarding_appearance, cx);
             set_main_window_state(shortcut_runtime::MainWindowLifecycle::Onboarding, cx);
-            let onboarding_handle = Rc::new(RefCell::new(
-                None::<gpui::WindowHandle<gpui_component::Root>>,
-            ));
-            let close_handle = onboarding_handle.clone();
+            let close_handle = process_onboarding.clone();
             let stores_for_complete = stores.clone();
             let complete_accessibility = onboarding_accessibility.clone();
             let services = onboarding::OnboardingServices::new(stores.clone()).with_on_complete(
-                Box::new(move |cx: &mut App| {
+                Box::new(move |pi_provider_setup, cx: &mut App| {
                     complete_accessibility.update(cx, |monitor, _| monitor.active = false);
                     if let Some(handle) = close_handle.borrow().as_ref() {
                         let _ = handle.update(cx, |_view, window, _cx| window.remove_window());
                     }
+                    *close_handle.borrow_mut() = None;
                     set_main_window_state(shortcut_runtime::MainWindowLifecycle::Windowless, cx);
-                    if let Err(error) = open_main_window(cx, stores_for_complete.clone()) {
+                    if let Err(error) = open_main_window_with_pi_setup(
+                        cx,
+                        stores_for_complete.clone(),
+                        pi_provider_setup,
+                    ) {
                         eprintln!("failed to open the Aiden window: {error}");
                     }
                 }),
             );
             match onboarding::open_onboarding_window(cx, services) {
-                Ok(handle) => *onboarding_handle.borrow_mut() = Some(handle),
+                Ok(handle) => *process_onboarding.borrow_mut() = Some(handle),
                 Err(error) => {
                     onboarding_accessibility.update(cx, |monitor, _| monitor.active = false);
                     eprintln!("failed to open the onboarding window: {error}");
@@ -479,6 +521,14 @@ fn activate_existing_instance() {
 /// Open the main Aiden window: the `AppState` shell under a gpui-component
 /// `Root` (dialogs/notifications/sheets live on the Root layer).
 fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::WindowHandle<Root>> {
+    open_main_window_with_pi_setup(cx, stores, None)
+}
+
+fn open_main_window_with_pi_setup(
+    cx: &mut App,
+    stores: Stores,
+    pi_provider_setup: Option<onboarding::PiProviderSetupRequest>,
+) -> anyhow::Result<gpui::WindowHandle<Root>> {
     let dev = aiden_data::is_dev_mode();
     let app_id = if dev {
         "com.sambitcreate.aiden-rs-dev"
@@ -524,8 +574,13 @@ fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::Window
             content_height = content.height.as_f32(),
             "opened main window bounds"
         );
-        let view =
-            cx.new(|cx| AppState::new(stores, initial_appearance, prepared_native, window, cx));
+        let view = cx.new(|cx| {
+            let mut view = AppState::new(stores, initial_appearance, prepared_native, window, cx);
+            if let Some((provider_id, label, revision)) = pi_provider_setup {
+                view.open_pi_provider_setup(&provider_id, &label, Some(revision), window, cx);
+            }
+            view
+        });
         let weak_view = view.downgrade();
         // Red ✕ follows the Files draft barrier before allowing the normal
         // macOS windowless-app behavior. Saving hard-blocks; dirty state
@@ -547,11 +602,32 @@ fn open_main_window(cx: &mut App, stores: Stores) -> anyhow::Result<gpui::Window
 
 #[cfg(test)]
 mod lifecycle_tests {
+    use super::{reopen_target, ReopenTarget};
+    use crate::shortcut_runtime::MainWindowLifecycle;
+
+    #[test]
+    fn dock_reopen_targets_retained_onboarding_without_opening_main() {
+        assert_eq!(
+            reopen_target(MainWindowLifecycle::Onboarding),
+            ReopenTarget::Onboarding
+        );
+        assert_eq!(
+            reopen_target(MainWindowLifecycle::Windowless),
+            ReopenTarget::Main
+        );
+        assert_eq!(
+            reopen_target(MainWindowLifecycle::Ready),
+            ReopenTarget::Main
+        );
+    }
+
     #[test]
     fn stores_are_opened_once_and_reused_for_every_reopen_path() {
         let source = include_str!("main.rs");
         assert_eq!(source.matches(concat!("Stores::", "open()")).count(), 1);
         assert!(source.contains("process_stores"));
+        assert!(source.contains("process_onboarding"));
+        assert!(source.contains("activate_onboarding_window"));
         assert!(source.contains("ensure_main_window"));
     }
 

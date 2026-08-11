@@ -3,6 +3,7 @@
 //! motion preference (GPUI 0.2 has no transform animations, so the design
 //! docs' scale/offset recipes are approximated with opacity only).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use aiden_core::appearance::{
@@ -10,8 +11,8 @@ use aiden_core::appearance::{
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, Animation, AnimationExt as _, AnyElement, Context, FontWeight,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    div, img, px, Animation, AnimationExt as _, AnyElement, Context, FontWeight, Image,
+    ImageFormat, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
@@ -23,6 +24,74 @@ use gpui_component::{
 
 use super::state::{ProviderChoice, Step};
 use super::OnboardingView;
+
+const PROFILE_TOUR_PNG: &[u8] =
+    include_bytes!("../../../../renderer/assets/onboarding/profile.png");
+const PROVIDERS_TOUR_PNG: &[u8] =
+    include_bytes!("../../../../renderer/assets/onboarding/providers.png");
+const SUBAGENTS_TOUR_PNG: &[u8] =
+    include_bytes!("../../../../renderer/assets/onboarding/subagents.png");
+const PRIVACY_TOUR_PNG: &[u8] =
+    include_bytes!("../../../../renderer/assets/onboarding/privacy.png");
+const MACOS_TOUR_PNG: &[u8] = include_bytes!("../../../../renderer/assets/onboarding/macos.png");
+const BENTO_TOUR_PNG: &[u8] = include_bytes!("../../../../renderer/assets/onboarding/bento.png");
+
+struct TourFeature {
+    id: &'static str,
+    title: &'static str,
+    description: &'static str,
+    image: &'static [u8],
+}
+
+const TOUR_FEATURES: [TourFeature; 6] = [
+    TourFeature {
+        id: "profile",
+        title: "Local profile",
+        description: "Personalize model-facing context while your profile stays on this Mac.",
+        image: PROFILE_TOUR_PNG,
+    },
+    TourFeature {
+        id: "providers",
+        title: "Provider choice",
+        description: "Connect hosted or local providers explicitly, then switch models in chat.",
+        image: PROVIDERS_TOUR_PNG,
+    },
+    TourFeature {
+        id: "subagents",
+        title: "Delegated tasks",
+        description: "Run focused fresh or fork tasks; writes, shell, and remote MCP reads wait for Allow once.",
+        image: SUBAGENTS_TOUR_PNG,
+    },
+    TourFeature {
+        id: "privacy",
+        title: "Private by design",
+        description: "Settings and encrypted credentials stay device-local unless you act.",
+        image: PRIVACY_TOUR_PNG,
+    },
+    TourFeature {
+        id: "macos",
+        title: "Native macOS feel",
+        description: "Quiet motion, visible keyboard focus, and responsive native surfaces.",
+        image: MACOS_TOUR_PNG,
+    },
+    TourFeature {
+        id: "bento",
+        title: "One focused workspace",
+        description: "Chat, files, review, terminal, usage, and settings stay close at hand.",
+        image: BENTO_TOUR_PNG,
+    },
+];
+
+fn tour_tile_consumes_key(key: &str) -> bool {
+    matches!(key, "enter" | "space")
+}
+
+/// Selection cards live inside the onboarding root's Enter key context. Stop
+/// that bubbling action while a card owns focus so Enter activates the card
+/// (via GPUI's native keyboard click) instead of advancing the whole flow.
+fn selection_card_consumes_key(key: &str) -> bool {
+    matches!(key, "enter" | "space")
+}
 
 /// Whether motion is allowed for this appearance preference + the injected
 /// OS flag (mirrors the pill's `MotionGate`; GPUI cannot probe the OS).
@@ -59,6 +128,66 @@ fn selection_matches(selection: Selection, preset: PresetId) -> bool {
 fn quiet_ease(t: f32) -> f32 {
     1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t)
 }
+
+const PERMISSION_ROWS: [(&str, &str); 8] = [
+    (
+        "Dictation",
+        "Aiden requests microphone access only when you explicitly start recording and never \
+         saves or logs the audio. On-device transcription stays on this Mac; if you select \
+         configured OpenAI or Google Gemini voice, the completed recording is sent only to that \
+         provider for transcription.",
+    ),
+    (
+        "Computer Use",
+        "Computer Use is off by default. When enabled for a chat, transient screenshots and \
+         accessibility text may be sent to the selected model but are not saved or logged by \
+         Aiden. Every input action asks for Allow once or Deny.",
+    ),
+    (
+        "Delegated workspace tasks",
+        "A delegated task, its bounded fresh or fork context projection, and bounded workspace \
+         file or tool results may be sent to your selected provider. Reads stay within your \
+         workspace permission, and every write or edit pauses for Allow once or Deny. A proposed \
+         shell command also pauses for per-command Allow once or Deny. If allowed, it runs with \
+         unsandboxed workspace and host access in a scrubbed environment, so it can still have \
+         arbitrary network and process effects; detached descendants may outlive cancellation and \
+         there is no rollback. At generation start, enabled remote MCP servers may receive a \
+         bounded connection and tools-list request. Every exact server/tool call and its displayed \
+         arguments then waits for Allow once or Deny; credentials remain host-owned, and the \
+         configured server controls the actual effect. Mutating calls show their effect profile \
+         and prior-unknown warning; an uncertain result is never retried automatically. Nested \
+         and background subagents remain unavailable in this release.",
+    ),
+    (
+        "Local by default",
+        "Your profile name, providers, keys, and settings stay on this Mac. Aiden never bundles \
+         your credentials anywhere else.",
+    ),
+    (
+        "No silent network access",
+        "This onboarding step makes no network calls. Providers are contacted only for actions \
+         you explicitly start, such as chat, model-data refresh, or cloud voice transcription \
+         after recording.",
+    ),
+    (
+        "MCP connections",
+        "MCP servers can expose remote tools and may receive relevant request data. Aiden connects \
+         only after you configure a server; OAuth opens only when you explicitly choose Authorize, \
+         and its tokens stay encrypted on this Mac.",
+    ),
+    (
+        "Scheduled tasks",
+        "Scheduled execution is off until you enable it in Settings. Enabled tasks run only while \
+         Aiden is open: pinned prompts may be sent to their selected provider and approved MCP \
+         servers, while local scripts require Full access and are time/output limited.",
+    ),
+    (
+        "Skills",
+        "Skill names, descriptions, and tool disclosure may be sent to the selected model before \
+         invocation. Detailed instructions and supporting-file content are sent only when invoked. \
+         Skills never expand workspace access or bypass approvals.",
+    ),
+];
 
 impl Render for OnboardingView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -348,39 +477,40 @@ impl OnboardingView {
                             }))
                     })),
             )
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_3()
-                    .when(self.machine.choice.requires_key(), |el| {
-                        el.child(
-                            v_flex()
-                                .flex_1()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("API key"),
-                                )
-                                .child(Input::new(&self.api_key_input)),
+            .when(self.machine.choice.requires_key(), |el| {
+                el.child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(if self.machine.defer_pi_setup {
+                                    "Provider setup will open after onboarding. No key is stored in portable settings."
+                                } else {
+                                    "Continue with Aiden's encrypted, provider-bound setup after onboarding."
+                                }),
                         )
-                    })
-                    .when(self.machine.choice.shows_base_url(), |el| {
-                        el.child(
-                            v_flex()
-                                .flex_1()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Base URL"),
-                                )
-                                .child(Input::new(&self.base_url_input)),
-                        )
-                    }),
-            )
+                        .child(
+                            Button::new("onboarding-defer-pi-provider-setup")
+                                .primary()
+                                .label(if self.machine.defer_pi_setup {
+                                    "Setup queued"
+                                } else {
+                                    "Set up securely"
+                                })
+                                .disabled(self.busy || self.machine.defer_pi_setup)
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.machine.defer_pi_provider_setup();
+                                    this.open_pi_provider_setup_on_complete = true;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
             .when(self.machine.choice == ProviderChoice::ChatGpt, |el| {
                 el.child(
                     h_flex()
@@ -438,8 +568,18 @@ impl OnboardingView {
                 |el| el.cursor_pointer(),
             )
             .hover(|style| style.bg(theme.muted))
+            .focusable()
+            .tab_stop(true)
+            .focus(|style| style.bg(theme.list_active).border_color(theme.ring))
+            .on_key_down(|event: &gpui::KeyDownEvent, _window, cx| {
+                if selection_card_consumes_key(event.keystroke.key.as_str()) {
+                    cx.stop_propagation();
+                }
+            })
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 this.machine.choice = choice;
+                this.machine.defer_pi_setup = false;
+                this.open_pi_provider_setup_on_complete = false;
                 cx.notify();
             }))
             .child(
@@ -516,6 +656,14 @@ impl OnboardingView {
                     .border_color(if active { theme.accent } else { theme.border })
                     .when(crate::services::appearance::pointer_cursors_enabled(cx), |el| el.cursor_pointer())
                     .hover(|style| style.bg(theme.muted))
+                    .focusable()
+                    .tab_stop(true)
+                    .focus(|style| style.bg(theme.list_active).border_color(theme.ring))
+                    .on_key_down(|event: &gpui::KeyDownEvent, _window, cx| {
+                        if selection_card_consumes_key(event.keystroke.key.as_str()) {
+                            cx.stop_propagation();
+                        }
+                    })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.machine.set_model(Some(click_id.clone()));
                         cx.notify();
@@ -650,6 +798,17 @@ impl OnboardingView {
                                         |el| el.cursor_pointer(),
                                     )
                                     .hover(|style| style.bg(theme.muted))
+                                    .focusable()
+                                    .tab_stop(true)
+                                    .focus(|style| {
+                                        style.bg(theme.list_active).border_color(theme.ring)
+                                    })
+                                    .on_key_down(|event: &gpui::KeyDownEvent, _window, cx| {
+                                        if selection_card_consumes_key(event.keystroke.key.as_str())
+                                        {
+                                            cx.stop_propagation();
+                                        }
+                                    })
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.machine.set_preset(preset_id);
                                         this.preview_appearance(cx);
@@ -686,36 +845,6 @@ impl OnboardingView {
 
     fn permissions_step(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let rows: [(&str, &str); 5] = [
-            (
-                "Dictation",
-                "Dictation needs microphone access to transcribe your voice. Allow it in System \
-                 Settings → Privacy & Security → Microphone; nothing is recorded outside the \
-                 dictation session.",
-            ),
-            (
-                "Computer Use",
-                "Computer Use may send screenshots and accessibility text to the selected model. \
-                 Every input action asks for approval.",
-            ),
-            (
-                "Local by default",
-                "Your profile name, providers, keys, and settings stay on this Mac. Aiden never \
-                 bundles your credentials anywhere else.",
-            ),
-            (
-                "No silent network access",
-                "This onboarding step makes no network calls. Providers are contacted only when \
-                 you chat or explicitly refresh model data.",
-            ),
-            (
-                "Skills",
-                "Skill names, descriptions, and tool disclosure may be sent to the selected model \
-                 before invocation. Detailed instructions and supporting-file content are sent only \
-                 when invoked. Skills never expand workspace access or bypass approvals.",
-            ),
-        ];
-
         v_flex()
             .id("onboarding-permissions")
             .w_full()
@@ -730,7 +859,7 @@ impl OnboardingView {
                 v_flex()
                     .w_full()
                     .gap_2p5()
-                    .children(rows.into_iter().map(|(title, body)| {
+                    .children(PERMISSION_ROWS.into_iter().map(|(title, body)| {
                         v_flex()
                             .id(SharedString::from(format!(
                                 "permission-{}",
@@ -757,6 +886,29 @@ impl OnboardingView {
                             )
                     })),
             )
+            .when_some(
+                self.pi_provider_setup_target(),
+                |el, (_id, label, _revision)| {
+                    el.child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_3()
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(
+                                format!("Want to rotate or review {label}'s encrypted credential?"),
+                            ))
+                            .child(
+                                Button::new("onboarding-open-provider-setup")
+                                    .outline()
+                                    .label("Open provider setup")
+                                    .disabled(self.busy)
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.finish_with_pi_provider_setup(cx);
+                                    })),
+                            ),
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -766,32 +918,6 @@ impl OnboardingView {
 
     fn finish_step(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let boxes: [(&str, &str); 6] = [
-            (
-                "Local profile",
-                "Your name personalizes Profile and model-facing context while staying on-device.",
-            ),
-            (
-                "Provider ready",
-                "Start with one model source, then add more hosted or local providers later.",
-            ),
-            (
-                "Workspace agents",
-                "Chat, run terminal work, review files, and keep context beside the conversation.",
-            ),
-            (
-                "Private by design",
-                "Aiden stores local settings and secrets on this Mac rather than bundling credentials.",
-            ),
-            (
-                "macOS polish",
-                "Glass cards, quiet motion, keyboard focus, and sidebar-friendly navigation.",
-            ),
-            (
-                "Bento overview",
-                "Hover any tile to reveal how each capability fits into your daily flow.",
-            ),
-        ];
 
         v_flex()
             .id("onboarding-finish")
@@ -804,33 +930,166 @@ impl OnboardingView {
                 &theme,
             ))
             .child(
-                v_flex()
+                h_flex()
                     .w_full()
-                    .gap_2p5()
-                    .children(boxes.into_iter().enumerate().map(|(index, (title, body))| {
+                    .flex_wrap()
+                    .justify_center()
+                    .gap_3()
+                    .children(TOUR_FEATURES.iter().map(|feature| {
+                        let bytes = feature.image;
                         v_flex()
-                            .id(SharedString::from(format!("feature-{}", index)))
-                            .gap_1()
+                            .id(SharedString::from(format!("feature-{}", feature.id)))
+                            .h(px(190.0))
+                            .min_w(px(180.0))
+                            .max_w(px(200.0))
+                            .flex_1()
+                            .gap_1p5()
                             .rounded_lg()
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.popover)
-                            .px_4()
+                            .px_3()
                             .py_3()
+                            .tab_stop(true)
+                            .hover(|style| style.bg(theme.muted).border_color(theme.accent))
+                            .focus(|style| style.bg(theme.list_active).border_color(theme.ring))
+                            .on_key_down(|event: &gpui::KeyDownEvent, _window, cx| {
+                                if tour_tile_consumes_key(event.keystroke.key.as_str()) {
+                                    cx.stop_propagation();
+                                }
+                            })
+                            .child(
+                                h_flex().w_full().justify_center().child(
+                                    div().size(px(92.0)).rounded_lg().overflow_hidden().child(
+                                        img(Arc::new(Image::from_bytes(
+                                            ImageFormat::Png,
+                                            bytes.to_vec(),
+                                        )))
+                                        .size_full(),
+                                    ),
+                                ),
+                            )
                             .child(
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(title.to_string()),
+                                    .child(feature.title.to_string()),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(body.to_string()),
+                                    .child(feature.description.to_string()),
                             )
                     })),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::{
+        selection_card_consumes_key, tour_tile_consumes_key, PERMISSION_ROWS, TOUR_FEATURES,
+    };
+
+    #[test]
+    fn permissions_disclose_exact_foreground_subagent_boundary() {
+        let (_, copy) = PERMISSION_ROWS
+            .iter()
+            .find(|(title, _)| *title == "Delegated workspace tasks")
+            .unwrap();
+        assert!(copy.contains("selected provider"));
+        assert!(copy.contains("workspace permission"));
+        assert!(copy.contains("fresh or fork context projection"));
+        assert!(copy.contains("bounded workspace file or tool results"));
+        assert!(copy.contains("every write or edit pauses for Allow once or Deny"));
+        assert!(copy.contains("per-command Allow once or Deny"));
+        assert!(copy.contains("unsandboxed workspace and host access"));
+        assert!(copy.contains("scrubbed environment"));
+        assert!(copy.contains("arbitrary network and process effects"));
+        assert!(copy.contains("detached descendants may outlive cancellation"));
+        assert!(copy.contains("there is no rollback"));
+        assert!(copy.contains("generation start"));
+        assert!(copy.contains("tools-list request"));
+        assert!(copy.contains("Every exact server/tool call"));
+        assert!(copy.contains("credentials remain host-owned"));
+        assert!(copy.contains("configured server controls the actual effect"));
+        assert!(copy.contains("Mutating calls show their effect profile"));
+        assert!(copy.contains("uncertain result is never retried automatically"));
+        assert!(copy.contains("Nested and background subagents remain unavailable"));
+    }
+
+    #[test]
+    fn every_advertised_tour_feature_has_a_bounded_square_rgba_png() {
+        assert_eq!(TOUR_FEATURES.len(), 6);
+
+        let mut ids = BTreeSet::new();
+        for feature in &TOUR_FEATURES {
+            assert!(ids.insert(feature.id), "duplicate tile id: {}", feature.id);
+            assert!(!feature.title.trim().is_empty());
+            assert!(!feature.description.trim().is_empty());
+            assert!(!feature.description.contains("Hover any tile"));
+
+            let png = feature.image;
+            assert!(png.len() < 600_000, "{} asset is oversized", feature.id);
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "{} signature", feature.id);
+            assert_eq!(&png[12..16], b"IHDR", "{} IHDR", feature.id);
+            assert_eq!(
+                u32::from_be_bytes(png[16..20].try_into().unwrap()),
+                1024,
+                "{} width",
+                feature.id
+            );
+            assert_eq!(
+                u32::from_be_bytes(png[20..24].try_into().unwrap()),
+                1024,
+                "{} height",
+                feature.id
+            );
+            assert_eq!(png[24], 8, "{} bit depth", feature.id);
+            assert_eq!(png[25], 6, "{} must be RGBA", feature.id);
+        }
+
+        assert_eq!(ids.len(), TOUR_FEATURES.len());
+    }
+
+    #[test]
+    fn informational_tour_tiles_contain_activation_keys() {
+        assert!(tour_tile_consumes_key("enter"));
+        assert!(tour_tile_consumes_key("space"));
+        assert!(!tour_tile_consumes_key("tab"));
+        assert!(!tour_tile_consumes_key("escape"));
+    }
+
+    #[test]
+    fn selection_cards_consume_enter_and_space_without_advancing_onboarding() {
+        assert!(selection_card_consumes_key("enter"));
+        assert!(selection_card_consumes_key("space"));
+        assert!(!selection_card_consumes_key("tab"));
+        assert!(!selection_card_consumes_key("escape"));
+    }
+
+    #[test]
+    fn onboarding_selection_cards_keep_native_focus_and_keyboard_click_contract() {
+        let source = include_str!("view.rs");
+        for marker in ["fn provider_card", "fn model_step", "fn appearance_step"] {
+            let block = source
+                .split_once(marker)
+                .and_then(|(_, rest)| rest.split_once("fn "))
+                .map(|(body, _)| body)
+                .unwrap_or(source);
+            assert!(block.contains(".focusable()"), "{marker} must be focusable");
+            assert!(
+                block.contains(".tab_stop(true)"),
+                "{marker} must be keyboard reachable"
+            );
+            assert!(
+                block.contains("selection_card_consumes_key"),
+                "{marker} must consume Enter/Space"
+            );
+        }
     }
 }
