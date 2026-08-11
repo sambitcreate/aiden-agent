@@ -7,6 +7,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
 
 use aiden_data::config_store::{ConfigStore, ConfigStoreError};
 use aiden_data::portable_config::McpServer;
@@ -17,7 +18,14 @@ use aiden_mcp::credential_cleanup::{
     pending_mcp_credential_cleanup_for_remove, pending_mcp_credential_cleanup_for_save,
     McpCredentialCleanupResolution, PendingMcpCredentialCleanupV1,
 };
-use aiden_mcp::{preset_secret_id, McpClientManager, McpStatus};
+use aiden_mcp::oauth::{
+    authorize_mcp_server, oauth_status, resolve_noninteractive_oauth, McpOAuthDeps, McpOAuthHttp,
+    McpOAuthOperationGate, McpOAuthStatus, McpOAuthStore, OAUTH_PORT,
+};
+#[cfg(test)]
+use aiden_mcp::oauth::{MemoryMcpOAuthStore, ReqwestMcpOAuthHttp};
+use aiden_mcp::{preset_secret_id, McpClientManager, McpError, McpStatus};
+use tokio_util::sync::CancellationToken;
 
 /// Errors intentionally contain no endpoint headers, arguments, or secrets.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +38,111 @@ pub enum McpMutationError {
     Missing,
     #[error("The MCP server record is invalid.")]
     Invalid,
+    #[error("{0}")]
+    OAuth(#[from] McpError),
+    #[error("The isolated MCP operation could not be completed safely.")]
+    Remote(#[source] aiden_mcp::subagent_remote::SubagentRemoteError),
+}
+
+pub struct SubagentMcpRemoteLease {
+    authority: std::sync::Weak<McpMutationAuthority>,
+    server: McpServer,
+    epoch: u64,
+    credential_revision: String,
+    redact_text: Box<dyn Fn(&str) -> String + Send + Sync>,
+    client: aiden_mcp::subagent_remote::SubagentRemoteClient,
+}
+
+impl SubagentMcpRemoteLease {
+    pub(crate) fn server(&self) -> &McpServer {
+        &self.server
+    }
+
+    pub fn credential_revision(&self) -> &str {
+        &self.credential_revision
+    }
+
+    pub fn redact_credential_text(&self, text: &str) -> String {
+        (self.redact_text)(text)
+    }
+
+    pub async fn is_current(&self) -> bool {
+        let Some(authority) = self.authority.upgrade() else {
+            return false;
+        };
+        authority
+            .subagent_lease_is_current(&self.server, self.epoch, &self.credential_revision)
+            .await
+    }
+
+    pub async fn list_tools(&self) -> Result<Vec<aiden_mcp::McpToolInfo>, McpMutationError> {
+        if !self.is_current().await {
+            return Err(McpMutationError::Invalid);
+        }
+        let tools = self
+            .client
+            .list_tools()
+            .await
+            .map_err(McpMutationError::Remote)?;
+        if !self.is_current().await {
+            return Err(McpMutationError::Invalid);
+        }
+        Ok(tools)
+    }
+
+    pub async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, McpMutationError> {
+        if !self.is_current().await {
+            return Err(McpMutationError::Invalid);
+        }
+        let result = self
+            .client
+            .call_tool(tool_name, arguments)
+            .await
+            .map_err(McpMutationError::Remote)?;
+        if !self.is_current().await {
+            return Err(McpMutationError::Invalid);
+        }
+        Ok(result)
+    }
+
+    pub async fn close(&self) {
+        self.client.close().await;
+    }
+}
+
+impl aiden_mcp::inventory::SubagentMcpClientPort for SubagentMcpRemoteLease {
+    fn credential_revision(&self) -> &str {
+        self.credential_revision()
+    }
+
+    fn credential_revision_is_current<'a>(
+        &'a self,
+        cancel: &'a CancellationToken,
+    ) -> futures::future::BoxFuture<'a, bool> {
+        Box::pin(async move { !cancel.is_cancelled() && self.is_current().await })
+    }
+
+    fn redact_credential_text(&self, text: &str) -> String {
+        self.redact_credential_text(text)
+    }
+
+    fn list_tools<'a>(
+        &'a self,
+        cancel: &'a CancellationToken,
+    ) -> futures::future::BoxFuture<'a, Result<Vec<aiden_mcp::McpToolInfo>, McpError>> {
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                return Err(McpError::Cancelled);
+            }
+            self.list_tools()
+                .await
+                .map_err(|_| McpError::Protocol("Isolated MCP inspection failed.".into()))
+        })
+    }
 }
 
 /// Serializes MCP mutation publication and owns its shared connection fence.
@@ -37,13 +150,24 @@ pub struct McpMutationAuthority {
     config: Arc<ConfigStore>,
     keys: Arc<ProviderKeysStore>,
     manager: Arc<McpClientManager>,
+    oauth_store: Arc<dyn McpOAuthStore>,
+    oauth_gate: Arc<McpOAuthOperationGate>,
+    oauth_http: Arc<dyn McpOAuthHttp>,
+    subagent_revision_key: Option<Vec<u8>>,
     epoch: AtomicU64,
     gate: tokio::sync::Mutex<()>,
     #[cfg(test)]
     fail_cleanup: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    before_runtime_admission: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 const CLEANUP_JOURNAL_KEY: &str = "pendingMcpCredentialCleanup";
+
+fn preset_key_mutation_authority() -> &'static Mutex<()> {
+    static AUTHORITY: OnceLock<Mutex<()>> = OnceLock::new();
+    AUTHORITY.get_or_init(|| Mutex::new(()))
+}
 
 struct MutationFence<'a>(&'a McpMutationAuthority);
 
@@ -54,24 +178,217 @@ impl Drop for MutationFence<'_> {
 }
 
 impl McpMutationAuthority {
+    #[cfg(test)]
     pub fn new(
         config: Arc<ConfigStore>,
         keys: Arc<ProviderKeysStore>,
         manager: Arc<McpClientManager>,
     ) -> Self {
+        Self::new_with_oauth(
+            config,
+            keys,
+            manager,
+            Arc::new(MemoryMcpOAuthStore::new()),
+            Arc::new(McpOAuthOperationGate::new()),
+            Arc::new(ReqwestMcpOAuthHttp::default()),
+        )
+    }
+
+    pub fn new_with_oauth(
+        config: Arc<ConfigStore>,
+        keys: Arc<ProviderKeysStore>,
+        manager: Arc<McpClientManager>,
+        oauth_store: Arc<dyn McpOAuthStore>,
+        oauth_gate: Arc<McpOAuthOperationGate>,
+        oauth_http: Arc<dyn McpOAuthHttp>,
+    ) -> Self {
         Self {
             config,
             keys,
             manager,
+            oauth_store,
+            oauth_gate,
+            oauth_http,
+            subagent_revision_key: aiden_mcp::subagent_credential_revision_key().ok(),
             epoch: AtomicU64::new(0),
             gate: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             fail_cleanup: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            before_runtime_admission: std::sync::Mutex::new(None),
         }
     }
 
     pub fn manager(&self) -> &Arc<McpClientManager> {
         &self.manager
+    }
+
+    fn subagent_credential_boundary(
+        &self,
+        spec: &aiden_mcp::McpServerSpec,
+    ) -> Result<aiden_subagents::mcp::SubagentMcpCredentialBoundary, McpMutationError> {
+        let revision_key = self
+            .subagent_revision_key
+            .clone()
+            .ok_or(McpMutationError::Invalid)?;
+        let configured_headers = spec
+            .remote
+            .as_ref()
+            .map(|remote| {
+                remote
+                    .headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        aiden_subagents::mcp::create_subagent_mcp_credential_boundary(
+            aiden_subagents::mcp::CreateSubagentMcpCredentialBoundaryInput {
+                revision_key,
+                configured_headers: Some(configured_headers),
+                endpoint_credentials: None,
+                preset_api_key: None,
+                oauth_authorization_binding: None,
+                oauth_client_id: None,
+                oauth_token_type: None,
+                oauth_scope: None,
+                oauth_code_verifier: None,
+                oauth_client_secret: None,
+                oauth_tokens: None,
+                oauth_generation: None,
+            },
+        )
+        .map_err(|_| McpMutationError::Invalid)
+    }
+
+    pub fn subagent_remote_servers(&self) -> Result<Vec<McpServer>, McpMutationError> {
+        Ok(self
+            .config
+            .list_mcp_servers()
+            .map_err(McpMutationError::Config)?
+            .into_iter()
+            .filter(|server| {
+                server.enabled
+                    && matches!(
+                        server.transport,
+                        aiden_data::portable_config::McpTransport::Http
+                            | aiden_data::portable_config::McpTransport::Sse
+                    )
+            })
+            .collect())
+    }
+
+    pub async fn open_subagent_remote(
+        self: &Arc<Self>,
+        server_id: &str,
+        cancelled: CancellationToken,
+    ) -> Result<SubagentMcpRemoteLease, McpMutationError> {
+        self.open_subagent_remote_inner(server_id, None, cancelled)
+            .await
+    }
+
+    pub async fn open_bound_subagent_remote(
+        self: &Arc<Self>,
+        server_id: &str,
+        expected_connection_fingerprint: &str,
+        cancelled: CancellationToken,
+    ) -> Result<SubagentMcpRemoteLease, McpMutationError> {
+        self.open_subagent_remote_inner(server_id, Some(expected_connection_fingerprint), cancelled)
+            .await
+    }
+
+    async fn open_subagent_remote_inner(
+        self: &Arc<Self>,
+        server_id: &str,
+        expected_connection_fingerprint: Option<&str>,
+        cancelled: CancellationToken,
+    ) -> Result<SubagentMcpRemoteLease, McpMutationError> {
+        let epoch = self.epoch();
+        let server = self
+            .subagent_remote_servers()?
+            .into_iter()
+            .find(|server| server.id == server_id)
+            .ok_or(McpMutationError::Missing)?;
+        let spec = self.resolve_runtime_spec_at_epoch(&server, epoch).await?;
+        let credential_boundary = self.subagent_credential_boundary(&spec)?;
+        let credential_revision = credential_boundary.revision.clone();
+        if expected_connection_fingerprint.is_some_and(|expected| {
+            aiden_mcp::inventory::subagent_mcp_connection_fingerprint(&server, &credential_revision)
+                .map_or(true, |actual| actual != expected)
+        }) {
+            return Err(McpMutationError::Invalid);
+        }
+        let client = aiden_mcp::subagent_remote::SubagentRemoteClient::connect(&spec, cancelled)
+            .await
+            .map_err(McpMutationError::Remote)?;
+        let lease = SubagentMcpRemoteLease {
+            authority: Arc::downgrade(self),
+            server,
+            epoch,
+            credential_revision,
+            redact_text: credential_boundary.redact_text,
+            client,
+        };
+        if !lease.is_current().await {
+            lease.close().await;
+            return Err(McpMutationError::Invalid);
+        }
+        Ok(lease)
+    }
+
+    pub async fn subagent_credential_revision(
+        &self,
+        server: &McpServer,
+        cancelled: &CancellationToken,
+    ) -> Result<String, McpMutationError> {
+        if cancelled.is_cancelled() {
+            return Err(McpMutationError::OAuth(McpError::Cancelled));
+        }
+        let epoch = self.epoch();
+        let current = self
+            .subagent_remote_servers()?
+            .into_iter()
+            .find(|candidate| candidate.id == server.id)
+            .ok_or(McpMutationError::Missing)?;
+        if mcp_runtime_connection_snapshot(&current) != mcp_runtime_connection_snapshot(server) {
+            return Err(McpMutationError::Invalid);
+        }
+        let spec = self.resolve_runtime_spec_at_epoch(&current, epoch).await?;
+        if self.epoch() != epoch || cancelled.is_cancelled() {
+            return Err(McpMutationError::Invalid);
+        }
+        Ok(self.subagent_credential_boundary(&spec)?.revision)
+    }
+
+    async fn subagent_lease_is_current(
+        &self,
+        server: &McpServer,
+        epoch: u64,
+        credential_revision: &str,
+    ) -> bool {
+        if self.epoch() != epoch {
+            return false;
+        }
+        let current = self.config.list_mcp_servers().ok().and_then(|servers| {
+            servers
+                .into_iter()
+                .find(|candidate| candidate.id == server.id)
+        });
+        let Some(current) = current.filter(|candidate| {
+            candidate.enabled
+                && candidate.transport == server.transport
+                && mcp_runtime_connection_snapshot(candidate)
+                    == mcp_runtime_connection_snapshot(server)
+        }) else {
+            return false;
+        };
+        let Ok(spec) = self.resolve_runtime_spec_at_epoch(&current, epoch).await else {
+            return false;
+        };
+        self.epoch() == epoch
+            && self
+                .subagent_credential_boundary(&spec)
+                .is_ok_and(|boundary| boundary.revision == credential_revision)
     }
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::SeqCst)
@@ -80,6 +397,11 @@ impl McpMutationAuthority {
     #[cfg(test)]
     pub(crate) fn set_cleanup_failure_for_test(&self, fail: bool) {
         self.fail_cleanup.store(fail, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    fn set_before_runtime_admission_for_test(&self, hook: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self.before_runtime_admission.lock().unwrap() = hook;
     }
 
     fn invalidate(&self) {
@@ -99,6 +421,7 @@ impl McpMutationAuthority {
             .find(|candidate| candidate.id == server.id);
         let pending = pending_mcp_credential_cleanup_for_save(current.as_ref(), &server);
         self.write_journal(pending.as_ref())?;
+        self.oauth_gate.invalidate(&server.id);
         self.invalidate();
         let _final_fence = MutationFence(self);
         self.manager.disconnect(&server.id).await;
@@ -126,6 +449,7 @@ impl McpMutationAuthority {
         };
         let pending = pending_mcp_credential_cleanup_for_remove(Some(&current), server_id);
         self.write_journal(pending.as_ref())?;
+        self.oauth_gate.invalidate(server_id);
         self.invalidate();
         let _final_fence = MutationFence(self);
         self.manager.disconnect(server_id).await;
@@ -157,8 +481,21 @@ impl McpMutationAuthority {
     }
 
     pub async fn status(&self, server: &McpServer) -> McpStatus {
-        match self.resolve_bound_spec(server) {
-            Ok(spec) => self.manager.status(&spec).await,
+        match self.ensure_runtime_connected(server).await {
+            Ok(spec) => match self.manager.list_tools(&spec.server.id).await {
+                Ok(tools) => McpStatus {
+                    connected: true,
+                    tool_count: tools.len(),
+                    tools: tools.into_iter().map(|tool| tool.name).collect(),
+                    error: None,
+                },
+                Err(error) => McpStatus {
+                    connected: false,
+                    tool_count: 0,
+                    tools: Vec::new(),
+                    error: Some(error.to_string()),
+                },
+            },
             Err(error) => McpStatus {
                 connected: false,
                 tool_count: 0,
@@ -166,6 +503,97 @@ impl McpMutationAuthority {
                 error: Some(error.to_string()),
             },
         }
+    }
+
+    pub fn oauth_status(&self, server: &McpServer) -> Result<McpOAuthStatus, McpMutationError> {
+        let spec = aiden_mcp::resolve_mcp_server(server).map_err(|_| McpMutationError::Invalid)?;
+        oauth_status(&spec, self.oauth_store.as_ref()).map_err(McpMutationError::OAuth)
+    }
+
+    pub async fn authorize(
+        &self,
+        server_id: &str,
+        open_browser: &aiden_mcp::oauth::OpenBrowserFn,
+        is_current: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<(), McpMutationError> {
+        let server = self
+            .config
+            .list_mcp_servers()
+            .map_err(McpMutationError::Config)?
+            .into_iter()
+            .find(|server| server.id == server_id)
+            .ok_or(McpMutationError::Missing)?;
+        let spec = aiden_mcp::resolve_mcp_server(&server).map_err(|_| McpMutationError::Invalid)?;
+        if !server.oauth.unwrap_or(false) {
+            return Err(McpMutationError::Invalid);
+        }
+        authorize_mcp_server(
+            &spec,
+            McpOAuthDeps {
+                store: self.oauth_store.as_ref(),
+                gate: self.oauth_gate.as_ref(),
+                http: self.oauth_http.as_ref(),
+                verifier: self.manager.as_ref(),
+                is_current,
+                open_browser: Some(open_browser),
+                port: OAUTH_PORT,
+            },
+        )
+        .await?;
+        self.manager.disconnect(server_id).await;
+        self.invalidate();
+        Ok(())
+    }
+
+    pub async fn cancel_authorization(&self, server_id: &str) {
+        self.oauth_gate.invalidate(server_id);
+        self.manager.disconnect(server_id).await;
+        self.invalidate();
+    }
+
+    pub async fn revoke_oauth(&self, server_id: &str) -> Result<(), McpMutationError> {
+        let _guard = self.gate.lock().await;
+        let _final_fence = MutationFence(self);
+        self.oauth_gate.invalidate(server_id);
+        self.invalidate();
+        self.manager.disconnect(server_id).await;
+        self.oauth_store.clear(server_id)?;
+        self.invalidate();
+        Ok(())
+    }
+
+    pub async fn ensure_runtime_connected(
+        &self,
+        server: &McpServer,
+    ) -> Result<aiden_mcp::McpServerSpec, McpMutationError> {
+        let epoch = self.epoch();
+        let spec = self.resolve_runtime_spec_at_epoch(server, epoch).await?;
+        #[cfg(test)]
+        if let Some(hook) = self.before_runtime_admission.lock().unwrap().clone() {
+            hook();
+        }
+        self.manager
+            .ensure_connected_with_current(&spec, &|| self.epoch() == epoch)
+            .await
+            .map_err(McpMutationError::OAuth)?;
+        Ok(spec)
+    }
+
+    async fn resolve_runtime_spec_at_epoch(
+        &self,
+        server: &McpServer,
+        epoch: u64,
+    ) -> Result<aiden_mcp::McpServerSpec, McpMutationError> {
+        let spec = self.resolve_bound_spec(server)?;
+        resolve_noninteractive_oauth(
+            spec,
+            self.oauth_store.as_ref(),
+            self.oauth_gate.as_ref(),
+            self.oauth_http.as_ref(),
+            &|| self.epoch() == epoch,
+        )
+        .await
+        .map_err(McpMutationError::OAuth)
     }
 
     fn resolve_bound_spec(
@@ -184,6 +612,11 @@ impl McpMutationAuthority {
     }
 
     pub async fn reset_connections(&self) {
+        if let Ok(servers) = self.config.list_mcp_servers() {
+            for server in servers {
+                self.oauth_gate.invalidate(&server.id);
+            }
+        }
         self.invalidate();
         self.manager.close_all().await;
         self.invalidate();
@@ -209,6 +642,7 @@ impl McpMutationAuthority {
             None => pending_mcp_credential_cleanup_for_remove(previous, id),
         };
         self.write_journal(pending.as_ref())?;
+        self.oauth_gate.invalidate(id);
         self.invalidate();
         self.manager.disconnect_blocking(id);
         if previous.map(mcp_credential_connection_snapshot)
@@ -216,6 +650,7 @@ impl McpMutationAuthority {
         {
             self.delete_preset_slot(id)?;
         }
+        self.reconcile_oauth(previous, current)?;
         self.clear_journal()?;
         self.invalidate();
         Ok(())
@@ -245,6 +680,8 @@ impl McpMutationAuthority {
                         .delete(&preset_secret_id(&server.id))
                         .map_err(McpMutationError::Credentials)?;
                     self.manager.disconnect_blocking(&server.id);
+                    self.oauth_gate.invalidate(&server.id);
+                    self.oauth_store.clear(&server.id)?;
                 }
                 self.clear_journal()?;
                 self.invalidate();
@@ -255,16 +692,21 @@ impl McpMutationAuthority {
             .into_iter()
             .find(|server| server.id == pending.server_id);
         self.invalidate();
+        self.oauth_gate.invalidate(&pending.server_id);
         self.manager.disconnect_blocking(&pending.server_id);
         let resolution = mcp_credential_cleanup_after_config(&pending, current.as_ref());
         if let McpCredentialCleanupResolution::Resolved {
-            clear_preset_key, ..
+            clear_oauth,
+            clear_preset_key,
         } = resolution
         {
             if clear_preset_key {
                 self.keys
                     .delete(&preset_secret_id(&pending.server_id))
                     .map_err(McpMutationError::Credentials)?;
+            }
+            if clear_oauth {
+                self.oauth_store.clear(&pending.server_id)?;
             }
         }
         self.clear_journal()?;
@@ -316,6 +758,27 @@ impl McpMutationAuthority {
             // makes the former key unreadable before it is removed.
             self.delete_preset_slot(&previous.id)?;
         }
+        self.reconcile_oauth(previous, current)?;
+        Ok(())
+    }
+
+    fn reconcile_oauth(
+        &self,
+        previous: Option<&McpServer>,
+        current: Option<&McpServer>,
+    ) -> Result<(), McpMutationError> {
+        let Some(previous) = previous.filter(|server| server.oauth.unwrap_or(false)) else {
+            return Ok(());
+        };
+        let still_same_binding = current.is_some_and(|current| {
+            current.oauth.unwrap_or(false)
+                && current.url.as_deref() == previous.url.as_deref()
+                && current.transport == previous.transport
+        });
+        if !still_same_binding {
+            self.oauth_gate.invalidate(&previous.id);
+            self.oauth_store.clear(&previous.id)?;
+        }
         Ok(())
     }
 
@@ -337,6 +800,14 @@ impl McpMutationAuthority {
         server_id: &str,
         key: Option<&str>,
     ) -> Result<(), McpMutationError> {
+        // Settings may issue a clear while a replacement save is settling.
+        // Serialize the key operations themselves so a late clear cannot
+        // delete the replacement written by the next editor revision.
+        let _key_guard = preset_key_mutation_authority().lock().map_err(|_| {
+            McpMutationError::Credentials(ProviderKeysError::SecureStorage(
+                "MCP credential coordinator unavailable".into(),
+            ))
+        })?;
         let server = self
             .config
             .list_mcp_servers()
@@ -349,8 +820,10 @@ impl McpMutationAuthority {
         {
             return Err(McpMutationError::Invalid);
         }
+        self.invalidate();
+        self.manager.disconnect_blocking(server_id);
         let slot = preset_secret_id(server_id);
-        match key.filter(|key| !key.trim().is_empty()) {
+        let result = match key.filter(|key| !key.trim().is_empty()) {
             Some(key) => self
                 .keys
                 .set_bound(
@@ -364,7 +837,9 @@ impl McpMutationAuthority {
                 .keys
                 .delete(&slot)
                 .map_err(McpMutationError::Credentials),
-        }
+        };
+        self.invalidate();
+        result
     }
 
     pub fn bound_preset_key(&self, server: &McpServer) -> Result<Option<String>, McpMutationError> {
@@ -422,6 +897,29 @@ fn validate_portable_server(server: &McpServer) -> Result<(), McpMutationError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct FailClearOAuthStore {
+        inner: MemoryMcpOAuthStore,
+    }
+
+    impl McpOAuthStore for FailClearOAuthStore {
+        fn get(&self, server_id: &str) -> Result<aiden_mcp::oauth::McpOAuthSession, McpError> {
+            self.inner.get(server_id)
+        }
+
+        fn set(
+            &self,
+            server_id: &str,
+            session: &aiden_mcp::oauth::McpOAuthSession,
+        ) -> Result<(), McpError> {
+            self.inner.set(server_id, session)
+        }
+
+        fn clear(&self, _server_id: &str) -> Result<(), McpError> {
+            Err(McpError::OAuthStore("injected clear failure".into()))
+        }
+    }
     use aiden_data::portable_config::McpTransport;
     use aiden_data::portable_config::{create_portable_config_stores, PortableConfigTestHooks};
     use aiden_data::secret_map::{SecretCipher, SecretCipherError};
@@ -472,6 +970,41 @@ mod tests {
             local,
             McpMutationAuthority::new(config, keys, Arc::new(McpClientManager::new())),
         )
+    }
+
+    fn authority_fixture_with_oauth() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        McpMutationAuthority,
+        Arc<MemoryMcpOAuthStore>,
+    ) {
+        let portable = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let keys = Arc::new(ProviderKeysStore::new(
+            local.path().to_path_buf(),
+            "aiden-mcp-oauth-test",
+            Arc::new(MemoryCipher::default()),
+        ));
+        let stores = create_portable_config_stores(
+            portable.path().to_path_buf(),
+            Some(local.path().to_path_buf()),
+            PortableConfigTestHooks::default(),
+        );
+        let config = Arc::new(ConfigStore::new(
+            stores,
+            Arc::new(crate::services::stores::StoreSecretsPort::new(keys.clone())),
+            None,
+        ));
+        let oauth = Arc::new(MemoryMcpOAuthStore::new());
+        let authority = McpMutationAuthority::new_with_oauth(
+            config,
+            keys,
+            Arc::new(McpClientManager::new()),
+            oauth.clone(),
+            Arc::new(McpOAuthOperationGate::new()),
+            Arc::new(ReqwestMcpOAuthHttp::default()),
+        );
+        (portable, local, authority, oauth)
     }
 
     fn server() -> McpServer {
@@ -542,6 +1075,25 @@ mod tests {
     }
 
     #[test]
+    fn preset_clear_then_replacement_keeps_the_latest_bound_key() {
+        let (_portable, _local, authority) = authority_fixture();
+        let preset = aiden_mcp::get_mcp_preset("composio").unwrap();
+        let server = aiden_mcp::server_from_preset(preset, None).unwrap();
+        authority.config.save_mcp_server(&server, &|| true).unwrap();
+        authority
+            .set_or_clear_preset_key(&server.id, Some("old-key"))
+            .unwrap();
+        authority.set_or_clear_preset_key(&server.id, None).unwrap();
+        authority
+            .set_or_clear_preset_key(&server.id, Some("replacement-key"))
+            .unwrap();
+        assert_eq!(
+            authority.bound_preset_key(&server).unwrap().as_deref(),
+            Some("replacement-key")
+        );
+    }
+
+    #[test]
     fn malformed_boot_journal_revokes_credentials_and_is_removed() {
         let (_portable, _local, authority) = authority_fixture();
         let preset = aiden_mcp::get_mcp_preset("composio").unwrap();
@@ -571,6 +1123,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_failure_after_publication_still_advances_final_fence() {
         let (_portable, _local, authority) = authority_fixture();
+        let authority = Arc::new(authority);
         let mut initial = server();
         initial.url = Some("https://first.example".into());
         authority
@@ -595,5 +1148,124 @@ mod tests {
             .get_settings()
             .unwrap()
             .contains_key(CLEANUP_JOURNAL_KEY));
+
+        authority.set_cleanup_failure_for_test(false);
+        let recovery = authority.clone();
+        tokio::task::spawn_blocking(move || recovery.reconcile_boot())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!authority
+            .config
+            .get_settings()
+            .unwrap()
+            .contains_key(CLEANUP_JOURNAL_KEY));
+    }
+
+    #[tokio::test]
+    async fn oauth_revoke_failure_still_advances_authority_fence() {
+        let (_portable, _local, base) = authority_fixture();
+        let authority = McpMutationAuthority::new_with_oauth(
+            base.config.clone(),
+            base.keys.clone(),
+            base.manager.clone(),
+            Arc::new(FailClearOAuthStore::default()),
+            Arc::new(McpOAuthOperationGate::new()),
+            Arc::new(ReqwestMcpOAuthHttp::default()),
+        );
+        let before = authority.epoch();
+
+        assert!(authority.revoke_oauth("mcp-test").await.is_err());
+        assert!(authority.epoch() > before);
+    }
+
+    #[test]
+    fn boot_recovery_revokes_oauth_when_the_connection_reached_its_replacement() {
+        let (_portable, _local, authority, oauth) = authority_fixture_with_oauth();
+        let mut previous = server();
+        previous.oauth = Some(true);
+        previous.url = Some("https://mcp.example/old".into());
+        authority
+            .config
+            .save_mcp_server(&previous, &|| true)
+            .unwrap();
+        oauth
+            .set(
+                &previous.id,
+                &aiden_mcp::oauth::McpOAuthSession {
+                    authorization_binding: previous.url.clone(),
+                    tokens: Some(aiden_mcp::oauth::McpOAuthTokens {
+                        access_token: "secret-access".into(),
+                        token_type: "Bearer".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut target = previous.clone();
+        target.url = Some("https://mcp.example/new".into());
+        let pending = pending_mcp_credential_cleanup_for_save(Some(&previous), &target).unwrap();
+        authority.write_journal(Some(&pending)).unwrap();
+        authority.config.save_mcp_server(&target, &|| true).unwrap();
+
+        authority.reconcile_boot().unwrap();
+        assert_eq!(
+            oauth.get(&previous.id).unwrap(),
+            aiden_mcp::oauth::McpOAuthSession::default()
+        );
+        assert!(!authority
+            .config
+            .get_settings()
+            .unwrap()
+            .contains_key(CLEANUP_JOURNAL_KEY));
+    }
+
+    #[tokio::test]
+    async fn removal_aborts_an_inflight_oauth_generation_before_publication() {
+        let (_portable, _local, authority, _oauth) = authority_fixture_with_oauth();
+        let record = server();
+        authority.config.save_mcp_server(&record, &|| true).unwrap();
+        let operation = authority.oauth_gate.begin(&record.id).unwrap();
+
+        authority.remove(&record.id).await.unwrap();
+        assert!(operation.aborted());
+        assert!(authority.config.list_mcp_servers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mutation_between_oauth_resolution_and_manager_admission_rejects_stale_spec() {
+        let (_portable, _local, authority) = authority_fixture();
+        let authority = Arc::new(authority);
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        authority.set_before_runtime_admission_for_test(Some(Arc::new({
+            let entered = entered.clone();
+            let release = release.clone();
+            move || {
+                entered.wait();
+                release.wait();
+            }
+        })));
+        let record = server();
+        let worker = {
+            let authority = authority.clone();
+            std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(authority.ensure_runtime_connected(&record))
+            })
+        };
+
+        entered.wait();
+        authority.invalidate();
+        release.wait();
+
+        assert!(matches!(
+            worker.join().unwrap(),
+            Err(McpMutationError::OAuth(McpError::StaleGeneration))
+        ));
     }
 }

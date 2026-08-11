@@ -12,6 +12,7 @@ use gpui::{
 use gpui_component::{text::TextView, v_flex, ActiveTheme};
 
 use crate::assistant::view_state::{AssistantMessage, AssistantRole, AssistantViewState};
+use crate::chat::markdown::markdown_with_math_fallback;
 
 /// The speaker label for the log (`You` / `Aiden`).
 #[allow(dead_code)] // renderer-contract port; exercised by unit tests
@@ -121,6 +122,7 @@ fn render_assistant_card(
     let theme = cx.theme();
     let thinking = message.thinking.clone();
     let content = message.content.clone();
+    let markdown = markdown_with_math_fallback(&content);
     let placeholder = live && content.is_empty() && streaming;
 
     v_flex()
@@ -159,7 +161,7 @@ fn render_assistant_card(
                     el.child(
                         TextView::markdown(
                             ElementId::Name(SharedString::from("assistant-markdown")),
-                            content,
+                            markdown,
                             window,
                             cx,
                         )

@@ -1517,6 +1517,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         }
@@ -2372,6 +2373,18 @@ mod tests {
                 .len(),
             120
         );
+        let computer = safe_tool_descriptor(
+            "computer_use",
+            &serde_json::json!({
+                "action": "type",
+                "text": "private text that must never enter the timeline",
+                "pid": 42,
+                "window_id": 7,
+            }),
+        );
+        assert_eq!(computer.label, "Use Mac");
+        assert_eq!(computer.detail.as_deref(), Some("type"));
+        assert!(!format!("{computer:?}").contains("private text"));
     }
 
     #[test]

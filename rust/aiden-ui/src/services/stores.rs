@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use aiden_data::chat_store::{create_chat_store, ChatStore, ChatStoreDurability};
 use aiden_data::config_store::{ConfigStore, ConfigStoreError, SecretsPort};
+use aiden_data::mcp_oauth::{EncryptedMcpOAuthStore, EncryptedMcpOAuthStoreOptions};
 use aiden_data::pi_credential_store::{
     EncryptedPiCredentialStore, EncryptedPiCredentialStoreOptions,
 };
@@ -29,24 +30,35 @@ use aiden_data::portable_config::{create_portable_config_stores, PortableConfigT
 use aiden_data::portable_watch::{
     create_last_safe_snapshot_reload, create_portable_config_watcher, PortableConfigWatcher,
 };
-use aiden_data::schedule_store::{
-    create_schedule_store, DataStorePersistence, ScheduleStore, ScheduledTask,
-};
+#[cfg(test)]
+use aiden_data::schedule_store::ScheduledTask;
+use aiden_data::schedule_store::{create_schedule_store, DataStorePersistence, ScheduleStore};
 use aiden_data::secret_map::{KeyringCredentialCipher, ProviderKeysError, ProviderKeysStore};
 use aiden_data::usage_store::UsageStore;
+use aiden_mcp::oauth::{McpOAuthOperationGate, ReqwestMcpOAuthHttp};
 use aiden_mcp::McpClientManager;
-use aiden_scheduler::runtime::{
-    create_scheduler, SchedulerCore, TaskExecutor, TaskRunError, TaskRunOutcome,
-};
+use aiden_scheduler::runtime::SchedulerCore;
+#[cfg(test)]
+use aiden_scheduler::runtime::{TaskExecutor, TaskRunError, TaskRunOutcome};
 use aiden_subagents::run_store_dispatcher::SubagentRunStoreSelection;
 use aiden_subagents::run_store_production::{
     ProductionSubagentRunStore, ProductionSubagentRunStoreOptions,
 };
+#[cfg(test)]
 use async_trait::async_trait;
+use futures::FutureExt;
 
+use crate::services::app_updates::AppUpdateAuthority;
 use crate::services::codex_auth::PiCodexAuthStore;
+use crate::services::computer_use::{
+    production_controller_factory, production_status_dependencies, ComputerUseAuthority,
+};
 use crate::services::foundation_titles::production_foundation_models_connection;
 use crate::services::mcp_mutation::McpMutationAuthority;
+use crate::services::pi_provider_setup::PiProviderSetupAuthority;
+use crate::services::scheduled_execution::{global_enabled, ProductionScheduledExecutor};
+use crate::services::subagents::SubagentAuthority;
+use crate::services::voice::VoiceAuthority;
 
 /// The keychain service name used for provider credentials.
 const KEYCHAIN_SERVICE: &str = "com.sambitcreate.aiden-agent.provider-keys";
@@ -71,9 +83,17 @@ pub struct Stores {
     /// Keychain accounts and never copied into portable provider config.
     /// The exact adapter shared by Codex setup and request-time token refresh.
     pub codex_auth: Arc<PiCodexAuthStore>,
+    /// Pi-native provider inventory and encrypted setup authority. Codex keeps
+    /// its separate OAuth authority while sharing the underlying store.
+    pub pi_providers: Arc<PiProviderSetupAuthority>,
     /// Truthful Apple Foundation Models status/title connection. It probes the
     /// signed helper only when title routing asks for it.
     pub foundation_models: Arc<aiden_computer_use::FoundationModelsConnection>,
+    /// The sole app-lifetime Computer Use authority. Settings, chat admission,
+    /// approvals, and lifecycle cancellation must all share this exact value.
+    pub computer_use: Arc<ComputerUseAuthority>,
+    /// Sole runtime authority for local voice selection and recording fences.
+    pub voice: Arc<VoiceAuthority>,
     /// Scheduled tasks + run history (machine-local `schedules.json` /
     /// `schedule-runs.json`). Shared with the settings surface and the
     /// scheduled-tasks panel so both see the same task list.
@@ -89,6 +109,8 @@ pub struct Stores {
     /// tasks through a `TaskExecutor` and records runs in the schedule store.
     /// Started by the shell on boot; stopped on quit so no tokio task leaks.
     pub scheduler: Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>,
+    /// Concrete executor retained for truthful readiness projection.
+    pub scheduler_executor: Arc<ProductionScheduledExecutor>,
     /// The app-wide quit decision state (in-flight generations block quit
     /// unless forced). Consulted by the shell's quit handler.
     pub quit_barrier: Arc<aiden_mac::quit_barrier::QuitBarrier>,
@@ -107,6 +129,12 @@ pub struct Stores {
     /// item 8). Best-effort at boot: a broken subagent store logs a warning and
     /// yields `None` so it never blocks the chat app.
     pub runs: Option<Arc<ProductionSubagentRunStore>>,
+    /// Sole app-lifetime native subagent admission/runtime/control authority.
+    /// It owns the exact same production run store exposed above.
+    pub subagents: Arc<SubagentAuthority>,
+    /// One app-lifetime update authority. It is inert outside a signed,
+    /// packaged macOS build with an embedded generic-feed marker.
+    pub app_updates: Arc<AppUpdateAuthority>,
 }
 
 impl Stores {
@@ -138,6 +166,7 @@ impl Stores {
             },
         ));
         let codex_auth = Arc::new(PiCodexAuthStore::new(pi_credentials.clone()));
+        let pi_providers = PiProviderSetupAuthority::new(pi_credentials);
         let foundation_models = Arc::new(production_foundation_models_connection());
         let config = Arc::new(ConfigStore::new(
             stores,
@@ -149,6 +178,17 @@ impl Stores {
             None,
             ChatStoreDurability::default(),
         ));
+        let computer_use = ComputerUseAuthority::new_with_controller_factory(
+            config.clone(),
+            chat.clone(),
+            production_status_dependencies(config.clone()),
+            production_controller_factory(),
+        );
+        let usage = Arc::new(UsageStore::new_data_store(Some(local_root.clone())));
+        let voice = VoiceAuthority::new(config.clone(), pi_providers.clone(), usage.clone());
+        if let Err(error) = voice.reconcile_boot() {
+            tracing::warn!(%error, "voice settings migration failed; dictation remains fail-closed");
+        }
         // The schedule store is the single authority for settings, the panel,
         // tools, and the runtime. Never construct another cached instance over
         // these files: a second cache can overwrite newer task state.
@@ -158,12 +198,18 @@ impl Stores {
             Box::new(aiden_data::now_millis),
             None,
         ));
-        let usage = Arc::new(UsageStore::new_data_store(Some(local_root.clone())));
         let mcp = Arc::new(McpClientManager::new());
-        let mcp_mutation = Arc::new(McpMutationAuthority::new(
+        let oauth_store = Arc::new(EncryptedMcpOAuthStore::new(EncryptedMcpOAuthStoreOptions {
+            root: local_root.clone(),
+            cipher: Arc::new(KeyringCredentialCipher::new(KEYCHAIN_SERVICE)),
+        }));
+        let mcp_mutation = Arc::new(McpMutationAuthority::new_with_oauth(
             config.clone(),
             keys.clone(),
             mcp.clone(),
+            oauth_store,
+            Arc::new(McpOAuthOperationGate::new()),
+            Arc::new(ReqwestMcpOAuthHttp::default()),
         ));
         // A crash between portable publication and credential cleanup leaves a
         // durable journal. Reconcile it before any watcher/chat can reconnect.
@@ -171,11 +217,28 @@ impl Stores {
             tracing::warn!(%error, "MCP cleanup journal reconciliation failed; affected credentials remain unavailable");
         }
 
-        let scheduler = create_scheduler(
+        let scheduler_executor = ProductionScheduledExecutor::new(
+            config.clone(),
             schedules.clone(),
-            Arc::new(DisabledTaskExecutor),
+            chat.clone(),
+            usage.clone(),
+            codex_auth.clone(),
+            mcp.clone(),
+            mcp_mutation.clone(),
+        );
+        let enabled_config = config.clone();
+        let scheduler = SchedulerCore::new(
+            schedules.clone(),
+            scheduler_executor.clone(),
             None,
             Box::new(aiden_data::now_millis),
+            Box::new(move || {
+                let config = enabled_config.clone();
+                async move { global_enabled(&config) }.boxed()
+            }),
+            Box::new(|message| tracing::warn!("[schedule] {message}")),
+            Box::new(|message| tracing::error!("[schedule] {message}")),
+            aiden_scheduler::runtime::SchedulerConfig::default(),
         );
 
         let (config_changed, config_watcher) =
@@ -184,10 +247,12 @@ impl Stores {
         spawn_config_poll_thread(watcher.clone());
 
         // The subagent run store. Its V1/V2 selection mirrors the TS
-        // `AIDEN_SUBAGENT_V2` rollout flag; the dispatcher owns migration and
+        // canonical default-on Subagents V2 rollback flags; the dispatcher owns migration and
         // the V1 checkpoint so deletion stays rollback-safe. A broken store is
         // logged, never fatal — chat deletion skips run reconciliation then.
         let runs = open_subagent_run_store(local_root);
+        let subagents = SubagentAuthority::new_with_mcp(runs.clone(), mcp_mutation.clone());
+        let app_updates = AppUpdateAuthority::production();
 
         Ok(Self {
             chat,
@@ -195,16 +260,22 @@ impl Stores {
             appearance_intent_revision: Arc::new(AtomicU64::new(0)),
             keys,
             codex_auth,
+            pi_providers,
             foundation_models,
+            computer_use,
+            voice,
             schedules,
             usage,
             mcp,
             mcp_mutation,
             scheduler,
+            scheduler_executor,
             quit_barrier: Arc::new(aiden_mac::quit_barrier::QuitBarrier::new()),
             config_watcher: Some(watcher),
             config_changed,
             runs,
+            subagents,
+            app_updates,
         })
     }
 
@@ -350,9 +421,9 @@ fn chats_dir_or_local() -> PathBuf {
     aiden_data::chats_dir().unwrap_or_else(|_| aiden_data::machine_local_data_dir().join("chats"))
 }
 
-/// The subagent run-store selection (port of `subagentV2Enabled`): the V2
-/// store is used only when `AIDEN_SUBAGENT_V2` is set, otherwise the V1
-/// store — matching the TS rollout flag.
+/// The subagent run-store selection (port of `subagentV2Enabled`): V2 is the
+/// default and exact `AIDEN_SUBAGENTS_ENABLED=0` or
+/// `AIDEN_SUBAGENTS_V2_ENABLED=0` selects the rollback-readable V1 store.
 fn subagent_run_selection() -> SubagentRunStoreSelection {
     let environment: std::collections::HashMap<String, String> = std::env::vars().collect();
     if ProductionSubagentRunStore::subagent_v2_enabled(&environment) {
@@ -389,11 +460,16 @@ fn open_subagent_run_store(local_root: PathBuf) -> Option<Arc<ProductionSubagent
 /// Explicitly fail closed until the app wires a bounded, cancellation-aware
 /// executor. In particular, a scheduled task must never report success merely
 /// because a placeholder saw it.
-pub struct DisabledTaskExecutor;
+#[cfg(test)]
+pub struct TestFailClosedTaskExecutor;
 
+#[cfg(test)]
 #[async_trait]
-impl TaskExecutor for DisabledTaskExecutor {
-    async fn run(&self, task: &ScheduledTask) -> Result<TaskRunOutcome, TaskRunError> {
+impl TaskExecutor for TestFailClosedTaskExecutor {
+    async fn run(
+        &self,
+        task: &aiden_data::schedule_store::ScheduledTask,
+    ) -> Result<TaskRunOutcome, TaskRunError> {
         Err(TaskRunError(format!(
             "Scheduled execution is unavailable for task {} until a real executor is configured.",
             task.id
@@ -659,7 +735,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn placeholder_scheduled_executor_never_reports_success() {
+    async fn test_only_fail_closed_executor_never_reports_success() {
         let task = ScheduledTask {
             id: "task-1".to_string(),
             name: "Test".to_string(),
@@ -687,7 +763,7 @@ mod tests {
             updated_at: 0,
         };
 
-        let result = DisabledTaskExecutor.run(&task).await;
+        let result = TestFailClosedTaskExecutor.run(&task).await;
 
         assert!(result.is_err());
     }

@@ -29,7 +29,7 @@ use gpui_component::{
 use crate::app::AppState;
 use crate::chat::composer::{
     attachment_from_image_bytes, attachment_image_element, composer_draft, format_bytes,
-    read_image_attachment, renderable_image_format, AttachmentError, ComposerDraft,
+    read_attachment, renderable_image_format, AttachmentError, ComposerDraft,
     CHAT_CONTENT_MAX_WIDTH_REMS, CHAT_DOCK_GUTTER_PX, MAX_IMAGE_BYTES,
 };
 use crate::chat::message_list::scroll_at_bottom;
@@ -39,6 +39,7 @@ use crate::chat::model_pad_picker::{
 };
 use crate::chat::model_picker::{ComposerModelPickerEvent, ModelPickerPins, PickerTab};
 use crate::services::chat_service::ChatSnapshot;
+use crate::services::skill_tools::SkillCatalogSource;
 
 impl AppState {
     /// The main chat area: message list + composer (+ empty states).
@@ -206,18 +207,34 @@ impl AppState {
         let text = self.composer_input.read(cx).value().to_string();
         let has_text = !text.trim().is_empty();
         let draft = composer_draft(cx).clone();
+        let (computer_use_enabled, computer_use_global, computer_use_saving, computer_use_error) = {
+            let service = self.service.read(cx);
+            (
+                service
+                    .active_chat
+                    .as_ref()
+                    .is_some_and(|chat| chat.computer_use_enabled == Some(true)),
+                self.stores.computer_use.global_enabled(),
+                service.computer_use_chat_saving(),
+                service.computer_use_chat_error().map(str::to_string),
+            )
+        };
         let composer_focused = self
             .composer_input
             .read(cx)
             .focus_handle(cx)
             .is_focused(window);
-        let can_send = has_text
+        let can_send = (has_text || draft.has_attachments())
             && !generating
             && snapshot.has_providers
             && snapshot.has_key_for_selection
             && snapshot.selection.is_some();
 
-        let readiness = if !snapshot.has_providers {
+        let readiness = if let Some(notice) = self.slash_palette.notice.clone() {
+            Some(notice)
+        } else if let Some(error) = computer_use_error {
+            Some(error)
+        } else if !snapshot.has_providers {
             Some("Select a provider and model to start chatting.".to_string())
         } else if snapshot.selection.is_none() {
             Some("Pick a model below to start chatting.".to_string())
@@ -237,9 +254,15 @@ impl AppState {
             .pb_4()
             .pt_3()
             .child(self.workspace_bar(context_busy, window, cx))
+            .when(self.slash_palette.open, |el| {
+                el.child(self.slash_palette_popup(window, cx))
+            })
             .child(
                 v_flex()
                     .id("composer-shell")
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        this.handle_slash_key(event, window, cx);
+                    }))
                     // Paste interception: runs in the capture phase (ancestor
                     // before the focused input) so image clips are staged as
                     // attachments and the input's text-paste is suppressed for
@@ -269,6 +292,32 @@ impl AppState {
                         el.child(self.attachment_row(&draft, cx))
                     })
                     .when(draft.is_editing(), |el| el.child(self.editing_banner(cx)))
+                    .when_some(draft.skill_selection.selected().cloned(), |el, skill| {
+                        el.child(
+                            h_flex()
+                                .id("composer-skill-selection")
+                                .gap_1()
+                                .items_center()
+                                .px_1p5()
+                                .py_1()
+                                .rounded_md()
+                                .bg(theme.secondary)
+                                .text_xs()
+                                .text_color(theme.secondary_foreground)
+                                .child(format!("Skill: {}", skill.name))
+                                .child(
+                                    Button::new("composer-skill-selection-clear")
+                                        .ghost()
+                                        .xsmall()
+                                        .tab_stop(false)
+                                        .icon(IconName::Close)
+                                        .tooltip("Remove selected skill")
+                                        .on_click(cx.listener(|this, _event, _window, cx| {
+                                            this.clear_slash_skill_selection(cx);
+                                        })),
+                                ),
+                        )
+                    })
                     .child(
                         Input::new(&self.composer_input)
                             .appearance(false)
@@ -299,7 +348,36 @@ impl AppState {
                                     .gap_1()
                                     .items_center()
                                     .flex_shrink_0()
-                                    .child(self.attach_button(&draft, generating, cx)),
+                                    .child(self.attach_button(&draft, generating, cx))
+                                    .child(
+                                        Button::new("composer-computer-use")
+                                            .when(computer_use_enabled, |button| button.primary())
+                                            .when(!computer_use_enabled, |button| button.ghost())
+                                            .small()
+                                            .label(if computer_use_saving {
+                                                "Computer Use…"
+                                            } else if computer_use_enabled {
+                                                "Computer Use on"
+                                            } else {
+                                                "Computer Use"
+                                            })
+                                            .disabled(
+                                                generating
+                                                    || computer_use_saving
+                                                    || !computer_use_global
+                                                    || self.service.read(cx).active_chat.is_none(),
+                                            )
+                                            .tooltip(if !computer_use_global {
+                                                "Enable Computer Use in Settings first"
+                                            } else if computer_use_enabled {
+                                                "Disable Computer Use for this chat"
+                                            } else {
+                                                "Enable Computer Use for this chat"
+                                            })
+                                            .on_click(cx.listener(|this, _event, window, cx| {
+                                                this.toggle_active_chat_computer_use(window, cx)
+                                            })),
+                                    ),
                             )
                             .child(
                                 h_flex()
@@ -364,6 +442,166 @@ impl AppState {
                             ),
                     ),
             )
+    }
+
+    /// Non-modal slash rows above the composer. Rows are not tab stops so the
+    /// native InputState keeps focus and IME/clipboard behavior remains intact.
+    fn slash_palette_popup(
+        &self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let commands = self.slash_palette.commands.clone();
+        let skills = self.slash_palette.skills.clone();
+        let selected = self.slash_palette.selected;
+        let loading = self.slash_palette.catalog_loading;
+        let command_count = commands.len();
+        let entity = cx.entity();
+        let command_theme = theme.clone();
+        let skill_theme = theme.clone();
+
+        let command_entity = entity.clone();
+        let command_rows = commands.into_iter().enumerate().map(move |(index, row)| {
+            let active = selected == index;
+            let command_id = row.definition.id.to_string();
+            let label = format!("/{}", row.alias.name);
+            let description = row.definition.description.to_string();
+            let entity = command_entity.clone();
+            h_flex()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "composer-slash-command-{index}"
+                ))))
+                .w_full()
+                .gap_2()
+                .rounded_md()
+                .px_2()
+                .py_1p5()
+                .bg(if active {
+                    command_theme.list_active
+                } else {
+                    command_theme.transparent
+                })
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "composer-slash-command-button-{index}"
+                    )))
+                    .ghost()
+                    .small()
+                    .tab_stop(false)
+                    .w_full()
+                    .justify_start()
+                    .label(label)
+                    .tooltip(description)
+                    .on_click(move |_event, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.select_slash_command_id(&command_id, window, cx);
+                        });
+                    }),
+                )
+                .into_any_element()
+        });
+
+        let skill_entity = entity.clone();
+        let skill_rows = skills.into_iter().enumerate().map(move |(offset, row)| {
+            let index = command_count + offset;
+            let active = selected == index;
+            let entry = row.entry;
+            let entry_for_click = entry.clone();
+            let source = match entry.source {
+                SkillCatalogSource::Configured => "Configured",
+                SkillCatalogSource::Workspace => "Workspace",
+                SkillCatalogSource::Global => "Global",
+            };
+            let entity = skill_entity.clone();
+            h_flex()
+                .id(ElementId::Name(SharedString::from(format!(
+                    "composer-slash-skill-{index}"
+                ))))
+                .w_full()
+                .gap_2()
+                .rounded_md()
+                .px_2()
+                .py_1p5()
+                .bg(if active {
+                    skill_theme.list_active
+                } else {
+                    skill_theme.transparent
+                })
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "composer-slash-skill-button-{index}"
+                    )))
+                    .ghost()
+                    .small()
+                    .tab_stop(false)
+                    .w_full()
+                    .justify_start()
+                    .label(format!("/skill:{} · {source}", entry.name))
+                    .tooltip(entry.description)
+                    .on_click(move |_event, window, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.select_slash_skill(entry_for_click.clone(), window, cx);
+                        });
+                    }),
+                )
+                .into_any_element()
+        });
+
+        let mut panel = v_flex()
+            .id("composer-slash-palette")
+            .w_full()
+            .max_h(px(280.))
+            .overflow_y_scroll()
+            .gap_0p5()
+            .p_1p5()
+            .rounded_xl()
+            .bg(theme.popover)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_md();
+        if command_count > 0 {
+            panel = panel.child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Commands"),
+            );
+        }
+        panel = panel.children(command_rows);
+        if !self.slash_palette.skills.is_empty() {
+            panel = panel.child(
+                div()
+                    .px_2()
+                    .pt_1()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Skills"),
+            );
+        }
+        panel = panel.children(skill_rows);
+        if loading && self.slash_palette.skills.is_empty() {
+            panel = panel.child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Loading skills…"),
+            );
+        } else if command_count == 0 && self.slash_palette.skills.is_empty() {
+            panel = panel.child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("No matching commands or skills"),
+            );
+        }
+        panel.into_any_element()
     }
 
     fn composer_model_picker(
@@ -1131,9 +1369,9 @@ impl AppState {
             .into_any_element()
     }
 
-    /// The attach (paperclip/plus) button: opens the macOS file picker filtered
-    /// to images. Disabled while a generation is in flight or a picker read is
-    /// pending.
+    /// The attach (paperclip/plus) button: opens the macOS file picker for
+    /// bounded text and image attachments. Disabled while a generation is in
+    /// flight or a picker read is pending.
     fn attach_button(
         &self,
         draft: &ComposerDraft,
@@ -1155,9 +1393,9 @@ impl AppState {
             .ghost()
             .icon(IconName::Plus)
             .disabled(disabled)
-            .tooltip("Attach images (⌘V to paste)")
+            .tooltip("Attach files (⌘V to paste)")
             .on_click(cx.listener(|this, _event, window, cx| {
-                this.attach_images(window, cx);
+                this.attach_files(window, cx);
             }))
             .into_any_element()
     }
@@ -1257,10 +1495,10 @@ impl AppState {
     // Composer actions
     // =======================================================================
 
-    /// Open the macOS file picker (images only), read + validate the picks on
-    /// the background executor, and stage them in the composer draft. Rejected
-    /// files surface a notification naming the file.
-    pub(crate) fn attach_images(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Open the macOS file picker, read + validate bounded text/image picks on
+    /// the background executor, and stage them in the composer draft.
+    /// Rejected files surface a notification naming the file.
+    pub(crate) fn attach_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.service.read(cx).generation_active() {
             return;
         }
@@ -1268,7 +1506,7 @@ impl AppState {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some(SharedString::from("Attach images")),
+            prompt: Some(SharedString::from("Attach files")),
         });
         composer_draft(cx).attaching = true;
         cx.notify();
@@ -1290,7 +1528,7 @@ impl AppState {
                     picked
                         .into_iter()
                         .map(|path| {
-                            let outcome = read_image_attachment(&path);
+                            let outcome = read_attachment(&path);
                             (path, outcome)
                         })
                         .collect()
@@ -1379,38 +1617,9 @@ impl AppState {
         cx.notify();
     }
 
-    /// Send the composer contents (send button). Handles the edit rebranch:
-    /// while editing, truncates the transcript back to (and including) the
-    /// edited message — dropping every later message — then sends the edited
-    /// text as a fresh turn. The staged attachments + edit target are cleared
-    /// up front (mirroring `send_composer`'s clear-before-send).
-    ///
-    /// Note: the ⌘-Enter key path routes through `app.rs::send_composer` and
-    /// sends text only; the edit rebranch + attachment staging apply to the
-    /// send button.
+    /// Submit through the one AppState transaction shared with Enter and ⌘↩.
     pub(crate) fn submit_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer_input.read(cx).value().to_string();
-        let trimmed = text.trim().to_string();
-        if trimmed.is_empty() {
-            return;
-        }
-        // Don't clear if a generation is active — the send would be rejected
-        // and the user's text would vanish.
-        let is_active = self.service.read(cx).generation_active();
-        if is_active {
-            return;
-        }
-
-        let draft = composer_draft(cx).clone();
-        self.composer_input
-            .update(cx, |input, inner| input.set_value("", window, inner));
-        composer_draft(cx).clear();
-
-        // Route through send_message_with so the edit rebranch (truncation)
-        // is persisted to the ChatStore — same path as the Enter key handler.
-        self.service.update(cx, |service, cx| {
-            service.send_message_with(&trimmed, draft.attachments, draft.editing_message_id, cx);
-        });
+        self.send_composer(window, cx);
     }
 }
 
@@ -1518,7 +1727,7 @@ const fn model_picker_shell_geometry(has_detail: bool) -> (f32, f32) {
     }
 }
 
-fn provider_icon_asset_path(provider_id: &str, model_id: &str) -> Option<&'static str> {
+pub(crate) fn provider_icon_asset_path(provider_id: &str, model_id: &str) -> Option<&'static str> {
     let provider_id = provider_id.trim().to_ascii_lowercase();
     let model_id = model_id.trim().to_ascii_lowercase();
     let slug = match provider_id.as_str() {

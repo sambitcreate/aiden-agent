@@ -14,6 +14,11 @@ use aiden_agent::llm_client::{TerminalTimelineStatus, TimelineProjector, ToolFin
 use aiden_agent::tool_loop_guard::{
     advance_attended_tool_error_state, recover_attended_tool_error_context, AgentContext,
 };
+use aiden_computer_use::{
+    computer_use_parameters_schema, ComputerUseApprovalError, ComputerUseApprovalRequest,
+    ComputerUseExecutionResult, ComputerUseResultContent, COMPUTER_USE_TOOL_DESCRIPTION,
+    COMPUTER_USE_TOOL_NAME,
+};
 use aiden_core::{
     AgentStep, AgentStepStatus, AgentToolStep, AssistantMessage, AssistantMessageEvent,
     ChatMessage, ChatRole, ContentBlock, GenerationTimeline, ImageContent, Message, StopReason,
@@ -40,12 +45,23 @@ use aiden_providers::{
     Provider, StreamOptions, StreamRequest,
 };
 
+use crate::services::computer_use::{
+    ActiveComputerUseGeneration, ComputerUseAuthority, ComputerUseGenerationIdentity,
+};
 use crate::services::mcp_tools::{
     collect_chat_mcp_tools, ChatMcpTools, McpStreamContext, CHAT_MCP_CALL_TIMEOUT_MS,
 };
-use crate::services::skill_tools::{collect_skill_registry, SkillRegistry, SkillStreamContext};
+use crate::services::skill_tools::{
+    collect_skill_registry, ResolvedSkillInvocation, SkillRegistry, SkillStreamContext,
+};
 use crate::services::stream::{
     message_content, tool_calls_of, zero_usage, zero_usage_message, StreamReducer, StreamTerminal,
+};
+use crate::services::subagents::SubagentStreamContext;
+use crate::services::subagents::SubagentWorkspaceWriteApprovalRequest;
+use crate::services::subagents::{
+    SubagentMcpMutationApprovalRequest, SubagentMcpReadApprovalRequest,
+    SubagentShellApprovalRequest,
 };
 
 /// Channel message sent from the streaming driver to the foreground.
@@ -61,6 +77,41 @@ pub enum StreamMsg {
     /// every recorded transition; the foreground mirrors it onto the
     /// generation state so the live message renders tool activity.
     Timeline { timeline: Box<GenerationTimeline> },
+    /// Renderer-safe attended approval. Raw action arguments and the prepared
+    /// one-use grant never cross this channel.
+    ComputerUseApproval { request: ComputerUseApprovalRequest },
+    /// Close the exact request after allow, deny, cancellation, or failure.
+    ComputerUseApprovalCleared { approval_id: String },
+    /// Renderer-safe attended child file mutation. Raw arguments and staged
+    /// bytes remain inside the app-owned subagent authority.
+    SubagentWorkspaceWriteApproval {
+        request: Box<SubagentWorkspaceWriteApprovalRequest>,
+    },
+    /// Close the exact child request after allow, deny, cancellation, or
+    /// channel loss.
+    SubagentWorkspaceWriteApprovalCleared { approval_id: String },
+    /// Renderer-safe one-use foreground child shell request. Durable records
+    /// contain only digests; this channel carries the exact command solely to
+    /// the owner-controlled modal.
+    SubagentShellApproval {
+        request: Box<SubagentShellApprovalRequest>,
+    },
+    /// Close the exact shell request after every terminal decision path.
+    SubagentShellApprovalCleared { approval_id: String },
+    /// Renderer-safe exact remote read request. Credentials and connection
+    /// material remain inside the app-owned MCP authority.
+    SubagentMcpReadApproval {
+        request: Box<SubagentMcpReadApprovalRequest>,
+    },
+    /// Close the exact MCP request after every terminal decision path.
+    SubagentMcpReadApprovalCleared { approval_id: String },
+    /// Renderer-safe exact remote mutation request. Credentials and effect
+    /// records remain inside the app-owned MCP authority.
+    SubagentMcpMutationApproval {
+        request: Box<SubagentMcpMutationApprovalRequest>,
+    },
+    /// Close the exact mutation request after every terminal decision path.
+    SubagentMcpMutationApprovalCleared { approval_id: String },
     /// Terminal success: the final assistant message + full text/thinking.
     Done {
         message: Box<AssistantMessage>,
@@ -125,6 +176,9 @@ pub fn resolve_api_family(provider_id: &str, kind: ProviderKind) -> ApiFamily {
     }
     if provider_id == GOOGLE_PROVIDER_ID {
         return ApiFamily::GoogleGenerativeAi;
+    }
+    if provider_id == "openai" {
+        return ApiFamily::OpenAIResponses;
     }
     match kind {
         ProviderKind::Anthropic => ApiFamily::AnthropicMessages,
@@ -406,9 +460,38 @@ pub struct TurnSnapshot {
     /// Main-chat Skills context. Positive-allowlist Assistant, automation, and
     /// subagent runtimes construct snapshots without it.
     pub skills: Option<SkillStreamContext>,
+    /// One lease-bound explicit slash invocation. Instructions are provider
+    /// input only and are never persisted or exposed to the renderer.
+    pub(crate) skill_invocation: Option<ResolvedSkillInvocation>,
+    /// App-lifetime Computer Use authority plus exact generation identity.
+    /// Admission remains fail-closed and happens inside the background turn.
+    pub computer_use: Option<ComputerUseStreamContext>,
+    /// Exact generation-scoped native subagent lease. `None` means the tool is
+    /// absent, not a registered tool that fails later.
+    pub subagents: Option<SubagentStreamContext>,
     /// The active workspace (folder path + permission posture). Grounds the
     /// coding system prompt; `None` (no workspace) uses a minimal default.
     pub workspace: Option<Workspace>,
+}
+
+#[derive(Clone)]
+pub struct ComputerUseStreamContext {
+    pub authority: Arc<ComputerUseAuthority>,
+    pub identity: ComputerUseGenerationIdentity,
+    pub gate_revision: u64,
+    pub supports_images: bool,
+    pub cancellation: tokio_util::sync::CancellationToken,
+}
+
+impl std::fmt::Debug for ComputerUseStreamContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ComputerUseStreamContext")
+            .field("identity", &self.identity)
+            .field("gate_revision", &self.gate_revision)
+            .field("supports_images", &self.supports_images)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Map persisted chat history into the normalized `Message` union the
@@ -451,13 +534,38 @@ pub fn chat_history_to_messages(
                         })
                     })
                     .collect();
-                let content = if images.is_empty() {
+                let text_prefix = entry
+                    .attachments
+                    .iter()
+                    .flatten()
+                    .filter(|attachment| {
+                        attachment.kind == aiden_core::AttachmentKind::Text
+                            && attachment.text.is_some()
+                    })
+                    .map(|attachment| {
+                        format!(
+                            "Attached file: {}\n```\n{}\n```",
+                            attachment.name,
+                            attachment.text.as_deref().unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let combined_text = [text_prefix.as_str(), entry.content.as_str()]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                let content = if images.is_empty() && text_prefix.is_empty() {
                     UserContent::Text(entry.content.clone())
                 } else {
-                    let mut blocks = vec![UserBlock::Text(TextContent {
-                        text: entry.content.clone(),
-                        text_signature: None,
-                    })];
+                    let mut blocks = Vec::with_capacity(1 + images.len());
+                    if !combined_text.is_empty() {
+                        blocks.push(UserBlock::Text(TextContent {
+                            text: combined_text,
+                            text_signature: None,
+                        }));
+                    }
                     blocks.extend(images);
                     UserContent::Blocks(blocks)
                 };
@@ -728,6 +836,96 @@ fn build_coding_system_prompt_with_skills(
     )
 }
 
+/// Port Pi 0.80.10's `formatSkillInvocation` contract. The file path is
+/// private provider input only; it is never copied into the renderer-safe
+/// provenance projection or persisted chat message.
+fn format_skill_invocation(
+    invocation: &ResolvedSkillInvocation,
+    additional_instructions: Option<&str>,
+) -> String {
+    let skill_block = format!(
+        "<skill name=\"{}\" location=\"{}\">\nReferences are relative to {}.\n\n{}\n</skill>",
+        escape_skill_xml(&invocation.name),
+        escape_skill_xml(&invocation.file_path),
+        escape_skill_xml(&dirname_env_path(&invocation.file_path)),
+        bounded_skill_instructions(&invocation.instructions),
+    );
+    match additional_instructions.filter(|instructions| !instructions.is_empty()) {
+        Some(instructions) => format!("{skill_block}\n\n{instructions}"),
+        None => skill_block,
+    }
+}
+
+fn apply_skill_invocation(messages: &mut [Message], invocation: Option<&ResolvedSkillInvocation>) {
+    let Some(invocation) = invocation else {
+        return;
+    };
+    let Some(Message::User(user)) = messages
+        .iter_mut()
+        .rev()
+        .find(|message| matches!(message, Message::User(_)))
+    else {
+        return;
+    };
+    let additional = match &user.content {
+        UserContent::Text(text) => Some(text.clone()),
+        UserContent::Blocks(blocks) => blocks.iter().find_map(|block| match block {
+            UserBlock::Text(text) => Some(text.text.clone()),
+            UserBlock::Image(_) => None,
+        }),
+    };
+    let formatted = format_skill_invocation(invocation, additional.as_deref());
+    match &mut user.content {
+        UserContent::Text(text) => *text = formatted,
+        UserContent::Blocks(blocks) => {
+            if let Some(UserBlock::Text(text)) = blocks
+                .iter_mut()
+                .find(|block| matches!(block, UserBlock::Text(_)))
+            {
+                text.text = formatted;
+            } else {
+                blocks.insert(
+                    0,
+                    UserBlock::Text(TextContent {
+                        text: formatted,
+                        text_signature: None,
+                    }),
+                );
+            }
+        }
+    }
+}
+
+fn bounded_skill_instructions(instructions: &str) -> String {
+    instructions
+        .chars()
+        .scan(0usize, |bytes, character| {
+            let next = *bytes + character.len_utf8();
+            (next <= aiden_data::portable_config::MAX_SKILL_INSTRUCTIONS_LENGTH).then(|| {
+                *bytes = next;
+                character
+            })
+        })
+        .collect()
+}
+
+fn escape_skill_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn dirname_env_path(path: &str) -> String {
+    let normalized = path.trim_end_matches('/');
+    match normalized.rfind('/') {
+        Some(index) if index > 0 => normalized[..index].to_string(),
+        _ => "/".to_string(),
+    }
+}
+
 /// The tool names the model can call, rendered as a prompt list (empty when
 /// no tools are wired, so the prompt never lists hallucinated tools).
 fn build_tool_list(tools: &[ToolDef]) -> String {
@@ -869,9 +1067,13 @@ pub async fn drive_stream(
     let mcp_future = async move {
         match mcp_context {
             Some(context) => {
-                let tools =
-                    collect_chat_mcp_tools(&context.manager, &context.servers, &context.preset_key)
-                        .await;
+                let tools = collect_chat_mcp_tools(
+                    &context.manager,
+                    &context.servers,
+                    &context.preset_key,
+                    context.authority.as_ref(),
+                )
+                .await;
                 Some(McpExecution {
                     manager: context.manager,
                     tools,
@@ -880,8 +1082,14 @@ pub async fn drive_stream(
             None => None,
         }
     };
-    let (skills, mcp) = tokio::select! {
-        joined = async { tokio::join!(skills_future, mcp_future) } => joined,
+    let subagent_context = snapshot.subagents.clone();
+    let subagent_inventory_future = async move {
+        if let Some(context) = subagent_context {
+            context.prepare_remote_mcp_inventory().await;
+        }
+    };
+    let (skills, mcp, ()) = tokio::select! {
+        joined = async { tokio::join!(skills_future, mcp_future, subagent_inventory_future) } => joined,
         _ = cancel_poll(cancel.clone()) => {
             settle_cancelled(
                 &tx,
@@ -896,7 +1104,8 @@ pub async fn drive_stream(
     let skills = match skills {
         Ok(skills) => skills,
         Err(message) => {
-            let timeline = projector.finish(TerminalTimelineStatus::Failed);
+            let timeline =
+                finish_claim_checked_timeline(&mut projector, TerminalTimelineStatus::Failed, "");
             let _ = tx.send(StreamMsg::Timeline {
                 timeline: Box::new(timeline),
             });
@@ -909,11 +1118,34 @@ pub async fn drive_stream(
             return;
         }
     };
+    let mut computer_use = match snapshot.computer_use.as_ref() {
+        Some(context) => context
+            .authority
+            .activate_generation(
+                context.identity.clone(),
+                context.gate_revision,
+                context.supports_images,
+                Some(&context.cancellation),
+            )
+            .await
+            .ok(),
+        None => None,
+    };
     let mcp_defs = mcp
         .as_ref()
         .map(|execution| execution.tools.defs.clone())
         .unwrap_or_default();
-    let tool_defs = match merge_tool_definitions(&skills, mcp_defs) {
+    let computer_use_def = computer_use.as_ref().map(|_| ToolDef {
+        name: COMPUTER_USE_TOOL_NAME.into(),
+        description: COMPUTER_USE_TOOL_DESCRIPTION.into(),
+        parameters: computer_use_parameters_schema(),
+    });
+    let subagent_def = snapshot
+        .subagents
+        .as_ref()
+        .map(SubagentStreamContext::tool_def);
+    let tool_defs = match merge_tool_definitions(&skills, mcp_defs, computer_use_def, subagent_def)
+    {
         Ok(definitions) => definitions,
         Err(collision) => {
             tracing::error!(tool = %collision, "MCP and Skill tool identities collided");
@@ -937,6 +1169,7 @@ pub async fn drive_stream(
         ..Default::default()
     };
     let mut messages = snapshot.messages.clone();
+    apply_skill_invocation(&mut messages, snapshot.skill_invocation.as_ref());
     let mut total_usage = zero_usage();
     let mut guard = ToolLoopGuard::new(MAX_TOOL_ITERATIONS, MAX_REPEATED_CALLS);
     let mut consecutive_error_turns = 0usize;
@@ -1071,10 +1304,6 @@ pub async fn drive_stream(
         }
 
         if reducer.failure.is_some() {
-            let timeline = projector.finish(TerminalTimelineStatus::Failed);
-            let _ = tx.send(StreamMsg::Timeline {
-                timeline: Box::new(timeline),
-            });
             match reducer.finalize() {
                 StreamTerminal::Error {
                     message,
@@ -1082,6 +1311,14 @@ pub async fn drive_stream(
                     partial_thinking,
                     ..
                 } => {
+                    let timeline = finish_claim_checked_timeline(
+                        &mut projector,
+                        TerminalTimelineStatus::Failed,
+                        &partial_text,
+                    );
+                    let _ = tx.send(StreamMsg::Timeline {
+                        timeline: Box::new(timeline),
+                    });
                     let _ = tx.send(StreamMsg::Error {
                         message,
                         partial_text,
@@ -1117,7 +1354,9 @@ pub async fn drive_stream(
         let dispatchable = !skills.definitions().is_empty()
             || mcp
                 .as_ref()
-                .is_some_and(|execution| !execution.tools.dispatch.is_empty());
+                .is_some_and(|execution| !execution.tools.dispatch.is_empty())
+            || computer_use.is_some()
+            || snapshot.subagents.is_some();
         if tool_calls.is_empty() || !dispatchable {
             // Settled success: the turn produced a final assistant message with
             // no tool work left to dispatch.
@@ -1132,7 +1371,11 @@ pub async fn drive_stream(
 
         // A tool round: enforce the loop guards (max rounds + repeated calls).
         if let Err(message) = guard.register_round(&tool_calls) {
-            let timeline = projector.finish(TerminalTimelineStatus::Failed);
+            let timeline = finish_claim_checked_timeline(
+                &mut projector,
+                TerminalTimelineStatus::Failed,
+                &reducer.text,
+            );
             let _ = tx.send(StreamMsg::Timeline {
                 timeline: Box::new(timeline),
             });
@@ -1153,10 +1396,15 @@ pub async fn drive_stream(
             let outcome = tokio::select! {
                 result = execute_registered_tool(
                     &mut projector,
-                    &skills,
-                    mcp.as_ref(),
+                    RegisteredToolSources {
+                        skills: &skills,
+                        mcp: mcp.as_ref(),
+                        computer_use: computer_use.as_mut(),
+                        subagents: snapshot.subagents.as_ref(),
+                    },
                     call,
                     cancel.clone(),
+                    &tx,
                 ) => result,
                 _ = cancel_poll(cancel.clone()) => {
                     cancelled = true;
@@ -1169,10 +1417,7 @@ pub async fn drive_stream(
             results.push(ToolResultMessage {
                 tool_call_id: call.id.clone(),
                 tool_name: call.name.clone(),
-                content: vec![ContentBlock::Text(TextContent {
-                    text: outcome.text,
-                    text_signature: None,
-                })],
+                content: outcome.content,
                 details: None,
                 added_tool_names: None,
                 is_error: outcome.is_error,
@@ -1218,6 +1463,8 @@ pub async fn drive_stream(
 fn merge_tool_definitions(
     skills: &SkillRegistry,
     mcp_definitions: Vec<ToolDef>,
+    computer_use: Option<ToolDef>,
+    subagent: Option<ToolDef>,
 ) -> Result<Vec<ToolDef>, String> {
     if let Some(collision) = mcp_definitions
         .iter()
@@ -1227,6 +1474,24 @@ fn merge_tool_definitions(
     }
     let mut definitions = skills.definitions().to_vec();
     definitions.extend(mcp_definitions);
+    if let Some(computer_use) = computer_use {
+        if definitions
+            .iter()
+            .any(|definition| definition.name == computer_use.name)
+        {
+            return Err(computer_use.name);
+        }
+        definitions.push(computer_use);
+    }
+    if let Some(subagent) = subagent {
+        if definitions
+            .iter()
+            .any(|definition| definition.name == subagent.name)
+        {
+            return Err(subagent.name);
+        }
+        definitions.push(subagent);
+    }
     Ok(definitions)
 }
 
@@ -1247,11 +1512,12 @@ fn settle_done(
     message: Box<AssistantMessage>,
     total_usage: Usage,
 ) {
-    let timeline = projector.finish(TerminalTimelineStatus::Completed);
+    let (full_text, full_thinking) = message_content(&message);
+    let timeline =
+        finish_claim_checked_timeline(projector, TerminalTimelineStatus::Completed, &full_text);
     let _ = tx.send(StreamMsg::Timeline {
         timeline: Box::new(timeline),
     });
-    let (full_text, full_thinking) = message_content(&message);
     let _ = tx.send(StreamMsg::Done {
         message,
         full_text,
@@ -1271,7 +1537,8 @@ fn settle_cancelled(
     partial_text: String,
     partial_thinking: String,
 ) {
-    let timeline = projector.finish(TerminalTimelineStatus::Failed);
+    let timeline =
+        finish_claim_checked_timeline(projector, TerminalTimelineStatus::Cancelled, &partial_text);
     let _ = tx.send(StreamMsg::Timeline {
         timeline: Box::new(timeline),
     });
@@ -1280,6 +1547,17 @@ fn settle_cancelled(
         partial_thinking,
         usage,
     });
+}
+
+/// Finish a provider timeline and attach the renderer-safe claim check before
+/// the terminal snapshot reaches the foreground. The same value is then
+/// mirrored onto the generation and persisted with the assistant message.
+fn finish_claim_checked_timeline(
+    projector: &mut TimelineProjector,
+    status: TerminalTimelineStatus,
+    assistant_text: &str,
+) -> GenerationTimeline {
+    aiden_core::attach_claim_check(projector.finish(status), assistant_text)
 }
 
 /// Sum two provider usage snapshots (a turn can span several tool rounds, and
@@ -1418,21 +1696,45 @@ fn send_flush(reducer: &mut StreamReducer, tx: &tokio::sync::mpsc::UnboundedSend
     }
 }
 
-/// The normalized text result of a dispatched MCP tool call.
 struct DispatchedToolResult {
-    text: String,
+    content: Vec<ContentBlock>,
     is_error: bool,
+}
+
+struct RegisteredToolSources<'a> {
+    skills: &'a SkillRegistry,
+    mcp: Option<&'a McpExecution>,
+    computer_use: Option<&'a mut ActiveComputerUseGeneration>,
+    subagents: Option<&'a SubagentStreamContext>,
+}
+
+impl DispatchedToolResult {
+    fn text(text: String, is_error: bool) -> Self {
+        Self {
+            content: vec![ContentBlock::Text(TextContent {
+                text,
+                text_signature: None,
+            })],
+            is_error,
+        }
+    }
 }
 
 /// Dispatch one model tool call through the connected MCP server and settle
 /// its timeline step. Unknown namespaced names fail closed.
 async fn execute_registered_tool(
     projector: &mut TimelineProjector,
-    skills: &SkillRegistry,
-    mcp: Option<&McpExecution>,
+    sources: RegisteredToolSources<'_>,
     call: &aiden_core::ToolCall,
     cancel: Arc<AtomicBool>,
+    tx: &tokio::sync::mpsc::UnboundedSender<StreamMsg>,
 ) -> DispatchedToolResult {
+    let RegisteredToolSources {
+        skills,
+        mcp,
+        computer_use,
+        subagents,
+    } = sources;
     if skills.contains(&call.name) {
         let result = skills.execute(&call.name, &call.arguments, cancel).await;
         projector.tool_finished(
@@ -1443,17 +1745,46 @@ async fn execute_registered_tool(
                 ToolFinishStatus::Completed
             },
         );
-        return DispatchedToolResult {
-            text: result.text,
-            is_error: result.is_error,
+        return DispatchedToolResult::text(result.text, result.is_error);
+    }
+    if call.name == COMPUTER_USE_TOOL_NAME {
+        let Some(execution) = computer_use else {
+            projector.tool_finished(&call.id, ToolFinishStatus::Failed);
+            return DispatchedToolResult::text(
+                "Computer Use is not available for this response.".into(),
+                true,
+            );
+        };
+        return execute_computer_use_tool_call(projector, execution, call, tx).await;
+    }
+    if call.name == "subagent" {
+        let Some(context) = subagents else {
+            projector.tool_finished(&call.id, ToolFinishStatus::Failed);
+            return DispatchedToolResult::text(
+                "Subagents are not available for this response.".into(),
+                true,
+            );
+        };
+        let result = context
+            .authority
+            .execute_with_events(context, &call.arguments, tx)
+            .await;
+        projector.tool_finished(
+            &call.id,
+            if result.is_ok() {
+                ToolFinishStatus::Completed
+            } else {
+                ToolFinishStatus::Failed
+            },
+        );
+        return match result {
+            Ok(text) => DispatchedToolResult::text(text, false),
+            Err(message) => DispatchedToolResult::text(message, true),
         };
     }
     let Some(execution) = mcp else {
         projector.tool_finished(&call.id, ToolFinishStatus::Failed);
-        return DispatchedToolResult {
-            text: format!("Unknown tool \"{}\".", call.name),
-            is_error: true,
-        };
+        return DispatchedToolResult::text(format!("Unknown tool \"{}\".", call.name), true);
     };
     execute_mcp_tool_call(projector, execution, call).await
 }
@@ -1465,10 +1796,7 @@ async fn execute_mcp_tool_call(
 ) -> DispatchedToolResult {
     let Some(target) = execution.tools.dispatch.get(&call.name) else {
         projector.tool_finished(&call.id, ToolFinishStatus::Failed);
-        return DispatchedToolResult {
-            text: format!("Unknown tool \"{}\".", call.name),
-            is_error: true,
-        };
+        return DispatchedToolResult::text(format!("Unknown tool \"{}\".", call.name), true);
     };
     let outcome = execution
         .manager
@@ -1482,18 +1810,75 @@ async fn execute_mcp_tool_call(
     match outcome {
         Ok(result) => {
             projector.tool_finished(&call.id, ToolFinishStatus::Completed);
-            DispatchedToolResult {
-                text: result.text,
-                is_error: false,
-            }
+            DispatchedToolResult::text(result.text, false)
         }
         Err(error) => {
             projector.tool_finished(&call.id, ToolFinishStatus::Failed);
-            DispatchedToolResult {
-                text: error.to_string(),
-                is_error: true,
-            }
+            DispatchedToolResult::text(error.to_string(), true)
         }
+    }
+}
+
+async fn execute_computer_use_tool_call(
+    projector: &mut TimelineProjector,
+    execution: &mut ActiveComputerUseGeneration,
+    call: &aiden_core::ToolCall,
+    tx: &tokio::sync::mpsc::UnboundedSender<StreamMsg>,
+) -> DispatchedToolResult {
+    let outcome = async {
+        let approval = execution
+            .approval_for(&call.arguments)
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(approval) = approval {
+            let (request, waiter) = execution
+                .begin_approval(&call.id, &approval)
+                .map_err(|error| error.to_string())?;
+            let approval_id = request.approval_id.clone();
+            tx.send(StreamMsg::ComputerUseApproval { request })
+                .map_err(|_| ComputerUseApprovalError::Cancelled.to_string())?;
+            let decision = waiter.wait(&execution.cancellation()).await;
+            let _ = tx.send(StreamMsg::ComputerUseApprovalCleared { approval_id });
+            decision.map_err(|error| error.to_string())?;
+            execution
+                .authorize(&call.id, &call.arguments, &approval)
+                .map_err(|error| error.to_string())?;
+        }
+        execution
+            .execute(&call.id, &call.arguments)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    match outcome {
+        Ok(result) => {
+            projector.tool_finished(&call.id, ToolFinishStatus::Completed);
+            computer_use_result(result)
+        }
+        Err(error) => {
+            projector.tool_finished(&call.id, ToolFinishStatus::Failed);
+            DispatchedToolResult::text(error.to_string(), true)
+        }
+    }
+}
+
+fn computer_use_result(result: ComputerUseExecutionResult) -> DispatchedToolResult {
+    let content = result
+        .content
+        .into_iter()
+        .map(|item| match item {
+            ComputerUseResultContent::Text(text) => ContentBlock::Text(TextContent {
+                text,
+                text_signature: None,
+            }),
+            ComputerUseResultContent::Image { data, mime_type } => {
+                ContentBlock::Image(ImageContent { data, mime_type })
+            }
+        })
+        .collect();
+    DispatchedToolResult {
+        content,
+        is_error: false,
     }
 }
 
@@ -1509,6 +1894,19 @@ pub fn resolve_api_key(
     resolve_api_key_with(provider, |connection| {
         config.get_bound_provider_key(connection).ok().flatten()
     })
+}
+
+/// Resolve a Pi-native credential before the portable custom-provider store.
+/// Builtin credentials are release/connection-bound by the app authority and
+/// never copied into portable config.
+pub fn resolve_runtime_api_key(
+    config: &aiden_data::config_store::ConfigStore,
+    pi_providers: &crate::services::pi_provider_setup::PiProviderSetupAuthority,
+    provider: &ConfiguredProvider,
+) -> Option<String> {
+    pi_providers
+        .api_key(&provider.id)
+        .or_else(|| resolve_api_key(config, provider))
 }
 
 fn resolve_api_key_with(
@@ -1538,6 +1936,7 @@ fn resolve_api_key_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiden_core::{Attachment, AttachmentKind};
     use std::collections::HashMap;
 
     struct ConfiguredCodexStore;
@@ -1646,6 +2045,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         }
@@ -1675,6 +2075,74 @@ mod tests {
         assert_eq!(a.model, "claude-sonnet-5");
         assert_eq!(a.api, "anthropic-messages");
         assert!(matches!(&a.content[0], ContentBlock::Text(t) if t.text == "hello there"));
+    }
+
+    #[test]
+    fn attachment_only_history_keeps_an_empty_text_part_and_image_part() {
+        let mut message = user(ChatRole::User, "  ");
+        message.attachments = Some(vec![Attachment {
+            id: "image-1".into(),
+            name: "pixel.png".into(),
+            mime_type: "image/png".into(),
+            kind: AttachmentKind::Image,
+            size: 3,
+            data: Some("YWJj".into()),
+            text: None,
+        }]);
+
+        let messages = chat_history_to_messages(
+            &[message],
+            "model",
+            "provider",
+            ApiFamily::OpenAICompletions,
+        );
+        let [Message::User(user)] = messages.as_slice() else {
+            panic!("expected one user message");
+        };
+        let UserContent::Blocks(parts) = &user.content else {
+            panic!("attachments must be sent as multipart user content");
+        };
+        assert!(matches!(
+            parts.as_slice(),
+            [
+                UserBlock::Text(TextContent { text, .. }),
+                UserBlock::Image(ImageContent { data, mime_type }),
+            ] if text == "  " && data == "YWJj" && mime_type == "image/png"
+        ));
+    }
+
+    #[test]
+    fn text_attachment_history_is_prefixed_before_user_text() {
+        let mut message = user(ChatRole::User, "Summarize this.");
+        message.attachments = Some(vec![Attachment {
+            id: "text-1".into(),
+            name: "notes.txt".into(),
+            mime_type: "text/plain".into(),
+            kind: AttachmentKind::Text,
+            size: 11,
+            data: None,
+            text: Some("hello world".into()),
+        }]);
+        let messages = chat_history_to_messages(
+            &[message],
+            "model",
+            "provider",
+            ApiFamily::OpenAICompletions,
+        );
+        let [Message::User(user)] = messages.as_slice() else {
+            panic!("expected one user message");
+        };
+        let UserContent::Blocks(parts) = &user.content else {
+            panic!("text attachments must use the multipart content shape");
+        };
+        assert_eq!(parts.len(), 1);
+        let UserBlock::Text(text) = &parts[0] else {
+            panic!("text attachment should remain provider text");
+        };
+        assert_eq!(
+            text.text,
+            "Attached file: notes.txt\n```\nhello world\n```\n\nSummarize this."
+        );
     }
 
     #[test]
@@ -2006,9 +2474,8 @@ mod tests {
         assert_eq!(anthropic.api_family(), ApiFamily::AnthropicMessages);
         assert_eq!(anthropic.transport().info().id, "anthropic");
 
-        // openai / deepseek / moonshotai (kind "openai", openai-completions
-        // family per the TS `apiFor` fallback).
-        for id in ["openai", "deepseek", "moonshotai"] {
+        // DeepSeek / Moonshot use Pi's OpenAI-completions family.
+        for id in ["deepseek", "moonshotai"] {
             let provider = ConfiguredProvider {
                 id: id.into(),
                 label: id.into(),
@@ -2025,6 +2492,25 @@ mod tests {
             assert_eq!(provider.api_family(), ApiFamily::OpenAICompletions, "{id}");
             assert_eq!(provider.transport().info().id, "openai-completions", "{id}");
         }
+
+        // Pi release metadata identifies the builtin OpenAI provider as the
+        // Responses family. The current Rust adapter deliberately lowers it
+        // through the bounded OpenAI-compatible transport.
+        let openai = ConfiguredProvider {
+            id: "openai".into(),
+            label: "OpenAI".into(),
+            kind: Kind::Openai,
+            base_url: "https://api.openai.com/v1".into(),
+            deployment: None,
+            models: vec!["gpt-5".into()],
+            default_model: None,
+            model_metadata: Default::default(),
+            catalog_models: Vec::new(),
+            needs_key: true,
+            has_key: true,
+        };
+        assert_eq!(openai.api_family(), ApiFamily::OpenAIResponses);
+        assert_eq!(openai.transport().info().id, "openai-completions");
     }
 
     #[test]
@@ -2091,6 +2577,9 @@ mod tests {
             catalog: None,
             mcp: None,
             skills: None,
+            skill_invocation: None,
+            computer_use: None,
+            subagents: None,
             workspace: None,
         };
         let request = build_stream_request(&snapshot);
@@ -2144,6 +2633,9 @@ mod tests {
             catalog: None,
             mcp: None,
             skills: None,
+            skill_invocation: None,
+            computer_use: None,
+            subagents: None,
             workspace: None,
         };
         let request = build_stream_request(&snapshot);
@@ -2328,6 +2820,9 @@ mod tests {
             catalog: catalog.clone(),
             mcp: None,
             skills: None,
+            skill_invocation: None,
+            computer_use: None,
+            subagents: None,
             workspace: None,
         };
         // Catalog > builtin: the builtin snapshot reports 1M/128k for
@@ -2517,6 +3012,50 @@ mod tests {
     }
 
     #[test]
+    fn terminal_timeline_attaches_unverified_success_claims() {
+        let mut projector = TimelineProjector::new("generation-claim", Box::new(|_| {}));
+        let arguments = serde_json::json!({});
+        projector.tool_started("write-call", "write_file", &arguments);
+        projector.tool_finished("write-call", ToolFinishStatus::Failed);
+
+        let timeline = finish_claim_checked_timeline(
+            &mut projector,
+            TerminalTimelineStatus::Completed,
+            "Done — I updated the file.",
+        );
+
+        assert!(matches!(
+            timeline.claim_check,
+            Some(aiden_core::GenerationClaimCheck::UnverifiedSuccess { .. })
+        ));
+    }
+
+    #[test]
+    fn cancelled_terminal_timeline_preserves_cancelled_step_status() {
+        let mut projector = TimelineProjector::new("generation-cancel", Box::new(|_| {}));
+        let arguments = serde_json::json!({});
+        projector.tool_started("write-call", "write_file", &arguments);
+        projector.tool_running("write-call");
+
+        let timeline = finish_claim_checked_timeline(
+            &mut projector,
+            TerminalTimelineStatus::Cancelled,
+            "I could not complete the file change.",
+        );
+
+        assert_eq!(
+            timeline.status,
+            aiden_core::GenerationTimelineStatus::Cancelled
+        );
+        assert!(matches!(
+            timeline.steps.first(),
+            Some(aiden_core::AgentStep::Tool(tool))
+                if tool.status == aiden_core::AgentStepStatus::Cancelled
+        ));
+        assert!(timeline.claim_check.is_none());
+    }
+
+    #[test]
     fn executed_tool_calls_settle_running_steps_as_completed_or_failed() {
         let mut projector = TimelineProjector::new("generation-1", Box::new(|_| {}));
         let call = aiden_core::ToolCall {
@@ -2661,9 +3200,36 @@ mod tests {
         let registry = crate::services::skill_tools::build_skill_registry(&[configured], &[], None);
         let collision = registry.definitions()[0].clone();
         assert_eq!(
-            merge_tool_definitions(&registry, vec![collision.clone()]),
+            merge_tool_definitions(&registry, vec![collision.clone()], None, None),
             Err(collision.name)
         );
+    }
+
+    #[test]
+    fn admitted_computer_use_surface_is_exact_and_collisions_fail_closed() {
+        let registry = SkillRegistry::default();
+        let definition = ToolDef {
+            name: COMPUTER_USE_TOOL_NAME.into(),
+            description: COMPUTER_USE_TOOL_DESCRIPTION.into(),
+            parameters: computer_use_parameters_schema(),
+        };
+        let merged = merge_tool_definitions(&registry, Vec::new(), Some(definition.clone()), None)
+            .expect("an otherwise empty registry admits the app-owned tool");
+        assert_eq!(merged, vec![definition.clone()]);
+        assert_eq!(
+            merged[0].parameters["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .len(),
+            14
+        );
+        assert_eq!(
+            merge_tool_definitions(&registry, vec![definition.clone()], Some(definition), None),
+            Err(COMPUTER_USE_TOOL_NAME.into())
+        );
+        assert!(merge_tool_definitions(&registry, Vec::new(), None, None)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -2689,18 +3255,30 @@ mod tests {
                 tools: ChatMcpTools::default(),
             }),
         ] {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
             let mut projector = TimelineProjector::new("turn", Box::new(|_| {}));
             projector.tool_started(&call.id, &call.name, &call.arguments);
             projector.tool_running(&call.id);
             let result = futures::executor::block_on(execute_registered_tool(
                 &mut projector,
-                &registry,
-                mcp.as_ref(),
+                RegisteredToolSources {
+                    skills: &registry,
+                    mcp: mcp.as_ref(),
+                    computer_use: None,
+                    subagents: None,
+                },
                 &call,
                 Arc::new(AtomicBool::new(false)),
+                &tx,
             ));
             assert!(!result.is_error);
-            assert_eq!(result.text, "Review instructions");
+            assert_eq!(
+                result.content,
+                vec![ContentBlock::Text(TextContent {
+                    text: "Review instructions".into(),
+                    text_signature: None,
+                })]
+            );
         }
     }
 
@@ -2717,6 +3295,9 @@ mod tests {
             catalog: None,
             mcp: None,
             skills: None,
+            skill_invocation: None,
+            computer_use: None,
+            subagents: None,
             workspace: Some(workspace(
                 Some("/Users/me/projects/aiden"),
                 WorkspacePermission::Ask,
@@ -2735,6 +3316,88 @@ mod tests {
         assert!(request
             .system_prompt
             .is_some_and(|prompt| prompt.contains("You are Aiden")));
+    }
+
+    #[test]
+    fn explicit_skill_prompt_is_provider_only_and_one_shot() {
+        let invocation = ResolvedSkillInvocation {
+            id: "skillref_review".into(),
+            name: "Review".into(),
+            source: crate::services::skill_tools::SkillCatalogSource::Workspace,
+            revision: "rev-1".into(),
+            instructions: "private workflow guidance".into(),
+            file_path: "/Users/me/.agents/skills/review/SKILL.md".into(),
+        };
+        let prompt = format_skill_invocation(&invocation, Some("base prompt"));
+        assert_eq!(
+            prompt,
+            "<skill name=\"Review\" location=\"/Users/me/.agents/skills/review/SKILL.md\">\nReferences are relative to /Users/me/.agents/skills/review.\n\nprivate workflow guidance\n</skill>\n\nbase prompt"
+        );
+        assert_eq!(
+            format_skill_invocation(&invocation, None),
+            "<skill name=\"Review\" location=\"/Users/me/.agents/skills/review/SKILL.md\">\nReferences are relative to /Users/me/.agents/skills/review.\n\nprivate workflow guidance\n</skill>"
+        );
+        // Renderer-facing DTOs do not carry this lease or its instructions;
+        // only the provider snapshot helper sees the private payload.
+        assert_eq!(invocation.id, "skillref_review");
+        assert!(prompt.contains("/Users/"));
+    }
+
+    #[test]
+    fn pi_skill_formatter_escapes_name_and_path_but_not_instruction_body() {
+        let invocation = ResolvedSkillInvocation {
+            id: "skillref_xml".into(),
+            name: "A&B <review>".into(),
+            source: crate::services::skill_tools::SkillCatalogSource::Configured,
+            revision: "rev-xml".into(),
+            instructions: "Use <literal> & preserve".into(),
+            file_path: "configured:one".into(),
+        };
+        assert_eq!(
+            format_skill_invocation(&invocation, None),
+            "<skill name=\"A&amp;B &lt;review&gt;\" location=\"configured:one\">\nReferences are relative to /.\n\nUse <literal> & preserve\n</skill>"
+        );
+    }
+
+    #[test]
+    fn pi_skill_invocation_replaces_provider_text_and_preserves_images() {
+        let invocation = ResolvedSkillInvocation {
+            id: "skillref_review".into(),
+            name: "Review".into(),
+            source: crate::services::skill_tools::SkillCatalogSource::Workspace,
+            revision: "rev-1".into(),
+            instructions: "private workflow guidance".into(),
+            file_path: "/workspace/.agents/skills/review/SKILL.md".into(),
+        };
+        let mut messages = vec![Message::User(UserMessage {
+            content: UserContent::Blocks(vec![
+                UserBlock::Text(TextContent {
+                    text: "review this image".into(),
+                    text_signature: None,
+                }),
+                UserBlock::Image(ImageContent {
+                    data: "data:image/png;base64,AA==".into(),
+                    mime_type: "image/png".into(),
+                }),
+            ]),
+            timestamp: 1,
+        })];
+
+        apply_skill_invocation(&mut messages, Some(&invocation));
+
+        let Message::User(user) = &messages[0] else {
+            panic!("skill invocation must retain the user message");
+        };
+        let UserContent::Blocks(blocks) = &user.content else {
+            panic!("image turns must retain block content");
+        };
+        assert_eq!(blocks.len(), 2);
+        let UserBlock::Text(text) = &blocks[0] else {
+            panic!("skill envelope must replace the provider text block");
+        };
+        assert!(text.text.contains("<skill name=\"Review\""));
+        assert!(text.text.ends_with("\n\nreview this image"));
+        assert!(matches!(blocks[1], UserBlock::Image(_)));
     }
 
     #[test]

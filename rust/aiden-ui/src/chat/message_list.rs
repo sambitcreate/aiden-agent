@@ -14,9 +14,12 @@
 //! Assistant content is rendered through `TextView::markdown`, which the
 //! `gpui-component` crate parses into GFM nodes and syntax-highlights fenced
 //! code blocks with tree-sitter (via the theme's `HighlightTheme`, wired by
-//! `services::appearance`). The `code_block_actions(...)` hook lets us attach a
-//! language label + copy button to every fenced block without forking the
-//! parser, so tables, lists, inline code, and links keep working.
+//! `services::appearance`). The bounded `chat::markdown` compatibility pass
+//! keeps unsupported KaTeX spans source-preserving and visibly labeled instead
+//! of implying that the native view rendered them. The
+//! `code_block_actions(...)` hook lets us attach a language label + copy button
+//! to every fenced block without forking the parser, so tables, lists, inline
+//! code, and links keep working.
 //!
 //! # Scroll behavior
 //!
@@ -24,20 +27,23 @@
 //! while the user is already at the bottom (the typical case during streaming).
 //! Scrolling up stops the pinning and the "Jump to bottom" button in
 //! `chat_pane` appears instead. `scroll_at_bottom` is the shared geometry check
-//! (`app.rs` gates its notification-driven scroll on it).
+//! (the message-list render gates its delta-driven scroll on it).
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use aiden_core::{Attachment, ChatMessage, ChatRole};
+use aiden_core::{
+    parse_subagent_message_reference_v1, Attachment, ChatMessage, ChatRole,
+    SubagentMessageReferenceV1, SubagentRunSnapshotV1, SubagentRunState,
+};
 use gpui::{
     div, prelude::FluentBuilder as _, px, relative, rems, App, Context, ElementId, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, ScrollHandle, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
 };
 use gpui_component::{
-    button::{Button, ButtonVariants as _},
+    button::{Button, ButtonRounded, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
     spinner::Spinner,
@@ -50,6 +56,7 @@ use crate::chat::activity_feed::timeline_feed;
 use crate::chat::composer::{
     attachment_image_element, composer_draft, CHAT_CONTENT_MAX_WIDTH_REMS, CHAT_DOCK_GUTTER_PX,
 };
+use crate::chat::markdown::markdown_with_math_fallback;
 use crate::services::chat_service::{ChatSnapshot, GenerationState};
 
 /// Pixels from the very bottom that still count as "at the bottom" — mirrors
@@ -79,6 +86,7 @@ impl AppState {
         let scroll = self.message_scroll.clone();
         let show_stream = should_show_stream_bubble(&snapshot);
         let generation = snapshot.generation.clone();
+        let live_subagents = snapshot.live_subagents.clone();
         // Reduced motion (parity audit UI §7): the persisted
         // `appearance.reduceMotion` override combined with the cached macOS
         // probe decides whether the streaming cursor may animate.
@@ -96,9 +104,7 @@ impl AppState {
         // Stick-to-bottom: keep the transcript pinned while the user is at the
         // bottom (typical while streaming). Once they scroll up this stops
         // pinning and the "Jump to bottom" button (in `chat_pane`) takes over.
-        if scroll_at_bottom(&scroll) {
-            scroll.scroll_to_bottom();
-        }
+        follow_transcript_if_at_bottom(&scroll);
 
         v_flex()
             .id("message-list")
@@ -128,6 +134,7 @@ impl AppState {
                     .when(show_stream, |el| {
                         el.child(render_stream_bubble(
                             &generation,
+                            &live_subagents,
                             motion_reduced,
                             window,
                             cx,
@@ -167,15 +174,27 @@ fn should_show_stream_bubble(snapshot: &ChatSnapshot) -> bool {
 // ===========================================================================
 
 /// Whether the user is at (or within `BOTTOM_TOLERANCE_PX` of) the bottom of
-/// the scroll viewport. GPUI scroll offsets are negative, so "at bottom" means
-/// `offset == max_offset` (both negative); scrolling up moves `offset` toward
-/// zero.
+/// the scroll viewport. GPUI scroll offsets are negative, while
+/// `ScrollHandle::max_offset()` is the positive available distance; scrolling
+/// up moves the offset toward zero.
 pub(crate) fn scroll_at_bottom(scroll: &ScrollHandle) -> bool {
     is_near_bottom(
         f32::from(scroll.offset().y),
-        f32::from(scroll.max_offset().height),
+        // GPUI exposes the *distance* available to scroll as a positive
+        // `Size`; its offset is negative as the reader moves down.
+        -f32::from(scroll.max_offset().height),
         BOTTOM_TOLERANCE_PX,
     )
+}
+
+/// Request a bottom follow only from the pre-growth geometry. `ScrollHandle`
+/// applies this request in its prepaint pass, after the new transcript height
+/// is known. Keeping this small operation production-owned makes the subtle
+/// "do not yank a reader back down" contract testable against GPUI itself.
+pub(crate) fn follow_transcript_if_at_bottom(scroll: &ScrollHandle) {
+    if scroll_at_bottom(scroll) {
+        scroll.scroll_to_bottom();
+    }
 }
 
 /// Pure geometry check, extracted for tests. `offset` and `max_offset` are
@@ -202,6 +221,7 @@ fn render_persisted_message(
 
 fn render_user_bubble(message: &ChatMessage, cx: &mut Context<AppState>) -> impl IntoElement {
     let muted = cx.theme().muted;
+    let muted_foreground = cx.theme().muted_foreground;
     let message_id = message.id.clone();
     let content = message.content.clone();
     h_flex()
@@ -217,6 +237,23 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut Context<AppState>) -> impl
                 .items_end()
                 .gap_1()
                 .max_w(relative(USER_BUBBLE_MAX_FRACTION))
+                // The persisted provenance is deliberately renderer-safe:
+                // only the bounded catalog label is shown, never the private
+                // instruction lease or supporting-file paths.
+                .when_some(message.skill_provenance.as_ref(), |el, provenance| {
+                    el.child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_full()
+                            .bg(muted.opacity(0.72))
+                            .text_xs()
+                            .text_color(muted_foreground)
+                            .child(skill_provenance_label(&provenance.name)),
+                    )
+                })
                 // Image attachments render inline (max 400 px), scaled down
                 // from the persisted base64 (gap 4).
                 .when_some(
@@ -238,6 +275,178 @@ fn render_user_bubble(message: &ChatMessage, cx: &mut Context<AppState>) -> impl
                 })
                 .child(user_message_actions(&message_id, &content, cx)),
         )
+}
+
+fn skill_provenance_label(name: &str) -> String {
+    format!("Skill · {name}")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SubagentChipData {
+    run_id: String,
+    label: String,
+    status: String,
+    state: SubagentChipState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubagentChipState {
+    Queued,
+    Starting,
+    Running,
+    Finished,
+    Failed,
+    TimedOut,
+    Interrupted,
+}
+
+fn subagent_chips_for_message(
+    message: &ChatMessage,
+    cx: &mut Context<AppState>,
+) -> gpui::AnyElement {
+    let Some(reference) = message
+        .subagents
+        .as_ref()
+        .and_then(parse_subagent_message_reference_v1)
+    else {
+        return div().into_any_element();
+    };
+
+    subagent_chips(
+        format!("subagent-chips-{}", message.id),
+        subagent_chip_data(reference),
+        cx,
+    )
+}
+
+fn subagent_chip_data(reference: SubagentMessageReferenceV1) -> Vec<SubagentChipData> {
+    let chips = reference
+        .items
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| SubagentChipData {
+            run_id: item.run_id,
+            label: item.label,
+            status: subagent_v1_state_label(item.state).to_string(),
+            state: subagent_v1_chip_state(item.state),
+        })
+        .collect::<Vec<_>>();
+
+    // Legacy references have run ids but no enriched items. Keep them
+    // discoverable instead of silently dropping the persisted child-run
+    // affordance; the panel remains the authoritative detail surface.
+    let chips = if chips.is_empty() {
+        reference
+            .run_ids
+            .into_iter()
+            .enumerate()
+            .map(|(index, run_id)| SubagentChipData {
+                run_id,
+                label: format!("Subagent {}", index + 1),
+                status: "Finished".to_string(),
+                state: SubagentChipState::Finished,
+            })
+            .collect()
+    } else {
+        chips
+    };
+    chips
+}
+
+fn live_subagent_chip_data(snapshots: &[SubagentRunSnapshotV1]) -> Vec<SubagentChipData> {
+    snapshots
+        .iter()
+        .map(|snapshot| SubagentChipData {
+            run_id: snapshot.run_id.clone(),
+            label: snapshot.label.clone(),
+            status: subagent_v1_state_label(snapshot.state).to_string(),
+            state: subagent_v1_chip_state(snapshot.state),
+        })
+        .collect()
+}
+
+fn subagent_v1_state_label(state: SubagentRunState) -> &'static str {
+    match state {
+        SubagentRunState::Queued => "Queued",
+        SubagentRunState::Starting => "Starting",
+        SubagentRunState::Running => "Working",
+        SubagentRunState::Completed => "Finished",
+        SubagentRunState::Failed => "Failed",
+        SubagentRunState::TimedOut => "Timed out",
+        SubagentRunState::Interrupted => "Interrupted",
+    }
+}
+
+fn subagent_v1_chip_state(state: SubagentRunState) -> SubagentChipState {
+    match state {
+        SubagentRunState::Queued => SubagentChipState::Queued,
+        SubagentRunState::Starting => SubagentChipState::Starting,
+        SubagentRunState::Running => SubagentChipState::Running,
+        SubagentRunState::Failed => SubagentChipState::Failed,
+        SubagentRunState::TimedOut => SubagentChipState::TimedOut,
+        SubagentRunState::Interrupted => SubagentChipState::Interrupted,
+        SubagentRunState::Completed => SubagentChipState::Finished,
+    }
+}
+
+fn subagent_chips(
+    id: String,
+    chips: Vec<SubagentChipData>,
+    cx: &mut Context<AppState>,
+) -> gpui::AnyElement {
+    if chips.is_empty() {
+        return div().into_any_element();
+    }
+    let theme = cx.theme().clone();
+    h_flex()
+        .id(ElementId::Name(SharedString::from(id)))
+        .w_full()
+        .flex_wrap()
+        .gap_1p5()
+        .children(chips.into_iter().map(|chip| {
+            let run_id = chip.run_id.clone();
+            let (icon, color) = match chip.state {
+                SubagentChipState::Queued => (IconName::LoaderCircle, theme.secondary),
+                SubagentChipState::Starting => (IconName::LoaderCircle, theme.primary),
+                SubagentChipState::Running => (IconName::LoaderCircle, theme.primary),
+                SubagentChipState::Finished => (IconName::CircleCheck, theme.success),
+                SubagentChipState::Failed => (IconName::CircleX, theme.danger),
+                SubagentChipState::TimedOut => (IconName::TriangleAlert, theme.warning),
+                SubagentChipState::Interrupted => (IconName::CircleX, theme.muted_foreground),
+            };
+            Button::new(ElementId::Name(SharedString::from(format!(
+                "subagent-chip-{run_id}"
+            ))))
+            .small()
+            .rounded(ButtonRounded::Small)
+            .ghost()
+            .px_2()
+            .py_0p5()
+            .tab_stop(true)
+            .tooltip(format!("Open {}. Status: {}.", chip.label, chip.status))
+            .child(Icon::new(icon).xsmall().text_color(color))
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .max_w(px(180.))
+                    .truncate()
+                    .text_xs()
+                    .child(chip.label),
+            )
+            .child(
+                div()
+                    .max_w(px(120.))
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(chip.status),
+            )
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                this.open_subagent_run(&run_id, window, cx);
+            }))
+            .into_any_element()
+        }))
+        .into_any_element()
 }
 
 fn render_assistant_message(
@@ -262,8 +471,9 @@ fn render_assistant_message(
                 .timeline
                 .as_ref()
                 .filter(|timeline| !timeline.steps.is_empty()),
-            |el, timeline| el.child(timeline_feed(timeline, false, cx)),
+            |el, timeline| el.child(timeline_feed(timeline, false, window, cx)),
         )
+        .child(subagent_chips_for_message(message, cx))
         .when_some(
             message.reasoning.as_ref().filter(|r| !r.trim().is_empty()),
             |el, reasoning| {
@@ -308,6 +518,7 @@ fn render_assistant_message(
 
 fn render_stream_bubble(
     generation: &Option<GenerationState>,
+    live_subagents: &[SubagentRunSnapshotV1],
     motion_reduced: bool,
     window: &mut Window,
     cx: &mut Context<AppState>,
@@ -336,6 +547,7 @@ fn render_stream_bubble(
     let error = generation
         .as_ref()
         .and_then(|generation| generation.error.clone());
+    let error_retryable = should_show_stream_retry(generation.as_ref());
     let live_timeline = generation
         .as_ref()
         .and_then(|generation| generation.timeline.clone());
@@ -394,8 +606,15 @@ fn render_stream_bubble(
             live_timeline
                 .as_ref()
                 .filter(|timeline| !timeline.steps.is_empty()),
-            |el, timeline| el.child(timeline_feed(timeline, true, cx)),
+            |el, timeline| el.child(timeline_feed(timeline, true, window, cx)),
         )
+        .when(!live_subagents.is_empty(), |el| {
+            el.child(subagent_chips(
+                "live-subagent-chips".to_string(),
+                live_subagent_chip_data(live_subagents),
+                cx,
+            ))
+        })
         .when(thinking_active || !thinking_text.trim().is_empty(), |el| {
             el.child(
                 v_flex()
@@ -460,18 +679,26 @@ fn render_stream_bubble(
                             .text_color(foreground)
                             .child(message),
                     )
-                    .child(
-                        Button::new("stream-retry")
-                            .small()
-                            .ghost()
-                            .label("Retry")
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.service
-                                    .update(cx, |service, cx| service.retry_last(cx));
-                            })),
-                    ),
+                    .when(!streaming && error_retryable, |el| {
+                        el.child(
+                            Button::new("stream-retry")
+                                .small()
+                                .ghost()
+                                .label("Retry")
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.service
+                                        .update(cx, |service, cx| service.retry_last(cx));
+                                })),
+                        )
+                    }),
             )
         })
+}
+
+fn should_show_stream_retry(generation: Option<&GenerationState>) -> bool {
+    generation.is_some_and(|generation| {
+        generation.complete && generation.error.is_some() && generation.error_retryable
+    })
 }
 
 // ===========================================================================
@@ -489,9 +716,10 @@ fn assistant_markdown(
     cx: &mut App,
 ) -> TextView {
     let element_key = key.to_string();
+    let content = content.into();
     TextView::markdown(
         ElementId::Name(SharedString::from(key.to_string())),
-        content,
+        markdown_with_math_fallback(&content),
         window,
         cx,
     )
@@ -776,6 +1004,38 @@ fn prewrap(text: &str) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{point, size, AppContext as _, Render, ScrollDelta, ScrollWheelEvent};
+
+    /// A real GPUI surface using the same production follow helper as the
+    /// transcript. This is deliberately not a geometry-only test: `draw`
+    /// exercises `ScrollHandle`'s prepaint-time bottom request and
+    /// `simulate_event` exercises the native scroll listener.
+    struct ScrollFollowHarness {
+        scroll: ScrollHandle,
+        rows: usize,
+        follow_new_content: bool,
+    }
+
+    impl Render for ScrollFollowHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            if self.follow_new_content {
+                follow_transcript_if_at_bottom(&self.scroll);
+            }
+            v_flex()
+                .id("scroll-follow-harness")
+                .track_scroll(&self.scroll)
+                .h_full()
+                .w_full()
+                .overflow_y_scroll()
+                .children((0..self.rows).map(|row| {
+                    div()
+                        .id(ElementId::Name(SharedString::from(format!("row-{row}"))))
+                        .flex_none()
+                        .h(px(20.))
+                        .w_full()
+                }))
+        }
+    }
 
     #[test]
     fn user_bubble_geometry_matches_the_canonical_contract() {
@@ -783,6 +1043,123 @@ mod tests {
         assert_eq!(USER_BUBBLE_PADDING_X_PX, 16.0);
         assert_eq!(USER_BUBBLE_PADDING_Y_PX, 10.0);
         assert_eq!(USER_BUBBLE_RADIUS_PX, 16.0);
+    }
+
+    #[test]
+    fn skill_provenance_uses_only_the_bounded_display_name() {
+        assert_eq!(skill_provenance_label("review"), "Skill · review");
+    }
+
+    #[test]
+    fn persisted_subagent_reference_projects_status_and_label_into_chip_data() {
+        let reference: SubagentMessageReferenceV1 = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "generationId": "chat:1",
+            "runIds": ["run-a"],
+            "items": [{
+                "runId": "run-a",
+                "label": "Review workspace",
+                "role": "scout",
+                "state": "failed"
+            }],
+            "total": 1,
+            "completed": 0,
+            "failed": 1,
+            "timedOut": 0,
+            "interrupted": 0
+        }))
+        .unwrap();
+        let chips = subagent_chip_data(reference);
+        assert_eq!(
+            chips,
+            vec![SubagentChipData {
+                run_id: "run-a".into(),
+                label: "Review workspace".into(),
+                status: "Failed".into(),
+                state: SubagentChipState::Failed,
+            }]
+        );
+    }
+
+    #[test]
+    fn legacy_subagent_reference_keeps_run_ids_clickable_with_safe_fallback_labels() {
+        let reference: SubagentMessageReferenceV1 = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "generationId": "chat:2",
+            "runIds": ["run-a", "run-b"],
+            "total": 2,
+            "completed": 2,
+            "failed": 0,
+            "timedOut": 0,
+            "interrupted": 0
+        }))
+        .unwrap();
+        let chips = subagent_chip_data(reference);
+        assert_eq!(chips[0].label, "Subagent 1");
+        assert_eq!(chips[1].run_id, "run-b");
+    }
+
+    #[test]
+    fn live_subagent_snapshots_keep_active_statuses_and_terminal_tones() {
+        let snapshots: Vec<SubagentRunSnapshotV1> = vec![
+            serde_json::from_value(serde_json::json!({
+                "version": 1,
+                "runId": "run-queued",
+                "groupId": "group-1",
+                "generationId": "chat:1",
+                "childId": "child-1",
+                "chatId": "chat",
+                "workspaceId": "workspace",
+                "revision": 1,
+                "role": "scout",
+                "label": "Queued scout",
+                "taskPreview": "queue",
+                "state": "queued",
+                "startedAt": 1,
+                "updatedAt": 1,
+                "modelId": "model",
+                "turns": 0,
+                "tools": 0,
+                "tokens": 0,
+                "warnings": []
+            }))
+            .unwrap(),
+            serde_json::from_value(serde_json::json!({
+                "version": 1,
+                "runId": "run-failed",
+                "groupId": "group-1",
+                "generationId": "chat:1",
+                "childId": "child-2",
+                "chatId": "chat",
+                "workspaceId": "workspace",
+                "revision": 2,
+                "role": "reviewer",
+                "label": "Failed review",
+                "taskPreview": "review",
+                "state": "failed",
+                "startedAt": 2,
+                "updatedAt": 2,
+                "modelId": "model",
+                "turns": 1,
+                "tools": 1,
+                "tokens": 1,
+                "warnings": []
+            }))
+            .unwrap(),
+        ];
+        let chips = live_subagent_chip_data(&snapshots);
+        assert_eq!(chips[0].status, "Queued");
+        assert_eq!(chips[0].state, SubagentChipState::Queued);
+        assert_eq!(chips[1].status, "Failed");
+        assert_eq!(chips[1].state, SubagentChipState::Failed);
+    }
+
+    #[test]
+    fn live_chip_render_contract_is_focusable_and_routes_to_subagent_panel() {
+        let source = include_str!("message_list.rs");
+        assert!(source.contains(".tab_stop(true)"));
+        assert!(source.contains("live-subagent-chips"));
+        assert!(source.contains("open_subagent_run"));
     }
 
     #[test]
@@ -795,6 +1172,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         };
@@ -810,6 +1188,7 @@ mod tests {
                 thinking_expanded: false,
                 complete: true,
                 error: None,
+                error_retryable: false,
                 model: None,
                 timeline: None,
             }),
@@ -824,6 +1203,29 @@ mod tests {
         // In-flight generations always show.
         snapshot.generation.as_mut().unwrap().complete = false;
         assert!(should_show_stream_bubble(&snapshot));
+    }
+
+    #[test]
+    fn admission_error_never_retries_an_older_persisted_turn() {
+        let mut generation = GenerationState {
+            chat_id: "c".into(),
+            counter: 1,
+            provider_id: "anthropic".into(),
+            text: String::new(),
+            thinking: String::new(),
+            thinking_active: false,
+            thinking_expanded: false,
+            complete: true,
+            error: Some("The message could not be saved, so it was not sent.".into()),
+            error_retryable: false,
+            model: None,
+            timeline: None,
+        };
+        assert!(!should_show_stream_retry(Some(&generation)));
+
+        generation.error = Some("The provider request failed.".into());
+        generation.error_retryable = true;
+        assert!(should_show_stream_retry(Some(&generation)));
     }
 
     #[test]
@@ -843,6 +1245,61 @@ mod tests {
     #[test]
     fn fresh_scroll_handle_counts_as_at_bottom() {
         assert!(scroll_at_bottom(&ScrollHandle::new()));
+    }
+
+    #[gpui::test]
+    fn scroll_handle_prepaint_follows_only_until_the_user_scrolls_away(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let scroll = ScrollHandle::new();
+        let view = cx.update(|_, app| {
+            app.new(|_| ScrollFollowHarness {
+                scroll: scroll.clone(),
+                rows: 10,
+                follow_new_content: true,
+            })
+        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+                div().size_full().child(view.clone())
+            })
+        };
+
+        draw(cx);
+        assert_eq!(scroll.max_offset().height, px(100.));
+        assert_eq!(scroll.offset().y, px(-100.));
+
+        // More transcript content appears while the reader is at the bottom:
+        // the production helper requests a bottom follow, applied in prepaint.
+        view.update(cx, |harness, _| harness.rows = 15);
+        draw(cx);
+        assert_eq!(scroll.max_offset().height, px(200.));
+        assert_eq!(scroll.offset().y, px(-200.));
+
+        // A real wheel event moves the reader away. The subsequent content
+        // growth must retain that reading position instead of snapping down.
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(10.), px(10.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(80.))),
+            ..Default::default()
+        });
+        assert_eq!(scroll.offset().y, px(-120.));
+        assert!(!scroll_at_bottom(&scroll));
+        view.update(cx, |harness, _| harness.rows = 20);
+        draw(cx);
+        assert_eq!(scroll.max_offset().height, px(300.));
+        assert_eq!(scroll.offset().y, px(-120.));
+
+        // The explicit Jump-to-bottom affordance restores follow. Subsequent
+        // content growth then remains pinned through the same GPUI path.
+        scroll.scroll_to_bottom();
+        draw(cx);
+        assert_eq!(scroll.offset().y, px(-300.));
+        view.update(cx, |harness, _| harness.rows = 25);
+        draw(cx);
+        assert_eq!(scroll.max_offset().height, px(400.));
+        assert_eq!(scroll.offset().y, px(-400.));
     }
 
     #[test]

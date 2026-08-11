@@ -49,6 +49,10 @@ pub struct ChatMcpTools {
 #[derive(Clone)]
 pub struct McpStreamContext {
     pub manager: Arc<McpClientManager>,
+    /// App-owned resolver for API-key and OAuth credentials. When present,
+    /// every runtime connection is resolved through the same authority as
+    /// Settings mutations and cancellation generations.
+    pub authority: Option<Arc<crate::services::mcp_mutation::McpMutationAuthority>>,
     /// Enabled servers from the portable config (already filtered).
     pub servers: Vec<McpServer>,
     /// Optional keychain resolver for preset API-key servers
@@ -61,6 +65,7 @@ impl std::fmt::Debug for McpStreamContext {
         formatter
             .debug_struct("McpStreamContext")
             .field("servers", &self.servers)
+            .field("authority", &self.authority.is_some())
             .field("preset_key", &self.preset_key.is_some())
             .finish()
     }
@@ -72,6 +77,7 @@ pub async fn collect_chat_mcp_tools(
     manager: &McpClientManager,
     servers: &[McpServer],
     preset_key: &Option<PresetKeyResolver>,
+    authority: Option<&Arc<crate::services::mcp_mutation::McpMutationAuthority>>,
 ) -> ChatMcpTools {
     let mut tools = ChatMcpTools::default();
     for server in servers
@@ -79,20 +85,31 @@ pub async fn collect_chat_mcp_tools(
         .filter(|server| server.enabled)
         .take(MAX_CHAT_MCP_SERVERS)
     {
-        let Some(spec) = resolve_mcp_server(server).ok() else {
-            tracing::warn!(server = %server.id, "Skipping MCP server: unresolvable");
-            continue;
+        let resolved = match authority {
+            Some(authority) => authority
+                .ensure_runtime_connected(server)
+                .await
+                .map(|spec| (spec, true)),
+            None => resolve_mcp_server(server)
+                .map_err(|_| crate::services::mcp_mutation::McpMutationError::Invalid)
+                .and_then(|spec| {
+                    inject_preset_key(spec, preset_key)
+                        .map_err(|_| crate::services::mcp_mutation::McpMutationError::Invalid)
+                })
+                .map(|spec| (spec, false)),
         };
-        let spec = match inject_preset_key(spec, preset_key) {
-            Ok(spec) => spec,
+        let (spec, connected) = match resolved {
+            Ok(value) => value,
             Err(error) => {
                 tracing::warn!(server = %server.id, %error, "Skipping MCP server: auth");
                 continue;
             }
         };
-        if let Err(error) = manager.ensure_connected(&spec).await {
-            tracing::warn!(server = %server.id, %error, "Skipping MCP server: connect");
-            continue;
+        if !connected {
+            if let Err(error) = manager.ensure_connected(&spec).await {
+                tracing::warn!(server = %server.id, %error, "Skipping MCP server: connect");
+                continue;
+            }
         }
         let listed = match manager.list_tools(&server.id).await {
             Ok(listed) => listed,
@@ -213,7 +230,7 @@ mod tests {
         ];
         // Disabled servers never connect; unreachable servers are skipped
         // rather than failing the turn.
-        let tools = collect_chat_mcp_tools(&manager, &servers, &None).await;
+        let tools = collect_chat_mcp_tools(&manager, &servers, &None, None).await;
         assert!(tools.defs.is_empty());
         assert!(tools.dispatch.is_empty());
     }

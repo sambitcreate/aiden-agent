@@ -12,27 +12,40 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use aiden_computer_use::{
+    ComputerUseApprovalDecision, ComputerUseApprovalRequest, ComputerUseEnableIntent,
+    ComputerUseNoticeDismissal, ComputerUsePrivacyNoticeState, COMPUTER_USE_NOTICE_DISMISSED_KEY,
+    COMPUTER_USE_NOTICE_VERSION,
+};
+use aiden_core::app_update::AppUpdateSnapshot;
 use aiden_core::appearance::{Mode, ReduceMotion};
 use futures::FutureExt;
 use gpui::{
-    actions, div, prelude::FluentBuilder as _, px, App, AppContext as _, Context, Entity,
-    FocusHandle, Focusable as _, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, ScrollHandle, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window,
+    actions, div, prelude::FluentBuilder as _, px, Animation, AnimationExt as _, App,
+    AppContext as _, Context, Entity, FocusHandle, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Timer, Window,
 };
 #[cfg(target_os = "macos")]
 use gpui_component::{
-    button::ButtonVariants as _,
+    button::{Button, ButtonVariants as _},
     h_flex,
-    input::{InputEvent, InputState},
+    input::{Input, InputEvent, InputState},
     resizable::ResizableState,
-    v_flex, ActiveTheme, IconName, PixelsExt as _, Sizable as _, WindowExt as _,
+    scroll::ScrollableElement as _,
+    v_flex, ActiveTheme, Disableable as _, IconName, PixelsExt as _, Sizable as _, WindowExt as _,
 };
+use gpui_tokio_bridge::Tokio;
+use std::time::Duration;
 
 use crate::assistant::{AssistantPanel, AssistantPanelDeps, AssistantPanelEvent};
 use crate::chat::composer::{model_items_with_layout, model_key, COMPOSER_MAX_ROWS};
 use crate::chat::model_pad_picker::ModelPadRuntime;
 use crate::chat::model_picker::{ComposerModelPicker, ModelPickerPins};
+use crate::chat::slash::{
+    parse_slash_query, rank_commands, rank_skills, should_open_palette, RankedSkill,
+    RankedSlashCommand, SkillInvocationSelection, SlashQuery,
+};
 use crate::environment::{
     EnvironmentWorkbench, FilesEvent, FilesNotification, FilesWorkbench, ReviewEvent,
     ReviewWorkbench,
@@ -45,22 +58,31 @@ use crate::panels::scheduled_panel::{
     ScheduledPanel, ScheduledPanelDeps, ScheduledPanelEvent, ScheduledTaskSource,
     StoreScheduledSource,
 };
-use crate::panels::subagents_panel::{
-    MemoryRunSource, SubagentRunSource, SubagentsPanel, SubagentsPanelDeps,
-};
+use crate::panels::subagents_panel::{SubagentRunSource, SubagentsPanel, SubagentsPanelDeps};
 use crate::panels::terminal_drawer::{TerminalDeps, TerminalDrawer};
 use crate::panels::usage_panel::{StoreUsageSource, UsageDataSource, UsagePanel, UsagePanelDeps};
 use crate::pill::{
     open_pill_window, LiveAudioSource, PillCoordinator, PillCoordinatorDeps, PillDeps, PillView,
 };
-use crate::services::chat_service::ChatService;
+use crate::services::accessibility_announcements::{
+    AccessibilityAnnouncementState, GenerationAnnouncementPhase,
+};
+use crate::services::chat_service::{ActiveSubagentApproval, ChatService};
 use crate::services::provider_kit::ConfiguredProvider;
+use crate::services::skill_tools::{
+    collect_skill_catalog, stream_context_for_mode, SkillCatalogEntry, SkillRuntimeMode,
+};
 use crate::services::stores::Stores;
+use crate::services::subagents::{
+    SubagentMcpMutationApprovalRequest, SubagentMcpMutationDecision,
+    SubagentMcpReadApprovalRequest, SubagentMcpReadDecision, SubagentShellApprovalRequest,
+    SubagentShellDecision, SubagentWorkspaceWriteApprovalRequest, SubagentWorkspaceWriteDecision,
+};
 use crate::settings::navigation::{
     capture_settings_return_view, settings_compact_tab_target, settings_escape_target,
     SettingsCompactTabTarget, SettingsEscapeTarget, SettingsNavigation,
 };
-use crate::settings::{SettingsSection, SettingsServices, SettingsView};
+use crate::settings::{SettingsEvent, SettingsSection, SettingsServices, SettingsView};
 use crate::workspace::{NotificationKind, WorkspaceEvent, WorkspaceState};
 
 fn pending_files_replay_authorized(
@@ -70,6 +92,74 @@ fn pending_files_replay_authorized(
     pending: bool,
 ) -> bool {
     pending && !generation_active && !git_busy && !files_saving
+}
+
+const COMPUTER_USE_QUIT_FAILURE: &str =
+    "Aiden couldn't save Computer Use safely, so it stayed open. Check settings access and try quitting again.";
+
+fn claim_quit(quit_in_flight: &mut bool) -> bool {
+    if *quit_in_flight {
+        return false;
+    }
+    *quit_in_flight = true;
+    true
+}
+
+fn trapped_focus_index(backwards: bool, position: Option<usize>, count: usize) -> usize {
+    debug_assert!(count > 0);
+    match (backwards, position) {
+        (true, Some(0) | None) => count - 1,
+        (true, Some(position)) => position - 1,
+        (false, Some(position)) if position + 1 == count => 0,
+        (false, Some(position)) => position + 1,
+        (false, None) => 0,
+    }
+}
+
+fn computer_use_escape_decision(deciding: bool) -> Option<ComputerUseApprovalDecision> {
+    (!deciding).then_some(ComputerUseApprovalDecision::Deny)
+}
+
+fn subagent_write_escape_decision(deciding: bool) -> Option<SubagentWorkspaceWriteDecision> {
+    (!deciding).then_some(SubagentWorkspaceWriteDecision::Deny)
+}
+
+#[derive(Default)]
+struct SubagentWriteModalFocusState {
+    active_id: Option<String>,
+    return_focus: Option<FocusHandle>,
+}
+
+enum SubagentWriteModalFocusTransition {
+    Unchanged,
+    FocusDeny,
+    Restore(FocusHandle),
+}
+
+impl SubagentWriteModalFocusState {
+    fn reconcile(
+        &mut self,
+        next_id: Option<&str>,
+        current_focus: Option<FocusHandle>,
+    ) -> SubagentWriteModalFocusTransition {
+        if self.active_id.as_deref() == next_id {
+            return SubagentWriteModalFocusTransition::Unchanged;
+        }
+        if let Some(next_id) = next_id {
+            if self.active_id.is_none() {
+                self.return_focus = current_focus;
+            }
+            self.active_id = Some(next_id.to_string());
+            SubagentWriteModalFocusTransition::FocusDeny
+        } else {
+            self.active_id = None;
+            self.return_focus
+                .take()
+                .map_or(SubagentWriteModalFocusTransition::Unchanged, |focus| {
+                    SubagentWriteModalFocusTransition::Restore(focus)
+                })
+        }
+    }
 }
 
 const fn model_pad_settings_entry_allowed(git_busy: bool) -> bool {
@@ -155,7 +245,6 @@ actions!(
 pub enum AppView {
     #[default]
     Chat,
-    Assistant,
     Scheduled,
     Usage,
     Subagents,
@@ -304,9 +393,79 @@ static PILL_WINDOW: std::sync::Mutex<Option<gpui::WindowHandle<PillView>>> =
 /// The wired dictation coordinator, reachable from the pill window's cancel
 /// button and the bridge task (both constructed before `AppState` finishes).
 static PILL_COORDINATOR: std::sync::OnceLock<Arc<PillCoordinator>> = std::sync::OnceLock::new();
+/// Appearance owned by the process rather than the visible main-window
+/// entity. The pill remains usable after that entity is closed, so retaining
+/// the last authoritative snapshot avoids silently reverting to the default
+/// palette or motion policy on the next windowless dictation.
+#[derive(Clone)]
+struct PillAppearanceSnapshot {
+    appearance: aiden_core::appearance::AppearanceConfig,
+    system_reduced_motion: bool,
+}
+
+static PILL_APPEARANCE: std::sync::OnceLock<Arc<std::sync::RwLock<PillAppearanceSnapshot>>> =
+    std::sync::OnceLock::new();
+
+fn pill_appearance_store() -> &'static Arc<std::sync::RwLock<PillAppearanceSnapshot>> {
+    PILL_APPEARANCE.get_or_init(|| {
+        Arc::new(std::sync::RwLock::new(PillAppearanceSnapshot {
+            appearance: aiden_core::appearance::create_default_appearance_config(),
+            system_reduced_motion: false,
+        }))
+    })
+}
+
+fn publish_pill_appearance(appearance: aiden_core::appearance::AppearanceConfig, reduced: bool) {
+    let snapshot = PillAppearanceSnapshot {
+        appearance,
+        system_reduced_motion: reduced,
+    };
+    match pill_appearance_store().write() {
+        Ok(mut current) => *current = snapshot,
+        Err(poisoned) => *poisoned.into_inner() = snapshot,
+    }
+}
+
+fn read_pill_appearance() -> (aiden_core::appearance::AppearanceConfig, bool) {
+    match pill_appearance_store().read() {
+        Ok(snapshot) => (snapshot.appearance.clone(), snapshot.system_reduced_motion),
+        Err(poisoned) => {
+            let snapshot = poisoned.into_inner();
+            (snapshot.appearance.clone(), snapshot.system_reduced_motion)
+        }
+    }
+}
+
+fn pill_appearance_for_show(
+    live: Option<(aiden_core::appearance::AppearanceConfig, bool)>,
+    cached: (aiden_core::appearance::AppearanceConfig, bool),
+) -> (aiden_core::appearance::AppearanceConfig, bool) {
+    live.unwrap_or(cached)
+}
 /// Mirrors the active chat's generation state for the OS-global dictation
 /// callback, which runs outside the `AppState` entity.
 static CHAT_GENERATION_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Handle the process-wide dictation shortcut without requiring a visible
+/// main window. Electron keeps the pill usable after the main window is
+/// closed; the coordinator is app-lifetime state and can be toggled
+/// directly from the GPUI application executor. Returning `true` also
+/// tells the shortcut dispatcher that the command was handled, including
+/// the intentional generation-active no-op, so it never falls through to
+/// a window-activating action.
+pub(crate) fn toggle_global_dictation(cx: &App) -> bool {
+    if CHAT_GENERATION_ACTIVE.load(Ordering::Relaxed) {
+        return true;
+    }
+    let Some(pill) = PILL_COORDINATOR.get().cloned() else {
+        return false;
+    };
+    cx.spawn(async move |_cx| {
+        pill.toggle().await;
+    })
+    .detach();
+    true
+}
 
 // ===========================================================================
 // Reduced motion (parity audit UI §7)
@@ -374,6 +533,167 @@ enum PillCommand {
     Broadcast(aiden_core::dictation::DictationStatePayload),
 }
 
+/// The UI half of persistence-first composer submission. It owns the exact
+/// draft snapshot until the service reports the matching durable admission;
+/// this prevents a late completion from clearing text the user typed after a
+/// failed or superseded request.
+#[derive(Default)]
+struct ComposerSubmissionCoordinator {
+    pending: Option<(
+        crate::services::chat_service::ChatSubmissionIdentity,
+        String,
+        crate::chat::composer::ComposerDraft,
+    )>,
+}
+
+impl ComposerSubmissionCoordinator {
+    fn begin(
+        &mut self,
+        submission: crate::services::chat_service::ChatSubmissionIdentity,
+        text: String,
+        draft: crate::chat::composer::ComposerDraft,
+    ) -> bool {
+        if self.pending.is_some() {
+            return false;
+        }
+        self.pending = Some((submission, text, draft));
+        true
+    }
+
+    fn pending(
+        &self,
+    ) -> Option<&(
+        crate::services::chat_service::ChatSubmissionIdentity,
+        String,
+        crate::chat::composer::ComposerDraft,
+    )> {
+        self.pending.as_ref()
+    }
+
+    /// Consume a durable admission only when it belongs to the currently
+    /// pending submission. Returns whether the visible composer still exactly
+    /// matches the snapshotted draft and therefore may be cleared once.
+    fn settle(
+        &mut self,
+        submission: &crate::services::chat_service::ChatSubmissionIdentity,
+        outcome: Option<crate::services::chat_service::ChatSubmissionOutcome>,
+        current_text: &str,
+        current_draft: &crate::chat::composer::ComposerDraft,
+    ) -> bool {
+        let Some((pending, text, draft)) = self.pending.as_ref() else {
+            return false;
+        };
+        let Some(outcome) = outcome else {
+            return false;
+        };
+        if pending != submission {
+            return false;
+        }
+        if outcome == crate::services::chat_service::ChatSubmissionOutcome::Rejected {
+            self.pending = None;
+            return false;
+        }
+        if outcome == crate::services::chat_service::ChatSubmissionOutcome::Unknown {
+            // Do not discard the exact draft and do not permit an unsafe
+            // duplicate retry until the user follows the recovery guidance.
+            return false;
+        }
+        let clear = text == current_text
+            && draft.attachments == current_draft.attachments
+            && draft.editing_message_id == current_draft.editing_message_id
+            && draft.skill_selection == current_draft.skill_selection;
+        self.pending = None;
+        clear
+    }
+}
+
+/// Session-only state for the non-modal composer slash surface. The catalog is
+/// renderer-safe metadata; explicit skill selection remains an opaque draft
+/// value and does not grant any runtime permission.
+#[derive(Default)]
+pub(crate) struct SlashPaletteState {
+    pub(crate) open: bool,
+    pub(crate) query: Option<SlashQuery>,
+    pub(crate) commands: Vec<RankedSlashCommand>,
+    pub(crate) skills: Vec<RankedSkill>,
+    pub(crate) catalog: Vec<SkillCatalogEntry>,
+    pub(crate) selected: usize,
+    pub(crate) catalog_loading: bool,
+    pub(crate) catalog_loaded: bool,
+    pub(crate) catalog_identity: Option<String>,
+    pub(crate) notice: Option<String>,
+}
+
+/// Snapshot the one opaque skill descriptor for the service's send-time
+/// resolver. Expanded instructions never live in the draft.
+pub(crate) fn skill_selection_for_send(
+    selection: &crate::chat::slash::SkillSelection,
+) -> Option<SkillInvocationSelection> {
+    selection.selected().cloned()
+}
+
+impl SlashPaletteState {
+    fn catalog_refresh_needed(&self, workspace_identity: &str) -> bool {
+        !self.catalog_loading
+            && (!self.catalog_loaded
+                || self.catalog_identity.as_deref() != Some(workspace_identity))
+    }
+
+    fn recompute(&mut self) {
+        let Some(query) = self.query.as_ref() else {
+            self.open = false;
+            self.commands.clear();
+            self.skills.clear();
+            self.selected = 0;
+            return;
+        };
+        self.commands = rank_commands(&query.query);
+        self.skills = rank_skills(&query.query, &self.catalog);
+        self.open = should_open_palette(query, self.commands.len(), self.skills.len());
+        let count = self.commands.len() + self.skills.len();
+        self.selected = if count == 0 {
+            0
+        } else {
+            self.selected.min(count - 1)
+        };
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+        self.query = None;
+        self.commands.clear();
+        self.skills.clear();
+        self.selected = 0;
+    }
+
+    fn move_selection(&mut self, forward: bool) {
+        let count = self.commands.len() + self.skills.len();
+        if count == 0 {
+            return;
+        }
+        self.selected = if forward {
+            (self.selected + 1) % count
+        } else if self.selected == 0 {
+            count - 1
+        } else {
+            self.selected - 1
+        };
+    }
+
+    fn selected_command_id(&self) -> Option<&'static str> {
+        (self.selected < self.commands.len()).then(|| self.commands[self.selected].definition.id)
+    }
+
+    fn selected_skill(&self) -> Option<SkillCatalogEntry> {
+        if self.selected < self.commands.len() {
+            return None;
+        }
+        self.skills
+            .get(self.selected - self.commands.len())
+            .map(|row| row.entry.clone())
+    }
+}
+
 /// The per-window root view.
 pub struct AppState {
     pub(crate) service: Entity<ChatService>,
@@ -395,11 +715,22 @@ pub struct AppState {
     pub(crate) model_picker_empty_pad_focus: FocusHandle,
     pub(crate) model_picker_trigger_focus: FocusHandle,
     pub(crate) message_scroll: ScrollHandle,
-    last_message_len: usize,
+    /// Exact draft awaiting the persistence-first submission admission.
+    composer_submission: ComposerSubmissionCoordinator,
+    /// Non-modal slash palette session (kept separate from Command-K dialog).
+    pub(crate) slash_palette: SlashPaletteState,
+    slash_catalog_revision: u64,
     last_catalog: Vec<String>,
     /// Last workspace id seen from the service (terminal cwd re-home on change).
     last_workspace_id: Option<String>,
     appearance_applied: bool,
+    /// Latest app-update state published by the process-lifetime authority.
+    /// The sidebar consumes this immutable snapshot; no renderer/network
+    /// work is performed during render.
+    pub(crate) app_update_snapshot: AppUpdateSnapshot,
+    pub(crate) app_update_dismissed_version: Option<String>,
+    /// Coarse lifecycle state used to send deduplicated VoiceOver announcements.
+    accessibility_announcements: AccessibilityAnnouncementState,
     _subscriptions: Vec<Subscription>,
 
     /// The workspace context bar (chips + pickers) for the chat view.
@@ -412,7 +743,18 @@ pub struct AppState {
     scheduled: Option<Entity<ScheduledPanel>>,
     usage: Option<Entity<UsagePanel>>,
     subagents: Option<Entity<SubagentsPanel>>,
+    /// One app-root-owned Assistant entity; its panel never participates in
+    /// route replacement, so an active chat remains mounted while it opens.
     assistant: Option<Entity<AssistantPanel>>,
+    assistant_open: bool,
+    /// Keeps the panel painted through its short minimize exit. The bubble is
+    /// deliberately withheld until this is false, avoiding a double surface.
+    assistant_present: bool,
+    assistant_return_focus: Option<FocusHandle>,
+    assistant_bubble_focus: FocusHandle,
+    assistant_unread: u8,
+    assistant_preview: Option<String>,
+    assistant_preview_generation: u64,
     pub(crate) terminal: Option<Entity<TerminalDrawer>>,
     pub(crate) environment: Entity<EnvironmentWorkbench>,
     pub(crate) files: Entity<FilesWorkbench>,
@@ -420,6 +762,7 @@ pub struct AppState {
     files_dirty: bool,
     files_saving: bool,
     pending_files_mutation: Option<PendingFilesMutation>,
+    quit_in_flight: bool,
     palette: Option<Entity<CommandPalette>>,
     palette_source: Option<Arc<std::sync::Mutex<PaletteSourceSnapshot>>>,
     palette_invoker_focus: Option<FocusHandle>,
@@ -440,9 +783,189 @@ pub struct AppState {
     pub(crate) environment_toggle_focus: FocusHandle,
     last_environment_overlay: bool,
     last_environment_summary: bool,
+    computer_use_deny_focus: FocusHandle,
+    computer_use_allow_focus: FocusHandle,
+    subagent_write_modal_focus: SubagentWriteModalFocusState,
+    subagent_write_deny_focus: FocusHandle,
+    subagent_write_allow_focus: FocusHandle,
+    subagent_shell_deny_focus: FocusHandle,
+    subagent_shell_allow_focus: FocusHandle,
+    subagent_mcp_read_deny_focus: FocusHandle,
+    subagent_mcp_read_allow_focus: FocusHandle,
+    subagent_mcp_mutation_deny_focus: FocusHandle,
+    subagent_mcp_mutation_allow_focus: FocusHandle,
+    computer_use_privacy: ComputerUsePrivacyNoticeState,
+    computer_use_privacy_return_focus: Option<FocusHandle>,
+    computer_use_privacy_cancel_focus: FocusHandle,
+    computer_use_privacy_session_focus: FocusHandle,
+    computer_use_privacy_permanent_focus: FocusHandle,
+    pi_provider_setup: Option<PiProviderSetupModal>,
+    pi_provider_cancel_focus: FocusHandle,
+    pi_provider_save_focus: FocusHandle,
+    pi_provider_sign_out_focus: FocusHandle,
+}
+
+struct PiProviderSetupModal {
+    provider_id: String,
+    label: String,
+    lease: crate::services::pi_provider_setup::PiSetupLease,
+    api_key: Entity<InputState>,
+    configured: bool,
+    busy: bool,
+    error: Option<String>,
+    return_focus: Option<FocusHandle>,
+}
+
+fn pi_provider_setup_can_close(busy: bool) -> bool {
+    !busy
+}
+
+fn pi_provider_setup_completion_is_current(
+    active_provider_id: &str,
+    active_lease: crate::services::pi_provider_setup::PiSetupLease,
+    completed_provider_id: &str,
+    completed_lease: crate::services::pi_provider_setup::PiSetupLease,
+) -> bool {
+    active_provider_id == completed_provider_id && active_lease == completed_lease
 }
 
 impl AppState {
+    /// Canonical bottom-right dock. This lives outside `content_view`, making
+    /// it stable across routes and ensuring there can only be one panel entity.
+    fn assistant_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if self.assistant_interaction_blocked(window, cx) {
+            return div().id("assistant-dock-inert").into_any_element();
+        }
+        let theme = cx.theme();
+        let viewport = window.viewport_size();
+        let dock_width = assistant_dock_width(viewport.width.as_f32());
+        let dock_height = assistant_dock_height(viewport.height.as_f32());
+        if assistant_entity_required_for_dock(self.assistant_open, self.assistant_present)
+            && assistant_dock_panel_present(self.assistant_open, self.assistant_present)
+        {
+            // The bubble is deliberately cheap: constructing the entity boots
+            // the MCP inventory, so defer it until an explicit open.
+            let Some(panel) = self.assistant.clone() else {
+                return div().id("assistant-dock-missing-panel").into_any_element();
+            };
+            let dock = div()
+                .id("assistant-dock")
+                .absolute()
+                .right_4()
+                .bottom_4()
+                .w(px(dock_width))
+                .h(px(dock_height))
+                .rounded_xl()
+                .overflow_hidden()
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .shadow_lg();
+            if self.assistant_open {
+                return dock.child(panel).into_any_element();
+            }
+            // The retained exit shell has no panel child: fading the actual
+            // panel would leave its composer hit targets and tab stops alive.
+            // Animate the complete inert chrome (surface, border, shadow).
+            return dock
+                .child(
+                    div()
+                        .id("assistant-dock-exit-snapshot")
+                        .size_full()
+                        .bg(theme.popover),
+                )
+                .with_animation(
+                    "assistant-dock-close",
+                    Animation::new(Duration::from_millis(120)),
+                    |dock, progress| dock.opacity(1. - progress),
+                )
+                .into_any_element();
+        }
+
+        let unread = if self.assistant_unread > 9 {
+            "9+".to_string()
+        } else {
+            self.assistant_unread.to_string()
+        };
+        let pointer = crate::services::appearance::pointer_cursors_enabled(cx);
+        h_flex()
+            .id("assistant-bubble")
+            .absolute()
+            .right_4()
+            .bottom_4()
+            .gap_2()
+            .items_center()
+            .track_focus(&self.assistant_bubble_focus)
+            .tab_stop(true)
+            .when(pointer, |el| el.cursor_pointer())
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.open_assistant(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .on_click(cx.listener(|this, _event, window, cx| this.open_assistant(window, cx)))
+            .when_some(self.assistant_preview.clone(), |el, preview| {
+                el.child(
+                    div()
+                        .max_w(px(240.))
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(theme.popover)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_sm()
+                        .truncate()
+                        .child(preview),
+                )
+            })
+            .child(
+                div()
+                    .relative()
+                    .size(px(48.))
+                    .rounded_full()
+                    .bg(theme.sidebar_primary)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(IconName::Bot)
+                    .when(self.assistant_unread > 0, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .top(px(-4.))
+                                .right(px(-4.))
+                                .min_w(px(18.))
+                                .h(px(18.))
+                                .rounded_full()
+                                .bg(theme.danger)
+                                .text_xs()
+                                .text_color(theme.danger_foreground)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(unread.clone()),
+                        )
+                    }),
+            )
+            .child(
+                Button::new("assistant-bubble-open")
+                    .ghost()
+                    .xsmall()
+                    .tab_stop(false)
+                    .tooltip(if self.assistant_unread == 0 {
+                        "Open Aiden".to_string()
+                    } else {
+                        format!("Open Aiden — {unread} unread")
+                    })
+                    .on_click(cx.listener(|this, _event, window, cx| {
+                        this.open_assistant(window, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn authorize_files_mutation(
         &mut self,
         mutation: PendingFilesMutation,
@@ -495,6 +1018,16 @@ impl AppState {
     ) {
         if self.authorize_files_mutation(PendingFilesMutation::SelectChat(id.clone()), window, cx) {
             self.set_view(AppView::Chat, cx);
+            let recovery = self
+                .composer_submission
+                .pending()
+                .filter(|(submission, _, _)| submission.chat_id == id)
+                .map(|(submission, _, _)| submission.clone());
+            if let Some(submission) = recovery {
+                self.service.update(cx, |service, cx| {
+                    service.reconcile_unknown_submission(&submission, cx)
+                });
+            }
             self.service
                 .update(cx, |service, cx| service.select_chat(&id, cx));
         }
@@ -523,9 +1056,12 @@ impl AppState {
     }
 
     fn quit_guarded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_in_flight {
+            return;
+        }
         self.cancel_shortcut_recording(cx);
         if self.authorize_files_mutation(PendingFilesMutation::Quit, window, cx) {
-            self.request_quit(cx);
+            self.request_quit(window, cx);
         }
     }
 
@@ -538,10 +1074,20 @@ impl AppState {
         let authorized =
             self.authorize_files_mutation(PendingFilesMutation::CloseWindow, window, cx);
         if authorized {
+            self.stores.voice.cancel();
             self.cancel_settings_codex_auth(cx);
-            self.service.update(cx, |service, _cx| {
-                service.flush_appearance_save_before_quit()
-            });
+            // The process remains alive after the red-window close, but no
+            // generation (especially an attended Computer Use action) may
+            // continue without a visible approval/cancellation surface.
+            // `dispose` synchronously cancels the active stream/Computer Use
+            // lease and also performs the required Appearance flush without
+            // changing the user's persisted Computer Use preference.
+            self.service.update(cx, |service, cx| service.dispose(cx));
+            // This process-wide gate is normally refreshed by `render`, but a
+            // native close removes the AppState entity before another render
+            // can publish the cancelled state. Clear it with the same close
+            // transaction so windowless dictation remains usable.
+            CHAT_GENERATION_ACTIVE.store(false, Ordering::Release);
         }
         authorized
     }
@@ -840,6 +1386,23 @@ impl AppState {
         // This is intentionally before `Root::new` renders its first frame.
         service.update(cx, |service, cx| service.apply_appearance(cx));
         service.update(cx, |service, cx| service.boot(cx));
+        let initial_pill_appearance = {
+            let service = service.read(cx);
+            (service.appearance.clone(), service.system_reduced_motion())
+        };
+        publish_pill_appearance(initial_pill_appearance.0, initial_pill_appearance.1);
+        if crate::services::scheduled_execution::global_enabled(&stores.config)
+            && stores.scheduler_executor.is_ready()
+        {
+            let scheduler = stores.scheduler.clone();
+            cx.spawn(async move |_this, cx| {
+                let result = cx.background_spawn(async move { scheduler.start().await }).await;
+                if let Err(error) = result {
+                    tracing::warn!(%error, "scheduled runtime failed to start; execution remains unavailable");
+                }
+            })
+            .detach();
+        }
 
         let composer_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -861,6 +1424,15 @@ impl AppState {
         let review_git = workspace_state.read(cx).git_service();
         let review = cx.new(|cx| ReviewWorkbench::new(review_git, window, cx));
         let settings_navigation = SettingsNavigation::new(window, cx);
+        let app_update_authority = stores.app_updates.clone();
+        let initial_app_update_snapshot = app_update_authority.snapshot();
+        let mut app_update_receiver = app_update_authority.subscribe();
+        let mut computer_use_privacy = ComputerUsePrivacyNoticeState::default();
+        computer_use_privacy.hydrate(stores.config.get_settings().ok().and_then(|settings| {
+            settings
+                .get(COMPUTER_USE_NOTICE_DISMISSED_KEY)
+                .and_then(serde_json::Value::as_u64)
+        }));
 
         let mut this = Self {
             service: service.clone(),
@@ -886,10 +1458,15 @@ impl AppState {
             model_picker_empty_pad_focus: cx.focus_handle(),
             model_picker_trigger_focus: cx.focus_handle(),
             message_scroll: ScrollHandle::new(),
-            last_message_len: 0,
+            composer_submission: ComposerSubmissionCoordinator::default(),
+            slash_palette: SlashPaletteState::default(),
+            slash_catalog_revision: 0,
             last_catalog: Vec::new(),
             last_workspace_id: None,
             appearance_applied: false,
+            app_update_snapshot: initial_app_update_snapshot,
+            app_update_dismissed_version: None,
+            accessibility_announcements: AccessibilityAnnouncementState::default(),
             _subscriptions: Vec::new(),
             workspace_state,
             environment: cx.new(|cx| EnvironmentWorkbench::new(environment_config, cx)),
@@ -898,11 +1475,19 @@ impl AppState {
             files_dirty: false,
             files_saving: false,
             pending_files_mutation: None,
+            quit_in_flight: false,
             settings: None,
             scheduled: None,
             usage: None,
             subagents: None,
             assistant: None,
+            assistant_open: false,
+            assistant_present: false,
+            assistant_return_focus: None,
+            assistant_bubble_focus: cx.focus_handle().tab_stop(true),
+            assistant_unread: 0,
+            assistant_preview: None,
+            assistant_preview_generation: 0,
             terminal: None,
             palette: None,
             palette_source: None,
@@ -924,6 +1509,26 @@ impl AppState {
             environment_toggle_focus: cx.focus_handle().tab_stop(true),
             last_environment_overlay: false,
             last_environment_summary: false,
+            computer_use_deny_focus: cx.focus_handle().tab_stop(true),
+            computer_use_allow_focus: cx.focus_handle().tab_stop(true),
+            subagent_write_modal_focus: SubagentWriteModalFocusState::default(),
+            subagent_write_deny_focus: cx.focus_handle().tab_stop(true),
+            subagent_write_allow_focus: cx.focus_handle().tab_stop(true),
+            subagent_shell_deny_focus: cx.focus_handle().tab_stop(true),
+            subagent_shell_allow_focus: cx.focus_handle().tab_stop(true),
+            subagent_mcp_read_deny_focus: cx.focus_handle().tab_stop(true),
+            subagent_mcp_read_allow_focus: cx.focus_handle().tab_stop(true),
+            subagent_mcp_mutation_deny_focus: cx.focus_handle().tab_stop(true),
+            subagent_mcp_mutation_allow_focus: cx.focus_handle().tab_stop(true),
+            computer_use_privacy,
+            computer_use_privacy_return_focus: None,
+            computer_use_privacy_cancel_focus: cx.focus_handle().tab_stop(true),
+            computer_use_privacy_session_focus: cx.focus_handle().tab_stop(true),
+            computer_use_privacy_permanent_focus: cx.focus_handle().tab_stop(true),
+            pi_provider_setup: None,
+            pi_provider_cancel_focus: cx.focus_handle().tab_stop(true),
+            pi_provider_save_focus: cx.focus_handle().tab_stop(true),
+            pi_provider_sign_out_focus: cx.focus_handle().tab_stop(true),
         };
 
         // The pill is a separate GPUI window, so it does not inherit the
@@ -931,8 +1536,10 @@ impl AppState {
         // both persisted appearance edits and AppKit accessibility events.
         this._subscriptions
             .push(cx.observe(&service, |_this, service, cx| {
-                let appearance = service.read(cx).appearance.clone();
-                let system_reduced = service.read(cx).system_reduced_motion();
+                let service = service.read(cx);
+                let appearance = service.appearance.clone();
+                let system_reduced = service.system_reduced_motion();
+                publish_pill_appearance(appearance.clone(), system_reduced);
                 let handle = match PILL_WINDOW.lock() {
                     Ok(guard) => *guard,
                     Err(poisoned) => *poisoned.into_inner(),
@@ -998,7 +1605,26 @@ impl AppState {
         ));
 
         // Wire the dictation pill (coordinator + window bridge).
-        wire_pill_coordinator(cx);
+        wire_pill_coordinator(this.stores.voice.clone(), cx);
+
+        // The real provider owns its timers/network on the dedicated Tokio
+        // bridge. Unpackaged/dev builds use the inert provider and therefore
+        // perform no update I/O.
+        let start_updates = app_update_authority.clone();
+        Tokio::spawn(cx, async move {
+            start_updates.start();
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            while app_update_receiver.changed().await.is_ok() {
+                let snapshot = app_update_receiver.borrow().clone();
+                let _ = this.update(cx, |this, cx| {
+                    this.app_update_snapshot = snapshot;
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
 
         // Scheduled execution remains deliberately dormant until the app owns
         // a real bounded executor. Starting with a placeholder would create
@@ -1028,6 +1654,7 @@ impl AppState {
                         if let Some(settings) = this.settings.clone() {
                             settings.update(cx, |settings, cx| settings.refresh_managed_skills(cx));
                         }
+                        this.invalidate_slash_catalog();
                     });
                 }
             })
@@ -1039,12 +1666,26 @@ impl AppState {
             &this.composer_input,
             window,
             |this, _source, event, window, cx| match event {
-                InputEvent::Change => cx.notify(),
+                InputEvent::Change => this.update_slash_palette(cx),
                 InputEvent::PressEnter { secondary: false } => {
-                    let text = this.composer_input.read(cx).value().to_string();
-                    this.send_composer(&text, window, cx);
+                    if !this.slash_palette.open {
+                        this.send_composer(window, cx);
+                    }
                 }
-                InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                InputEvent::Focus => cx.notify(),
+                InputEvent::Blur => {
+                    cx.defer_in(window, |_this, window, cx| {
+                        let composer_focused = _this
+                            .composer_input
+                            .read(cx)
+                            .focus_handle(cx)
+                            .is_focused(window);
+                        if !composer_focused {
+                            _this.slash_palette.close();
+                        }
+                        cx.notify();
+                    });
+                }
                 InputEvent::PressEnter { secondary: true } => {}
             },
         ));
@@ -1272,7 +1913,7 @@ impl AppState {
                                     );
                                 }
                                 PendingFilesMutation::Navigate(view) => this.set_view(view, cx),
-                                PendingFilesMutation::Quit => this.request_quit(cx),
+                                PendingFilesMutation::Quit => this.request_quit(window, cx),
                                 PendingFilesMutation::CloseWindow => {
                                     this.cancel_settings_codex_auth(cx);
                                     this.service.update(cx, |service, _cx| {
@@ -1324,7 +1965,7 @@ impl AppState {
             &this.service,
             window,
             |this, _service, window, cx| {
-                this.sync_from_service(cx);
+                this.sync_from_service(window, cx);
                 let files_blocked = this.service.read(cx).generation_active()
                     || this.workspace_state.read(cx).git_busy;
                 let workspace = this.service.read(cx).workspace.clone();
@@ -1402,7 +2043,22 @@ impl AppState {
 
     /// Central sync point driven by service notifications (no window access
     /// here — window-dependent work is deferred to render).
-    fn sync_from_service(&mut self, cx: &mut Context<Self>) {
+    fn sync_from_service(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((submission, _text, _draft)) = self.composer_submission.pending().cloned() {
+            let outcome = self.service.update(cx, |service, _cx| {
+                service.take_submission_outcome(&submission)
+            });
+            let current_text = self.composer_input.read(cx).value().to_string();
+            let current_draft = crate::chat::composer::composer_draft(cx).clone();
+            if self
+                .composer_submission
+                .settle(&submission, outcome, &current_text, &current_draft)
+            {
+                self.composer_input
+                    .update(cx, |input, inner| input.set_value("", window, inner));
+                crate::chat::composer::composer_draft(cx).clear();
+            }
+        }
         let booted = self.service.read(cx).booted;
         if booted && !self.appearance_applied {
             self.appearance_applied = true;
@@ -1413,11 +2069,41 @@ impl AppState {
         let service = self.service.read(cx);
         let catalog = provider_catalog_fingerprint(&service.providers);
         let providers = service.providers.clone();
+        let assistant_selection = service.selection.clone();
         let selection = service
             .selection
             .as_ref()
             .map(|selection| model_key(&selection.provider_id, &selection.model));
+        let generation_owner = service
+            .generation
+            .as_ref()
+            .map(|generation| format!("{}:{}", generation.chat_id, generation.counter));
+        let generation_phase = service.generation.as_ref().map(|generation| {
+            if generation.error.is_some() {
+                GenerationAnnouncementPhase::Failed
+            } else if generation.complete {
+                GenerationAnnouncementPhase::Completed
+            } else {
+                GenerationAnnouncementPhase::Running
+            }
+        });
+        let approval_id = service
+            .active_subagent_approval()
+            .map(|approval| approval.approval_id().to_string());
         let _ = service;
+        let generation_announcement = self
+            .accessibility_announcements
+            .observe_generation(generation_owner.as_deref(), generation_phase);
+        let approval_announcement = self
+            .accessibility_announcements
+            .observe_approval(generation_owner.as_deref(), approval_id.as_deref());
+        if let Some(message) = generation_announcement {
+            let _ = aiden_mac::accessibility::announce(&message);
+        }
+        if let Some(message) = approval_announcement {
+            let _ = aiden_mac::accessibility::announce(&message);
+        }
+        self.sync_assistant_readiness(providers.clone(), assistant_selection, cx);
         if catalog != self.last_catalog {
             self.last_catalog = catalog;
             let runtime = cx.try_global::<ModelPadRuntime>().cloned();
@@ -1446,18 +2132,9 @@ impl AppState {
 
         let generation_active = service.generation_active();
         CHAT_GENERATION_ACTIVE.store(generation_active, Ordering::Relaxed);
-        let message_len = service
-            .active_chat
-            .as_ref()
-            .map_or(0, |chat| chat.messages.len());
-        if message_len != self.last_message_len || generation_active {
-            self.last_message_len = message_len;
-            self.message_scroll.scroll_to_bottom();
-        }
-
         // Mirror the workspace list / active workspace into the bar (only a
-        // folder change restarts the bar's git poll) and re-home an existing
-        // terminal drawer when the workspace changes.
+        // folder change restarts the bar's git poll) and tear down any PTYs
+        // owned by the previous workspace before adopting the next one.
         let workspaces = service.workspaces.clone();
         let active_id = service
             .workspace
@@ -1469,19 +2146,19 @@ impl AppState {
         let workspace_changed = active_id != self.last_workspace_id;
         if workspace_changed {
             self.last_workspace_id = active_id.clone();
+            self.invalidate_slash_catalog();
         }
-        if workspace_changed {
-            if let Some(terminal) = &self.terminal {
-                if let Some(cwd) = folder.clone() {
-                    terminal.update(cx, |terminal, cx| terminal.set_cwd(cwd, cx));
+        if let Some(terminal) = &self.terminal {
+            if terminal_allowed {
+                if let (Some(workspace_id), Some(cwd)) = (active_id.clone(), folder.clone()) {
+                    terminal.update(cx, |terminal, cx| {
+                        terminal.set_workspace(workspace_id, cwd, cx)
+                    });
                 } else {
-                    terminal.update(cx, |terminal, cx| terminal.close(cx));
+                    terminal.update(cx, |terminal, cx| terminal.clear_workspace(cx));
                 }
-            }
-        }
-        if !terminal_allowed {
-            if let Some(terminal) = &self.terminal {
-                terminal.update(cx, |terminal, cx| terminal.close(cx));
+            } else {
+                terminal.update(cx, |terminal, cx| terminal.clear_workspace(cx));
             }
         }
         let workspace_interaction_blocked =
@@ -1497,34 +2174,271 @@ impl AppState {
         }
     }
 
-    /// Send the composer contents (Enter or the send button).
-    pub fn send_composer(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let text = text.trim().to_string();
-        if text.is_empty() {
+    /// Keep an already-created dock panel on the ChatService's foreground
+    /// provider/model snapshot. This is local-only: selecting a model updates
+    /// the dock before the asynchronous settings write, while an external
+    /// provider deletion disables it as soon as refresh_providers publishes.
+    fn sync_assistant_readiness(
+        &mut self,
+        providers: Vec<ConfiguredProvider>,
+        selection: Option<crate::services::provider_kit::ModelSelection>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.assistant.clone() {
+            panel.update(cx, |panel, cx| {
+                panel.refresh_readiness_from_snapshot(providers, selection, cx)
+            });
+        }
+    }
+
+    /// Submit the exact composer draft. Every entry point (button, Enter, and
+    /// ⌘↩) uses this transaction: dispatch first, then clear once admitted.
+    pub fn send_composer(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.composer_submission.pending().is_some() {
             return;
         }
-        // Don't clear the input or attempt to send while a generation is
-        // active — send_message_with would silently reject it and the user's
-        // typed text would vanish. The Send button already becomes Stop.
-        let is_active = self.service.read(cx).generation_active();
-        if is_active {
+        let text = self.composer_input.read(cx).value().to_string();
+        let draft = crate::chat::composer::composer_draft(cx).clone();
+        if text.trim().is_empty() && !draft.has_attachments() {
             return;
         }
 
-        self.composer_input
-            .update(cx, |input, inner| input.set_value("", window, inner));
-
-        // Read staged attachments + edit target from the global draft.
-        let (attachments, editing_message_id) = {
-            let draft = cx.default_global::<crate::chat::composer::ComposerDraft>();
-            let atts = draft.attachments.clone();
-            let edit = draft.editing_message_id.take();
-            (atts, edit)
+        let skill_selection = skill_selection_for_send(&draft.skill_selection);
+        let admitted = self.service.update(cx, |service, cx| {
+            service.send_message_with_skill(
+                &text,
+                draft.attachments.clone(),
+                draft.editing_message_id.clone(),
+                skill_selection,
+                cx,
+            )
+        });
+        let Some(submission) = admitted else {
+            return;
         };
 
-        self.service.update(cx, |service, cx| {
-            service.send_message_with(&text, attachments, editing_message_id, cx)
+        let began = self.composer_submission.begin(submission, text, draft);
+        debug_assert!(began, "checked for a pending composer submission above");
+    }
+
+    fn refresh_slash_catalog(&mut self, cx: &mut Context<Self>) {
+        let workspace_identity = self
+            .service
+            .read(cx)
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.id.clone())
+            .unwrap_or_else(|| "<none>".to_string());
+        if !self
+            .slash_palette
+            .catalog_refresh_needed(&workspace_identity)
+        {
+            return;
+        }
+        let (workspace_root, permission) = {
+            let service = self.service.read(cx);
+            (
+                service
+                    .workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.folder_path.as_deref())
+                    .map(std::path::PathBuf::from),
+                service
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| workspace.permission)
+                    .unwrap_or(aiden_data::portable_config::WorkspacePermission::None),
+            )
+        };
+        let context = stream_context_for_mode(
+            SkillRuntimeMode::Chat,
+            self.stores.config.clone(),
+            workspace_root,
+            permission,
+        )
+        .expect("Chat mode always permits skill catalog context");
+        let revision = self.slash_catalog_revision.wrapping_add(1);
+        self.slash_catalog_revision = revision;
+        self.slash_palette.catalog_loading = true;
+        self.slash_palette.catalog_identity = Some(workspace_identity);
+        cx.spawn(async move |this, cx| {
+            let catalog = cx
+                .background_spawn(async move {
+                    let cancel = AtomicBool::new(false);
+                    collect_skill_catalog(&context, &cancel)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.slash_catalog_revision != revision {
+                    return;
+                }
+                this.slash_palette.catalog = catalog;
+                this.slash_palette.catalog_loading = false;
+                this.slash_palette.catalog_loaded = true;
+                this.slash_palette.recompute();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn invalidate_slash_catalog(&mut self) {
+        self.slash_catalog_revision = self.slash_catalog_revision.wrapping_add(1);
+        self.slash_palette.catalog.clear();
+        self.slash_palette.catalog_identity = None;
+        self.slash_palette.catalog_loaded = false;
+        self.slash_palette.catalog_loading = false;
+    }
+
+    pub(crate) fn update_slash_palette(&mut self, cx: &mut Context<Self>) {
+        let (text, cursor) = {
+            let input = self.composer_input.read(cx);
+            (input.value().to_string(), input.cursor())
+        };
+        self.slash_palette.query = parse_slash_query(&text, cursor);
+        if self.slash_palette.query.is_none() {
+            self.slash_palette.close();
+            cx.notify();
+            return;
+        }
+        self.slash_palette.recompute();
+        if self.slash_palette.open
+            && self.slash_palette.catalog.is_empty()
+            && !self.slash_palette.catalog_loaded
+            && !self.slash_palette.catalog_loading
+        {
+            self.refresh_slash_catalog(cx);
+        }
+        cx.notify();
+    }
+
+    fn remove_slash_token(
+        &mut self,
+        query: &SlashQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.composer_input.read(cx).value().to_string();
+        let Some(value) = query.remove_token(&text) else {
+            return;
+        };
+        self.composer_input.update(cx, |input, cx| {
+            input.set_value(value, window, cx);
+            input.focus(window, cx);
         });
+    }
+
+    pub(crate) fn select_slash_skill(
+        &mut self,
+        entry: SkillCatalogEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (workspace_identity, workspace_permission) = self
+            .service
+            .read(cx)
+            .workspace
+            .as_ref()
+            .map(|workspace| (Some(workspace.id.clone()), Some(workspace.permission)))
+            .unwrap_or((
+                None,
+                Some(aiden_data::portable_config::WorkspacePermission::None),
+            ));
+        let query = self.slash_palette.query.clone();
+        if let Some(query) = query.as_ref() {
+            self.remove_slash_token(query, window, cx);
+        }
+        crate::chat::composer::composer_draft(cx)
+            .skill_selection
+            .replace_for_workspace(&entry, workspace_identity.as_deref(), workspace_permission);
+        self.slash_palette.close();
+        self.slash_palette.notice = None;
+        self.composer_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn clear_slash_skill_selection(&mut self, cx: &mut Context<Self>) {
+        crate::chat::composer::composer_draft(cx)
+            .skill_selection
+            .clear();
+        self.slash_palette.notice = None;
+        cx.notify();
+    }
+
+    pub(crate) fn dispatch_slash_command_id(
+        &mut self,
+        command_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command) = (match command_id {
+            "assistant.open" => Some(PaletteCommand::OpenAssistant),
+            "chat.new" => Some(PaletteCommand::NewChat),
+            "chat.search" => Some(PaletteCommand::SearchChats),
+            "model.change" => Some(PaletteCommand::ChangeModel),
+            "provider.manage" => Some(PaletteCommand::ManageProviders),
+            "settings.open" => Some(PaletteCommand::OpenSettings),
+            "workspace.openPreferredEditor" => Some(PaletteCommand::OpenWorkspaceEditor),
+            "sidebar.toggle" => Some(PaletteCommand::ToggleSidebar),
+            "terminal.toggle" => Some(PaletteCommand::ToggleTerminal),
+            "environment.toggle" => Some(PaletteCommand::ToggleEnvironment),
+            "theme.toggle" => Some(PaletteCommand::ToggleTheme),
+            "view.scheduled" => Some(PaletteCommand::OpenScheduled),
+            "view.usage" => Some(PaletteCommand::OpenUsage),
+            "view.subagents" => Some(PaletteCommand::OpenSubagents),
+            _ => None,
+        }) else {
+            return;
+        };
+        self.palette_invoker_focus = Some(self.composer_input.read(cx).focus_handle(cx));
+        self.on_palette_command(command, window, cx);
+    }
+
+    pub(crate) fn select_slash_command_id(
+        &mut self,
+        command_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let query = self.slash_palette.query.clone();
+        if let Some(query) = query.as_ref() {
+            self.remove_slash_token(query, window, cx);
+        }
+        self.slash_palette.close();
+        self.dispatch_slash_command_id(command_id, window, cx);
+    }
+
+    pub(crate) fn handle_slash_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.slash_palette.open {
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "up" => self.slash_palette.move_selection(false),
+            "down" => self.slash_palette.move_selection(true),
+            "escape" => {
+                self.slash_palette.close();
+                self.composer_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+            "enter" => {
+                if let Some(command_id) = self.slash_palette.selected_command_id() {
+                    let command_id = command_id.to_string();
+                    self.select_slash_command_id(&command_id, window, cx);
+                } else if let Some(entry) = self.slash_palette.selected_skill() {
+                    self.select_slash_skill(entry, window, cx);
+                }
+            }
+            _ => return,
+        }
+        cx.stop_propagation();
+        cx.notify();
     }
 
     fn on_new_chat(&mut self, _: &NewChat, window: &mut Window, cx: &mut Context<Self>) {
@@ -1535,13 +2449,34 @@ impl AppState {
         self.quit_guarded(window, cx);
     }
 
-    /// The quit barrier: warn + cancel when a generation is in flight, stop
-    /// the background services that spawn tokio work, mark the barrier ready,
-    /// and quit. Full dialog UX lands later — for now a warning log plus
-    /// clean cancellation so no tokio stream task leaks past shutdown.
-    fn request_quit(&mut self, cx: &mut Context<Self>) {
-        self.cancel_settings_codex_auth(cx);
+    /// Complete the irreversible half of quit after every authoritative
+    /// Computer Use persistence/teardown operation has succeeded.
+    fn finish_quit(&mut self, cx: &mut Context<Self>) {
         let barrier = self.stores.quit_barrier.clone();
+        self.service.update(cx, |service, cx| service.dispose(cx));
+        if let Some(pill) = PILL_COORDINATOR.get() {
+            pill.dispose();
+        } else {
+            self.stores.voice.cancel();
+        }
+        self.stores.foundation_models.dispose();
+        // Stop the scheduler tick loop (aborts the tick task, requests
+        // cancellation of any live runs) so no background tokio task
+        // outlives the app.
+        self.stores.scheduler.stop();
+        barrier.note_renderer_closed();
+        barrier.force();
+        cx.quit();
+    }
+
+    /// The quit barrier: claim one quit attempt, stop foreground work without
+    /// tearing down the app, then await the authority-owned Computer Use
+    /// shutdown before crossing the irreversible process quit boundary.
+    fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !claim_quit(&mut self.quit_in_flight) {
+            return;
+        }
+        self.cancel_settings_codex_auth(cx);
         if self.service.read(cx).generation_active() {
             tracing::warn!(
                 "Quit requested with an in-flight generation — cancelling the stream before shutdown."
@@ -1549,18 +2484,49 @@ impl AppState {
             // Aborts the provider stream: sets the driver's cancel flag and
             // settles the partial bubble so the watcher/driver tasks end
             // instead of running to completion into a dead channel.
+            self.service
+                .update(cx, |service, cx| service.stop_generation(cx));
         }
-        self.service.update(cx, |service, cx| service.dispose(cx));
-        self.stores.foundation_models.dispose();
-        // Stop the scheduler tick loop (aborts the tick task, requests
-        // cancellation of any live runs) so no background tokio task
-        // outlives the app.
-        self.stores.scheduler.stop();
-        // Barrier bookkeeping: the renderer can no longer veto, and the quit
-        // is forced through any lingering generation gate.
-        barrier.note_renderer_closed();
-        barrier.force();
-        cx.quit();
+        if let Some(pill) = PILL_COORDINATOR.get() {
+            pill.request_cancel();
+        } else {
+            self.stores.voice.cancel();
+        }
+        let computer_use = Arc::clone(&self.stores.computer_use);
+        let authority_for_resume = Arc::clone(&computer_use);
+        let shutdown = Tokio::spawn(cx, async move { computer_use.shutdown().await });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = shutdown.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.quit_in_flight = false;
+                match result {
+                    Ok(Ok(())) => this.finish_quit(cx),
+                    Ok(Err(error)) => {
+                        tracing::warn!("Computer Use shutdown did not finish cleanly: {error}");
+                        authority_for_resume.resume_after_cancelled_shutdown();
+                        window.push_notification(
+                            gpui_component::notification::Notification::error(
+                                COMPUTER_USE_QUIT_FAILURE,
+                            ),
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        tracing::warn!("Computer Use shutdown task failed: {error}");
+                        authority_for_resume.resume_after_cancelled_shutdown();
+                        window.push_notification(
+                            gpui_component::notification::Notification::error(
+                                COMPUTER_USE_QUIT_FAILURE,
+                            ),
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     // =======================================================================
@@ -1580,6 +2546,43 @@ impl AppState {
         }
         self.dismiss_compact_sidebar_for_navigation(window, cx);
         self.enter_settings(Some(SettingsSection::Providers), window, cx);
+    }
+
+    pub(crate) fn dismiss_app_update(&mut self, cx: &mut Context<Self>) {
+        if let AppUpdateSnapshot::Ready { version } = &self.app_update_snapshot {
+            self.app_update_dismissed_version = Some(version.clone());
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn open_app_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let AppUpdateSnapshot::Ready { version } = &self.app_update_snapshot else {
+            return;
+        };
+        let version = version.clone();
+        if self.stores.app_updates.open_downloaded_installer() {
+            self.app_update_dismissed_version = Some(version);
+            window.push_notification(
+                "The verified Aiden installer is open. Finish the update there.",
+                cx,
+            );
+        } else {
+            window.push_notification(
+                "This update is ready, but the installer is unavailable in this build.",
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn check_for_app_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let authority = self.stores.app_updates.clone();
+        let task = Tokio::spawn(cx, async move { authority.check_now(true).await });
+        cx.spawn(async move |_this, _cx| {
+            let _ = task.await;
+        })
+        .detach();
+        window.push_notification("Checking for Aiden updates…", cx);
     }
 
     /// ⌘⇧F: focus the sidebar chat search.
@@ -1825,15 +2828,19 @@ impl AppState {
         self.navigate_view(destination, window, cx);
     }
 
-    /// ⌘⇧A: toggle the Assistant panel.
+    /// ⌘⇧A toggles the persistent app-root Assistant dock; it never changes
+    /// `view`, so the chat/main surface stays mounted underneath it.
     fn on_toggle_assistant(
         &mut self,
         _: &ToggleAssistant,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dismiss_compact_sidebar_for_navigation(window, cx);
-        self.toggle_view(AppView::Assistant, window, cx);
+        if self.assistant_open {
+            self.minimize_assistant(window, cx);
+        } else {
+            self.open_assistant(window, cx);
+        }
     }
 
     fn on_open_assistant(
@@ -1842,8 +2849,7 @@ impl AppState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.dismiss_compact_sidebar_for_navigation(window, cx);
-        self.navigate_view(AppView::Assistant, window, cx);
+        self.open_assistant(window, cx);
     }
 
     /// ⌘⇧S: toggle the Subagents panel.
@@ -1886,8 +2892,7 @@ impl AppState {
         if self.environment_overlay_open(window, cx) {
             return;
         }
-        let text = self.composer_input.read(cx).value().to_string();
-        self.send_composer(&text, window, cx);
+        self.send_composer(window, cx);
     }
 
     fn on_save_file(&mut self, _: &SaveFile, window: &mut Window, cx: &mut Context<Self>) {
@@ -2228,7 +3233,6 @@ impl AppState {
                 | PaletteCommand::OpenScheduled
                 | PaletteCommand::OpenUsage
                 | PaletteCommand::OpenSubagents
-                | PaletteCommand::OpenAssistant
                 | PaletteCommand::Quit
                 | PaletteCommand::NextChat
                 | PaletteCommand::PreviousChat
@@ -2279,8 +3283,17 @@ impl AppState {
             PaletteCommand::OpenScheduled => self.set_view(AppView::Scheduled, cx),
             PaletteCommand::OpenUsage => self.set_view(AppView::Usage, cx),
             PaletteCommand::OpenSubagents => self.set_view(AppView::Subagents, cx),
-            PaletteCommand::OpenAssistant => self.set_view(AppView::Assistant, cx),
-            PaletteCommand::Quit => self.request_quit(cx),
+            PaletteCommand::OpenAssistant => {
+                // The palette owns an active dialog; release it before the
+                // dock's modal guard runs, then capture the original invoker
+                // as the dock's restore target.
+                self.close_palette(window, cx);
+                if let Some(focus) = palette_invoker_focus {
+                    focus.focus(window);
+                }
+                self.open_assistant(window, cx);
+            }
+            PaletteCommand::Quit => self.request_quit(window, cx),
             PaletteCommand::ToggleTerminal => self.toggle_terminal(window, cx),
             PaletteCommand::ToggleEnvironment => self.toggle_environment(window, cx),
             PaletteCommand::OpenWorkspaceEditor => {
@@ -2394,8 +3407,8 @@ impl AppState {
         });
     }
 
-    /// Create the terminal drawer once; the PTY stays alive across toggles
-    /// (the drawer hides/shows, it is never destroyed).
+    /// Create the terminal drawer once. Its workspace-owned PTYs stay alive
+    /// across drawer toggles, but are destroyed on workspace/window teardown.
     fn terminal_entity(
         &mut self,
         window: &mut Window,
@@ -2404,22 +3417,29 @@ impl AppState {
         if let Some(entity) = &self.terminal {
             return Some(entity.clone());
         }
-        let cwd = self.service.read(cx).workspace_folder()?;
+        let service = self.service.read(cx);
+        let workspace_id = service.workspace.as_ref()?.id.clone();
+        let cwd = service.workspace_folder()?;
         let deps = TerminalDeps {
             shell: None,
             // The terminal starts in the active workspace folder (the git repo
-            // root); a later workspace switch re-homes it via `set_cwd`.
+            // root); a later workspace switch destroys all prior sessions.
             cwd: Some(cwd),
             simple: false,
         };
-        let entity = cx.new(|cx| TerminalDrawer::new(cx, deps));
+        let config = self.stores.config.clone();
+        let entity =
+            cx.new(|cx| TerminalDrawer::new_owned(cx, deps, Some(workspace_id), Some(config)));
         let was_open = Rc::new(Cell::new(false));
         self._subscriptions.push(cx.observe_in(
             &entity,
             window,
             move |this, terminal, window, cx| {
                 let open = terminal.read(cx).is_open();
-                if was_open.replace(open) && !open {
+                if was_open.replace(open)
+                    && !open
+                    && terminal.read(cx).should_restore_toggle_focus()
+                {
                     this.terminal_toggle_focus.focus(window);
                 }
                 cx.notify();
@@ -2452,6 +3472,29 @@ impl AppState {
             window,
             |_this, _settings, _window, cx| cx.notify(),
         ));
+        self._subscriptions.push(cx.subscribe_in(
+            &entity,
+            window,
+            |this, _settings, event: &SettingsEvent, window, cx| match event {
+                SettingsEvent::PiProviderSetupRequested {
+                    provider_id,
+                    label,
+                    authority_revision,
+                } => {
+                    this.open_pi_provider_setup(
+                        provider_id,
+                        label,
+                        Some(*authority_revision),
+                        window,
+                        cx,
+                    );
+                }
+                SettingsEvent::ComputerUsePrivacyNoticeRestored => {
+                    this.computer_use_privacy.restore();
+                    cx.notify();
+                }
+            },
+        ));
         self.settings = Some(entity.clone());
         entity
     }
@@ -2464,8 +3507,12 @@ impl AppState {
         if let Some(entity) = &self.scheduled {
             return entity.clone();
         }
-        let source: Arc<dyn ScheduledTaskSource> =
-            Arc::new(StoreScheduledSource::new(self.stores.schedules.clone()));
+        let source: Arc<dyn ScheduledTaskSource> = Arc::new(StoreScheduledSource::new(
+            self.stores.schedules.clone(),
+            self.stores.config.clone(),
+            self.stores.scheduler.clone(),
+            self.stores.scheduler_executor.clone(),
+        ));
         let entity = cx.new(|cx| ScheduledPanel::new(cx, ScheduledPanelDeps::new(source)));
         let panel = entity.clone();
         self._subscriptions.push(cx.subscribe_in(
@@ -2476,13 +3523,44 @@ impl AppState {
                 ScheduledPanelEvent::ToggleEnabled { id, enabled } => {
                     this.toggle_scheduled_task(panel.clone(), id, *enabled, cx);
                 }
-                ScheduledPanelEvent::RunNow { .. } => {
-                    window.push_notification("Scheduled task execution is not available yet.", cx);
+                ScheduledPanelEvent::RunNow { id } => {
+                    this.run_scheduled_task(panel.clone(), id, window, cx);
                 }
             },
         ));
         self.scheduled = Some(entity.clone());
         entity
+    }
+
+    fn run_scheduled_task(
+        &mut self,
+        panel: Entity<ScheduledPanel>,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scheduler = self.stores.scheduler.clone();
+        let id = id.to_string();
+        window.push_notification("Starting scheduled task…", cx);
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let run = scheduler.run_now(&id)?;
+                    run.await
+                })
+                .await;
+            let _ = panel.update(cx, |panel, cx| {
+                panel.set_error(
+                    result
+                        .as_ref()
+                        .err()
+                        .map(|error| format!("Run Now failed: {error}")),
+                    cx,
+                );
+                panel.refresh(cx);
+            });
+        })
+        .detach();
     }
 
     /// Persist an enable/disable toggle through the shared scheduler authority,
@@ -2514,8 +3592,10 @@ impl AppState {
         if let Some(entity) = &self.usage {
             return entity.clone();
         }
-        let source: Arc<dyn UsageDataSource> =
-            Arc::new(StoreUsageSource::new(self.stores.usage.clone()));
+        let source: Arc<dyn UsageDataSource> = Arc::new(StoreUsageSource::new(
+            self.stores.usage.clone(),
+            self.stores.config.clone(),
+        ));
         let entity = cx.new(|cx| UsagePanel::new(cx, UsagePanelDeps::new(source)));
         self.usage = Some(entity.clone());
         entity
@@ -2526,20 +3606,157 @@ impl AppState {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<SubagentsPanel> {
+        let active_chat = self.service.read(cx).active_chat_id.clone();
         if let Some(entity) = &self.subagents {
+            entity.update(cx, |panel, cx| panel.set_active_chat(active_chat, cx));
             return entity.clone();
         }
-        // No live subagent runtime yet: the roster renders from an empty
-        // in-memory source (the empty state) until the run registry lands.
-        let source: Arc<dyn SubagentRunSource> = Arc::new(MemoryRunSource::default());
+        let source: Arc<dyn SubagentRunSource> = self.stores.subagents.clone();
         let entity = cx.new(|cx| SubagentsPanel::new(cx, SubagentsPanelDeps::new(source)));
+        entity.update(cx, |panel, cx| panel.set_active_chat(active_chat, cx));
         self.subagents = Some(entity.clone());
         entity
     }
 
-    /// The proactive-assistant panel: created once on first navigation (its
-    /// MCP inventory and recent automations are collected on open) and kept
-    /// alive so a pending thread + approval queue survive view switches.
+    /// Open the Subagents roster for a transcript chip and select the exact
+    /// persisted run. Navigation goes through the same files-mutation gate as
+    /// the keyboard/sidebar command, so a pending editor cannot be discarded
+    /// silently by clicking a chip.
+    pub(crate) fn open_subagent_run(
+        &mut self,
+        run_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_compact_sidebar_for_navigation(window, cx);
+        self.navigate_view(AppView::Subagents, window, cx);
+        if self.view != AppView::Subagents {
+            return;
+        }
+        let panel = self.subagents_entity(window, cx);
+        let run_id = run_id.to_string();
+        panel.update(cx, |panel, cx| panel.select_run(&run_id, cx));
+    }
+
+    fn open_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.assistant_interaction_blocked(window, cx) {
+            return;
+        }
+        if !self.assistant_open {
+            self.assistant_return_focus = window.focused(cx);
+            self.assistant_open = true;
+            self.assistant_present = true;
+            self.assistant_unread = 0;
+            self.assistant_preview = None;
+            self.assistant_preview_generation = self.assistant_preview_generation.wrapping_add(1);
+        }
+        let panel = self.assistant_entity(window, cx);
+        panel.read(cx).focus_composer(window, cx);
+        cx.notify();
+    }
+
+    fn minimize_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.assistant_open {
+            return;
+        }
+        self.assistant_open = false;
+        if self.assistant_motion_reduced(cx) {
+            self.finish_assistant_minimize(window, cx);
+        } else if let Some(window_handle) = cx.active_window() {
+            cx.spawn(async move |this, cx| {
+                Timer::after(Duration::from_millis(120)).await;
+                let _ = window_handle.update(cx, |_, window, cx| {
+                    this.update(cx, |this, cx| this.finish_assistant_minimize(window, cx))
+                        .ok();
+                });
+            })
+            .detach();
+        } else {
+            self.finish_assistant_minimize(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn finish_assistant_minimize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.assistant_open || !self.assistant_present {
+            return;
+        }
+        self.assistant_present = false;
+        let restore_focus =
+            assistant_minimize_may_restore_focus(self.assistant_interaction_blocked(window, cx));
+        let return_focus = self.assistant_return_focus.take();
+        if restore_focus {
+            if let Some(focus) = return_focus {
+                focus.focus(window);
+            } else {
+                self.assistant_bubble_focus.focus(window);
+            }
+        }
+        cx.notify();
+    }
+
+    fn assistant_motion_reduced(&self, cx: &App) -> bool {
+        cx.try_global::<crate::services::appearance::AidenAppearanceRuntime>()
+            .is_some_and(|appearance| appearance.motion_reduced)
+    }
+
+    fn assistant_notice(&mut self, notice: String, cx: &mut Context<Self>) {
+        if self.assistant_open {
+            return;
+        }
+        let (unread, preview) =
+            assistant_notice_state(self.assistant_open, self.assistant_unread, &notice);
+        self.assistant_unread = unread;
+        self.assistant_preview = preview;
+        self.assistant_preview_generation = self.assistant_preview_generation.wrapping_add(1);
+        let generation = self.assistant_preview_generation;
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_secs(8)).await;
+            this.update(cx, |this, cx| {
+                if this.assistant_preview_generation == generation {
+                    this.assistant_preview = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn assistant_interaction_blocked(&self, window: &mut Window, cx: &mut App) -> bool {
+        let root_modal = window.has_active_dialog(cx)
+            || self.files.read(cx).confirmation_open()
+            || self
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.read(cx).skills_modal_open())
+            || self
+                .settings
+                .as_ref()
+                .is_some_and(|settings| settings.read(cx).provider_editor_modal_open())
+            || self
+                .service
+                .read(cx)
+                .pending_computer_use_approval()
+                .is_some()
+            || self
+                .service
+                .read(cx)
+                .pending_subagent_write_approval()
+                .is_some()
+            || self
+                .service
+                .read(cx)
+                .pending_subagent_shell_approval()
+                .is_some()
+            || self.computer_use_privacy.is_open()
+            || self.pi_provider_setup.is_some();
+        assistant_dock_occluded(self.environment_overlay_open(window, cx), root_modal)
+    }
+
+    /// The proactive-assistant panel: created once from the root dock and kept
+    /// alive so a pending thread + approval queue survive every route switch.
     fn assistant_entity(
         &mut self,
         window: &mut Window,
@@ -2554,8 +3771,17 @@ impl AppState {
         self._subscriptions.push(cx.subscribe_in(
             &entity,
             window,
-            |_this, _source, _event: &AssistantPanelEvent, _window, _cx| {},
+            |this, _source, event: &AssistantPanelEvent, window, cx| match event {
+                AssistantPanelEvent::Refresh => {}
+                AssistantPanelEvent::Notice(notice) => this.assistant_notice(notice.clone(), cx),
+                AssistantPanelEvent::Minimize => this.minimize_assistant(window, cx),
+            },
         ));
+        let providers = self.service.read(cx).providers.clone();
+        let selection = self.service.read(cx).selection.clone();
+        entity.update(cx, |panel, cx| {
+            panel.refresh_readiness_from_snapshot(providers, selection, cx)
+        });
         self.assistant = Some(entity.clone());
         entity
     }
@@ -2583,9 +3809,101 @@ impl AppState {
     }
 }
 
-/// Open (or focus) the pill window on the foreground; `true` when a new
-/// window was created. Also stores the window handle in [`PILL_WINDOW`] so
-/// later broadcasts can reach the view.
+/// Sanitise a dock notification to one visual line without exposing an
+/// unbounded streamed reply beside the bubble.
+fn assistant_preview_text(text: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    const FALLBACK: &str = "Aiden has an update";
+    let compact: String = text
+        .chars()
+        .filter_map(|character| {
+            if is_format_control(character) || matches!(character, '`' | '*' | '_' | '#') {
+                None
+            } else if character.is_control() {
+                Some(' ')
+            } else {
+                Some(character)
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let compact = compact.trim_matches(|character: char| {
+        matches!(character, '-' | '>' | '[' | ']' | '(' | ')' | '~')
+    });
+    let compact = if compact.is_empty() {
+        FALLBACK
+    } else {
+        compact
+    };
+    if compact.chars().count() <= MAX_CHARS {
+        return compact.to_string();
+    }
+    let candidate: String = compact.chars().take(MAX_CHARS).collect();
+    let clipped = candidate
+        .rfind(' ')
+        .map(|cut| candidate[..cut].trim_end())
+        .unwrap_or(candidate.as_str());
+    format!("{clipped}…")
+}
+
+/// Rust does not expose Unicode general category Cf directly. This is the
+/// complete format-control set relevant to the Unicode ranges Electron's
+/// `\p{Cf}` sanitizer removes, including bidi controls and zero-width marks.
+fn is_format_control(character: char) -> bool {
+    matches!(character,
+        '\u{00ad}' | '\u{0600}'..='\u{0605}' | '\u{061c}' | '\u{06dd}' | '\u{070f}' |
+        '\u{0890}'..='\u{0891}' | '\u{08e2}' | '\u{180e}' | '\u{200b}'..='\u{200f}' |
+        '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206f}' |
+        '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{110bd}' | '\u{110cd}' |
+        '\u{13430}'..='\u{1343f}' | '\u{1bca0}'..='\u{1bca3}' | '\u{1d173}'..='\u{1d17a}' |
+        '\u{e0001}' | '\u{e0020}'..='\u{e007f}'
+    )
+}
+
+fn assistant_notice_state(open: bool, unread: u8, notice: &str) -> (u8, Option<String>) {
+    if open {
+        (unread, None)
+    } else {
+        (
+            unread.saturating_add(1),
+            Some(assistant_preview_text(notice)),
+        )
+    }
+}
+
+/// `present` is intentionally independent from `open` for the 120 ms exit.
+fn assistant_dock_panel_present(_open: bool, present: bool) -> bool {
+    present
+}
+
+/// The minimized root bubble must never create a network-owning panel.
+fn assistant_entity_required_for_dock(open: bool, present: bool) -> bool {
+    open || present
+}
+
+fn assistant_dock_width(viewport_width: f32) -> f32 {
+    (viewport_width - 48.).clamp(200., 368.)
+}
+
+fn assistant_dock_height(viewport_height: f32) -> f32 {
+    (viewport_height - 128.).clamp(220., 544.)
+}
+
+fn assistant_dock_occluded(environment_overlay: bool, root_modal: bool) -> bool {
+    environment_overlay || root_modal
+}
+
+const fn assistant_minimize_may_restore_focus(interaction_blocked: bool) -> bool {
+    !interaction_blocked
+}
+
+/// Show (or reuse) the pill window on the foreground; `true` when a new
+/// window was created. The retained window is deliberately probed without
+/// activation: the pill is a non-activating overlay and must never steal the
+/// focused target that will receive the dictated paste. Also stores the
+/// window handle in [`PILL_WINDOW`] so later broadcasts can reach the view.
 fn bridge_show_pill(
     cx: &mut gpui::AsyncApp,
     audio: &Arc<LiveAudioSource>,
@@ -2602,9 +3920,12 @@ fn bridge_show_pill(
         Err(poisoned) => poisoned.into_inner(),
     };
     if let Some(handle) = guard.as_ref() {
-        let activate =
-            cx.update(|app| handle.update(app, |_view, window, _cx| window.activate_window()));
-        if matches!(activate, Ok(Ok(()))) {
+        // A retained pill is already visible/non-activating. Use a no-op
+        // entity update only to detect a stale handle; calling
+        // `activate_window` here would move keyboard focus away from the
+        // user's target application before the transcript is pasted.
+        let alive = cx.update(|app| handle.update(app, |_view, _window, _cx| {}));
+        if matches!(alive, Ok(Ok(()))) {
             return false;
         }
         // The cached handle is stale (window closed via Escape); replace it.
@@ -2659,7 +3980,10 @@ fn bridge_broadcast(
 
 /// Wire the dictation pill: spawn the foreground window-command bridge and
 /// construct the coordinator over it. Runs once from [`AppState::new`].
-fn wire_pill_coordinator(cx: &mut Context<AppState>) {
+fn wire_pill_coordinator(
+    voice: Arc<crate::services::voice::VoiceAuthority>,
+    cx: &mut Context<AppState>,
+) {
     if PILL_COORDINATOR.get().is_some() {
         return;
     }
@@ -2674,21 +3998,17 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
         while let Some(command) = command_rx.recv().await {
             match command {
                 PillCommand::Show { reply } => {
-                    let appearance = this
-                        .upgrade()
-                        .and_then(|entity| {
-                            cx.read_entity(&entity, |state, app| {
-                                let service = state.service.read(app);
-                                (service.appearance.clone(), service.system_reduced_motion())
-                            })
-                            .ok()
+                    let live = this.upgrade().and_then(|entity| {
+                        cx.read_entity(&entity, |state, app| {
+                            let service = state.service.read(app);
+                            (service.appearance.clone(), service.system_reduced_motion())
                         })
-                        .unwrap_or_else(|| {
-                            (
-                                aiden_core::appearance::create_default_appearance_config(),
-                                false,
-                            )
-                        });
+                        .ok()
+                    });
+                    if let Some((appearance, reduced)) = live.as_ref() {
+                        publish_pill_appearance(appearance.clone(), *reduced);
+                    }
+                    let appearance = pill_appearance_for_show(live, read_pill_appearance());
                     let created = bridge_show_pill(cx, &bridge_audio, &appearance.0, appearance.1);
                     let _ = reply.send(created);
                 }
@@ -2729,7 +4049,7 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
         log_error: Box::new(|message, error| {
             tracing::error!("dictation: {message}: {error}");
         }),
-        model_id: "parakeet-v3".to_string(),
+        voice,
         audio,
         transcribe: None,
     });
@@ -2739,9 +4059,1511 @@ fn wire_pill_coordinator(cx: &mut Context<AppState>) {
     let _ = PILL_COORDINATOR.set(pill);
 }
 
+impl AppState {
+    pub(crate) fn toggle_active_chat_computer_use(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let enabled = self
+            .service
+            .read(cx)
+            .active_chat
+            .as_ref()
+            .is_some_and(|chat| chat.computer_use_enabled == Some(true));
+        if enabled {
+            self.service.update(cx, |service, cx| {
+                service.set_active_chat_computer_use(false, cx)
+            });
+            return;
+        }
+        match self.computer_use_privacy.request_chat_enable() {
+            ComputerUseEnableIntent::Proceed => self.service.update(cx, |service, cx| {
+                service.set_active_chat_computer_use(true, cx)
+            }),
+            ComputerUseEnableIntent::ShowPrivacyNotice => {
+                self.computer_use_privacy_return_focus = window.focused(cx);
+                let focus = self.computer_use_privacy_cancel_focus.clone();
+                cx.defer_in(window, move |_this, window, _cx| focus.focus(window));
+                cx.notify();
+            }
+        }
+    }
+
+    fn cancel_computer_use_privacy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.computer_use_privacy.cancel();
+        if let Some(focus) = self.computer_use_privacy_return_focus.take() {
+            cx.defer_in(window, move |_this, window, _cx| focus.focus(window));
+        }
+        cx.notify();
+    }
+
+    fn accept_computer_use_privacy(
+        &mut self,
+        dismissal: ComputerUseNoticeDismissal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.computer_use_privacy.accept(dismissal) {
+            return;
+        }
+        if dismissal == ComputerUseNoticeDismissal::Permanent {
+            let config = Arc::clone(&self.stores.config);
+            cx.background_spawn(async move {
+                let mut patch = serde_json::Map::new();
+                patch.insert(
+                    COMPUTER_USE_NOTICE_DISMISSED_KEY.into(),
+                    COMPUTER_USE_NOTICE_VERSION.into(),
+                );
+                if let Err(error) = config.set_settings(&patch, &|| true) {
+                    tracing::warn!("could not save Computer Use privacy acknowledgement: {error}");
+                }
+            })
+            .detach();
+        }
+        self.service.update(cx, |service, cx| {
+            service.set_active_chat_computer_use(true, cx)
+        });
+        if let Some(focus) = self.computer_use_privacy_return_focus.take() {
+            cx.defer_in(window, move |_this, window, _cx| focus.focus(window));
+        }
+        cx.notify();
+    }
+
+    fn decide_computer_use_approval(
+        &mut self,
+        approval_id: &str,
+        decision: ComputerUseApprovalDecision,
+        cx: &mut Context<Self>,
+    ) {
+        self.service.update(cx, |service, cx| {
+            service.decide_computer_use_approval(approval_id, decision, cx);
+        });
+    }
+
+    fn reconcile_subagent_approval_focus(
+        &mut self,
+        approval_id: Option<&str>,
+        deny_focus: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self
+            .subagent_write_modal_focus
+            .reconcile(approval_id, window.focused(cx))
+        {
+            SubagentWriteModalFocusTransition::Unchanged => {}
+            SubagentWriteModalFocusTransition::FocusDeny => {
+                let focus = deny_focus;
+                cx.defer_in(window, move |_this, window, _cx| focus.focus(window));
+            }
+            SubagentWriteModalFocusTransition::Restore(focus) => {
+                cx.defer_in(window, move |_this, window, _cx| focus.focus(window));
+            }
+        }
+    }
+
+    fn decide_subagent_write_approval(
+        &mut self,
+        approval_id: &str,
+        decision: SubagentWorkspaceWriteDecision,
+        cx: &mut Context<Self>,
+    ) {
+        self.service.update(cx, |service, cx| {
+            service.decide_subagent_write_approval(approval_id, decision, cx);
+        });
+    }
+
+    pub(crate) fn open_pi_provider_setup(
+        &mut self,
+        provider_id: &str,
+        label: &str,
+        expected_revision: Option<u64>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .pi_provider_setup
+            .as_ref()
+            .is_some_and(|modal| !pi_provider_setup_can_close(modal.busy))
+        {
+            return;
+        }
+        let authority = &self.stores.pi_providers;
+        let statuses = authority.list();
+        let Some(status) = statuses
+            .iter()
+            .find(|status| status.provider.id == provider_id)
+        else {
+            return;
+        };
+        if expected_revision.is_some_and(|revision| revision != status.revision) {
+            return;
+        }
+        let configured = status.configured;
+        let api_key = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(if configured {
+                    "Replace API key"
+                } else {
+                    "Paste API key"
+                })
+        });
+        let input_focus = api_key.read(cx).focus_handle(cx);
+        self.pi_provider_setup = Some(PiProviderSetupModal {
+            provider_id: provider_id.to_string(),
+            label: label.to_string(),
+            lease: authority.begin_setup(),
+            api_key,
+            configured,
+            busy: false,
+            error: None,
+            return_focus: window.focused(cx),
+        });
+        cx.defer_in(window, move |_this, window, _cx| input_focus.focus(window));
+        cx.notify();
+    }
+
+    fn close_pi_provider_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .pi_provider_setup
+            .as_ref()
+            .is_some_and(|modal| !pi_provider_setup_can_close(modal.busy))
+        {
+            return;
+        }
+        let return_focus = self
+            .pi_provider_setup
+            .take()
+            .and_then(|modal| modal.return_focus);
+        if let Some(return_focus) = return_focus {
+            cx.defer_in(window, move |_this, window, _cx| return_focus.focus(window));
+        }
+        cx.notify();
+    }
+
+    fn save_pi_provider_setup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(modal) = self.pi_provider_setup.as_mut() else {
+            return;
+        };
+        if modal.busy {
+            return;
+        }
+        let key = modal.api_key.read(cx).value().to_string();
+        let provider_id = modal.provider_id.clone();
+        let lease = modal.lease;
+        modal.busy = true;
+        modal.error = None;
+        let authority = self.stores.pi_providers.clone();
+        let settings = self.settings.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let operation_provider_id = provider_id.clone();
+            let result = cx
+                .background_spawn(async move {
+                    authority.commit_api_key(&operation_provider_id, &key, lease)
+                })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let Some(modal) = this.pi_provider_setup.as_mut() else {
+                    return;
+                };
+                if !pi_provider_setup_completion_is_current(
+                    &modal.provider_id,
+                    modal.lease,
+                    &provider_id,
+                    lease,
+                ) {
+                    return;
+                }
+                modal.busy = false;
+                match result {
+                    Ok(()) => {
+                        if let Some(settings) = settings {
+                            settings.update(cx, |settings, cx| settings.refresh(cx));
+                        }
+                        this.close_pi_provider_setup(window, cx);
+                    }
+                    Err(error) => {
+                        modal.error = Some(error.to_string());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn sign_out_pi_provider(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(modal) = self.pi_provider_setup.as_mut() else {
+            return;
+        };
+        if modal.busy {
+            return;
+        }
+        modal.busy = true;
+        modal.error = None;
+        let provider_id = modal.provider_id.clone();
+        let lease = modal.lease;
+        let authority = self.stores.pi_providers.clone();
+        let settings = self.settings.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let operation_provider_id = provider_id.clone();
+            let result = cx
+                .background_spawn(async move { authority.sign_out(&operation_provider_id) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let Some(modal) = this.pi_provider_setup.as_mut() else {
+                    return;
+                };
+                if !pi_provider_setup_completion_is_current(
+                    &modal.provider_id,
+                    modal.lease,
+                    &provider_id,
+                    lease,
+                ) {
+                    return;
+                }
+                modal.busy = false;
+                match result {
+                    Ok(()) => {
+                        if let Some(settings) = settings {
+                            settings.update(cx, |settings, cx| settings.refresh(cx));
+                        }
+                        this.close_pi_provider_setup(window, cx);
+                    }
+                    Err(error) => {
+                        modal.error = Some(error.to_string());
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn pi_provider_setup_modal(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let Some(modal) = self.pi_provider_setup.as_ref() else {
+            return div().into_any_element();
+        };
+        let busy = modal.busy;
+        let configured = modal.configured;
+        v_flex()
+            .id("pi-provider-setup-backdrop")
+            .absolute().inset_0().occlude().items_center().justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _event, window, cx| { cx.stop_propagation(); this.close_pi_provider_setup(window, cx); }))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" { this.close_pi_provider_setup(window, cx); cx.stop_propagation(); return; }
+                if event.keystroke.key != "tab" { return; }
+                let Some(modal) = this.pi_provider_setup.as_ref() else { return };
+                let mut handles = vec![modal.api_key.read(cx).focus_handle(cx), this.pi_provider_cancel_focus.clone(), this.pi_provider_save_focus.clone()];
+                if modal.configured { handles.push(this.pi_provider_sign_out_focus.clone()); }
+                let position = handles.iter().position(|handle| handle.is_focused(window));
+                handles[trapped_focus_index(event.keystroke.modifiers.shift, position, handles.len())].focus(window);
+                cx.stop_propagation();
+            }))
+            .child(v_flex().id("pi-provider-setup-dialog").w(px(440.)).max_w(gpui::relative(0.9)).gap_3().p_4().rounded(px(16.)).border_1().border_color(theme.border).bg(theme.popover).shadow_lg().occlude()
+                .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| cx.stop_propagation())
+                .on_click(|_event, _window, cx| cx.stop_propagation())
+                .child(div().font_weight(FontWeight::SEMIBOLD).child(format!("Set up {}", modal.label)))
+                .child(div().text_sm().text_color(theme.muted_foreground).child("This credential is encrypted on this Mac and bound to Pi's exact provider catalog."))
+                .child(Input::new(&modal.api_key).mask_toggle().disabled(busy))
+                .when_some(modal.error.clone(), |el, error| el.child(div().text_sm().text_color(theme.danger).child(error)))
+                .child(h_flex().justify_between().gap_2()
+                    .child(if configured { div().track_focus(&self.pi_provider_sign_out_focus).tab_stop(true).child(Button::new("pi-provider-sign-out").danger().small().tab_stop(false).label("Sign out").disabled(busy).on_click(cx.listener(|this, _, window, cx| this.sign_out_pi_provider(window, cx)))).into_any_element() } else { div().into_any_element() })
+                    .child(h_flex().gap_2()
+                        .child(div().track_focus(&self.pi_provider_cancel_focus).tab_stop(true).child(Button::new("pi-provider-cancel").ghost().small().tab_stop(false).label("Cancel").disabled(busy).on_click(cx.listener(|this, _, window, cx| this.close_pi_provider_setup(window, cx)))))
+                        .child(div().track_focus(&self.pi_provider_save_focus).tab_stop(true).child(Button::new("pi-provider-save").primary().small().tab_stop(false).label(if busy { "Saving…" } else { "Save" }).disabled(busy).on_click(cx.listener(|this, _, window, cx| this.save_pi_provider_setup(window, cx)))))))
+            ).into_any_element()
+    }
+
+    fn computer_use_approval_modal(
+        &self,
+        request: ComputerUseApprovalRequest,
+        deciding: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let approval_id = request.approval_id.clone();
+        let allow_id = request.approval_id.clone();
+        let deny_service = self.service.clone();
+        let deny_keyboard_service = self.service.clone();
+        let allow_service = self.service.clone();
+        let allow_keyboard_service = self.service.clone();
+        let backdrop_service = self.service.clone();
+        let backdrop_id = approval_id.clone();
+        v_flex()
+            .id("computer-use-approval-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(move |_event, _window, cx| {
+                cx.stop_propagation();
+                if !deciding {
+                    backdrop_service.update(cx, |service, cx| {
+                        service.decide_computer_use_approval(
+                            &backdrop_id,
+                            ComputerUseApprovalDecision::Deny,
+                            cx,
+                        );
+                    });
+                }
+            })
+            .child(
+                v_flex()
+                    .id("computer-use-approval-dialog")
+                    .w(px(440.))
+                    .max_w(gpui::relative(0.9))
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                        cx.stop_propagation()
+                    })
+                    .on_click(|_event, _window, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Allow Computer Use once?"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(request.summary),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "Exact target: PID {}, window {}. This grant is consumed by this action only.",
+                                request.target_pid, request.target_window_id
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .track_focus(&self.computer_use_deny_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let approval_id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                deny_keyboard_service.update(
+                                                    cx,
+                                                    |service, cx| {
+                                                        service.decide_computer_use_approval(
+                                                            &approval_id,
+                                                            ComputerUseApprovalDecision::Deny,
+                                                            cx,
+                                                        );
+                                                    },
+                                                );
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("computer-use-deny")
+                                            .ghost()
+                                            .small()
+                                            .label("Deny")
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                deny_service.update(cx, |service, cx| {
+                                                    service.decide_computer_use_approval(
+                                                        &approval_id,
+                                                        ComputerUseApprovalDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.computer_use_allow_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let approval_id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                allow_keyboard_service.update(
+                                                    cx,
+                                                    |service, cx| {
+                                                        service.decide_computer_use_approval(
+                                                            &approval_id,
+                                                            ComputerUseApprovalDecision::AllowOnce,
+                                                            cx,
+                                                        );
+                                                    },
+                                                );
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("computer-use-allow-once")
+                                            .primary()
+                                            .small()
+                                            .label(if deciding { "Continuing…" } else { "Allow once" })
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                allow_service.update(cx, |service, cx| {
+                                                    service.decide_computer_use_approval(
+                                                        &allow_id,
+                                                        ComputerUseApprovalDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn subagent_mcp_read_approval_modal(
+        &self,
+        request: SubagentMcpReadApprovalRequest,
+        deciding: bool,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let deny_id = request.approval_id.clone();
+        let deny_button_id = request.approval_id.clone();
+        let allow_id = request.approval_id.clone();
+        let deny_service = self.service.clone();
+        let deny_button_service = self.service.clone();
+        let deny_keyboard_service = self.service.clone();
+        let allow_button_service = self.service.clone();
+        let allow_keyboard_service = self.service.clone();
+        let arguments = request.canonical_arguments.clone();
+        v_flex()
+            .id("subagent-mcp-read-approval-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(move |_event, _window, cx| {
+                if !deciding {
+                    deny_service.update(cx, |service, cx| {
+                        service.decide_subagent_mcp_read_approval(
+                            &deny_id,
+                            SubagentMcpReadDecision::Deny,
+                            cx,
+                        );
+                    });
+                }
+            })
+            .child(
+                v_flex()
+                    .id("subagent-mcp-read-approval-dialog")
+                    .w(px(560.))
+                    .max_w(gpui::relative(0.92))
+                    .max_h(gpui::relative(0.86))
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .occlude()
+                    .on_click(|_event, _window, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Allow this MCP call once?"),
+                    )
+                    .child(
+                        div().text_sm().child(format!(
+                            "A delegated task wants to call {}:{}.",
+                            request.server_id, request.tool_name
+                        )),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("The configured server controls the actual effect. Its result will be treated as untrusted evidence."),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Arguments sent to this server"),
+                            )
+                            .child(
+                                div()
+                                    .max_h(px(220.))
+                                    .overflow_y_scrollbar()
+                                    .p_3()
+                                    .rounded_md()
+                                    .bg(theme.muted)
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_xs()
+                                    .child(arguments),
+                            ),
+                    )
+                    .when_some(error, |el, error| {
+                        el.child(div().text_xs().text_color(theme.danger).child(error))
+                    })
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_mcp_read_deny_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                deny_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_read_approval(
+                                                        &id,
+                                                        SubagentMcpReadDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-mcp-read-deny")
+                                            .ghost()
+                                            .small()
+                                            .label("Deny")
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                deny_button_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_read_approval(
+                                                        &deny_button_id,
+                                                        SubagentMcpReadDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_mcp_read_allow_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let id = allow_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                allow_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_read_approval(
+                                                        &id,
+                                                        SubagentMcpReadDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-mcp-read-allow-once")
+                                            .primary()
+                                            .small()
+                                            .label(if deciding { "Calling…" } else { "Allow once" })
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                allow_button_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_read_approval(
+                                                        &allow_id,
+                                                        SubagentMcpReadDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn subagent_mcp_mutation_approval_modal(
+        &self,
+        request: SubagentMcpMutationApprovalRequest,
+        deciding: bool,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let deny_id = request.approval_id.clone();
+        let allow_id = request.approval_id.clone();
+        let deny_button_id = request.approval_id.clone();
+        let deny_service = self.service.clone();
+        let deny_button_service = self.service.clone();
+        let deny_keyboard_service = self.service.clone();
+        let allow_button_service = self.service.clone();
+        let allow_keyboard_service = self.service.clone();
+        let arguments = request.canonical_arguments.clone();
+        let profile = format!(
+            "Effect profile: {} · {} · {} · {} · task {}",
+            request.classification,
+            request.destructive,
+            request.idempotency,
+            request.open_world,
+            request.task_support
+        );
+        let prior_unknown = request.prior_unknown_effect;
+        v_flex()
+            .id("subagent-mcp-mutation-approval-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(move |_event, _window, cx| {
+                if !deciding {
+                    deny_service.update(cx, |service, cx| {
+                        service.decide_subagent_mcp_mutation_approval(
+                            &deny_id,
+                            SubagentMcpMutationDecision::Deny,
+                            cx,
+                        );
+                    });
+                }
+            })
+            .child(
+                v_flex()
+                    .id("subagent-mcp-mutation-approval-dialog")
+                    .w(px(600.))
+                    .max_w(gpui::relative(0.92))
+                    .max_h(gpui::relative(0.86))
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .occlude()
+                    .on_click(|_event, _window, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Allow this MCP mutation once?"),
+                    )
+                    .child(div().text_sm().child(format!(
+                        "A delegated task wants to call {}:{}.",
+                        request.server_id, request.tool_name
+                    )))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("The configured server controls the actual effect. This call can change remote state; its result is untrusted evidence."),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(profile))
+                    .when(prior_unknown, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.danger)
+                                .child("A prior identical mutation has an unknown outcome. Do not retry automatically; verify the server first."),
+                        )
+                    })
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Arguments sent to this server"),
+                            )
+                            .child(
+                                div()
+                                    .max_h(px(220.))
+                                    .overflow_y_scrollbar()
+                                    .p_3()
+                                    .rounded_md()
+                                    .bg(theme.muted)
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_xs()
+                                    .child(arguments),
+                            ),
+                    )
+                    .when_some(error, |el, error| {
+                        el.child(div().text_xs().text_color(theme.danger).child(error))
+                    })
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_mcp_mutation_deny_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                deny_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_mutation_approval(
+                                                        &id,
+                                                        SubagentMcpMutationDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-mcp-mutation-deny")
+                                            .ghost()
+                                            .small()
+                                            .label("Deny")
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                deny_button_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_mutation_approval(
+                                                        &deny_button_id,
+                                                        SubagentMcpMutationDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_mcp_mutation_allow_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let id = allow_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                allow_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_mutation_approval(
+                                                        &id,
+                                                        SubagentMcpMutationDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-mcp-mutation-allow-once")
+                                            .primary()
+                                            .small()
+                                            .label(if deciding { "Calling…" } else { "Allow once" })
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                allow_button_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_mcp_mutation_approval(
+                                                        &allow_id,
+                                                        SubagentMcpMutationDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn subagent_shell_approval_modal(
+        &self,
+        request: SubagentShellApprovalRequest,
+        deciding: bool,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let deny_id = request.approval_id.clone();
+        let allow_id = request.approval_id.clone();
+        let deny_service = self.service.clone();
+        let allow_service = self.service.clone();
+        let deny_action_service = self.service.clone();
+        let deny_keyboard_service = self.service.clone();
+        let allow_keyboard_service = self.service.clone();
+        v_flex()
+            .id("subagent-shell-approval-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(move |_event, _window, cx| {
+                if !deciding {
+                    deny_service.update(cx, |service, cx| {
+                        service.decide_subagent_shell_approval(
+                            &deny_id,
+                            SubagentShellDecision::Deny,
+                            cx,
+                        );
+                    });
+                }
+            })
+            .child(
+                v_flex()
+                    .id("subagent-shell-approval-dialog")
+                    .w(px(560.))
+                    .max_w(gpui::relative(0.92))
+                    .max_h(gpui::relative(0.86))
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .occlude()
+                    .on_click(|_event, _window, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Allow this command once?"),
+                    )
+                    .child(crate::approvals::shell_approval::shell_approval_section(
+                        &theme,
+                        &serde_json::to_value(aiden_core::ToolApprovalDetails::SubagentShell(
+                            request.details.clone(),
+                        ))
+                        .unwrap_or_default(),
+                    ))
+                    .when_some(error, |el, error| {
+                        el.child(div().text_xs().text_color(theme.danger).child(error))
+                    })
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_shell_deny_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                deny_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_shell_approval(
+                                                        &id,
+                                                        SubagentShellDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-shell-deny")
+                                            .ghost()
+                                            .small()
+                                            .label("Deny")
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                let id = request.approval_id.clone();
+                                                let service = deny_action_service.clone();
+                                                service.update(cx, |service, cx| {
+                                                    service.decide_subagent_shell_approval(
+                                                        &id,
+                                                        SubagentShellDecision::Deny,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_shell_allow_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let allow_id = allow_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                let service = allow_keyboard_service.clone();
+                                                let id = allow_id.clone();
+                                                service.update(cx, |service, cx| {
+                                                    service.decide_subagent_shell_approval(
+                                                        &id,
+                                                        SubagentShellDecision::AllowOnce,
+                                                        cx,
+                                                    )
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-shell-allow-once")
+                                            .primary()
+                                            .small()
+                                            .label(if deciding {
+                                                "Starting…"
+                                            } else {
+                                                "Allow once"
+                                            })
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                let service = allow_service.clone();
+                                                let id = allow_id.clone();
+                                                service.update(cx, |service, cx| {
+                                                    service.decide_subagent_shell_approval(
+                                                        &id,
+                                                        SubagentShellDecision::AllowOnce,
+                                                        cx,
+                                                    )
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn subagent_write_approval_modal(
+        &self,
+        request: SubagentWorkspaceWriteApprovalRequest,
+        deciding: bool,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        let operation = match request.details.operation {
+            aiden_core::WorkspaceWriteOperation::Create => "Create file",
+            aiden_core::WorkspaceWriteOperation::Replace => "Replace file",
+            aiden_core::WorkspaceWriteOperation::Edit => "Edit file",
+        };
+        let approval_id = request.approval_id.clone();
+        let allow_id = request.approval_id.clone();
+        let backdrop_id = request.approval_id.clone();
+        let deny_service = self.service.clone();
+        let deny_keyboard_service = self.service.clone();
+        let allow_service = self.service.clone();
+        let allow_keyboard_service = self.service.clone();
+        let backdrop_service = self.service.clone();
+        v_flex()
+            .id("subagent-write-approval-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(move |_event, _window, cx| {
+                cx.stop_propagation();
+                if !deciding {
+                    backdrop_service.update(cx, |service, cx| {
+                        service.decide_subagent_write_approval(
+                            &backdrop_id,
+                            SubagentWorkspaceWriteDecision::Deny,
+                            cx,
+                        );
+                    });
+                }
+            })
+            .child(
+                v_flex()
+                    .id("subagent-write-approval-dialog")
+                    .w(px(560.))
+                    .max_w(gpui::relative(0.92))
+                    .max_h(gpui::relative(0.86))
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                        cx.stop_propagation()
+                    })
+                    .on_click(|_event, _window, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Allow this workspace change once?"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(format!(
+                                "{} · {} · {}",
+                                operation, request.details.path, request.details.workspace_label
+                            )),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!(
+                                "{} proposes this exact change. Before: {} · After: {}. No command will run.",
+                                request.details.child_label,
+                                request
+                                    .details
+                                    .pre_digest_prefix
+                                    .as_deref()
+                                    .unwrap_or("must not exist"),
+                                request.details.post_digest_prefix,
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme.muted_foreground)
+                                    .child(if request.details.diff_truncated {
+                                        "Sanitized change preview · truncated"
+                                    } else {
+                                        "Sanitized change preview"
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .max_h(px(240.))
+                                    .overflow_y_scrollbar()
+                                    .p_3()
+                                    .rounded_md()
+                                    .bg(theme.secondary)
+                                    .text_xs()
+                                    .child(request.details.diff_preview.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Aiden will refuse the change if the workspace, file, provider, credential, or approval binding has changed since this preview."),
+                    )
+                    .when_some(error, |el, error| {
+                        el.child(div().text_xs().text_color(theme.danger).child(error))
+                    })
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_write_deny_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let approval_id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                deny_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_write_approval(
+                                                        &approval_id,
+                                                        SubagentWorkspaceWriteDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-write-deny")
+                                            .ghost()
+                                            .small()
+                                            .label("Deny")
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                deny_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_write_approval(
+                                                        &approval_id,
+                                                        SubagentWorkspaceWriteDecision::Deny,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.subagent_write_allow_focus)
+                                    .tab_stop(true)
+                                    .on_key_down({
+                                        let approval_id = request.approval_id.clone();
+                                        move |event: &gpui::KeyDownEvent, _window, cx| {
+                                            if !deciding
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                allow_keyboard_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_write_approval(
+                                                        &approval_id,
+                                                        SubagentWorkspaceWriteDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                                cx.stop_propagation();
+                                            }
+                                        }
+                                    })
+                                    .child(
+                                        Button::new("subagent-write-allow-once")
+                                            .primary()
+                                            .small()
+                                            .label(if deciding { "Applying…" } else { "Allow once" })
+                                            .disabled(deciding)
+                                            .tab_stop(false)
+                                            .on_click(move |_event, _window, cx| {
+                                                allow_service.update(cx, |service, cx| {
+                                                    service.decide_subagent_write_approval(
+                                                        &allow_id,
+                                                        SubagentWorkspaceWriteDecision::AllowOnce,
+                                                        cx,
+                                                    );
+                                                });
+                                            }),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn computer_use_privacy_modal(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme().clone();
+        v_flex()
+            .id("computer-use-privacy-backdrop")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .items_center()
+            .justify_center()
+            .bg(gpui::black().opacity(0.18))
+            .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .on_click(cx.listener(|this, _event, window, cx| {
+                cx.stop_propagation();
+                this.cancel_computer_use_privacy(window, cx);
+            }))
+            .child(
+                v_flex()
+                    .id("computer-use-privacy-dialog")
+                    .w(px(500.))
+                    .max_w(gpui::relative(0.9))
+                    .gap_3()
+                    .p_4()
+                    .rounded(px(16.))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.popover)
+                    .shadow_lg()
+                    .occlude()
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, _window, cx| {
+                        cx.stop_propagation()
+                    })
+                    .on_click(|_event, _window, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("Enable Computer Use for this chat?"),
+                    )
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(
+                        "Computer Use can inspect the selected app's pixels and accessibility details. That transient UI context may be sent to your selected model provider, but Aiden does not save or log captures. Every input action still asks for Allow once or Deny.",
+                    ))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(
+                        "The pinned helper and macOS permissions must be ready. Permission prompts only appear after you explicitly request them in Settings.",
+                    ))
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .track_focus(&self.computer_use_privacy_cancel_focus)
+                                    .tab_stop(true)
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, window, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.cancel_computer_use_privacy(window, cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        Button::new("computer-use-privacy-cancel")
+                                            .ghost()
+                                            .small()
+                                            .label("Not now")
+                                            .tab_stop(false)
+                                            .on_click(cx.listener(
+                                                |this, _event, window, cx| {
+                                                    this.cancel_computer_use_privacy(window, cx)
+                                                },
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.computer_use_privacy_session_focus)
+                                    .tab_stop(true)
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, window, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.accept_computer_use_privacy(
+                                                    ComputerUseNoticeDismissal::Session,
+                                                    window,
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        Button::new("computer-use-privacy-session")
+                                            .outline()
+                                            .small()
+                                            .label("Enable this session")
+                                            .tab_stop(false)
+                                            .on_click(cx.listener(
+                                                |this, _event, window, cx| {
+                                                    this.accept_computer_use_privacy(
+                                                        ComputerUseNoticeDismissal::Session,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                },
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .track_focus(&self.computer_use_privacy_permanent_focus)
+                                    .tab_stop(true)
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, window, cx| {
+                                            if matches!(
+                                                event.keystroke.key.as_str(),
+                                                "enter" | "space"
+                                            ) {
+                                                this.accept_computer_use_privacy(
+                                                    ComputerUseNoticeDismissal::Permanent,
+                                                    window,
+                                                    cx,
+                                                );
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        Button::new("computer-use-privacy-permanent")
+                                            .primary()
+                                            .small()
+                                            .label("Enable & remember")
+                                            .tab_stop(false)
+                                            .on_click(cx.listener(
+                                                |this, _event, window, cx| {
+                                                    this.accept_computer_use_privacy(
+                                                        ComputerUseNoticeDismissal::Permanent,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                },
+                                            )),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for AppState {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        let active_subagent_approval = self.service.read(cx).active_subagent_approval();
+        let computer_use_approval = match &active_subagent_approval {
+            Some(ActiveSubagentApproval::ComputerUse(request)) => Some(request.clone()),
+            _ => None,
+        };
+        let subagent_write_approval = match &active_subagent_approval {
+            Some(ActiveSubagentApproval::WorkspaceWrite(request)) => Some(request.clone()),
+            _ => None,
+        };
+        let subagent_shell_approval = match &active_subagent_approval {
+            Some(ActiveSubagentApproval::Shell(request)) => Some(request.clone()),
+            _ => None,
+        };
+        let subagent_mcp_read_approval = match &active_subagent_approval {
+            Some(ActiveSubagentApproval::McpRead(request)) => Some(request.clone()),
+            _ => None,
+        };
+        let subagent_mcp_mutation_approval = match &active_subagent_approval {
+            Some(ActiveSubagentApproval::McpMutation(request)) => Some(request.clone()),
+            _ => None,
+        };
+        let deny_focus = match &active_subagent_approval {
+            Some(ActiveSubagentApproval::ComputerUse(_)) => self.computer_use_deny_focus.clone(),
+            Some(ActiveSubagentApproval::WorkspaceWrite(_)) => {
+                self.subagent_write_deny_focus.clone()
+            }
+            Some(ActiveSubagentApproval::Shell(_)) => self.subagent_shell_deny_focus.clone(),
+            Some(ActiveSubagentApproval::McpRead(_)) => self.subagent_mcp_read_deny_focus.clone(),
+            Some(ActiveSubagentApproval::McpMutation(_)) => {
+                self.subagent_mcp_mutation_deny_focus.clone()
+            }
+            None => self.subagent_write_deny_focus.clone(),
+        };
+        self.reconcile_subagent_approval_focus(
+            active_subagent_approval
+                .as_ref()
+                .map(ActiveSubagentApproval::approval_id),
+            deny_focus,
+            window,
+            cx,
+        );
+        let computer_use_deciding = self.service.read(cx).computer_use_approval_deciding();
+        let subagent_write_deciding = self.service.read(cx).subagent_write_approval_deciding();
+        let subagent_write_error = self
+            .service
+            .read(cx)
+            .subagent_write_approval_error()
+            .map(str::to_string);
+        let subagent_shell_deciding = self.service.read(cx).subagent_shell_approval_deciding();
+        let subagent_shell_error = self
+            .service
+            .read(cx)
+            .subagent_shell_approval_error()
+            .map(str::to_string);
+        let subagent_mcp_read_deciding =
+            self.service.read(cx).subagent_mcp_read_approval_deciding();
+        let subagent_mcp_read_error = self
+            .service
+            .read(cx)
+            .subagent_mcp_read_approval_error()
+            .map(str::to_string);
+        let subagent_mcp_mutation_deciding = self
+            .service
+            .read(cx)
+            .subagent_mcp_mutation_approval_deciding();
+        let subagent_mcp_mutation_error = self
+            .service
+            .read(cx)
+            .subagent_mcp_mutation_approval_error()
+            .map(str::to_string);
+        let show_subagent_shell_approval = subagent_shell_approval.is_some();
+        let computer_use_privacy = self.computer_use_privacy.is_open();
 
         let title = match self.view {
             AppView::Chat => crate::chat::toolbar::chat_title(
@@ -2751,7 +5573,6 @@ impl Render for AppState {
                     .as_ref()
                     .map(|chat| chat.title.as_str()),
             ),
-            AppView::Assistant => "Assistant".to_string(),
             AppView::Scheduled => "Scheduled".to_string(),
             AppView::Usage => "Profile".to_string(),
             AppView::Subagents => "Subagents".to_string(),
@@ -2763,8 +5584,27 @@ impl Render for AppState {
             .settings
             .as_ref()
             .is_some_and(|settings| settings.read(cx).skills_modal_open());
-        let app_key_context = if skills_modal {
+        let provider_editor = self
+            .settings
+            .clone()
+            .filter(|settings| settings.read(cx).provider_editor_modal_open());
+        let provider_editor_open = provider_editor.is_some();
+        let app_key_context = if subagent_mcp_mutation_approval.is_some() {
+            "SubagentMcpMutationApprovalModal"
+        } else if subagent_mcp_read_approval.is_some() {
+            "SubagentMcpReadApprovalModal"
+        } else if subagent_shell_approval.is_some() {
+            "SubagentShellApprovalModal"
+        } else if subagent_write_approval.is_some() {
+            "SubagentWorkspaceWriteApprovalModal"
+        } else if computer_use_approval.is_some() {
+            "ComputerUseApprovalModal"
+        } else if computer_use_privacy {
+            "ComputerUsePrivacyModal"
+        } else if skills_modal {
             "SettingsModal"
+        } else if provider_editor_open {
+            "SettingsProviderEditorModal"
         } else if environment_overlay || files_confirmation {
             "EnvironmentModal"
         } else {
@@ -2787,6 +5627,255 @@ impl Render for AppState {
             .text_color(theme.foreground)
             .key_context(app_key_context)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if let Some(request) = this
+                    .service
+                    .read(cx)
+                    .pending_subagent_mcp_mutation_approval()
+                    .cloned()
+                {
+                    let deciding = this
+                        .service
+                        .read(cx)
+                        .subagent_mcp_mutation_approval_deciding();
+                    if event.keystroke.key == "escape" && !deciding {
+                        this.service.update(cx, |service, cx| {
+                            service.decide_subagent_mcp_mutation_approval(
+                                &request.approval_id,
+                                SubagentMcpMutationDecision::Deny,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    }
+                    if event.keystroke.key == "tab" {
+                        let handles = [
+                            this.subagent_mcp_mutation_deny_focus.clone(),
+                            this.subagent_mcp_mutation_allow_focus.clone(),
+                        ];
+                        let focused = window.focused(cx);
+                        let position = handles
+                            .iter()
+                            .position(|handle| focused.as_ref() == Some(handle));
+                        handles[trapped_focus_index(
+                            event.keystroke.modifiers.shift,
+                            position,
+                            handles.len(),
+                        )]
+                        .focus(window);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if let Some(request) = this
+                    .service
+                    .read(cx)
+                    .pending_subagent_mcp_read_approval()
+                    .cloned()
+                {
+                    let deciding = this.service.read(cx).subagent_mcp_read_approval_deciding();
+                    if event.keystroke.key == "escape" && !deciding {
+                        this.service.update(cx, |service, cx| {
+                            service.decide_subagent_mcp_read_approval(
+                                &request.approval_id,
+                                SubagentMcpReadDecision::Deny,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    }
+                    if event.keystroke.key == "tab" {
+                        let handles = [
+                            this.subagent_mcp_read_deny_focus.clone(),
+                            this.subagent_mcp_read_allow_focus.clone(),
+                        ];
+                        let focused = window.focused(cx);
+                        let position = handles
+                            .iter()
+                            .position(|handle| focused.as_ref() == Some(handle));
+                        handles[trapped_focus_index(
+                            event.keystroke.modifiers.shift,
+                            position,
+                            handles.len(),
+                        )]
+                        .focus(window);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if let Some(request) = this
+                    .service
+                    .read(cx)
+                    .pending_subagent_shell_approval()
+                    .cloned()
+                {
+                    let deciding = this.service.read(cx).subagent_shell_approval_deciding();
+                    if event.keystroke.key == "escape" && !deciding {
+                        this.service.update(cx, |service, cx| {
+                            service.decide_subagent_shell_approval(
+                                &request.approval_id,
+                                SubagentShellDecision::Deny,
+                                cx,
+                            );
+                        });
+                        cx.stop_propagation();
+                    }
+                    if event.keystroke.key == "tab" {
+                        let handles = [
+                            this.subagent_shell_deny_focus.clone(),
+                            this.subagent_shell_allow_focus.clone(),
+                        ];
+                        let focused = window.focused(cx);
+                        let position = handles
+                            .iter()
+                            .position(|handle| focused.as_ref() == Some(handle));
+                        handles[trapped_focus_index(
+                            event.keystroke.modifiers.shift,
+                            position,
+                            handles.len(),
+                        )]
+                        .focus(window);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if let Some(request) = this
+                    .service
+                    .read(cx)
+                    .pending_subagent_write_approval()
+                    .cloned()
+                {
+                    let deciding = this.service.read(cx).subagent_write_approval_deciding();
+                    if event.keystroke.key == "escape" {
+                        if let Some(decision) = subagent_write_escape_decision(deciding) {
+                            this.decide_subagent_write_approval(&request.approval_id, decision, cx);
+                            cx.stop_propagation();
+                        }
+                        return;
+                    }
+                    if event.keystroke.key == "tab" {
+                        let handles = [
+                            this.subagent_write_deny_focus.clone(),
+                            this.subagent_write_allow_focus.clone(),
+                        ];
+                        let focused = window.focused(cx);
+                        let position = handles
+                            .iter()
+                            .position(|handle| focused.as_ref() == Some(handle));
+                        let next = trapped_focus_index(
+                            event.keystroke.modifiers.shift,
+                            position,
+                            handles.len(),
+                        );
+                        handles[next].focus(window);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if let Some(request) = this
+                    .service
+                    .read(cx)
+                    .pending_computer_use_approval()
+                    .cloned()
+                {
+                    let deciding = this.service.read(cx).computer_use_approval_deciding();
+                    if event.keystroke.key == "escape" {
+                        if let Some(decision) = computer_use_escape_decision(deciding) {
+                            this.decide_computer_use_approval(&request.approval_id, decision, cx);
+                            cx.stop_propagation();
+                        }
+                        return;
+                    }
+                    if event.keystroke.key == "tab" {
+                        let focused = window.focused(cx);
+                        let backwards = event.keystroke.modifiers.shift;
+                        if backwards && focused.as_ref() == Some(&this.computer_use_deny_focus) {
+                            this.computer_use_allow_focus.focus(window);
+                        } else if !backwards
+                            && focused.as_ref() == Some(&this.computer_use_allow_focus)
+                        {
+                            this.computer_use_deny_focus.focus(window);
+                        } else if focused.as_ref() != Some(&this.computer_use_deny_focus)
+                            && focused.as_ref() != Some(&this.computer_use_allow_focus)
+                        {
+                            if backwards {
+                                this.computer_use_allow_focus.focus(window);
+                            } else {
+                                this.computer_use_deny_focus.focus(window);
+                            }
+                        } else {
+                            return;
+                        }
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if this.computer_use_privacy.is_open() {
+                    if event.keystroke.key == "escape" {
+                        this.cancel_computer_use_privacy(window, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if event.keystroke.key == "tab" {
+                        let handles = [
+                            this.computer_use_privacy_cancel_focus.clone(),
+                            this.computer_use_privacy_session_focus.clone(),
+                            this.computer_use_privacy_permanent_focus.clone(),
+                        ];
+                        let focused = window.focused(cx);
+                        let position = handles
+                            .iter()
+                            .position(|handle| focused.as_ref() == Some(handle));
+                        let next = trapped_focus_index(
+                            event.keystroke.modifiers.shift,
+                            position,
+                            handles.len(),
+                        );
+                        handles[next].focus(window);
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
+                if let Some(settings) = this
+                    .settings
+                    .clone()
+                    .filter(|settings| settings.read(cx).provider_editor_modal_open())
+                {
+                    if event.keystroke.key == "escape" {
+                        settings.update(cx, |settings, cx| {
+                            settings.close_provider_editor(window, cx)
+                        });
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if event.keystroke.key == "tab" {
+                        let (handles, focus_inside) = {
+                            let state = settings.read(cx);
+                            (
+                                state.provider_editor_modal_focus_handles(cx),
+                                state.provider_editor_modal_contains_focus(window, cx),
+                            )
+                        };
+                        if let Some((first, last)) = handles {
+                            let focused = window.focused(cx);
+                            let backwards = event.keystroke.modifiers.shift;
+                            if backwards && focused.as_ref() == Some(&first) {
+                                last.focus(window);
+                            } else if !backwards && focused.as_ref() == Some(&last) {
+                                first.focus(window);
+                            } else if !focus_inside {
+                                if backwards {
+                                    last.focus(window);
+                                } else {
+                                    first.focus(window);
+                                }
+                            } else {
+                                return;
+                            }
+                            cx.stop_propagation();
+                        }
+                    }
+                    return;
+                }
                 if let Some(settings) = this
                     .settings
                     .clone()
@@ -3031,6 +6120,9 @@ impl Render for AppState {
             .on_action(cx.listener(Self::on_manage_providers))
             .on_action(cx.listener(Self::on_search_settings))
             .child(self.shell_body(title, window, cx))
+            // Paint above every route but before root modal layers. A compact
+            // Environment sheet or approval/auth dialog makes it inert/hidden.
+            .child(self.assistant_dock(window, cx))
             .when(sidebar_blocker_width > 0.0, |el| {
                 el.child(
                     div()
@@ -3096,6 +6188,56 @@ impl Render for AppState {
                     el.child(crate::settings::skills::skills_modal(&settings, cx))
                 })
             })
+            .when(provider_editor_open, |el| {
+                el.when_some(provider_editor, |el, settings| {
+                    el.child(crate::settings::providers::provider_editor_modal(
+                        &settings, cx,
+                    ))
+                })
+            })
+            .when_some(computer_use_approval, |el, request| {
+                el.child(self.computer_use_approval_modal(request, computer_use_deciding, cx))
+            })
+            .when_some(subagent_write_approval, |el, request| {
+                el.child(self.subagent_write_approval_modal(
+                    request,
+                    subagent_write_deciding,
+                    subagent_write_error,
+                    cx,
+                ))
+            })
+            .when(show_subagent_shell_approval, |el| {
+                el.when_some(subagent_shell_approval, |el, request| {
+                    el.child(self.subagent_shell_approval_modal(
+                        request,
+                        subagent_shell_deciding,
+                        subagent_shell_error,
+                        cx,
+                    ))
+                })
+            })
+            .when_some(subagent_mcp_read_approval, |el, request| {
+                el.child(self.subagent_mcp_read_approval_modal(
+                    request,
+                    subagent_mcp_read_deciding,
+                    subagent_mcp_read_error,
+                    cx,
+                ))
+            })
+            .when_some(subagent_mcp_mutation_approval, |el, request| {
+                el.child(self.subagent_mcp_mutation_approval_modal(
+                    request,
+                    subagent_mcp_mutation_deciding,
+                    subagent_mcp_mutation_error,
+                    cx,
+                ))
+            })
+            .when(computer_use_privacy, |el| {
+                el.child(self.computer_use_privacy_modal(cx))
+            })
+            .when(self.pi_provider_setup.is_some(), |el| {
+                el.child(self.pi_provider_setup_modal(cx))
+            })
     }
 }
 
@@ -3106,7 +6248,6 @@ impl AppState {
     fn content_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let content = match self.view {
             AppView::Chat => self.chat_view(window, cx).into_any_element(),
-            AppView::Assistant => self.assistant_entity(window, cx).into_any_element(),
             AppView::Scheduled => self.scheduled_entity(window, cx).into_any_element(),
             AppView::Usage => self.usage_entity(window, cx).into_any_element(),
             AppView::Subagents => self.subagents_entity(window, cx).into_any_element(),
@@ -3142,6 +6283,876 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    /// A real GPUI entity/window harness for the root-dock lifecycle. It uses
+    /// a tiny panel instead of the production network-owning AssistantPanel,
+    /// so it can assert entity identity and focus deterministically.
+    struct AssistantDockPanelHarness {
+        composer: FocusHandle,
+    }
+
+    impl Render for AssistantDockPanelHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().track_focus(&self.composer).tab_stop(true)
+        }
+    }
+
+    struct AssistantDockLifecycleHarness {
+        view: AppView,
+        panel: Option<Entity<AssistantDockPanelHarness>>,
+        open: bool,
+        present: bool,
+        unread: u8,
+        preview: Option<String>,
+        return_focus: Option<FocusHandle>,
+        bubble: FocusHandle,
+        origin: FocusHandle,
+    }
+
+    impl AssistantDockLifecycleHarness {
+        fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+            if !self.open {
+                self.return_focus = window.focused(cx);
+                self.open = true;
+                self.present = true;
+                self.unread = 0;
+                self.preview = None;
+            }
+            let panel = self.panel.get_or_insert_with(|| {
+                cx.new(|cx| AssistantDockPanelHarness {
+                    composer: cx.focus_handle(),
+                })
+            });
+            panel.read(cx).composer.focus(window);
+            cx.notify();
+        }
+
+        fn minimize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+            self.open = false;
+            // The actual app waits 120 ms except under reduced motion; the
+            // harness makes the exit boundary explicit and deterministic.
+            self.finish_minimize(window, cx);
+        }
+
+        fn finish_minimize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+            self.present = false;
+            self.return_focus
+                .take()
+                .unwrap_or_else(|| self.bubble.clone())
+                .focus(window);
+            cx.notify();
+        }
+
+        fn notice(&mut self, message: &str, cx: &mut Context<Self>) {
+            let (unread, preview) = assistant_notice_state(self.open, self.unread, message);
+            self.unread = unread;
+            self.preview = preview;
+            cx.notify();
+        }
+    }
+
+    impl Render for AssistantDockLifecycleHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(div().track_focus(&self.origin).tab_stop(true))
+                .child(div().track_focus(&self.bubble).tab_stop(true))
+        }
+    }
+
+    #[gpui::test]
+    fn assistant_dock_entity_lifecycle_preserves_routes_focus_and_minimized_notices(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (dock, cx) = cx.add_window_view(|_window, cx| AssistantDockLifecycleHarness {
+            view: AppView::Chat,
+            panel: None,
+            open: false,
+            present: false,
+            unread: 0,
+            preview: None,
+            return_focus: None,
+            bubble: cx.focus_handle(),
+            origin: cx.focus_handle(),
+        });
+        cx.update(|window, app| {
+            let origin = dock.read(app).origin.clone();
+            origin.focus(window);
+            assert!(dock.read(app).panel.is_none());
+
+            dock.update(app, |state, cx| state.open(window, cx));
+            let first = dock.read(app).panel.clone().expect("one panel");
+            assert_eq!(dock.read(app).view, AppView::Chat);
+            assert_eq!(window.focused(app), Some(first.read(app).composer.clone()));
+
+            // A route change does not replace the dock entity.
+            dock.update(app, |state, cx| {
+                state.view = AppView::Scheduled;
+                cx.notify();
+            });
+            assert_eq!(
+                dock.read(app).panel.as_ref().unwrap().entity_id(),
+                first.entity_id()
+            );
+
+            dock.update(app, |state, cx| state.minimize(window, cx));
+            assert!(!dock.read(app).present);
+            assert_eq!(window.focused(app), Some(origin));
+
+            dock.update(app, |state, cx| state.notice("background reply", cx));
+            assert_eq!(dock.read(app).unread, 1);
+            assert_eq!(dock.read(app).preview.as_deref(), Some("background reply"));
+            dock.update(app, |state, cx| state.open(window, cx));
+            assert_eq!(dock.read(app).unread, 0);
+            assert!(dock.read(app).preview.is_none());
+            assert_eq!(
+                dock.read(app).panel.as_ref().unwrap().entity_id(),
+                first.entity_id()
+            );
+        });
+    }
+
+    #[test]
+    fn retained_pill_reuse_never_activates_the_target_window() {
+        // The GPUI window handle is intentionally not faked here: the
+        // production bridge's retained-handle branch is the contract under
+        // test. A no-op update probes liveness; activation would steal focus
+        // from the application that receives the eventual paste.
+        let source = include_str!("app.rs");
+        let bridge = source
+            .split_once("fn bridge_show_pill(")
+            .and_then(|(_, rest)| rest.split_once("fn bridge_close_pill("))
+            .map(|(bridge, _)| bridge)
+            .expect("pill bridge boundaries");
+        assert!(bridge.contains("handle.update(app, |_view, _window, _cx| {})"));
+        assert!(!bridge.contains("window.activate_window()"));
+    }
+
+    #[test]
+    fn slash_phase2_catalog_refresh_is_cached_until_workspace_changes() {
+        let mut state = SlashPaletteState::default();
+        // An empty catalog is still a completed load. The next query must not
+        // rediscover it merely because no matching skill rows were returned.
+        assert!(state.catalog_refresh_needed("workspace-a"));
+        state.catalog_identity = Some("workspace-a".into());
+        state.catalog_loaded = true;
+        assert!(!state.catalog_refresh_needed("workspace-a"));
+        assert!(state.catalog_refresh_needed("workspace-b"));
+        state.catalog_loading = true;
+        assert!(!state.catalog_refresh_needed("workspace-b"));
+    }
+
+    #[test]
+    fn slash_phase3_selected_skill_send_snapshots_the_opaque_chip() {
+        let mut selection = crate::chat::slash::SkillSelection::default();
+        assert!(skill_selection_for_send(&selection).is_none());
+        let entry = SkillCatalogEntry {
+            id: "skillref_example".into(),
+            name: "Review".into(),
+            description: "Review a change".into(),
+            source: crate::services::skill_tools::SkillCatalogSource::Workspace,
+            revision: "rev-1".into(),
+        };
+        selection.replace(&entry);
+        let snapshot = skill_selection_for_send(&selection).expect("selected chip");
+        assert_eq!(snapshot.id, "skillref_example");
+        assert_eq!(snapshot.workspace_identity, None);
+        // The service owns resolution; taking the snapshot has no mutation
+        // side effect, so the chip remains available on a rejected lease.
+        assert!(selection.is_selected("skillref_example"));
+    }
+
+    #[test]
+    fn slash_phase3_rejected_or_unknown_admission_keeps_the_selected_chip() {
+        use crate::services::chat_service::ChatSubmissionOutcome;
+
+        let mut draft = crate::chat::composer::ComposerDraft::default();
+        let entry = SkillCatalogEntry {
+            id: "skillref_example".into(),
+            name: "Review".into(),
+            description: "Review a change".into(),
+            source: crate::services::skill_tools::SkillCatalogSource::Workspace,
+            revision: "rev-1".into(),
+        };
+        draft.skill_selection.replace(&entry);
+        let submission = submission_identity("chat-a", 11);
+        let mut coordinator = ComposerSubmissionCoordinator::default();
+        assert!(coordinator.begin(submission.clone(), "draft".into(), draft.clone()));
+        assert!(!coordinator.settle(
+            &submission,
+            Some(ChatSubmissionOutcome::Rejected),
+            "draft",
+            &draft,
+        ));
+        assert!(coordinator.pending().is_none());
+        assert!(draft.skill_selection.is_selected("skillref_example"));
+
+        assert!(coordinator.begin(submission.clone(), "draft".into(), draft.clone()));
+        assert!(!coordinator.settle(
+            &submission,
+            Some(ChatSubmissionOutcome::Unknown),
+            "draft",
+            &draft,
+        ));
+        assert!(coordinator.pending().is_some());
+        assert!(draft.skill_selection.is_selected("skillref_example"));
+    }
+
+    #[test]
+    fn slash_phase2_popup_is_non_modal_and_keeps_composer_focus() {
+        let popup_source = include_str!("chat/chat_pane.rs");
+        let popup = popup_source
+            .split_once("fn slash_palette_popup(")
+            .and_then(|(_, rest)| rest.split_once("fn composer_model_picker("))
+            .map(|(popup, _)| popup)
+            .expect("slash popup source boundaries");
+        assert!(popup.contains("composer-slash-palette"));
+        assert!(popup.contains("overflow_y_scroll"));
+        assert!(popup.matches(".tab_stop(false)").count() >= 2);
+        assert!(popup.contains("Commands"));
+        assert!(popup.contains("Skills"));
+        assert!(!popup.contains("open_dialog"));
+
+        let app_source = include_str!("app.rs");
+        assert!(app_source.contains("InputEvent::Blur"));
+        assert!(app_source.contains("cx.defer_in(window"));
+        assert!(app_source.contains("handle_slash_key"));
+    }
+
+    #[test]
+    fn quit_claim_is_single_use_until_the_attempt_settles() {
+        let mut quit_in_flight = false;
+        assert!(claim_quit(&mut quit_in_flight));
+        assert!(!claim_quit(&mut quit_in_flight));
+
+        // A failed authority shutdown clears the claim so the user can retry;
+        // a successful one never returns to the live AppState.
+        quit_in_flight = false;
+        assert!(claim_quit(&mut quit_in_flight));
+    }
+
+    #[test]
+    fn quit_waits_for_authority_and_keeps_failure_on_the_live_app() {
+        let source = include_str!("app.rs");
+        let request = source
+            .split_once("fn request_quit(")
+            .and_then(|(_, rest)| {
+                rest.split_once(
+                    "// =======================================================================",
+                )
+            })
+            .map(|(request, _)| request)
+            .expect("quit request source boundaries");
+
+        assert!(request.contains("let shutdown = Tokio::spawn(cx"));
+        assert!(request.contains("computer_use.shutdown().await"));
+        assert!(request.contains("Ok(Ok(())) => this.finish_quit(cx)"));
+        assert!(request.contains("this.quit_in_flight = false"));
+        assert!(request.contains("resume_after_cancelled_shutdown"));
+        assert!(request.contains("Notification::error"));
+        assert!(request.contains("COMPUTER_USE_QUIT_FAILURE"));
+        assert!(!request.contains("cx.quit()"));
+        assert!(!request.contains("service.dispose(cx)"));
+    }
+
+    #[test]
+    fn quit_barrier_does_not_treat_manual_update_open_as_automatic_install() {
+        let source = include_str!("app.rs");
+        let finish = source
+            .split_once("fn finish_quit(")
+            .and_then(|(_, rest)| rest.split_once("/// The quit barrier:"))
+            .map(|(finish, _)| finish)
+            .expect("finish quit source boundaries");
+        assert!(!finish.contains("open_downloaded_installer"));
+        assert!(!finish.contains("install_on_quit"));
+    }
+
+    #[test]
+    fn native_close_clears_the_windowless_dictation_generation_gate() {
+        let source = include_str!("app.rs");
+        let close = source
+            .split_once("pub(crate) fn request_native_close(")
+            .and_then(|(_, rest)| rest.split_once("fn sidebar_frame("))
+            .map(|(close, _)| close)
+            .expect("native close source boundaries");
+        assert!(close.contains("service.dispose(cx)"));
+        assert!(close.contains("CHAT_GENERATION_ACTIVE.store(false, Ordering::Release)"));
+    }
+
+    fn submission_identity(
+        chat_id: &str,
+        counter: u64,
+    ) -> crate::services::chat_service::ChatSubmissionIdentity {
+        crate::services::chat_service::ChatSubmissionIdentity {
+            chat_id: chat_id.into(),
+            counter,
+        }
+    }
+
+    fn draft_with_image_and_edit() -> crate::chat::composer::ComposerDraft {
+        crate::chat::composer::ComposerDraft {
+            attachments: vec![aiden_core::Attachment {
+                id: "image-1".into(),
+                name: "photo.png".into(),
+                mime_type: "image/png".into(),
+                kind: aiden_core::AttachmentKind::Image,
+                size: 3,
+                data: Some("abc".into()),
+                text: None,
+            }],
+            editing_message_id: Some("user-before-branch".into()),
+            attaching: false,
+            skill_selection: crate::chat::slash::SkillSelection::default(),
+        }
+    }
+
+    #[gpui::test]
+    fn composer_submission_entity_keeps_failed_drafts_and_clears_only_the_matching_retry(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::services::chat_service::ChatSubmissionOutcome;
+
+        let coordinator = cx.new(|_| ComposerSubmissionCoordinator::default());
+        let original_text = "replace this branch".to_string();
+        let original_draft = draft_with_image_and_edit();
+        let failed = submission_identity("chat-a", 1);
+        let retry = submission_identity("chat-a", 2);
+
+        coordinator.update(cx, |state, _| {
+            assert!(state.begin(
+                failed.clone(),
+                original_text.clone(),
+                original_draft.clone()
+            ));
+            // Button, Enter, and ⌘↩ cannot produce a second in-flight write.
+            assert!(!state.begin(retry.clone(), "duplicate".into(), Default::default()));
+            // A forced persistence failure unlocks retry but requests no UI
+            // clear, so text, image attachment, and edit target remain exact.
+            assert!(!state.settle(
+                &failed,
+                Some(ChatSubmissionOutcome::Rejected),
+                &original_text,
+                &original_draft,
+            ));
+            assert!(state.pending().is_none());
+            assert!(state.begin(retry.clone(), original_text.clone(), original_draft.clone()));
+        });
+
+        coordinator.update(cx, |state, _| {
+            // A late success for the failed request cannot consume the newer
+            // pending retry, even though both refer to the same chat.
+            assert!(!state.settle(
+                &failed,
+                Some(ChatSubmissionOutcome::Admitted),
+                &original_text,
+                &original_draft,
+            ));
+            assert_eq!(state.pending().unwrap().0, retry);
+            // The matching retry clears exactly once.
+            assert!(state.settle(
+                &retry,
+                Some(ChatSubmissionOutcome::Admitted),
+                &original_text,
+                &original_draft,
+            ));
+            assert!(!state.settle(
+                &retry,
+                Some(ChatSubmissionOutcome::Admitted),
+                &original_text,
+                &original_draft,
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn composer_submission_entity_never_clears_a_draft_edited_while_persisting(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::services::chat_service::ChatSubmissionOutcome;
+
+        let coordinator = cx.new(|_| ComposerSubmissionCoordinator::default());
+        let submitted = submission_identity("chat-a", 7);
+        let draft = draft_with_image_and_edit();
+        coordinator.update(cx, |state, _| {
+            assert!(state.begin(submitted.clone(), "original".into(), draft.clone()));
+            let mut newer = draft.clone();
+            newer.editing_message_id = Some("different-target".into());
+            assert!(!state.settle(
+                &submitted,
+                Some(ChatSubmissionOutcome::Admitted),
+                "newer text",
+                &newer,
+            ));
+            assert!(state.pending().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn composer_submission_unknown_stays_locked_until_reopen_reconciliation_settles(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::services::chat_service::ChatSubmissionOutcome;
+
+        let coordinator = cx.new(|_| ComposerSubmissionCoordinator::default());
+        let submission = submission_identity("chat-a", 9);
+        let draft = draft_with_image_and_edit();
+        coordinator.update(cx, |state, _| {
+            assert!(state.begin(submission.clone(), "draft".into(), draft.clone()));
+            assert!(!state.settle(
+                &submission,
+                Some(ChatSubmissionOutcome::Unknown),
+                "draft",
+                &draft,
+            ));
+            assert!(state.pending().is_some());
+            // Reopening the chat may prove the exact turn absent; only then
+            // does the retained draft become safely retryable.
+            assert!(!state.settle(
+                &submission,
+                Some(ChatSubmissionOutcome::Rejected),
+                "draft",
+                &draft,
+            ));
+            assert!(state.pending().is_none());
+        });
+    }
+
+    struct SubagentWriteFocusHarness {
+        origin: FocusHandle,
+        deny: FocusHandle,
+        allow: FocusHandle,
+    }
+
+    impl Render for SubagentWriteFocusHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(div().track_focus(&self.origin).tab_stop(true))
+                .child(div().track_focus(&self.deny).tab_stop(true))
+                .child(div().track_focus(&self.allow).tab_stop(true))
+        }
+    }
+
+    #[gpui::test]
+    fn subagent_write_modal_focus_wraps_between_deny_and_allow(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_window, cx| SubagentWriteFocusHarness {
+            origin: cx.focus_handle(),
+            deny: cx.focus_handle(),
+            allow: cx.focus_handle(),
+        });
+        cx.update(|window, app| {
+            let harness = view.read(app);
+            let handles = [harness.deny.clone(), harness.allow.clone()];
+            handles[0].focus(window);
+            handles[trapped_focus_index(true, Some(0), handles.len())].focus(window);
+            assert_eq!(window.focused(app), Some(harness.allow.clone()));
+            handles[trapped_focus_index(false, Some(1), handles.len())].focus(window);
+            assert_eq!(window.focused(app), Some(harness.deny.clone()));
+        });
+    }
+
+    #[gpui::test]
+    fn shared_subagent_modal_order_retains_focus_across_kind_changes_and_restores_once(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_window, cx| SubagentWriteFocusHarness {
+            origin: cx.focus_handle(),
+            deny: cx.focus_handle(),
+            allow: cx.focus_handle(),
+        });
+        cx.update(|window, app| {
+            use crate::services::chat_service::{
+                push_subagent_approval_order, remove_subagent_approval_order,
+                subagent_approval_order_is_head, SubagentApprovalKind,
+            };
+            let origin = view.read(app).origin.clone();
+            origin.focus(window);
+            let mut focus = SubagentWriteModalFocusState::default();
+            let mut order = VecDeque::new();
+            push_subagent_approval_order(
+                &mut order,
+                "computer-0",
+                SubagentApprovalKind::ComputerUse,
+            );
+            push_subagent_approval_order(&mut order, "shell-1", SubagentApprovalKind::Shell);
+            push_subagent_approval_order(&mut order, "mcp-2", SubagentApprovalKind::McpRead);
+            push_subagent_approval_order(
+                &mut order,
+                "write-3",
+                SubagentApprovalKind::WorkspaceWrite,
+            );
+            assert!(subagent_approval_order_is_head(
+                &order,
+                SubagentApprovalKind::ComputerUse,
+                "computer-0"
+            ));
+            match focus.reconcile(Some("computer-0"), window.focused(app)) {
+                SubagentWriteModalFocusTransition::FocusDeny => view.read(app).deny.focus(window),
+                _ => panic!("first modal must own focus"),
+            }
+            remove_subagent_approval_order(&mut order, "computer-0");
+            assert!(subagent_approval_order_is_head(
+                &order,
+                SubagentApprovalKind::Shell,
+                "shell-1"
+            ));
+            assert!(matches!(
+                focus.reconcile(Some("shell-1"), window.focused(app)),
+                SubagentWriteModalFocusTransition::FocusDeny
+            ));
+            remove_subagent_approval_order(&mut order, "shell-1");
+            assert!(subagent_approval_order_is_head(
+                &order,
+                SubagentApprovalKind::McpRead,
+                "mcp-2"
+            ));
+            assert!(matches!(
+                focus.reconcile(Some("mcp-2"), window.focused(app)),
+                SubagentWriteModalFocusTransition::FocusDeny
+            ));
+            remove_subagent_approval_order(&mut order, "mcp-2");
+            assert!(subagent_approval_order_is_head(
+                &order,
+                SubagentApprovalKind::WorkspaceWrite,
+                "write-3"
+            ));
+            assert!(matches!(
+                focus.reconcile(Some("write-3"), window.focused(app)),
+                SubagentWriteModalFocusTransition::FocusDeny
+            ));
+            assert_eq!(window.focused(app), Some(view.read(app).deny.clone()));
+            assert!(matches!(
+                focus.reconcile(Some("write-3"), window.focused(app)),
+                SubagentWriteModalFocusTransition::Unchanged
+            ));
+            remove_subagent_approval_order(&mut order, "write-3");
+            let SubagentWriteModalFocusTransition::Restore(restored) =
+                focus.reconcile(None, window.focused(app))
+            else {
+                panic!("final drain must restore original focus");
+            };
+            restored.focus(window);
+            assert_eq!(window.focused(app), Some(origin));
+
+            push_subagent_approval_order(&mut order, "shell-3", SubagentApprovalKind::Shell);
+            push_subagent_approval_order(
+                &mut order,
+                "computer-4",
+                SubagentApprovalKind::ComputerUse,
+            );
+            assert!(subagent_approval_order_is_head(
+                &order,
+                SubagentApprovalKind::Shell,
+                "shell-3"
+            ));
+            assert!(!subagent_approval_order_is_head(
+                &order,
+                SubagentApprovalKind::ComputerUse,
+                "computer-4"
+            ));
+        });
+    }
+
+    struct SubagentWriteModalLifecycleHarness {
+        origin: FocusHandle,
+        deny: FocusHandle,
+        allow: FocusHandle,
+        queue: VecDeque<SubagentWorkspaceWriteApprovalRequest>,
+        deciding: Option<String>,
+        focus: SubagentWriteModalFocusState,
+        decisions: Vec<(String, SubagentWorkspaceWriteDecision)>,
+    }
+
+    impl SubagentWriteModalLifecycleHarness {
+        fn enqueue(&mut self, approval_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+            let generation = crate::services::chat_service::GenerationState {
+                chat_id: "chat-1".into(),
+                counter: 1,
+                provider_id: "provider-1".into(),
+                text: String::new(),
+                thinking: String::new(),
+                thinking_active: false,
+                thinking_expanded: false,
+                complete: false,
+                error: None,
+                error_retryable: false,
+                model: Some("model-1".into()),
+                timeline: None,
+            };
+            crate::services::chat_service::enqueue_subagent_write_request(
+                &mut self.queue,
+                Some(&generation),
+                subagent_write_request(approval_id),
+                1,
+            )
+            .unwrap();
+            self.reconcile(window, cx);
+        }
+
+        fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+            match self.focus.reconcile(
+                self.queue
+                    .front()
+                    .map(|request| request.approval_id.as_str()),
+                window.focused(cx),
+            ) {
+                SubagentWriteModalFocusTransition::Unchanged => {}
+                SubagentWriteModalFocusTransition::FocusDeny => self.deny.focus(window),
+                SubagentWriteModalFocusTransition::Restore(focus) => focus.focus(window),
+            }
+        }
+
+        fn decide(
+            &mut self,
+            approval_id: &str,
+            decision: SubagentWorkspaceWriteDecision,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+        ) -> bool {
+            if !crate::services::chat_service::subagent_write_decision_is_current(
+                &self.queue,
+                self.deciding.as_deref(),
+                approval_id,
+                1,
+            ) {
+                return false;
+            }
+            self.deciding = Some(approval_id.to_string());
+            self.decisions.push((approval_id.to_string(), decision));
+            crate::services::chat_service::remove_subagent_write_request(
+                &mut self.queue,
+                &mut self.deciding,
+                approval_id,
+            );
+            self.reconcile(window, cx);
+            cx.notify();
+            true
+        }
+    }
+
+    impl Render for SubagentWriteModalLifecycleHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .track_focus(&self.origin)
+                .tab_stop(true)
+                .when(!self.queue.is_empty(), |root| {
+                    root.child(
+                        v_flex()
+                            .id("subagent-write-approval-backdrop")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .child(div().track_focus(&self.deny).tab_stop(true).child("Deny"))
+                            .child(
+                                div()
+                                    .track_focus(&self.allow)
+                                    .tab_stop(true)
+                                    .child("Allow once"),
+                            ),
+                    )
+                })
+        }
+    }
+
+    fn subagent_write_request(approval_id: &str) -> SubagentWorkspaceWriteApprovalRequest {
+        SubagentWorkspaceWriteApprovalRequest {
+            approval_id: approval_id.into(),
+            generation_id: "chat-1:1".into(),
+            chat_id: "chat-1".into(),
+            run_id: "run-1".into(),
+            child_id: "child-1".into(),
+            tool_call_id: format!("call-{approval_id}"),
+            authority_revision: 1,
+            argument_digest: "a".repeat(64),
+            effect_digest: "b".repeat(64),
+            authority_digest: "c".repeat(64),
+            expires_at: u64::MAX,
+            details: aiden_core::SubagentWorkspaceWriteApprovalDetails {
+                operation: aiden_core::WorkspaceWriteOperation::Edit,
+                child_label: "Writer".into(),
+                path: "src/safe.rs".into(),
+                workspace_label: "Workspace".into(),
+                worktree_label: None,
+                is_managed_worktree: false,
+                pre_digest_prefix: Some("0123456789ab".into()),
+                post_digest_prefix: "abcdef012345".into(),
+                before_bytes: 10,
+                after_bytes: 12,
+                diff_preview: "-old\n+new".into(),
+                diff_truncated: false,
+                command_will_run: false,
+                refuse_if_changed: true,
+            },
+        }
+    }
+
+    #[gpui::test]
+    fn subagent_write_modal_forces_fifo_deny_allow_and_rejects_stale_decision(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_window, cx| SubagentWriteModalLifecycleHarness {
+            origin: cx.focus_handle(),
+            deny: cx.focus_handle(),
+            allow: cx.focus_handle(),
+            queue: VecDeque::new(),
+            deciding: None,
+            focus: SubagentWriteModalFocusState::default(),
+            decisions: Vec::new(),
+        });
+        cx.update(|window, app| {
+            let origin = view.read(app).origin.clone();
+            origin.focus(window);
+            view.update(app, |modal, cx| {
+                modal.enqueue("approval-1", window, cx);
+                modal.enqueue("approval-2", window, cx);
+            });
+            assert_eq!(window.focused(app), Some(view.read(app).deny.clone()));
+            view.update(app, |modal, cx| {
+                assert!(!modal.decide(
+                    "approval-2",
+                    SubagentWorkspaceWriteDecision::AllowOnce,
+                    window,
+                    cx,
+                ));
+                assert!(modal.decide(
+                    "approval-1",
+                    SubagentWorkspaceWriteDecision::Deny,
+                    window,
+                    cx,
+                ));
+            });
+            assert_eq!(
+                view.read(app).focus.active_id.as_deref(),
+                Some("approval-2")
+            );
+            assert_eq!(window.focused(app), Some(view.read(app).deny.clone()));
+            view.update(app, |modal, cx| {
+                assert!(!modal.decide(
+                    "approval-1",
+                    SubagentWorkspaceWriteDecision::AllowOnce,
+                    window,
+                    cx,
+                ));
+                assert!(modal.decide(
+                    "approval-2",
+                    SubagentWorkspaceWriteDecision::AllowOnce,
+                    window,
+                    cx,
+                ));
+            });
+            assert!(view.read(app).queue.is_empty());
+            assert_eq!(window.focused(app), Some(origin));
+            assert_eq!(
+                view.read(app).decisions,
+                vec![
+                    ("approval-1".into(), SubagentWorkspaceWriteDecision::Deny),
+                    (
+                        "approval-2".into(),
+                        SubagentWorkspaceWriteDecision::AllowOnce
+                    ),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn subagent_write_escape_denies_only_while_idle() {
+        assert_eq!(
+            subagent_write_escape_decision(false),
+            Some(SubagentWorkspaceWriteDecision::Deny)
+        );
+        assert_eq!(subagent_write_escape_decision(true), None);
+    }
+
+    struct PiProviderFocusHarness {
+        input: FocusHandle,
+        cancel: FocusHandle,
+        save: FocusHandle,
+        sign_out: FocusHandle,
+    }
+
+    impl Render for PiProviderFocusHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .child(div().track_focus(&self.input).tab_stop(true))
+                .child(div().track_focus(&self.cancel).tab_stop(true))
+                .child(div().track_focus(&self.save).tab_stop(true))
+                .child(div().track_focus(&self.sign_out).tab_stop(true))
+        }
+    }
+
+    #[gpui::test]
+    fn pi_provider_modal_focus_wraps_and_restores_explicit_owner(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_window, cx| PiProviderFocusHarness {
+            input: cx.focus_handle(),
+            cancel: cx.focus_handle(),
+            save: cx.focus_handle(),
+            sign_out: cx.focus_handle(),
+        });
+        cx.update(|window, app| {
+            let harness = view.read(app);
+            let handles = [
+                harness.input.clone(),
+                harness.cancel.clone(),
+                harness.save.clone(),
+                harness.sign_out.clone(),
+            ];
+            handles[0].focus(window);
+            let backwards = trapped_focus_index(true, Some(0), handles.len());
+            handles[backwards].focus(window);
+            assert_eq!(window.focused(app), Some(harness.sign_out.clone()));
+
+            let forwards = trapped_focus_index(false, Some(backwards), handles.len());
+            handles[forwards].focus(window);
+            assert_eq!(window.focused(app), Some(harness.input.clone()));
+
+            let return_focus = harness.cancel.clone();
+            return_focus.focus(window);
+            assert_eq!(window.focused(app), Some(return_focus));
+        });
+    }
+
+    #[test]
+    fn pi_provider_modal_busy_lock_and_stale_completion_are_fail_closed() {
+        use crate::services::pi_provider_setup::PiSetupLease;
+
+        assert!(pi_provider_setup_can_close(false));
+        assert!(!pi_provider_setup_can_close(true));
+
+        let first = PiSetupLease::for_test(7);
+        let replacement = PiSetupLease::for_test(8);
+        assert!(pi_provider_setup_completion_is_current(
+            "anthropic",
+            first,
+            "anthropic",
+            first,
+        ));
+        assert!(!pi_provider_setup_completion_is_current(
+            "anthropic",
+            replacement,
+            "anthropic",
+            first,
+        ));
+        assert!(!pi_provider_setup_completion_is_current(
+            "google",
+            first,
+            "anthropic",
+            first,
+        ));
+    }
+
+    #[test]
+    fn computer_use_modal_traps_focus_and_escape_can_only_deny_once_idle() {
+        assert_eq!(trapped_focus_index(false, None, 2), 0);
+        assert_eq!(trapped_focus_index(false, Some(1), 2), 0);
+        assert_eq!(trapped_focus_index(true, Some(0), 2), 1);
+        assert_eq!(trapped_focus_index(false, Some(2), 3), 0);
+        assert_eq!(trapped_focus_index(true, Some(0), 3), 2);
+        assert_eq!(
+            computer_use_escape_decision(false),
+            Some(ComputerUseApprovalDecision::Deny)
+        );
+        assert_eq!(computer_use_escape_decision(true), None);
+    }
 
     #[test]
     fn pending_files_replay_rechecks_live_busy_state() {
@@ -3280,6 +7291,106 @@ mod tests {
         // System: follows the OS probe (parity with the pill's MotionGate).
         assert!(motion_reduced(ReduceMotion::System, true));
         assert!(!motion_reduced(ReduceMotion::System, false));
+    }
+
+    #[test]
+    fn windowless_pill_show_prefers_live_appearance_and_retains_cached_state() {
+        let mut cached = aiden_core::appearance::create_default_appearance_config();
+        cached.mode = Mode::Dark;
+        cached.reduce_motion = ReduceMotion::On;
+        let mut live = cached.clone();
+        live.mode = Mode::Light;
+        live.reduce_motion = ReduceMotion::Off;
+
+        assert_eq!(
+            pill_appearance_for_show(None, (cached.clone(), true)),
+            (cached, true)
+        );
+        assert_eq!(
+            pill_appearance_for_show(
+                Some((live.clone(), false)),
+                (
+                    aiden_core::appearance::create_default_appearance_config(),
+                    true
+                )
+            ),
+            (live, false)
+        );
+    }
+
+    #[test]
+    fn assistant_dock_keeps_the_panel_present_until_its_exit_settles() {
+        assert!(assistant_dock_panel_present(true, true));
+        // Minimize starts an exit: no bubble is rendered while the panel is
+        // still present. Reduced motion clears `present` immediately.
+        assert!(assistant_dock_panel_present(false, true));
+        assert!(!assistant_dock_panel_present(false, false));
+        assert!(!assistant_entity_required_for_dock(false, false));
+        assert!(assistant_entity_required_for_dock(true, true));
+    }
+
+    #[test]
+    fn assistant_notice_badges_only_while_minimized_and_bounds_the_preview() {
+        let reply = format!("first\n{}", "word ".repeat(160));
+        let (unread, preview) = assistant_notice_state(false, 9, &reply);
+        assert_eq!(unread, 10);
+        assert!(preview.expect("preview").ends_with('…'));
+
+        let (unread, preview) = assistant_notice_state(true, 3, "visible reply");
+        assert_eq!(unread, 3);
+        assert!(preview.is_none());
+    }
+
+    #[test]
+    fn assistant_preview_collapses_whitespace_for_a_single_bubble_line() {
+        assert_eq!(
+            assistant_preview_text("  reply\n\nwith\tspace  "),
+            "reply with space"
+        );
+    }
+
+    #[test]
+    fn assistant_preview_removes_bidi_format_controls_markdown_and_uses_a_safe_fallback() {
+        assert_eq!(
+            assistant_preview_text("**`\u{200b}hello\u{200e}\u{061c}`** \u{2067}world\u{2069}"),
+            "hello world"
+        );
+        assert_eq!(
+            assistant_preview_text("\u{feff}\u{202e}\u{2060}"),
+            "Aiden has an update"
+        );
+        let long = format!("{} tail", "word ".repeat(30));
+        let preview = assistant_preview_text(&long);
+        assert!(preview.chars().count() <= 81 && preview.ends_with('…'));
+        assert_eq!(
+            assistant_preview_text(&"😀".repeat(100)).chars().count(),
+            81
+        );
+        assert_eq!(
+            assistant_preview_text(&"界".repeat(100)).chars().count(),
+            81
+        );
+    }
+
+    #[test]
+    fn assistant_dock_is_occluded_by_environment_and_every_root_modal() {
+        assert!(!assistant_dock_occluded(false, false));
+        assert!(assistant_dock_occluded(true, false));
+        assert!(assistant_dock_occluded(false, true));
+    }
+
+    #[test]
+    fn delayed_assistant_minimize_never_restores_focus_through_a_new_modal() {
+        assert!(assistant_minimize_may_restore_focus(false));
+        assert!(!assistant_minimize_may_restore_focus(true));
+    }
+
+    #[test]
+    fn assistant_dock_geometry_keeps_the_required_window_insets() {
+        assert_eq!(assistant_dock_width(300.), 252.);
+        assert_eq!(assistant_dock_width(900.), 368.);
+        assert_eq!(assistant_dock_height(700.), 544.);
+        assert_eq!(assistant_dock_height(500.), 372.);
     }
 
     #[test]

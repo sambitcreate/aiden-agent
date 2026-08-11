@@ -25,7 +25,7 @@ use aiden_data::config_store::ConfigStore;
 use aiden_data::portable_config::McpServer;
 use aiden_data::schedule_store::{
     next_scheduled_run, DataStorePersistence, ScheduledTask, ScheduledTaskInput,
-    ScheduledTaskPermission,
+    ScheduledTaskPermission, ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
 };
 use aiden_scheduler::runtime::SchedulerCore;
 use async_trait::async_trait;
@@ -104,6 +104,7 @@ impl aiden_agent::project_tool::WorkspaceLister for StoreWorkspaceLister {
 #[async_trait]
 pub trait ScheduleSource: Send + Sync {
     fn list(&self) -> Vec<ScheduledTask>;
+    fn global_enabled(&self) -> bool;
     /// Upsert by input id (`None` creates a new task).
     async fn save(
         &self,
@@ -121,12 +122,28 @@ pub trait ScheduleSource: Send + Sync {
 }
 
 /// [`ScheduleSource`] over the app's shared scheduler authority.
-pub struct StoreScheduleSource(pub Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>);
+pub struct StoreScheduleSource {
+    core: Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>,
+    config: Arc<ConfigStore>,
+}
+
+impl StoreScheduleSource {
+    pub fn new(
+        core: Arc<SchedulerCore<DataStorePersistence, DataStorePersistence>>,
+        config: Arc<ConfigStore>,
+    ) -> Self {
+        Self { core, config }
+    }
+}
 
 #[async_trait]
 impl ScheduleSource for StoreScheduleSource {
     fn list(&self) -> Vec<ScheduledTask> {
-        self.0.store().list().unwrap_or_default()
+        self.core.store().list().unwrap_or_default()
+    }
+
+    fn global_enabled(&self) -> bool {
+        crate::services::scheduled_execution::global_enabled(&self.config)
     }
 
     async fn save(
@@ -135,14 +152,17 @@ impl ScheduleSource for StoreScheduleSource {
         expected_updated_at: Option<u64>,
     ) -> Result<ScheduledTask, String> {
         let cancellation = tokio_util::sync::CancellationToken::new();
-        self.0
+        self.core
             .save(input, expected_updated_at, &cancellation)
             .await
             .map_err(|error| error.to_string())
     }
 
     async fn remove(&self, id: &str) -> Result<(), String> {
-        self.0.remove(id).await.map_err(|error| error.to_string())
+        self.core
+            .remove(id)
+            .await
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -208,11 +228,11 @@ pub fn parse_schedule_input(call: &ToolCall, now: u64) -> Result<ScheduledTaskIn
     } else {
         None
     };
-    let enabled = if call.name == SCHEDULE_TASK_TOOL {
-        Some(false)
-    } else {
-        args.get("enabled").and_then(serde_json::Value::as_bool)
-    };
+    let enabled = Some(
+        args.get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    );
 
     Ok(ScheduledTaskInput {
         id,
@@ -248,11 +268,19 @@ fn task_json(task: &ScheduledTask) -> serde_json::Value {
         "timezone": task.timezone,
         "nextRunAt": task.next_run_at,
         "updatedAt": task.updated_at,
-        "executionStatus": "unsupported",
+        "executionStatus": if task.enabled { "scheduled" } else { "paused" },
         "permission": match task.permission {
             ScheduledTaskPermission::ReadOnly => "read-only",
             ScheduledTaskPermission::Full => "full",
         },
+    })
+}
+
+fn scheduled_tasks_json(tasks: &[ScheduledTask], scheduler_enabled: bool) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "schedulerEnabled": scheduler_enabled,
+        "tasks": tasks.iter().map(task_json).collect::<Vec<_>>(),
     })
 }
 
@@ -268,6 +296,7 @@ pub struct AssistantToolExecutor {
     mcp: Arc<aiden_mcp::McpClientManager>,
     mcp_tools: ChatMcpTools,
     schedule: Arc<dyn ScheduleSource>,
+    config: Arc<ConfigStore>,
     mcp_timeout: Duration,
 }
 
@@ -279,6 +308,7 @@ impl AssistantToolExecutor {
         mcp: Arc<aiden_mcp::McpClientManager>,
         mcp_tools: ChatMcpTools,
         schedule: Arc<dyn ScheduleSource>,
+        config: Arc<ConfigStore>,
     ) -> Self {
         Self {
             identity: AssistantMcpServerTool::new(lister),
@@ -286,6 +316,7 @@ impl AssistantToolExecutor {
             mcp,
             mcp_tools,
             schedule,
+            config,
             mcp_timeout: Duration::from_millis(ASSISTANT_MCP_CALL_TIMEOUT_MS),
         }
     }
@@ -294,7 +325,7 @@ impl AssistantToolExecutor {
         vec![
             ToolDef {
                 name: SCHEDULE_TASK_TOOL.to_string(),
-                description: "Propose one dormant LLM automation. Scheduled execution is currently unsupported, so a saved proposal remains disabled. The user must confirm the proposal; never claim it is active or will run. Pass an exact project ID from list_projects as workspaceId and exact server IDs from list_mcp_servers as mcpServerIds.".to_string(),
+                description: "Propose one pinned LLM automation. It runs only after attended confirmation, explicit task enable, and the global Scheduled tasks gate. Pass exact IDs from the identity tools; never claim it is active until the tool result confirms it.".to_string(),
                 parameters: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -308,6 +339,7 @@ impl AssistantToolExecutor {
                         "providerId": { "type": "string" },
                         "model": { "type": "string" },
                         "notify": { "type": "boolean" }
+                        ,"enabled": { "type": "boolean", "description": "Whether the attended approval should enable this task immediately." }
                     },
                     "required": ["name", "prompt", "cron", "timezone", "providerId", "model"],
                     "additionalProperties": false,
@@ -357,12 +389,8 @@ impl AssistantToolExecutor {
     }
 
     /// Remove a saved automation through the same lifecycle authority. This
-    /// is intentionally not exposed as an Assistant tool while scheduled
-    /// execution is unsupported.
-    #[expect(
-        dead_code,
-        reason = "keeps removal on the shared authority without advertising a dormant Assistant tool"
-    )]
+    /// is intentionally not exposed as an Assistant tool in this tranche.
+    #[allow(dead_code)]
     pub async fn remove_schedule(&self, id: &str) -> Result<(), ToolExecutionError> {
         self.schedule
             .remove(id)
@@ -372,18 +400,84 @@ impl AssistantToolExecutor {
 
     async fn list_scheduled_tasks(&self) -> Result<ToolOutput, ToolExecutionError> {
         let tasks = self.schedule.list();
-        let payload = serde_json::json!({
-            "status": "ok",
-            "tasks": tasks.iter().map(task_json).collect::<Vec<_>>(),
-        });
+        let payload = scheduled_tasks_json(&tasks, self.schedule.global_enabled());
         Ok(ToolOutput::text(
             serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
         ))
     }
 
+    fn bind_schedule_input(
+        &self,
+        input: &mut ScheduledTaskInput,
+    ) -> Result<(), ToolExecutionError> {
+        if input.permission == Some(ScheduledTaskPermission::Full) && input.workspace_id.is_some() {
+            return Err(ToolExecutionError::Message(
+                "Full project automations are unavailable in the native scheduled runtime because it does not expose filesystem or shell tools. Use Read-only prompt context or an exactly selected MCP scope."
+                    .into(),
+            ));
+        }
+        let provider_id = input
+            .provider_id
+            .as_deref()
+            .ok_or_else(|| ToolExecutionError::Message("Choose an exact provider.".to_string()))?;
+        let provider = self
+            .config
+            .get_provider(provider_id)
+            .map_err(|_| ToolExecutionError::Message("The provider could not be read.".into()))?
+            .ok_or_else(|| ToolExecutionError::Message("The provider no longer exists.".into()))?;
+        let model = input.model.as_deref().unwrap_or_default();
+        if !provider.models.iter().any(|candidate| candidate == model) {
+            return Err(ToolExecutionError::Message(
+                "The selected model is unavailable for that provider.".into(),
+            ));
+        }
+        if provider.needs_key
+            && self
+                .config
+                .get_bound_provider_key(&provider)
+                .ok()
+                .flatten()
+                .is_none()
+        {
+            return Err(ToolExecutionError::Message(
+                "The selected provider needs authentication.".into(),
+            ));
+        }
+        input.provider_fingerprint =
+            Some(aiden_scheduler::binding::scheduled_provider_fingerprint(
+                &crate::services::scheduled_execution::provider_binding_for_schedule(&provider),
+            ));
+        let configured = self.config.list_mcp_servers().map_err(|_| {
+            ToolExecutionError::Message("The MCP configuration could not be read.".into())
+        })?;
+        let mut bindings = Vec::new();
+        for id in input.mcp_server_ids.as_deref().unwrap_or_default() {
+            let server = configured
+                .iter()
+                .find(|server| server.id == *id && server.enabled)
+                .ok_or_else(|| {
+                    ToolExecutionError::Message(
+                        "An approved MCP server is unavailable.".to_string(),
+                    )
+                })?;
+            let binding_server = serde_json::to_value(server)
+                .and_then(serde_json::from_value::<aiden_scheduler::binding::McpServer>)
+                .map_err(|_| {
+                    ToolExecutionError::Message("The MCP binding is invalid.".to_string())
+                })?;
+            bindings.push(aiden_scheduler::binding::scheduled_mcp_server_binding(
+                &binding_server,
+            ));
+        }
+        input.mcp_server_bindings = Some(bindings);
+        input.execution_profile = Some(ASSISTANT_SCHEDULE_EXECUTION_PROFILE.to_string());
+        Ok(())
+    }
+
     async fn create_automation(&self, call: &ToolCall) -> Result<ToolOutput, ToolExecutionError> {
-        let input = parse_schedule_input(call, aiden_data::now_millis())
+        let mut input = parse_schedule_input(call, aiden_data::now_millis())
             .map_err(ToolExecutionError::Message)?;
+        self.bind_schedule_input(&mut input)?;
         let task = self
             .schedule
             .save(&input, None)
@@ -391,7 +485,7 @@ impl AssistantToolExecutor {
             .map_err(ToolExecutionError::Message)?;
         let payload = serde_json::json!({
             "status": "created",
-            "schedulerEnabled": false,
+            "schedulerEnabled": self.schedule.global_enabled(),
             "task": task_json(&task),
         });
         Ok(ToolOutput::text(
@@ -400,8 +494,9 @@ impl AssistantToolExecutor {
     }
 
     async fn edit_automation(&self, call: &ToolCall) -> Result<ToolOutput, ToolExecutionError> {
-        let input = parse_schedule_input(call, aiden_data::now_millis())
+        let mut input = parse_schedule_input(call, aiden_data::now_millis())
             .map_err(ToolExecutionError::Message)?;
+        self.bind_schedule_input(&mut input)?;
         let expected_updated_at = call
             .arguments
             .get("expectedUpdatedAt")
@@ -419,7 +514,7 @@ impl AssistantToolExecutor {
             .map_err(ToolExecutionError::Message)?;
         let payload = serde_json::json!({
             "status": "updated",
-            "schedulerEnabled": false,
+            "schedulerEnabled": self.schedule.global_enabled(),
             "task": task_json(&task),
         });
         Ok(ToolOutput::text(
@@ -471,7 +566,13 @@ impl ToolExecutor for AssistantToolExecutor {
 ///
 /// Mirrors the chat driver's collection with the assistant's call timeout.
 pub async fn collect_assistant_mcp_tools(context: &McpStreamContext) -> ChatMcpTools {
-    collect_chat_mcp_tools(&context.manager, &context.servers, &context.preset_key).await
+    collect_chat_mcp_tools(
+        &context.manager,
+        &context.servers,
+        &context.preset_key,
+        context.authority.as_ref(),
+    )
+    .await
 }
 
 /// The enabled MCP servers from the config store (the inventory the assistant
@@ -514,6 +615,10 @@ mod tests {
             Vec::new()
         }
 
+        fn global_enabled(&self) -> bool {
+            false
+        }
+
         async fn save(
             &self,
             _input: &ScheduledTaskInput,
@@ -534,7 +639,29 @@ mod tests {
             Arc::new(aiden_mcp::McpClientManager::new()),
             ChatMcpTools::default(),
             Arc::new(NoopScheduleSource),
+            test_config(),
         )
+    }
+
+    fn test_config() -> Arc<ConfigStore> {
+        let portable = tempfile::tempdir().unwrap().keep();
+        let local = tempfile::tempdir().unwrap().keep();
+        let keys = Arc::new(aiden_data::secret_map::ProviderKeysStore::new(
+            local.clone(),
+            "scheduled-assistant-test",
+            Arc::new(aiden_data::secret_map::KeyringCredentialCipher::new(
+                "scheduled-assistant-test",
+            )),
+        ));
+        Arc::new(ConfigStore::new(
+            aiden_data::portable_config::create_portable_config_stores(
+                portable,
+                Some(local),
+                aiden_data::portable_config::PortableConfigTestHooks::default(),
+            ),
+            Arc::new(crate::services::stores::StoreSecretsPort::new(keys)),
+            None,
+        ))
     }
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
@@ -639,6 +766,24 @@ mod tests {
         .expect("valid edit");
         assert_eq!(input.id.as_deref(), Some("task-1"));
         assert_eq!(input.enabled, Some(false));
+        let enabled = parse_schedule_input(
+            &call(
+                "edit_automation",
+                serde_json::json!({
+                    "taskId": "task-1",
+                    "name": "Morning brief",
+                    "prompt": "Updated.",
+                    "cron": "30 7 * * *",
+                    "timezone": "UTC",
+                    "expectedUpdatedAt": 42,
+                    "enabled": true,
+                    "providerId": "p",
+                    "model": "m",
+                }),
+            ),
+            1_700_000_000_000,
+        );
+        assert_eq!(enabled.unwrap().enabled, Some(true));
         // Without a task id the edit is malformed.
         assert!(parse_schedule_input(
             &call(
@@ -676,6 +821,45 @@ mod tests {
         assert!(!executor.requires_approval("list_projects"));
     }
 
+    #[test]
+    fn scheduled_list_projects_legacy_enabled_rows_as_dormant() {
+        let legacy = ScheduledTask {
+            id: "legacy-enabled".to_string(),
+            name: "Legacy morning brief".to_string(),
+            enabled: true,
+            mode: aiden_data::schedule_store::ScheduledTaskMode::Llm,
+            cron: "0 9 * * *".to_string(),
+            timezone: "UTC".to_string(),
+            next_run_at: Some(1_800_000_000_000),
+            last_run_at: None,
+            workspace_id: None,
+            provider_id: Some("provider".to_string()),
+            model: Some("model".to_string()),
+            provider_fingerprint: None,
+            prompt: Some("Summarize updates.".to_string()),
+            script: None,
+            permission: ScheduledTaskPermission::ReadOnly,
+            mcp_server_ids: None,
+            mcp_server_bindings: None,
+            execution_profile: None,
+            chat_id: None,
+            notify: true,
+            last_result: None,
+            last_error: None,
+            created_at: 41,
+            updated_at: 42,
+        };
+
+        let payload = scheduled_tasks_json(&[legacy], true);
+        let projected = &payload["tasks"][0];
+
+        assert_eq!(payload["schedulerEnabled"], true);
+        assert_eq!(projected["enabled"], true);
+        assert_eq!(projected["nextRunAt"], 1_800_000_000_000u64);
+        assert_eq!(projected["cron"], "0 9 * * *");
+        assert_eq!(projected["updatedAt"], 42);
+    }
+
     #[tokio::test]
     async fn unknown_tools_resolve_to_not_found_without_panicking() {
         let executor = executor();
@@ -697,11 +881,11 @@ mod tests {
         ));
         let scheduler = aiden_scheduler::runtime::create_scheduler(
             store,
-            Arc::new(crate::services::stores::DisabledTaskExecutor),
+            Arc::new(crate::services::stores::TestFailClosedTaskExecutor),
             None,
             Box::new(aiden_data::now_millis),
         );
-        let assistant = StoreScheduleSource(scheduler.clone());
+        let assistant = StoreScheduleSource::new(scheduler.clone(), test_config());
         let input = ScheduledTaskInput {
             name: "Dormant task".to_string(),
             enabled: Some(false),

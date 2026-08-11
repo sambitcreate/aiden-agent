@@ -18,7 +18,6 @@ use gpui_component::{
     h_flex, v_flex, Disableable as _, Icon, IconName, Sizable as _,
 };
 
-use crate::approvals::approval_bridge::format_schedule;
 use crate::approvals::queue::PendingApproval;
 
 /// The card title: proposals ask to be created, edits ask to be saved.
@@ -110,7 +109,7 @@ pub fn mcp_server_labels(details: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// The provider/model line ("Runs with … while Aiden is open.").
+/// The pinned provider/model configuration without implying execution.
 pub fn provider_line(details: &serde_json::Value) -> String {
     let provider_name = details
         .get("providerName")
@@ -128,38 +127,31 @@ pub fn provider_line(details: &serde_json::Value) -> String {
         .get("model")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("?");
-    format!(
-        "Runs with {provider_name} ({provider_id}) · {model_name} ({model}) while Aiden is open."
-    )
+    format!("Configured with {provider_name} ({provider_id}) · {model_name} ({model}).")
 }
 
-/// The next-run line: "Remains paused" for disabled edits, otherwise a human
-/// next-run label.
+/// Truthful execution posture for the exact approved proposal.
 pub fn next_run_label(details: &serde_json::Value) -> String {
-    match details.get("enabled").and_then(serde_json::Value::as_bool) {
-        Some(false) => "Remains paused".to_string(),
-        _ => {
-            let next = details.get("nextRunAt").and_then(serde_json::Value::as_u64);
-            let cron = details
-                .get("cron")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let timezone = details
-                .get("timezone")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("UTC");
-            match next.and_then(|millis| chrono::DateTime::from_timestamp_millis(millis as i64)) {
-                Some(datetime) => format!(
-                    "Next run: {} · {}",
-                    datetime
-                        .with_timezone(&chrono::Local)
-                        .format("%b %e, %Y at %-I:%M %p"),
-                    format_schedule(cron, timezone, next)
-                ),
-                None => "Next run: soon".to_string(),
-            }
-        }
+    if details
+        .get("schedulerEnabled")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
+    {
+        return "Paused by the global Scheduled tasks setting".to_string();
     }
+    if details.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
+        return "Saved paused until this task is enabled".to_string();
+    }
+    details
+        .get("nextRunAt")
+        .and_then(serde_json::Value::as_u64)
+        .map(|next| {
+            format!(
+                "Next run {}",
+                crate::services::chat_service::relative_time(next, aiden_data::now_millis())
+            )
+        })
+        .unwrap_or_else(|| "Enabled · awaiting its next schedule".to_string())
 }
 
 /// The warnings rendered under the details (full-access write scope, unattended
@@ -176,7 +168,9 @@ pub fn automation_warnings(details: &serde_json::Value) -> Vec<String> {
             .and_then(serde_json::Value::as_str)
             .filter(|name| !name.trim().is_empty())
         {
-            warnings.push(format!("Can edit files and run commands in {workspace}."));
+            warnings.push(format!(
+                "Uses {workspace} as prompt context; native scheduled prompts do not expose filesystem or shell tools."
+            ));
         }
     }
     let mcp = mcp_server_labels(details);
@@ -189,7 +183,7 @@ pub fn automation_warnings(details: &serde_json::Value) -> Vec<String> {
         == Some(false)
     {
         warnings.push(
-            "Scheduling is off. This will be saved but will not run until Scheduled Tasks are enabled."
+            "The global Scheduled tasks setting is off, so this automation will remain paused."
                 .to_string(),
         );
     }
@@ -468,7 +462,7 @@ mod tests {
             "prompt": "Summarize <private> updates.",
             "cron": "0 9 * * *",
             "timezone": "UTC",
-            "nextRunAt": 1_800_000_000_000_i64,
+            "nextRunAt": null,
             "notify": true,
             "mode": "llm",
             "permission": if read_only { "read-only" } else { "full" },
@@ -481,6 +475,7 @@ mod tests {
             "model": "local-model",
             "modelName": "Local Model",
             "schedulerEnabled": false,
+            "enabled": false,
         });
         if let Some(workspace) = workspace {
             value["workspaceName"] = json!(workspace);
@@ -540,27 +535,37 @@ mod tests {
         let proposal = create(false, Some("Website"), vec![]);
         assert_eq!(
             provider_line(&proposal),
-            "Runs with Local Provider (local-provider) · Local Model (local-model) while Aiden is open."
+            "Configured with Local Provider (local-provider) · Local Model (local-model)."
         );
         let warnings = automation_warnings(&proposal);
         assert!(warnings
             .iter()
-            .any(|warning| warning == "Can edit files and run commands in Website."));
-        // Scheduler off → the save-but-not-run warning.
+            .any(|warning| warning.contains("do not expose filesystem or shell tools")));
+        // The explicit global gate remains visible in the approval.
         assert!(warnings
             .iter()
-            .any(|warning| warning.contains("will not run")));
+            .any(|warning| warning.contains("remain paused")));
     }
 
     #[test]
-    fn next_run_labels_report_paused_and_scheduled_states() {
+    fn execution_label_tracks_global_task_and_next_run_state() {
         let proposal = create(true, None, vec![]);
-        assert!(next_run_label(&proposal).starts_with("Next run:"));
+        assert_eq!(
+            next_run_label(&proposal),
+            "Paused by the global Scheduled tasks setting"
+        );
         let mut paused = proposal.clone();
         paused["action"] = json!("edit");
         paused["taskId"] = json!("task-1");
         paused["enabled"] = json!(false);
-        assert_eq!(next_run_label(&paused), "Remains paused");
+        paused["schedulerEnabled"] = json!(true);
+        assert_eq!(
+            next_run_label(&paused),
+            "Saved paused until this task is enabled"
+        );
+        paused["enabled"] = json!(true);
+        paused["nextRunAt"] = json!(aiden_data::now_millis() + 60_000);
+        assert!(next_run_label(&paused).starts_with("Next run "));
     }
 
     #[test]

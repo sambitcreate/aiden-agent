@@ -542,8 +542,14 @@ impl Provider for AnthropicProvider {
         options: &StreamOptions,
     ) -> Result<EventStream, ProviderError> {
         let request_builder = self.build_request(request, options)?;
-        let source = reqwest_eventsource::EventSource::new(request_builder)
+        let mut source = reqwest_eventsource::EventSource::new(request_builder)
             .map_err(|err| ProviderError::Request(err.to_string()))?;
+        // A generation is one user-owned request. The crate default retries
+        // transport failures forever, which leaves the chat in a streaming
+        // state with no terminal error and can duplicate a provider turn after
+        // a partial response. Match the other provider paths: settle this
+        // generation and let the UI's explicit Retry action start a new turn.
+        source.set_retry_policy(Box::new(reqwest_eventsource::retry::Never));
         let accumulator = AnthropicAccumulator::new();
 
         let stream = futures::stream::unfold(

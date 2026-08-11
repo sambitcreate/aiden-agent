@@ -1,7 +1,7 @@
 //! Composer support: the model-picker items (shared by the sidebar footer and
 //! the composer), the pending-attachment draft + edit state machine, the
-//! attachment read/validate helpers (a port of `main/services/attachments.ts`
-//! for images), and the edit-rebranch truncation helper. The interactive
+//! attachment read/validate helpers (a port of `main/services/attachments.ts`),
+//! and the edit-rebranch truncation helper. The interactive
 //! composer itself is rendered from `AppState` (see `chat_pane.rs`).
 
 use std::path::Path;
@@ -158,6 +158,9 @@ pub fn model_items_with_layout(
 /// Max image bytes accepted for an attachment, mirroring `attachments.ts`
 /// (`MAX_IMAGE_BYTES = 8 MB`).
 pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+/// Max decoded UTF-8 characters retained for a text attachment.
+pub const MAX_TEXT_CHARS: usize = 100_000;
+const TEXT_TRUNCATION_SUFFIX: &str = "\n… [truncated]";
 
 /// The pending composer state: attachments staged before send, the message id
 /// being edited (if any), and whether a file picker read is in flight. Lives in
@@ -175,6 +178,9 @@ pub struct ComposerDraft {
     pub editing_message_id: Option<String>,
     /// Whether a file-picker read is in flight (spinner/disabled attach button).
     pub attaching: bool,
+    /// At most one opaque skill descriptor selected for the next message.
+    /// Expanded instructions never live in the draft.
+    pub skill_selection: crate::chat::slash::SkillSelection,
 }
 
 impl gpui::Global for ComposerDraft {}
@@ -225,6 +231,7 @@ impl ComposerDraft {
     pub fn clear(&mut self) {
         self.attachments.clear();
         self.editing_message_id = None;
+        self.skill_selection.clear();
     }
 }
 
@@ -237,9 +244,10 @@ pub fn composer_draft(cx: &mut App) -> &mut ComposerDraft {
 // Attachment reading + validation (port of `main/services/attachments.ts`)
 // ===========================================================================
 
-/// The image extensions the attach affordance accepts, mapped to mime types
-/// (the same set `attachments.ts` exposes; `heic`/`heif`/`bmp` are omitted
-/// because GPUI cannot render or the provider path does not carry them).
+/// The image extensions the attach affordance accepts, mapped to mime types.
+/// The provider path carries all of these even when GPUI cannot decode a
+/// particular format for an inline thumbnail; those attachments fall back to
+/// a file chip in the UI.
 pub fn image_mime_for_path(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     match extension.as_str() {
@@ -247,6 +255,9 @@ pub fn image_mime_for_path(path: &Path) -> Option<&'static str> {
         "jpg" | "jpeg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "heic" => Some("image/heic"),
+        "heif" => Some("image/heif"),
         _ => None,
     }
 }
@@ -254,10 +265,13 @@ pub fn image_mime_for_path(path: &Path) -> Option<&'static str> {
 /// Why an attachment was rejected by [`validate_image_attachment`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachmentError {
-    /// The path is not one of the accepted image extensions.
-    NotAnImage,
-    /// The file exceeds [`MAX_IMAGE_BYTES`].
+    /// The path is not a supported image or text file.
+    UnsupportedType,
+    /// The file exceeds the applicable image or text cap.
     TooLarge(u64),
+    /// The file contains a NUL byte and is therefore not safe to inline as
+    /// UTF-8 text.
+    Binary,
     /// The file could not be read (I/O failure, not a regular file, …).
     Unreadable(String),
 }
@@ -265,14 +279,16 @@ pub enum AttachmentError {
 impl std::fmt::Display for AttachmentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AttachmentError::NotAnImage => {
-                write!(f, "isn't a supported image (png, jpg, gif, webp)")
-            }
+            AttachmentError::UnsupportedType => write!(
+                f,
+                "isn't a supported text or image file (png, jpg, gif, webp, bmp, heic, heif)"
+            ),
             AttachmentError::TooLarge(size) => write!(
                 f,
-                "is too large to attach (max 8 MB, got {:.1} MB)",
+                "is too large to attach (max 8 MB for images or 100,000 characters for text; got {:.1} MB)",
                 *size as f64 / (1024.0 * 1024.0)
             ),
+            AttachmentError::Binary => write!(f, "isn't a supported text or image file"),
             AttachmentError::Unreadable(message) => write!(f, "couldn't be read: {message}"),
         }
     }
@@ -283,7 +299,7 @@ impl std::fmt::Display for AttachmentError {
 /// Returns the resolved mime type on success. Pure — callers feed it
 /// `fs::metadata` output, so the check is unit-testable.
 pub fn validate_image_attachment(path: &Path, size: u64) -> Result<&'static str, AttachmentError> {
-    let mime = image_mime_for_path(path).ok_or(AttachmentError::NotAnImage)?;
+    let mime = image_mime_for_path(path).ok_or(AttachmentError::UnsupportedType)?;
     if size > MAX_IMAGE_BYTES {
         return Err(AttachmentError::TooLarge(size));
     }
@@ -330,6 +346,56 @@ pub fn read_image_attachment(path: &Path) -> Result<Attachment, AttachmentError>
         metadata.len(),
         bytes,
     ))
+}
+
+/// Build a persisted-ready text attachment from bounded UTF-8 content.
+pub fn attachment_from_text(name: String, size: u64, text: String) -> Attachment {
+    Attachment {
+        id: new_uuid_like(),
+        name,
+        mime_type: "text/plain".to_string(),
+        kind: AttachmentKind::Text,
+        size,
+        data: None,
+        text: Some(text),
+    }
+}
+
+/// Read one picked path using Electron's attachment contract: supported image
+/// formats remain base64 bytes, while every other regular UTF-8 file is
+/// inlined with a bounded character budget. NUL-containing files fail closed
+/// instead of being treated as lossy text.
+pub fn read_attachment(path: &Path) -> Result<Attachment, AttachmentError> {
+    let metadata =
+        std::fs::metadata(path).map_err(|error| AttachmentError::Unreadable(error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(AttachmentError::Unreadable("not a regular file".into()));
+    }
+    if image_mime_for_path(path).is_some() {
+        return read_image_attachment(path);
+    }
+    let bytes =
+        std::fs::read(path).map_err(|error| AttachmentError::Unreadable(error.to_string()))?;
+    if bytes.contains(&0) {
+        return Err(AttachmentError::Binary);
+    }
+    // Node's Buffer#toString("utf8") replaces malformed sequences rather
+    // than dropping the file; preserve that behavior while still rejecting
+    // explicit NUL bytes above as obvious binary content.
+    let raw = String::from_utf8_lossy(&bytes).into_owned();
+    let text = if raw.chars().count() > MAX_TEXT_CHARS {
+        let budget = MAX_TEXT_CHARS.saturating_sub(TEXT_TRUNCATION_SUFFIX.chars().count());
+        let prefix: String = raw.chars().take(budget).collect();
+        format!("{prefix}{TEXT_TRUNCATION_SUFFIX}")
+    } else {
+        raw
+    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "attachment".to_string());
+    Ok(attachment_from_text(name, metadata.len(), text))
 }
 
 /// Human-friendly byte size for attachment chips ("1.2 MB", "340 KB").
@@ -522,6 +588,9 @@ mod tests {
             ("photo.jpg", Some("image/jpeg")),
             ("anim.gif", Some("image/gif")),
             ("web.webp", Some("image/webp")),
+            ("scan.bmp", Some("image/bmp")),
+            ("photo.heic", Some("image/heic")),
+            ("photo.HEIF", Some("image/heif")),
             ("notes.txt", None),
             ("archive.zip", None),
             ("no-extension", None),
@@ -537,11 +606,11 @@ mod tests {
 
     #[test]
     fn attachment_validation_rejects_non_images_and_oversized_files() {
-        // A huge non-image is NotAnImage, not TooLarge (mirrors attachments.ts
+        // A huge unsupported file is UnsupportedType, not TooLarge (mirrors attachments.ts
         // which resolves the mime before checking size).
         assert_eq!(
             validate_image_attachment(Path::new("data.bin"), MAX_IMAGE_BYTES + 1),
-            Err(AttachmentError::NotAnImage)
+            Err(AttachmentError::UnsupportedType)
         );
         // An image exactly at the cap is accepted.
         assert_eq!(
@@ -574,6 +643,37 @@ mod tests {
         assert_eq!(decoded, bytes, "base64 data must round-trip the raw bytes");
         assert!(!attachment.id.is_empty());
         assert_eq!(attachment.name, "pixel.png");
+    }
+
+    #[test]
+    fn text_attachment_is_bounded_and_rehydrates_with_metadata() {
+        let path = std::env::temp_dir().join(format!("aiden-text-{}.txt", new_uuid_like()));
+        let raw = "x".repeat(MAX_TEXT_CHARS + 20);
+        std::fs::write(&path, raw.as_bytes()).unwrap();
+        let attachment = read_attachment(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(attachment.kind, AttachmentKind::Text);
+        assert_eq!(attachment.mime_type, "text/plain");
+        assert_eq!(attachment.size, raw.len() as u64);
+        let text = attachment.text.as_deref().unwrap();
+        assert!(text.ends_with(TEXT_TRUNCATION_SUFFIX));
+        assert!(text.chars().count() <= MAX_TEXT_CHARS);
+        assert!(attachment.data.is_none());
+    }
+
+    #[test]
+    fn binary_or_invalid_utf8_text_attachment_fails_closed() {
+        let nul_path = std::env::temp_dir().join(format!("aiden-binary-{}", new_uuid_like()));
+        std::fs::write(&nul_path, b"hello\0world").unwrap();
+        assert_eq!(read_attachment(&nul_path), Err(AttachmentError::Binary));
+        let _ = std::fs::remove_file(&nul_path);
+
+        let invalid_path = std::env::temp_dir().join(format!("aiden-invalid-{}", new_uuid_like()));
+        std::fs::write(&invalid_path, [0xff, 0xfe]).unwrap();
+        let replacement = read_attachment(&invalid_path).unwrap();
+        assert_eq!(replacement.kind, AttachmentKind::Text);
+        assert_eq!(replacement.text.as_deref(), Some("��"));
+        let _ = std::fs::remove_file(&invalid_path);
     }
 
     #[test]
@@ -670,6 +770,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         }
@@ -684,6 +785,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         }

@@ -5,12 +5,56 @@
 //! unit-tested; [`timeline_feed`] renders a persisted or live
 //! `aiden_core::GenerationTimeline` above the message bubble.
 
-use aiden_core::{AgentStep, AgentStepStatus, GenerationTimeline, GenerationTimelineStatus};
-use gpui::{
-    div, prelude::FluentBuilder as _, px, App, ElementId, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, Styled as _,
+use aiden_core::{
+    AgentStep, AgentStepStatus, GenerationClaimCheck, GenerationTimeline, GenerationTimelineStatus,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _};
+use gpui::{
+    div, prelude::FluentBuilder as _, px, Animation, AnimationExt as _, App, ElementId,
+    InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
+};
+use gpui_component::{
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex, ActiveTheme, Icon, IconName, Sizable as _,
+};
+
+use std::time::Duration;
+
+const TICKER_ROWS: usize = 3;
+const TICKER_ROW_HEIGHT_PX: f32 = 24.0;
+
+/// Render-owned disclosure state for one generation timeline. The state is
+/// keyed by `generation_id`, so a new turn starts collapsed while a user's
+/// explicit open/close choice survives ordinary streaming re-renders.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ActivityFeedState {
+    generation_id: String,
+    open: bool,
+    auto_open_key: Option<String>,
+}
+
+impl ActivityFeedState {
+    fn reconcile(&mut self, timeline: &GenerationTimeline) {
+        if self.generation_id != timeline.generation_id {
+            self.generation_id = timeline.generation_id.clone();
+            self.open = false;
+            self.auto_open_key = None;
+        }
+
+        let attention_key = if has_unverified_success_claim(timeline) {
+            Some(format!("{}:claim", timeline.generation_id))
+        } else if activity_issue_count(timeline) > 0 {
+            Some(format!("{}:issue", timeline.generation_id))
+        } else {
+            None
+        };
+        if let Some(key) = attention_key {
+            if self.auto_open_key.as_deref() != Some(key.as_str()) {
+                self.auto_open_key = Some(key);
+                self.open = true;
+            }
+        }
+    }
+}
 
 /// The feed-line tone, mapped to a theme color at render time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +85,16 @@ pub fn is_active_step(step: &AgentStep) -> bool {
             tool.status,
             AgentStepStatus::Pending | AgentStepStatus::AwaitingApproval | AgentStepStatus::Running
         ),
+        AgentStep::Thinking(thinking) => thinking.finished_at.is_none(),
+    }
+}
+
+/// The live ticker only shimmers a tool that is actively running. Pending and
+/// approval-gated rows remain readable without implying that work is executing,
+/// matching Electron's `TickerRow` predicate.
+fn is_ticker_active_step(step: &AgentStep) -> bool {
+    match step {
+        AgentStep::Tool(tool) => tool.status == AgentStepStatus::Running,
         AgentStep::Thinking(thinking) => thinking.finished_at.is_none(),
     }
 }
@@ -166,6 +220,17 @@ pub fn activity_issue_count(timeline: &GenerationTimeline) -> usize {
             )
         })
         .count()
+}
+
+/// Whether the terminal prose contains a consequential success claim that the
+/// recorded tool evidence could not verify. This is kept separate from the
+/// issue count so a warning remains visible even when every tool step has a
+/// normal terminal status.
+pub fn has_unverified_success_claim(timeline: &GenerationTimeline) -> bool {
+    matches!(
+        timeline.claim_check,
+        Some(GenerationClaimCheck::UnverifiedSuccess { .. })
+    )
 }
 
 fn plural(count: usize, singular: &str, plural_form: &str) -> String {
@@ -298,10 +363,17 @@ pub fn summarize_activity(timeline: &GenerationTimeline) -> String {
 // View
 // ===========================================================================
 
-/// Render a timeline as a compact activity feed: a summary header followed by
-/// the full thinking/tool trail. `live` runs an accent spinner on active
-/// steps and keeps the summary shimmer-style while the turn runs.
-pub fn timeline_feed(timeline: &GenerationTimeline, live: bool, cx: &mut App) -> gpui::AnyElement {
+/// Render a timeline as a compact activity feed. Live turns start as a
+/// bounded three-row ticker; settled turns start as one deterministic summary.
+/// The summary is a real focusable button, so Enter/Space and pointer clicks
+/// share the same disclosure state. Issues and claim-check warnings auto-open
+/// once per generation, matching the Electron attention contract.
+pub fn timeline_feed(
+    timeline: &GenerationTimeline,
+    live: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::AnyElement {
     if timeline.steps.is_empty() {
         return div().into_any_element();
     }
@@ -309,57 +381,267 @@ pub fn timeline_feed(timeline: &GenerationTimeline, live: bool, cx: &mut App) ->
     let running = timeline.status == GenerationTimelineStatus::Running;
     let summary = summarize_activity(timeline);
     let issues = activity_issue_count(timeline);
+    let motion_reduced = cx
+        .try_global::<crate::services::appearance::AidenAppearanceRuntime>()
+        .is_some_and(|appearance| appearance.motion_reduced);
+    let state = window.use_keyed_state(
+        ElementId::Name(SharedString::from(format!(
+            "activity-feed-state-{}",
+            timeline.generation_id
+        ))),
+        cx,
+        |_, _| ActivityFeedState::default(),
+    );
+    if state.read(cx).generation_id != timeline.generation_id
+        || (has_unverified_success_claim(timeline)
+            && state.read(cx).auto_open_key.as_deref()
+                != Some(format!("{}:claim", timeline.generation_id).as_str()))
+        || (!has_unverified_success_claim(timeline)
+            && issues > 0
+            && state.read(cx).auto_open_key.as_deref()
+                != Some(format!("{}:issue", timeline.generation_id).as_str()))
+    {
+        state.update(cx, |state, _| state.reconcile(timeline));
+    }
+    let open = state.read(cx).open;
+    let show_ticker = live && running && !open;
+    let ticker_count = timeline.steps.len().min(TICKER_ROWS);
+    let ticker_start = ticker_start_index(timeline.steps.len());
+    let ticker_steps = timeline.steps.iter().skip(ticker_start);
+    let summary_state = state.clone();
+    let summary_id = ElementId::Name(SharedString::from(format!(
+        "activity-summary-{}",
+        timeline.generation_id
+    )));
+    let summary_content = h_flex()
+        .id("activity-summary-content")
+        .w_full()
+        .min_w(px(0.))
+        .gap_1p5()
+        .items_center()
+        .px_1p5()
+        .py_1()
+        .rounded_md()
+        .when(show_ticker, |el| {
+            el.child(
+                v_flex()
+                    .id("activity-ticker")
+                    .w_full()
+                    .h(px(TICKER_ROW_HEIGHT_PX * ticker_count as f32))
+                    .justify_end()
+                    .overflow_hidden()
+                    .children(ticker_steps.enumerate().map(|(index, step)| {
+                        ticker_row(step, index, ticker_count, live, motion_reduced, cx)
+                    })),
+            )
+        })
+        .when(!show_ticker, |el| {
+            el.child(summary_element(
+                &summary,
+                running && live && !motion_reduced,
+                theme.muted_foreground,
+            ))
+        })
+        .when(issues > 0, |el| {
+            el.child(
+                div()
+                    .text_xs()
+                    .text_color(theme.warning)
+                    .child(if issues == 1 {
+                        "1 issue".to_string()
+                    } else {
+                        format!("{issues} issues")
+                    }),
+            )
+        })
+        .child(
+            Icon::new(IconName::ChevronRight)
+                .small()
+                .text_color(theme.muted_foreground)
+                .rotate(if open {
+                    gpui::percentage(0.25)
+                } else {
+                    gpui::percentage(0.0)
+                }),
+        );
+    let summary_button = Button::new(summary_id)
+        .ghost()
+        .h_auto()
+        .w_full()
+        .p_0()
+        .justify_start()
+        .tab_stop(true)
+        .on_click(move |_event, _window, cx| {
+            summary_state.update(cx, |state, cx| {
+                state.open = !state.open;
+                cx.notify();
+            });
+        })
+        .child(summary_content);
 
     v_flex()
         .id("activity-feed")
         .w_full()
         .gap_0p5()
-        .child(
-            h_flex()
-                .id("activity-summary")
-                .w_full()
-                .gap_1p5()
-                .items_center()
-                .px_1p5()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .child(
-                    div()
-                        .flex_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(summary),
-                )
-                .when(issues > 0, |el| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.warning)
-                            .child(if issues == 1 {
-                                "1 issue".to_string()
-                            } else {
-                                format!("{issues} issues")
-                            }),
+        .child(summary_button)
+        .when(open, |el| {
+            el.child(
+                v_flex()
+                    .id("activity-trail")
+                    .w_full()
+                    .pl_2p5()
+                    .children(
+                        timeline.steps.iter().enumerate().map(|(index, step)| {
+                            feed_row(step, index, live, cx).into_any_element()
+                        }),
                     )
-                })
-                .child(
-                    Icon::new(IconName::ChevronRight)
-                        .small()
-                        .text_color(theme.muted_foreground),
-                ),
-        )
-        .child(
-            v_flex().id("activity-trail").w_full().pl_2p5().children(
-                timeline
-                    .steps
-                    .iter()
-                    .enumerate()
-                    .map(|(index, step)| feed_row(step, index, live, cx).into_any_element()),
-            ),
-        )
+                    .when(has_unverified_success_claim(timeline), |el| {
+                        el.child(claim_warning(theme.clone()))
+                    }),
+            )
+        })
         .when(running && live, |el| el.pb_0p5())
         .into_any_element()
+}
+
+fn summary_element(summary: &str, animate: bool, text_color: gpui::Hsla) -> gpui::AnyElement {
+    let base = div()
+        .flex_1()
+        .min_w(px(0.))
+        .text_xs()
+        .text_color(text_color)
+        .child(summary.to_string());
+    if animate {
+        base.with_animation(
+            "activity-summary-pulse",
+            Animation::new(Duration::from_millis(1200)).repeat(),
+            |el, progress| el.opacity(0.72 + 0.28 * pulse(progress)),
+        )
+        .into_any_element()
+    } else {
+        base.into_any_element()
+    }
+}
+
+/// A compact live ticker row. Older rows are intentionally dimmer than the
+/// newest row; this is the GPUI equivalent of Electron's top fade mask while
+/// keeping the row count and layout bounded even for very long turns.
+fn ticker_row(
+    step: &AgentStep,
+    index: usize,
+    row_count: usize,
+    live: bool,
+    motion_reduced: bool,
+    cx: &mut App,
+) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+    let line = activity_line(step);
+    let text_color = match line.tone {
+        StepTone::Error => theme.danger,
+        StepTone::Warning => theme.warning,
+        StepTone::Normal => theme.muted_foreground,
+    };
+    let object_color = theme.muted_foreground.opacity(0.8);
+    let active = live && is_ticker_active_step(step);
+    let base_opacity = ticker_row_opacity(index, row_count);
+    let step_key = match step {
+        AgentStep::Tool(tool) => tool.id.as_str(),
+        AgentStep::Thinking(thinking) => thinking.id.as_str(),
+    };
+    let row = h_flex()
+        .id(ElementId::Name(SharedString::from(format!(
+            "activity-ticker-row-{step_key}"
+        ))))
+        .h(px(TICKER_ROW_HEIGHT_PX))
+        .w_full()
+        .min_w(px(0.))
+        .items_center()
+        .gap_1()
+        .opacity(base_opacity)
+        .child(
+            div()
+                .min_w(px(0.))
+                .flex_1()
+                .truncate()
+                .text_xs()
+                .text_color(text_color)
+                .child(line.verb),
+        )
+        .when_some(line.object, |el, object| {
+            el.child(
+                div()
+                    .max_w(px(240.))
+                    .truncate()
+                    .text_xs()
+                    .text_color(object_color)
+                    .child(object),
+            )
+        });
+    if active && !motion_reduced {
+        row.with_animation(
+            ElementId::Name(SharedString::from(format!(
+                "activity-ticker-pulse-{step_key}"
+            ))),
+            Animation::new(Duration::from_millis(1200)).repeat(),
+            move |row, progress| row.opacity(base_opacity * (0.78 + 0.22 * pulse(progress))),
+        )
+        .into_any_element()
+    } else {
+        row.into_any_element()
+    }
+}
+
+fn ticker_row_opacity(index: usize, row_count: usize) -> f32 {
+    if row_count <= 1 {
+        return 1.0;
+    }
+    let oldest = row_count.saturating_sub(1) as f32;
+    0.45 + 0.55 * (index as f32 / oldest)
+}
+
+fn ticker_start_index(step_count: usize) -> usize {
+    step_count.saturating_sub(TICKER_ROWS)
+}
+
+fn pulse(progress: f32) -> f32 {
+    0.5 + 0.5 * (progress * std::f32::consts::TAU).cos()
+}
+
+fn claim_warning(theme: gpui_component::theme::Theme) -> impl IntoElement {
+    h_flex()
+        .id("activity-claim-warning")
+        .w_full()
+        .gap_2()
+        .items_start()
+        .mt_1p5()
+        .px_2p5()
+        .py_2()
+        .rounded_md()
+        .bg(theme.warning.opacity(0.12))
+        .border_1()
+        .border_color(theme.warning.opacity(0.35))
+        .child(
+            Icon::new(IconName::TriangleAlert)
+                .small()
+                .text_color(theme.warning),
+        )
+        .child(
+            v_flex()
+                .gap_0p5()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.warning)
+                        .child("Success not verified"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("A tool action may not have completed."),
+                ),
+        )
 }
 
 /// One trail row: a status icon (spinner while active + live) and the
@@ -453,6 +735,7 @@ mod tests {
     use aiden_core::{
         AgentThinkingStep, AgentToolStep, GenerationTimelineStatus, GENERATION_TIMELINE_VERSION,
     };
+    use gpui::AppContext as _;
 
     fn tool_step(
         name: &str,
@@ -559,6 +842,53 @@ mod tests {
             None,
         );
         assert_eq!(activity_line(&approval).verb, "Web search needs approval");
+    }
+
+    #[test]
+    fn ticker_only_marks_running_tools_as_live() {
+        assert!(is_ticker_active_step(&tool_step(
+            "run_command",
+            "Run command",
+            AgentStepStatus::Running,
+            None,
+            None,
+        )));
+        assert!(!is_ticker_active_step(&tool_step(
+            "run_command",
+            "Run command",
+            AgentStepStatus::Pending,
+            None,
+            None,
+        )));
+        assert!(!is_ticker_active_step(&tool_step(
+            "run_command",
+            "Run command",
+            AgentStepStatus::AwaitingApproval,
+            None,
+            None,
+        )));
+    }
+
+    #[test]
+    fn claim_check_warning_is_visible_only_for_unverified_success() {
+        let mut timeline = timeline(
+            vec![tool_step(
+                "write_file",
+                "Write file",
+                AgentStepStatus::Completed,
+                Some("src/main.rs"),
+                None,
+            )],
+            GenerationTimelineStatus::Completed,
+        );
+        assert!(!has_unverified_success_claim(&timeline));
+        timeline.claim_check = Some(GenerationClaimCheck::UnverifiedSuccess {
+            step_ids: vec!["tool-1".into()],
+        });
+        assert!(has_unverified_success_claim(&timeline));
+        let source = include_str!("activity_feed.rs");
+        assert!(source.contains("activity-claim-warning"));
+        assert!(source.contains("Success not verified"));
     }
 
     #[test]
@@ -674,6 +1004,100 @@ mod tests {
             GenerationTimelineStatus::Completed,
         );
         assert_eq!(activity_issue_count(&fed), 3);
+    }
+
+    #[test]
+    fn live_ticker_is_bounded_and_fades_older_rows() {
+        assert_eq!(ticker_start_index(0), 0);
+        assert_eq!(ticker_start_index(2), 0);
+        assert_eq!(ticker_start_index(3), 0);
+        assert_eq!(ticker_start_index(8), 5);
+        assert!(ticker_row_opacity(0, TICKER_ROWS) < ticker_row_opacity(1, TICKER_ROWS));
+        assert!(ticker_row_opacity(1, TICKER_ROWS) < ticker_row_opacity(2, TICKER_ROWS));
+        assert_eq!(ticker_row_opacity(2, TICKER_ROWS), 1.0);
+    }
+
+    #[test]
+    fn summary_is_a_focusable_keyboard_toggle() {
+        let source = include_str!("activity_feed.rs");
+        assert!(source.contains("Button::new(summary_id)"));
+        assert!(source.contains(".tab_stop(true)"));
+        assert!(source.contains("state.open = !state.open"));
+        assert!(source.contains("timeline.steps.iter().skip(ticker_start)"));
+        assert!(source.contains("let ticker_count = timeline.steps.len().min(TICKER_ROWS)"));
+    }
+
+    #[test]
+    fn settled_feed_stays_collapsed_unless_attention_requires_opening() {
+        let clean = timeline(
+            vec![tool_step(
+                "read_file",
+                "Read file",
+                AgentStepStatus::Completed,
+                None,
+                None,
+            )],
+            GenerationTimelineStatus::Completed,
+        );
+        let mut state = ActivityFeedState::default();
+        state.reconcile(&clean);
+        assert!(!state.open);
+
+        let mut failed = clean.clone();
+        failed.steps[0] = tool_step(
+            "run_command",
+            "Run command",
+            AgentStepStatus::Failed,
+            None,
+            None,
+        );
+        state.reconcile(&failed);
+        assert!(state.open);
+        assert_eq!(state.auto_open_key.as_deref(), Some("generation-1:issue"));
+
+        // A user's explicit close wins after the one-shot attention reveal;
+        // ordinary timeline updates must not force it open again.
+        state.open = false;
+        state.reconcile(&failed);
+        assert!(!state.open);
+
+        failed.claim_check = Some(GenerationClaimCheck::UnverifiedSuccess {
+            step_ids: vec!["tool-1".into()],
+        });
+        state.reconcile(&failed);
+        assert!(state.open);
+        assert_eq!(state.auto_open_key.as_deref(), Some("generation-1:claim"));
+    }
+
+    #[gpui::test]
+    fn disclosure_state_survives_in_a_gpui_entity_and_respects_user_close(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| ActivityFeedState::default());
+        let mut timeline = timeline(
+            vec![tool_step(
+                "run_command",
+                "Run command",
+                AgentStepStatus::Failed,
+                None,
+                None,
+            )],
+            GenerationTimelineStatus::Completed,
+        );
+        state.update(cx, |state, _| state.reconcile(&timeline));
+        assert!(cx.read(|app| state.read(app).open));
+
+        state.update(cx, |state, _| state.open = false);
+        state.update(cx, |state, _| state.reconcile(&timeline));
+        assert!(!cx.read(|app| state.read(app).open));
+
+        timeline.generation_id = "generation-2".into();
+        state.update(cx, |state, _| state.reconcile(&timeline));
+        assert!(cx.read(|app| state.read(app).open));
+        assert_eq!(
+            cx.read(|app| state.read(app).generation_id.clone()),
+            "generation-2"
+        );
     }
 
     #[test]

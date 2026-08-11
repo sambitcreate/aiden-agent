@@ -68,11 +68,22 @@ pub fn pointer_cursors_enabled(cx: &App) -> bool {
     pointer_cursor_policy(
         cx.try_global::<AidenAppearanceRuntime>()
             .map(|runtime| runtime.pointer_cursors),
+        true,
     )
 }
 
-fn pointer_cursor_policy(preference: Option<bool>) -> bool {
-    preference.unwrap_or(false)
+/// Shared disabled-state gate for custom controls that cannot rely on a
+/// gpui-component primitive to suppress its cursor automatically.
+pub fn pointer_cursor_for_interaction(cx: &App, interactive: bool) -> bool {
+    pointer_cursor_policy(
+        cx.try_global::<AidenAppearanceRuntime>()
+            .map(|runtime| runtime.pointer_cursors),
+        interactive,
+    )
+}
+
+fn pointer_cursor_policy(preference: Option<bool>, interactive: bool) -> bool {
+    interactive && preference.unwrap_or(false)
 }
 
 pub fn input_surface(cx: &App) -> Hsla {
@@ -517,9 +528,10 @@ mod tests {
 
     #[test]
     fn pointer_cursor_policy_honors_the_live_runtime_preference() {
-        assert!(!pointer_cursor_policy(None));
-        assert!(pointer_cursor_policy(Some(true)));
-        assert!(!pointer_cursor_policy(Some(false)));
+        assert!(!pointer_cursor_policy(None, true));
+        assert!(pointer_cursor_policy(Some(true), true));
+        assert!(!pointer_cursor_policy(Some(false), true));
+        assert!(!pointer_cursor_policy(Some(true), false));
     }
 
     #[test]

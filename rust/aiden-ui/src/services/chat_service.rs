@@ -9,22 +9,30 @@
 //! invalidates stale streams when the user switches chats or presses stop
 //! (mirroring the renderer's intent-invalidation refs).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiden_computer_use::FoundationModelsCancellationToken;
+use crate::services::subagents::{
+    SubagentMcpMutationApprovalRequest, SubagentMcpMutationDecision,
+    SubagentMcpReadApprovalRequest, SubagentMcpReadDecision, SubagentShellApprovalRequest,
+    SubagentShellDecision, SubagentWorkspaceWriteApprovalRequest, SubagentWorkspaceWriteDecision,
+};
+use aiden_computer_use::{
+    ComputerUseApprovalDecision, ComputerUseApprovalRequest, FoundationModelsCancellationToken,
+};
 use aiden_core::appearance::{AppearanceConfig, Mode};
 use aiden_core::chat_title::FoundationModelsConnectionStatus;
 use aiden_core::chat_title::{
     build_chat_title_prompt, can_replace_generated_chat_title, resolve_chat_title_route,
     sanitize_generated_chat_title, ChatTitleInput, ChatTitleProviderId, ChatTitleRoute,
 };
+use aiden_core::subagent_runs::SubagentRunSnapshotV1;
 use aiden_core::{
-    meta_of, Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline, Message, UserContent,
-    UserMessage,
+    meta_of, Chat, ChatMessage, ChatMeta, ChatRole, GenerationTimeline, Message, SkillProvenance,
+    SkillProvenanceSource, UserContent, UserMessage,
 };
 use aiden_data::chat_store::{
     derive_chat_title_seed, AppendMessageMeta, ChatMessageInput, ChatStoreInput,
@@ -39,10 +47,12 @@ use aiden_providers::catalog;
 use aiden_providers::live_discovery::{self, DiscoveryOptions, RuntimeKind};
 use aiden_providers::{StreamOptions, StreamRequest};
 use futures::StreamExt;
-use gpui::{AppContext as _, Context, Task};
+use gpui::{AppContext as _, Context, Task, Timer};
 use gpui_tokio_bridge::{JoinError, Tokio};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
+use crate::chat::slash::SkillInvocationSelection;
 use crate::services::appearance::{
     appearance_from_settings, appearance_to_settings, apply_appearance, resolve_scheme,
     AidenSystemAccessibility, SETTINGS_APPEARANCE_KEY,
@@ -51,6 +61,7 @@ use crate::services::appearance_coordinator::{
     AppearanceCoordinator, AppearanceFailure, AppearanceOperationKind, AppearanceSaveState,
     NativeAppearanceIntent,
 };
+use crate::services::computer_use::ComputerUseGenerationIdentity;
 use crate::services::mcp_tools::McpStreamContext;
 use crate::services::native_appearance::{
     NativeAppearance, NativeBootRestore, PreparedNativeAppearance,
@@ -58,10 +69,13 @@ use crate::services::native_appearance::{
 use crate::services::provider_availability::require_available_selection;
 use crate::services::provider_kit::{
     chat_history_to_messages, configured_codex_provider, drive_stream, enrich_provider,
-    load_capabilities, resolve_api_key, ConfiguredProvider, ModelSelection, StreamMsg,
-    TurnSnapshot,
+    load_capabilities, resolve_runtime_api_key, ComputerUseStreamContext, ConfiguredProvider,
+    ModelSelection, StreamMsg, TurnSnapshot,
 };
-use crate::services::skill_tools::{stream_context_for_mode, SkillRuntimeMode};
+use crate::services::skill_tools::{
+    resolve_skill_invocation, stream_context_for_mode, ResolvedSkillInvocation, SkillCatalogSource,
+    SkillInvocationResolutionError, SkillRuntimeMode,
+};
 use crate::services::stores::Stores;
 use crate::services::stream::{chat_usage_record, message_content};
 
@@ -76,6 +90,33 @@ const BOOT_DISCOVERY_TOTAL_TIMEOUT_MS: u64 = 5_000;
 const TITLE_SYSTEM_PROMPT: &str =
     "You are a helpful assistant that summarizes chat conversations into short, concise titles.";
 const TITLE_REQUEST_TIMEOUT_MS: u64 = 15_000;
+
+fn computer_use_model_capabilities(
+    provider: &ConfiguredProvider,
+    selection: &ModelSelection,
+) -> Option<bool> {
+    let metadata = provider.model_metadata.get(&selection.model)?;
+    (metadata.tool_call == Some(true)).then_some(metadata.vision == Some(true))
+}
+
+/// Fail closed only for explicitly non-vision metadata. Unknown metadata
+/// follows the Electron policy: the provider receives the request and may
+/// advertise/validate vision dynamically.
+fn image_submission_error(
+    provider: &ConfiguredProvider,
+    selection: &ModelSelection,
+    attachments: &[aiden_core::Attachment],
+) -> Option<&'static str> {
+    let has_images = attachments
+        .iter()
+        .any(|attachment| attachment.kind == aiden_core::AttachmentKind::Image);
+    let vision = provider
+        .model_metadata
+        .get(&selection.model)
+        .and_then(|metadata| metadata.vision);
+    (has_images && vision == Some(false))
+        .then_some("Switch to a vision-capable model before sending these images.")
+}
 
 fn configured_title_provider(
     settings: &serde_json::Map<String, serde_json::Value>,
@@ -229,10 +270,283 @@ pub struct GenerationState {
     pub thinking_expanded: bool,
     pub complete: bool,
     pub error: Option<String>,
+    /// Whether the transcript error belongs to a persisted user turn and may
+    /// safely invoke `retry_last`. Admission failures leave the exact draft in
+    /// the composer, so their error card must never retry an older turn.
+    pub error_retryable: bool,
     pub model: Option<String>,
     /// Live activity timeline (thinking/tool steps). Mirrored from the driver's
     /// `TimelineProjector` and persisted with the assistant message on settle.
     pub timeline: Option<GenerationTimeline>,
+}
+
+pub(crate) fn enqueue_subagent_write_request(
+    queue: &mut VecDeque<SubagentWorkspaceWriteApprovalRequest>,
+    generation: Option<&GenerationState>,
+    request: SubagentWorkspaceWriteApprovalRequest,
+    now: u64,
+) -> Result<bool, Box<SubagentWorkspaceWriteApprovalRequest>> {
+    let exact_generation = generation.is_some_and(|generation| {
+        generation.chat_id == request.chat_id
+            && format!("{}:{}", generation.chat_id, generation.counter) == request.generation_id
+            && !generation.complete
+            && request.expires_at > now
+    });
+    if !exact_generation {
+        return Err(Box::new(request));
+    }
+    if queue
+        .iter()
+        .any(|pending| pending.approval_id == request.approval_id)
+    {
+        return Ok(false);
+    }
+    queue.push_back(request);
+    Ok(true)
+}
+
+pub(crate) fn remove_subagent_write_request(
+    queue: &mut VecDeque<SubagentWorkspaceWriteApprovalRequest>,
+    deciding: &mut Option<String>,
+    approval_id: &str,
+) -> bool {
+    let prior = queue.len();
+    queue.retain(|request| request.approval_id != approval_id);
+    if deciding.as_deref() == Some(approval_id) {
+        *deciding = None;
+    }
+    queue.len() != prior
+}
+
+pub(crate) fn subagent_write_decision_is_current(
+    queue: &VecDeque<SubagentWorkspaceWriteApprovalRequest>,
+    deciding: Option<&str>,
+    approval_id: &str,
+    now: u64,
+) -> bool {
+    deciding.is_none()
+        && queue
+            .front()
+            .is_some_and(|request| request.approval_id == approval_id && request.expires_at > now)
+}
+
+pub(crate) fn enqueue_subagent_shell_request(
+    queue: &mut VecDeque<SubagentShellApprovalRequest>,
+    generation: Option<&GenerationState>,
+    request: SubagentShellApprovalRequest,
+    now: u64,
+) -> Result<bool, Box<SubagentShellApprovalRequest>> {
+    let exact_generation = generation.is_some_and(|generation| {
+        generation.chat_id == request.chat_id
+            && format!("{}:{}", generation.chat_id, generation.counter) == request.generation_id
+            && !generation.complete
+            && request.expires_at > now
+    });
+    if !exact_generation {
+        return Err(Box::new(request));
+    }
+    if queue
+        .iter()
+        .any(|pending| pending.approval_id == request.approval_id)
+    {
+        return Ok(false);
+    }
+    queue.push_back(request);
+    Ok(true)
+}
+
+pub(crate) fn remove_subagent_shell_request(
+    queue: &mut VecDeque<SubagentShellApprovalRequest>,
+    deciding: &mut Option<String>,
+    approval_id: &str,
+) -> bool {
+    let prior = queue.len();
+    queue.retain(|request| request.approval_id != approval_id);
+    if deciding.as_deref() == Some(approval_id) {
+        *deciding = None;
+    }
+    queue.len() != prior
+}
+
+pub(crate) fn subagent_shell_decision_is_current(
+    queue: &VecDeque<SubagentShellApprovalRequest>,
+    deciding: Option<&str>,
+    approval_id: &str,
+    now: u64,
+) -> bool {
+    deciding.is_none()
+        && queue
+            .front()
+            .is_some_and(|request| request.approval_id == approval_id && request.expires_at > now)
+}
+
+pub(crate) fn enqueue_subagent_mcp_read_request(
+    queue: &mut VecDeque<SubagentMcpReadApprovalRequest>,
+    generation: Option<&GenerationState>,
+    request: SubagentMcpReadApprovalRequest,
+    now: u64,
+) -> Result<bool, Box<SubagentMcpReadApprovalRequest>> {
+    let exact_generation = generation.is_some_and(|generation| {
+        generation.chat_id == request.chat_id
+            && format!("{}:{}", generation.chat_id, generation.counter) == request.generation_id
+            && !generation.complete
+            && request.expires_at > now
+    });
+    if !exact_generation {
+        return Err(Box::new(request));
+    }
+    if queue
+        .iter()
+        .any(|pending| pending.approval_id == request.approval_id)
+    {
+        return Ok(false);
+    }
+    queue.push_back(request);
+    Ok(true)
+}
+
+pub(crate) fn remove_subagent_mcp_read_request(
+    queue: &mut VecDeque<SubagentMcpReadApprovalRequest>,
+    deciding: &mut Option<String>,
+    approval_id: &str,
+) -> bool {
+    let prior = queue.len();
+    queue.retain(|request| request.approval_id != approval_id);
+    if deciding.as_deref() == Some(approval_id) {
+        *deciding = None;
+    }
+    queue.len() != prior
+}
+
+pub(crate) fn subagent_mcp_read_decision_is_current(
+    queue: &VecDeque<SubagentMcpReadApprovalRequest>,
+    deciding: Option<&str>,
+    approval_id: &str,
+    now: u64,
+) -> bool {
+    deciding.is_none()
+        && queue
+            .front()
+            .is_some_and(|request| request.approval_id == approval_id && request.expires_at > now)
+}
+
+pub(crate) fn enqueue_subagent_mcp_mutation_request(
+    queue: &mut VecDeque<SubagentMcpMutationApprovalRequest>,
+    generation: Option<&GenerationState>,
+    request: SubagentMcpMutationApprovalRequest,
+    now: u64,
+) -> Result<bool, Box<SubagentMcpMutationApprovalRequest>> {
+    let exact_generation = generation.is_some_and(|generation| {
+        generation.chat_id == request.chat_id
+            && format!("{}:{}", generation.chat_id, generation.counter) == request.generation_id
+            && !generation.complete
+            && request.expires_at > now
+    });
+    if !exact_generation {
+        return Err(Box::new(request));
+    }
+    if queue
+        .iter()
+        .any(|pending| pending.approval_id == request.approval_id)
+    {
+        return Ok(false);
+    }
+    queue.push_back(request);
+    Ok(true)
+}
+
+pub(crate) fn remove_subagent_mcp_mutation_request(
+    queue: &mut VecDeque<SubagentMcpMutationApprovalRequest>,
+    deciding: &mut Option<String>,
+    approval_id: &str,
+) -> bool {
+    let prior = queue.len();
+    queue.retain(|request| request.approval_id != approval_id);
+    if deciding.as_deref() == Some(approval_id) {
+        *deciding = None;
+    }
+    queue.len() != prior
+}
+
+pub(crate) fn subagent_mcp_mutation_decision_is_current(
+    queue: &VecDeque<SubagentMcpMutationApprovalRequest>,
+    deciding: Option<&str>,
+    approval_id: &str,
+    now: u64,
+) -> bool {
+    deciding.is_none()
+        && queue
+            .front()
+            .is_some_and(|request| request.approval_id == approval_id && request.expires_at > now)
+}
+
+/// The only presentation/arbitration order for foreground subagent effects.
+/// The typed queues below retain each effect's authority payload; this tiny
+/// ledger prevents one effect type from jumping ahead of another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubagentApprovalKind {
+    ComputerUse,
+    WorkspaceWrite,
+    Shell,
+    McpRead,
+    McpMutation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SubagentApprovalOrderEntry {
+    approval_id: String,
+    kind: SubagentApprovalKind,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ActiveSubagentApproval {
+    ComputerUse(ComputerUseApprovalRequest),
+    WorkspaceWrite(SubagentWorkspaceWriteApprovalRequest),
+    Shell(SubagentShellApprovalRequest),
+    McpRead(SubagentMcpReadApprovalRequest),
+    McpMutation(SubagentMcpMutationApprovalRequest),
+}
+
+impl ActiveSubagentApproval {
+    pub(crate) fn approval_id(&self) -> &str {
+        match self {
+            Self::ComputerUse(request) => &request.approval_id,
+            Self::WorkspaceWrite(request) => &request.approval_id,
+            Self::Shell(request) => &request.approval_id,
+            Self::McpRead(request) => &request.approval_id,
+            Self::McpMutation(request) => &request.approval_id,
+        }
+    }
+}
+
+pub(crate) fn push_subagent_approval_order(
+    order: &mut VecDeque<SubagentApprovalOrderEntry>,
+    approval_id: &str,
+    kind: SubagentApprovalKind,
+) {
+    if !order.iter().any(|entry| entry.approval_id == approval_id) {
+        order.push_back(SubagentApprovalOrderEntry {
+            approval_id: approval_id.to_string(),
+            kind,
+        });
+    }
+}
+
+pub(crate) fn remove_subagent_approval_order(
+    order: &mut VecDeque<SubagentApprovalOrderEntry>,
+    approval_id: &str,
+) {
+    order.retain(|entry| entry.approval_id != approval_id);
+}
+
+pub(crate) fn subagent_approval_order_is_head(
+    order: &VecDeque<SubagentApprovalOrderEntry>,
+    kind: SubagentApprovalKind,
+    approval_id: &str,
+) -> bool {
+    order
+        .front()
+        .is_some_and(|entry| entry.kind == kind && entry.approval_id == approval_id)
 }
 
 /// A lightweight owned snapshot of everything the shell renders for the active
@@ -242,9 +556,90 @@ pub struct GenerationState {
 pub struct ChatSnapshot {
     pub messages: Vec<ChatMessage>,
     pub generation: Option<GenerationState>,
+    /// Memory-only foreground child projections for the exact active
+    /// generation. The service obtains these from the authority cache;
+    /// transcript rendering never reads the persisted run store.
+    pub live_subagents: Vec<SubagentRunSnapshotV1>,
     pub selection: Option<ModelSelection>,
     pub has_providers: bool,
     pub has_key_for_selection: bool,
+}
+
+/// Exact identity of a composer submission that crossed the durable user-turn
+/// boundary. The counter alone is scoped to a chat, so UI admission must carry
+/// both values to prevent a late completion from another chat clearing a newer
+/// draft with the same counter.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ChatSubmissionIdentity {
+    pub chat_id: String,
+    pub counter: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatSubmissionOutcome {
+    Admitted,
+    Rejected,
+    /// The store could not establish whether the exact turn committed (for
+    /// example, a post-rename durability error). The composer remains locked
+    /// rather than risking a duplicate turn on retry.
+    Unknown,
+}
+
+#[derive(Default)]
+struct SubmissionAdmissionLedger(HashMap<ChatSubmissionIdentity, ChatSubmissionOutcome>);
+
+#[derive(Default)]
+struct UncertainSubmissionRegistry(
+    HashMap<
+        ChatSubmissionIdentity,
+        (
+            ChatMessage,
+            ModelSelection,
+            ConfiguredProvider,
+            Option<ResolvedSkillInvocation>,
+        ),
+    >,
+);
+
+impl UncertainSubmissionRegistry {
+    fn take(
+        &mut self,
+        identity: &ChatSubmissionIdentity,
+    ) -> Option<(
+        ChatMessage,
+        ModelSelection,
+        ConfiguredProvider,
+        Option<ResolvedSkillInvocation>,
+    )> {
+        self.0.remove(identity)
+    }
+
+    fn restore(
+        &mut self,
+        identity: ChatSubmissionIdentity,
+        record: (
+            ChatMessage,
+            ModelSelection,
+            ConfiguredProvider,
+            Option<ResolvedSkillInvocation>,
+        ),
+    ) {
+        self.0.insert(identity, record);
+    }
+}
+
+impl SubmissionAdmissionLedger {
+    fn admit(&mut self, submission: ChatSubmissionIdentity) {
+        self.0.insert(submission, ChatSubmissionOutcome::Admitted);
+    }
+
+    fn resolve(&mut self, submission: ChatSubmissionIdentity, outcome: ChatSubmissionOutcome) {
+        self.0.insert(submission, outcome);
+    }
+
+    fn take(&mut self, submission: &ChatSubmissionIdentity) -> Option<ChatSubmissionOutcome> {
+        self.0.remove(submission)
+    }
 }
 
 pub struct ChatService {
@@ -266,6 +661,9 @@ pub struct ChatService {
     pub active_chat_id: Option<String>,
     pub active_chat: Option<Chat>,
     pub active_error: Option<String>,
+    /// Caller-owned identity retained while a first-chat create is being
+    /// reconciled after an ambiguous durability result.
+    pending_new_chat_id: Option<String>,
     pub appearance: AppearanceConfig,
     appearance_coordinator: AppearanceCoordinator,
     appearance_write_revision: Arc<AtomicU64>,
@@ -277,8 +675,15 @@ pub struct ChatService {
     native_restore_completed: bool,
     native_observer_started: bool,
     native_poll_started: bool,
+    pi_provider_watch_started: bool,
     /// Generation for the *active* chat (only one stream at a time).
     pub generation: Option<GenerationState>,
+    /// Counter whose user turn has crossed the durable append/rebranch boundary.
+    /// Admissions are retained until their owning composer consumes them. A
+    /// last-value slot loses a successful completion when another (possibly
+    /// stale) background completion publishes before the UI receives a frame.
+    submission_outcomes: SubmissionAdmissionLedger,
+    uncertain_submissions: UncertainSubmissionRegistry,
     /// Per-chat intent counters: incrementing invalidates in-flight streams.
     generations: HashMap<String, u64>,
     pub(crate) booted: bool,
@@ -297,8 +702,45 @@ pub struct ChatService {
     /// aborts the provider stream (the token is replaced per generation, so a
     /// stale flag never leaks into the next turn).
     cancel_token: Option<Arc<AtomicBool>>,
+    computer_use_cancellation: Option<CancellationToken>,
+    pending_computer_use_approval: Option<ComputerUseApprovalRequest>,
+    computer_use_approval_deciding: bool,
+    pending_subagent_write_approvals: VecDeque<SubagentWorkspaceWriteApprovalRequest>,
+    subagent_write_approval_deciding: Option<String>,
+    subagent_write_approval_error: Option<String>,
+    pending_subagent_shell_approvals: VecDeque<SubagentShellApprovalRequest>,
+    subagent_shell_approval_deciding: Option<String>,
+    subagent_shell_approval_error: Option<String>,
+    pending_subagent_mcp_read_approvals: VecDeque<SubagentMcpReadApprovalRequest>,
+    subagent_mcp_read_approval_deciding: Option<String>,
+    subagent_mcp_read_approval_error: Option<String>,
+    pending_subagent_mcp_mutation_approvals: VecDeque<SubagentMcpMutationApprovalRequest>,
+    subagent_mcp_mutation_approval_deciding: Option<String>,
+    subagent_mcp_mutation_approval_error: Option<String>,
+    pending_subagent_approval_order: VecDeque<SubagentApprovalOrderEntry>,
+    computer_use_chat_saving: bool,
+    computer_use_chat_error: Option<String>,
+    computer_use_chat_revision: Arc<AtomicU64>,
     title_revision: u64,
     title_cancellations: HashMap<String, (u64, FoundationModelsCancellationToken)>,
+}
+
+fn skill_selection_fence_error(
+    selection: &SkillInvocationSelection,
+    live_workspace_identity: Option<&str>,
+    live_permission: WorkspacePermission,
+) -> Option<&'static str> {
+    let lease_is_unbound =
+        selection.workspace_identity.is_none() && selection.workspace_permission.is_none();
+    if (lease_is_unbound && live_workspace_identity.is_some())
+        || (!lease_is_unbound
+            && (selection.workspace_identity.as_deref() != live_workspace_identity
+                || selection.workspace_permission != Some(live_permission)))
+    {
+        Some("The selected skill is stale; choose it again before sending.")
+    } else {
+        None
+    }
 }
 
 impl ChatService {
@@ -323,6 +765,7 @@ impl ChatService {
             active_chat_id: None,
             active_chat: None,
             active_error: None,
+            pending_new_chat_id: None,
             appearance: appearance.clone(),
             appearance_coordinator: AppearanceCoordinator::new(appearance),
             appearance_write_revision,
@@ -334,7 +777,10 @@ impl ChatService {
             native_restore_completed,
             native_observer_started: false,
             native_poll_started: false,
+            pi_provider_watch_started: false,
             generation: None,
+            submission_outcomes: SubmissionAdmissionLedger::default(),
+            uncertain_submissions: UncertainSubmissionRegistry::default(),
             generations: HashMap::new(),
             booted: false,
             workspace: None,
@@ -342,6 +788,25 @@ impl ChatService {
             _stream_task: None,
             _driver: None,
             cancel_token: None,
+            computer_use_cancellation: None,
+            pending_computer_use_approval: None,
+            computer_use_approval_deciding: false,
+            pending_subagent_write_approvals: VecDeque::new(),
+            subagent_write_approval_deciding: None,
+            subagent_write_approval_error: None,
+            pending_subagent_shell_approvals: VecDeque::new(),
+            subagent_shell_approval_deciding: None,
+            subagent_shell_approval_error: None,
+            pending_subagent_mcp_read_approvals: VecDeque::new(),
+            subagent_mcp_read_approval_deciding: None,
+            subagent_mcp_read_approval_error: None,
+            pending_subagent_mcp_mutation_approvals: VecDeque::new(),
+            subagent_mcp_mutation_approval_deciding: None,
+            subagent_mcp_mutation_approval_error: None,
+            pending_subagent_approval_order: VecDeque::new(),
+            computer_use_chat_saving: false,
+            computer_use_chat_error: None,
+            computer_use_chat_revision: Arc::new(AtomicU64::new(0)),
             title_revision: 0,
             title_cancellations: HashMap::new(),
         }
@@ -356,6 +821,21 @@ impl ChatService {
     /// loaded here too and used to enrich the provider model lists; a missing
     /// file (dev checkouts) logs and falls back to the builtin snapshot.
     pub fn boot(&mut self, cx: &mut Context<Self>) {
+        if !self.pi_provider_watch_started {
+            self.pi_provider_watch_started = true;
+            let mut changed = self.stores.pi_providers.subscribe();
+            cx.spawn(async move |this, cx| {
+                while changed.changed().await.is_ok() {
+                    if this
+                        .update(cx, |this, cx| this.refresh_providers(cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         let stores = self.stores.clone();
         cx.spawn(async move |this, cx| {
             let (chats, providers, settings, appearance, workspaces, capabilities) = cx
@@ -378,6 +858,7 @@ impl ChatService {
                     if let Some(codex) = configured_codex_provider(stores.codex_auth.as_ref()) {
                         providers.push(codex);
                     }
+                    providers.extend(stores.pi_providers.configured_providers());
                     let settings = stores.config.get_settings().unwrap_or_default();
                     let appearance = appearance_from_settings(&settings);
                     let workspaces = stores.config.list_workspaces().unwrap_or_default();
@@ -473,6 +954,7 @@ impl ChatService {
                     if let Some(codex) = configured_codex_provider(stores.codex_auth.as_ref()) {
                         providers.push(codex);
                     }
+                    providers.extend(stores.pi_providers.configured_providers());
                     let settings = stores.config.get_settings().unwrap_or_default();
                     (providers, settings)
                 })
@@ -594,7 +1076,13 @@ impl ChatService {
         if self.workspace.as_ref().map(|w| w.id.as_str()) == Some(id) {
             return;
         }
+        if let Some(previous) = self.workspace.as_ref() {
+            self.stores.subagents.cancel_workspace(&previous.id);
+        }
         self.workspace = Some(workspace.clone());
+        self.stores
+            .computer_use
+            .cancel_for_workspace(Some(&workspace.id));
         self.persist_workspace(workspace, cx);
         cx.notify();
     }
@@ -772,9 +1260,17 @@ impl ChatService {
             .as_ref()
             .is_some_and(|generation| generation.chat_id == id);
         if was_active || generating_this_chat {
+            self.stores.subagents.cancel_chat(id);
             if let Some(token) = &self.cancel_token {
                 token.store(true, Ordering::Relaxed);
             }
+            if let Some(token) = self.computer_use_cancellation.take() {
+                token.cancel();
+            }
+            self.stores.computer_use.cancel_for_chat(id);
+            self.pending_computer_use_approval = None;
+            self.computer_use_approval_deciding = false;
+            self.clear_subagent_write_approvals();
             // Bump the per-chat intent counter so the in-flight watcher stops
             // draining immediately (its `generation_matches` check fails once
             // `generation` is cleared below).
@@ -867,7 +1363,13 @@ impl ChatService {
         if self.selection.as_ref() == Some(&next) {
             return;
         }
+        if let Some(previous) = self.selection.as_ref() {
+            self.stores.subagents.cancel_provider(&previous.provider_id);
+        }
         self.selection = Some(next.clone());
+        self.stores
+            .computer_use
+            .cancel_for_provider(&next.provider_id);
         self.persist_selection(&next, cx);
         cx.notify();
     }
@@ -1294,6 +1796,99 @@ impl ChatService {
             .is_some_and(|generation| !generation.complete)
     }
 
+    /// Consume exactly one completed durable admission. This is intentionally
+    /// keyed by the full chat/counter identity, not by whichever task happened
+    /// to finish last.
+    pub fn take_submission_outcome(
+        &mut self,
+        submission: &ChatSubmissionIdentity,
+    ) -> Option<ChatSubmissionOutcome> {
+        self.submission_outcomes.take(submission)
+    }
+
+    /// Re-check an indeterminate durable write after the user explicitly
+    /// reopens the chat. Until this resolves, the composer keeps its exact
+    /// draft locked so a retry cannot duplicate a turn.
+    pub fn reconcile_unknown_submission(
+        &mut self,
+        submission: &ChatSubmissionIdentity,
+        cx: &mut Context<Self>,
+    ) {
+        // Take ownership before spawning so repeated reopen commands cannot
+        // race multiple recoveries into duplicate provider starts.
+        let Some((message, selection, provider, skill_invocation)) =
+            self.uncertain_submissions.take(submission)
+        else {
+            return;
+        };
+        let retry_message = message.clone();
+        let identity = submission.clone();
+        let reconciliation_identity = identity.clone();
+        let stores = self.stores.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    stores
+                        .chat
+                        .reconcile_submission(&reconciliation_identity.chat_id, &message)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                let outcome = match &result {
+                    Ok(Some(_)) => ChatSubmissionOutcome::Admitted,
+                    Ok(None) => ChatSubmissionOutcome::Rejected,
+                    Err(_) => ChatSubmissionOutcome::Unknown,
+                };
+                this.submission_outcomes.resolve(identity.clone(), outcome);
+                if outcome == ChatSubmissionOutcome::Unknown {
+                    this.uncertain_submissions.restore(
+                        identity.clone(),
+                        (
+                            retry_message,
+                            selection.clone(),
+                            provider.clone(),
+                            skill_invocation.clone(),
+                        ),
+                    );
+                }
+                if let Ok(Some(chat)) = result {
+                    if this.active_chat_id.as_deref() == Some(identity.chat_id.as_str()) {
+                        this.active_chat = Some(chat.clone());
+                    }
+                    if this.active_chat_id.as_deref() == Some(identity.chat_id.as_str())
+                        && this.selection.as_ref() == Some(&selection)
+                        && this.generation_matches(&identity.chat_id, identity.counter)
+                        && this.generation_active()
+                    {
+                        if let Some(generation) = this.generation.as_mut() {
+                            generation.error = None;
+                        }
+                        this.start_generation(
+                            identity.chat_id.clone(),
+                            selection,
+                            provider,
+                            chat,
+                            skill_invocation,
+                            cx,
+                        );
+                    }
+                }
+                if outcome == ChatSubmissionOutcome::Rejected
+                    && this.generation_matches(&identity.chat_id, identity.counter)
+                {
+                    if let Some(generation) = this.generation.as_mut() {
+                        generation.complete = true;
+                        generation.error =
+                            Some("The message could not be saved, so it was not sent.".into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn bump_generation(&mut self, chat_id: &str) -> u64 {
         let counter = self.generations.get(chat_id).copied().unwrap_or(0) + 1;
         self.generations.insert(chat_id.to_string(), counter);
@@ -1314,13 +1909,25 @@ impl ChatService {
     /// The snapshot the shell renders for the active chat.
     pub fn snapshot(&self) -> ChatSnapshot {
         let provider = self.selected_provider();
+        let generation = self.generation.clone();
+        let live_subagents = generation
+            .as_ref()
+            .filter(|generation| !generation.complete)
+            .map(|generation| {
+                self.stores.subagents.live_snapshots_for_generation(
+                    &format!("{}:{}", generation.chat_id, generation.counter),
+                    &generation.chat_id,
+                )
+            })
+            .unwrap_or_default();
         ChatSnapshot {
             messages: self
                 .active_chat
                 .as_ref()
                 .map(|chat| chat.messages.clone())
                 .unwrap_or_default(),
-            generation: self.generation.clone(),
+            generation,
+            live_subagents,
             selection: self.selection.clone(),
             has_providers: !self.providers.is_empty(),
             has_key_for_selection: provider
@@ -1351,6 +1958,7 @@ impl ChatService {
         let key_servers = enabled.clone();
         Some(McpStreamContext {
             manager: self.stores.mcp.clone(),
+            authority: Some(self.stores.mcp_mutation.clone()),
             servers: enabled,
             preset_key: Some(Arc::new(move |server_id| {
                 let server = key_servers.iter().find(|server| server.id == server_id)?;
@@ -1359,29 +1967,95 @@ impl ChatService {
         })
     }
 
+    fn resolve_skill_selection(
+        &self,
+        selection: &SkillInvocationSelection,
+    ) -> Result<ResolvedSkillInvocation, String> {
+        let live_workspace_identity = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.id.as_str());
+        let live_permission = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.permission)
+            .unwrap_or(WorkspacePermission::None);
+        if let Some(error) =
+            skill_selection_fence_error(selection, live_workspace_identity, live_permission)
+        {
+            return Err(error.into());
+        }
+        let context = stream_context_for_mode(
+            SkillRuntimeMode::Chat,
+            self.stores.config.clone(),
+            self.workspace
+                .as_ref()
+                .and_then(|workspace| workspace.folder_path.as_deref())
+                .map(PathBuf::from),
+            live_permission,
+        )
+        .ok_or_else(|| "Skills are unavailable for this chat.".to_string())?;
+        let cancel = AtomicBool::new(false);
+        resolve_skill_invocation(
+            &context,
+            &selection.id,
+            &selection.name,
+            selection.source,
+            &selection.revision,
+            &cancel,
+        )
+        .map_err(|error| match error {
+            SkillInvocationResolutionError::Missing => {
+                "The selected skill is no longer available; choose it again before sending."
+                    .to_string()
+            }
+            SkillInvocationResolutionError::Stale => {
+                "The selected skill changed; choose it again before sending.".to_string()
+            }
+        })
+    }
+
     /// Send with attachments and optional edit target (rebranch).
+    #[expect(
+        dead_code,
+        reason = "legacy non-skill callers retain the simple send seam"
+    )]
     pub fn send_message_with(
         &mut self,
         text: &str,
         attachments: Vec<aiden_core::Attachment>,
         editing_message_id: Option<String>,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<ChatSubmissionIdentity> {
+        self.send_message_with_skill(text, attachments, editing_message_id, None, cx)
+    }
+
+    /// Send one draft, resolving an optional opaque slash skill lease against
+    /// the fresh authoritative registry before creating/appending a chat.
+    /// Resolution failures leave the caller's exact draft untouched.
+    pub fn send_message_with_skill(
+        &mut self,
+        text: &str,
+        attachments: Vec<aiden_core::Attachment>,
+        editing_message_id: Option<String>,
+        skill_selection: Option<SkillInvocationSelection>,
+        cx: &mut Context<Self>,
+    ) -> Option<ChatSubmissionIdentity> {
         let text = text.trim().to_string();
-        if text.is_empty() || self.generation_active() {
-            return;
+        if (text.is_empty() && attachments.is_empty()) || self.generation_active() {
+            return None;
         }
         let Some(selection) = self.selection.clone() else {
             self.active_error = Some("Select a provider and model to start chatting.".into());
             cx.notify();
-            return;
+            return None;
         };
         let provider = match require_available_selection(&self.providers, &selection) {
             Ok(provider) => provider,
             Err(error) => {
                 self.active_error = Some(error.to_string());
                 cx.notify();
-                return;
+                return None;
             }
         };
         if provider.needs_key && !provider.has_key {
@@ -1390,56 +2064,87 @@ impl ChatService {
                 provider.label
             ));
             cx.notify();
-            return;
+            return None;
         }
+        if let Some(error) = image_submission_error(&provider, &selection, &attachments) {
+            self.active_error = Some(error.into());
+            cx.notify();
+            return None;
+        }
+
+        let skill_invocation = match skill_selection.as_ref() {
+            Some(selection) => match self.resolve_skill_selection(selection) {
+                Ok(invocation) => Some(invocation),
+                Err(error) => {
+                    self.active_error = Some(error);
+                    cx.notify();
+                    return None;
+                }
+            },
+            None => None,
+        };
 
         // Ensure a persisted chat exists (one-time synchronous create on first
         // send; message persistence below always runs on the background).
         let chat_id = match self.active_chat_id.clone() {
             Some(id) => id,
-            None => match self.stores.chat.create(ChatStoreInput {
-                title: None,
-                workspace_id: self.workspace.as_ref().map(|w| w.id.as_str()),
-                provider_id: Some(&selection.provider_id),
-                model: Some(&selection.model),
-            }) {
-                Ok(chat) => {
-                    let meta = meta_of(&chat);
-                    self.chat_list.insert(0, meta);
-                    let chat_id = chat.id.clone();
-                    self.active_chat_id = Some(chat_id.clone());
-                    self.active_chat = Some(chat);
-                    chat_id
-                }
-                Err(error) => {
-                    self.active_error = Some(format!("Couldn't create the chat: {error}"));
-                    cx.notify();
-                    return;
-                }
-            },
-        };
-
-        // Edit mode: truncate the transcript from the edited message onward
-        // (rebranch), then proceed as a normal send.
-        if let Some(edit_id) = &editing_message_id {
-            if let Some(chat) = self.active_chat.as_mut() {
-                if let Some(pos) = chat.messages.iter().position(|m| &m.id == edit_id) {
-                    chat.messages.truncate(pos);
-                    chat.updated_at = now_millis();
-                    let stores = self.stores.clone();
-                    let truncate_id = chat_id.clone();
-                    let keep = pos;
-                    cx.spawn(async move |_, cx| {
-                        let _ = cx
-                            .background_spawn(async move {
-                                stores.chat.truncate_messages(&truncate_id, keep).ok()
-                            })
-                            .await;
-                    })
-                    .detach();
+            None => {
+                let requested_id = self
+                    .pending_new_chat_id
+                    .get_or_insert_with(aiden_data::chat_store::new_uuid_like)
+                    .clone();
+                match self.stores.chat.create_with_id(
+                    &requested_id,
+                    ChatStoreInput {
+                        title: None,
+                        workspace_id: self.workspace.as_ref().map(|w| w.id.as_str()),
+                        provider_id: Some(&selection.provider_id),
+                        model: Some(&selection.model),
+                    },
+                ) {
+                    Ok(chat) => {
+                        self.pending_new_chat_id = None;
+                        let meta = meta_of(&chat);
+                        self.chat_list.insert(0, meta);
+                        let chat_id = chat.id.clone();
+                        self.active_chat_id = Some(chat_id.clone());
+                        self.active_chat = Some(chat);
+                        chat_id
+                    }
+                    Err(error) => match self.stores.chat.get(&requested_id) {
+                        Ok(Some(chat)) => {
+                            // The payload was durable despite a post-rename error;
+                            // reuse this exact chat rather than creating another.
+                            self.pending_new_chat_id = None;
+                            let meta = meta_of(&chat);
+                            self.chat_list.insert(0, meta);
+                            let chat_id = chat.id.clone();
+                            self.active_chat_id = Some(chat_id.clone());
+                            self.active_chat = Some(chat);
+                            chat_id
+                        }
+                        Ok(None) => {
+                            self.active_error = Some(format!("Couldn't create the chat: {error}"));
+                            cx.notify();
+                            return None;
+                        }
+                        Err(_) => {
+                            self.active_error = Some("Aiden could not determine whether the new chat was created. Retry to reconcile this chat before starting another.".into());
+                            cx.notify();
+                            return None;
+                        }
+                    },
                 }
             }
-        }
+        };
+
+        let rebranch_keep = editing_message_id.as_ref().and_then(|edit_id| {
+            self.active_chat
+                .as_ref()?
+                .messages
+                .iter()
+                .position(|message| &message.id == edit_id)
+        });
 
         let counter = self.bump_generation(&chat_id);
         self.active_error = None;
@@ -1453,14 +2158,15 @@ impl ChatService {
             thinking_expanded: false,
             complete: false,
             error: None,
+            error_retryable: false,
             model: Some(selection.model.clone()),
             timeline: None,
         });
         cx.notify();
 
-        // Append the user message in memory, then persist on the background.
+        // The user turn becomes visible only after its append/rebranch commits.
         let user_message = ChatMessage {
-            id: format!("user-{counter}"),
+            id: format!("user-{}", aiden_data::chat_store::new_uuid_like()),
             role: ChatRole::User,
             content: text.clone(),
             created_at: now_millis(),
@@ -1471,31 +2177,492 @@ impl ChatService {
             } else {
                 Some(attachments.clone())
             },
+            skill_provenance: skill_invocation
+                .as_ref()
+                .map(skill_provenance_from_invocation),
             timeline: None,
             subagents: None,
         };
-        if let Some(chat) = self.active_chat.as_mut() {
-            chat.messages.push(user_message.clone());
-            chat.updated_at = user_message.created_at;
-            chat.provider_id = Some(selection.provider_id.clone());
-            chat.model = Some(selection.model.clone());
-        }
-        self.persist_user_message(&chat_id, &user_message, &selection, cx);
-
-        self.start_generation(chat_id, selection, provider, cx);
+        self.persist_user_message_and_start(
+            &chat_id,
+            counter,
+            &user_message,
+            selection,
+            provider,
+            rebranch_keep,
+            skill_invocation,
+            cx,
+        );
+        Some(ChatSubmissionIdentity { chat_id, counter })
     }
 
     /// Drive one generation against the CURRENT in-memory history of `chat_id`
     /// (which must end with a user message). Shared by `send_message` (appends
     /// the user turn first) and `retry_last` (retracts the failed assistant
     /// turn first, then re-sends the existing last user turn).
+    fn computer_use_context(
+        &self,
+        chat_id: &str,
+        counter: u64,
+        selection: &ModelSelection,
+        provider: &ConfiguredProvider,
+        cancellation: CancellationToken,
+    ) -> Option<ComputerUseStreamContext> {
+        let chat = self
+            .active_chat
+            .as_ref()
+            .filter(|chat| chat.id == chat_id && chat.computer_use_enabled == Some(true))?;
+        let workspace = self.workspace.as_ref().filter(|workspace| {
+            workspace.folder_path.is_some() && workspace.permission != WorkspacePermission::None
+        })?;
+        if chat.workspace_id.as_deref() != Some(workspace.id.as_str())
+            || chat.provider_id.as_deref() != Some(selection.provider_id.as_str())
+            || !self.stores.computer_use.global_enabled()
+        {
+            return None;
+        }
+        let supports_images = computer_use_model_capabilities(provider, selection)?;
+        Some(ComputerUseStreamContext {
+            authority: Arc::clone(&self.stores.computer_use),
+            identity: ComputerUseGenerationIdentity {
+                generation_id: format!("{chat_id}:{counter}"),
+                chat_id: chat_id.to_string(),
+                workspace_id: Some(workspace.id.clone()),
+                provider_id: selection.provider_id.clone(),
+            },
+            gate_revision: self.stores.computer_use.generation_snapshot(),
+            supports_images,
+            cancellation,
+        })
+    }
+
+    pub fn pending_computer_use_approval(&self) -> Option<&ComputerUseApprovalRequest> {
+        match self.pending_subagent_approval_order.front() {
+            Some(entry) if entry.kind == SubagentApprovalKind::ComputerUse => self
+                .pending_computer_use_approval
+                .as_ref()
+                .filter(|request| request.approval_id == entry.approval_id),
+            _ => None,
+        }
+    }
+
+    pub fn computer_use_approval_deciding(&self) -> bool {
+        self.pending_computer_use_approval().is_some() && self.computer_use_approval_deciding
+    }
+
+    pub fn pending_subagent_write_approval(
+        &self,
+    ) -> Option<&SubagentWorkspaceWriteApprovalRequest> {
+        match self.pending_subagent_approval_order.front() {
+            Some(entry) if entry.kind == SubagentApprovalKind::WorkspaceWrite => self
+                .pending_subagent_write_approvals
+                .iter()
+                .find(|request| request.approval_id == entry.approval_id),
+            _ => None,
+        }
+    }
+
+    pub fn subagent_write_approval_deciding(&self) -> bool {
+        self.pending_subagent_write_approval()
+            .is_some_and(|request| {
+                self.subagent_write_approval_deciding.as_deref()
+                    == Some(request.approval_id.as_str())
+            })
+    }
+
+    pub fn subagent_write_approval_error(&self) -> Option<&str> {
+        self.subagent_write_approval_error.as_deref()
+    }
+
+    pub fn decide_subagent_write_approval(
+        &mut self,
+        approval_id: &str,
+        decision: SubagentWorkspaceWriteDecision,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let matches = subagent_approval_order_is_head(
+            &self.pending_subagent_approval_order,
+            SubagentApprovalKind::WorkspaceWrite,
+            approval_id,
+        ) && subagent_write_decision_is_current(
+            &self.pending_subagent_write_approvals,
+            self.subagent_write_approval_deciding.as_deref(),
+            approval_id,
+            now_millis(),
+        );
+        let decided = matches
+            && self
+                .stores
+                .subagents
+                .decide_workspace_write_approval(approval_id, decision);
+        if decided {
+            self.subagent_write_approval_deciding = Some(approval_id.to_string());
+            self.subagent_write_approval_error = None;
+            cx.notify();
+        } else if matches {
+            self.subagent_write_approval_error =
+                Some("This approval is no longer current. The file was not changed.".into());
+            cx.notify();
+        }
+        decided
+    }
+
+    fn clear_subagent_write_approvals(&mut self) {
+        self.pending_subagent_write_approvals.clear();
+        self.subagent_write_approval_deciding = None;
+        self.subagent_write_approval_error = None;
+        self.clear_subagent_shell_approvals();
+        self.clear_subagent_mcp_read_approvals();
+        self.clear_subagent_mcp_mutation_approvals();
+        self.pending_subagent_approval_order.clear();
+    }
+
+    pub fn pending_subagent_shell_approval(&self) -> Option<&SubagentShellApprovalRequest> {
+        match self.pending_subagent_approval_order.front() {
+            Some(entry) if entry.kind == SubagentApprovalKind::Shell => self
+                .pending_subagent_shell_approvals
+                .iter()
+                .find(|request| request.approval_id == entry.approval_id),
+            _ => None,
+        }
+    }
+
+    pub fn subagent_shell_approval_deciding(&self) -> bool {
+        self.pending_subagent_shell_approval()
+            .is_some_and(|request| {
+                self.subagent_shell_approval_deciding.as_deref()
+                    == Some(request.approval_id.as_str())
+            })
+    }
+
+    pub fn subagent_shell_approval_error(&self) -> Option<&str> {
+        self.subagent_shell_approval_error.as_deref()
+    }
+
+    pub fn decide_subagent_shell_approval(
+        &mut self,
+        approval_id: &str,
+        decision: SubagentShellDecision,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let matches = subagent_approval_order_is_head(
+            &self.pending_subagent_approval_order,
+            SubagentApprovalKind::Shell,
+            approval_id,
+        ) && subagent_shell_decision_is_current(
+            &self.pending_subagent_shell_approvals,
+            self.subagent_shell_approval_deciding.as_deref(),
+            approval_id,
+            now_millis(),
+        );
+        let decided = matches
+            && self
+                .stores
+                .subagents
+                .decide_shell_approval(approval_id, decision);
+        if decided {
+            self.subagent_shell_approval_deciding = Some(approval_id.to_string());
+            self.subagent_shell_approval_error = None;
+            cx.notify();
+        } else if matches {
+            self.subagent_shell_approval_error =
+                Some("This approval is no longer current. The command was not run.".into());
+            cx.notify();
+        }
+        decided
+    }
+
+    fn clear_subagent_shell_approvals(&mut self) {
+        self.pending_subagent_shell_approvals.clear();
+        self.subagent_shell_approval_deciding = None;
+        self.subagent_shell_approval_error = None;
+    }
+
+    pub fn pending_subagent_mcp_read_approval(&self) -> Option<&SubagentMcpReadApprovalRequest> {
+        match self.pending_subagent_approval_order.front() {
+            Some(entry) if entry.kind == SubagentApprovalKind::McpRead => self
+                .pending_subagent_mcp_read_approvals
+                .iter()
+                .find(|request| request.approval_id == entry.approval_id),
+            _ => None,
+        }
+    }
+
+    pub fn subagent_mcp_read_approval_deciding(&self) -> bool {
+        self.pending_subagent_mcp_read_approval()
+            .is_some_and(|request| {
+                self.subagent_mcp_read_approval_deciding.as_deref()
+                    == Some(request.approval_id.as_str())
+            })
+    }
+
+    pub fn subagent_mcp_read_approval_error(&self) -> Option<&str> {
+        self.subagent_mcp_read_approval_error.as_deref()
+    }
+
+    pub fn decide_subagent_mcp_read_approval(
+        &mut self,
+        approval_id: &str,
+        decision: SubagentMcpReadDecision,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let matches = subagent_approval_order_is_head(
+            &self.pending_subagent_approval_order,
+            SubagentApprovalKind::McpRead,
+            approval_id,
+        ) && subagent_mcp_read_decision_is_current(
+            &self.pending_subagent_mcp_read_approvals,
+            self.subagent_mcp_read_approval_deciding.as_deref(),
+            approval_id,
+            now_millis(),
+        );
+        let decided = matches
+            && self
+                .stores
+                .subagents
+                .decide_mcp_read_approval(approval_id, decision);
+        if decided {
+            self.subagent_mcp_read_approval_deciding = Some(approval_id.to_string());
+            self.subagent_mcp_read_approval_error = None;
+            cx.notify();
+        } else if matches {
+            self.subagent_mcp_read_approval_error =
+                Some("This approval is no longer current. The MCP call was not sent.".into());
+            cx.notify();
+        }
+        decided
+    }
+
+    fn clear_subagent_mcp_read_approvals(&mut self) {
+        self.pending_subagent_mcp_read_approvals.clear();
+        self.subagent_mcp_read_approval_deciding = None;
+        self.subagent_mcp_read_approval_error = None;
+    }
+
+    pub fn pending_subagent_mcp_mutation_approval(
+        &self,
+    ) -> Option<&SubagentMcpMutationApprovalRequest> {
+        match self.pending_subagent_approval_order.front() {
+            Some(entry) if entry.kind == SubagentApprovalKind::McpMutation => self
+                .pending_subagent_mcp_mutation_approvals
+                .iter()
+                .find(|request| request.approval_id == entry.approval_id),
+            _ => None,
+        }
+    }
+
+    pub fn subagent_mcp_mutation_approval_deciding(&self) -> bool {
+        self.pending_subagent_mcp_mutation_approval()
+            .is_some_and(|request| {
+                self.subagent_mcp_mutation_approval_deciding.as_deref()
+                    == Some(request.approval_id.as_str())
+            })
+    }
+
+    pub fn subagent_mcp_mutation_approval_error(&self) -> Option<&str> {
+        self.subagent_mcp_mutation_approval_error.as_deref()
+    }
+
+    pub fn decide_subagent_mcp_mutation_approval(
+        &mut self,
+        approval_id: &str,
+        decision: SubagentMcpMutationDecision,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let matches = subagent_approval_order_is_head(
+            &self.pending_subagent_approval_order,
+            SubagentApprovalKind::McpMutation,
+            approval_id,
+        ) && subagent_mcp_mutation_decision_is_current(
+            &self.pending_subagent_mcp_mutation_approvals,
+            self.subagent_mcp_mutation_approval_deciding.as_deref(),
+            approval_id,
+            now_millis(),
+        );
+        let decided = matches
+            && self
+                .stores
+                .subagents
+                .decide_mcp_mutation_approval(approval_id, decision);
+        if decided {
+            self.subagent_mcp_mutation_approval_deciding = Some(approval_id.to_string());
+            self.subagent_mcp_mutation_approval_error = None;
+            cx.notify();
+        } else if matches {
+            self.subagent_mcp_mutation_approval_error =
+                Some("This approval is no longer current. The MCP mutation was not sent.".into());
+            cx.notify();
+        }
+        decided
+    }
+
+    fn clear_subagent_mcp_mutation_approvals(&mut self) {
+        self.pending_subagent_mcp_mutation_approvals.clear();
+        self.subagent_mcp_mutation_approval_deciding = None;
+        self.subagent_mcp_mutation_approval_error = None;
+    }
+
+    pub(crate) fn active_subagent_approval(&self) -> Option<ActiveSubagentApproval> {
+        match self.pending_subagent_approval_order.front()? {
+            SubagentApprovalOrderEntry {
+                kind: SubagentApprovalKind::ComputerUse,
+                approval_id,
+            } => self
+                .pending_computer_use_approval
+                .as_ref()
+                .filter(|request| request.approval_id == *approval_id)
+                .cloned()
+                .map(ActiveSubagentApproval::ComputerUse),
+            SubagentApprovalOrderEntry {
+                kind: SubagentApprovalKind::WorkspaceWrite,
+                approval_id,
+            } => self
+                .pending_subagent_write_approvals
+                .iter()
+                .find(|request| request.approval_id == *approval_id)
+                .cloned()
+                .map(ActiveSubagentApproval::WorkspaceWrite),
+            SubagentApprovalOrderEntry {
+                kind: SubagentApprovalKind::Shell,
+                approval_id,
+            } => self
+                .pending_subagent_shell_approvals
+                .iter()
+                .find(|request| request.approval_id == *approval_id)
+                .cloned()
+                .map(ActiveSubagentApproval::Shell),
+            SubagentApprovalOrderEntry {
+                kind: SubagentApprovalKind::McpRead,
+                approval_id,
+            } => self
+                .pending_subagent_mcp_read_approvals
+                .iter()
+                .find(|request| request.approval_id == *approval_id)
+                .cloned()
+                .map(ActiveSubagentApproval::McpRead),
+            SubagentApprovalOrderEntry {
+                kind: SubagentApprovalKind::McpMutation,
+                approval_id,
+            } => self
+                .pending_subagent_mcp_mutation_approvals
+                .iter()
+                .find(|request| request.approval_id == *approval_id)
+                .cloned()
+                .map(ActiveSubagentApproval::McpMutation),
+        }
+    }
+
+    pub fn computer_use_chat_saving(&self) -> bool {
+        self.computer_use_chat_saving
+    }
+
+    pub fn computer_use_chat_error(&self) -> Option<&str> {
+        self.computer_use_chat_error.as_deref()
+    }
+
+    pub fn set_active_chat_computer_use(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.computer_use_chat_saving || self.generation_active() {
+            return;
+        }
+        let Some(chat_id) = self.active_chat_id.clone() else {
+            return;
+        };
+        if self
+            .active_chat
+            .as_ref()
+            .is_some_and(|chat| chat.computer_use_enabled == Some(enabled))
+        {
+            return;
+        }
+        let revision = self
+            .computer_use_chat_revision
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        let revisions = Arc::clone(&self.computer_use_chat_revision);
+        let authority = Arc::clone(&self.stores.computer_use);
+        self.computer_use_chat_saving = true;
+        self.computer_use_chat_error = None;
+        cx.notify();
+        let current: Arc<dyn Fn() -> bool + Send + Sync> =
+            Arc::new(move || revisions.load(Ordering::Acquire) == revision);
+        let task = Tokio::spawn(cx, async move {
+            authority
+                .set_chat_enabled(&chat_id, enabled, current)
+                .await
+                .map(|_| chat_id)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if this.computer_use_chat_revision.load(Ordering::Acquire) != revision {
+                    return;
+                }
+                this.computer_use_chat_saving = false;
+                match result {
+                    Ok(Ok(chat_id)) if this.active_chat_id.as_deref() == Some(chat_id.as_str()) => {
+                        if let Some(chat) = this.active_chat.as_mut() {
+                            chat.computer_use_enabled = Some(enabled);
+                        }
+                        this.computer_use_chat_error = None;
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => this.computer_use_chat_error = Some(error.to_string()),
+                    Err(_) => {
+                        this.computer_use_chat_error =
+                            Some("Computer Use save was interrupted.".into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub fn decide_computer_use_approval(
+        &mut self,
+        approval_id: &str,
+        decision: ComputerUseApprovalDecision,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let matches = subagent_approval_order_is_head(
+            &self.pending_subagent_approval_order,
+            SubagentApprovalKind::ComputerUse,
+            approval_id,
+        ) && self
+            .pending_computer_use_approval
+            .as_ref()
+            .is_some_and(|request| request.approval_id == approval_id);
+        let decided = matches
+            && self
+                .stores
+                .computer_use
+                .decide_approval(approval_id, decision);
+        if decided {
+            self.computer_use_approval_deciding = true;
+            cx.notify();
+        }
+        decided
+    }
+
     fn start_generation(
         &mut self,
         chat_id: String,
         selection: ModelSelection,
         provider: ConfiguredProvider,
+        persisted_chat: Chat,
+        skill_invocation: Option<ResolvedSkillInvocation>,
         cx: &mut Context<Self>,
     ) {
+        if persisted_chat.id != chat_id {
+            self.active_error = Some("The saved conversation changed before generation.".into());
+            cx.notify();
+            return;
+        }
+        // The exact document returned by the successful store operation is
+        // authoritative for both the parent request and immutable fork
+        // capture. Never seed a child from optimistic UI history.
+        self.active_chat = Some(persisted_chat.clone());
         let counter = self.bump_generation(&chat_id);
         self.active_error = None;
         self.generation = Some(GenerationState {
@@ -1508,6 +2675,7 @@ impl ChatService {
             thinking_expanded: false,
             complete: false,
             error: None,
+            error_retryable: false,
             model: Some(selection.model.clone()),
             timeline: None,
         });
@@ -1526,6 +2694,33 @@ impl ChatService {
             &selection.provider_id,
             provider.api_family(),
         );
+        let computer_use_cancellation = CancellationToken::new();
+        // One shared cancellation identity fences the parent provider stream
+        // and every child admitted for this exact response.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let computer_use = self.computer_use_context(
+            &chat_id,
+            counter,
+            &selection,
+            &provider,
+            computer_use_cancellation.clone(),
+        );
+        let subagents = self
+            .stores
+            .subagents
+            .admit_generation(
+                format!("{chat_id}:{counter}"),
+                chat_id.clone(),
+                provider.clone(),
+                selection.clone(),
+                self.stores.config.clone(),
+                self.stores.pi_providers.clone(),
+                self.stores.codex_auth.clone(),
+                self.workspace.clone(),
+                Some(persisted_chat),
+                cancel.clone(),
+            )
+            .ok();
         let snapshot = TurnSnapshot {
             provider: provider.clone(),
             selection: selection.clone(),
@@ -1544,6 +2739,9 @@ impl ChatService {
                     .map(|workspace| workspace.permission)
                     .unwrap_or(WorkspacePermission::None),
             ),
+            skill_invocation,
+            computer_use,
+            subagents,
             // Grounds the coding system prompt (folder path, permission
             // posture, tool list, safety language).
             workspace: self.workspace.clone(),
@@ -1551,17 +2749,48 @@ impl ChatService {
 
         // A fresh stop flag per generation: the driver polls it and aborts the
         // provider stream when the user presses Stop.
-        let cancel = Arc::new(AtomicBool::new(false));
         self.cancel_token = Some(cancel.clone());
+        self.computer_use_cancellation = Some(computer_use_cancellation);
+        self.pending_computer_use_approval = None;
+        self.computer_use_approval_deciding = false;
+        self.clear_subagent_write_approvals();
 
         // Keychain lookup happens inside the tokio driver (background thread).
         let config = self.stores.config.clone();
+        let pi_providers = self.stores.pi_providers.clone();
         let codex_auth = self.stores.codex_auth.clone();
         let (tx, rx) = mpsc::unbounded_channel::<StreamMsg>();
         let driver = Tokio::spawn(cx, async move {
-            let api_key = resolve_api_key(&config, &snapshot.provider);
+            let api_key = resolve_runtime_api_key(&config, &pi_providers, &snapshot.provider);
             drive_stream(snapshot, api_key, codex_auth, cancel, tx).await;
         });
+
+        // Child lifecycle projections are published from tokio tasks, not the
+        // parent stream channel. Poll only the authority's in-memory revision
+        // while this exact generation is active so the GPUI transcript can
+        // repaint live chips without a dispatcher/disk read on render.
+        let live_authority = self.stores.subagents.clone();
+        let live_chat_id = chat_id.clone();
+        let live_counter = counter;
+        cx.spawn(async move |this, cx| -> anyhow::Result<()> {
+            let mut revision = live_authority.live_snapshot_revision();
+            loop {
+                Timer::after(Duration::from_millis(120)).await;
+                let alive = this.read_with(cx, |this, _| {
+                    this.generation_matches(&live_chat_id, live_counter) && this.generation_active()
+                })?;
+                if !alive {
+                    break;
+                }
+                let next_revision = live_authority.live_snapshot_revision();
+                if next_revision != revision {
+                    revision = next_revision;
+                    this.update(cx, |_this, cx| cx.notify())?;
+                }
+            }
+            Ok(())
+        })
+        .detach();
 
         let watcher = cx.spawn(async move |this, cx| -> anyhow::Result<()> {
             let mut rx = rx;
@@ -1629,26 +2858,49 @@ impl ChatService {
             if let Some(chat) = self.active_chat.as_mut() {
                 truncate_failed_turn(&mut chat.messages);
             }
-            // Persist the retraction FIRST (background), then start the new
-            // generation only after it landed — so the fresh assistant append
-            // can never race the retract back into the transcript.
-            let stores = self.stores.clone();
-            cx.spawn(async move |this, cx| {
-                let truncate_id = chat_id.clone();
-                let _ = cx
-                    .background_spawn(async move {
-                        stores.chat.truncate_messages(&truncate_id, keep).ok()
-                    })
-                    .await;
-                this.update(cx, |this, cx| {
-                    this.start_generation(chat_id, selection, provider, cx);
-                })
-                .ok();
-            })
-            .detach();
-        } else {
-            self.start_generation(chat_id, selection, provider, cx);
         }
+        // Obtain the exact successfully persisted document before retrying.
+        // Retractions publish first; unchanged retries still re-read the
+        // canonical store instead of trusting mutable UI history.
+        let stores = self.stores.clone();
+        let expected_chat_id = chat_id.clone();
+        let expected_selection = selection.clone();
+        cx.spawn(async move |this, cx| {
+            let operation_chat_id = chat_id.clone();
+            let persisted_chat = cx
+                .background_spawn(async move {
+                    if truncating {
+                        stores.chat.truncate_messages(&operation_chat_id, keep).ok()
+                    } else {
+                        stores.chat.get(&operation_chat_id).ok().flatten()
+                    }
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.active_chat_id.as_deref() != Some(expected_chat_id.as_str())
+                    || this.selection.as_ref() != Some(&expected_selection)
+                    || this.generation_active()
+                {
+                    return;
+                }
+                if let Some(persisted_chat) = persisted_chat {
+                    this.start_generation(
+                        expected_chat_id,
+                        selection,
+                        provider,
+                        persisted_chat,
+                        None,
+                        cx,
+                    );
+                } else {
+                    this.active_error =
+                        Some("The conversation could not be prepared for retry.".into());
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Stop the in-flight generation: signal the background driver to abort
@@ -1659,9 +2911,23 @@ impl ChatService {
     /// the foreground records — the provider stops generating (and billing)
     /// instead of running to completion into a dead channel.
     pub fn stop_generation(&mut self, cx: &mut Context<Self>) {
+        if let Some(generation) = &self.generation {
+            self.stores
+                .subagents
+                .cancel_generation(&format!("{}:{}", generation.chat_id, generation.counter));
+        }
         if let Some(token) = &self.cancel_token {
             token.store(true, Ordering::Relaxed);
         }
+        if let Some(token) = self.computer_use_cancellation.take() {
+            token.cancel();
+        }
+        if let Some(chat_id) = self.active_chat_id.as_deref() {
+            self.stores.computer_use.cancel_for_chat(chat_id);
+        }
+        self.pending_computer_use_approval = None;
+        self.computer_use_approval_deciding = false;
+        self.clear_subagent_write_approvals();
         let mut partial = None;
         if let Some(generation) = self.generation.as_mut() {
             if !generation.complete {
@@ -1701,9 +2967,26 @@ impl ChatService {
     /// aborts the provider stream so the model stops generating in the
     /// background.
     fn cancel_generation(&mut self, cx: &mut Context<Self>) {
+        self.computer_use_chat_revision
+            .fetch_add(1, Ordering::AcqRel);
+        self.computer_use_chat_saving = false;
+        if let Some(generation) = &self.generation {
+            self.stores
+                .subagents
+                .cancel_generation(&format!("{}:{}", generation.chat_id, generation.counter));
+        }
         if let Some(token) = &self.cancel_token {
             token.store(true, Ordering::Relaxed);
         }
+        if let Some(token) = self.computer_use_cancellation.take() {
+            token.cancel();
+        }
+        if let Some(chat_id) = self.active_chat_id.as_deref() {
+            self.stores.computer_use.cancel_for_chat(chat_id);
+        }
+        self.pending_computer_use_approval = None;
+        self.computer_use_approval_deciding = false;
+        self.clear_subagent_write_approvals();
         let partial = self.generation.as_ref().and_then(|generation| {
             if generation.complete {
                 return None;
@@ -1765,12 +3048,217 @@ impl ChatService {
                 }
                 cx.notify();
             }
+            StreamMsg::ComputerUseApproval { request } => {
+                remove_subagent_approval_order(
+                    &mut self.pending_subagent_approval_order,
+                    &request.approval_id,
+                );
+                push_subagent_approval_order(
+                    &mut self.pending_subagent_approval_order,
+                    &request.approval_id,
+                    SubagentApprovalKind::ComputerUse,
+                );
+                self.pending_computer_use_approval = Some(request);
+                self.computer_use_approval_deciding = false;
+                cx.notify();
+            }
+            StreamMsg::ComputerUseApprovalCleared { approval_id } => {
+                if self
+                    .pending_computer_use_approval
+                    .as_ref()
+                    .is_some_and(|request| request.approval_id == approval_id)
+                {
+                    self.pending_computer_use_approval = None;
+                    self.computer_use_approval_deciding = false;
+                    remove_subagent_approval_order(
+                        &mut self.pending_subagent_approval_order,
+                        &approval_id,
+                    );
+                    cx.notify();
+                }
+            }
+            StreamMsg::SubagentWorkspaceWriteApproval { request } => {
+                let request = *request;
+                let approval_id = request.approval_id.clone();
+                match enqueue_subagent_write_request(
+                    &mut self.pending_subagent_write_approvals,
+                    self.generation.as_ref(),
+                    request,
+                    now_millis(),
+                ) {
+                    Ok(true) => {
+                        push_subagent_approval_order(
+                            &mut self.pending_subagent_approval_order,
+                            &approval_id,
+                            SubagentApprovalKind::WorkspaceWrite,
+                        );
+                        self.subagent_write_approval_error = None;
+                        cx.notify();
+                    }
+                    Ok(false) => {}
+                    Err(stale) => {
+                        self.stores.subagents.decide_workspace_write_approval(
+                            &stale.approval_id,
+                            SubagentWorkspaceWriteDecision::Deny,
+                        );
+                    }
+                }
+            }
+            StreamMsg::SubagentWorkspaceWriteApprovalCleared { approval_id } => {
+                let changed = remove_subagent_write_request(
+                    &mut self.pending_subagent_write_approvals,
+                    &mut self.subagent_write_approval_deciding,
+                    &approval_id,
+                );
+                remove_subagent_approval_order(
+                    &mut self.pending_subagent_approval_order,
+                    &approval_id,
+                );
+                self.subagent_write_approval_error = None;
+                if changed {
+                    cx.notify();
+                }
+            }
+            StreamMsg::SubagentShellApproval { request } => {
+                let request = *request;
+                let approval_id = request.approval_id.clone();
+                match enqueue_subagent_shell_request(
+                    &mut self.pending_subagent_shell_approvals,
+                    self.generation.as_ref(),
+                    request,
+                    now_millis(),
+                ) {
+                    Ok(true) => {
+                        push_subagent_approval_order(
+                            &mut self.pending_subagent_approval_order,
+                            &approval_id,
+                            SubagentApprovalKind::Shell,
+                        );
+                        self.subagent_shell_approval_error = None;
+                        cx.notify();
+                    }
+                    Ok(false) => {}
+                    Err(stale) => {
+                        self.stores
+                            .subagents
+                            .decide_shell_approval(&stale.approval_id, SubagentShellDecision::Deny);
+                    }
+                }
+            }
+            StreamMsg::SubagentShellApprovalCleared { approval_id } => {
+                let changed = remove_subagent_shell_request(
+                    &mut self.pending_subagent_shell_approvals,
+                    &mut self.subagent_shell_approval_deciding,
+                    &approval_id,
+                );
+                remove_subagent_approval_order(
+                    &mut self.pending_subagent_approval_order,
+                    &approval_id,
+                );
+                self.subagent_shell_approval_error = None;
+                if changed {
+                    cx.notify();
+                }
+            }
+            StreamMsg::SubagentMcpReadApproval { request } => {
+                let request = *request;
+                let approval_id = request.approval_id.clone();
+                match enqueue_subagent_mcp_read_request(
+                    &mut self.pending_subagent_mcp_read_approvals,
+                    self.generation.as_ref(),
+                    request,
+                    now_millis(),
+                ) {
+                    Ok(true) => {
+                        push_subagent_approval_order(
+                            &mut self.pending_subagent_approval_order,
+                            &approval_id,
+                            SubagentApprovalKind::McpRead,
+                        );
+                        self.subagent_mcp_read_approval_error = None;
+                        cx.notify();
+                    }
+                    Ok(false) => {}
+                    Err(stale) => {
+                        self.stores.subagents.decide_mcp_read_approval(
+                            &stale.approval_id,
+                            SubagentMcpReadDecision::Deny,
+                        );
+                    }
+                }
+            }
+            StreamMsg::SubagentMcpReadApprovalCleared { approval_id } => {
+                let changed = remove_subagent_mcp_read_request(
+                    &mut self.pending_subagent_mcp_read_approvals,
+                    &mut self.subagent_mcp_read_approval_deciding,
+                    &approval_id,
+                );
+                remove_subagent_approval_order(
+                    &mut self.pending_subagent_approval_order,
+                    &approval_id,
+                );
+                self.subagent_mcp_read_approval_error = None;
+                if changed {
+                    cx.notify();
+                }
+            }
+            StreamMsg::SubagentMcpMutationApproval { request } => {
+                let request = *request;
+                let approval_id = request.approval_id.clone();
+                match enqueue_subagent_mcp_mutation_request(
+                    &mut self.pending_subagent_mcp_mutation_approvals,
+                    self.generation.as_ref(),
+                    request,
+                    now_millis(),
+                ) {
+                    Ok(true) => {
+                        push_subagent_approval_order(
+                            &mut self.pending_subagent_approval_order,
+                            &approval_id,
+                            SubagentApprovalKind::McpMutation,
+                        );
+                        self.subagent_mcp_mutation_approval_error = None;
+                        cx.notify();
+                    }
+                    Ok(false) => {}
+                    Err(stale) => {
+                        self.stores.subagents.decide_mcp_mutation_approval(
+                            &stale.approval_id,
+                            SubagentMcpMutationDecision::Deny,
+                        );
+                    }
+                }
+            }
+            StreamMsg::SubagentMcpMutationApprovalCleared { approval_id } => {
+                let changed = remove_subagent_mcp_mutation_request(
+                    &mut self.pending_subagent_mcp_mutation_approvals,
+                    &mut self.subagent_mcp_mutation_approval_deciding,
+                    &approval_id,
+                );
+                remove_subagent_approval_order(
+                    &mut self.pending_subagent_approval_order,
+                    &approval_id,
+                );
+                self.subagent_mcp_mutation_approval_error = None;
+                if changed {
+                    cx.notify();
+                }
+            }
             StreamMsg::Done {
                 message,
                 full_text,
                 full_thinking,
                 usage,
             } => {
+                if let Some(generation) = &self.generation {
+                    self.stores.subagents.finish_generation(&format!(
+                        "{}:{}",
+                        generation.chat_id, generation.counter
+                    ));
+                }
+                self.pending_computer_use_approval = None;
+                self.computer_use_approval_deciding = false;
+                self.clear_subagent_write_approvals();
                 let model = message.model.clone();
                 let (final_text, final_thinking) = message_content(&message);
                 let timeline = self
@@ -1808,6 +3296,15 @@ impl ChatService {
                 partial_thinking,
                 usage,
             } => {
+                if let Some(generation) = &self.generation {
+                    self.stores.subagents.cancel_generation(&format!(
+                        "{}:{}",
+                        generation.chat_id, generation.counter
+                    ));
+                }
+                self.pending_computer_use_approval = None;
+                self.computer_use_approval_deciding = false;
+                self.clear_subagent_write_approvals();
                 let codex_needs_attention = codex_status_refresh_required(
                     self.generation
                         .as_ref()
@@ -1827,6 +3324,7 @@ impl ChatService {
                     generation.thinking_active = false;
                     generation.complete = true;
                     generation.error = Some(message.clone());
+                    generation.error_retryable = true;
                 }
                 if !partial_text.trim().is_empty() {
                     self.persist_assistant(
@@ -1855,6 +3353,15 @@ impl ChatService {
                 partial_thinking,
                 usage,
             } => {
+                if let Some(generation) = &self.generation {
+                    self.stores.subagents.cancel_generation(&format!(
+                        "{}:{}",
+                        generation.chat_id, generation.counter
+                    ));
+                }
+                self.pending_computer_use_approval = None;
+                self.computer_use_approval_deciding = false;
+                self.clear_subagent_write_approvals();
                 if let Some(generation) = self.generation.as_mut() {
                     generation.text = partial_text;
                     generation.thinking = partial_thinking;
@@ -2031,7 +3538,11 @@ impl ChatService {
                             provider,
                             selection,
                         } => {
-                            let api_key = resolve_api_key(&stores.config, &provider);
+                            let api_key = resolve_runtime_api_key(
+                                &stores.config,
+                                &stores.pi_providers,
+                                &provider,
+                            );
                             let request = StreamRequest {
                                 provider_id: selection.provider_id.clone(),
                                 api: provider.api_family(),
@@ -2157,6 +3668,9 @@ impl ChatService {
     /// Watcher cleanup when the stream channel closes without a terminal event
     /// (e.g. the driver was aborted mid-flight).
     fn on_stream_closed(&mut self, chat_id: &str, counter: u64, cx: &mut Context<Self>) {
+        self.stores
+            .subagents
+            .finish_generation(&format!("{chat_id}:{counter}"));
         let current = self.generation.as_ref().is_some_and(|generation| {
             generation.chat_id == chat_id && generation.counter == counter
         });
@@ -2167,6 +3681,7 @@ impl ChatService {
                 if !generation.complete {
                     generation.complete = true;
                     generation.error = Some("Generation stopped.".into());
+                    generation.error_retryable = true;
                 }
             }
             cx.notify();
@@ -2181,35 +3696,53 @@ impl ChatService {
         }
         cancel_title_tasks(&self.title_cancellations);
         self.title_cancellations.clear();
+        self.stores.subagents.shutdown();
     }
 
     // -----------------------------------------------------------------------
     // Persistence helpers (background writes)
     // -----------------------------------------------------------------------
 
-    fn persist_user_message(
-        &self,
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the durable admission captures one immutable turn plus its stream identity"
+    )]
+    fn persist_user_message_and_start(
+        &mut self,
         chat_id: &str,
+        counter: u64,
         message: &ChatMessage,
-        selection: &ModelSelection,
+        selection: ModelSelection,
+        provider: ConfiguredProvider,
+        rebranch_keep: Option<usize>,
+        skill_invocation: Option<ResolvedSkillInvocation>,
         cx: &mut Context<Self>,
     ) {
         let stores = self.stores.clone();
         let chat_id = chat_id.to_string();
         let content = message.content.clone();
         let created_at = message.created_at;
+        let attachments = message.attachments.clone();
         let provider_id = selection.provider_id.clone();
         let model = selection.model.clone();
+        let expected_chat_id = chat_id.clone();
+        let expected_message = message.clone();
+        let input_message = expected_message.clone();
+        let reconciliation_message = expected_message.clone();
+        let expected_skill_invocation = skill_invocation.clone();
+        let skill_provenance = skill_invocation
+            .as_ref()
+            .map(skill_provenance_from_invocation);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
                     let input = ChatMessageInput {
-                        id: None,
+                        id: Some(input_message.id.clone()),
                         role: ChatRole::User,
                         content,
                         model: None,
                         reasoning: None,
-                        attachments: None,
+                        attachments,
                         timeline: None,
                         subagents: None,
                         created_at: Some(created_at),
@@ -2220,12 +3753,115 @@ impl ChatService {
                         auto_title: true,
                         expected_workspace_id: None,
                     };
-                    stores.chat.append_message(&chat_id, input, Some(meta)).ok()
+                    let operation = match rebranch_keep {
+                        Some(keep) => stores.chat.replace_tail_and_append_message_with_skill_provenance(
+                            &chat_id,
+                            keep,
+                            input,
+                            skill_provenance,
+                            Some(meta),
+                        ),
+                        None => stores.chat.append_message_with_skill_provenance(
+                            &chat_id,
+                            input,
+                            skill_provenance,
+                            Some(meta),
+                        ),
+                    };
+                    match operation {
+                        Ok(chat) => Ok(Some(chat)),
+                        Err(_) => stores
+                            .chat
+                            .reconcile_submission(&chat_id, &reconciliation_message),
+                    }
                 })
                 .await;
-            if result.is_some() {
+            if let Ok(Some(persisted_chat)) = result {
                 this.update(cx, |this, cx| {
                     this.refresh_chat_list(cx);
+                    this.submission_outcomes.admit(ChatSubmissionIdentity {
+                        chat_id: expected_chat_id.clone(),
+                        counter,
+                    });
+                    if this.active_chat_id.as_deref() == Some(expected_chat_id.as_str()) {
+                        this.active_chat = Some(persisted_chat.clone());
+                    }
+                    if this.active_chat_id.as_deref() == Some(expected_chat_id.as_str())
+                        && this.selection.as_ref() == Some(&selection)
+                        && this.generation_matches(&expected_chat_id, counter)
+                        && this.generation_active()
+                    {
+                        this.start_generation(
+                            expected_chat_id,
+                            selection,
+                            provider,
+                            persisted_chat,
+                            expected_skill_invocation.clone(),
+                            cx,
+                        );
+                    } else {
+                        cx.notify();
+                    }
+                })
+                .ok();
+            } else {
+                this.update(cx, |this, cx| {
+                    // Always settle the UI's exact pending draft, even when
+                    // the user switched chats before this background write
+                    // failed. Otherwise the next submit would stay locked.
+                    let outcome = if matches!(result, Ok(None)) {
+                        ChatSubmissionOutcome::Rejected
+                    } else {
+                        ChatSubmissionOutcome::Unknown
+                    };
+                    let identity = ChatSubmissionIdentity {
+                        chat_id: expected_chat_id.clone(),
+                        counter,
+                    };
+                    this.submission_outcomes.resolve(identity.clone(), outcome);
+                    if outcome == ChatSubmissionOutcome::Unknown {
+                        this.uncertain_submissions.restore(
+                            identity,
+                            (
+                                expected_message.clone(),
+                                selection.clone(),
+                                provider.clone(),
+                                expected_skill_invocation.clone(),
+                            ),
+                        );
+                    }
+                    if this.active_chat_id.as_deref() == Some(expected_chat_id.as_str()) {
+                        this.active_error = Some(match outcome {
+                            ChatSubmissionOutcome::Rejected => {
+                                "The message could not be saved, so it was not sent.".into()
+                            }
+                            ChatSubmissionOutcome::Unknown => "Aiden could not determine whether the message was saved. Reopen the chat before retrying.".into(),
+                            ChatSubmissionOutcome::Admitted => unreachable!(),
+                        });
+                        if outcome == ChatSubmissionOutcome::Rejected
+                            && this.generation_matches(&expected_chat_id, counter)
+                        {
+                            if let Some(generation) = this.generation.as_mut() {
+                                generation.complete = true;
+                                generation.error = Some(
+                                    "The message could not be saved, so it was not sent.".into(),
+                                );
+                            }
+                        }
+                        if outcome == ChatSubmissionOutcome::Unknown
+                            && this.generation_matches(&expected_chat_id, counter)
+                        {
+                            if let Some(generation) = this.generation.as_mut() {
+                                generation.error = Some(
+                                    "Reopen this chat to verify the message before retrying."
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
+                    // The root observes the service to settle an exact
+                    // composer snapshot. A switched chat still needs this
+                    // notification so its failed request cannot lock retry.
                     cx.notify();
                 })
                 .ok();
@@ -2245,6 +3881,13 @@ impl ChatService {
         timeline: Option<GenerationTimeline>,
         cx: &mut Context<Self>,
     ) {
+        // Child completion and canonical store publication happen before the
+        // parent tool result settles. Resolve the exact generation reference
+        // here, immediately before the assistant append—not when the user
+        // message starts and not from mutable picker state.
+        let subagents = self.generation.as_ref().and_then(|generation| {
+            assistant_subagent_reference(&self.stores.subagents, generation, chat_id)
+        });
         let stores = self.stores.clone();
         let chat_id = chat_id.to_string();
         let text = text.to_string();
@@ -2273,7 +3916,7 @@ impl ChatService {
                         },
                         attachments: None,
                         timeline: timeline_value,
-                        subagents: None,
+                        subagents,
                         created_at: Some(timestamp),
                     };
                     let meta = AppendMessageMeta {
@@ -2301,6 +3944,36 @@ impl ChatService {
         })
         .detach();
     }
+}
+
+/// Exact production helper used at assistant settlement. Keeping this small
+/// makes the persistence boundary deterministic without requiring a GPUI
+/// window in store-level regressions.
+fn skill_provenance_from_invocation(invocation: &ResolvedSkillInvocation) -> SkillProvenance {
+    let source = match invocation.source {
+        SkillCatalogSource::Configured => SkillProvenanceSource::Configured,
+        SkillCatalogSource::Workspace => SkillProvenanceSource::Workspace,
+        SkillCatalogSource::Global => SkillProvenanceSource::Global,
+    };
+    SkillProvenance {
+        id: invocation.id.clone(),
+        name: invocation.name.clone(),
+        source,
+        revision: invocation.revision.clone(),
+    }
+}
+
+pub(crate) fn assistant_subagent_reference(
+    authority: &crate::services::subagents::SubagentAuthority,
+    generation: &GenerationState,
+    chat_id: &str,
+) -> Option<serde_json::Value> {
+    (generation.chat_id == chat_id).then(|| {
+        authority.message_reference(
+            &format!("{}:{}", generation.chat_id, generation.counter),
+            chat_id,
+        )
+    })?
 }
 
 fn prepared_accessibility(
@@ -2331,6 +4004,7 @@ impl Drop for ChatService {
             cancel.store(true, Ordering::SeqCst);
         }
         cancel_title_tasks(&self.title_cancellations);
+        self.stores.subagents.shutdown();
     }
 }
 
@@ -2381,6 +4055,353 @@ pub fn relative_time(updated_at: u64, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_selection_fence_rejects_workspace_and_permission_changes() {
+        let selection = SkillInvocationSelection {
+            id: "skillref_review".into(),
+            name: "Review".into(),
+            source: crate::services::skill_tools::SkillCatalogSource::Workspace,
+            revision: "rev-1".into(),
+            workspace_identity: Some("workspace-a".into()),
+            workspace_permission: Some(WorkspacePermission::Ask),
+        };
+        assert!(skill_selection_fence_error(
+            &selection,
+            Some("workspace-a"),
+            WorkspacePermission::Ask,
+        )
+        .is_none());
+        assert!(skill_selection_fence_error(
+            &selection,
+            Some("workspace-b"),
+            WorkspacePermission::Ask,
+        )
+        .is_some());
+        assert!(skill_selection_fence_error(
+            &selection,
+            Some("workspace-a"),
+            WorkspacePermission::None,
+        )
+        .is_some());
+        let unbound = SkillInvocationSelection {
+            workspace_identity: None,
+            workspace_permission: None,
+            ..selection
+        };
+        assert!(skill_selection_fence_error(
+            &unbound,
+            Some("workspace-a"),
+            WorkspacePermission::Ask,
+        )
+        .is_some());
+    }
+
+    fn recovery_record() -> (
+        ChatMessage,
+        ModelSelection,
+        ConfiguredProvider,
+        Option<ResolvedSkillInvocation>,
+    ) {
+        (
+            ChatMessage {
+                id: "user-recovery".into(),
+                role: ChatRole::User,
+                content: "draft".into(),
+                created_at: 1,
+                model: None,
+                reasoning: None,
+                attachments: None,
+                skill_provenance: None,
+                timeline: None,
+                subagents: None,
+            },
+            ModelSelection {
+                provider_id: "provider".into(),
+                model: "model".into(),
+            },
+            ConfiguredProvider {
+                id: "provider".into(),
+                label: "Provider".into(),
+                kind: aiden_data::portable_config::ProviderKind::Openai,
+                base_url: "https://example.test".into(),
+                deployment: None,
+                models: vec!["model".into()],
+                default_model: None,
+                model_metadata: HashMap::new(),
+                catalog_models: Vec::new(),
+                needs_key: false,
+                has_key: true,
+            },
+            None,
+        )
+    }
+
+    #[test]
+    fn uncertain_recovery_registry_is_single_flight_and_retries_only_after_unknown() {
+        let identity = ChatSubmissionIdentity {
+            chat_id: "chat-a".into(),
+            counter: 1,
+        };
+        let mut registry = UncertainSubmissionRegistry::default();
+        registry.restore(identity.clone(), recovery_record());
+        // Two rapid reopen requests share one recovery lease.
+        let leased = registry.take(&identity).expect("first reopen leases it");
+        assert!(registry.take(&identity).is_none());
+        // Only another indeterminate result restores that lease.
+        registry.restore(identity.clone(), leased);
+        assert!(registry.take(&identity).is_some());
+        assert!(registry.take(&identity).is_none());
+    }
+
+    #[test]
+    fn delayed_admission_from_another_chat_cannot_consume_the_newer_draft() {
+        let old = ChatSubmissionIdentity {
+            chat_id: "chat-a".into(),
+            counter: 1,
+        };
+        let newer = ChatSubmissionIdentity {
+            chat_id: "chat-b".into(),
+            counter: 1,
+        };
+        let mut ledger = SubmissionAdmissionLedger::default();
+        // Force the completion order that used to overwrite a one-slot value:
+        // B succeeds, A publishes late, then AppState synchronizes B.
+        ledger.admit(newer.clone());
+        ledger.admit(old.clone());
+        assert_eq!(ledger.take(&newer), Some(ChatSubmissionOutcome::Admitted));
+        assert_eq!(ledger.take(&old), Some(ChatSubmissionOutcome::Admitted));
+        assert_eq!(ledger.take(&newer), None);
+    }
+
+    fn write_approval_request(
+        approval_id: &str,
+        generation_id: &str,
+        expires_at: u64,
+    ) -> SubagentWorkspaceWriteApprovalRequest {
+        SubagentWorkspaceWriteApprovalRequest {
+            approval_id: approval_id.into(),
+            generation_id: generation_id.into(),
+            chat_id: "chat-1".into(),
+            run_id: "run-1".into(),
+            child_id: "child-1".into(),
+            tool_call_id: format!("call-{approval_id}"),
+            authority_revision: 1,
+            argument_digest: "a".repeat(64),
+            effect_digest: "b".repeat(64),
+            authority_digest: "c".repeat(64),
+            expires_at,
+            details: aiden_core::SubagentWorkspaceWriteApprovalDetails {
+                operation: aiden_core::WorkspaceWriteOperation::Edit,
+                child_label: "Writer".into(),
+                path: "src/safe.rs".into(),
+                workspace_label: "Workspace".into(),
+                worktree_label: None,
+                is_managed_worktree: false,
+                pre_digest_prefix: Some("0123456789ab".into()),
+                post_digest_prefix: "abcdef012345".into(),
+                before_bytes: 10,
+                after_bytes: 12,
+                diff_preview: "-old\n+new".into(),
+                diff_truncated: false,
+                command_will_run: false,
+                refuse_if_changed: true,
+            },
+        }
+    }
+
+    fn active_generation(counter: u64) -> GenerationState {
+        GenerationState {
+            chat_id: "chat-1".into(),
+            counter,
+            provider_id: "provider".into(),
+            text: String::new(),
+            thinking: String::new(),
+            thinking_active: false,
+            thinking_expanded: false,
+            complete: false,
+            error: None,
+            error_retryable: false,
+            model: Some("model".into()),
+            timeline: None,
+        }
+    }
+
+    fn mcp_read_approval_request(
+        approval_id: &str,
+        generation_id: &str,
+        expires_at: u64,
+    ) -> SubagentMcpReadApprovalRequest {
+        SubagentMcpReadApprovalRequest {
+            approval_id: approval_id.into(),
+            generation_id: generation_id.into(),
+            chat_id: "chat-1".into(),
+            run_id: "run-1".into(),
+            child_id: "child-1".into(),
+            tool_call_id: format!("call-{approval_id}"),
+            authority_revision: 1,
+            expires_at,
+            server_id: "linear".into(),
+            tool_name: "get_issue".into(),
+            canonical_arguments: r#"{"id":"ENG-1"}"#.into(),
+        }
+    }
+
+    #[test]
+    fn old_or_expired_subagent_write_request_never_enters_live_queue() {
+        let mut queue = VecDeque::new();
+        let current = active_generation(2);
+        assert!(enqueue_subagent_write_request(
+            &mut queue,
+            Some(&current),
+            write_approval_request("old", "chat-1:1", 10_000),
+            100,
+        )
+        .is_err());
+        assert!(enqueue_subagent_write_request(
+            &mut queue,
+            Some(&current),
+            write_approval_request("expired", "chat-1:2", 100),
+            100,
+        )
+        .is_err());
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn subagent_write_queue_replaces_front_and_rejects_stale_decision() {
+        let current = active_generation(2);
+        let mut queue = VecDeque::new();
+        enqueue_subagent_write_request(
+            &mut queue,
+            Some(&current),
+            write_approval_request("first", "chat-1:2", 10_000),
+            100,
+        )
+        .unwrap();
+        enqueue_subagent_write_request(
+            &mut queue,
+            Some(&current),
+            write_approval_request("second", "chat-1:2", 10_000),
+            100,
+        )
+        .unwrap();
+        assert!(subagent_write_decision_is_current(
+            &queue, None, "first", 100
+        ));
+        assert!(!subagent_write_decision_is_current(
+            &queue, None, "second", 100
+        ));
+        let mut deciding = Some("first".to_string());
+        assert!(remove_subagent_write_request(
+            &mut queue,
+            &mut deciding,
+            "first"
+        ));
+        assert_eq!(deciding, None);
+        assert_eq!(queue.front().unwrap().approval_id, "second");
+        assert!(!subagent_write_decision_is_current(
+            &queue, None, "first", 100
+        ));
+        assert!(subagent_write_decision_is_current(
+            &queue, None, "second", 100
+        ));
+    }
+
+    #[test]
+    fn shared_subagent_order_preserves_cross_kind_arrival_and_makes_stale_decisions_inert() {
+        let mut order = VecDeque::new();
+        push_subagent_approval_order(&mut order, "shell-first", SubagentApprovalKind::Shell);
+        push_subagent_approval_order(
+            &mut order,
+            "write-second",
+            SubagentApprovalKind::WorkspaceWrite,
+        );
+        push_subagent_approval_order(&mut order, "mcp-third", SubagentApprovalKind::McpRead);
+        assert!(subagent_approval_order_is_head(
+            &order,
+            SubagentApprovalKind::Shell,
+            "shell-first"
+        ));
+        assert!(!subagent_approval_order_is_head(
+            &order,
+            SubagentApprovalKind::WorkspaceWrite,
+            "write-second"
+        ));
+        remove_subagent_approval_order(&mut order, "shell-first");
+        assert!(subagent_approval_order_is_head(
+            &order,
+            SubagentApprovalKind::WorkspaceWrite,
+            "write-second"
+        ));
+        remove_subagent_approval_order(&mut order, "write-second");
+        assert!(subagent_approval_order_is_head(
+            &order,
+            SubagentApprovalKind::McpRead,
+            "mcp-third"
+        ));
+
+        let mut reverse = VecDeque::new();
+        push_subagent_approval_order(
+            &mut reverse,
+            "write-first",
+            SubagentApprovalKind::WorkspaceWrite,
+        );
+        push_subagent_approval_order(&mut reverse, "shell-second", SubagentApprovalKind::Shell);
+        assert!(subagent_approval_order_is_head(
+            &reverse,
+            SubagentApprovalKind::WorkspaceWrite,
+            "write-first"
+        ));
+        assert!(!subagent_approval_order_is_head(
+            &reverse,
+            SubagentApprovalKind::Shell,
+            "shell-second"
+        ));
+    }
+
+    #[test]
+    fn mcp_read_queue_requires_exact_live_generation_expiry_and_head() {
+        let current = active_generation(2);
+        let mut queue = VecDeque::new();
+        assert!(enqueue_subagent_mcp_read_request(
+            &mut queue,
+            Some(&current),
+            mcp_read_approval_request("stale", "chat-1:1", 10_000),
+            100,
+        )
+        .is_err());
+        enqueue_subagent_mcp_read_request(
+            &mut queue,
+            Some(&current),
+            mcp_read_approval_request("first", "chat-1:2", 10_000),
+            100,
+        )
+        .unwrap();
+        enqueue_subagent_mcp_read_request(
+            &mut queue,
+            Some(&current),
+            mcp_read_approval_request("second", "chat-1:2", 10_000),
+            100,
+        )
+        .unwrap();
+        assert!(subagent_mcp_read_decision_is_current(
+            &queue, None, "first", 100
+        ));
+        assert!(!subagent_mcp_read_decision_is_current(
+            &queue, None, "second", 100
+        ));
+        let mut deciding = Some("first".into());
+        assert!(remove_subagent_mcp_read_request(
+            &mut queue,
+            &mut deciding,
+            "first"
+        ));
+        assert!(deciding.is_none());
+        assert!(subagent_mcp_read_decision_is_current(
+            &queue, None, "second", 100
+        ));
+    }
 
     #[test]
     fn prepared_accessibility_is_used_before_the_first_service_frame() {
@@ -2446,6 +4467,91 @@ mod tests {
             needs_key: false,
             has_key: false,
         }
+    }
+
+    fn image_attachment() -> aiden_core::Attachment {
+        aiden_core::Attachment {
+            id: "image".into(),
+            name: "image.png".into(),
+            mime_type: "image/png".into(),
+            kind: aiden_core::AttachmentKind::Image,
+            size: 1,
+            data: Some("eA==".into()),
+            text: None,
+        }
+    }
+
+    #[test]
+    fn image_admission_rechecks_the_selected_model_and_allows_unknown_metadata() {
+        let mut provider = title_test_provider();
+        provider.models.push("vision".into());
+        let nonvision = ModelSelection {
+            provider_id: "provider".into(),
+            model: "model".into(),
+        };
+        let vision = ModelSelection {
+            provider_id: "provider".into(),
+            model: "vision".into(),
+        };
+        let mut nonvision_metadata = aiden_data::portable_config::ProviderModelMetadata {
+            source: aiden_data::portable_config::ProviderModelMetadataSource::Provider,
+            name: None,
+            r#type: None,
+            vision: Some(false),
+            tool_call: None,
+            reasoning: None,
+            thinking_levels: None,
+            thinking_can_disable: None,
+            context_length: None,
+            parameter_count: None,
+            format: None,
+        };
+        provider
+            .model_metadata
+            .insert("model".into(), nonvision_metadata.clone());
+        assert!(image_submission_error(&provider, &nonvision, &[image_attachment()]).is_some());
+        nonvision_metadata.vision = Some(true);
+        provider
+            .model_metadata
+            .insert("vision".into(), nonvision_metadata);
+        assert!(image_submission_error(&provider, &vision, &[image_attachment()]).is_none());
+        provider.model_metadata.remove("model");
+        assert!(image_submission_error(&provider, &nonvision, &[image_attachment()]).is_none());
+    }
+
+    #[test]
+    fn computer_use_model_gate_is_explicit_and_fail_closed() {
+        let selection = ModelSelection {
+            provider_id: "provider".into(),
+            model: "model".into(),
+        };
+        let mut provider = title_test_provider();
+        assert_eq!(computer_use_model_capabilities(&provider, &selection), None);
+
+        let mut metadata = aiden_data::portable_config::ProviderModelMetadata {
+            source: aiden_data::portable_config::ProviderModelMetadataSource::Provider,
+            name: None,
+            r#type: None,
+            vision: Some(true),
+            tool_call: Some(false),
+            reasoning: None,
+            thinking_levels: None,
+            thinking_can_disable: None,
+            context_length: None,
+            parameter_count: None,
+            format: None,
+        };
+        provider
+            .model_metadata
+            .insert("model".into(), metadata.clone());
+        assert_eq!(computer_use_model_capabilities(&provider, &selection), None);
+
+        metadata.tool_call = Some(true);
+        provider.model_metadata.insert("model".into(), metadata);
+        assert_eq!(
+            computer_use_model_capabilities(&provider, &selection),
+            Some(true)
+        );
     }
 
     fn foundation_status(
@@ -2664,6 +4770,7 @@ mod tests {
             model: None,
             reasoning: None,
             attachments: None,
+            skill_provenance: None,
             timeline: None,
             subagents: None,
         }

@@ -1,5 +1,6 @@
-//! The proactive-assistant surface: an `AppView::Assistant` route rendering an
-//! `AssistantPanel` entity (port of `renderer/components/assistant/*`).
+//! The proactive-assistant surface: one app-root dock retaining an
+//! `AssistantPanel` entity across route changes (port of
+//! `renderer/components/assistant/*`).
 //!
 //! - [`view_state`] — pure transcript/approval state + the AgentEvent →
 //!   view-state mapping (ports `use-assistant-chat.ts`).

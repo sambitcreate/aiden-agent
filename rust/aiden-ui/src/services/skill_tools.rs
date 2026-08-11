@@ -28,6 +28,31 @@ const MAX_PROVIDER_SKILL_NAME_CHARS: usize = 128;
 const MAX_PROVIDER_SKILL_DESCRIPTION_CHARS: usize = 512;
 const MAX_PROVIDER_TOOL_DESCRIPTION_CHARS: usize = 1_024;
 
+/// Provenance safe to show in the composer catalog. Filesystem paths and
+/// discovery internals deliberately never cross this boundary.
+#[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillCatalogSource {
+    Configured,
+    Workspace,
+    Global,
+}
+
+/// Bounded renderer-safe skill metadata. Instructions, supporting-file paths,
+/// and provider credentials are intentionally absent.
+#[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillCatalogEntry {
+    /// Opaque provider-safe descriptor id bound to the authorized workspace
+    /// and the selected skill revision.
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub source: SkillCatalogSource,
+    /// Opaque content/version fingerprint for stale-selection checks.
+    pub revision: String,
+}
+
 /// Runtime surfaces allowed to expose ambient Skills.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
@@ -96,6 +121,39 @@ pub struct SkillRegistry {
     defs: Vec<ToolDef>,
     disclosure: Option<String>,
     dispatch: HashMap<String, SkillTarget>,
+    invocations: HashMap<String, ResolvedSkillInvocation>,
+}
+
+/// Internal provider-only lease for one explicit slash invocation. Expanded
+/// instructions never enter the renderer-facing catalog or composer draft.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedSkillInvocation {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) source: SkillCatalogSource,
+    pub(crate) revision: String,
+    pub(crate) instructions: String,
+    /// Provider-only equivalent of Pi's `Skill.filePath`; never included in
+    /// renderer DTOs, persisted messages, or redacted `Debug` output.
+    pub(crate) file_path: String,
+}
+
+impl std::fmt::Debug for ResolvedSkillInvocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedSkillInvocation")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("source", &self.source)
+            .field("revision", &self.revision)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkillInvocationResolutionError {
+    Missing,
+    Stale,
 }
 
 impl SkillRegistry {
@@ -109,6 +167,34 @@ impl SkillRegistry {
 
     pub fn contains(&self, name: &str) -> bool {
         self.dispatch.contains_key(name)
+    }
+
+    /// Resolve an opaque renderer selection against this immutable live
+    /// registry. A matching name/source with a different lease is stale;
+    /// absent names are missing (including disabled configured skills).
+    pub(crate) fn resolve_invocation(
+        &self,
+        id: &str,
+        name: &str,
+        source: SkillCatalogSource,
+        revision: &str,
+    ) -> Result<ResolvedSkillInvocation, SkillInvocationResolutionError> {
+        let Some(invocation) = self.invocations.get(id) else {
+            return if self
+                .invocations
+                .values()
+                .any(|candidate| candidate.name == name && candidate.source == source)
+            {
+                Err(SkillInvocationResolutionError::Stale)
+            } else {
+                Err(SkillInvocationResolutionError::Missing)
+            };
+        };
+        if invocation.name != name || invocation.source != source || invocation.revision != revision
+        {
+            return Err(SkillInvocationResolutionError::Stale);
+        }
+        Ok(invocation.clone())
     }
 
     pub async fn execute(
@@ -208,6 +294,56 @@ pub fn collect_skill_registry(context: &SkillStreamContext, cancel: &AtomicBool)
     build_skill_registry(&configured, &discovered, workspace_root)
 }
 
+/// Resolve a slash selection against a fresh authoritative registry at send
+/// admission. The registry is rebuilt from the current config/discovery view,
+/// so disabled, removed, revised, or permission-ineligible entries fail
+/// closed before any chat append occurs.
+pub(crate) fn resolve_skill_invocation(
+    context: &SkillStreamContext,
+    id: &str,
+    name: &str,
+    source: SkillCatalogSource,
+    revision: &str,
+    cancel: &AtomicBool,
+) -> Result<ResolvedSkillInvocation, SkillInvocationResolutionError> {
+    collect_skill_registry(context, cancel).resolve_invocation(id, name, source, revision)
+}
+
+/// Build the bounded renderer-safe catalog from the same configured and
+/// discovered sources used by the per-turn provider registry. This helper is
+/// intentionally separate from `collect_skill_registry`: a future composer
+/// request can ask for metadata without cloning instructions into the UI
+/// surface or exposing filesystem paths.
+#[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+pub fn collect_skill_catalog(
+    context: &SkillStreamContext,
+    cancel: &AtomicBool,
+) -> Vec<SkillCatalogEntry> {
+    if cancel.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    let workspace_root = discovery_workspace_root(
+        context.workspace_permission,
+        context.workspace_root.as_deref(),
+    );
+    let configured = context.config.list_skills().unwrap_or_else(|error| {
+        tracing::warn!(%error, "Skipping configured skills for the catalog");
+        Vec::new()
+    });
+    if cancel.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    let discovered =
+        discover_skills_fresh_cancellable(workspace_root, cancel).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Skipping discovered skills for the catalog");
+            Vec::new()
+        });
+    if cancel.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    build_skill_catalog(&configured, &discovered, workspace_root)
+}
+
 fn discovery_workspace_root(
     permission: WorkspacePermission,
     workspace_root: Option<&Path>,
@@ -217,82 +353,164 @@ fn discovery_workspace_root(
         .flatten()
 }
 
-pub(crate) fn build_skill_registry(
-    configured: &[Skill],
-    discovered: &[DiscoveredSkill],
-    workspace_root: Option<&Path>,
-) -> SkillRegistry {
-    #[derive(Clone, Copy)]
-    enum Candidate<'a> {
-        Configured(&'a Skill),
-        Discovered(&'a DiscoveredSkill),
-    }
-    impl<'a> Candidate<'a> {
-        fn name(self) -> &'a str {
-            match self {
-                Self::Configured(skill) => &skill.name,
-                Self::Discovered(skill) => &skill.name,
-            }
-        }
+#[derive(Clone, Copy)]
+enum SkillCandidate<'a> {
+    Configured(&'a Skill),
+    Discovered(&'a DiscoveredSkill),
+}
 
-        fn description(self) -> &'a str {
-            match self {
-                Self::Configured(skill) => &skill.description,
-                Self::Discovered(skill) => &skill.description,
-            }
-        }
-
-        fn instruction_bytes(self) -> usize {
-            match self {
-                Self::Configured(skill) => skill.instructions.len(),
-                Self::Discovered(skill) => skill.instructions.len(),
-            }
-        }
-
-        fn priority(self) -> u8 {
-            match self {
-                Self::Configured(_) => 0,
-                Self::Discovered(skill) if skill.source == DiscoveredSkillSource::Workspace => 1,
-                Self::Discovered(_) => 2,
-            }
-        }
-
-        fn location(self) -> &'static str {
-            match self {
-                Self::Configured(_) => "configured",
-                Self::Discovered(skill) => match skill.source {
-                    DiscoveredSkillSource::Global => "global",
-                    DiscoveredSkillSource::Workspace => "workspace",
-                },
-            }
-        }
-
-        fn into_target(self, workspace_root: Option<&Path>) -> SkillTarget {
-            match self {
-                Self::Configured(skill) => SkillTarget::Configured(skill.clone()),
-                Self::Discovered(skill) => SkillTarget::Discovered {
-                    skill: skill.clone(),
-                    workspace_root: workspace_root.map(Path::to_path_buf),
-                },
-            }
+impl<'a> SkillCandidate<'a> {
+    fn name(self) -> &'a str {
+        match self {
+            Self::Configured(skill) => &skill.name,
+            Self::Discovered(skill) => &skill.name,
         }
     }
 
-    let mut selected = BTreeMap::<String, Candidate<'_>>::new();
+    fn description(self) -> &'a str {
+        match self {
+            Self::Configured(skill) => &skill.description,
+            Self::Discovered(skill) => &skill.description,
+        }
+    }
+
+    fn instruction_bytes(self) -> usize {
+        match self {
+            Self::Configured(skill) => skill.instructions.len(),
+            Self::Discovered(skill) => skill.instructions.len(),
+        }
+    }
+
+    fn instructions(self) -> String {
+        match self {
+            Self::Configured(skill) => skill.instructions.clone(),
+            Self::Discovered(skill) => skill.instructions.clone(),
+        }
+    }
+
+    fn priority(self) -> u8 {
+        match self {
+            Self::Configured(_) => 0,
+            Self::Discovered(skill) if skill.source == DiscoveredSkillSource::Workspace => 1,
+            Self::Discovered(_) => 2,
+        }
+    }
+
+    fn location(self) -> &'static str {
+        match self {
+            Self::Configured(_) => "configured",
+            Self::Discovered(skill) => match skill.source {
+                DiscoveredSkillSource::Global => "global",
+                DiscoveredSkillSource::Workspace => "workspace",
+            },
+        }
+    }
+
+    fn invocation_file_path(self) -> String {
+        match self {
+            Self::Configured(skill) => format!("configured:{}", skill.id),
+            Self::Discovered(skill) => skill.path.to_string_lossy().into_owned(),
+        }
+    }
+
+    fn into_target(self, workspace_root: Option<&Path>) -> SkillTarget {
+        match self {
+            Self::Configured(skill) => SkillTarget::Configured(skill.clone()),
+            Self::Discovered(skill) => SkillTarget::Discovered {
+                skill: skill.clone(),
+                workspace_root: workspace_root.map(Path::to_path_buf),
+            },
+        }
+    }
+
+    #[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+    fn catalog_source(self) -> SkillCatalogSource {
+        match self {
+            Self::Configured(_) => SkillCatalogSource::Configured,
+            Self::Discovered(skill) => match skill.source {
+                DiscoveredSkillSource::Workspace => SkillCatalogSource::Workspace,
+                DiscoveredSkillSource::Global => SkillCatalogSource::Global,
+            },
+        }
+    }
+
+    #[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+    fn revision(self) -> String {
+        let mut hasher = Sha256::new();
+        let source = match self {
+            Self::Configured(_) => "configured",
+            Self::Discovered(skill) => match skill.source {
+                DiscoveredSkillSource::Workspace => "workspace",
+                DiscoveredSkillSource::Global => "global",
+            },
+        };
+        hasher.update(source.as_bytes());
+        if let Self::Configured(skill) = self {
+            // Configured ids are host-owned but bind the opaque catalog
+            // revision to the selected config record.
+            hasher.update(skill.id.as_bytes());
+        }
+        hasher.update(self.name().as_bytes());
+        hasher.update(self.description().as_bytes());
+        hasher.update(self.instruction_bytes().to_le_bytes());
+        if let Self::Discovered(skill) = self {
+            hasher.update(skill.version.sha256.as_bytes());
+        }
+        let digest = format!("{:x}", hasher.finalize());
+        digest[..16].to_string()
+    }
+
+    #[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+    fn catalog_id(self, workspace_root: Option<&Path>) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"aiden-slash-skill-v1");
+        hasher.update(self.revision().as_bytes());
+        if let Some(root) = workspace_root {
+            // Hash the authorized root only; never expose it in the DTO.
+            hasher.update(root.to_string_lossy().as_bytes());
+        } else {
+            hasher.update(b"<no-workspace>");
+        }
+        let digest = format!("{:x}", hasher.finalize());
+        format!("skillref_{}", &digest[..24])
+    }
+}
+
+struct PreparedSkill<'a> {
+    priority: u8,
+    name: String,
+    description: String,
+    candidate: SkillCandidate<'a>,
+}
+
+fn bounded_skill_candidates<'a>(
+    configured: &'a [Skill],
+    discovered: &'a [DiscoveredSkill],
+) -> Vec<PreparedSkill<'a>> {
+    let mut selected = BTreeMap::<String, SkillCandidate<'a>>::new();
     for skill in discovered
         .iter()
         .filter(|skill| skill.source == DiscoveredSkillSource::Global)
     {
-        selected.insert(normalized_name(&skill.name), Candidate::Discovered(skill));
+        selected.insert(
+            normalized_name(&skill.name),
+            SkillCandidate::Discovered(skill),
+        );
     }
     for skill in discovered
         .iter()
         .filter(|skill| skill.source == DiscoveredSkillSource::Workspace)
     {
-        selected.insert(normalized_name(&skill.name), Candidate::Discovered(skill));
+        selected.insert(
+            normalized_name(&skill.name),
+            SkillCandidate::Discovered(skill),
+        );
     }
     for skill in configured.iter().filter(|skill| skill.enabled) {
-        selected.insert(normalized_name(&skill.name), Candidate::Configured(skill));
+        selected.insert(
+            normalized_name(&skill.name),
+            SkillCandidate::Configured(skill),
+        );
     }
 
     let mut entries = selected
@@ -311,15 +529,20 @@ pub(crate) fn build_skill_registry(
                 candidate.description(),
                 MAX_PROVIDER_SKILL_DESCRIPTION_CHARS,
             );
-            (candidate.priority(), name, description, candidate)
+            PreparedSkill {
+                priority: candidate.priority(),
+                name,
+                description,
+                candidate,
+            }
         })
-        .filter(|entry| !entry.1.is_empty())
+        .filter(|entry| !entry.name.is_empty())
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| normalized_name(&left.1).cmp(&normalized_name(&right.1)))
-            .then_with(|| left.1.cmp(&right.1))
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| normalized_name(&left.name).cmp(&normalized_name(&right.name)))
+            .then_with(|| left.name.cmp(&right.name))
     });
 
     let total_candidates = entries.len();
@@ -328,14 +551,15 @@ pub(crate) fn build_skill_registry(
     let mut instruction_bytes = 0usize;
     for entry in entries {
         if retained.len() >= MAX_SKILL_REGISTRY_ENTRIES
-            || description_bytes.saturating_add(entry.2.len()) > MAX_SKILL_PROMPT_DESCRIPTION_BYTES
-            || instruction_bytes.saturating_add(entry.3.instruction_bytes())
+            || description_bytes.saturating_add(entry.description.len())
+                > MAX_SKILL_PROMPT_DESCRIPTION_BYTES
+            || instruction_bytes.saturating_add(entry.candidate.instruction_bytes())
                 > MAX_SKILL_REGISTRY_INSTRUCTION_BYTES
         {
             continue;
         }
-        description_bytes += entry.2.len();
-        instruction_bytes += entry.3.instruction_bytes();
+        description_bytes += entry.description.len();
+        instruction_bytes += entry.candidate.instruction_bytes();
         retained.push(entry);
     }
     if retained.len() < total_candidates {
@@ -346,15 +570,51 @@ pub(crate) fn build_skill_registry(
         );
     }
     retained.sort_by(|left, right| {
-        normalized_name(&left.1)
-            .cmp(&normalized_name(&right.1))
-            .then_with(|| left.1.cmp(&right.1))
+        normalized_name(&left.name)
+            .cmp(&normalized_name(&right.name))
+            .then_with(|| left.name.cmp(&right.name))
     });
+    retained
+}
+
+#[allow(dead_code)] // Phase 0 catalog consumed by the upcoming composer palette.
+pub(crate) fn build_skill_catalog(
+    configured: &[Skill],
+    discovered: &[DiscoveredSkill],
+    workspace_root: Option<&Path>,
+) -> Vec<SkillCatalogEntry> {
+    bounded_skill_candidates(configured, discovered)
+        .into_iter()
+        .map(|entry| SkillCatalogEntry {
+            id: entry.candidate.catalog_id(workspace_root),
+            name: entry.name,
+            description: entry.description,
+            source: entry.candidate.catalog_source(),
+            revision: entry.candidate.revision(),
+        })
+        .collect()
+}
+
+pub(crate) fn build_skill_registry(
+    configured: &[Skill],
+    discovered: &[DiscoveredSkill],
+    workspace_root: Option<&Path>,
+) -> SkillRegistry {
+    let retained = bounded_skill_candidates(configured, discovered);
 
     let mut defs = Vec::with_capacity(retained.len());
     let mut dispatch = HashMap::with_capacity(retained.len());
+    let mut invocations = HashMap::with_capacity(retained.len());
     let mut disclosure = Vec::with_capacity(retained.len());
-    for (_, name, description, candidate) in retained {
+    for entry in retained {
+        let name = entry.name;
+        let description = entry.description;
+        let candidate = entry.candidate;
+        let catalog_id = candidate.catalog_id(workspace_root);
+        let revision = candidate.revision();
+        let source = candidate.catalog_source();
+        let instructions = candidate.instructions();
+        let file_path = candidate.invocation_file_path();
         let tool_name = skill_tool_name(candidate.name());
         let summary = if description.is_empty() {
             name.clone()
@@ -383,13 +643,30 @@ pub(crate) fn build_skill_registry(
                 "additionalProperties": false
             }),
         });
-        disclosure.push((name, description, tool_name.clone(), candidate.location()));
+        disclosure.push((
+            name.clone(),
+            description.clone(),
+            tool_name.clone(),
+            candidate.location(),
+        ));
         dispatch.insert(tool_name, candidate.into_target(workspace_root));
+        invocations.insert(
+            catalog_id.clone(),
+            ResolvedSkillInvocation {
+                id: catalog_id,
+                name,
+                source,
+                revision,
+                instructions,
+                file_path,
+            },
+        );
     }
     SkillRegistry {
         defs,
         disclosure: format_disclosure(&disclosure),
         dispatch,
+        invocations,
     }
 }
 
@@ -557,6 +834,7 @@ fn escape_xml(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiden_core::{ChatMessage, ChatRole};
 
     fn configured(id: &str, name: &str, instructions: &str) -> Skill {
         Skill {
@@ -616,6 +894,142 @@ mod tests {
             matches!(target, SkillTarget::Configured(skill) if skill.instructions == "configured instructions")
         );
         assert_eq!(registry.definitions().len(), 1);
+    }
+
+    #[test]
+    fn explicit_invocation_resolution_is_lease_bound_and_private() {
+        let configured = configured("one", "Review", "private instructions");
+        let catalog = build_skill_catalog(
+            std::slice::from_ref(&configured),
+            &[],
+            Some(Path::new("/workspace")),
+        );
+        let entry = &catalog[0];
+        let registry = build_skill_registry(
+            std::slice::from_ref(&configured),
+            &[],
+            Some(Path::new("/workspace")),
+        );
+        let resolved = registry
+            .resolve_invocation(&entry.id, &entry.name, entry.source, &entry.revision)
+            .expect("live lease");
+        assert_eq!(resolved.instructions, "private instructions");
+
+        let mut stale_revision = entry.revision.clone();
+        stale_revision.push('x');
+        assert_eq!(
+            registry.resolve_invocation(&entry.id, &entry.name, entry.source, &stale_revision,),
+            Err(SkillInvocationResolutionError::Stale)
+        );
+        let moved_registry = build_skill_registry(
+            std::slice::from_ref(&configured),
+            &[],
+            Some(Path::new("/other-workspace")),
+        );
+        assert_eq!(
+            moved_registry.resolve_invocation(
+                &entry.id,
+                &entry.name,
+                entry.source,
+                &entry.revision
+            ),
+            Err(SkillInvocationResolutionError::Stale)
+        );
+        assert_eq!(
+            registry.resolve_invocation(
+                "skillref_missing",
+                "Missing",
+                entry.source,
+                &entry.revision,
+            ),
+            Err(SkillInvocationResolutionError::Missing)
+        );
+        assert!(!format!("{resolved:?}").contains("/workspace"));
+    }
+
+    #[test]
+    fn disabled_skill_is_missing_at_send_resolution() {
+        let enabled = configured("one", "Review", "private instructions");
+        let catalog = build_skill_catalog(std::slice::from_ref(&enabled), &[], None);
+        let entry = &catalog[0];
+        let mut disabled = enabled.clone();
+        disabled.enabled = false;
+        let registry = build_skill_registry(&[disabled], &[], None);
+        assert_eq!(
+            registry.resolve_invocation(&entry.id, &entry.name, entry.source, &entry.revision),
+            Err(SkillInvocationResolutionError::Missing)
+        );
+    }
+
+    #[test]
+    fn renderer_catalog_uses_the_same_precedence_and_excludes_private_fields() {
+        let catalog = build_skill_catalog(
+            &[configured("configured-id", "Shared", "/secret instruction")],
+            &[
+                discovered("Shared", DiscoveredSkillSource::Global),
+                discovered("Shared", DiscoveredSkillSource::Workspace),
+                discovered("Other", DiscoveredSkillSource::Global),
+            ],
+            Some(Path::new("/workspace")),
+        );
+        assert_eq!(catalog.len(), 2);
+        let shared = catalog.iter().find(|entry| entry.name == "Shared").unwrap();
+        assert_eq!(shared.source, SkillCatalogSource::Configured);
+        assert!(!shared.id.contains("configured-id"));
+        assert!(!shared.description.contains("/secret"));
+        assert!(shared.revision.len() >= 8);
+        let other_workspace = build_skill_catalog(
+            &[configured("configured-id", "Shared", "/secret instruction")],
+            &[],
+            Some(Path::new("/other-workspace")),
+        );
+        assert_ne!(shared.id, other_workspace[0].id);
+        assert!(catalog.iter().all(|entry| {
+            entry.id.len() <= 64
+                && !entry.id.contains('/')
+                && !entry.name.contains('\n')
+                && !entry.description.contains('\n')
+        }));
+        let renderer_json = serde_json::to_string(
+            &catalog
+                .iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "id": entry.id,
+                        "name": entry.name,
+                        "description": entry.description,
+                        "source": format!("{:?}", entry.source),
+                        "revision": entry.revision,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert!(!renderer_json.contains("/secret instruction"));
+        let message_json = serde_json::to_string(&ChatMessage {
+            id: "user-1".into(),
+            role: ChatRole::User,
+            content: "Review".into(),
+            created_at: 1,
+            model: None,
+            reasoning: None,
+            attachments: None,
+            skill_provenance: None,
+            timeline: None,
+            subagents: None,
+        })
+        .unwrap();
+        assert!(!message_json.contains("/secret instruction"));
+    }
+
+    #[test]
+    fn renderer_catalog_is_bounded_and_cancellation_is_fail_closed() {
+        let many = (0..600)
+            .map(|index| configured(&format!("id-{index}"), &format!("Skill {index:03}"), "i"))
+            .collect::<Vec<_>>();
+        let catalog = build_skill_catalog(&many, &[], None);
+        assert_eq!(catalog.len(), MAX_SKILL_REGISTRY_ENTRIES);
+        assert!(catalog.windows(2).all(|pair| pair[0].name <= pair[1].name));
     }
 
     #[test]

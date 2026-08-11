@@ -6,13 +6,17 @@
 //! The panel groups runs into Active/Done, renders a state icon, title,
 //! duration, and child counts, and expands into a detail row. It is fed by an
 //! injected [`SubagentRunSource`] (Arc'd) returning renderer-safe V2
-//! snapshots; the orchestrator wires the live run registry later. All view
-//! logic (grouping, counts, elapsed formatting, selection) is pure and
-//! unit-tested.
+//! snapshots; the app wires the shared production
+//! [`SubagentAuthority`](crate::services::subagents::SubagentAuthority) owned
+//! by [`Stores`](crate::services::stores::Stores). All view logic (grouping,
+//! counts, elapsed formatting, selection) is pure and unit-tested.
 
 use std::sync::Arc;
 
-use aiden_core::subagent_runs::{SubagentRunSnapshotV2, SubagentRunStateV2, SubagentSnapshotRole};
+use aiden_core::subagent_runs::{
+    SubagentEffectActivityStateV1, SubagentEffectActivityV1, SubagentRunSnapshotV2,
+    SubagentRunStateV2, SubagentSnapshotRole,
+};
 use gpui::{
     div, percentage, prelude::FluentBuilder as _, px, AppContext as _, Context, ElementId,
     FontWeight, InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
@@ -182,6 +186,52 @@ pub trait SubagentRunSource: Send + Sync {
     fn snapshots_for_chat(&self, _chat_id: &str) -> Vec<SubagentRunSnapshotV2> {
         self.snapshots()
     }
+
+    fn unavailable_message(&self) -> Option<String> {
+        None
+    }
+
+    fn effect_activity_for_run(
+        &self,
+        _run_id: &str,
+        _chat_id: &str,
+    ) -> Vec<SubagentEffectActivityV1> {
+        Vec::new()
+    }
+
+    fn stop(&self, _run_id: &str) -> bool {
+        false
+    }
+}
+
+impl SubagentRunSource for crate::services::subagents::SubagentAuthority {
+    fn snapshots(&self) -> Vec<SubagentRunSnapshotV2> {
+        crate::services::subagents::SubagentAuthority::snapshots(self)
+    }
+
+    fn snapshots_for_chat(&self, chat_id: &str) -> Vec<SubagentRunSnapshotV2> {
+        crate::services::subagents::SubagentAuthority::snapshots_for_chat(self, chat_id)
+    }
+
+    fn unavailable_message(&self) -> Option<String> {
+        self.availability()
+            .err()
+            .map(|reason| reason.message().to_string())
+    }
+
+    fn effect_activity_for_run(
+        &self,
+        run_id: &str,
+        chat_id: &str,
+    ) -> Vec<SubagentEffectActivityV1> {
+        crate::services::subagents::SubagentAuthority::effect_activity_for_run(
+            self, run_id, chat_id,
+        )
+    }
+
+    fn stop(&self, run_id: &str) -> bool {
+        self.stop_run(run_id)
+    }
 }
 
 /// In-memory source (demo data for standalone use and tests).
@@ -300,92 +350,6 @@ impl MemoryRunSource {
 }
 
 // ===========================================================================
-// Live run source (aiden-subagents run_store_v2 read path)
-// ===========================================================================
-
-/// The on-disk V2 run store directory relative to the machine-local data root
-/// (mirrors `aiden-subagents`' `V2_DIRECTORY`).
-const SUBAGENT_RUNS_V2_DIRECTORY: &str = "subagent-runs-v2";
-
-/// Reads the committed V2 run store (`userData/subagent-runs-v2/runs.json`)
-/// written by the subagent system and projects its snapshots for the panel.
-///
-/// The read is tolerant: a missing file, an uncommitted database, or a corrupt
-/// record degrades to the empty state (never demo data). `snapshots_for_chat`
-/// narrows to one chat's lineage via the snapshot's `chatId`.
-#[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
-#[derive(Debug)]
-pub struct LiveRunSource {
-    runs_file: std::path::PathBuf,
-}
-
-impl LiveRunSource {
-    #[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
-    pub fn new() -> Self {
-        Self {
-            runs_file: aiden_data::machine_local_data_dir()
-                .join(SUBAGENT_RUNS_V2_DIRECTORY)
-                .join("runs.json"),
-        }
-    }
-
-    /// A source pointed at an explicit `runs.json` path (tests).
-    #[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
-    pub fn with_runs_file(runs_file: std::path::PathBuf) -> Self {
-        Self { runs_file }
-    }
-
-    #[allow(dead_code)] // wired by the shell owner (app.rs swaps in LiveRunSource)
-    fn read_snapshots(&self) -> Vec<SubagentRunSnapshotV2> {
-        let contents = match std::fs::read(&self.runs_file) {
-            Ok(contents) => contents,
-            Err(_) => return Vec::new(),
-        };
-        let value: serde_json::Value = match serde_json::from_slice(&contents) {
-            Ok(value) => value,
-            Err(_) => return Vec::new(),
-        };
-        // The canonical committed V2 database first...
-        if let Some(database) =
-            aiden_subagents::run_store_v2::parse_mutable_subagent_run_database_v2(&value)
-        {
-            return database.snapshots;
-        }
-        // ...then a tolerant per-snapshot fallback so a partially-written or
-        // migration-era store still surfaces its completed runs.
-        value
-            .get("snapshots")
-            .and_then(serde_json::Value::as_array)
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(aiden_core::subagent_runs::parse_subagent_run_snapshot_v2)
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-}
-
-impl Default for LiveRunSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SubagentRunSource for LiveRunSource {
-    fn snapshots(&self) -> Vec<SubagentRunSnapshotV2> {
-        self.read_snapshots()
-    }
-
-    fn snapshots_for_chat(&self, chat_id: &str) -> Vec<SubagentRunSnapshotV2> {
-        self.read_snapshots()
-            .into_iter()
-            .filter(|snapshot| snapshot.chat_id == chat_id)
-            .collect()
-    }
-}
-
-// ===========================================================================
 // The panel entity
 // ===========================================================================
 
@@ -398,6 +362,7 @@ pub type GroupedSubagentRuns = (
 pub struct SubagentsPanel {
     pub(crate) source: Arc<dyn SubagentRunSource>,
     pub(crate) snapshots: Vec<SubagentRunSnapshotV2>,
+    effect_activity: std::collections::HashMap<String, Vec<SubagentEffectActivityV1>>,
     pub(crate) selected_run_id: Option<String>,
     pub(crate) expanded: std::collections::BTreeSet<String>,
     pub(crate) now: u64,
@@ -458,6 +423,7 @@ impl SubagentsPanel {
         let mut this = Self {
             source: deps.source,
             snapshots: Vec::new(),
+            effect_activity: std::collections::HashMap::new(),
             selected_run_id: None,
             expanded: std::collections::BTreeSet::new(),
             now: aiden_data::now_millis(),
@@ -495,12 +461,22 @@ impl SubagentsPanel {
         let chat_id = self.active_chat.clone();
         let read_scope = chat_id.clone();
         cx.spawn(async move |this, cx| {
-            let snapshots = cx
+            let (snapshots, effects) = cx
                 .background_spawn(async move {
-                    match read_scope.as_deref() {
+                    let snapshots = match read_scope.as_deref() {
                         Some(chat_id) => source.snapshots_for_chat(chat_id),
                         None => source.snapshots(),
-                    }
+                    };
+                    let effects = snapshots
+                        .iter()
+                        .map(|run| {
+                            (
+                                run.run_id.clone(),
+                                source.effect_activity_for_run(&run.run_id, &run.chat_id),
+                            )
+                        })
+                        .collect();
+                    (snapshots, effects)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -512,6 +488,7 @@ impl SubagentsPanel {
                     return;
                 }
                 this.snapshots = snapshots;
+                this.effect_activity = effects;
                 this.loaded = true;
                 cx.notify();
             })
@@ -607,7 +584,10 @@ impl SubagentsPanel {
             .gap_2()
             .items_center()
             .rounded_md()
-            .cursor_pointer()
+            .when(
+                crate::services::appearance::pointer_cursors_enabled(cx),
+                |el| el.cursor_pointer(),
+            )
             .bg(bg)
             .text_color(fg)
             .when(depth > 1, |el| el.pl_6())
@@ -714,6 +694,11 @@ impl SubagentsPanel {
     fn detail(&self, run: &SubagentRunSnapshotV2, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let children = children_of(run, &self.snapshots);
+        let effects = self
+            .effect_activity
+            .get(&run.run_id)
+            .cloned()
+            .unwrap_or_default();
         v_flex()
             .id(ElementId::Name(SharedString::from(format!(
                 "subagent-detail-{}",
@@ -749,6 +734,36 @@ impl SubagentsPanel {
                         .child(format!("Error: {error}")),
                 )
             })
+            .children(effects.into_iter().map(|effect| {
+                let color = match effect.state {
+                    SubagentEffectActivityStateV1::RemoteError
+                    | SubagentEffectActivityStateV1::Unknown => theme.danger,
+                    SubagentEffectActivityStateV1::Prepared
+                    | SubagentEffectActivityStateV1::Authorized => theme.warning,
+                    _ => theme.muted_foreground,
+                };
+                div().text_xs().text_color(color).child(effect.label)
+            }))
+            .when(is_state_active(run.state), |el| {
+                let run_id = run.run_id.clone();
+                el.child(
+                    div()
+                        .id(ElementId::Name(SharedString::from(format!(
+                            "subagent-stop-{run_id}"
+                        ))))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(theme.secondary)
+                        .text_xs()
+                        .child("Stop run")
+                        .on_click(cx.listener(move |this, _event, _window, cx| {
+                            if this.source.stop(&run_id) {
+                                this.refresh(cx);
+                            }
+                        })),
+                )
+            })
             .when(!children.is_empty(), |el| {
                 el.child(
                     div()
@@ -776,12 +791,11 @@ impl SubagentsPanel {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child("No subagents yet"),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Subagents used by this conversation will appear here."),
-            )
+            .child(div().text_sm().text_color(theme.muted_foreground).child(
+                self.source.unavailable_message().unwrap_or_else(|| {
+                    "Subagents used by this conversation will appear here.".to_string()
+                }),
+            ))
     }
 }
 
@@ -887,6 +901,19 @@ impl Render for SubagentsPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn production_authority_source_reports_unavailable_and_routes_stop() {
+        let authority = crate::services::subagents::SubagentAuthority::new(None);
+        let source: Arc<dyn SubagentRunSource> = authority;
+        assert_eq!(
+            source.unavailable_message().as_deref(),
+            Some("Subagent history is unavailable on this device.")
+        );
+        assert!(source.snapshots().is_empty());
+        assert!(source.snapshots_for_chat("chat-1").is_empty());
+        assert!(!source.stop("run-missing"));
+    }
 
     #[test]
     fn state_labels_match_the_renderer() {
@@ -1074,97 +1101,6 @@ mod tests {
             Some("one")
         );
         assert_eq!(resolve_selection(&runs, None).unwrap().run_id, "one");
-    }
-
-    // =====================================================================
-    // LiveRunSource (run_store_v2 read path)
-    // =====================================================================
-
-    #[test]
-    fn live_source_returns_the_empty_state_when_no_store_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = LiveRunSource::with_runs_file(dir.path().join("missing.json"));
-        assert!(source.snapshots().is_empty());
-        assert!(source.snapshots_for_chat("chat-1").is_empty());
-    }
-
-    #[test]
-    fn live_source_parses_snapshots_and_filters_by_chat() {
-        let dir = tempfile::tempdir().unwrap();
-        let runs_file = dir.path().join("runs.json");
-        let run_a = demo_run(
-            "run-a",
-            None,
-            "Scout A",
-            SubagentSnapshotRole::Scout,
-            SubagentRunStateV2::Completed,
-            1_000,
-            Some(2_000),
-            2,
-        );
-        let mut run_b = demo_run(
-            "run-b",
-            None,
-            "Scout B",
-            SubagentSnapshotRole::Scout,
-            SubagentRunStateV2::Running,
-            3_000,
-            None,
-            1,
-        );
-        run_b.chat_id = "chat-other".to_string();
-        let store = serde_json::json!({
-            "version": 2,
-            "snapshots": [serde_json::to_value(&run_a).unwrap(), serde_json::to_value(&run_b).unwrap()],
-        });
-        std::fs::write(&runs_file, serde_json::to_string_pretty(&store).unwrap()).unwrap();
-
-        let source = LiveRunSource::with_runs_file(runs_file);
-        assert_eq!(source.snapshots().len(), 2);
-        let scoped = source.snapshots_for_chat("chat-1");
-        assert_eq!(scoped.len(), 1);
-        assert_eq!(scoped[0].run_id, "run-a");
-    }
-
-    #[test]
-    fn live_source_tolerates_corrupt_records() {
-        let dir = tempfile::tempdir().unwrap();
-        let runs_file = dir.path().join("runs.json");
-        std::fs::write(&runs_file, "{ not json").unwrap();
-        let source = LiveRunSource::with_runs_file(runs_file);
-        assert!(source.snapshots().is_empty());
-
-        // A store whose snapshots array mixes valid + invalid entries keeps
-        // the valid ones.
-        let dir = tempfile::tempdir().unwrap();
-        let runs_file = dir.path().join("runs.json");
-        let good = demo_run(
-            "run-good",
-            None,
-            "Good",
-            SubagentSnapshotRole::Scout,
-            SubagentRunStateV2::Completed,
-            1,
-            Some(2),
-            1,
-        );
-        let store = serde_json::json!({
-            "version": 2,
-            "snapshots": [serde_json::to_value(&good).unwrap(), { "version": 2 }],
-        });
-        std::fs::write(&runs_file, serde_json::to_string(&store).unwrap()).unwrap();
-        let source = LiveRunSource::with_runs_file(runs_file);
-        let snapshots = source.snapshots();
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].run_id, "run-good");
-    }
-
-    #[test]
-    fn live_source_is_never_demo_data() {
-        // An unreadable path must degrade to empty, not the demo roster.
-        let source =
-            LiveRunSource::with_runs_file(std::path::PathBuf::from("/nonexistent/runs.json"));
-        assert!(source.snapshots().is_empty());
     }
 
     // =====================================================================
