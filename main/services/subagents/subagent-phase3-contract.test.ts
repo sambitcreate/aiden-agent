@@ -560,10 +560,7 @@ test("managed worktree deletion and terminal creation share workspace mutation a
     "if (ownerInvalidated())",
     revalidate,
   );
-  const spawn = terminalService.indexOf(
-    "const pty = (this.options.spawnPty ?? spawn)(",
-    finalAbortCheck,
-  );
+  const spawn = terminalService.indexOf("const { pty,", finalAbortCheck);
   const postSpawnCheck = terminalService.indexOf(
     "if (ownerInvalidated())",
     spawn,
