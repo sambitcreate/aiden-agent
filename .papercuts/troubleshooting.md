@@ -1,5 +1,26 @@
 # Troubleshooting papercuts
 
+## 2026-08-10 — node-pty `posix_spawnp failed.` on macOS terminal creation
+
+- The error string `"posix_spawnp failed."` is emitted verbatim by node-pty's
+  native binding (`src/unix/pty.cc`), thrown when `posix_spawn()` of the
+  `spawn-helper` Mach-O binary returns non-zero. It does **not** mean the shell
+  is bad — node-pty spawns `spawn-helper` first (`argv[0] = helperPath`), and
+  `spawn-helper` then `execvp`s the shell (`src/unix/spawn-helper.cc`).
+- Root cause: node-pty 1.1.0's npm prebuilt tarball restores `spawn-helper`
+  with mode `0644` (no execute bit). `posix_spawn` of a non-executable file
+  fails, surfacing as the opaque error. Reproduced by `chmod 644` on the
+  helper then `node-pty.spawn(...)`.
+- Fix is layered: (1) runtime — `TerminalService.ensureSpawnHelperExecutable`
+  now chmods **and verifies** (no silent `catch {}`) every `prebuilds/*`
+  candidate, throwing a descriptive path-bearing error on failure; the shell
+  is resolved with an executable-check fallback (`$SHELL` → `/bin/zsh` →
+  `/bin/bash` → `/bin/sh`). (2) build-time — `afterPack` chmods/verifies the
+  helper under `app.asar.unpacked` so packaged builds never ship the bad bit.
+  A silent failure on this boundary is what made the original bug
+  undiagnosable; verify-and-throw is the load-bearing lesson.
+- Windows is unaffected (uses ConPTY, no `spawn-helper`).
+
 ## 2026-08-10 — GPUI Environment and descriptor-relative file work
 
 - macOS exposes directory descriptors under `/dev/fd`, but `/dev/fd/N/child`
@@ -357,3 +378,25 @@ same-lock recursion.
   layout mutations (including reset) until publication settles, or explicitly
   supersede the durable intent; otherwise disk may contain a layout the UI
   still presents as the previous clean snapshot.
+
+## 2026-08-10 — Attended Computer Use admission
+
+- A generation authority that validates persisted chat/provider/workspace
+  identity cannot safely race the background user-message append that updates
+  that identity. Persist the exact turn metadata first, then admit the tool;
+  accepting the in-memory value would weaken the durable ownership fence.
+- A renderer-safe approval channel is easiest to keep honest when the prepared
+  grant and raw arguments never enter its message type. Send only an opaque
+  request id, bounded summary, and exact target/revision metadata, and let the
+  authority resolve that id against its private one-use ledger.
+
+## 2026-08-11 — Owned PTY teardown in GPUI
+
+- `alacritty_terminal::EventLoop` owns its `tty::Pty`; caching the child PID
+  outside that owner creates a PID-reuse race after `ChildExit`. Send
+  `Msg::Shutdown`, transfer the event-loop join to a background reaper, and let
+  the returned owned PTY perform its own hangup and wait during drop.
+- GPUI's test entity map may retain an entity after a local handle is dropped.
+  Deterministic child-lifecycle tests should invoke the same explicit
+  workspace-owner clear transition used by production, then verify that every
+  retained child is reaped.

@@ -1,3 +1,46 @@
+### 2026-08-11 — Transactional GPUI chat and persistent Assistant dock
+
+- Unified button, Enter, and Command-Enter submission behind a durable
+  persistence-first transaction. Attachment-only turns now work, known
+  non-vision models reject images without clearing the draft, and edit/rebranch
+  atomically replaces the persisted tail. Stable caller-owned ids and explicit
+  reconciliation make post-rename/index/marker errors retry-safe without
+  duplicate turns.
+- Added a real GPUI ScrollHandle/prepaint harness and removed the root-level
+  streaming yank. New deltas follow only while the user remains near the
+  bottom; scrolling away is respected and Jump follows the new content extent.
+- Replaced the route-level Assistant view with one lazy app-root dock entity.
+  The underlying chat stays mounted, focus is captured/restored without
+  crossing newer modal ownership, minimized replies expose only a sanitized
+  bounded preview, and compact/reduced-motion/modal states match the accepted
+  dock contract.
+- The retained Assistant follows ChatService's live provider/model snapshot
+  and fences each request against the exact current portable, Codex, Pi-native,
+  or explicit loopback connection and credential. Typed preflight rejection
+  rolls back the optimistic turn, preserves a newer draft, and does not wedge
+  transient retries or emit a minimized notice.
+- Final gates passed 208 data tests, 675 UI tests, exact all-target/all-feature
+  workspace Clippy, rustfmt, and diff checks. Independent review accepted the
+  tranche with no remaining P0/P1/P2. Phase 6 remains active.
+
+### 2026-08-10 — Terminal `posix_spawnp failed.` root cause and fix
+
+- Diagnosed the macOS terminal-drawer failure (`terminal:create` →
+  `posix_spawnp failed.`). The string comes verbatim from node-pty 1.1.0's
+  native binding, thrown when `posix_spawn` of its `spawn-helper` binary
+  returns non-zero. Root cause: the npm prebuilt tarball restores
+  `spawn-helper` at mode `0644` (no execute bit), so `posix_spawn` fails.
+  Reproduced deterministically (`chmod 644` → spawn fails; `0755` → OK).
+- Hardened the boundary in two layers. (1) `TerminalService` now resolves
+  every `prebuilds/*` helper, chmods only when missing the execute bit,
+  **verifies after** (no silent `catch {}`), and throws a path-bearing
+  remediation message on failure; the shell is resolved via an
+  executable-check fallback chain so a stale `$SHELL` can no longer break
+  terminal creation. (2) `afterPack` chmods/verifies the helper under
+  `app.asar.unpacked` so packaged builds never ship the bad bit and a broken
+  package fails in CI. Tests cover chmod+verify, the no-op paths, and the
+  descriptive-error requirement.
+
 ### 2026-08-10 — GPUI provider credential and selection safety foundation
 
 - Bound every runtime provider credential to the exact provider connection
@@ -1376,3 +1419,716 @@ Major milestones only. Day-to-day changelog noise lives in git.
   Artificial Analysis attribution, and the trigger-independent 316 + 8 + 224px
   shell geometry. Final independent review accepted the picker after the full
   UI suite reached 519 tests.
+
+### 2026-08-10 — GPUI Appearance parity and MCP mutation authority
+
+- Completed Appearance as one rollback-safe process-lifetime transaction:
+  native theme/Dock restore occurs before the first window, close/quit fences
+  and flushes the newest intent, macOS accessibility updates remain live, and
+  partial native failure cannot diverge AppKit, GPUI, and durable state.
+  Settings now renders both complete scheme editors with safe repairable
+  drafts, real controls/assets/previews, responsive focus behavior, and live
+  pointer/motion/font/diff consumers. Independent review accepted the final
+  surface after 532 UI tests.
+- Replaced split MCP Settings/runtime mutation with one app-owned authority and
+  shared manager. Epoch fencing rejects late calls and connection handshakes;
+  exact-snapshot bound credentials rotate cached clients without plaintext in
+  identity or logs. A bounded crash journal coordinates disconnect, config
+  publication, durable revocation, boot replay, and watcher retry. Real
+  ConfigStore/watcher and GPUI failed-save/retry compositions passed independent
+  cross-review.
+- Completed the production MCP OAuth/Settings tranche. Encrypted OAuth session
+  replacement and revocation now retain durable cleanup work across crashes,
+  bind every commit to the exact connection/renderer owner, and hold one
+  authority lease through noninteractive resolution and manager admission.
+  Discovery, DCR, PKCE, refresh, resource/issuer/scopes validation, and DNS
+  checks are bounded and fail closed; Ready follows a real ephemeral MCP
+  handshake. Settings supports preset, custom HTTP, and stdio flows with owned
+  modal focus/cancel/revision behavior and honest retryable errors. SSE remains
+  explicitly unsupported for testing/runtime connection instead of implying a
+  working transport.
+
+### 2026-08-10 — GPUI Scheduled Tasks execution and UI
+
+- Replaced fail-closed containment with one app-lifetime production executor
+  and shared SchedulerCore/ScheduleStore. The global gate remains persisted and
+  default-off; each task also requires explicit enablement, and boot starts the
+  loop only when the persisted gate and exact runtime readiness both pass.
+- LLM schedules pin a real provider/model/credential and exact optional MCP
+  bindings, then execute a bounded plain-provider turn with truthful no-native-
+  coding-tools semantics. Script schedules use process-group cancellation, a
+  60-second timeout, and a 1 MiB combined-output cap.
+- Settings now provides retained create/edit/delete/enable flows with explicit
+  permission and revision checks. The main Scheduled panel shows live readiness,
+  next-run/running state, real Run Now results, and persisted history. Assistant
+  proposals remain attended and are rebound to current provider/MCP state before
+  optimistic publication.
+- Disable, edit, remove, global stop, workspace revocation, and quit cancel or
+  fence in-flight work; late results cannot overwrite the newer task state.
+  Verification passed 204 data, 117 core, 58 scheduler, and 566 UI tests plus
+  strict all-target/all-feature workspace Clippy, rustfmt, and diff checks.
+
+### 2026-08-10 — GPUI attended Computer Use
+
+- Added one app-lifetime Computer Use authority shared by Stores, Settings,
+  chat, the provider loop, and shutdown. Global and per-chat gates remain off
+  by default; helper readiness is non-prompting, while permission prompts are
+  reachable only from the explicit Settings action.
+- The main chat injects the exact 14-action tool only after global, chat,
+  workspace, provider-tool-capability, and pinned-helper readiness all pass.
+  Raw arguments, screenshots, accessibility payloads, and one-use grants stay
+  inside the controller; only a bounded request summary and exact target
+  identity cross to the app-owned attended modal.
+- Added focus-trapped Allow once/Deny and first-enable privacy dialogs, durable
+  privacy acknowledgment, transient capture disclosure, bounded provider
+  results, exact cancellation on context/Stop/quit, and stale-revision fencing.
+  Verification passed 118 Computer Use unit tests, 4 integration tests, 558 UI
+  tests, and strict all-target/all-feature workspace Clippy.
+
+### 2026-08-10 — GPUI on-device Voice authority
+
+- Replaced the fictional GPUI OpenAI/Gemini choices and hardcoded Parakeet v3
+  runtime with one app-lifetime local Voice authority. Legacy cloud settings
+  migrate visibly to `local`; an unreconciled cloud value is rejected at
+  recording admission. Cloud transcription remains an explicit future parity
+  item until Rust owns bounded requests and exact bound credentials.
+- Settings now truthfully exposes only on-device transcription, exact installed
+  model selection, explicit download/cancel/delete progress, and read-only
+  microphone permission status. Onboarding explains that microphone access is
+  requested only when recording starts and that audio is neither saved nor
+  logged.
+- The composer/global pill resolves the selected installed model at recording
+  start and carries a generation lease through transcription. Selection,
+  deletion, cancel, window close, and quit fence late results and stop capture;
+  no boot path probes the microphone or contacts the network.
+- Verification passed 563 UI tests, 96 macOS integration tests, 117 core tests,
+  204 data tests, and strict all-target/all-feature workspace Clippy.
+
+### 2026-08-10 — GPUI cloud Voice transcription parity
+
+- Extended the app-lifetime Voice authority with production OpenAI and Google
+  Gemini transcription while retaining on-device Parakeet as the default.
+  Settings persists an exact provider/model choice and reuses the root-owned Pi
+  setup modal; boot/status reads remain network-free and never prompt for the
+  microphone.
+- Recording admission captures a private release/catalog-bound Pi credential
+  lease before microphone access. Key rotation, sign-out, selection changes,
+  cancel, close, and quit stop or fence capture/transcription, and the lease is
+  revalidated before and after response accounting so a stale result cannot be
+  delivered or silently switch providers.
+- Cloud audio is converted in memory to finite mono 16 kHz PCM WAV, limited to
+  five minutes, and never logged or persisted. Requests use fixed HTTPS origins,
+  sensitive auth headers, no redirects or proxies, public-only DNS, bounded
+  bodies, and the canonical 120-second owner deadline. Provider errors are
+  fixed-category and cannot expose credentials or response bodies; empty
+  transcripts retain the Electron no-speech contract.
+- Completed/failed/cancelled cloud attempts record only aggregate usage. The
+  onboarding disclosure now distinguishes local audio from explicitly selected
+  cloud transcription. Full workspace tests passed (including 587 UI tests),
+  plus exact strict workspace Clippy, rustfmt, and diff validation.
+
+### 2026-08-10 — GPUI Usage and Profile parity
+
+- Replaced the hardcoded 30-day Usage view with Electron-parity, session-local
+  `7d`/`30d`/`90d`/`1y`/`all` selection (default `1y`), full aggregate summary
+  metrics and cost/coverage footer, bounded responsive activity, token mix, and
+  model rankings. The range control has roving keyboard focus and the profile
+  editor supports Enter/Escape while fencing cancellation after a durable save
+  begins.
+- Profile names now read and write through the shared ConfigStore-backed
+  ProfileService. Share renders a fixed 1200 × 1600 aggregate-only PNG from a
+  deliberately narrow projection that excludes raw ids, model/provider labels,
+  chats, prompts, paths, credentials, and account identifiers.
+- The macOS share authority validates the canonical PNG before creating a
+  private 0700/0600 temporary artifact, owns exactly one native picker, and
+  cleans up on failure/cancel or after a bounded selected-service handoff.
+  Refresh/range changes fence in-flight render generations so stale completion
+  cannot open an old-range preview or settle a newer operation.
+- The existing onboarding “Local profile” tile and first-run profile authority
+  remain accurate; no first-run semantics changed. Verification passed UI
+  no-run, 13 Usage tests, 4 share-render tests, 8 profile-data tests, 3 native
+  share tests, strict all-target/all-feature Clippy for the affected crates,
+  rustfmt, and diff validation.
+
+### 2026-08-11 — GPUI workspace Terminal parity
+
+- Replaced the single eager PTY with lazy, workspace/window-owned sessions:
+  eight retained tabs, up to four equal horizontal or vertical panes, canonical
+  new/select/close/exit fallback, viewport-only clear, and no tab/layout
+  persistence. First-open failures remain visible through fixed sanitized copy
+  and retry only from the explicit New terminal action.
+- Drawer height is the sole persisted Terminal preference and uses the
+  Electron 232px default, 152px floor, chat-safe 50% ceiling, pointer resizing,
+  Arrow/Shift/Home/End keyboard steps, and newest-intent ConfigStore writes.
+  Focus returns to the toolbar toggle only when the drawer actually owned it.
+- PTY input/grid sizes are bounded; shells resolve only from executable
+  absolute candidates. Portable PTYs retain their child handles and terminate
+  their process groups before background wait, while Alacritty shutdown hands
+  its owned EventLoop/Pty to a reaper and never signals a cached raw PID.
+  Workspace/permission changes and app/window drop tear down every session.
+- Verification passed 17 focused Terminal parser/layout/focus/resize/lifecycle
+  tests, UI test compilation, strict all-target/all-feature UI Clippy, rustfmt,
+  and diff validation. Existing onboarding already advertises workspace
+  terminal work; first-run semantics did not change.
+
+### 2026-08-11 — GPUI Subagents foreground fresh/fork read/write foundation
+
+- Replaced the demo/live-file panel seam with one Stores-owned Subagents
+  authority and production V2 run store shared by provider dispatch, chat
+  lifecycle, the app-root approval surface, and the production panel. The
+  default-on rollout uses the canonical exact-`0` rollback and fails admission
+  when the complete store/provider/model/credential/workspace binding is absent.
+- Foreground children support fresh context plus an immutable bounded fork from
+  the exact successfully persisted parent chat revision. They inherit or narrow
+  the root capabilities, run with bounded ordered concurrency, and revalidate
+  exact provider, credential, workspace, and generation identity before and
+  after child work. User turns retain no Subagent reference; settled assistant
+  turns carry the exact generation reference after child state is flushed.
+- Added attended workspace write/edit: the model receives those tools only when
+  workspace permission, V2 persistence, and the live approval channel all exist.
+  Each proposal publishes a durable effect and an app-root focus-trapped Allow
+  once/Deny request with a bounded ASCII relative path and sanitized diff;
+  exact private argument/effect/authority digests govern one atomic commit, and
+  descriptor-relative staging begins only after Allow once.
+  Debug output and assistant history never contain the raw approval payload.
+- Stop, generation/chat/workspace/provider change, approval-channel loss,
+  window close, and quit wake parked calls and fence stale work. The production
+  panel projects chat-scoped runs and pending/terminal write effects without
+  demo data. Recovery-stage ownership now remains behind an identity-pinned
+  guard through every post-create verification failure: only the exact owned
+  name is removed, while hostile replacement or hard-link evidence is retained.
+- The final onboarding tour is now a data-driven six-tile gallery for profile,
+  providers, Subagents, privacy, native macOS behavior, and the unified
+  workspace. Every tile has a matched bounded 1024×1024 transparent RGBA asset,
+  responsive wrapping, stable hover/focus affordance, and contained keyboard
+  activation; the asset contract covers every advertised tile.
+- Full workspace tests passed (including 634 UI tests), together with
+  exact strict all-target/all-feature workspace Clippy, rustfmt, and diff checks.
+  Independent acceptance found no remaining P0/P1/P2.
+- This milestone does not claim full Subagents parity: shell, MCP, depth-2
+  delegation, and background execution remain unavailable and unadvertised.
+
+### 2026-08-11 — GPUI foreground Subagent shell
+
+- Foreground child shell is now available behind the exact one-use per-command
+  Allow once/Deny authority. It uses the production AIDSH001 runner with a
+  private scrubbed environment, descriptor-pinned workspace root, bounded
+  output/time, process-group TERM/KILL/reap handling, durable V2 effect
+  lifecycle, and truthful production-panel projection.
+- The app root serializes workspace-write and shell requests through one shared
+  arrival-order ledger while retaining typed authority queues. Exactly one
+  modal is rendered; a single focus owner captures the original focus once,
+  retains modal focus across effect-kind transitions, and restores it once on
+  final drain. Both approvals trap Tab/Shift-Tab and deny idle Escape/backdrop.
+- Onboarding now discloses selected-provider proposals, per-command approval,
+  unsandboxed host effects despite environment scrubbing, arbitrary network and
+  process reach, detached descendants, and the absence of rollback. MCP,
+  depth-2, and background Subagents remain unavailable and unadvertised.
+- Active lifecycle cancellation now reaches the owned runner for exact run,
+  generation, chat, workspace, provider, shutdown, and rollout-gate changes.
+  Process-group cleanup is independent of pipe EOF and direct-shell reaping:
+  cooperative descendants receive the full TERM grace, resistant descendants
+  receive KILL, and cleanup is confirmed only after group absence.
+- Verification: `cargo test -p aiden-subagents --locked` (157), `cargo test
+  -p aiden-ui --locked` (644), workspace all-target tests, strict all-feature
+  all-target Clippy, rustfmt, and diff validation passed. Independent review
+  accepted the foreground shell tranche with no remaining P0/P1/P2. Phase 6
+  remains active for final visual QA and the unavailable Subagent lanes.
+
+### 2026-08-11 — GPUI foreground Subagent remote MCP reads
+
+- Added the canonical default-on, exact-`0` child-MCP rollout beneath the global
+  and V2 gates. Foreground depth-1 fresh/fork generations discover only enabled
+  remote HTTP or legacy SSE servers; stdio, mutation, nested delegation, and
+  background execution remain absent from the model schema and executor.
+- Inventory classification is fail closed: only explicit, structurally valid,
+  non-conflicting `readOnlyHint: true` tools with supported execution metadata
+  are positively enumerated. Exact server/tool identities and input schemas are
+  retained for request-time reinspection; malformed, unknown, task-required,
+  stale, or mutating tools are never downgraded into the read lane.
+- Added one app-owned remote MCP authority using isolated clients, exact config
+  and connection fingerprints, process-keyed credential revisions, bounded
+  discovery/call lifetimes, a shared one-operation foreground network budget,
+  and pre/post config, credential, schema, effect, and cancellation fences.
+  Raw and encoded credentials are redacted from bounded results, which are
+  labeled as untrusted evidence before returning to the child.
+- MCP reads join the single app-root Computer Use/workspace-write/shell approval
+  FIFO. The focus-trapped modal shows exact server, tool, and bounded canonical
+  arguments; it offers only Deny or a 60-second Allow once grant and explains
+  that the configured server controls the actual effect. Onboarding now
+  discloses generation-start remote discovery, per-call data transmission,
+  host-owned credentials, and the same effect boundary.
+- Deterministic coverage includes the four-flag cascade, strict annotation and
+  execution classification, HTTP/SSE remote clients, exact schema projection,
+  expiry and shared-modal ordering, config/credential rotation fences, and a
+  real config-to-child-agent-to-GPUI-approval-to-remote-call composition with
+  redaction and session closure. Verification passed 122 MCP tests, 160
+  Subagents tests, 680 UI tests, strict all-feature/all-target workspace Clippy,
+  rustfmt, and diff validation. Phase 6 remains active for MCP mutation,
+  depth-2/background work, and final visual QA.
+
+### 2026-08-11 — GPUI foreground Subagent remote MCP mutations and Voice Settings parity
+
+- Added the independent child-MCP mutation rollout beneath the global, V2, and
+  base child-MCP gates. Only tools classified as mutating enter the positive
+  `mcpMutations` schema; read and mutation scopes remain disjoint, and stale
+  positive requests fail closed rather than downgrading lanes.
+- Each mutation performs a fresh first inspection, exact canonical argument and
+  credential-redaction checks, prior-Unknown lookup across the chat, a distinct
+  app-root effect-profile approval, durable Prepared→Authorized→DispatchStarted
+  publication, a final synchronous fence, exactly one raw call, and bounded
+  post-call reinspection. Valid server `isError` becomes `RemoteError`; unsafe,
+  malformed, oversized, stale, cancelled, or uncertain post-dispatch outcomes
+  become `Unknown` and are never retried automatically.
+- Mutation approvals share the global Computer Use/workspace-write/shell/read
+  FIFO with a deny-first focus trap and prior-Unknown warning. Onboarding now
+  discloses mutation effect profiles and the no-automatic-retry boundary while
+  keeping nested and background execution unavailable.
+- Voice Settings now has retained provider/model selectors, explicit local
+  engine readiness/error, model-management entry, dictation hotkey status and
+  retry/manage actions, and local Accessibility trust with Grant/Refresh. All
+  probes are gated to the local provider and remain network-free; cloud setup
+  still uses the existing app-root provider authority.
+- Verification passed 123 MCP tests, 160 Subagents tests, 684 UI tests,
+  focused mutation/Voice Settings suites, strict all-feature/all-target
+  workspace Clippy, rustfmt, and diff validation. Phase 6 remains active for
+  depth-2/background Subagents and final visual/accessibility capture.
+
+### 2026-08-11 — GPUI Scheduled Settings defaults and Command Palette parity
+
+- Scheduled Settings now matches the persisted Electron defaults contract for
+  task mode, permission, MCP access, notifications, timezone, and script-folder
+  disclosure. Defaults are loaded with an authoritative loading/error/retry
+  state, sparse ConfigStore writes are fenced by a monotonic revision, and
+  malformed enum/boolean/timezone values fail closed. Existing scheduler
+  execution remains default-off and separately gated.
+- Command Palette now uses a native GPUI InputState/Input for query editing,
+  preserving selection/IME/clipboard/placeholder behavior. Submodes provide an
+  explicit Back button; Escape/Backspace/Left return to Root; result rows are
+  focusable and activate through Enter/Space with busy-state semantics.
+- Verification: 4 scheduled-default tests, 13 Command Palette tests, full
+  workspace all-target tests (690 UI), strict all-feature/all-target Clippy,
+  rustfmt, and diff validation all passed. Phase 6 remains active for final
+  visual/accessibility capture and the unavailable depth-2/background lanes.
+
+### 2026-08-11 — GPUI Assistant Settings and Providers visual parity
+
+- Assistant Settings now uses a static truthful fact contract: the retained
+  dock follows the live composer selection/readiness, history is local to the
+  current Assistant session, attended project/schedule/MCP access is bounded by
+  per-call approval, and app-settings/files/shell/background/delegation remain
+  unavailable. Semantic badges and live shortcut status preserve the existing
+  retry/manage actions.
+- Providers Settings now offers an accessible Add-provider template menu for
+  LM Studio, Ollama, Tailscale/private, and custom endpoints; a loading-aware
+  Pi refresh action; curated featured-provider disclosure; and catalog-backed
+  provider logo/fallback icons. Built-in setup remains bound to Pi authority
+  revision and exact auth-method availability.
+- Verification: 5 Assistant Settings tests, 12 Providers Settings tests, full
+  UI 695, workspace all-target tests, strict all-feature/all-target Clippy,
+  rustfmt, and diff validation passed. Phase 6 remains active for final
+  visual/accessibility capture and unavailable depth-2/background lanes.
+
+### 2026-08-11 — GPUI Shortcuts and Computer Use Settings parity
+
+- Shortcuts Settings now presents separate Global and In-app command groups,
+  a native accessible search input, recording/loading status, and live Escape/
+  Tab cancellation guidance. Recorder propagation is stopped before cancel so
+  navigation keys cannot become shortcut bindings.
+- Computer Use Settings now presents Beta/helper readiness, driver version,
+  status tone and recoverable refresh/error controls, explicit permission
+  labels, and privacy badges for per-chat opt-in, attended actions, and the
+  no-capture-persistence boundary. Restoring the durable privacy notice is
+  revision-fenced and synchronized back to the app-root reducer.
+- Verification passed nine Shortcut tests, four Computer Use Settings tests,
+  the full workspace suite after integration, strict all-feature/all-target
+  Clippy, rustfmt, and diff validation. Phase 6 remains active for final visual
+  capture and unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI MCP fields and custom Provider modal parity
+
+- Manual MCP stdio environment values and remote HTTP/SSE headers now use
+  bounded auto-growing multiline inputs (3–8 rows), preserving embedded `=`
+  values, parser/formatter round-trips, transport-field clearing, OAuth
+  actions, and existing modal busy/focus fences.
+- The custom Provider editor now renders through the app-root occluding modal
+  layer with bounded scroll, owned first/last focus handles, Tab/Escape/
+  backdrop behavior, explicit return-focus, and save/close busy locking.
+  Draft errors and completions are fenced to the exact provider/editor revision.
+- Verification passed twelve MCP Settings tests, fifteen Providers Settings
+  tests, full workspace checks, strict all-feature/all-target Clippy, rustfmt,
+  and diff validation. Phase 6 remains active for final visual capture and
+  unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI credential-removal lifecycle fencing
+
+- Custom Provider key removal now uses the serialized ProviderMutationService
+  authority and an editor/provider revision fence. Save, discovery, key input,
+  and modal close remain disabled until the exact removal settles; stale
+  completions cannot mutate a reopened editor.
+- MCP preset-key removal now has a draft busy flag, OAuth revision fence, and
+  serialized key-mutation coordinator so a delayed clear cannot delete a key
+  written by a replacement save. MCP reset status publication is tied to the
+  latest connection revision.
+- Shortcuts search now includes the Electron command catalog's category,
+  keyword, pretty accelerator, and ARIA accelerator metadata.
+- Verification passed MCP Settings 13/13, Providers Settings 15/15, full
+  workspace all-target tests (707), strict all-feature/all-target Clippy,
+  rustfmt, and diff validation. Phase 6 remains active for final visual
+  capture and unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI Web Search Settings lifecycle fencing
+
+- Web Search enablement now uses busy/revision/lifecycle fences. Failed
+  ConfigStore writes restore the prior toggle, and stale keychain probes,
+  local key tests, and toggle completions cannot publish after hydration or a
+  newer operation.
+- Exa key saves/removals are bound to the exact editor entity and section
+  lifecycle. Leaving Web Search invalidates in-flight work and closes the
+  draft; key removal reports when the follow-up durable disable write could
+  not be committed instead of implying complete persistence.
+- Verification passed six focused Web Search tests, strict UI Clippy, rustfmt,
+  and diff validation. Phase 6 remains active for final visual capture and
+  unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI dictation pill focus parity
+
+- Re-showing an existing GPUI dictation pill now performs only a no-op liveness
+  probe. It no longer activates the non-activating overlay window, preserving
+  focus in the target application that receives the dictated paste.
+- The retained-handle bridge contract is covered by a focused regression;
+  existing pill state/coordinator tests remain green. Phase 6 remains active
+  for final visual capture and unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI Voice Settings lifecycle fencing
+
+- Voice Settings now fences local runtime probes, provider/model selection,
+  local model management, Accessibility checks, and section exit with
+  monotonic operation/lifecycle revisions. Late completions cannot repopulate
+  readiness or overwrite a newer provider/model state.
+- Leaving Voice cancels an active model download and invalidates progress and
+  terminal callbacks. Verification passed five focused Voice tests, the full
+  UI suite (716), strict workspace Clippy, rustfmt, and diff validation. Phase
+  6 remains active for final visual capture and unavailable depth-2/background
+  Subagent lanes.
+
+### 2026-08-11 — GPUI dictation pill display/work-area parity
+
+- The macOS pill display bridge now asks AppKit for the cursor-containing
+  display and its Dock/menu-bar-aware visible frame at each new show. GPUI
+  receives the matching display id and top-left work-area placement; nearest
+  display and primary-frame fallbacks remain finite and non-activating.
+- Pure geometry covers negative display origins, reserved work-area insets,
+  and small-area clamping. Native bridge conversion tests and the pill suite
+  pass; Phase 6 remains active for final visual capture and unavailable
+  depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI windowless global Dictation focus parity
+
+- The process-wide DictationToggle shortcut now skips main-window preparation
+  and `cx.activate`, toggling the app-lifetime pill coordinator directly so a
+  closed main window cannot steal the external application's focus before the
+  dictated paste. A generation-active shortcut is handled as a no-op; it does
+  not fall through to a window-activating action.
+- ComposerFocus and AssistantOpen retain their normal window preparation and
+  activation path. The focused shortcut policy regression, full UI suite
+  (720/720), full workspace all-target suite, strict workspace Clippy,
+  rustfmt, and diff validation are green. Phase 6 remains active for final
+  visual capture and unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — GPUI onboarding keyboard and retained-window lifecycle parity
+
+- Provider, model, and appearance choice cards now expose native GPUI focus,
+  tab stops, visible focus styling, and Enter/Space activation fences. Focused
+  selection cannot bubble into an accidental onboarding-step advance.
+- Incomplete onboarding vetoes native window close and retains one process-wide
+  handle. Dock/global reopen reactivates that exact entity instead of opening a
+  blank main window; the completion handoff alone removes onboarding
+  programmatically after the durable marker is queued, preserving draft/step
+  state across close attempts.
+- Verification passed onboarding/lifecycle tests, the full UI suite (725),
+  full workspace all-target tests, strict workspace Clippy, rustfmt, and diff
+  validation. Phase 6 remains active for final visual capture and unavailable
+  depth-2/background Subagent lanes.
+
+### 2026-08-11 — Slash command and skill invocation Phase 0 contracts
+
+- Added a pure composer slash contract: first-token/caret gating, unknown
+  slash/path passthrough, bounded token removal, deterministic ranking backed
+  by the existing Command-K definitions, and one-selection skill state.
+- Added a bounded renderer-safe skill catalog projection using the same
+  configured > workspace > global precedence as tool assembly. Catalog rows
+  expose only opaque workspace-bound ids, safe names/descriptions, source
+  labels, and revision fingerprints; instructions, paths, credentials, and
+  tool identities remain host-owned.
+- Focused Slash and Skill tests pass (5 + 13), with UI check, strict UI
+  Clippy, rustfmt, and diff validation green. The composer popup and
+  lease-bound send-time invocation remain intentionally unimplemented until
+  their dedicated Phase 2–3 lifecycle work lands.
+
+### 2026-08-11 — Slash composer palette Phase 2
+
+- Wired a bounded non-modal popup above the composer while preserving
+  `InputState` focus/IME behavior and deferred blur handling. Command rows reuse
+  canonical Command-K ids and handlers; Up/Down/Escape/Enter and pointer
+  selection are fenced without shifting the transcript.
+- Skills use the renderer-safe configured > workspace > global catalog with
+  workspace-identity caching, loading/empty states, and one opaque
+  workspace-bound chip. Explicit skill selection fails closed at send while
+  retaining the draft and chip because authoritative lease-bound invocation is
+  intentionally Phase 3.
+- Verification: focused Slash 9 + Skill tools 13, full UI 736, full workspace
+  all-target tests, strict workspace Clippy, rustfmt, and diff validation are
+  green. Phase 6 remains active for final visual capture and unavailable
+  depth-2/background Subagent lanes.
+
+### 2026-08-11 — Slash active skill invocation Phase 3 (partial)
+
+- Send now resolves the selected opaque chip against a fresh authoritative
+  registry before chat creation or append, fencing workspace identity,
+  permission, skill source, and registry revision. Stale, missing, disabled,
+  rejected, and unknown paths retain the exact draft/chip; retry paths do not
+  reuse a completed skill lease.
+- The resolved instruction body is retained only in a redacted-debug,
+  one-generation provider snapshot. It is bounded by the registry limits and
+  never enters the renderer catalog, `ChatMessage`, chat history, or logs.
+- The Rust driver uses a bounded private instruction envelope rather than
+  claiming Pi's exact `formatSkillInvocation()` implementation. Safe persisted
+  provenance is also deferred because the existing core `ChatMessage` schema
+  has no suitable field. Focused Slash 10, Skill tools 14, full UI 741, full
+  workspace all-target tests, strict workspace Clippy, rustfmt, and diff checks
+  are green. Phase 3 remains partial and Phase 6 remains active.
+
+### 2026-08-11 — GPUI production update-feed discovery and ready banner
+
+- Added one app-lifetime update authority backed by the existing strict feed
+  parser/provider. It discovers a feed only from a bounded generic HTTPS
+  `app-update.yml` inside a bundled production `.app`; development and
+  unpackaged runs stay on the inert provider and perform no update I/O.
+- The authority starts through the Tokio bridge, publishes a watch-fenced
+  `AppUpdateSnapshot`, and drives a compact sidebar Update ready card. The
+  native action opens only verified private `.dmg`, `.pkg`, or `.zip` artifacts
+  and says Open installer rather than claiming an automatic restart.
+- Verification: aiden-mac 94 tests, app-update authority 2 tests, UI check,
+  strict UI Clippy, rustfmt, and diff validation. Automatic signed-app
+  replacement/quit-and-restart remains a distribution-specific follow-up;
+  Phase 6 remains active.
+
+### 2026-08-11 — Slash skill safe provenance persistence
+
+- Added the optional `skillProvenance`/`skill_provenance` user-message field to
+  the Electron-compatible Rust and TypeScript chat schemas. Only bounded,
+  printable `{id, name, source, revision}` metadata is retained; assistant
+  messages, malformed values, controls, oversized fields, instructions, paths,
+  credentials, and workspace roots are discarded.
+- The Rust chat store has a dedicated provenance-aware append/rebranch seam, and
+  the active skill send path maps the authoritative one-generation lease to
+  that safe projection after persistence admission. Expanded instructions stay
+  in-memory and redacted in `Debug`.
+- The GPUI transcript renders only the bounded skill name as a compact,
+  non-interactive chip; no private instruction or path data crosses the
+  renderer boundary.
+- Focused core/data/UI checks and provenance tests pass. Exact Pi-compatible
+  invocation formatting remains intentionally open because the pinned Pi
+  formatter source is not present in this checkout; Electron dependencies are
+  absent from the isolated worktree, so its targeted TypeScript test could not
+  run here.
+
+### 2026-08-11 — Pinned Pi skill invocation envelope
+
+- Inspected the release-pinned `@earendil-works/pi-agent-core` 0.80.10
+  `formatSkillInvocation` implementation from the package artifact and ported
+  its provider-facing `<skill>` envelope to the Rust generation driver. The
+  current user task is passed as the envelope's additional instructions, so
+  the persisted chat text remains unchanged while the selected skill applies
+  to exactly one generation.
+- Skill names, private locations, and reference roots are XML-escaped at the
+  Rust boundary; the bounded instruction body remains the provider-authored
+  content. Discovered skills retain their provider-only file path, while
+  configured skills use a stable `configured:<id>` private location because
+  portable Rust config does not expose a filesystem path. No path or expanded
+  instructions enter renderer DTOs, persisted provenance, logs, or redacted
+  debug output.
+- Added formatter and image-preservation regressions. Rust focused tests,
+  workspace tests, strict Clippy, rustfmt, and diff checks remain the release
+  gates; the isolated worktree still lacks Electron `node_modules`, so the
+  TypeScript test path remains unavailable.
+
+### 2026-08-11 — Skill discovery cache identity and eviction hardening
+
+- The bounded five-second skill catalog cache now records the device/inode
+  identity (or portable presence/type fallback) of each discovery root. A
+  workspace recreated at the same path therefore cannot receive a stale
+  catalog from the previous root.
+- Cache admission evicts only completed/retry entries; active scans remain
+  addressable by their waiters. If every slot is actively scanning, a bounded
+  in-flight overflow is tolerated until a completed entry can be evicted.
+- Added replacement-root and cache-bound regressions. The full Rust workspace
+  all-target suite (746 UI tests; 210 data tests), strict Clippy, rustfmt, and
+  diff validation pass.
+
+### 2026-08-11 — Update artifact installer handoff correction
+
+- Verified update artifacts now retain an allowlisted `.dmg`, `.pkg`, or `.zip`
+  suffix when staged, so the native Open installer action can accept the exact
+  downloaded type. Unsupported feed entries fail closed before artifact
+  download, and untrusted feed version text is no longer used in a filesystem
+  path.
+- Added focused feature-gated feed-provider coverage for suffix handling,
+  unsupported-artifact rejection, and the installer handoff path.
+
+### 2026-08-11 — Anthropic stream retry parity
+
+- Anthropic user-owned generation streams now use a no-reconnect policy rather
+  than `reqwest-eventsource`'s unbounded transport retry default. Network loss
+  therefore settles through the existing error/retry UI instead of leaving an
+  indefinite streaming cursor or replaying a partially delivered request.
+- The full `aiden-providers` suite (260 tests), workspace suite (746 UI tests),
+  strict Clippy, rustfmt, and diff checks remain green.
+
+### 2026-08-11 — Superseded final-scan status made explicit
+
+- Marked `docs/gpui-port/final-scan-v2.md` as historical so its pre-Phase-6AA
+  window-close and pre-Phase-6AC stream-retry findings cannot be mistaken for
+  current gaps. The Phase 6 plan and current workspace gates are now the
+  present-state evidence; automatic distribution-specific replacement,
+  depth-2/background Subagents, and pixel capture remain intentionally open.
+
+### 2026-08-11 — Electron Builder update-feed format parity
+
+- The production update feed now parses the actual `latest-mac.yml` YAML
+  emitted by Electron Builder, including relative artifact URLs and its
+  base64 SHA-512 file digests. The previous JSON/SHA-256-only parser could
+  never recognize a real release feed despite the packaged marker pointing at
+  `latest-mac.yml`.
+- URL traversal/non-HTTPS artifacts still fail closed, while injected JSON
+  fixtures retain bounded SHA-256 compatibility. Added parser and end-to-end
+  provider tests; the macOS update-feature suite passes 106 tests.
+
+### 2026-08-11 — Computer Use quit durability
+
+- Application quit now claims a single in-flight attempt, cancels foreground
+  work without disposing the live app, and waits for the Computer Use
+  authority to durably persist its global disable and drain its coordinator
+  before calling `cx.quit()`. Shutdown/storage failure leaves the app open,
+  resumes the settings coordinator, and publishes fixed retry guidance.
+- Added quit single-flight, durable-disable-before-teardown, and failed-shutdown
+  retry regressions. Full workspace tests (750 UI tests), strict Clippy,
+  rustfmt, and diff checks pass. Phase 6 remains active for final visual QA
+  and deliberately unavailable depth-2/background Subagent lanes.
+
+### 2026-08-11 — Native updater install-on-quit boundary audit
+
+- Compared Electron's `autoInstallOnAppQuit` / Squirrel.Mac
+  `quitAndInstall(false, true)` path with the standalone GPUI updater. Rust has
+  no signed external updater helper, native Squirrel handoff, or packaged GPUI
+  application replacement contract, so automatic in-place replacement cannot
+  be implemented safely yet.
+- Renamed the Rust installer seam to `open_downloaded_installer` /
+  `open_verified_installer` and documented it as an explicit-user-action path;
+  the quit barrier does not invoke it. Focused `aiden-mac` (107 tests) and
+  `aiden-ui` (751 tests) suites pass; the updater crate's strict Clippy check,
+  rustfmt, and diff checks are green.
+
+### 2026-08-11 — Dictation pill elapsed-timer parity
+
+- The production pill meter task now derives elapsed seconds from a monotonic
+  recording-start instant and emits bounded `Tick` events while listening.
+  Start-identity checks prevent an old meter task from advancing a newer
+  recording; stop, cancel, and error transitions clear the source. Reduced
+  motion keeps the elapsed clock live while freezing only animated level bars.
+- Added focused monotonic/catch-up and source-fence coverage. The remaining
+  open pill differences are the documented native vibrancy/window-reuse
+  constraints; Phase 6 remains active for final visual capture and unavailable
+  depth-2/background Subagent lanes.
+
+### 2026-08-11 — Terminal claim-check warning parity
+
+- Provider terminal timelines now attach the existing core claim-check result
+  before publishing `Done`, `Error`, or `Cancelled`. Cancellation preserves
+  the `cancelled` timeline/step status, while failed consequential actions
+  referenced by successful prose carry bounded renderer-safe step ids.
+- The activity feed now renders a visible `Success not verified` warning for
+  that structured state, including persisted timelines. Focused provider and
+  activity-feed regressions cover failed-write claims and cancellation status.
+
+### 2026-08-11 — Windowless dictation close lifecycle fence
+
+- Native red-close now clears the process-wide generation-active gate directly
+  after disposing the AppState. This closes the stale-render window where a
+  cancelled generation could leave global DictationToggle permanently handled
+  as a no-op after the main window was removed.
+- Added a source-contract regression for the dispose/atomic-reset ordering;
+  the pill remains non-activating and app-lifetime owned.
+
+### 2026-08-11 — Activity Feed disclosure and attachment parity
+
+- Activity timelines now use generation-keyed collapsible disclosure state,
+  bounded three-row live ticker rendering, keyboard-activatable summaries, and
+  one-shot issue/claim auto-open behavior with explicit user-close precedence.
+  The full Activity Feed package and focused GPUI/entity regressions remain
+  green.
+- Composer attachment reads now accept bounded UTF-8 text plus BMP/HEIC/HEIF
+  image payloads. Text is capped at 100,000 characters, NUL content is rejected
+  as binary, and provider history reconstructs the exact labeled fenced text
+  block before the user's message while preserving image blocks.
+
+### 2026-08-11 — Windowless pill appearance retention
+
+- The app-lifetime dictation bridge now retains the last authoritative
+  appearance and reduced-motion snapshot independently of the visible main
+  window. Reopening the pill after native close therefore preserves custom
+  light/dark/preset and motion choices instead of silently using defaults;
+  live ChatService state still supersedes the cache whenever available.
+- Added focused live-versus-cached fallback coverage. Phase 6 remains active
+  for final visual QA and deliberately unavailable depth-2/background
+  Subagent lanes.
+
+### 2026-08-11 — Markdown math source-preserving fallback
+
+- Assistant transcript and dock-thread markdown now recognize bounded inline
+  and display math outside code spans/fences. The GPUI renderer receives
+  copyable inline code or labeled `math` fences that retain the original
+  delimiters, so formulas remain readable and recoverable rather than being
+  silently parsed as ordinary prose.
+- True KaTeX/MathJax rendering remains explicitly open because the pinned
+  GPUI component renderer exposes no math element or bundled typesetter.
+  Focused math tests, UI Clippy, rustfmt, and diff checks are green.
+
+### 2026-08-11 — Persisted foreground-Subagent transcript chips
+
+- Assistant transcript messages now render bounded persisted Subagent
+  references as status-labeled, keyboard-activatable chips. Legacy references
+  retain exact run ids with safe fallback labels, and enriched references expose
+  their bounded item labels and terminal state.
+- Chip selection navigates through AppState's existing mutation/file gate and
+  selects the exact run in the Subagents roster. Rendering does not perform
+  synchronous dispatcher or disk reads. UI (771), workspace, strict Clippy,
+  rustfmt, and diff checks are green.
+- Live streaming chip publication remains intentionally open pending an
+  async authority/cache path; depth-2/background Subagents and final visual QA
+  remain unavailable/active items.
+
+### 2026-08-11 — VoiceOver lifecycle announcement bridge
+
+- Added a macOS-only AppKit accessibility notification bridge that normalizes
+  controls/whitespace and caps each announcement at 512 Unicode scalars before
+  posting to VoiceOver. Unsupported hosts and off-main-thread calls fail
+  closed.
+- AppState now announces only generation start/terminal/error and foreground
+  approval transitions, deduplicated by exact generation and approval identity;
+  streamed token/thinking deltas never reach the bridge. Focused sanitizer and
+  lifecycle tests, strict Clippy, rustfmt, and diff checks are green.
+
+### 2026-08-11 — Live foreground-Subagent snapshot cache
+
+- Foreground Subagent projector snapshots now publish through a weak,
+  generation-scoped authority callback into a bounded memory-only cache. Chat
+  snapshots expose only the exact active chat/counter, while a 120 ms revision
+  poll refreshes live status chips without dispatcher or disk reads during
+  render. Cancel/finish tombstones and fixed lock ordering reject late
+  callbacks and clear stale rows before a newer generation can appear.
+- Focused message-list/cache/lifecycle regressions pass; the full UI suite is
+  781 tests with the full workspace, strict Clippy, rustfmt, and diff checks
+  green. Live chips cover projector milestones and terminal state; per-token
+  deltas, depth-2, and background Subagents remain intentionally unavailable.

@@ -1,7 +1,9 @@
 # Slash Commands and Active Skill Invocation Plan
 
-- **Status:** Planned — source and UI audit complete; implementation has not
-  started
+- **Status:** Partial — Phase 0/2 contracts, the Phase 3 non-modal send-time
+  skill lease, compact provenance rendering, bounded persisted user-message
+  provenance, and the pinned Pi invocation envelope are implemented; later
+  session commands remain
 - **Date:** 2026-07-29
 - **Owners:** Composer, command system, chat lifecycle, and skills surfaces
 - **Related plans:**
@@ -540,33 +542,76 @@ the same skill or the same unavailable reason.
 
 ### Phase 2 — Composer command palette
 
-- Add pure slash parsing/ranking/session helpers.
-- Extract canonical command action/result builders.
-- Build the two-group popup above the composer.
+- Add pure slash parsing/ranking/session helpers. **Implemented.**
+- Extract canonical command action/result builders. **Implemented by reusing the
+  existing Command-K definitions and handlers.**
+- Build the two-group popup above the composer. **Implemented as a bounded,
+  non-modal GPUI surface that preserves composer focus.**
 - Ship the Core release command rows, initially with Skills loading/empty
-  states wired to the safe catalog.
+  states wired to the safe catalog. **Implemented with workspace-identity-cached,
+  renderer-safe catalog loading and explicit loading/empty states.**
 - Add keyboard, pointer, screen-reader metadata, reduced-motion, responsive,
-  theme, and layering coverage.
+  theme, and layering coverage. **Keyboard/pointer focus and bounded layering
+  are implemented; broader accessibility/visual capture remains in Phase 6.**
 
 **Exit:** all core app commands work from slash and their availability matches
 Command-K; opening/filtering never shifts the transcript.
 
+The Phase 2 surface intentionally does not execute selected skills yet. A
+selected skill is represented by one opaque, workspace-bound chip and the send
+path fails closed while retaining the draft until Phase 3 adds the authoritative
+lease-bound resolver.
+
 ### Phase 3 — Active skill invocation
 
-- Add the selected-skill composer chip and submission contract.
+- Add the selected-skill composer chip and submission contract. **Implemented.**
 - Resolve and snapshot the invocation inside the append/start turn lease.
+  **Implemented with live workspace identity, permission, registry revision,
+  stale/missing/disabled classification, and one-generation ownership.**
 - Use Pi `formatSkillInvocation()` and inject only into the current generation
-  turn.
-- Persist/render safe provenance only.
-- Preserve the draft/chip on stale or invalid skill failures.
-- Verify that access modes and approval flows remain unchanged.
+  turn. **Implemented from the pinned `@earendil-works/pi-agent-core` 0.80.10
+  source: the provider receives the `<skill>` envelope, relative-reference
+  line, bounded skill body, and the original task as additional instructions.
+  Name/path metadata is XML-escaped at the Rust boundary; the configured-skill
+  fallback uses the private stable `configured:<id>` location because the
+  portable Rust skill schema has no filesystem path.**
+- Persist/render safe provenance only. **A bounded `skillProvenance` field is
+  now optional on user messages in the Rust and Electron-compatible chat
+  schemas. It stores only opaque id/name/source/revision metadata; malformed,
+  control-bearing, assistant-side, and oversized values are dropped. The
+  expanded lease remains redacted in `Debug` and in-memory only.**
+- Preserve the draft/chip on stale or invalid skill failures. **Implemented for
+  stale, missing, disabled, rejected, unknown, and retry paths.**
+- Verify that access modes and approval flows remain unchanged. **No MCP,
+  Subagent, Assistant, or approval policy changes were made.**
 
 **Exit:** a user can select an available skill, send a real task, see its
 provenance, and prove through tests that instructions were neither exposed to
 the renderer nor persisted.
 
-The user-requested feature is not complete until Phase 3 exits. Phase 2 must
-not be presented as complete slash-command support without active skills.
+The user-requested feature remains partial because later session commands and
+broader visual/accessibility work are still open. The Phase 3 implementation
+executes a real one-generation skill lease, uses the pinned Pi invocation
+envelope, and persists only bounded provenance; it does not persist private
+instructions or widen approval/tool authority.
+
+### Phase 3 provenance hardening — 2026-08-11
+
+- `ChatMessage.skillProvenance` / `skillProvenance` is optional and survives
+  reload on user messages only; the GPUI transcript renders its bounded name as
+  a compact non-interactive chip. The canonical shape is `{id, name, source,
+  revision}` with bounded printable fields and a three-value source enum.
+- Rust `ChatStore` exposes a dedicated provenance-aware append/rebranch seam so
+  existing callers cannot accidentally persist renderer input. Electron's
+  chat-store normalization applies the same bounds and canonicalizes unknown
+  fields away.
+- Expanded instructions, supporting-file paths, credentials, and workspace
+  roots remain outside the persisted/renderer shape. The Rust provider now
+  ports the pinned Pi 0.80.10 formatter contract; its private file path is
+  provider-only and never enters the renderer or persisted chat.
+- Focused Rust core/data/UI compilation and provenance tests pass; the normal
+  Electron test/type-check path is unavailable in this worktree without its
+  `node_modules` dependency tree.
 
 ### Phase 4 — Selected session commands
 

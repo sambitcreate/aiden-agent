@@ -1,5 +1,16 @@
 # GPUI Port — Final Exhaustive Scan v2
 
+> **Historical snapshot — superseded by the Phase 6 acceptance record.** This
+> scan was written before the retained onboarding/main-window lifecycle,
+> production update-feed, and provider stream retry work landed. Its Check 5
+> window-close finding is resolved by the current `on_window_should_close` and
+> reopen paths in `main.rs`/`onboarding/mod.rs`; its network-down retry note is
+> resolved by the provider-specific no-reconnect policy. Use
+> [`docs/plans/gpui-ui-fidelity-plan.md`](../plans/gpui-ui-fidelity-plan.md)
+> and the current workspace gates for present-state evidence. The remaining
+> deliberate limitations are distribution-specific automatic app replacement,
+> unavailable depth-2/background Subagents, and final macOS pixel capture.
+
 Branch: `gpui-rust` (HEAD `7c839d5`).
 Scope: `rust/aiden-ui/src/` runtime paths, cross-checked against the vendored
 GPUI 0.2.2 source, `aiden-providers`, and `reqwest-eventsource` 0.6.0 internals.
