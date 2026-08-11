@@ -4,7 +4,7 @@ import { mkdtemp, open, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { IPty, spawn } from "node-pty";
-import { TerminalService } from "./terminal.js";
+import { resolveNodePtyDiskPackageDir, TerminalService } from "./terminal.js";
 import type { RendererDocumentOwner } from "./renderer-document-owner.js";
 
 function deferred() {
@@ -223,6 +223,33 @@ test("a missing prebuilds directory is a no-op (node-pty picks its own path)", a
   // Reaching here without throwing is the assertion: a missing helper path must
   // not break terminal creation, since the guard treats it as "not present".
   assert.equal(typeof session.id, "string");
+});
+
+test("packaged spawn-helper checks target the unpacked filesystem path", () => {
+  const packaged = path.join(
+    "/Applications",
+    "Aiden Agent.app",
+    "Contents",
+    "Resources",
+    "app.asar",
+    "node_modules",
+    "node-pty",
+  );
+  const unpacked = resolveNodePtyDiskPackageDir(packaged);
+
+  assert.equal(
+    unpacked,
+    path.join(
+      "/Applications",
+      "Aiden Agent.app",
+      "Contents",
+      "Resources",
+      "app.asar.unpacked",
+      "node_modules",
+      "node-pty",
+    ),
+  );
+  assert.equal(resolveNodePtyDiskPackageDir(unpacked), unpacked, "rewrite must be idempotent");
 });
 
 test("a spawn-helper that is already executable is left untouched", async () => {
