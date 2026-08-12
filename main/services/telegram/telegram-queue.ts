@@ -18,7 +18,10 @@ export type QueueLane = "control" | "priority" | "default";
 export interface QueuedTelegramTurn {
   readonly lane: QueueLane;
   readonly text: string;
+  /** Telegram chat ID — used for API calls (sendMessage, sendChatAction). */
   readonly chatId: number;
+  /** Paired owner's Telegram user ID — used for the persistent Aiden chat key. */
+  readonly ownerUserId: number;
   readonly fromUsername?: string;
 }
 

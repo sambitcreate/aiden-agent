@@ -18,7 +18,7 @@ function makeDeps() {
 }
 
 function turn(lane: QueueLane, text: string, chatId = 1): QueuedTelegramTurn {
-  return { lane, text, chatId };
+  return { lane, text, chatId, ownerUserId: chatId };
 }
 
 test("dequeue order is control, then priority, then default", () => {

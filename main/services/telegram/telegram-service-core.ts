@@ -226,6 +226,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       lane: classifyMessage(text),
       text,
       chatId: message.chat.id,
+      ownerUserId: from.id,
       fromUsername: from.username,
     });
 
@@ -273,6 +274,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       lane: "default",
       text: command,
       chatId,
+      ownerUserId: message.from?.id ?? chatId,
       fromUsername: message.from?.username,
     });
     tryDispatch();
@@ -289,13 +291,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   async function dispatchTurn(turn: QueuedTelegramTurn): Promise<void> {
     dispatchPending = true;
 
-    // Ensure the persistent chat exists.
-    const chatId = telegramChatId(turn.chatId);
+    // Ensure the persistent chat exists. The Aiden chat key is derived from
+    // the owner's Telegram user ID; the Telegram chat ID is used for API calls.
+    const chatId = telegramChatId(turn.ownerUserId);
     try {
       const settings = await deps.config.getSettings();
       await ensureTelegramChat(
         deps.turn,
-        turn.chatId,
+        turn.ownerUserId,
         `Telegram${turn.fromUsername ? ` (@${turn.fromUsername})` : ""}`,
         settings.lastProviderId,
         settings.lastModel,
