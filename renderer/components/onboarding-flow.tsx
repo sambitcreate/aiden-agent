@@ -23,6 +23,7 @@ import {
   Network,
   Palette,
   Plug,
+  Send,
   ShieldCheck,
   SquareTerminal,
   UserRound,
@@ -84,6 +85,8 @@ const FEATURE_ILLUSTRATIONS = {
   usage: new URL("../assets/onboarding/features/usage-profile.png", import.meta.url).href,
   permissions: new URL("../assets/onboarding/features/permissions.png", import.meta.url).href,
   themes: new URL("../assets/onboarding/features/themes-accessibility.png", import.meta.url).href,
+  telegram: new URL("../assets/onboarding/features/telegram-remote-control.png", import.meta.url)
+    .href,
 } as const;
 
 const providerChoices: Array<{
@@ -323,6 +326,15 @@ const featureBentos: FeatureBento[] = [
     description: "Use Command-K or / for app commands, and $ to attach a reusable skill.",
     icon: Command,
     imageUrl: FEATURE_ILLUSTRATIONS.commands,
+    size: "standard",
+  },
+  {
+    id: "telegram",
+    group: "control",
+    title: "Telegram Remote Control",
+    description: "Run trusted workspace automations from your paired Telegram account.",
+    icon: Send,
+    imageUrl: FEATURE_ILLUSTRATIONS.telegram,
     size: "standard",
   },
   {

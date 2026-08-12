@@ -14,6 +14,9 @@ export const TELEGRAM_MESSAGE_LIMIT = 4096;
 /** Safety margin so HTML entity expansion doesn't push past the limit. */
 const CHUNK_HEADROOM = 64;
 
+const CODE_SPAN_SENTINEL = String.fromCharCode(0);
+const CODE_SPAN_PATTERN = new RegExp(`${CODE_SPAN_SENTINEL}CODESPAN(\\d+)${CODE_SPAN_SENTINEL}`, "g");
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -32,13 +35,13 @@ function convertInline(markdown: string): string {
   const codeSpans: string[] = [];
   let working = markdown.replace(/```[\s\S]*?```/g, (match) => {
     codeSpans.push(match);
-    return `\x00CODESPAN${codeSpans.length - 1}\x00`;
+    return `${CODE_SPAN_SENTINEL}CODESPAN${codeSpans.length - 1}${CODE_SPAN_SENTINEL}`;
   });
 
   // Inline code: `code`
   working = working.replace(/`([^`]+)`/g, (_m, code: string) => {
     codeSpans.push(`<code>${escapeHtml(code)}</code>`);
-    return `\x00CODESPAN${codeSpans.length - 1}\x00`;
+    return `${CODE_SPAN_SENTINEL}CODESPAN${codeSpans.length - 1}${CODE_SPAN_SENTINEL}`;
   });
 
   // Escape remaining HTML.
@@ -63,7 +66,7 @@ function convertInline(markdown: string): string {
   );
 
   // Restore code spans.
-  working = working.replace(/\x00CODESPAN(\d+)\x00/g, (_m, idx: string) => {
+  working = working.replace(CODE_SPAN_PATTERN, (_m, idx: string) => {
     const i = Number(idx);
     if (i < codeSpans.length && codeSpans[i].startsWith("```")) {
       return convertFencedBlock(codeSpans[i]);

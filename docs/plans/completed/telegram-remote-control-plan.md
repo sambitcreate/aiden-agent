@@ -1,6 +1,6 @@
 # Telegram Remote Control Plan
 
-Status: implemented on 2026-08-11; Phases 0–5 complete; Phase 6 (onboarding bento) deferred pending a 1024×1024 PNG asset
+Status: implemented on 2026-08-11; Phases 0–6 complete
 Date: 2026-08-11
 UI reference: ChatGPT/Codex settings surfaces and Aiden's existing settings tokens; the Telegram operator UI is provided by the ported `pi-telegram` adapter (menus rendered as Telegram inline keyboards, not Aiden UI).
 License basis: `pi-telegram` is MIT-licensed (a fork of `badlogic/pi-telegram`). Vendor with attribution.
@@ -19,7 +19,7 @@ Hermes is a secondary reference for behavior (long-poll transport, owner allowli
 
 1. **Port, not install.** Vendor `pi-telegram`'s Telegram layer under `main/services/telegram/`; replace its Pi-SDK boundary with an Aiden shim. MIT license retained with attribution.
 2. **Full unattended authority after enablement.** Once the user enables Telegram in Settings and creates/pairs the bot, Telegram-originated turns run with `permission: "full"` and an unattended mode (no approval surface). This matches the existing scheduled-tasks trust boundary. Pairing is restricted to a single configured owner.
-3. **One persistent chat.** A single Aiden chat backs the Telegram surface (`chatStore.create({ id: "telegram-<ownerId>", ... })` on first inbound), reused across turns. No per-thread or multi-session binding in v1.
+3. **Persistent chat isolation.** Assistant-only turns reuse one Aiden chat (`telegram-<ownerId>`). A selected folder workspace creates and reuses its own isolated backing chat (`telegram-<ownerId>-<workspaceId>`), so project context never crosses between workspaces.
 4. **Transport = Telegram long-polling.** Outbound `getUpdates` only — no inbound HTTP server, no tray, no public URL. Works behind NAT and while the Aiden window is closed (Aiden already runs window-less on macOS).
 5. **Owner pairing.** First user to `/start` the bot becomes the allowed owner (`allowedUserId`); all other users are ignored, mirroring `pi-telegram`'s built-in flow.
 6. **Settings-gated enablement.** The service starts polling only when Telegram is enabled in Settings and a bot token is present; otherwise it stays dormant.
@@ -51,7 +51,7 @@ Hermes is a secondary reference for behavior (long-poll transport, owner allowli
 | `agent_settled` | `bgOwner.terminal` (terminal state) — **not** the `chats:settled` broadcast | broadcast only reaches windows |
 | `AssistantMessageEvent` (streaming preview) | capture `chat:delta` in the synthetic owner's `send()` | currently ignored at `:49`; extend the switch |
 | Tool execution events | `chat:tool` phase events via `owner.send` | optional; deferred to v2 activity mode |
-| `ctx.cwd` / session binding | one persistent chat via `chatStore.create({ id: "telegram-<ownerId>" })` | `schedule-execution.ts:129` |
+| `ctx.cwd` / session binding | one persistent assistant chat (`telegram-<ownerId>`) or a workspace-isolated chat (`telegram-<ownerId>-<workspaceId>`) | `telegram-turn.ts` |
 | `api.exec` / `setModel` / `compact` | deferred (v2) | — |
 
 **Mode/permission (load-bearing):** Telegram turns use main-only unattended modes (`assistant-unattended` / `assistant-automation`) with `permission: "full"`, identical to the scheduled path, so phone-originated turns never block on a GUI approval. Headless code must use `bgOwner.terminal` + `llmClient.waitForChatIdle`; it must **not** rely on `ipcMain.broadcast` (`chats:settled` and friends only reach `BrowserWindow.getAllWindows()`).
@@ -201,7 +201,8 @@ Acceptance: full enable/pair/disable flow from the UI; status reflects polling s
 
 ### Phase 6 — Onboarding
 
-1. Bento tile + `1024x1024` PNG; data-driven gallery entry; onboarding test coverage.
+1. Bento tile + `1024x1024` transparent PNG; data-driven gallery entry; onboarding test coverage.
+2. Explicit workspace authority: settings persist `telegramWorkspaceId`; a selected, folder-backed workspace runs `assistant-automation` with a workspace-isolated chat; no selection remains assistant-only; stale selections fail before generation.
 
 ## Deferred (not v1)
 
@@ -217,7 +218,7 @@ Threaded Mode + multi-instance bus; compaction menu; activity/thinking/tool rend
 
 ## Implementation summary (2026-08-11)
 
-Phases 0–5 shipped as a clean-slate port on branch `feature/text-control`.
+Phases 0–6 shipped as a clean-slate port on branch `feature/text-control`.
 Rather than vendoring pi-telegram's 57-file, ~1.5 MB tree (deeply entangled
 with Threaded-Mode, Pi-SDK, and companion-extension code), we wrote a focused
 implementation that captures the same behaviour with MIT attribution.
@@ -232,21 +233,25 @@ implementation that captures the same behaviour with MIT attribution.
 - `telegram-service.ts` — production singleton with DI wiring
 
 **Files modified**:
-- `main/handlers/telegram.ts` — IPC handlers (telegram:get/setKey/setEnabled/connect/disconnect/resetPairing)
+- `main/handlers/telegram.ts` — IPC handlers (telegram:get/setKey/setEnabled/connect/disconnect/resetPairing/setProvider/setWorkspace)
 - `main/handlers/index.ts` — registerTelegramHandlers
 - `main/index.ts` — lifecycle anchors (start/stop/stopAndSettle)
-- `main/services/types.ts` — AppSettings: telegramEnabled, telegramAllowedUserId
+- `main/services/types.ts` — AppSettings: telegramEnabled, telegramAllowedUserId, telegramWorkspaceId
 - `main/services/usage-store-core.ts` — UsageRequestSource: "telegram"
 - `main/services/portable-config-core.ts` — keepBoolean: telegramEnabled
 - `renderer/preload-channels.ts` — INVOKE_PREFIXES: "telegram:"
-- `renderer/lib/ipc.ts` — telegramApi
+- `renderer/lib/ipc.ts` — telegramApi, including `setWorkspace`
 - `renderer/lib/queries.ts` — queryKeys.telegram, useTelegramSettings
-- `renderer/components/settings/telegram-settings.tsx` — settings UI
+- `renderer/components/settings/telegram-settings.tsx` — settings UI with explicit folder-workspace scope
 - `renderer/shared/settings-section.ts` — nav entry
 - `renderer/main/settings-view.tsx` — NAV_ICONS + CONTENT binding
 - `package.json` — test:telegram script
 - `resources/telegram/LICENSE.pi-telegram.md` — MIT attribution
 
-**Tests** (50 passing): bot API (10), turn injection (9), queue (10), markdown (10), service core (11).
+**Workspace authority and onboarding (Phase 6):**
+- `telegramWorkspaceId` is optional and can only be set to a configured folder workspace through `telegram:setWorkspace`; it is shown by `telegram:get`.
+- Project turns resolve that exact workspace for every dispatch, retain `permission: "full"` with computer/subagent/MCP access disabled, pass the provider fingerprint, and use `assistant-automation` in the workspace-isolated backing chat.
+- Without a selected workspace, turns retain the `assistant-unattended` assistant-only path. A stale configured selection returns a concrete error before generation.
+- The onboarding gallery includes a `Telegram Remote Control` control bento and a transparent 1024 × 1024 `features/telegram-remote-control.png` illustration.
 
-**Phase 6 (onboarding)** deferred: requires a 1024×1024 transparent PNG asset for the bento gallery tile.
+**Tests** (59 passing): bot API (10), turn injection (12), queue (10), markdown (10), service core (12), workspace authority (3), workspace options (2).
