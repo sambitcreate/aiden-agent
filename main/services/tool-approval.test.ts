@@ -125,3 +125,51 @@ test("only the renderer document that received a prompt can decide it", async ()
   assert.equal(approvals.decide(prompts[0].approvalId, true, "document-one"), true);
   assert.equal(await pending, true);
 });
+
+test("abort withdraws a published Live approval immediately", async () => {
+  const published: string[] = [];
+  const withdrawn: string[] = [];
+  const coordinator = new ToolApprovalCoordinator(
+    (prompt) => published.push(prompt.approvalId),
+    (approvalId) => withdrawn.push(approvalId),
+  );
+  const abort = new AbortController();
+  const decision = coordinator.request(
+    {
+      streamId: "live:session-1",
+      toolCallId: "call-1",
+      toolName: "computer_use",
+      summary: "click exact target",
+    },
+    abort.signal,
+    "document-1",
+  );
+  assert.equal(published.length, 1);
+  abort.abort();
+  assert.equal(await decision, false);
+  assert.deepEqual(withdrawn, published);
+  assert.equal(coordinator.pendingCount, 0);
+});
+
+test("owner loss still settles when the withdrawal channel is gone", async () => {
+  const coordinator = new ToolApprovalCoordinator(
+    () => undefined,
+    () => {
+      throw new Error("renderer document gone");
+    },
+  );
+  const abort = new AbortController();
+  const decision = coordinator.request(
+    {
+      streamId: "live:session-1",
+      toolCallId: "call-1",
+      toolName: "computer_use",
+      summary: "click exact target",
+    },
+    abort.signal,
+    "document-1",
+  );
+  abort.abort();
+  assert.equal(await decision, false);
+  assert.equal(coordinator.pendingCount, 0);
+});
