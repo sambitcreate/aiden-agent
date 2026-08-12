@@ -7,6 +7,10 @@ import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { secrets } from "../services/secrets.js";
 import { telegramService } from "../services/telegram/telegram-service.js";
+import {
+  isTelegramFolderWorkspace,
+  telegramWorkspaceSelectionId,
+} from "../services/telegram/telegram-workspace-core.js";
 import { TELEGRAM_PROVIDER_ID } from "../services/telegram/telegram-service.js";
 
 export interface TelegramStatusResponse {
@@ -16,6 +20,7 @@ export interface TelegramStatusResponse {
   providerId?: string;
   model?: string;
   polling: boolean;
+  workspaceId?: string;
   queuedCount: number;
   lastError?: string;
 }
@@ -30,6 +35,7 @@ export function registerTelegramHandlers(): void {
       allowedUserId: settings.telegramAllowedUserId,
       providerId: settings.telegramProviderId,
       model: settings.telegramModel,
+      workspaceId: settings.telegramWorkspaceId,
       polling: status.status !== "disabled",
       queuedCount: status.queuedCount,
       lastError: status.lastError,
@@ -79,5 +85,17 @@ export function registerTelegramHandlers(): void {
     const m = typeof model === "string" && model.trim() ? model.trim() : undefined;
     await configStore.setSettings({ telegramProviderId: pid, telegramModel: m });
     return { providerId: pid, model: m };
+  });
+
+  ipcMain.handle("telegram:setWorkspace", async (_event, workspaceId: unknown) => {
+    const selectedWorkspaceId = telegramWorkspaceSelectionId(workspaceId);
+    if (selectedWorkspaceId) {
+      const workspace = await configStore.getWorkspace(selectedWorkspaceId);
+      if (!isTelegramFolderWorkspace(workspace)) {
+        throw new Error("Choose a configured folder workspace for Telegram project automation.");
+      }
+    }
+    await configStore.setSettings({ telegramWorkspaceId: selectedWorkspaceId });
+    return { workspaceId: selectedWorkspaceId };
   });
 }

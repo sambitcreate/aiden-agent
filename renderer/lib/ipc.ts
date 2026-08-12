@@ -340,6 +340,7 @@ export interface TelegramStatus {
   allowedUserId?: number;
   providerId?: string;
   model?: string;
+  workspaceId?: string;
   polling: boolean;
   queuedCount: number;
   lastError?: string;
@@ -353,6 +354,8 @@ export const telegramApi = {
   resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
   setProvider: (providerId: string, model: string) =>
     invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
+  setWorkspace: (workspaceId?: string) =>
+    invoke<{ workspaceId?: string }>("telegram:setWorkspace", workspaceId),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────

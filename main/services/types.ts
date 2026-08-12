@@ -498,6 +498,11 @@ export interface AppSettings {
   telegramProviderId?: string;
   /** Model for Telegram turns; falls back to provider default when unset. */
   telegramModel?: string;
+  /**
+   * Explicit folder workspace authorized for Telegram project automation.
+   * Omitted keeps Telegram turns assistant-only.
+   */
+  telegramWorkspaceId?: string;
 }
 
 export type ComputerUseStatusState =
