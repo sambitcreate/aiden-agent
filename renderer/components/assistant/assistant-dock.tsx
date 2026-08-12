@@ -11,7 +11,10 @@ import {
 import { AssistantBubble } from "./assistant-bubble";
 import { AssistantPanel } from "./assistant-panel";
 import { useAssistantChat } from "./use-assistant-chat";
+import { useAssistantLive, type AssistantLiveController } from "./use-assistant-live";
 import { useCommandHandler } from "../../lib/command-system";
+import type { AssistantChat } from "./use-assistant-chat";
+import { assistantThreadChangeBlockedReason } from "./assistant-live-ownership";
 
 /** How long a reply preview stays beside the collapsed mark. */
 const PREVIEW_VISIBLE_MS = 8_000;
@@ -24,8 +27,39 @@ export function AssistantDock({
   interactionBlocked?: boolean;
 }): React.ReactElement {
   const chat = useAssistantChat();
-  const [open, setOpen] = React.useState(false);
-  const [present, setPresent] = React.useState(false);
+  const ordinaryApprovalPending = chat.approvals.some(
+    (approval) => approval.toolName !== "computer_use",
+  );
+  const live = useAssistantLive(
+    chat.activeChatId,
+    ordinaryApprovalPending
+      ? "Decide the pending automation approval before starting Live."
+      : chat.streaming
+        ? "Finish or stop the current Aiden response before starting Live."
+        : null,
+  );
+  return (
+    <AssistantDockPresentation chat={chat} live={live} interactionBlocked={interactionBlocked} />
+  );
+}
+
+export function AssistantDockPresentation({
+  chat,
+  live,
+  interactionBlocked = false,
+  initiallyOpen = false,
+  panelComponent: PanelComponent = AssistantPanel,
+  useCommand = useCommandHandler,
+}: {
+  chat: AssistantChat;
+  live: AssistantLiveController;
+  interactionBlocked?: boolean;
+  initiallyOpen?: boolean;
+  panelComponent?: typeof AssistantPanel;
+  useCommand?: typeof useCommandHandler;
+}): React.ReactElement {
+  const [open, setOpen] = React.useState(initiallyOpen);
+  const [present, setPresent] = React.useState(initiallyOpen);
   const [unread, setUnread] = React.useState(0);
   const [preview, setPreview] = React.useState<string | null>(null);
   const [draft, setDraft] = React.useState("");
@@ -34,6 +68,16 @@ export function AssistantDock({
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
   const restoreFocusPendingRef = React.useRef(false);
   const lastSeenReplyRef = React.useRef<number | null>(null);
+  const threadChangeBlockedReason = assistantThreadChangeBlockedReason(chat, live);
+  const panelChat = React.useMemo<AssistantChat>(() => {
+    if (!threadChangeBlockedReason) return chat;
+    return {
+      ...chat,
+      canChangeThread: false,
+      newThread: () => undefined,
+      openThread: () => undefined,
+    };
+  }, [chat, threadChangeBlockedReason]);
 
   const openPanel = React.useCallback(() => {
     if (interactionBlocked) return;
@@ -50,10 +94,11 @@ export function AssistantDock({
   }, [interactionBlocked, open]);
 
   const minimizePanel = React.useCallback(() => {
+    if (live.active || live.busy || live.setupOpen) return;
     restoreFocusPendingRef.current = true;
     setOpen(false);
-  }, []);
-  useCommandHandler("assistant.open", openPanel, !interactionBlocked);
+  }, [live.active, live.busy, live.setupOpen]);
+  useCommand("assistant.open", openPanel, !interactionBlocked);
   React.useEffect(
     () =>
       onAssistantAutomationComposerRequested(() => {
@@ -127,8 +172,9 @@ export function AssistantDock({
           aria-hidden={!open ? true : undefined}
           style={{ pointerEvents: open ? "auto" : "none" }}
         >
-          <AssistantPanel
-            chat={chat}
+          <PanelComponent
+            chat={panelChat}
+            live={live}
             draft={draft}
             inputRef={inputRef}
             onDraftChange={setDraft}
