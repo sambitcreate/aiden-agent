@@ -23,6 +23,7 @@ import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerTelegramHandlers } from "./telegram.js";
+import { registerSubagentHandlers } from "./subagents.js";
 
 import { ipcMain, logger } from "../platform.js";
 import { writeDevLog } from "../services/dev-log.js";
@@ -63,6 +64,7 @@ export function registerHandlers(): void {
   registerAssistantHandlers();
   registerShortcutHandlers();
   registerTelegramHandlers();
+  registerSubagentHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 
