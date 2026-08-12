@@ -328,6 +328,37 @@ export function useAssistantChat(): AssistantChat {
     [refreshThreads],
   );
 
+  React.useEffect(() => {
+    const removeApproval = onNotification<ApprovalPrompt & { streamId: string }>(
+      "chat:approval",
+      (prompt) => {
+        if (!prompt.streamId.startsWith("live:") || prompt.toolName !== "computer_use") return;
+        setApprovals((existing) => enqueueAssistantApproval(existing, prompt));
+        setLastNotice({
+          kind: "approval",
+          text: "Computer Use needs your confirmation",
+          at: ++noticeSequenceRef.current,
+        });
+      },
+    );
+    const removeWithdrawal = onNotification<{ approvalId: string }>(
+      "chat:approval-withdrawn",
+      ({ approvalId }) => {
+        setApprovals((existing) =>
+          existing.filter((approval) => approval.approvalId !== approvalId),
+        );
+        if (decidingApprovalRef.current === approvalId) {
+          decidingApprovalRef.current = null;
+          setDecidingApprovalId(null);
+        }
+      },
+    );
+    return () => {
+      removeApproval();
+      removeWithdrawal();
+    };
+  }, []);
+
   // The composer can change the model while the dock sits idle.
   React.useEffect(() => subscribeModelSelection(setSelection), []);
 
