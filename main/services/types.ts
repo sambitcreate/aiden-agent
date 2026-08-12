@@ -494,6 +494,10 @@ export interface AppSettings {
   telegramEnabled?: boolean;
   /** Paired Telegram owner chat id; undefined until first /start pairs. */
   telegramAllowedUserId?: number;
+  /** Provider for Telegram turns; falls back to lastProviderId when unset. */
+  telegramProviderId?: string;
+  /** Model for Telegram turns; falls back to provider default when unset. */
+  telegramModel?: string;
 }
 
 export type ComputerUseStatusState =

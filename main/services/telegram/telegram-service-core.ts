@@ -180,6 +180,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const from = update.message?.from ?? update.callback_query?.from;
     if (!message || !from) return;
 
+    deps.info(`Telegram update ${update.update_id}: from=${from.id} (${from.username ?? "no-username"}) chat=${message.chat.id} type=${message.chat.type} text="${(message.text ?? "").slice(0, 80)}"`);
+
     // Restrict to private chats — group/supergroup messages are ignored.
     if (message.chat.type !== "private") return;
 

@@ -338,6 +338,8 @@ export interface TelegramStatus {
   enabled: boolean;
   hasToken: boolean;
   allowedUserId?: number;
+  providerId?: string;
+  model?: string;
   polling: boolean;
   queuedCount: number;
   lastError?: string;
@@ -349,6 +351,8 @@ export const telegramApi = {
   connect: () => invoke<{ connected: boolean }>("telegram:connect"),
   disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
   resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
+  setProvider: (providerId: string, model: string) =>
+    invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────

@@ -24,6 +24,7 @@ import {
   shortcutApi,
   skillsApi,
   telegramApi,
+  titleProvidersApi,
   usageApi,
   workspacesApi,
 } from "./ipc";

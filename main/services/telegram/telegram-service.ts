@@ -9,6 +9,7 @@ import { chatStore } from "../chat-store.js";
 import { llmClient } from "../llm-client.js";
 import { providerRegistry } from "../provider-registry.js";
 import { secrets } from "../secrets.js";
+import type { StoredProvider } from "../types.js";
 import {
   createFetchTransport,
   TelegramBotApi,
@@ -18,17 +19,22 @@ import { createTelegramServiceCore } from "./telegram-service-core.js";
 
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
-async function resolveProvider(): Promise<{ providerId: string; model: string } | null> {
+async function resolveProvider(): Promise<{
+  providerId: string;
+  model: string;
+  provider: StoredProvider;
+} | null> {
   const settings = await configStore.getSettings();
-  const providerId = settings.lastProviderId;
+  // Prefer Telegram-specific provider/model, fall back to the global default.
+  const providerId = settings.telegramProviderId ?? settings.lastProviderId;
   if (!providerId) return null;
   const provider =
     (await providerRegistry.selectionProvider(providerId)) ??
     (await configStore.getProvider(providerId));
   if (!provider) return null;
-  const model = settings.lastModel ?? provider.defaultModel ?? provider.models[0];
+  const model = settings.telegramModel ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
   if (!model) return null;
-  return { providerId, model };
+  return { providerId, model, provider };
 }
 
 function broadcastMetadata(chat: {
@@ -63,8 +69,17 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export function createTelegramService() {
+  let tokenLogged = false;
   const api = new TelegramBotApi(
-    createFetchTransport(() => secrets.getKey(TELEGRAM_PROVIDER_ID)),
+    createFetchTransport(async () => {
+      const token = await secrets.getKey(TELEGRAM_PROVIDER_ID);
+      if (token && !tokenLogged) {
+        tokenLogged = true;
+        const valid = /^\d{5,16}:[A-Za-z0-9_-]{20,}$/.test(token);
+        logger.info("telegram", `Bot token: ${token.length} chars, format ${valid ? "ok" : "INVALID"}, prefix "${token.slice(0, 5)}…"`);
+      }
+      return token;
+    }),
   );
   return createTelegramServiceCore({
     api,

@@ -13,6 +13,8 @@ export interface TelegramStatusResponse {
   enabled: boolean;
   hasToken: boolean;
   allowedUserId?: number;
+  providerId?: string;
+  model?: string;
   polling: boolean;
   queuedCount: number;
   lastError?: string;
@@ -26,6 +28,8 @@ export function registerTelegramHandlers(): void {
       enabled: settings.telegramEnabled ?? false,
       hasToken: await secrets.hasKey(TELEGRAM_PROVIDER_ID),
       allowedUserId: settings.telegramAllowedUserId,
+      providerId: settings.telegramProviderId,
+      model: settings.telegramModel,
       polling: status.status !== "disabled",
       queuedCount: status.queuedCount,
       lastError: status.lastError,
@@ -68,5 +72,12 @@ export function registerTelegramHandlers(): void {
   ipcMain.handle("telegram:resetPairing", async () => {
     await configStore.setSettings({ telegramAllowedUserId: undefined });
     return { reset: true };
+  });
+
+  ipcMain.handle("telegram:setProvider", async (_event, providerId: unknown, model: unknown) => {
+    const pid = typeof providerId === "string" && providerId.trim() ? providerId.trim() : undefined;
+    const m = typeof model === "string" && model.trim() ? model.trim() : undefined;
+    await configStore.setSettings({ telegramProviderId: pid, telegramModel: m });
+    return { providerId: pid, model: m };
   });
 }

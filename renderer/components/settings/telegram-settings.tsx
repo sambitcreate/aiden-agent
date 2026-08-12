@@ -1,16 +1,29 @@
-// Telegram settings — bot token, enable toggle, pairing status, and controls.
-// Mirrors web-search-settings.tsx. The bot token is stored encrypted via
+// Telegram settings — bot token, enable toggle, pairing status, provider/model
+// picker, and connection controls. The bot token is stored encrypted via
 // safeStorage and never returned to the renderer.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button, Field, FieldSet, Input, Switch, toast } from "../ui";
+import {
+  Button,
+  Field,
+  FieldSet,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+  toast,
+} from "../ui";
 import { telegramApi } from "../../lib/ipc";
-import { queryKeys, useTelegramSettings } from "../../lib/queries";
+import { queryKeys, useProviders, useTelegramSettings } from "../../lib/queries";
 
 export function TelegramSettings() {
   const qc = useQueryClient();
   const telegram = useTelegramSettings();
+  const providers = useProviders();
   const [keyDraft, setKeyDraft] = React.useState("");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.telegram });
@@ -20,6 +33,8 @@ export function TelegramSettings() {
   const polling = telegram.data?.polling ?? false;
   const lastError = telegram.data?.lastError;
   const queuedCount = telegram.data?.queuedCount ?? 0;
+  const telegramProviderId = telegram.data?.providerId ?? "";
+  const telegramModel = telegram.data?.model ?? "";
 
   const saveKey = async () => {
     const value = keyDraft.trim();
@@ -56,6 +71,20 @@ export function TelegramSettings() {
     toast.success("Pairing reset. The next /start will claim a new owner.");
   };
 
+  const saveProvider = async (providerId: string, model: string) => {
+    await telegramApi.setProvider(providerId, model);
+    await invalidate();
+    toast.success("Telegram provider saved.");
+  };
+
+  // Providers that have at least one model and a key (or don't need one).
+  const usableProviders = (providers.data ?? []).filter(
+    (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
+  );
+
+  const selectedProvider = usableProviders.find((p) => p.id === telegramProviderId);
+  const selectedModel = telegramModel || selectedProvider?.defaultModel || selectedProvider?.models[0] || "";
+
   return (
     <FieldSet title="Telegram Remote Control">
       <Field
@@ -80,6 +109,7 @@ export function TelegramSettings() {
         <div className="flex gap-2">
           <Input
             type="password"
+            value={keyDraft}
             onChange={(e) => setKeyDraft(e.target.value)}
             placeholder={hasToken ? "••••••••••••" : "Paste your bot token from @BotFather"}
           />
@@ -92,6 +122,60 @@ export function TelegramSettings() {
             {keyDraft.trim() ? (hasToken ? "Replace" : "Save") : "Remove"}
           </Button>
         </div>
+      </Field>
+
+      <Field
+        label="Provider"
+        description={
+          usableProviders.length > 0
+            ? "The AI provider and model used for Telegram turns."
+            : "No providers configured. Go to Settings → Providers to add one."
+        }
+      >
+        {usableProviders.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            <Select
+              value={telegramProviderId}
+              onValueChange={(pid) => {
+                const provider = usableProviders.find((p) => p.id === pid);
+                const model = provider?.defaultModel ?? provider?.models[0] ?? "";
+                void saveProvider(pid, model);
+              }}
+            >
+              <SelectTrigger size="small" aria-label="Telegram provider">
+                <SelectValue placeholder="Choose a provider…" />
+              </SelectTrigger>
+              <SelectContent>
+                {usableProviders.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedProvider && selectedProvider.models.length > 1 && (
+              <Select
+                value={selectedModel}
+                onValueChange={(model) => void saveProvider(telegramProviderId, model)}
+              >
+                <SelectTrigger size="small" aria-label="Telegram model">
+                  <SelectValue placeholder="Choose a model…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedProvider.models.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-sm">
+            Configure at least one provider in Settings → Providers, then return here to select it for Telegram.
+          </p>
+        )}
       </Field>
 
       {hasToken && (
@@ -114,6 +198,7 @@ export function TelegramSettings() {
       {allowedUserId !== undefined && (
         <Field label="Paired owner" description="The Telegram account currently authorized to control Aiden.">
           <div className="flex items-center gap-3">
+            <span className="text-muted-foreground text-sm">User ID: {allowedUserId}</span>
             <Button size="small" variant="muted" onClick={resetPairing}>
               Reset pairing
             </Button>
@@ -132,6 +217,7 @@ export function TelegramSettings() {
           <li>Open Telegram and message <strong>@BotFather</strong>.</li>
           <li>Send <code>/newbot</code> and follow the prompts to create a bot.</li>
           <li>Copy the bot token and paste it above, then Save.</li>
+          <li>Choose a provider above (or set one up in Settings → Providers).</li>
           <li>Toggle Enable, then send <code>/start</code> to your bot from Telegram to pair.</li>
         </ol>
       </Field>

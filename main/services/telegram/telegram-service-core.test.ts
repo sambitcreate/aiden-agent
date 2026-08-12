@@ -293,7 +293,17 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     llmClient,
     chatStore,
     async resolveProvider() {
-      return { providerId: "openai", model: "gpt-4" };
+      return {
+        providerId: "openai",
+        model: "gpt-4",
+        provider: {
+          id: "openai",
+          kind: "openai" as const,
+          label: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          needsKey: true,
+        },
+      };
     },
     broadcastMetadata(_chat: unknown) {},
   };

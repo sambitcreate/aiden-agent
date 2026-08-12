@@ -58,6 +58,14 @@ function mockChatStore(existing: ChatRecord | null = null): {
   return { store, created, appended };
 }
 
+const MOCK_PROVIDER = {
+  id: "openai",
+  kind: "openai" as const,
+  label: "OpenAI",
+  baseUrl: "https://api.openai.com/v1",
+  needsKey: true,
+};
+
 function mockDeps(opts: {
   llm?: TelegramLlmClient;
   store?: TelegramChatStore;
@@ -69,8 +77,8 @@ function mockDeps(opts: {
     chatStore: opts.store ?? mockChatStore().store,
     resolveProvider:
       opts.provider === undefined
-        ? async () => ({ providerId: "openai", model: "gpt-4o" })
-        : async () => opts.provider ?? null,
+        ? async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER })
+        : async () => opts.provider ? { ...opts.provider, provider: MOCK_PROVIDER } : null,
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);
     },
@@ -175,7 +183,7 @@ test("ensureTelegramChat creates a chat when none exists and reuses an existing 
   const deps: TelegramTurnDeps = {
     llmClient: mockLlm(),
     chatStore: store,
-    resolveProvider: async () => ({ providerId: "openai", model: "gpt-4o" }),
+    resolveProvider: async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER }),
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);
     },

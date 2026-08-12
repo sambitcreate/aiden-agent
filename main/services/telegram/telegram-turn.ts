@@ -9,6 +9,7 @@ import type { NotificationChannel } from "../../../renderer/preload-channels.js"
 import type { ChatDone, ChatError } from "../types.js";
 import type { UsageRequestSource } from "../usage-store-core.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
+import { scheduledProviderFingerprint } from "../schedule-provider-binding.js";
 
 /** Minimal llmClient surface the shim needs. */
 export interface TelegramLlmClient {
@@ -31,6 +32,7 @@ export interface TelegramLlmClient {
       allowMcpTools: boolean;
       usageSource: UsageRequestSource;
       turnId: string;
+      providerFingerprint?: string;
     },
   ): Promise<boolean>;
   isChatBusy(chatId: string): boolean;
@@ -62,7 +64,14 @@ export interface TelegramChatStore {
 export interface TelegramTurnDeps {
   llmClient: TelegramLlmClient;
   chatStore: TelegramChatStore;
-  resolveProvider(): Promise<{ providerId: string; model: string } | null>;
+  resolveProvider(): Promise<{
+    providerId: string;
+    model: string;
+    provider: Pick<
+      import("../types.js").StoredProvider,
+      "id" | "kind" | "label" | "baseUrl" | "needsKey" | "deployment" | "isBuiltin"
+    >;
+  } | null>;
   broadcastMetadata(chat: { id: string; workspaceId?: string; title: string; updatedAt: number }): void;
 }
 
@@ -209,6 +218,7 @@ export async function sendTelegramTurn(
         allowMcpTools: false,
         usageSource: "telegram",
         turnId: streamId,
+        providerFingerprint: scheduledProviderFingerprint(provider.provider),
       },
     );
 
