@@ -30,16 +30,19 @@ function between(value: string, start: string, end: string): string {
 }
 
 test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false });
+  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, geminiLive: false });
+  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, geminiLive: false });
   assert.deepEqual(parseAppCapabilities({ subagents: false }), {
     subagents: false,
+    geminiLive: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
     subagents: false,
+    geminiLive: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: true }), {
     subagents: true,
+    geminiLive: false,
   });
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files"]);
@@ -209,10 +212,8 @@ test("compact Environment modality blocks every app-level interaction seam and c
   );
 
   assert.match(assistant, /if \(interactionBlocked\) return/u);
-  assert.match(
-    assistant,
-    /useCommandHandler\("assistant\.open", openPanel, !interactionBlocked\)/u,
-  );
+  assert.match(assistant, /useCommand = useCommandHandler/u);
+  assert.match(assistant, /useCommand\("assistant\.open", openPanel, !interactionBlocked\)/u);
   assert.match(assistant, /inert=\{interactionBlocked \? true : undefined\}/u);
   assert.match(assistant, /aria-hidden=\{interactionBlocked \? true : undefined\}/u);
   assert.match(assistant, /visibility: interactionBlocked \? "hidden" : undefined/u);
@@ -284,7 +285,8 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
-  assert.match(appHandler, /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*\}/u);
+  assert.match(appHandler, /subagents: subagentsEnabled\(\)/u);
+  assert.match(appHandler, /geminiLive: geminiLiveEnabled\(\)/u);
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);
