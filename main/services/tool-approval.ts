@@ -23,7 +23,10 @@ interface PendingApproval {
 export class ToolApprovalCoordinator {
   private readonly pending = new Map<string, PendingApproval>();
 
-  constructor(private readonly publish: (prompt: ToolApprovalPrompt) => void) {}
+  constructor(
+    private readonly publish: (prompt: ToolApprovalPrompt) => void,
+    private readonly withdraw?: (approvalId: string) => void,
+  ) {}
 
   request(
     descriptor: Omit<ToolApprovalPrompt, "approvalId">,
@@ -34,12 +37,21 @@ export class ToolApprovalCoordinator {
     const approvalId = `a-${randomUUID()}`;
     return new Promise<boolean>((resolve) => {
       let settled = false;
+      let published = false;
       const aborted = () => finish(false);
       const finish = (allowed: boolean) => {
         if (settled) return;
         settled = true;
         this.pending.delete(approvalId);
         signal?.removeEventListener("abort", aborted);
+        if (published) {
+          try {
+            this.withdraw?.(approvalId);
+          } catch {
+            // Owner loss can make the withdrawal channel unavailable. The
+            // approval capability is still removed and must always settle.
+          }
+        }
         resolve(allowed);
       };
       this.pending.set(approvalId, {
@@ -54,6 +66,7 @@ export class ToolApprovalCoordinator {
       }
       try {
         this.publish({ ...descriptor, approvalId });
+        published = true;
       } catch {
         finish(false);
       }
