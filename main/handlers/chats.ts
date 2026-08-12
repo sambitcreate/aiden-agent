@@ -8,6 +8,7 @@ import { chatApplicationService } from "../services/chat-application-service-mai
 import { chatTitleService } from "../services/chat-title.js";
 import { configStore } from "../services/config-store.js";
 import { computerUseStatus } from "../services/computer-use/status.js";
+import { geminiLiveService } from "../services/gemini-live/service-main.js";
 import { llmClient } from "../services/llm-client.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
@@ -48,6 +49,7 @@ import {
   parseChatCopyRequest,
   parseChatOnlyRequest,
 } from "./chat-session-params.js";
+import { applyComputerUseSettingChange } from "./chat-computer-use-setting.js";
 import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
@@ -492,40 +494,17 @@ export function registerChatHistoryHandlers(): void {
       const chatId = asString(id, "id");
       if (typeof enabled !== "boolean")
         throw new Error("Invalid Computer Use chat setting.");
-      const release = llmClient.beginComputerUseSettingChange(chatId);
-      if (!release) {
-        throw new Error(
-          "Finish or stop the current response before changing Computer Use.",
-        );
-      }
-      const controller = new AbortController();
-      const removeInvalidation = owner.onInvalidated(() =>
-        controller.abort(
-          new Error("The renderer document is no longer active."),
-        ),
+      return chatForRenderer(
+        await applyComputerUseSettingChange(owner, chatId, enabled, {
+          begin: (targetChatId) =>
+            llmClient.beginComputerUseSettingChange(targetChatId),
+          status: (signal) => computerUseStatus.status({ signal }),
+          persist: (targetChatId, nextEnabled, isCurrent) =>
+            chatStore.setComputerUseEnabled(targetChatId, nextEnabled, isCurrent),
+          revokeLive: (targetChatId) =>
+            geminiLiveService.revokeComputerUse(targetChatId),
+        }),
       );
-      try {
-        if (enabled) {
-          const status = await computerUseStatus.status({
-            signal: controller.signal,
-          });
-          if (owner.isDestroyed())
-            throw new Error("The renderer document is no longer active.");
-          if (!status.ready) throw new Error(status.detail);
-        }
-        if (owner.isDestroyed())
-          throw new Error("The renderer document is no longer active.");
-        return chatForRenderer(
-          await chatStore.setComputerUseEnabled(
-            chatId,
-            enabled,
-            () => !owner.isDestroyed(),
-          ),
-        );
-      } finally {
-        removeInvalidation();
-        release();
-      }
     },
   );
 
