@@ -88,6 +88,11 @@ import {
   type AppUpdateRestartResult,
   type AppUpdateSnapshot,
 } from "../shared/app-update";
+import type {
+  AssistantLiveRendererEvent,
+  AssistantLiveSnapshot,
+  AssistantLiveStartIntent,
+} from "../shared/assistant-live";
 import {
   fallbackDetachedLifecycleStream,
   parseChatReadResponse,
@@ -228,6 +233,17 @@ export const assistantApi = {
   config: () => invoke<AssistantConfigSnapshot>("assistant:get-config"),
   setConfig: (patch: Partial<AssistantConfig>) =>
     invoke<AssistantConfigSnapshot>("assistant:set-config", patch),
+};
+
+export const assistantLiveApi = {
+  status: () => invoke<AssistantLiveSnapshot>("assistant-live:status"),
+  start: (intent: AssistantLiveStartIntent) =>
+    invoke<AssistantLiveSnapshot>("assistant-live:start", intent),
+  stop: () => invoke<AssistantLiveSnapshot>("assistant-live:stop", {}),
+  sendAudio: (sessionId: string, pcm: Uint8Array) =>
+    invoke<boolean>("assistant-live:audio", { sessionId, pcm }),
+  onEvent: (handler: (event: AssistantLiveRendererEvent) => void) =>
+    onNotification<AssistantLiveRendererEvent>("assistant-live:event", handler),
 };
 
 export const artificialAnalysisApi = {
