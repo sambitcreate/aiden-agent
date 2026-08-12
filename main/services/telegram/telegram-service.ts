@@ -10,10 +10,7 @@ import { llmClient } from "../llm-client.js";
 import { providerRegistry } from "../provider-registry.js";
 import { secrets } from "../secrets.js";
 import type { StoredProvider } from "../types.js";
-import {
-  createFetchTransport,
-  TelegramBotApi,
-} from "./telegram-bot-api.js";
+import { createFetchTransport, TelegramBotApi } from "./telegram-bot-api.js";
 import { createTelegramConfig } from "./telegram-config.js";
 import { isTelegramFolderWorkspace } from "./telegram-workspace-core.js";
 import type { TelegramWorkspaceResolution } from "./telegram-turn.js";
@@ -33,13 +30,13 @@ async function resolveProvider(): Promise<{
     (await providerRegistry.selectionProvider(providerId)) ??
     (await configStore.getProvider(providerId));
   if (!provider) return null;
-  const model = settings.telegramModel ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
+  const model =
+    settings.telegramModel ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
   if (!model) return null;
   return { providerId, model, provider };
 }
 
-async function resolveWorkspace(): Promise<TelegramWorkspaceResolution> {
-  const workspaceId = (await configStore.getSettings()).telegramWorkspaceId;
+async function resolveWorkspace(workspaceId?: string): Promise<TelegramWorkspaceResolution> {
   if (!workspaceId) return { kind: "assistant" };
   const workspace = await configStore.getWorkspace(workspaceId);
 
@@ -88,7 +85,10 @@ export function createTelegramService() {
       if (token && !tokenLogged) {
         tokenLogged = true;
         const valid = /^\d{5,16}:[A-Za-z0-9_-]{20,}$/.test(token);
-        logger.info("telegram", `Bot token: ${token.length} chars, format ${valid ? "ok" : "INVALID"}, prefix "${token.slice(0, 5)}…"`);
+        logger.info(
+          "telegram",
+          `Bot token: ${token.length} chars, format ${valid ? "ok" : "INVALID"}, prefix "${token.slice(0, 5)}…"`,
+        );
       }
       return token;
     }),
@@ -101,6 +101,10 @@ export function createTelegramService() {
       hasToken: () => secrets.hasKey(TELEGRAM_PROVIDER_ID),
       resolveRootDir: () => app.getPath("userData"),
     }),
+    listWorkspaces: async () =>
+      (await configStore.listWorkspaces())
+        .filter(isTelegramFolderWorkspace)
+        .map(({ id, name, folderPath }) => ({ id, name, folderPath: folderPath as string })),
     turn: {
       llmClient,
       chatStore,

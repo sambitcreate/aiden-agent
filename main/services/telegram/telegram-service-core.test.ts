@@ -12,6 +12,7 @@
 // without spinning. The mock sleep resolves instantly and just counts calls.
 
 import assert from "node:assert/strict";
+import { EventEmitter, once } from "node:events";
 import { test } from "node:test";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
 import type {
@@ -111,8 +112,10 @@ function createMockApi(opts: MockApiOptions) {
         opts.stop();
         return [];
       }
-      // Park the loop without busy-spinning; the test owns termination.
-      return new Promise<TelegramUpdate[]>(() => {});
+      // Park the loop without busy-spinning; stopping the service releases it.
+      if (!_signal) return [];
+      await once(_signal, "abort");
+      return [];
     },
     async sendMessage(p: {
       chatId: number;
@@ -152,6 +155,7 @@ interface MockConfigState {
   enabled: boolean;
   hasToken: boolean;
   allowedUserId?: number;
+  telegramWorkspaceId?: string;
 }
 
 function createMockConfig(state: MockConfigState) {
@@ -164,6 +168,7 @@ function createMockConfig(state: MockConfigState) {
     lastModel: "gpt-4",
     telegramEnabled: state.enabled,
     telegramAllowedUserId: state.allowedUserId,
+    telegramWorkspaceId: state.telegramWorkspaceId,
   });
 
   const config = {
@@ -200,6 +205,9 @@ function createMockConfig(state: MockConfigState) {
       if (patch.telegramEnabled !== undefined) {
         state.enabled = patch.telegramEnabled;
       }
+      if ("telegramWorkspaceId" in patch) {
+        state.telegramWorkspaceId = patch.telegramWorkspaceId;
+      }
       return { ...baseSettings(), ...patch };
     },
     async hasToken(): Promise<boolean> {
@@ -222,6 +230,9 @@ interface MockTurnOptions {
   /** Resolve the turn as a chat:error with this message. */
   failMessage?: string;
   workspace?: { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
+  workspaceResolver?: (
+    workspaceId?: string,
+  ) => { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
 }
 
 /** Minimal owner surface the turn shim drives back through send(). */
@@ -236,6 +247,8 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   let releasedLeases = 0;
   let settledLeases = 0;
 
+  const pendingStart = new EventEmitter();
+  let pendingOwner: TurnOwner | undefined;
   const createdChats: Array<{ id: string; workspaceId?: string }> = [];
   const startedParams: Array<{ chatId: string; workspaceId?: string; mode?: string }> = [];
   const llmClient = {
@@ -258,7 +271,11 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     ): Promise<boolean> {
       startedParams.push(_params);
       startCalls += 1;
-      if (opts.pending) return new Promise<boolean>(() => {});
+      if (opts.pending) {
+        pendingOwner = owner;
+        await once(pendingStart, "complete");
+        return true;
+      }
       if (opts.failMessage) {
         owner.send("chat:error", { streamId, message: opts.failMessage });
         return true;
@@ -310,8 +327,10 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         },
       };
     },
-    async resolveWorkspace() {
-      return opts.workspace ?? { kind: "assistant" as const };
+    async resolveWorkspace(workspaceId?: string) {
+      return (
+        opts.workspaceResolver?.(workspaceId) ?? opts.workspace ?? { kind: "assistant" as const }
+      );
     },
     broadcastMetadata(_chat: unknown) {},
   };
@@ -324,6 +343,10 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     createdChats: () => createdChats,
     startedParams: () => startedParams,
     releasedLeases: () => releasedLeases,
+    completePendingTurn: () => {
+      pendingOwner?.send("chat:done", { streamId: "pending-turn", content: "Mock reply" });
+      pendingStart.emit("complete");
+    },
     settledLeases: () => settledLeases,
   };
 }
@@ -380,6 +403,9 @@ interface HarnessOptions {
   busyTurn?: boolean;
   failMessage?: string;
   workspace?: { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
+  workspaces?: Array<{ id: string; name: string; folderPath: string }>;
+  telegramWorkspaceId?: string;
+  workspaceResolver?: MockTurnOptions["workspaceResolver"];
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -387,6 +413,7 @@ function harness(o: HarnessOptions = {}) {
     enabled: o.enabled ?? false,
     hasToken: o.hasToken ?? true,
     allowedUserId: o.allowedUserId,
+    telegramWorkspaceId: o.telegramWorkspaceId,
   });
   const turnMock = createMockTurn({
     reply: o.reply,
@@ -394,6 +421,16 @@ function harness(o: HarnessOptions = {}) {
     busy: o.busyTurn,
     failMessage: o.failMessage,
     workspace: o.workspace,
+    workspaceResolver:
+      o.workspaceResolver ??
+      ((workspaceId) => {
+        if (workspaceId) {
+          return o.workspaces?.some((workspace) => workspace.id === workspaceId)
+            ? { kind: "project" as const, workspaceId }
+            : { kind: "stale" as const };
+        }
+        return o.workspace ?? { kind: "assistant" as const };
+      }),
   });
   const sleepMock = createMockSleep();
   const logs = createLogs();
@@ -412,6 +449,7 @@ function harness(o: HarnessOptions = {}) {
     api: api as unknown as TelegramBotApi,
     config: config as unknown as TelegramConfig,
     turn: turnMock.turn as unknown as TelegramTurnDeps,
+    listWorkspaces: async () => o.workspaces ?? [],
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
     sleep: sleepMock.sleep,
@@ -594,18 +632,212 @@ test("/start replies with a help message and starts no LLM turn", async () => {
   });
 
   await service.start();
-  await waitFor(() =>
-    api.sentMessages.some((m) => m.text.includes("Aiden Telegram Bridge")),
-  );
+  await waitFor(() => api.sentMessages.some((m) => m.text.includes("Aiden Telegram Bridge")));
 
   assert.equal(turnMock.startCalls(), 0, "no LLM turn for /start");
   assert.equal(service.queueSize, 0, "command not enqueued");
 
-  const help = api.sentMessages.find((m) =>
-    m.text.includes("Aiden Telegram Bridge"),
-  );
+  const help = api.sentMessages.find((m) => m.text.includes("Aiden Telegram Bridge"));
   assert.ok(help, "help message present");
   assert.equal(help?.parseMode, undefined, "help sent as plain text");
+  assert.match(help.text, /\/workspace — list and choose a workspace/);
+});
+
+test("/workspace lists configured folders without creating a turn", async () => {
+  const owner = person(42, "owner");
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    workspaces: [
+      { id: "aiden", name: "Aiden", folderPath: "/tmp/aiden" },
+      { id: "notes", name: "Notes", folderPath: "/tmp/notes" },
+    ],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "/workspace"))]],
+
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => api.sentMessages.some((message) => message.text.includes("Aiden")));
+
+  const reply = api.sentMessages.find((message) => message.text.includes("Aiden"));
+  assert.ok(reply, "workspace list sent");
+  assert.match(reply.text, /1\. Aiden/);
+  assert.match(reply.text, /2\. Notes/);
+  assert.match(reply.text, /\/workspace <number>/);
+  assert.equal(turnMock.startCalls(), 0, "workspace command is never an LLM prompt");
+});
+test("/workspace identifies the currently selected workspace", async () => {
+  const owner = person(42, "owner");
+  const { service, api } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    telegramWorkspaceId: "notes",
+    workspaces: [{ id: "notes", name: "Notes", folderPath: "/tmp/notes" }],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "/workspace"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => api.sentMessages.some((message) => message.text.includes("Current: Notes")));
+});
+
+test("/workspace number persists the selected configured workspace", async () => {
+  const owner = person(42, "owner");
+  const { service, api, config, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    workspaces: [
+      { id: "aiden", name: "Aiden", folderPath: "/tmp/aiden" },
+      { id: "notes", name: "Notes", folderPath: "/tmp/notes" },
+    ],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "/workspace 2"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => config.setSettingsCalls.some((patch) => "telegramWorkspaceId" in patch));
+
+  assert.deepEqual(config.setSettingsCalls, [{ telegramWorkspaceId: "notes" }]);
+  assert.equal(config.state.telegramWorkspaceId, "notes");
+  assert.equal(turnMock.startCalls(), 0, "workspace command is never an LLM prompt");
+  assert.ok(
+    api.sentMessages.some((message) => message.text.includes("Notes")),
+    "selection acknowledgement sent",
+  );
+});
+
+test("/workspace selection scopes the following Telegram prompt", async () => {
+  const owner = person(42, "owner");
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    workspaces: [{ id: "notes", name: "Notes", folderPath: "/tmp/notes" }],
+    batches: [
+      [
+        makeUpdate(1, makeMessage(10, owner, "/workspace notes")),
+        makeUpdate(2, makeMessage(11, owner, "list files")),
+      ],
+    ],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1);
+
+  assert.deepEqual(turnMock.createdChats(), [{ id: "telegram-42-notes", workspaceId: "notes" }]);
+  const [started] = turnMock.startedParams();
+  assert.equal(started?.chatId, "telegram-42-notes");
+  assert.equal(started?.workspaceId, "notes");
+  assert.equal(started?.mode, "assistant-automation");
+  assert.ok(
+    api.sentMessages.some((message) => message.text.includes("Mock reply")),
+    "scoped reply delivered",
+  );
+});
+
+test("/workspace preserves consecutive spaces in an exact workspace name", async () => {
+  const owner = person(42, "owner");
+  const { service, api, config, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    workspaces: [{ id: "team-notes", name: "Team  Notes", folderPath: "/tmp/team-notes" }],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "/workspace Team  Notes"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => config.setSettingsCalls.length === 1);
+
+  assert.deepEqual(config.setSettingsCalls, [{ telegramWorkspaceId: "team-notes" }]);
+  assert.equal(turnMock.startCalls(), 0, "workspace command is never an LLM prompt");
+  assert.ok(
+    api.sentMessages.some((message) =>
+      message.text.includes("Telegram workspace set to Team  Notes."),
+    ),
+    "exact workspace name is acknowledged",
+  );
+});
+
+test("/workspace rejects a case-mismatched workspace name", async () => {
+  const owner = person(42, "owner");
+  const { service, api, config, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    workspaces: [{ id: "workspace-notes", name: "Notes", folderPath: "/tmp/notes" }],
+    batches: [[makeUpdate(1, makeMessage(10, owner, "/workspace notes"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() =>
+    api.sentMessages.some((message) => message.text.includes('Workspace "notes" was not found.')),
+  );
+
+  assert.deepEqual(config.setSettingsCalls, []);
+  assert.equal(turnMock.startCalls(), 0, "workspace command is never an LLM prompt");
+});
+
+test("queued prompts retain the workspace selection present at receipt", async () => {
+  const owner = person(42, "owner");
+  const { service, config, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    workspaces: [{ id: "notes", name: "Notes", folderPath: "/tmp/notes" }],
+    batches: [
+      [
+        makeUpdate(1, makeMessage(10, owner, "first prompt")),
+        makeUpdate(2, makeMessage(11, owner, "queued prompt")),
+      ],
+    ],
+    autoStop: false,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1);
+  await config.setSettings({ telegramWorkspaceId: "notes" });
+  turnMock.completePendingTurn();
+  await waitFor(() => turnMock.startCalls() === 2);
+
+  assert.deepEqual(
+    turnMock.startedParams().map(({ workspaceId, mode }) => ({ workspaceId, mode })),
+    [
+      { workspaceId: undefined, mode: "assistant-unattended" },
+      { workspaceId: undefined, mode: "assistant-unattended" },
+    ],
+  );
+  service.stop();
+});
+
+test("/workspace off restores assistant-only mode", async () => {
+  const owner = person(42, "owner");
+  const { service, api, config, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    telegramWorkspaceId: "notes",
+    batches: [[makeUpdate(1, makeMessage(10, owner, "/workspace off"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => config.setSettingsCalls.some((patch) => "telegramWorkspaceId" in patch));
+
+  assert.deepEqual(config.setSettingsCalls, [{ telegramWorkspaceId: undefined }]);
+  assert.equal(config.state.telegramWorkspaceId, undefined);
+  assert.equal(turnMock.startCalls(), 0, "workspace command is never an LLM prompt");
+  assert.ok(
+    api.sentMessages.some((message) => message.text.includes("assistant-only mode")),
+    "assistant-only acknowledgement sent",
+  );
 });
 
 test("/status replies with bridge status info", async () => {
@@ -645,17 +877,13 @@ test("a text message from the owner is dispatched as a headless turn and replied
 
   await service.start();
   await waitFor(() => turnMock.startCalls() >= 1);
-  await waitFor(() =>
-    api.sentMessages.some((m) => m.text.includes("Hi from Aiden")),
-  );
+  await waitFor(() => api.sentMessages.some((m) => m.text.includes("Hi from Aiden")));
 
   assert.equal(turnMock.startCalls(), 1, "exactly one turn dispatched");
   assert.equal(service.queueSize, 0, "queue drained after dispatch");
   assert.equal(service.isActive, false, "turn settled");
 
-  const reply = api.sentMessages.find((m) =>
-    m.text.includes("Hi from Aiden"),
-  );
+  const reply = api.sentMessages.find((m) => m.text.includes("Hi from Aiden"));
   assert.ok(reply, "reply delivered");
   assert.equal(reply?.parseMode, "HTML", "reply delivered as Telegram HTML");
   assert.equal(reply?.disablePreview, true, "link preview disabled");

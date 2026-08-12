@@ -9,11 +9,7 @@
 import type { TelegramBotApi, TelegramUpdate, TelegramMessage } from "./telegram-bot-api.js";
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps, TelegramTurnResult } from "./telegram-turn.js";
-import {
-  sendTelegramTurn,
-  ensureTelegramChat,
-  telegramChatId,
-} from "./telegram-turn.js";
+import { sendTelegramTurn, ensureTelegramChat, telegramChatId } from "./telegram-turn.js";
 import {
   createTelegramQueue,
   classifyMessage,
@@ -31,11 +27,7 @@ function extractText(message: TelegramMessage): string | undefined {
   return message.text ?? message.caption;
 }
 
-export type TelegramServiceStatus =
-  | "disabled"
-  | "idle"
-  | "polling"
-  | "error";
+export type TelegramServiceStatus = "disabled" | "idle" | "polling" | "error";
 
 export interface TelegramServiceState {
   status: TelegramServiceStatus;
@@ -54,7 +46,26 @@ export interface TelegramServiceDeps {
   warn(message: string): void;
   error(message: string, cause?: unknown): void;
   info(message: string): void;
+  listWorkspaces(): Promise<readonly TelegramSelectableWorkspace[]>;
 }
+
+interface TelegramSelectableWorkspace {
+  id: string;
+  name: string;
+  folderPath: string;
+}
+
+const TELEGRAM_HELP_TEXT = [
+  "🤖 Aiden Telegram Bridge",
+  "",
+  "Send any message and I'll respond as Aiden.",
+  "",
+  "Commands:",
+  "/start — show this help",
+  "/stop — clear queued messages",
+  "/status — show bridge status",
+  "/workspace — list and choose a workspace",
+].join("\n");
 
 export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   const queue: TelegramQueue = createTelegramQueue({
@@ -157,10 +168,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           await handleUpdate(update);
           handled = true;
         } catch (cause) {
-          deps.error(
-            `Telegram handleUpdate failed for ${update.update_id}.`,
-            cause,
-          );
+          deps.error(`Telegram handleUpdate failed for ${update.update_id}.`, cause);
         }
         // Persist the resume offset (update_id + 1) ONLY after successful
         // handling. On failure the update will be retried on the next poll.
@@ -180,7 +188,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const from = update.message?.from ?? update.callback_query?.from;
     if (!message || !from) return;
 
-    deps.info(`Telegram update ${update.update_id}: from=${from.id} (${from.username ?? "no-username"}) chat=${message.chat.id} type=${message.chat.type} text="${(message.text ?? "").slice(0, 80)}"`);
+    deps.info(
+      `Telegram update ${update.update_id}: from=${from.id} (${from.username ?? "no-username"}) chat=${message.chat.id} type=${message.chat.type} text="${(message.text ?? "").slice(0, 80)}"`,
+    );
 
     // Restrict to private chats — group/supergroup messages are ignored.
     if (message.chat.type !== "private") return;
@@ -223,34 +233,121 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
 
-    // Enqueue the prompt.
-    queue.enqueue({
+    await enqueuePrompt({
       lane: classifyMessage(text),
       text,
       chatId: message.chat.id,
       ownerUserId: from.id,
       fromUsername: from.username,
     });
+  }
 
+  /**
+   * Capture workspace authority before a prompt joins the queue. A later local
+   * Settings or Telegram /workspace change must not retarget an accepted prompt.
+   */
+  async function enqueuePrompt(turn: Omit<QueuedTelegramTurn, "workspaceId">): Promise<void> {
+    const settings = await deps.config.getSettings();
+    queue.enqueue({ ...turn, workspaceId: settings.telegramWorkspaceId });
     tryDispatch();
   }
 
   async function handleCommand(command: string, message: TelegramMessage): Promise<void> {
-    const cmd = command.split(/\s+/)[0]?.toLowerCase() ?? "";
+    const cmd = (command.split(/\s+/)[0]?.toLowerCase() ?? "").split("@")[0];
     const chatId = message.chat.id;
 
-    if (cmd === "/start") {
-      await deps.api.sendMessage({
-        chatId,
-        text: "🤖 Aiden Telegram Bridge\n\nSend any message and I'll respond as Aiden.\n\nCommands:\n/start — show this help\n/stop — clear queued messages\n/status — show bridge status",
-      });
+    if (cmd === "/start" || cmd === "/help") {
+      await deps.api.sendMessage({ chatId, text: TELEGRAM_HELP_TEXT });
       return;
     }
 
+    if (cmd === "/workspace") {
+      const workspaces = await deps.listWorkspaces();
+      const settings = await deps.config.getSettings();
+      const selectedWorkspaceId = settings.telegramWorkspaceId;
+      const selectedWorkspace = workspaces.find(
+        (workspace) => workspace.id === selectedWorkspaceId,
+      );
+      const separator = command.search(/\s/u);
+      const selection = separator === -1 ? "" : command.slice(separator).trim();
+      if (!selection) {
+        const lines =
+          workspaces.length === 0
+            ? [
+                "No configured folder workspaces are available.",
+                "Add a folder workspace in Aiden Settings, then try /workspace again.",
+              ]
+            : [
+                "🗂️ Telegram workspace",
+                `Current: ${
+                  selectedWorkspace
+                    ? selectedWorkspace.name
+                    : selectedWorkspaceId
+                      ? "saved workspace unavailable"
+                      : "assistant-only mode"
+                }`,
+                "",
+                ...workspaces.flatMap((workspace, index) => [
+                  `${index + 1}. ${workspace.name}`,
+                  `   ${workspace.folderPath}`,
+                ]),
+                "",
+                "Choose one with /workspace <number>.",
+                "Use /workspace off for assistant-only mode.",
+              ];
+        await deps.api.sendMessage({ chatId, text: lines.join("\n") });
+        return;
+      }
+
+      if (selection.toLowerCase() === "off") {
+        const hadQueued = queue.size();
+        queue.clear();
+        await deps.config.setSettings({ telegramWorkspaceId: undefined });
+        await deps.api.sendMessage({
+          chatId,
+          text: [
+            "Telegram workspace cleared. Future turns will run in assistant-only mode.",
+            ...(hadQueued > 0 ? [`Cleared ${hadQueued} queued message(s).`] : []),
+          ].join("\n"),
+        });
+        return;
+      }
+
+      const position = /^\d+$/u.test(selection) ? Number(selection) - 1 : -1;
+      const matches = workspaces.filter(
+        (workspace) => workspace.id === selection || workspace.name === selection,
+      );
+      const workspace =
+        position >= 0 ? workspaces[position] : matches.length === 1 ? matches[0] : undefined;
+      if (!workspace) {
+        await deps.api.sendMessage({
+          chatId,
+          text:
+            matches.length > 1
+              ? `More than one workspace is named "${selection}". Choose by number from /workspace.`
+              : `Workspace "${selection}" was not found. Run /workspace to see configured folders.`,
+        });
+        return;
+      }
+
+      const hadQueued = queue.size();
+      queue.clear();
+      await deps.config.setSettings({ telegramWorkspaceId: workspace.id });
+      await deps.api.sendMessage({
+        chatId,
+        text: [
+          `Telegram workspace set to ${workspace.name}. Future turns will run in ${workspace.folderPath}.`,
+          ...(hadQueued > 0 ? [`Cleared ${hadQueued} queued message(s).`] : []),
+        ].join("\n"),
+      });
+      return;
+    }
     if (cmd === "/stop" || cmd === "/cancel") {
       const hadQueued = queue.size();
       queue.clear();
-      const lines = [hadQueued > 0 ? `🧹 Cleared ${hadQueued} queued message(s).` : "No messages were queued."];
+      const lines = [
+        hadQueued > 0 ? `🧹 Cleared ${hadQueued} queued message(s).` : "No messages were queued.",
+      ];
       if (activeTurn) {
         lines.push("The current turn is still running — it will finish on its own.");
       }
@@ -271,15 +368,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       return;
     }
 
-    // Unknown command — treat as a prompt.
-    queue.enqueue({
+    await enqueuePrompt({
       lane: "default",
       text: command,
       chatId,
       ownerUserId: message.from?.id ?? chatId,
       fromUsername: message.from?.username,
     });
-    tryDispatch();
   }
 
   /** Attempt to dispatch the next queued turn. No-op if gates block. */
@@ -293,9 +388,8 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   async function dispatchTurn(turn: QueuedTelegramTurn): Promise<void> {
     dispatchPending = true;
     try {
-      const workspace = await deps.turn.resolveWorkspace();
-      const workspaceId =
-        workspace.kind === "project" ? workspace.workspaceId : undefined;
+      const workspace = await deps.turn.resolveWorkspace(turn.workspaceId);
+      const workspaceId = workspace.kind === "project" ? workspace.workspaceId : undefined;
       const chatId = telegramChatId(turn.ownerUserId, workspaceId);
 
       if (workspace.kind !== "stale") {
@@ -341,15 +435,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
   }
 
-  async function deliverReply(
-    chatId: number,
-    result: TelegramTurnResult,
-  ): Promise<void> {
+  async function deliverReply(chatId: number, result: TelegramTurnResult): Promise<void> {
     if (!result.ok) {
       if (result.error) {
-        await deps.api
-          .sendMessage({ chatId, text: `⚠️ ${result.error}` })
-          .catch(() => undefined);
+        await deps.api.sendMessage({ chatId, text: `⚠️ ${result.error}` }).catch(() => undefined);
       }
       return;
     }

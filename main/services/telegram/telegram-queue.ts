@@ -23,6 +23,8 @@ export interface QueuedTelegramTurn {
   /** Paired owner's Telegram user ID — used for the persistent Aiden chat key. */
   readonly ownerUserId: number;
   readonly fromUsername?: string;
+  /** Workspace selection captured when the prompt was accepted. */
+  readonly workspaceId?: string;
 }
 
 export interface TelegramQueueDependencies {
@@ -37,9 +39,15 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
 
   function enqueue(turn: QueuedTelegramTurn): void {
     switch (turn.lane) {
-      case "control": control.push(turn); break;
-      case "priority": priority.push(turn); break;
-      default: def.push(turn); break;
+      case "control":
+        control.push(turn);
+        break;
+      case "priority":
+        priority.push(turn);
+        break;
+      default:
+        def.push(turn);
+        break;
     }
   }
 

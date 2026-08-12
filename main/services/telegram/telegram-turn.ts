@@ -53,7 +53,9 @@ export interface TelegramChatStore {
     providerId?: string;
     model?: string;
   }): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number }>;
-  get(id: string): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number } | null>;
+  get(
+    id: string,
+  ): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number } | null>;
   appendMessage(
     id: string,
     message: { role: "user" | "assistant"; content: string },
@@ -72,8 +74,14 @@ export interface TelegramTurnDeps {
       "id" | "kind" | "label" | "baseUrl" | "needsKey" | "deployment" | "isBuiltin"
     >;
   } | null>;
-  broadcastMetadata(chat: { id: string; workspaceId?: string; title: string; updatedAt: number }): void;
-  resolveWorkspace(): Promise<TelegramWorkspaceResolution>;
+  broadcastMetadata(chat: {
+    id: string;
+    workspaceId?: string;
+    title: string;
+    updatedAt: number;
+  }): void;
+  /** Resolve the selection captured when the Telegram prompt was accepted. */
+  resolveWorkspace(workspaceId?: string): Promise<TelegramWorkspaceResolution>;
 }
 
 export type TelegramWorkspaceResolution =
@@ -132,9 +140,7 @@ export function createTelegramBackgroundOwner(streamId: string): {
 
 /** Persistent chat id for a Telegram owner and optional project workspace. */
 export function telegramChatId(ownerUserId: number, workspaceId?: string): string {
-  return workspaceId
-    ? `telegram-${ownerUserId}-${workspaceId}`
-    : `telegram-${ownerUserId}`;
+  return workspaceId ? `telegram-${ownerUserId}-${workspaceId}` : `telegram-${ownerUserId}`;
 }
 
 /**
@@ -193,7 +199,8 @@ export async function sendTelegramTurn(
   if (resolvedWorkspace.kind === "stale") {
     return {
       content: "",
-      error: "The Telegram workspace is no longer available. Choose a folder workspace in Aiden Settings.",
+      error:
+        "The Telegram workspace is no longer available. Choose a folder workspace in Aiden Settings.",
       ok: false,
     };
   }
@@ -201,7 +208,11 @@ export async function sendTelegramTurn(
     resolvedWorkspace.kind === "project" ? resolvedWorkspace.workspaceId : undefined;
   const provider = await deps.resolveProvider();
   if (!provider) {
-    return { content: "", error: "No provider is configured. Choose a provider in Aiden first.", ok: false };
+    return {
+      content: "",
+      error: "No provider is configured. Choose a provider in Aiden first.",
+      ok: false,
+    };
   }
 
   const streamId = telegramStreamId();
@@ -245,7 +256,11 @@ export async function sendTelegramTurn(
     );
 
     if (!started) {
-      return { content: "", error: "The Telegram generation was cancelled before it started.", ok: false };
+      return {
+        content: "",
+        error: "The Telegram generation was cancelled before it started.",
+        ok: false,
+      };
     }
 
     const terminal = await background.terminal;
