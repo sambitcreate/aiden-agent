@@ -1,8 +1,10 @@
 /* global fetch */
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   ACCEPTANCE_SAVED_TEXT,
   ACCEPTANCE_TEXT,
@@ -32,6 +34,17 @@ const target = {
   app_name: "TextEdit",
   title: "Aiden CUA Acceptance 123.txt",
 };
+
+test("Gemini Live reuses the packaged Computer Use controller without a privileged bridge", async () => {
+  const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const source = await readFile(
+    path.join(root, "main/services/gemini-live/service-main.ts"),
+    "utf8",
+  );
+  assert.match(source, /createComputerUseController\(`live:\$\{sessionId\}`/u);
+  assert.match(source, /computerUseStatus\.status\(\{ signal \}\)/u);
+  assert.doesNotMatch(source, /fake-cua-driver|acceptance.*shortcut|skip.*approval/iu);
+});
 
 function assistantMessage(callIndex, args) {
   return {
