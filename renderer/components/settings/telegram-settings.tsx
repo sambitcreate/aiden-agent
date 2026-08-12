@@ -18,12 +18,22 @@ import {
   toast,
 } from "../ui";
 import { telegramApi } from "../../lib/ipc";
-import { queryKeys, useProviders, useTelegramSettings } from "../../lib/queries";
+import {
+  queryKeys,
+  useProviders,
+  useTelegramSettings,
+  useWorkspaces,
+} from "../../lib/queries";
+import {
+  TELEGRAM_ASSISTANT_ONLY_VALUE,
+  telegramWorkspaceOptions,
+} from "../../lib/telegram-workspace-options";
 
 export function TelegramSettings() {
   const qc = useQueryClient();
   const telegram = useTelegramSettings();
   const providers = useProviders();
+  const workspaces = useWorkspaces();
   const [keyDraft, setKeyDraft] = React.useState("");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.telegram });
@@ -35,6 +45,15 @@ export function TelegramSettings() {
   const queuedCount = telegram.data?.queuedCount ?? 0;
   const telegramProviderId = telegram.data?.providerId ?? "";
   const telegramModel = telegram.data?.model ?? "";
+  const telegramWorkspaceId = telegram.data?.workspaceId;
+  const workspaceOptions = telegramWorkspaceOptions(
+    workspaces.data ?? [],
+    telegramWorkspaceId,
+  );
+  const folderWorkspaceCount = workspaceOptions.filter(
+    (workspace) =>
+      workspace.value !== TELEGRAM_ASSISTANT_ONLY_VALUE && !workspace.unavailable,
+  ).length;
 
   const saveKey = async () => {
     const value = keyDraft.trim();
@@ -75,6 +94,24 @@ export function TelegramSettings() {
     await telegramApi.setProvider(providerId, model);
     await invalidate();
     toast.success("Telegram provider saved.");
+  };
+
+  const saveWorkspace = async (workspaceId: string) => {
+    try {
+      await telegramApi.setWorkspace(
+        workspaceId === TELEGRAM_ASSISTANT_ONLY_VALUE ? undefined : workspaceId,
+      );
+      await invalidate();
+      toast.success(
+        workspaceId === TELEGRAM_ASSISTANT_ONLY_VALUE
+          ? "Telegram workspace scope cleared."
+          : "Telegram workspace scope saved.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save Telegram workspace scope.",
+      );
+    }
   };
 
   // Providers that have at least one model and a key (or don't need one).
@@ -122,6 +159,36 @@ export function TelegramSettings() {
             {keyDraft.trim() ? (hasToken ? "Replace" : "Save") : "Remove"}
           </Button>
         </div>
+      </Field>
+
+      <Field
+        label="Workspace"
+        description="Project automation runs only in this folder. Assistant-only mode cannot access project files or tools."
+      >
+        <Select
+          value={telegramWorkspaceId ?? TELEGRAM_ASSISTANT_ONLY_VALUE}
+          onValueChange={(workspaceId) => void saveWorkspace(workspaceId)}
+        >
+          <SelectTrigger size="small" aria-label="Telegram workspace">
+            <SelectValue placeholder="Assistant-only mode" />
+          </SelectTrigger>
+          <SelectContent>
+            {workspaceOptions.map((workspace) => (
+              <SelectItem
+                key={workspace.value}
+                value={workspace.value}
+                disabled={workspace.unavailable}
+              >
+                {workspace.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {folderWorkspaceCount === 0 && (
+          <p className="text-muted-foreground text-sm">
+            Add a folder workspace in Settings → Workspaces to enable project automation.
+          </p>
+        )}
       </Field>
 
       <Field
