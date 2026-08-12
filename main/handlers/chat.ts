@@ -10,6 +10,7 @@ import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { parseParams } from "./chat-params.js";
+import { geminiLiveService } from "../services/gemini-live/service-main.js";
 
 // Re-exported so the IPC contract surface stays queryable from one module.
 export { parseParams };
@@ -99,7 +100,11 @@ export function registerChatGenerationHandlers(): void {
   ipcMain.handle("chat:approve", async (event, approvalId: unknown, decision: unknown) => {
     if (typeof approvalId !== "string" || !approvalId) return;
     const owner = chatGenerationOwner(event);
-    if (!llmClient.approve(approvalId, decision === "allow" ? "allow" : "deny", owner.documentId)) {
+    const allowed = decision === "allow";
+    if (
+      !llmClient.approve(approvalId, allowed ? "allow" : "deny", owner.documentId) &&
+      !geminiLiveService.approveComputerUse(owner, approvalId, allowed)
+    ) {
       throw new Error("This renderer document does not own that approval.");
     }
   });
