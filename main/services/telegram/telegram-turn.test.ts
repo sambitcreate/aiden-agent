@@ -70,6 +70,7 @@ function mockDeps(opts: {
   llm?: TelegramLlmClient;
   store?: TelegramChatStore;
   provider?: { providerId: string; model: string } | null;
+  workspace?: { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
 }): { deps: TelegramTurnDeps; broadcasts: ChatRecord[] } {
   const broadcasts: ChatRecord[] = [];
   const deps: TelegramTurnDeps = {
@@ -79,6 +80,7 @@ function mockDeps(opts: {
       opts.provider === undefined
         ? async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER })
         : async () => opts.provider ? { ...opts.provider, provider: MOCK_PROVIDER } : null,
+    resolveWorkspace: async () => opts.workspace ?? { kind: "assistant" },
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);
     },
@@ -89,6 +91,67 @@ function mockDeps(opts: {
 test("telegramChatId returns telegram-<userId>", () => {
   assert.equal(telegramChatId(123), "telegram-123");
   assert.equal(telegramChatId(0), "telegram-0");
+});
+
+test("workspace Telegram turn starts assistant automation with the selected workspace", async () => {
+  let startedParams:
+    | { chatId: string; workspaceId?: string; mode?: string }
+    | undefined;
+  const llm = mockLlm(async (streamId, params, owner) => {
+    startedParams = params;
+    owner.send("chat:done", { streamId, content: "done" });
+    return true;
+  });
+  const { deps } = mockDeps({
+    llm,
+    workspace: { kind: "project", workspaceId: "workspace-a" },
+  });
+  const chatId = telegramChatId(123, "workspace-a");
+
+  await sendTelegramTurn(deps, chatId, "list files");
+
+  assert.equal(chatId, "telegram-123-workspace-a");
+  assert.equal(startedParams?.chatId, chatId);
+  assert.equal(startedParams?.workspaceId, "workspace-a");
+  assert.equal(startedParams?.mode, "assistant-automation");
+});
+
+test("stale Telegram workspace errors before generation", async () => {
+  let startCalls = 0;
+  const llm = mockLlm(async (streamId, _params, owner) => {
+    startCalls += 1;
+    owner.send("chat:done", { streamId, content: "done" });
+    return true;
+  });
+  const { deps } = mockDeps({ llm, workspace: { kind: "stale" } });
+
+  const result = await sendTelegramTurn(deps, telegramChatId(123, "missing"), "list files");
+
+  assert.deepEqual(result, {
+    ok: false,
+    content: "",
+    error: "The Telegram workspace is no longer available. Choose a folder workspace in Aiden Settings.",
+  });
+  assert.equal(startCalls, 0);
+});
+
+test("assistant-only Telegram turn preserves the owner chat and assistant mode", async () => {
+  let startedParams:
+    | { chatId: string; workspaceId?: string; mode?: string }
+    | undefined;
+  const llm = mockLlm(async (streamId, params, owner) => {
+    startedParams = params;
+    owner.send("chat:done", { streamId, content: "done" });
+    return true;
+  });
+  const { deps } = mockDeps({ llm, workspace: { kind: "assistant" } });
+  const chatId = telegramChatId(123);
+
+  await sendTelegramTurn(deps, chatId, "settings help");
+
+  assert.equal(startedParams?.chatId, "telegram-123");
+  assert.equal(startedParams?.workspaceId, undefined);
+  assert.equal(startedParams?.mode, "assistant-unattended");
 });
 
 test("createTelegramBackgroundOwner exposes telegram:<streamId> documentId and resolves terminal on chat:done", async () => {
@@ -184,6 +247,7 @@ test("ensureTelegramChat creates a chat when none exists and reuses an existing 
     llmClient: mockLlm(),
     chatStore: store,
     resolveProvider: async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER }),
+    resolveWorkspace: async () => ({ kind: "assistant" }),
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);
     },

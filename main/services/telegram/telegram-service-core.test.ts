@@ -221,6 +221,7 @@ interface MockTurnOptions {
   busy?: boolean;
   /** Resolve the turn as a chat:error with this message. */
   failMessage?: string;
+  workspace?: { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
 }
 
 /** Minimal owner surface the turn shim drives back through send(). */
@@ -235,6 +236,8 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   let releasedLeases = 0;
   let settledLeases = 0;
 
+  const createdChats: Array<{ id: string; workspaceId?: string }> = [];
+  const startedParams: Array<{ chatId: string; workspaceId?: string; mode?: string }> = [];
   const llmClient = {
     beginChatTurn() {
       if (opts.busy) return null;
@@ -249,10 +252,11 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     },
     async start(
       streamId: string,
-      _params: unknown,
+      _params: { chatId: string; workspaceId?: string; mode?: string },
       owner: TurnOwner,
       _options: unknown,
     ): Promise<boolean> {
+      startedParams.push(_params);
       startCalls += 1;
       if (opts.pending) return new Promise<boolean>(() => {});
       if (opts.failMessage) {
@@ -273,6 +277,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   const chatStore = {
     async create(input: { id: string; title: string; workspaceId?: string }) {
       createCalls += 1;
+      createdChats.push({ id: input.id, workspaceId: input.workspaceId });
       return {
         id: input.id,
         title: input.title,
@@ -305,6 +310,9 @@ function createMockTurn(opts: MockTurnOptions = {}) {
         },
       };
     },
+    async resolveWorkspace() {
+      return opts.workspace ?? { kind: "assistant" as const };
+    },
     broadcastMetadata(_chat: unknown) {},
   };
 
@@ -313,6 +321,8 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     startCalls: () => startCalls,
     appendCalls: () => appendCalls,
     createCalls: () => createCalls,
+    createdChats: () => createdChats,
+    startedParams: () => startedParams,
     releasedLeases: () => releasedLeases,
     settledLeases: () => settledLeases,
   };
@@ -369,6 +379,7 @@ interface HarnessOptions {
   pendingTurn?: boolean;
   busyTurn?: boolean;
   failMessage?: string;
+  workspace?: { kind: "assistant" } | { kind: "project"; workspaceId: string } | { kind: "stale" };
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -382,6 +393,7 @@ function harness(o: HarnessOptions = {}) {
     pending: o.pendingTurn,
     busy: o.busyTurn,
     failMessage: o.failMessage,
+    workspace: o.workspace,
   });
   const sleepMock = createMockSleep();
   const logs = createLogs();
@@ -647,6 +659,30 @@ test("a text message from the owner is dispatched as a headless turn and replied
   assert.ok(reply, "reply delivered");
   assert.equal(reply?.parseMode, "HTML", "reply delivered as Telegram HTML");
   assert.equal(reply?.disablePreview, true, "link preview disabled");
+});
+
+test("a scoped Telegram prompt uses an isolated project chat", async () => {
+  const owner = person(42, "owner");
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    hasToken: true,
+    allowedUserId: 42,
+    workspace: { kind: "project", workspaceId: "workspace-a" },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "list files"))]],
+    autoStop: true,
+  });
+
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1);
+  await waitFor(() => api.sentMessages.some((message) => message.text.includes("Mock reply")));
+
+  assert.deepEqual(turnMock.createdChats(), [
+    { id: "telegram-42-workspace-a", workspaceId: "workspace-a" },
+  ]);
+  const [started] = turnMock.startedParams();
+  assert.equal(started?.chatId, "telegram-42-workspace-a");
+  assert.equal(started?.workspaceId, "workspace-a");
+  assert.equal(started?.mode, "assistant-automation");
 });
 
 test("dispatch gate blocks a second turn while one is already active", async () => {

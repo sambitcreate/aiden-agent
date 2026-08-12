@@ -73,7 +73,13 @@ export interface TelegramTurnDeps {
     >;
   } | null>;
   broadcastMetadata(chat: { id: string; workspaceId?: string; title: string; updatedAt: number }): void;
+  resolveWorkspace(): Promise<TelegramWorkspaceResolution>;
 }
+
+export type TelegramWorkspaceResolution =
+  | { kind: "assistant" }
+  | { kind: "project"; workspaceId: string }
+  | { kind: "stale" };
 
 let telegramTurnSequence = 0;
 
@@ -124,9 +130,11 @@ export function createTelegramBackgroundOwner(streamId: string): {
   };
 }
 
-/** Persistent chat id for a Telegram owner: `telegram-<userId>`. */
-export function telegramChatId(ownerUserId: number): string {
-  return `telegram-${ownerUserId}`;
+/** Persistent chat id for a Telegram owner and optional project workspace. */
+export function telegramChatId(ownerUserId: number, workspaceId?: string): string {
+  return workspaceId
+    ? `telegram-${ownerUserId}-${workspaceId}`
+    : `telegram-${ownerUserId}`;
 }
 
 /**
@@ -139,8 +147,9 @@ export async function ensureTelegramChat(
   title: string,
   providerId?: string,
   model?: string,
+  workspaceId?: string,
 ): Promise<string> {
-  const chatId = telegramChatId(ownerUserId);
+  const chatId = telegramChatId(ownerUserId, workspaceId);
   const existing = await deps.chatStore.get(chatId);
   if (existing) {
     deps.broadcastMetadata(existing);
@@ -150,6 +159,7 @@ export async function ensureTelegramChat(
     id: chatId,
     title,
     providerId,
+    workspaceId,
     model,
   });
   deps.broadcastMetadata(chat);
@@ -177,7 +187,18 @@ export async function sendTelegramTurn(
   deps: TelegramTurnDeps,
   chatId: string,
   content: string,
+  workspace?: TelegramWorkspaceResolution,
 ): Promise<TelegramTurnResult> {
+  const resolvedWorkspace = workspace ?? (await deps.resolveWorkspace());
+  if (resolvedWorkspace.kind === "stale") {
+    return {
+      content: "",
+      error: "The Telegram workspace is no longer available. Choose a folder workspace in Aiden Settings.",
+      ok: false,
+    };
+  }
+  const workspaceId =
+    resolvedWorkspace.kind === "project" ? resolvedWorkspace.workspaceId : undefined;
   const provider = await deps.resolveProvider();
   if (!provider) {
     return { content: "", error: "No provider is configured. Choose a provider in Aiden first.", ok: false };
@@ -205,9 +226,10 @@ export async function sendTelegramTurn(
       streamId,
       {
         chatId,
+        workspaceId,
         providerId: provider.providerId,
         model: provider.model,
-        mode: "assistant-unattended",
+        mode: workspaceId ? "assistant-automation" : "assistant-unattended",
         messages: [{ role: "user", content }],
       },
       background.owner,

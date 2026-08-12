@@ -292,35 +292,40 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
   async function dispatchTurn(turn: QueuedTelegramTurn): Promise<void> {
     dispatchPending = true;
-
-    // Ensure the persistent chat exists. The Aiden chat key is derived from
-    // the owner's Telegram user ID; the Telegram chat ID is used for API calls.
-    const chatId = telegramChatId(turn.ownerUserId);
     try {
-      const settings = await deps.config.getSettings();
-      await ensureTelegramChat(
-        deps.turn,
-        turn.ownerUserId,
-        `Telegram${turn.fromUsername ? ` (@${turn.fromUsername})` : ""}`,
-        settings.lastProviderId,
-        settings.lastModel,
-      );
-    } catch (cause) {
-      deps.error("Telegram: failed to ensure chat for turn.", cause);
-    }
+      const workspace = await deps.turn.resolveWorkspace();
+      const workspaceId =
+        workspace.kind === "project" ? workspace.workspaceId : undefined;
+      const chatId = telegramChatId(turn.ownerUserId, workspaceId);
 
-    activeTurn = true;
-    dispatchPending = false;
+      if (workspace.kind !== "stale") {
+        try {
+          const settings = await deps.config.getSettings();
+          await ensureTelegramChat(
+            deps.turn,
+            turn.ownerUserId,
+            `Telegram${turn.fromUsername ? ` (@${turn.fromUsername})` : ""}`,
+            settings.lastProviderId,
+            settings.lastModel,
+            workspaceId,
+          );
+        } catch (cause) {
+          deps.error("Telegram: failed to ensure chat for turn.", cause);
+        }
+      }
 
-    // Start typing indicator AFTER activeTurn is set so the loop condition
-    // evaluates true on its first iteration.
-    void sendTypingIndicator(turn.chatId).catch(() => undefined);
+      activeTurn = true;
+      dispatchPending = false;
 
-    try {
+      // Start typing indicator AFTER activeTurn is set so the loop condition
+      // evaluates true on its first iteration.
+      void sendTypingIndicator(turn.chatId).catch(() => undefined);
+
       const result: TelegramTurnResult = await sendTelegramTurn(
         deps.turn,
         chatId,
         turn.text,
+        workspace,
       );
       await deliverReply(turn.chatId, result);
     } catch (cause) {
@@ -331,6 +336,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         .catch(() => undefined);
     } finally {
       activeTurn = false;
+      dispatchPending = false;
       tryDispatch();
     }
   }

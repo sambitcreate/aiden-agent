@@ -15,8 +15,9 @@ import {
   TelegramBotApi,
 } from "./telegram-bot-api.js";
 import { createTelegramConfig } from "./telegram-config.js";
+import { isTelegramFolderWorkspace } from "./telegram-workspace-core.js";
+import type { TelegramWorkspaceResolution } from "./telegram-turn.js";
 import { createTelegramServiceCore } from "./telegram-service-core.js";
-
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 async function resolveProvider(): Promise<{
@@ -35,6 +36,17 @@ async function resolveProvider(): Promise<{
   const model = settings.telegramModel ?? settings.lastModel ?? provider.defaultModel ?? provider.models[0];
   if (!model) return null;
   return { providerId, model, provider };
+}
+
+async function resolveWorkspace(): Promise<TelegramWorkspaceResolution> {
+  const workspaceId = (await configStore.getSettings()).telegramWorkspaceId;
+  if (!workspaceId) return { kind: "assistant" };
+  const workspace = await configStore.getWorkspace(workspaceId);
+
+  if (!workspace || !isTelegramFolderWorkspace(workspace)) {
+    return { kind: "stale" };
+  }
+  return { kind: "project", workspaceId: workspace.id };
 }
 
 function broadcastMetadata(chat: {
@@ -93,6 +105,7 @@ export function createTelegramService() {
       llmClient,
       chatStore,
       resolveProvider,
+      resolveWorkspace,
       broadcastMetadata,
     },
     getToken: () => secrets.getKey(TELEGRAM_PROVIDER_ID),
