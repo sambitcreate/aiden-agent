@@ -7,6 +7,7 @@
 export const INVOKE_PREFIXES = [
   "app:",
   "assistant:",
+  "assistant-live:",
   "attachments:",
   "bots:",
   "browser:",
@@ -57,7 +58,9 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:command",
   "app:navigate",
   "app:update-state",
+  "assistant-live:event",
   "chat:approval",
+  "chat:approval-withdrawn",
   "chat:artifact",
   "chat:delta",
   "chat:done",
