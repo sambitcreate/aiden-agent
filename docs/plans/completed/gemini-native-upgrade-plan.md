@@ -12,7 +12,7 @@ This plan covers a staged Gemini upgrade in three funded phases plus one explici
 - **Phase 0 — Catalog-driven runtime limits** (cheap win, no provider rewrite)
 - **Phase 1 — Native Google provider via pi-ai** (`google-generative-ai` API, not the OpenAI-compat shim)
 - **Phase 3 — Thinking/reasoning controls with shimmer UX + Gemini context caching**
-- **Deferred — Gemini Live realtime multimodal** (out of scope here; see Deferred track)
+- **Follow-on — Gemini Live realtime multimodal** (out of scope here; see Follow-on track)
 
 Native **Google Search Grounding** and **cloud code execution** are *not* part of this plan. They are product/cost decisions that interact with the existing Exa tool and local `coding-tools.ts`, and they require a separate design.
 
@@ -29,11 +29,11 @@ Original gaps and shipped outcomes, verified against the current codebase:
 | Catalog already knows the real limits | `resources/model-capabilities.json` → `models-catalog-core.ts` → `models-catalog.ts` | Phase 0 now uses this offline snapshot for runtime limits as well as display metadata; the running app still makes no catalog network request. |
 | No reasoning UI or payload mapping | Before Phase 3a, `model-picker-pad.tsx` was selection-only and no thinking level reached the Pi Agent; Phase 0 identified reasoning-capable runtime models. | Phase 3a now provides a bounded per-model control and native request mapping. |
 | No context caching before Phase 3b | `main/services/gemini-context-cache.ts` now owns explicit cache creation, reuse, invalidation, and cleanup. | Eligible native Google workspace turns reuse the stable Pi prefix and report cache-read usage without caching transcript or file contents. |
-| Voice and chat use distinct native paths | Voice uses one-shot `generateContent`; chat uses Pi's native streaming transport. | The split is intentional: one-shot voice remains adequate while Gemini Live is deferred. |
+| Voice and chat use distinct native paths | Voice uses one-shot `generateContent`; chat uses Pi's native streaming transport. | The split is intentional: one-shot voice remains adequate while Gemini Live is tracked as a separate follow-on. |
 
 ## Non-goals
 
-- No Gemini Live / realtime WebSocket voice or screen streaming (deferred).
+- No Gemini Live / realtime WebSocket voice or screen streaming (separate follow-on).
 - No Google Search Grounding or cloud code-execution sandbox (separate design).
 - No migration of the other six presets (covered by the broader plan).
 - No public-catalog calls from the running app (per `AGENTS.md` release-model policy).
@@ -150,15 +150,14 @@ Phase 3 is complete: a reasoning-capable `google` model shows the Thinking contr
 
 ---
 
-## Deferred — Gemini Live realtime multimodal
+## Follow-on — Gemini Live realtime multimodal
 
-Intentionally out of scope. Rationale captured so a future plan can pick it up:
-
-- Product surface is large (floating window / menu-bar tray presence, interruptibility, mic & screen permissions, UX for live screen/canvas streaming) — not a transport swap.
-- Current one-shot voice (`MediaRecorder` → `generateContent`) is adequate for dictation; Live is a new interaction model, not a fix.
-- Builds on the native transport from Phase 1 but would add a WebSocket bridge in `main/services/` plus significant renderer work.
-
-Revisit as a standalone plan once Phases 0–3 are stable and there is validated product demand for low-latency interruptible voice / real-time screen share.
+This delivery intentionally excluded Live. The follow-on is now specified in
+[`../gemini-live-assistant-plan.md`](../gemini-live-assistant-plan.md): it is an
+Aiden-owned realtime adapter initiated from the Assistant dock, not a change to
+Pi's normal chat transport. It retains the original rationale: Live is a new
+interaction model with microphone/screen permissions, interruption, lifecycle,
+and approval requirements—not a replacement for one-shot dictation.
 
 ---
 
@@ -190,4 +189,5 @@ No test requires real Google credentials, paid tokens, or public network access.
 - Workspace prefix is context-cached with fingerprint reuse, and cache-read tokens are metered; cache failure never blocks a turn.
 - Legacy `gemini` credentials, selections, and pins migrate to `google` without silent loss.
 - No credentials or provider payloads cross the preload boundary; no runtime public-catalog calls.
-- Gemini Live multimodal remains explicitly deferred with rationale recorded.
+- Gemini Live multimodal remains outside this completed delivery and is tracked by
+  the separate `gemini-live-assistant-plan.md` follow-on.
