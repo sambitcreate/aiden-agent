@@ -10,12 +10,289 @@
 
 /** Telegram message text limit. */
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
+export const TELEGRAM_RICH_MESSAGE_LIMIT = 32_768;
+export const TELEGRAM_RICH_BLOCK_LIMIT = 500;
 
 /** Safety margin so HTML entity expansion doesn't push past the limit. */
 const CHUNK_HEADROOM = 64;
 
 const CODE_SPAN_SENTINEL = String.fromCharCode(0);
 const CODE_SPAN_PATTERN = new RegExp(`${CODE_SPAN_SENTINEL}CODESPAN(\\d+)${CODE_SPAN_SENTINEL}`, "g");
+
+interface RichDraftState {
+  codeTicks: number;
+  comment: boolean;
+  displayMath: boolean;
+  fence?: { marker: "`" | "~"; length: number };
+  strongAsterisk: boolean;
+  emphasisAsterisk: boolean;
+  strongUnderscore: boolean;
+  emphasisUnderscore: boolean;
+  strike: boolean;
+  linkText: boolean;
+  linkDestination: boolean;
+}
+
+function richDraftState(): RichDraftState {
+  return {
+    codeTicks: 0,
+    comment: false,
+    displayMath: false,
+    strongAsterisk: false,
+    emphasisAsterisk: false,
+    strongUnderscore: false,
+    emphasisUnderscore: false,
+    strike: false,
+    linkText: false,
+    linkDestination: false,
+  };
+}
+
+function richDraftClosed(state: RichDraftState): boolean {
+  return state.codeTicks === 0 && !state.comment && !state.displayMath && !state.fence &&
+    !state.strongAsterisk && !state.emphasisAsterisk && !state.strongUnderscore &&
+    !state.emphasisUnderscore && !state.strike && !state.linkText && !state.linkDestination;
+}
+
+function repeated(text: string, index: number, character: string): number {
+  let count = 0;
+  while (text[index + count] === character) count += 1;
+  return count;
+}
+
+function escaped(text: string, index: number): boolean {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) slashes += 1;
+  return slashes % 2 === 1;
+}
+
+function delimiterCandidate(text: string, index: number, length: number): boolean {
+  const previous = text[index - 1] ?? "";
+  const next = text[index + length] ?? "";
+  if (!next || /\s/u.test(next)) return Boolean(previous && !/\s/u.test(previous));
+  if (!previous || /\s/u.test(previous)) return true;
+  return /[\p{P}\p{S}]/u.test(previous) || /[\p{P}\p{S}]/u.test(next);
+}
+
+function updateRichDraftLine(line: string, state: RichDraftState): void {
+  if (state.fence || state.displayMath) return;
+  for (let index = 0; index < line.length; index += 1) {
+    if (state.comment) {
+      const close = line.indexOf("-->", index);
+      if (close === -1) return;
+      state.comment = false;
+      index = close + 2;
+      continue;
+    }
+    if (state.codeTicks > 0) {
+      const ticks = repeated(line, index, "`");
+      if (ticks >= state.codeTicks) {
+        state.codeTicks = 0;
+        index += ticks - 1;
+      }
+      continue;
+    }
+    if (escaped(line, index)) continue;
+    if (line.startsWith("<!--", index)) {
+      const close = line.indexOf("-->", index + 4);
+      if (close === -1) {
+        state.comment = true;
+        return;
+      }
+      index = close + 2;
+      continue;
+    }
+    const ticks = repeated(line, index, "`");
+    if (ticks > 0) {
+      state.codeTicks = ticks;
+      index += ticks - 1;
+      continue;
+    }
+    if (line.startsWith("][", index) || line.startsWith("](", index)) {
+      state.linkText = false;
+      state.linkDestination = true;
+      index += 1;
+      continue;
+    }
+    if (line[index] === "[" && !state.linkDestination) {
+      state.linkText = true;
+      continue;
+    }
+    if (line[index] === ")" && state.linkDestination) {
+      state.linkDestination = false;
+      continue;
+    }
+    if (line.startsWith("~~", index) && delimiterCandidate(line, index, 2)) {
+      state.strike = !state.strike;
+      index += 1;
+      continue;
+    }
+    if (line.startsWith("**", index) && delimiterCandidate(line, index, 2)) {
+      state.strongAsterisk = !state.strongAsterisk;
+      index += 1;
+      continue;
+    }
+    if (line[index] === "*" && delimiterCandidate(line, index, 1)) {
+      state.emphasisAsterisk = !state.emphasisAsterisk;
+      continue;
+    }
+    if (line.startsWith("__", index) && delimiterCandidate(line, index, 2)) {
+      state.strongUnderscore = !state.strongUnderscore;
+      index += 1;
+      continue;
+    }
+    if (line[index] === "_" && delimiterCandidate(line, index, 1)) {
+      state.emphasisUnderscore = !state.emphasisUnderscore;
+    }
+  }
+}
+
+function safeRichDraftEnd(markdown: string): number {
+  const state = richDraftState();
+  let offset = 0;
+  let safeEnd = 0;
+  for (const line of markdown.split("\n")) {
+    const lineEnd = offset + line.length;
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
+    if (state.fence) {
+      if (new RegExp(`^ {0,3}${state.fence.marker}{${state.fence.length},}\\s*$`, "u").test(line)) state.fence = undefined;
+    } else if (state.displayMath) {
+      if (line.trim() === "$$") state.displayMath = false;
+    } else if (fence) {
+      state.fence = { marker: fence[0] as "`" | "~", length: fence.length };
+    } else if (line.trim() === "$$") {
+      state.displayMath = true;
+    } else {
+      updateRichDraftLine(line, state);
+    }
+    if (richDraftClosed(state)) safeEnd = lineEnd;
+    offset = lineEnd + 1;
+  }
+  return richDraftClosed(state) ? markdown.length : safeEnd;
+}
+
+/** Return only a structurally closed prefix suitable for sendRichMessageDraft. */
+export function safeRichDraftPrefix(markdown: string): string | undefined {
+  const source = markdown.trim().slice(0, TELEGRAM_RICH_MESSAGE_LIMIT);
+  if (!source) return undefined;
+  const safeEnd = safeRichDraftEnd(source);
+  const prefix = source.slice(0, safeEnd).trimEnd();
+  if (/[\p{L}\p{N}]/u.test(prefix)) return prefix;
+  let cursor = source.length;
+  while ((cursor = source.lastIndexOf(" ", cursor - 1)) > 0) {
+    const candidate = source.slice(0, cursor).trimEnd();
+    if (/[\p{L}\p{N}]/u.test(candidate) && safeRichDraftEnd(candidate) === candidate.length) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Split native Rich Markdown without breaking fenced code blocks or a single
+ * top-level inline wrapper. Telegram applies both a character and block limit.
+ */
+export function chunkRichMarkdown(markdown: string): string[] {
+  const normalized = markdown.replace(/\r\n/gu, "\n").trim();
+  if (!normalized) return [];
+  if (richBlockCount(normalized) <= TELEGRAM_RICH_BLOCK_LIMIT && normalized.length <= TELEGRAM_RICH_MESSAGE_LIMIT) {
+    return [normalized];
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+  let blocks = 0;
+  for (const rawBlock of richBlocks(normalized)) {
+    for (const block of splitLongRichBlock(rawBlock)) {
+      const blockCount = richBlockCount(block);
+      const candidate = current ? `${current}\n\n${block}` : block;
+      if (candidate.length <= TELEGRAM_RICH_MESSAGE_LIMIT && blocks + blockCount <= TELEGRAM_RICH_BLOCK_LIMIT) {
+        current = candidate;
+        blocks += blockCount;
+        continue;
+      }
+      if (current) chunks.push(current.trimEnd());
+      current = block;
+      blocks = blockCount;
+    }
+  }
+  if (current) chunks.push(current.trimEnd());
+  return chunks;
+}
+
+function richBlocks(markdown: string): string[] {
+  const result: string[] = [];
+  const current: string[] = [];
+  let fence: { marker: string; length: number } | undefined;
+  const flush = () => {
+    if (current.length) result.push(current.splice(0).join("\n"));
+  };
+  for (const line of markdown.split("\n")) {
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
+    if (!fence && !line.trim()) {
+      flush();
+      continue;
+    }
+    current.push(line);
+    if (!fence && opening) {
+      fence = { marker: opening[0]!, length: opening.length };
+    } else if (fence && new RegExp(`^ {0,3}${fence.marker}{${fence.length},}\\s*$`, "u").test(line)) {
+      fence = undefined;
+    }
+  }
+  flush();
+  return result;
+}
+
+function richBlockCount(markdown: string): number {
+  return richBlocks(markdown).reduce((total, block) => {
+    if (/^ {0,3}(`{3,}|~{3,})/u.test(block)) return total + 1;
+    const lines = block.split("\n").filter((line) => line.trim());
+    return total + (lines.some((line) => /^\s*(?:[-*+] |\d+\. |> |\|)/u.test(line)) ? Math.max(1, lines.length) : 1);
+  }, 0);
+}
+
+function splitLongRichBlock(block: string): string[] {
+  if (block.length <= TELEGRAM_RICH_MESSAGE_LIMIT && richBlockCount(block) <= TELEGRAM_RICH_BLOCK_LIMIT) return [block];
+  const fenced = splitLongFence(block);
+  if (fenced) return fenced;
+  const wrapper = ["**", "__", "~~", "`", "*", "_"].find(
+    (delimiter) => block.startsWith(delimiter) && block.endsWith(delimiter) && block.length > delimiter.length * 2,
+  );
+  if (wrapper) {
+    return splitRichContent(
+      block.slice(wrapper.length, -wrapper.length),
+      TELEGRAM_RICH_MESSAGE_LIMIT - wrapper.length * 2,
+      (value) => `${wrapper}${value}${wrapper}`,
+    );
+  }
+  return splitRichContent(block, TELEGRAM_RICH_MESSAGE_LIMIT, (value) => value.trim());
+}
+
+function splitLongFence(block: string): string[] | undefined {
+  const lines = block.split("\n");
+  const opening = lines[0] ?? "";
+  const marker = opening.match(/^ {0,3}(`{3,}|~{3,})/u)?.[1];
+  const closing = lines[lines.length - 1] ?? "";
+  if (!marker || !new RegExp(`^ {0,3}${marker[0]}{${marker.length},}\\s*$`, "u").test(closing)) return undefined;
+  const limit = TELEGRAM_RICH_MESSAGE_LIMIT - opening.length - closing.length - 2;
+  if (limit <= 0) return undefined;
+  return splitRichContent(lines.slice(1, -1).join("\n"), limit, (value) => `${opening}\n${value}${value.endsWith("\n") ? "" : "\n"}${closing}`);
+}
+
+function splitRichContent(content: string, limit: number, wrap: (value: string) => string): string[] {
+  const chunks: string[] = [];
+  let remaining = content;
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit + 1);
+    const paragraph = window.lastIndexOf("\n\n", limit);
+    const line = window.lastIndexOf("\n", limit);
+    const space = window.lastIndexOf(" ", limit);
+    const splitAt = paragraph > 0 ? paragraph + 2 : line > 0 ? line + 1 : space > 0 ? space + 1 : limit;
+    chunks.push(wrap(remaining.slice(0, splitAt)));
+    remaining = remaining.slice(splitAt);
+  }
+  if (remaining) chunks.push(wrap(remaining));
+  return chunks;
+}
 
 function escapeHtml(text: string): string {
   return text

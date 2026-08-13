@@ -5,11 +5,18 @@ import type { TelegramInlineKeyboardMarkup } from "./telegram-bot-api.js";
 export interface TelegramButtonAction {
   label: string;
   prompt: string;
+  selectedStyle?: "primary" | "success" | "danger";
 }
 
 export interface TelegramOutboundAttachment {
   path: string;
   caption?: string;
+}
+
+export interface TelegramOutboundVoice {
+  text: string;
+  lang?: string;
+  rate?: string;
 }
 
 export function createTelegramButtonStore(now: () => number) {
@@ -30,7 +37,12 @@ export function createTelegramButtonStore(now: () => number) {
         actions.delete(id);
         return undefined;
       }
-      return { label: action.label, prompt: action.prompt };
+      actions.delete(id);
+      return {
+        label: action.label,
+        prompt: action.prompt,
+        ...(action.selectedStyle ? { selectedStyle: action.selectedStyle } : {}),
+      };
     },
   };
 }
@@ -38,11 +50,17 @@ export function createTelegramButtonStore(now: () => number) {
 export function planTelegramReply(
   markdown: string,
   register: (action: TelegramButtonAction) => string,
-): { markdown: string; replyMarkup?: TelegramInlineKeyboardMarkup; attachments: TelegramOutboundAttachment[] } {
+): {
+  markdown: string;
+  replyMarkup?: TelegramInlineKeyboardMarkup;
+  attachments: TelegramOutboundAttachment[];
+  voices: TelegramOutboundVoice[];
+} {
   const rows: TelegramInlineKeyboardMarkup["inline_keyboard"] = [];
   const attachments: TelegramOutboundAttachment[] = [];
+  const voices: TelegramOutboundVoice[] = [];
   const visible = markdown.replace(
-    /^<!--\s*(telegram_button|telegram_attach)\s*:?[ \t]*(\{.*\}|(?:[A-Za-z_]\w*="[^"]*"\s*)+)\s*-->[ \t]*(?:\r?\n)?/gmu,
+    /^<!--\s*(telegram_button|telegram_attach|telegram_voice)\s*:?[ \t]*(\{.*\}|(?:[A-Za-z_]\w*="[^"]*"\s*)+)\s*-->[ \t]*(?:\r?\n)?/gmu,
     (_raw, command: string, source: string) => {
       const payload = parsePayload(source.trim());
       if (command === "telegram_attach") {
@@ -50,11 +68,25 @@ export function planTelegramReply(
         if (path) attachments.push({ path, caption: stringValue(payload.caption) });
         return "";
       }
+      if (command === "telegram_voice") {
+        const text = stringValue(payload.text) ?? stringValue(payload.value);
+        const lang = stringValue(payload.lang);
+        const rate = stringValue(payload.rate);
+        if (text) voices.push({ text, ...(lang ? { lang } : {}), ...(rate ? { rate } : {}) });
+        return "";
+      }
       const value = stringValue(payload.value);
       const label = stringValue(payload.label) ?? value;
       const prompt = stringValue(payload.prompt) ?? value;
+      const style = payload.selected_style;
+      const selectedStyle = style === "primary" || style === "success" || style === "danger"
+        ? style
+        : undefined;
       if (label && prompt) {
-        rows.push([{ text: label.slice(0, 64), callback_data: register({ label, prompt }) }]);
+        rows.push([{
+          text: label.slice(0, 64),
+          callback_data: register({ label, prompt, ...(selectedStyle ? { selectedStyle } : {}) }),
+        }]);
       }
       return "";
     },
@@ -62,8 +94,32 @@ export function planTelegramReply(
   return {
     markdown: visible || (rows.length ? "☑️ **Choose an option:**" : ""),
     attachments,
+    voices,
     ...(rows.length ? { replyMarkup: { inline_keyboard: rows } } : {}),
   };
+}
+
+/** Hide complete and in-progress host action comments from streamed previews. */
+export function stripTelegramActionMarkupForPreview(markdown: string): string {
+  return markdown
+    .split(/\r?\n/gu)
+    .filter((line) => !/^<!--[ \t]*telegram_(?:button|attach|voice)\b/iu.test(line))
+    .join("\n")
+    .trim();
+}
+
+export function markTelegramButtonSelected(
+  markup: TelegramInlineKeyboardMarkup,
+  callbackData: string,
+  style: "primary" | "success" | "danger" = "primary",
+): TelegramInlineKeyboardMarkup | undefined {
+  let matched = false;
+  const inline_keyboard = markup.inline_keyboard.map((row) => row.map((button) => {
+    if (button.callback_data !== callbackData) return { ...button };
+    matched = true;
+    return { ...button, style };
+  }));
+  return matched ? { inline_keyboard } : undefined;
 }
 
 function parsePayload(source: string): Record<string, unknown> {

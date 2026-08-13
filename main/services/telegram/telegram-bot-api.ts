@@ -11,6 +11,8 @@ export interface TelegramUser {
   first_name: string;
   last_name?: string;
   username?: string;
+  /** True when BotFather Threaded Mode is enabled for this bot's private chats. */
+  has_topics_enabled?: boolean;
 }
 
 export interface TelegramChat {
@@ -32,6 +34,7 @@ export interface TelegramMessage {
   entities?: TelegramMessageEntity[];
   reply_to_message?: TelegramMessage;
   media_group_id?: string;
+  message_thread_id?: number;
   photo?: TelegramPhotoSize[];
   document?: TelegramDocument;
   voice?: TelegramVoice;
@@ -39,6 +42,7 @@ export interface TelegramMessage {
   video?: TelegramVideo;
   animation?: TelegramDocument;
   forward_origin?: unknown;
+  reply_markup?: TelegramInlineKeyboardMarkup;
 }
 
 export interface TelegramPhotoSize {
@@ -93,10 +97,21 @@ export interface TelegramInlineKeyboardButton {
   text: string;
   callback_data?: string;
   url?: string;
+  style?: "primary" | "success" | "danger";
 }
 
 export interface TelegramInlineKeyboardMarkup {
   inline_keyboard: TelegramInlineKeyboardButton[][];
+}
+
+export interface TelegramInputRichMessage {
+  markdown: string;
+  skip_entity_detection?: boolean;
+}
+
+export interface TelegramForumTopic {
+  message_thread_id: number;
+  name: string;
 }
 
 export interface TelegramCallbackQuery {
@@ -111,6 +126,21 @@ export interface TelegramUpdate {
   message?: TelegramMessage;
   edited_message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
+  message_reaction?: TelegramMessageReactionUpdated;
+}
+
+export interface TelegramReactionTypeEmoji {
+  type: "emoji";
+  emoji: string;
+}
+
+export interface TelegramMessageReactionUpdated {
+  chat: TelegramChat;
+  message_id: number;
+  user?: TelegramUser;
+  old_reaction: TelegramReactionTypeEmoji[];
+  new_reaction: TelegramReactionTypeEmoji[];
+  date: number;
 }
 
 export type TelegramMessageEntityType =
@@ -257,7 +287,7 @@ export class TelegramBotApi {
   ): Promise<TelegramUpdate[]> {
     const body: Record<string, unknown> = {
       timeout: timeoutSeconds,
-      allowed_updates: ["message", "edited_message", "callback_query"],
+      allowed_updates: ["message", "edited_message", "callback_query", "message_reaction"],
     };
     if (offset !== undefined) body.offset = offset;
     return callWithAbort(
@@ -268,6 +298,20 @@ export class TelegramBotApi {
 
   async getMe(): Promise<TelegramUser> {
     return unwrap<TelegramUser>(await this.transport("getMe", {}));
+  }
+
+  async createForumTopic(chatId: number, name: string): Promise<TelegramForumTopic> {
+    return unwrap<TelegramForumTopic>(await this.transport("createForumTopic", {
+      chat_id: chatId,
+      name,
+    }));
+  }
+
+  async deleteForumTopic(chatId: number, threadId: number): Promise<void> {
+    await unwrap<boolean>(await this.transport("deleteForumTopic", {
+      chat_id: chatId,
+      message_thread_id: threadId,
+    }));
   }
 
   async getFile(fileId: string): Promise<TelegramFile> {
@@ -283,6 +327,7 @@ export class TelegramBotApi {
 
   async sendDocument(params: {
     chatId: number;
+    threadId?: number;
     bytes: Uint8Array;
     name: string;
     mimeType?: string;
@@ -293,6 +338,7 @@ export class TelegramBotApi {
       "sendDocument",
       {
         chat_id: String(params.chatId),
+        ...(params.threadId !== undefined ? { message_thread_id: String(params.threadId) } : {}),
         ...(params.caption ? { caption: params.caption } : {}),
       },
       {
@@ -300,6 +346,31 @@ export class TelegramBotApi {
         bytes: params.bytes,
         name: params.name,
         mimeType: params.mimeType ?? "application/octet-stream",
+      },
+    ));
+  }
+
+  async sendVoice(params: {
+    chatId: number;
+    threadId?: number;
+    bytes: Uint8Array;
+    name?: string;
+    mimeType?: "audio/ogg" | "audio/opus";
+    caption?: string;
+  }): Promise<TelegramMessage> {
+    if (!this.uploadTransport) throw new Error("Telegram voice uploads are unavailable.");
+    return unwrap<TelegramMessage>(await this.uploadTransport(
+      "sendVoice",
+      {
+        chat_id: String(params.chatId),
+        ...(params.threadId !== undefined ? { message_thread_id: String(params.threadId) } : {}),
+        ...(params.caption ? { caption: params.caption } : {}),
+      },
+      {
+        field: "voice",
+        bytes: params.bytes,
+        name: params.name ?? "aiden-voice.ogg",
+        mimeType: params.mimeType ?? "audio/ogg",
       },
     ));
   }
@@ -316,6 +387,7 @@ export class TelegramBotApi {
 
   async sendMessage(params: {
     chatId: number;
+    threadId?: number;
     text: string;
     parseMode?: "HTML" | "MarkdownV2";
     replyMarkup?: unknown;
@@ -323,6 +395,7 @@ export class TelegramBotApi {
   }): Promise<TelegramMessage> {
     const body: Record<string, unknown> = {
       chat_id: params.chatId,
+      ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
       text: params.text,
     };
     if (params.parseMode) body.parse_mode = params.parseMode;
@@ -331,12 +404,41 @@ export class TelegramBotApi {
     return unwrap<TelegramMessage>(await this.transport("sendMessage", body));
   }
 
+  async sendRichMessage(params: {
+    chatId: number;
+    threadId?: number;
+    markdown: string;
+    replyMarkup?: unknown;
+  }): Promise<TelegramMessage> {
+    return unwrap<TelegramMessage>(await this.transport("sendRichMessage", {
+      chat_id: params.chatId,
+      ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
+      rich_message: { markdown: params.markdown, skip_entity_detection: true },
+      ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
+    }));
+  }
+
+  async sendRichMessageDraft(params: {
+    chatId: number;
+    threadId?: number;
+    draftId: number;
+    markdown: string;
+  }): Promise<void> {
+    await unwrap<boolean>(await this.transport("sendRichMessageDraft", {
+      chat_id: params.chatId,
+      draft_id: params.draftId,
+      ...(params.threadId !== undefined ? { message_thread_id: params.threadId } : {}),
+      rich_message: { markdown: params.markdown, skip_entity_detection: true },
+    }));
+  }
+
   async editMessageText(params: {
     chatId: number;
     messageId: number;
     text: string;
     parseMode?: "HTML" | "MarkdownV2";
     replyMarkup?: unknown;
+    disablePreview?: boolean;
   }): Promise<TelegramMessage> {
     const body: Record<string, unknown> = {
       chat_id: params.chatId,
@@ -345,6 +447,7 @@ export class TelegramBotApi {
     };
     if (params.parseMode) body.parse_mode = params.parseMode;
     if (params.replyMarkup !== undefined) body.reply_markup = params.replyMarkup;
+    if (params.disablePreview) body.disable_web_page_preview = true;
     return unwrap<TelegramMessage>(await this.transport("editMessageText", body));
   }
 
@@ -362,13 +465,17 @@ export class TelegramBotApi {
     await unwrap<unknown>(await this.transport("editMessageReplyMarkup", body));
   }
 
-  async sendChatAction(chatId: number, action: string): Promise<void> {
-    await this.transport("sendChatAction", { chat_id: chatId, action });
+  async sendChatAction(chatId: number, action: string, threadId?: number): Promise<void> {
+    await unwrap<boolean>(await this.transport("sendChatAction", {
+      chat_id: chatId,
+      action,
+      ...(threadId !== undefined ? { message_thread_id: threadId } : {}),
+    }));
   }
 
   async answerCallbackQuery(id: string, text?: string): Promise<void> {
     const body: Record<string, unknown> = { callback_query_id: id };
     if (text) body.text = text;
-    await this.transport("answerCallbackQuery", body);
+    await unwrap<boolean>(await this.transport("answerCallbackQuery", body));
   }
 }

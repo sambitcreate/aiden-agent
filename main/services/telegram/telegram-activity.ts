@@ -3,7 +3,8 @@
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
 import type { TelegramBotApi, TelegramMessage } from "./telegram-bot-api.js";
 import { escapeHtml } from "./telegram-controls.js";
-import { chunkForTelegram, markdownToTelegramHtml } from "./telegram-markdown.js";
+import { chunkForTelegram, markdownToTelegramHtml, safeRichDraftPrefix } from "./telegram-markdown.js";
+import { stripTelegramActionMarkupForPreview } from "./telegram-outbound.js";
 
 export type TelegramActivityVerbosity = "quiet" | "thinking" | "tools" | "verbose";
 
@@ -12,6 +13,8 @@ interface ActivityOptions {
   chatId: number;
   draftPreviews: boolean;
   verbosity: TelegramActivityVerbosity;
+  rendering: "rich" | "html";
+  threadId?: number;
   now(): number;
 }
 
@@ -22,8 +25,10 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
   let draft = "";
   let reasoning = "";
   let draftMessage: TelegramMessage | undefined;
+  const nativeDraftId = Math.max(1, Math.floor(options.now() % 2_147_483_647));
   let thinkingMessage: TelegramMessage | undefined;
   let lastDraftAt = 0;
+  let lastDraftSent = "";
   let delivery = Promise.resolve();
   let finished = false;
 
@@ -33,15 +38,31 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
 
   async function updateDraft(): Promise<void> {
     if (!draft.trim() || finished) return;
-    const html = chunkForTelegram(markdownToTelegramHtml(draft))[0];
+    const visibleDraft = stripTelegramActionMarkupForPreview(draft);
+    if (!visibleDraft || visibleDraft === lastDraftSent) return;
+    if (options.rendering === "rich") {
+      const safeDraft = safeRichDraftPrefix(visibleDraft);
+      if (!safeDraft || safeDraft === lastDraftSent) return;
+      await options.api.sendRichMessageDraft({
+        chatId: options.chatId,
+        threadId: options.threadId,
+        draftId: nativeDraftId,
+        markdown: safeDraft,
+      });
+      lastDraftSent = safeDraft;
+      return;
+    }
+    const html = chunkForTelegram(markdownToTelegramHtml(visibleDraft))[0];
     if (!html) return;
     if (!draftMessage) {
       draftMessage = await options.api.sendMessage({
         chatId: options.chatId,
+        threadId: options.threadId,
         text: html,
         parseMode: "HTML",
         disablePreview: true,
       });
+      lastDraftSent = visibleDraft;
       return;
     }
     await options.api.editMessageText({
@@ -50,6 +71,7 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
       text: html,
       parseMode: "HTML",
     });
+    lastDraftSent = visibleDraft;
   }
 
   async function updateThinking(): Promise<void> {
@@ -59,6 +81,7 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
     if (!thinkingMessage) {
       thinkingMessage = await options.api.sendMessage({
         chatId: options.chatId,
+        threadId: options.threadId,
         text: html,
         parseMode: "HTML",
         disablePreview: true,
@@ -101,6 +124,7 @@ export function createTelegramActivityProjector(options: ActivityOptions) {
       enqueue(async () => {
         await options.api.sendMessage({
           chatId: options.chatId,
+          threadId: options.threadId,
           text: `${icon} <b>${escapeHtml(titleCase(event.toolName!))}</b>: <code>${escapeHtml(event.phase!)}</code>`,
           parseMode: "HTML",
           disablePreview: true,

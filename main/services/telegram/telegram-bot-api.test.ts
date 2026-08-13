@@ -32,7 +32,7 @@ test("getUpdates calls transport with offset, timeout, and allowed_updates", asy
   assert.equal(calls[0].method, "getUpdates");
   assert.deepEqual(calls[0].body, {
     timeout: 25,
-    allowed_updates: ["message", "edited_message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query", "message_reaction"],
     offset: 42,
   });
 });
@@ -44,7 +44,7 @@ test("getUpdates without offset omits the offset field", async () => {
   assert.equal(calls[0].method, "getUpdates");
   assert.deepEqual(calls[0].body, {
     timeout: 0,
-    allowed_updates: ["message", "edited_message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query", "message_reaction"],
   });
   assert.equal("offset" in calls[0].body, false);
 });
@@ -124,6 +124,27 @@ test("sendChatAction calls transport with chat_id and action", async () => {
 
   assert.equal(calls[0].method, "sendChatAction");
   assert.deepEqual(calls[0].body, { chat_id: 7, action: "typing" });
+});
+
+test("native rich messages and drafts preserve thread routing", async () => {
+  const { api, calls } = harness({
+    ok: true,
+    result: { message_id: 1, chat: { id: 5, type: "private" }, date: 0 },
+  });
+  await api.sendRichMessage({ chatId: 5, threadId: 8, markdown: "**Hello**" });
+  assert.deepEqual(calls[0], {
+    method: "sendRichMessage",
+    body: {
+      chat_id: 5,
+      message_thread_id: 8,
+      rich_message: { markdown: "**Hello**", skip_entity_detection: true },
+    },
+  });
+
+  const draft = harness({ ok: true, result: true });
+  await draft.api.sendRichMessageDraft({ chatId: 5, threadId: 8, draftId: 9, markdown: "Draft" });
+  assert.equal(draft.calls[0]?.method, "sendRichMessageDraft");
+  assert.equal(draft.calls.length, 1);
 });
 
 test("answerCallbackQuery includes callback_query_id and optional text", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createTelegramButtonStore, planTelegramReply } from "./telegram-outbound.js";
+import { createTelegramButtonStore, markTelegramButtonSelected, planTelegramReply } from "./telegram-outbound.js";
 
 test("plans assistant-authored Telegram buttons without leaking hidden markup", () => {
   let now = 1;
@@ -14,8 +14,19 @@ test("plans assistant-authored Telegram buttons without leaking hidden markup", 
   const callback = plan.replyMarkup?.inline_keyboard[0]?.[0]?.callback_data;
   assert.match(callback ?? "", /^tgbtn:/);
   assert.deepEqual(store.resolve(callback!), { label: "Continue", prompt: "Keep going" });
+  assert.equal(store.resolve(callback!), undefined, "generated controls are single-use");
   now += 25 * 60 * 60 * 1_000;
   assert.equal(store.resolve(callback!), undefined);
+});
+
+test("plans explicit voice replies and selected button styles", () => {
+  const plan = planTelegramReply(
+    'Done.\n<!-- telegram_voice text="Your task is complete" lang="en" -->\n<!-- telegram_button label="Approve" prompt="Approve it" selected_style="success" -->',
+    () => "tgbtn:1",
+  );
+  assert.deepEqual(plan.voices, [{ text: "Your task is complete", lang: "en" }]);
+  const selected = markTelegramButtonSelected(plan.replyMarkup!, "tgbtn:1", "success");
+  assert.equal(selected?.inline_keyboard[0]?.[0]?.style, "success");
 });
 
 test("plans workspace attachment actions without exposing local paths in text", () => {

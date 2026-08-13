@@ -15,11 +15,14 @@ export interface TelegramInboundContent {
   text: string;
   attachments: Attachment[];
   notices: string[];
+  localFiles: Array<{ name: string; mimeType: string; path: string; size: number }>;
+  hasVoiceInput: boolean;
 }
 
 export interface TelegramInboundDeps {
   api: Pick<TelegramBotApi, "downloadFile">;
   transcribeAudio?(input: { audioBase64: string; mimeType: string }): Promise<string>;
+  storeFile?(input: { bytes: Uint8Array; name: string; mimeType: string }): Promise<string>;
 }
 
 interface FileCandidate {
@@ -75,6 +78,15 @@ function candidates(message: TelegramMessage): FileCandidate[] {
       kind: "file",
     });
   }
+  if (message.animation) {
+    result.push({
+      fileId: message.animation.file_id,
+      name: message.animation.file_name ?? `telegram-animation-${message.message_id}`,
+      mimeType: message.animation.mime_type ?? "application/octet-stream",
+      declaredSize: message.animation.file_size,
+      kind: "file",
+    });
+  }
   return result;
 }
 
@@ -85,6 +97,8 @@ export async function normalizeTelegramInbound(
   let text = message.text ?? message.caption ?? "";
   const attachments: Attachment[] = [];
   const notices: string[] = [];
+  const localFiles: TelegramInboundContent["localFiles"] = [];
+  let hasVoiceInput = false;
   for (const candidate of candidates(message)) {
     if (candidate.declaredSize && candidate.declaredSize > MAX_DOWNLOAD_BYTES) {
       notices.push(`${candidate.name} was skipped because it exceeds Telegram's 20 MB bot download limit.`);
@@ -97,6 +111,7 @@ export async function normalizeTelegramInbound(
         continue;
       }
       if (candidate.kind === "voice") {
+        hasVoiceInput = true;
         if (!deps.transcribeAudio) {
           notices.push(`Voice file ${candidate.name} arrived, but Aiden voice transcription is unavailable.`);
           continue;
@@ -138,9 +153,36 @@ export async function normalizeTelegramInbound(
           size: bytes.byteLength,
           text: bounded,
         });
+        if (deps.storeFile) {
+          const storedPath = await deps.storeFile({
+            bytes,
+            name: candidate.name,
+            mimeType: candidate.mimeType,
+          });
+          localFiles.push({
+            name: candidate.name,
+            mimeType: candidate.mimeType,
+            path: storedPath,
+            size: bytes.byteLength,
+          });
+        }
         continue;
       }
-      notices.push(`${candidate.name} (${candidate.mimeType}) was received but is not an inline Aiden attachment type.`);
+      if (!deps.storeFile) {
+        notices.push(`${candidate.name} (${candidate.mimeType}) arrived, but Aiden's Telegram inbox is unavailable.`);
+        continue;
+      }
+      const storedPath = await deps.storeFile({
+        bytes,
+        name: candidate.name,
+        mimeType: candidate.mimeType,
+      });
+      localFiles.push({
+        name: candidate.name,
+        mimeType: candidate.mimeType,
+        path: storedPath,
+        size: bytes.byteLength,
+      });
     } catch (cause) {
       notices.push(`${candidate.name} could not be downloaded: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
@@ -151,5 +193,18 @@ export async function normalizeTelegramInbound(
     if (replied?.trim()) text = `[Replying to]\n${replied.trim()}\n\n${text}`.trim();
   }
   if (message.forward_origin) text = `[Forwarded Telegram message]\n${text}`.trim();
-  return { text, attachments, notices };
+  if (localFiles.length > 0) {
+    const inventory = localFiles.map((file) => [
+      `File: ${file.name}`,
+      `Type: ${file.mimeType}`,
+      `Size: ${file.size} bytes`,
+      `Local path: ${file.path}`,
+    ].join("\n")).join("\n\n");
+    text = [
+      text,
+      "[Aiden Telegram inbox: private local copies available for inspection]",
+      inventory,
+    ].filter(Boolean).join("\n\n");
+  }
+  return { text, attachments, notices, localFiles, hasVoiceInput };
 }

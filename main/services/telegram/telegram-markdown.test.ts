@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import {
   markdownToTelegramHtml,
   chunkForTelegram,
+  chunkRichMarkdown,
   TELEGRAM_MESSAGE_LIMIT,
+  TELEGRAM_RICH_MESSAGE_LIMIT,
 } from "./telegram-markdown.js";
 
 test("converts **bold** to <b>bold</b>", () => {
@@ -75,4 +77,17 @@ test("chunkForTelegram splits at paragraph boundaries when possible", () => {
 
 test("chunkForTelegram returns empty array for empty string", () => {
   assert.deepEqual(chunkForTelegram(""), []);
+});
+
+test("chunkRichMarkdown preserves fences while splitting long code", () => {
+  const chunks = chunkRichMarkdown(`\`\`\`ts\n${"const value = 1;\n".repeat(3_000)}\`\`\``);
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.length <= TELEGRAM_RICH_MESSAGE_LIMIT));
+  assert.ok(chunks.every((chunk) => chunk.startsWith("```ts\n") && chunk.endsWith("\n```")));
+});
+
+test("chunkRichMarkdown keeps a wrapped inline block balanced", () => {
+  const chunks = chunkRichMarkdown(`**${"word ".repeat(8_000)}**`);
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.startsWith("**") && chunk.endsWith("**")));
 });
