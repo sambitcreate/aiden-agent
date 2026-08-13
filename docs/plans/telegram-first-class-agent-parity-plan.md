@@ -1,10 +1,46 @@
 # Telegram First-Class Agent Parity
 
-Status: Active
+Status: Implemented; credentialed Telegram client smoke pending
 
 Date: 2026-08-13
 
 Reference baseline: `@llblab/pi-telegram` `0.27.12` at `/Users/sambitbiswas/projects/opp/pi-telegram`
+
+## 2026-08-13 completion tranche
+
+The remaining work is implemented in dependency order:
+
+1. **Runtime integrity and shared state.** Consume generated actions once, debounce
+   albums, handle reaction shortcuts, recover polling-offset failures, reset all
+   owner-bound state during re-pairing, and make Telegram model changes use the
+   same provider/model selection as the desktop workspace. An in-flight switch
+   aborts safely and queues one continuation against the new model.
+2. **Rich transport.** Persist arbitrary inbound files in a private Aiden Telegram
+   inbox, expose their exact local paths to the accepted turn, add native Rich
+   Markdown and Rich Draft delivery with a known-safe HTML fallback, and add
+   configurable hidden/mirror/always outbound voice policy through registered TTS
+   providers.
+3. **Routing and identity.** Add isolated named bot profiles, profile-scoped tokens,
+   offsets, owner state, diagnostics, transport ownership leases, and private-chat
+   thread targets that route to explicit Aiden workspaces/agents without launching
+   hidden processes.
+4. **Extension and direct-delivery surface.** Add bounded registries for commands,
+   menu/status sections, update handlers, callbacks, inbound/outbound handlers and
+   voice providers. Expose target-aware `telegram_help`, `telegram_message`,
+   `telegram_attach`, and `telegram_voice` tools; every cross-target send is fenced
+   to one live profile owner and one known chat/thread target.
+5. **Product completion.** Surface profiles, rendering, voice, routing and
+   diagnostics in Settings; document the BotFather prerequisite; then run focused
+   and full tests, type-check, lint, production build and a credentialed-client
+   smoke gate when credentials are available.
+
+Final review hardening added structurally closed Rich Draft prefixes without a
+post-final phantom draft, BotFather `has_topics_enabled` capability detection,
+automatic voice interception with text fallback, the full documented reaction
+shortcut set, cleanup of stale/disabled topic mappings, OGG/Opus provider
+validation, and workspace-readable inbound file copies. Cross-target Telegram
+tools are available to attended desktop agents as well as Telegram-originated
+turns; unattended non-Telegram schedules do not gain that outbound authority.
 
 ## 2026-08-13 implementation checkpoint
 
@@ -19,10 +55,10 @@ Shipped in the worktree:
 - Settings controls for thinking, drafts, and activity plus truthful onboarding
   copy. Aiden remains the only runtime/config/credential/permission owner.
 
-Still active: native private-chat Threaded Mode, named bot profiles, companion
-extension registries, cross-target direct tools, outbound TTS policy, richer
-diagnostics/recovery, and credentialed Telegram client smoke checks. These are
-not represented as complete by this checkpoint.
+The requested parity tranche is complete in source and automated verification.
+Only the credentialed client smoke gate remains external: it requires a real bot
+token, paired account, BotFather Threaded Mode, and a registered TTS provider for
+voice delivery.
 
 ## Objective
 
@@ -47,10 +83,13 @@ main/index.ts
   -> telegram-service.ts                production composition
     -> telegram-service-core.ts         polling and authorized update orchestration
       -> telegram-controls.ts           commands, callback plans, menus
-      -> telegram-session.ts            active-turn, model, thinking, compaction
-      -> telegram-delivery.ts           replies, previews, activity, buttons, files, voice
+      -> telegram-session.ts            compaction
+      -> telegram-activity.ts           drafts, reasoning and tool projection
+      -> telegram-outbound.ts           buttons, files and voice plans
       -> telegram-inbound.ts            text, replies, edits, albums, downloads, voice
-      -> telegram-threads.ts            private-chat Threaded Mode and target ownership
+      -> telegram-thread-store.ts       private-chat topic-to-workspace routing
+      -> telegram-ownership.ts          per-profile process-generation lease
+      -> telegram-profile-config.ts     isolated named profile projection
       -> telegram-extension-registry.ts Aiden companion capability hooks
       -> telegram-queue.ts              accepted-turn and control lanes
       -> telegram-bot-api.ts            Bot API transport only
