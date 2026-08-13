@@ -687,6 +687,8 @@ async function prepareGeneration(
         : assistantAutomationMode
           ? "assistant-automation"
           : undefined,
+      interactionSurface: options.interactionSurface,
+      allowTelegramDirect: !assistantMode || attendedAssistant || options.interactionSurface === "telegram",
       assistantModelSelection: attendedAssistant
         ? assistantModelSelection
         : undefined,

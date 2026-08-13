@@ -6,6 +6,7 @@ import {
   buildModelMenu,
   buildQueueItemMenu,
   buildQueueMenu,
+  buildSettingsMenu,
   buildThinkingMenu,
   commandArgument,
   commandName,
@@ -49,4 +50,11 @@ test("model, thinking, and queue menus carry short callback identities", () => {
   const item = { id: 9, lane: "default" as const, text: "Review this", chatId: 1, ownerUserId: 2 };
   assert.equal(buildQueueMenu([item]).markup.inline_keyboard[2]?.[0]?.callback_data, "queue:item:9");
   assert.equal(buildQueueItemMenu(item).markup.inline_keyboard[1]?.[1]?.callback_data, "queue:delete:9");
+});
+
+test("Telegram settings expose native rendering and voice policy controls", () => {
+  const menu = buildSettingsMenu({ rendering: "rich", voiceMode: "mirror" });
+  const callbacks = menu.markup.inline_keyboard.flat().map((button) => button.callback_data);
+  assert.ok(callbacks.includes("settings:rendering:toggle"));
+  assert.ok(callbacks.includes("settings:voice:next"));
 });

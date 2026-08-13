@@ -8,6 +8,6 @@ export function telegramWorkspaceSelectionId(value: unknown): string | undefined
 /** A Telegram project turn requires a workspace with a real folder root. */
 export function isTelegramFolderWorkspace(
   workspace: Pick<Workspace, "folderPath"> | null | undefined,
-): boolean {
+): workspace is Pick<Workspace, "folderPath"> & { folderPath: string } {
   return Boolean(workspace?.folderPath);
 }

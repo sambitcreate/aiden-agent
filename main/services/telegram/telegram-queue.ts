@@ -27,11 +27,13 @@ export interface QueuedTelegramTurn {
   readonly chatId: number;
   readonly sourceMessageId?: number;
   readonly sourceMediaGroupId?: string;
+  readonly threadId?: number;
   /** Paired owner's Telegram user ID — used for the persistent Aiden chat key. */
   readonly ownerUserId: number;
   readonly fromUsername?: string;
   /** Workspace selection captured when the prompt was accepted. */
   readonly workspaceId?: string;
+  readonly hasVoiceInput?: boolean;
 }
 
 export interface TelegramQueueDependencies {
@@ -106,6 +108,14 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
     return list().find((turn) => turn.id === id);
   }
 
+  function findBySource(chatId: number, messageId: number, threadId?: number): QueuedTelegramTurn | undefined {
+    return list().find((turn) =>
+      turn.chatId === chatId &&
+      turn.sourceMessageId === messageId &&
+      turn.threadId === threadId
+    );
+  }
+
   function remove(id: number): QueuedTelegramTurn | undefined {
     for (const lane of [control, priority, def]) {
       const index = lane.findIndex((turn) => turn.id === id);
@@ -134,7 +144,7 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
     return control.splice(0, control.length);
   }
 
-  return { enqueue, dequeue, peek, size, isEmpty, clear, list, find, remove, replace, setPriority, drainControl };
+  return { enqueue, dequeue, peek, size, isEmpty, clear, list, find, findBySource, remove, replace, setPriority, drainControl };
 }
 
 export interface TelegramQueue {
@@ -146,6 +156,7 @@ export interface TelegramQueue {
   clear(): void;
   list(): readonly QueuedTelegramTurn[];
   find(id: number): QueuedTelegramTurn | undefined;
+  findBySource(chatId: number, messageId: number, threadId?: number): QueuedTelegramTurn | undefined;
   remove(id: number): QueuedTelegramTurn | undefined;
   replace(id: number, replacement: QueuedTelegramTurn): boolean;
   setPriority(id: number, enabled: boolean): boolean;

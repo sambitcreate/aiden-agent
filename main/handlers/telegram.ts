@@ -5,13 +5,11 @@
 
 import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
-import { secrets } from "../services/secrets.js";
 import { telegramService } from "../services/telegram/telegram-service.js";
 import {
   isTelegramFolderWorkspace,
   telegramWorkspaceSelectionId,
 } from "../services/telegram/telegram-workspace-core.js";
-import { TELEGRAM_PROVIDER_ID } from "../services/telegram/telegram-service.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 
 export interface TelegramStatusResponse {
@@ -26,16 +24,22 @@ export interface TelegramStatusResponse {
   thinkingLevel?: import("../../renderer/shared/generation-thinking.js").GenerationThinkingLevel;
   draftPreviews: boolean;
   activity: "quiet" | "thinking" | "tools" | "verbose";
+  rendering: "rich" | "html";
+  voiceMode: "hidden" | "mirror" | "always";
+  activeProfile: string;
+  profiles: Awaited<ReturnType<typeof telegramService.listProfiles>>;
+  threadedMode: boolean;
+  recentDiagnostics: ReturnType<typeof telegramService.getStatus>["recentDiagnostics"];
   lastError?: string;
 }
 
 export function registerTelegramHandlers(): void {
   ipcMain.handle("telegram:get", async () => {
-    const settings = await configStore.getSettings();
+    const settings = await telegramService.getActiveSettings();
     const status = telegramService.getStatus();
     return {
       enabled: settings.telegramEnabled ?? false,
-      hasToken: await secrets.hasKey(TELEGRAM_PROVIDER_ID),
+      hasToken: await telegramService.hasActiveToken(),
       allowedUserId: settings.telegramAllowedUserId,
       providerId: settings.telegramProviderId,
       model: settings.telegramModel,
@@ -45,6 +49,12 @@ export function registerTelegramHandlers(): void {
       thinkingLevel: settings.telegramThinkingLevel,
       draftPreviews: settings.telegramDraftPreviews ?? false,
       activity: settings.telegramActivity ?? "quiet",
+      rendering: settings.telegramRendering ?? "rich",
+      voiceMode: settings.telegramVoiceMode ?? "hidden",
+      activeProfile: telegramService.activeProfile,
+      profiles: await telegramService.listProfiles(),
+      threadedMode: settings.telegramThreadedMode ?? false,
+      recentDiagnostics: status.recentDiagnostics,
       lastError: status.lastError,
     } satisfies TelegramStatusResponse;
   });
@@ -52,23 +62,18 @@ export function registerTelegramHandlers(): void {
   ipcMain.handle("telegram:setKey", async (_event, key: unknown) => {
     const value = typeof key === "string" ? key.trim() : "";
     if (value) {
-      await secrets.setKey(TELEGRAM_PROVIDER_ID, value);
+      await telegramService.setActiveToken(value);
     } else {
-      await secrets.deleteKey(TELEGRAM_PROVIDER_ID);
-      await configStore.setSettings({ telegramEnabled: false, telegramAllowedUserId: undefined });
-      telegramService.stop();
+      await telegramService.setActiveToken("");
+      await telegramService.resetPairing();
+      await telegramService.setEnabled(false);
     }
     return { hasKey: Boolean(value) };
   });
 
   ipcMain.handle("telegram:setEnabled", async (_event, enabled: unknown) => {
     const value = enabled === true;
-    await configStore.setSettings({ telegramEnabled: value });
-    if (value) {
-      await telegramService.start();
-    } else {
-      telegramService.stop();
-    }
+    await telegramService.setEnabled(value);
     return value;
   });
 
@@ -83,14 +88,19 @@ export function registerTelegramHandlers(): void {
   });
 
   ipcMain.handle("telegram:resetPairing", async () => {
-    await configStore.setSettings({ telegramAllowedUserId: undefined });
+    await telegramService.resetPairing();
     return { reset: true };
   });
 
   ipcMain.handle("telegram:setProvider", async (_event, providerId: unknown, model: unknown) => {
     const pid = typeof providerId === "string" && providerId.trim() ? providerId.trim() : undefined;
     const m = typeof model === "string" && model.trim() ? model.trim() : undefined;
-    await configStore.setSettings({ telegramProviderId: pid, telegramModel: m });
+    await telegramService.setActiveSettings({
+      telegramProviderId: pid,
+      telegramModel: m,
+    });
+    await configStore.setSettings({ lastProviderId: pid, lastModel: m });
+    if (pid && m) ipcMain.broadcast("telegram:model-selection-changed", { providerId: pid, model: m });
     return { providerId: pid, model: m };
   });
 
@@ -102,7 +112,7 @@ export function registerTelegramHandlers(): void {
         throw new Error("Choose a configured folder workspace for Telegram project automation.");
       }
     }
-    await configStore.setSettings({ telegramWorkspaceId: selectedWorkspaceId });
+    await telegramService.setActiveSettings({ telegramWorkspaceId: selectedWorkspaceId });
     return { workspaceId: selectedWorkspaceId };
   });
 
@@ -118,7 +128,40 @@ export function registerTelegramHandlers(): void {
     const activity = ["quiet", "thinking", "tools", "verbose"].includes(String(value.activity))
       ? value.activity as "quiet" | "thinking" | "tools" | "verbose"
       : "quiet";
-    await configStore.setSettings({ telegramThinkingLevel: thinkingLevel, telegramDraftPreviews: draftPreviews, telegramActivity: activity });
-    return { thinkingLevel, draftPreviews, activity };
+    const rendering = value.rendering === "html" ? "html" : "rich";
+    const voiceMode = value.voiceMode === "mirror" || value.voiceMode === "always"
+      ? value.voiceMode
+      : "hidden";
+    const threadedMode = value.threadedMode === true;
+    const previous = await telegramService.getActiveSettings();
+    await telegramService.setActiveSettings({
+      telegramThinkingLevel: thinkingLevel,
+      telegramDraftPreviews: draftPreviews,
+      telegramActivity: activity,
+      telegramRendering: rendering,
+      telegramVoiceMode: voiceMode,
+      telegramThreadedMode: threadedMode,
+    });
+    try {
+      if (threadedMode && !previous.telegramThreadedMode) await telegramService.ensureActiveThreads();
+      if (!threadedMode && previous.telegramThreadedMode) await telegramService.clearActiveThreads();
+    } catch (cause) {
+      await telegramService.setActiveSettings({ telegramThreadedMode: previous.telegramThreadedMode });
+      throw cause;
+    }
+    return { thinkingLevel, draftPreviews, activity, rendering, voiceMode, threadedMode };
+  });
+
+  ipcMain.handle("telegram:selectProfile", async (_event, profile: unknown) => ({
+    profile: await telegramService.selectProfile(typeof profile === "string" ? profile : ""),
+  }));
+
+  ipcMain.handle("telegram:createProfile", async (_event, profile: unknown) => ({
+    profile: await telegramService.createProfile(typeof profile === "string" ? profile : ""),
+  }));
+
+  ipcMain.handle("telegram:deleteProfile", async (_event, profile: unknown) => {
+    await telegramService.deleteProfile(typeof profile === "string" ? profile : "");
+    return { deleted: true };
   });
 }

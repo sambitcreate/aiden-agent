@@ -75,6 +75,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "shortcut:changed",
   "terminal:data",
   "terminal:exit",
+  "telegram:model-selection-changed",
   "aiden:theme:changed",
 ] as const;
 

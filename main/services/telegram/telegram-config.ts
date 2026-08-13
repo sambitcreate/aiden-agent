@@ -28,6 +28,7 @@ export interface TelegramConfigDeps {
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   hasToken(): Promise<boolean>;
   resolveRootDir(): string;
+  runtimeFileName?: string;
 }
 
 export function createTelegramConfig(deps: TelegramConfigDeps) {
@@ -36,7 +37,7 @@ export function createTelegramConfig(deps: TelegramConfigDeps) {
   async function getStore(): Promise<DataStore<TelegramRuntimeState>> {
     if (!store) {
       store = new DataStore<TelegramRuntimeState>(
-        "telegram-runtime.json",
+        deps.runtimeFileName ?? "telegram-runtime.json",
         {},
         () => deps.resolveRootDir(),
       );

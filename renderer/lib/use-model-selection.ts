@@ -5,6 +5,7 @@
 import * as React from "react";
 import { isUsable } from "./model-picker-data";
 import type { Provider } from "./types";
+import { telegramApi } from "./ipc";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
 const MODEL_KEY = "aiden-agent.model";
@@ -84,6 +85,10 @@ export function useModelSelection(providers: Provider[] | undefined) {
       }),
     [],
   );
+
+  React.useEffect(() => telegramApi.onModelSelectionChanged((selection) => {
+    persistModelSelection(selection.providerId, selection.model);
+  }), []);
 
   // Once providers load, choose an initial usable provider only when there is no
   // saved selection. A removed or unavailable provider must remain explicit so a

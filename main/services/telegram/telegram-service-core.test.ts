@@ -70,10 +70,12 @@ interface MockApiOptions {
   autoStop?: boolean;
   /** Invoked to break the poll loop (wired to service.stop()). */
   stop: () => void;
+  delayAfterFirstBatch?: boolean;
 }
 
 interface SentMessage {
   chatId: number;
+  threadId?: number;
   text: string;
   parseMode?: "HTML" | "MarkdownV2";
   disablePreview?: boolean;
@@ -82,6 +84,8 @@ interface SentMessage {
 function createMockApi(opts: MockApiOptions) {
   const pending = [...(opts.batches ?? [])];
   const sentMessages: SentMessage[] = [];
+  const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
+  const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
   const calls: string[] = [];
   let getMeCalls = 0;
   let getUpdatesCalls = 0;
@@ -90,6 +94,8 @@ function createMockApi(opts: MockApiOptions) {
 
   const api = {
     sentMessages,
+    richMessages,
+    voiceMessages,
     calls,
     getMeCalls: () => getMeCalls,
     getUpdatesCalls: () => getUpdatesCalls,
@@ -107,6 +113,9 @@ function createMockApi(opts: MockApiOptions) {
     ): Promise<TelegramUpdate[]> {
       getUpdatesCalls += 1;
       calls.push("getUpdates");
+      if (opts.delayAfterFirstBatch && getUpdatesCalls > 1) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       if (pending.length > 0) return pending.shift() as TelegramUpdate[];
       if (opts.autoStop ?? true) {
         opts.stop();
@@ -119,12 +128,14 @@ function createMockApi(opts: MockApiOptions) {
     },
     async sendMessage(p: {
       chatId: number;
+      threadId?: number;
       text: string;
       parseMode?: "HTML" | "MarkdownV2";
       disablePreview?: boolean;
     }): Promise<TelegramMessage> {
       sentMessages.push({
         chatId: p.chatId,
+        threadId: p.threadId,
         text: p.text,
         parseMode: p.parseMode,
         disablePreview: p.disablePreview,
@@ -135,6 +146,14 @@ function createMockApi(opts: MockApiOptions) {
         date: 0,
         text: p.text,
       };
+    },
+    async sendRichMessage(p: { chatId: number; threadId?: number; markdown: string }): Promise<TelegramMessage> {
+      richMessages.push(p);
+      return { message_id: richMessages.length, chat: { id: p.chatId, type: "private" }, date: 0, text: p.markdown };
+    },
+    async sendVoice(p: { chatId: number; threadId?: number; bytes: Uint8Array }): Promise<TelegramMessage> {
+      voiceMessages.push(p);
+      return { message_id: voiceMessages.length, chat: { id: p.chatId, type: "private" }, date: 0 };
     },
     async sendChatAction(_chatId: number, _action: string): Promise<void> {
       sendChatActionCalls += 1;
@@ -156,6 +175,9 @@ interface MockConfigState {
   hasToken: boolean;
   allowedUserId?: number;
   telegramWorkspaceId?: string;
+  telegramRendering?: "rich" | "html";
+  telegramVoiceMode?: "hidden" | "mirror" | "always";
+  telegramThreadedMode?: boolean;
 }
 
 function createMockConfig(state: MockConfigState) {
@@ -169,6 +191,11 @@ function createMockConfig(state: MockConfigState) {
     telegramEnabled: state.enabled,
     telegramAllowedUserId: state.allowedUserId,
     telegramWorkspaceId: state.telegramWorkspaceId,
+    // Preserve the legacy delivery assertions in this compatibility fixture.
+    // Native rich delivery has dedicated coverage below.
+    telegramRendering: state.telegramRendering ?? "html",
+    telegramVoiceMode: state.telegramVoiceMode,
+    telegramThreadedMode: state.telegramThreadedMode,
   });
 
   const config = {
@@ -199,7 +226,7 @@ function createMockConfig(state: MockConfigState) {
     },
     async setSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
       setSettingsCalls.push(patch);
-      if (patch.telegramAllowedUserId !== undefined) {
+      if ("telegramAllowedUserId" in patch) {
         state.allowedUserId = patch.telegramAllowedUserId;
       }
       if (patch.telegramEnabled !== undefined) {
@@ -208,6 +235,8 @@ function createMockConfig(state: MockConfigState) {
       if ("telegramWorkspaceId" in patch) {
         state.telegramWorkspaceId = patch.telegramWorkspaceId;
       }
+      if (patch.telegramRendering !== undefined) state.telegramRendering = patch.telegramRendering;
+      if (patch.telegramVoiceMode !== undefined) state.telegramVoiceMode = patch.telegramVoiceMode;
       return { ...baseSettings(), ...patch };
     },
     async hasToken(): Promise<boolean> {
@@ -250,7 +279,7 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   const pendingStart = new EventEmitter();
   let pendingOwner: TurnOwner | undefined;
   const createdChats: Array<{ id: string; workspaceId?: string }> = [];
-  const startedParams: Array<{ chatId: string; workspaceId?: string; mode?: string }> = [];
+  const startedParams: Array<{ chatId: string; workspaceId?: string; mode?: string; content?: string }> = [];
   const llmClient = {
     beginChatTurn() {
       if (opts.busy) return null;
@@ -265,11 +294,11 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     },
     async start(
       streamId: string,
-      _params: { chatId: string; workspaceId?: string; mode?: string },
+      _params: { chatId: string; workspaceId?: string; mode?: string; messages?: Array<{ content: string }> },
       owner: TurnOwner,
       _options: unknown,
     ): Promise<boolean> {
-      startedParams.push(_params);
+      startedParams.push({ ..._params, content: _params.messages?.[0]?.content });
       startCalls += 1;
       if (opts.pending) {
         pendingOwner = owner;
@@ -406,6 +435,18 @@ interface HarnessOptions {
   workspaces?: Array<{ id: string; name: string; folderPath: string }>;
   telegramWorkspaceId?: string;
   workspaceResolver?: MockTurnOptions["workspaceResolver"];
+  telegramRendering?: "rich" | "html";
+  telegramVoiceMode?: "hidden" | "mirror" | "always";
+  telegramThreadedMode?: boolean;
+  resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
+  clearThreadTargets?: () => Promise<void>;
+  listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
+  applyModelSelection?: (choice: import("./telegram-controls.js").TelegramModelChoice) => Promise<void>;
+  abortChat?: (chatId: string) => Promise<void>;
+  mediaGroupDebounceMs?: number;
+  handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
+  synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
+  delayAfterFirstBatch?: boolean;
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -414,6 +455,9 @@ function harness(o: HarnessOptions = {}) {
     hasToken: o.hasToken ?? true,
     allowedUserId: o.allowedUserId,
     telegramWorkspaceId: o.telegramWorkspaceId,
+    telegramRendering: o.telegramRendering,
+    telegramVoiceMode: o.telegramVoiceMode,
+    telegramThreadedMode: o.telegramThreadedMode,
   });
   const turnMock = createMockTurn({
     reply: o.reply,
@@ -443,6 +487,7 @@ function harness(o: HarnessOptions = {}) {
     batches: o.batches,
     autoStop: o.autoStop,
     stop: () => stopFn(),
+    delayAfterFirstBatch: o.delayAfterFirstBatch,
   });
 
   const service = createTelegramServiceCore({
@@ -450,6 +495,14 @@ function harness(o: HarnessOptions = {}) {
     config: config as unknown as TelegramConfig,
     turn: turnMock.turn as unknown as TelegramTurnDeps,
     listWorkspaces: async () => o.workspaces ?? [],
+    listModels: o.listModels,
+    applyModelSelection: o.applyModelSelection,
+    abortChat: o.abortChat,
+    resolveThreadWorkspace: o.resolveThreadWorkspace,
+    clearThreadTargets: o.clearThreadTargets,
+    mediaGroupDebounceMs: o.mediaGroupDebounceMs,
+    handleExtensionUpdate: o.handleExtensionUpdate,
+    synthesizeVoice: o.synthesizeVoice,
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
     sleep: sleepMock.sleep,
@@ -889,6 +942,33 @@ test("a text message from the owner is dispatched as a headless turn and replied
   assert.equal(reply?.disablePreview, true, "link preview disabled");
 });
 
+test("always voice mode intercepts automatic text and falls back only when synthesis fails", async () => {
+  const owner = person(42);
+  const voiced = harness({
+    enabled: true,
+    allowedUserId: 42,
+    telegramRendering: "rich",
+    telegramVoiceMode: "always",
+    batches: [[makeUpdate(1, makeMessage(10, owner, "Speak"))]],
+    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+  });
+  await voiced.service.start();
+  await waitFor(() => voiced.api.voiceMessages.length === 1);
+  assert.equal(voiced.api.richMessages.length, 0);
+
+  const fallback = harness({
+    enabled: true,
+    allowedUserId: 42,
+    telegramRendering: "rich",
+    telegramVoiceMode: "always",
+    batches: [[makeUpdate(1, makeMessage(10, owner, "Speak"))]],
+    synthesizeVoice: async () => undefined,
+  });
+  await fallback.service.start();
+  await waitFor(() => fallback.api.richMessages.length === 1);
+  assert.equal(fallback.api.voiceMessages.length, 0);
+});
+
 test("a scoped Telegram prompt uses an isolated project chat", async () => {
   const owner = person(42, "owner");
   const { service, api, turnMock } = harness({
@@ -938,4 +1018,199 @@ test("dispatch gate blocks a second turn while one is already active", async () 
   assert.ok(service.queueSize >= 1, "second turn held behind the active turn");
 
   service.stop();
+});
+
+test("thumbs-down reaction removes the matching queued prompt", async () => {
+  const owner = person(42, "owner");
+  const reaction: TelegramUpdate = {
+    update_id: 3,
+    message_reaction: {
+      chat: { id: 100, type: "private" },
+      message_id: 11,
+      user: owner,
+      old_reaction: [],
+      new_reaction: [{ type: "emoji", emoji: "👎" }],
+      date: 0,
+    },
+  };
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(10, owner, "active")), makeUpdate(2, makeMessage(11, owner, "queued"))],
+      [reaction],
+    ],
+    autoStop: false,
+  });
+  await service.start();
+  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(({ text }) => text.includes("Queued prompt removed")));
+  assert.equal(service.queueSize, 0);
+  turnMock.completePendingTurn();
+  service.stop();
+});
+
+test("reaction shortcut variants normalize variation selectors and promote queued prompts", async () => {
+  const owner = person(42);
+  const result = harness({
+    enabled: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    autoStop: false,
+    delayAfterFirstBatch: true,
+    batches: [
+      [makeUpdate(1, makeMessage(10, owner, "active")), makeUpdate(2, makeMessage(11, owner, "waiting"))],
+      [{
+        update_id: 3,
+        message_reaction: {
+          chat: { id: 100, type: "private" },
+          message_id: 11,
+          user: owner,
+          old_reaction: [],
+          new_reaction: [{ type: "emoji", emoji: "❤️" }],
+          date: 0,
+        },
+      }],
+    ],
+  });
+  await result.service.start();
+  await waitFor(() => result.api.sentMessages.some(({ text }) => text.includes("promoted")));
+  result.service.stop();
+});
+
+test("thread provisioning reports the BotFather capability prerequisite", async () => {
+  const result = harness({
+    enabled: true,
+    telegramThreadedMode: true,
+    me: { ...BOT, has_topics_enabled: false },
+    batches: [],
+  });
+  await result.service.start();
+  await assert.rejects(result.service.ensureThreads(), /BotFather/u);
+  assert.ok(result.service.getStatus().recentDiagnostics.some(({ message }) => message.includes("BotFather")));
+});
+
+test("reaction updates are offered to registered extension routing first", async () => {
+  const owner = person(42);
+  let extensionCalls = 0;
+  const { service } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    batches: [[{
+      update_id: 1,
+      message_reaction: {
+        chat: { id: 100, type: "private" },
+        message_id: 10,
+        user: owner,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+        date: 0,
+      },
+    }]],
+    handleExtensionUpdate: async () => {
+      extensionCalls += 1;
+      return true;
+    },
+  });
+  await service.start();
+  await waitFor(() => extensionCalls === 1);
+});
+
+test("thread messages capture their durable workspace and replies stay in the thread", async () => {
+  const owner = person(42);
+  const message = makeMessage(10, owner, "inspect");
+  message.message_thread_id = 77;
+  const { service, api, turnMock } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    telegramRendering: "rich",
+    workspaces: [{ id: "project", name: "Project", folderPath: "/tmp/project" }],
+    resolveThreadWorkspace: async (threadId) => threadId === 77 ? "project" : undefined,
+    batches: [[makeUpdate(1, message)]],
+  });
+  await service.start();
+  await waitFor(() => api.richMessages.length === 1);
+  assert.equal(turnMock.startedParams()[0]?.workspaceId, "project");
+  assert.equal(api.richMessages[0]?.threadId, 77);
+});
+
+test("pairing reset clears queued work and durable thread bindings", async () => {
+  let cleared = 0;
+  const { service, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    clearThreadTargets: async () => { cleared += 1; },
+    batches: [],
+    autoStop: false,
+  });
+  await service.start();
+  await service.resetPairing();
+  assert.equal(cleared, 1);
+  assert.equal(config.state.allowedUserId, undefined);
+  service.stop();
+});
+
+test("offset persistence failure is diagnostic and polling remains live", async () => {
+  const owner = person(42);
+  const { service, api, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    batches: [
+      [makeUpdate(1, makeMessage(10, owner, "/help"))],
+      [makeUpdate(2, makeMessage(11, owner, "/help"))],
+    ],
+  });
+  const originalPersist = config.persistOffset;
+  let failed = false;
+  config.persistOffset = async (offset: number) => {
+    if (!failed) {
+      failed = true;
+      throw new Error("disk unavailable");
+    }
+    await originalPersist(offset);
+  };
+  await service.start();
+  await waitFor(() => api.sentMessages.filter(({ text }) => text.includes("Aiden Telegram Agent")).length === 2);
+  assert.ok(service.getStatus().recentDiagnostics.some(({ message }) => message.includes("disk unavailable")));
+});
+
+test("active-run model switching persists first, aborts safely, and queues a continuation", async () => {
+  const owner = person(42);
+  const controlMessage = makeMessage(20, BOT, "model menu");
+  const choice = {
+    providerId: "next-provider",
+    providerLabel: "Next",
+    model: "next-model",
+    reasoning: true,
+  };
+  const applied: unknown[] = [];
+  let aborts = 0;
+  let finishActive: () => void = () => undefined;
+  const result = harness({
+    enabled: true,
+    allowedUserId: 42,
+    pendingTurn: true,
+    delayAfterFirstBatch: true,
+    autoStop: false,
+    batches: [
+      [makeUpdate(1, makeMessage(10, owner, "long task"))],
+      [{
+        update_id: 2,
+        callback_query: { id: "model", from: owner, message: controlMessage, data: "model:set:0" },
+      }],
+    ],
+    listModels: async () => [choice],
+    applyModelSelection: async (selected) => { applied.push(selected); },
+    abortChat: async () => {
+      aborts += 1;
+      finishActive();
+    },
+  });
+  finishActive = result.turnMock.completePendingTurn;
+  await result.service.start();
+  await waitFor(() => applied.length === 1 && aborts === 1 && result.turnMock.startCalls() === 2);
+  assert.deepEqual(applied, [choice]);
+  assert.match(result.turnMock.startedParams()[1]?.content ?? "", /Continue the interrupted task using Next\/next-model/);
+  result.service.stop();
 });

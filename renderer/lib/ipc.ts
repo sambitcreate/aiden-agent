@@ -347,6 +347,17 @@ export interface TelegramStatus {
   draftPreviews: boolean;
   activity: "quiet" | "thinking" | "tools" | "verbose";
   lastError?: string;
+  rendering: "rich" | "html";
+  voiceMode: "hidden" | "mirror" | "always";
+  threadedMode: boolean;
+  activeProfile: string;
+  profiles: Array<{
+    name: string;
+    hasToken: boolean;
+    settings: { enabled?: boolean; allowedUserId?: number };
+    status: { status: string; queuedCount: number; lastError?: string };
+  }>;
+  recentDiagnostics: Array<{ at: number; level: "info" | "warning" | "error" | "recovery"; message: string }>;
 }
 export const telegramApi = {
   get: () => invoke<TelegramStatus>("telegram:get"),
@@ -363,7 +374,15 @@ export const telegramApi = {
     thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
     draftPreviews: boolean;
     activity: "quiet" | "thinking" | "tools" | "verbose";
+    rendering: "rich" | "html";
+    voiceMode: "hidden" | "mirror" | "always";
+    threadedMode: boolean;
   }) => invoke("telegram:setExperience", input),
+  selectProfile: (profile: string) => invoke<{ profile: string }>("telegram:selectProfile", profile),
+  createProfile: (profile: string) => invoke<{ profile: string }>("telegram:createProfile", profile),
+  deleteProfile: (profile: string) => invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
+  onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
+    onNotification("telegram:model-selection-changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────

@@ -49,6 +49,8 @@ export interface TelegramControlStatus {
   active: boolean;
   workspaceLabel: string;
   lastError?: string;
+  extensionRows?: readonly string[];
+  extensionSections?: readonly { label: string; callbackData: string }[];
 }
 
 export interface TelegramWorkspaceChoice {
@@ -78,6 +80,7 @@ export function buildStatusText(status: TelegramControlStatus): string {
     `<b>Queue:</b> ${status.queueCount}`,
     `<b>Workspace:</b> ${escapeHtml(status.workspaceLabel)}`,
     ...(status.lastError ? [`<b>Last error:</b> ${escapeHtml(status.lastError)}`] : []),
+    ...(status.extensionRows ?? []).map((row) => escapeHtml(row)),
   ].join("\n");
 }
 
@@ -105,6 +108,10 @@ export function buildMainMenu(status: TelegramControlStatus): TelegramInlineKeyb
             { text: "🛑 Stop all", callback_data: "turn:stop" },
           ]]
         : []),
+      ...(status.extensionSections ?? []).map((section) => [{
+        text: section.label,
+        callback_data: section.callbackData,
+      }]),
     ],
   };
 }
@@ -223,6 +230,8 @@ export function confirmationMenu(
 export function buildSettingsMenu(options: {
   draftPreviews?: boolean;
   activity?: "quiet" | "thinking" | "tools" | "verbose";
+  rendering?: "rich" | "html";
+  voiceMode?: "hidden" | "mirror" | "always";
 } = {}): { text: string; markup: TelegramInlineKeyboardMarkup } {
   return {
     text: [
@@ -243,6 +252,14 @@ export function buildSettingsMenu(options: {
         [{
           text: `🔧 Activity: ${options.activity ?? "quiet"}`,
           callback_data: "settings:activity:next",
+        }],
+        [{
+          text: `📝 Rendering: ${options.rendering ?? "rich"}`,
+          callback_data: "settings:rendering:toggle",
+        }],
+        [{
+          text: `👄 Voice: ${options.voiceMode ?? "hidden"}`,
+          callback_data: "settings:voice:next",
         }],
       ],
     },
