@@ -504,11 +504,35 @@ export interface AppSettings {
   telegramDraftPreviews?: boolean;
   /** Technical activity projected into Telegram during a turn. */
   telegramActivity?: "quiet" | "thinking" | "tools" | "verbose";
+  /** Native Rich Markdown or legacy HTML assistant answer delivery. */
+  telegramRendering?: "rich" | "html";
+  /** Automatic voice reply policy; explicit telegram_voice actions remain available. */
+  telegramVoiceMode?: "hidden" | "mirror" | "always";
   /**
    * Explicit folder workspace authorized for Telegram project automation.
    * Omitted keeps Telegram turns assistant-only.
    */
   telegramWorkspaceId?: string;
+  /** Named Telegram bot profiles; the legacy root fields remain profiles.default. */
+  telegramProfiles?: Record<string, TelegramProfileSettings>;
+  /** Profile currently edited by Settings and used as the default direct-delivery target. */
+  telegramActiveProfile?: string;
+  /** Provision and route private-chat topics to explicit Aiden workspace targets. */
+  telegramThreadedMode?: boolean;
+}
+
+export interface TelegramProfileSettings {
+  enabled?: boolean;
+  allowedUserId?: number;
+  providerId?: string;
+  model?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  draftPreviews?: boolean;
+  activity?: "quiet" | "thinking" | "tools" | "verbose";
+  rendering?: "rich" | "html";
+  voiceMode?: "hidden" | "mirror" | "always";
+  workspaceId?: string;
+  threadedMode?: boolean;
 }
 
 export type ComputerUseStatusState =
