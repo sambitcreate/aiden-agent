@@ -32,7 +32,7 @@ test("getUpdates calls transport with offset, timeout, and allowed_updates", asy
   assert.equal(calls[0].method, "getUpdates");
   assert.deepEqual(calls[0].body, {
     timeout: 25,
-    allowed_updates: ["message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query"],
     offset: 42,
   });
 });
@@ -44,7 +44,7 @@ test("getUpdates without offset omits the offset field", async () => {
   assert.equal(calls[0].method, "getUpdates");
   assert.deepEqual(calls[0].body, {
     timeout: 0,
-    allowed_updates: ["message", "callback_query"],
+    allowed_updates: ["message", "edited_message", "callback_query"],
   });
   assert.equal("offset" in calls[0].body, false);
 });

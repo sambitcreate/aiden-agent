@@ -25,6 +25,13 @@ export interface AssistantPromptInput {
   mcpOmittedInvalidIdentities?: number;
   /** True for background proactive runs: adds the strict [SILENT] contract. */
   unattended: boolean;
+  /** Trusted host-owned delivery surface. Omitted means the desktop app. */
+  surface?: "desktop" | "telegram";
+}
+
+export interface TelegramAgentPromptInput {
+  /** Whether Aiden bound this turn to an explicitly selected folder workspace. */
+  workspaceBound: boolean;
 }
 
 const PERMISSION_TEXT: Record<AssistantPromptInput["settingsPermission"], string> = {
@@ -159,7 +166,48 @@ export function withUnattendedAssistantContract(prompt: string): string {
   return `${prompt}\n\n${SILENT_CONTRACT}`;
 }
 
+/**
+ * Tell an interactive remote agent where its response is going and expose the
+ * Telegram-native response affordances implemented by the host. This context
+ * lives in the system prompt so user text cannot spoof or erase it.
+ */
+export function withTelegramAgentContract(prompt: string, input: TelegramAgentPromptInput): string {
+  const workspaceCapability = input.workspaceBound
+    ? [
+        "A folder workspace is selected for this Telegram session. Use only the project tools",
+        "provided to this turn; never claim a file or command action succeeded without its tool result.",
+        "You may send a workspace file back to Telegram by placing this invisible directive on",
+        'its own line: <!-- telegram_attach {"path":"relative/path","caption":"optional"} -->.',
+        "The host restricts attachments to regular files inside the selected workspace.",
+      ]
+    : [
+        "No folder workspace is selected for this Telegram session. You cannot inspect, edit, or",
+        "run commands in a project. If project access is needed, tell the user to choose one with",
+        "/workspace or in Aiden Settings. Do not emit telegram_attach directives without a workspace.",
+      ];
+  return [
+    prompt,
+    "",
+    "Trusted host delivery context:",
+    '<aiden_delivery_context>{"channel":"telegram","interaction":"direct","reply_target":"paired_owner"}</aiden_delivery_context>',
+    "You are being used interactively through Aiden's private Telegram agent. Answer the user's",
+    "current message normally; this is not a timer or background notification. Never reply with",
+    "[SILENT]. Keep responses comfortable to read on a phone and use only Telegram-safe Markdown.",
+    "The host can receive text, photos, supported text documents, transcribed voice messages,",
+    "replies, and forwarded-message context. It delivers your final response back to Telegram.",
+    ...workspaceCapability,
+    "To offer a useful follow-up action, place an invisible directive on its own line:",
+    '<!-- telegram_button {"label":"Button label","prompt":"Prompt sent when tapped"} -->.',
+    "Use buttons sparingly and only when they materially help. The host strips valid directives",
+    "from visible text and renders native Telegram controls.",
+    "Telegram operator controls are host-owned: /start, /status, /model, /thinking, /queue,",
+    "/workspace, /compact, /next, /continue, /abort, /stop, /settings, and /help. Refer the user",
+    "to those commands when relevant. Bot token, pairing, and high-risk settings remain in Aiden Settings.",
+  ].join("\n");
+}
+
 export function buildAssistantSystemPrompt(input: AssistantPromptInput): string {
+  const telegram = input.surface === "telegram";
   const sections = `Settings are organised into these sections: ${input.settingsSections.join(", ")}.`;
   const canReadSettings = input.availableTools.includes("get_settings");
   const canReadProjects = input.availableTools.includes("list_projects");
@@ -196,10 +244,18 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
     "understand and operate the app itself: you answer questions about it and explain",
     "its settings.",
     "",
-    "Inside this dock, you cannot read or change project files, call external services,",
-    "or run commands directly. For immediate coding work, tell the user to use a project",
-    "chat in the main window. You may prepare a future scheduled project or MCP automation",
-    "only through the approval-gated tools described below.",
+    ...(telegram
+      ? [
+          "Without a selected folder workspace, you cannot read or change project files or run",
+          "commands. Use only the tools actually provided to this turn, and never imply a tool or",
+          "workspace capability that is absent.",
+        ]
+      : [
+          "Inside this dock, you cannot read or change project files, call external services,",
+          "or run commands directly. For immediate coding work, tell the user to use a project",
+          "chat in the main window. You may prepare a future scheduled project or MCP automation",
+          "only through the approval-gated tools described below.",
+        ]),
     "",
     sections,
     ...(canReadSettings ? [permissionText(input.settingsPermission)] : []),
@@ -262,8 +318,13 @@ export function buildAssistantSystemPrompt(input: AssistantPromptInput): string 
           "was completed unless the corresponding MCP tool call succeeded.",
         ]
       : []),
-    "Be brief — this is a small window. Use Markdown sparingly and never open with a",
-    "preamble about what you are about to do.",
+    telegram
+      ? "Be concise and direct. Use Markdown sparingly and never open with a preamble about what you are about to do."
+      : "Be brief — this is a small window. Use Markdown sparingly and never open with a",
+    ...(telegram ? [] : ["preamble about what you are about to do."]),
   ].join("\n");
-  return input.unattended ? withUnattendedAssistantContract(prompt) : prompt;
+  const surfacedPrompt = telegram
+    ? withTelegramAgentContract(prompt, { workspaceBound: false })
+    : prompt;
+  return input.unattended ? withUnattendedAssistantContract(surfacedPrompt) : surfacedPrompt;
 }

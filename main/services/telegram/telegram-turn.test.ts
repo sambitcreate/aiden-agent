@@ -27,9 +27,7 @@ function mockLlm(
 ): TelegramLlmClient {
   return {
     beginChatTurn: () => begin,
-    start:
-      start ??
-      (async () => true),
+    start: start ?? (async () => true),
     isChatBusy: () => false,
     waitForChatIdle: async () => true,
   };
@@ -79,7 +77,7 @@ function mockDeps(opts: {
     resolveProvider:
       opts.provider === undefined
         ? async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER })
-        : async () => opts.provider ? { ...opts.provider, provider: MOCK_PROVIDER } : null,
+        : async () => (opts.provider ? { ...opts.provider, provider: MOCK_PROVIDER } : null),
     resolveWorkspace: async () => opts.workspace ?? { kind: "assistant" },
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);
@@ -94,11 +92,11 @@ test("telegramChatId returns telegram-<userId>", () => {
 });
 
 test("workspace Telegram turn starts assistant automation with the selected workspace", async () => {
-  let startedParams:
-    | { chatId: string; workspaceId?: string; mode?: string }
-    | undefined;
-  const llm = mockLlm(async (streamId, params, owner) => {
+  let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
+  let interactionSurface: string | undefined;
+  const llm = mockLlm(async (streamId, params, owner, options) => {
     startedParams = params;
+    interactionSurface = options.interactionSurface;
     owner.send("chat:done", { streamId, content: "done" });
     return true;
   });
@@ -114,6 +112,7 @@ test("workspace Telegram turn starts assistant automation with the selected work
   assert.equal(startedParams?.chatId, chatId);
   assert.equal(startedParams?.workspaceId, "workspace-a");
   assert.equal(startedParams?.mode, "assistant-automation");
+  assert.equal(interactionSurface, "telegram");
 });
 
 test("stale Telegram workspace errors before generation", async () => {
@@ -130,17 +129,18 @@ test("stale Telegram workspace errors before generation", async () => {
   assert.deepEqual(result, {
     ok: false,
     content: "",
-    error: "The Telegram workspace is no longer available. Choose a folder workspace in Aiden Settings.",
+    error:
+      "The Telegram workspace is no longer available. Choose a folder workspace in Aiden Settings.",
   });
   assert.equal(startCalls, 0);
 });
 
 test("assistant-only Telegram turn preserves the owner chat and assistant mode", async () => {
-  let startedParams:
-    | { chatId: string; workspaceId?: string; mode?: string }
-    | undefined;
-  const llm = mockLlm(async (streamId, params, owner) => {
+  let startedParams: { chatId: string; workspaceId?: string; mode?: string } | undefined;
+  let interactionSurface: string | undefined;
+  const llm = mockLlm(async (streamId, params, owner, options) => {
     startedParams = params;
+    interactionSurface = options.interactionSurface;
     owner.send("chat:done", { streamId, content: "done" });
     return true;
   });
@@ -152,6 +152,7 @@ test("assistant-only Telegram turn preserves the owner chat and assistant mode",
   assert.equal(startedParams?.chatId, "telegram-123");
   assert.equal(startedParams?.workspaceId, undefined);
   assert.equal(startedParams?.mode, "assistant-unattended");
+  assert.equal(interactionSurface, "telegram");
 });
 
 test("createTelegramBackgroundOwner exposes telegram:<streamId> documentId and resolves terminal on chat:done", async () => {
@@ -246,7 +247,11 @@ test("ensureTelegramChat creates a chat when none exists and reuses an existing 
   const deps: TelegramTurnDeps = {
     llmClient: mockLlm(),
     chatStore: store,
-    resolveProvider: async () => ({ providerId: "openai", model: "gpt-4o", provider: MOCK_PROVIDER }),
+    resolveProvider: async () => ({
+      providerId: "openai",
+      model: "gpt-4o",
+      provider: MOCK_PROVIDER,
+    }),
     resolveWorkspace: async () => ({ kind: "assistant" }),
     broadcastMetadata: (chat) => {
       broadcasts.push(chat);

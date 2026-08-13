@@ -6,7 +6,8 @@
 // Design reference: pi-telegram (https://github.com/llblab/pi-telegram, MIT).
 
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
-import type { ChatDone, ChatError } from "../types.js";
+import type { Attachment, ChatDone, ChatError } from "../types.js";
+import type { GenerationThinkingLevel } from "../../../renderer/shared/generation-thinking.js";
 import type { UsageRequestSource } from "../usage-store-core.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { scheduledProviderFingerprint } from "../schedule-provider-binding.js";
@@ -22,7 +23,8 @@ export interface TelegramLlmClient {
       providerId: string;
       model: string;
       mode?: "assistant-unattended" | "assistant-automation";
-      messages: Array<{ role: "user"; content: string }>;
+      thinkingLevel?: GenerationThinkingLevel;
+      messages: Array<{ role: "user"; content: string; attachments?: Attachment[] }>;
     },
     owner: ChatGenerationOwner,
     options: {
@@ -30,6 +32,7 @@ export interface TelegramLlmClient {
       allowComputerUse: boolean;
       allowSubagents: boolean;
       allowMcpTools: boolean;
+      interactionSurface: "telegram";
       usageSource: UsageRequestSource;
       turnId: string;
       providerFingerprint?: string;
@@ -37,6 +40,7 @@ export interface TelegramLlmClient {
   ): Promise<boolean>;
   isChatBusy(chatId: string): boolean;
   waitForChatIdle(chatId: string): Promise<boolean>;
+  cancelChat?(chatId: string): Promise<void>;
 }
 
 export interface ChatTurnLease {
@@ -58,7 +62,7 @@ export interface TelegramChatStore {
   ): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number } | null>;
   appendMessage(
     id: string,
-    message: { role: "user" | "assistant"; content: string },
+    message: { role: "user" | "assistant"; content: string; attachments?: Attachment[] },
     meta?: { providerId?: string; model?: string },
   ): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number }>;
 }
@@ -74,6 +78,7 @@ export interface TelegramTurnDeps {
       "id" | "kind" | "label" | "baseUrl" | "needsKey" | "deployment" | "isBuiltin"
     >;
   } | null>;
+  resolveThinkingLevel?(): Promise<GenerationThinkingLevel | undefined>;
   broadcastMetadata(chat: {
     id: string;
     workspaceId?: string;
@@ -101,7 +106,10 @@ function telegramStreamId(): string {
  * Mirrors schedule-execution.ts createBackgroundOwner, extended to capture
  * chat:delta for optional streaming previews.
  */
-export function createTelegramBackgroundOwner(streamId: string): {
+export function createTelegramBackgroundOwner(
+  streamId: string,
+  observer: (channel: NotificationChannel, payload: unknown) => void = () => undefined,
+): {
   owner: ChatGenerationOwner;
   terminal: Promise<ChatDone | ChatError>;
   deltas: string[];
@@ -125,6 +133,7 @@ export function createTelegramBackgroundOwner(streamId: string): {
         const delta = (payload as { delta?: string })?.delta;
         if (delta) deltas.push(delta);
       }
+      observer(channel, payload);
     },
     onInvalidated: () => () => undefined,
   };
@@ -194,6 +203,8 @@ export async function sendTelegramTurn(
   chatId: string,
   content: string,
   workspace?: TelegramWorkspaceResolution,
+  attachments?: readonly Attachment[],
+  observer?: (channel: NotificationChannel, payload: unknown) => void,
 ): Promise<TelegramTurnResult> {
   const resolvedWorkspace = workspace ?? (await deps.resolveWorkspace());
   if (resolvedWorkspace.kind === "stale") {
@@ -216,7 +227,8 @@ export async function sendTelegramTurn(
   }
 
   const streamId = telegramStreamId();
-  const background = createTelegramBackgroundOwner(streamId);
+  const thinkingLevel = await deps.resolveThinkingLevel?.();
+  const background = createTelegramBackgroundOwner(streamId, observer);
   const turn = deps.llmClient.beginChatTurn(chatId, streamId, background.owner.documentId);
   if (!turn) {
     return { content: "", error: "The Telegram chat already has a turn in progress.", ok: false };
@@ -226,7 +238,11 @@ export async function sendTelegramTurn(
     try {
       await deps.chatStore.appendMessage(
         chatId,
-        { role: "user", content },
+        {
+          role: "user",
+          content,
+          ...(attachments?.length ? { attachments: [...attachments] } : {}),
+        },
         { providerId: provider.providerId, model: provider.model },
       );
     } finally {
@@ -241,7 +257,14 @@ export async function sendTelegramTurn(
         providerId: provider.providerId,
         model: provider.model,
         mode: workspaceId ? "assistant-automation" : "assistant-unattended",
-        messages: [{ role: "user", content }],
+        thinkingLevel,
+        messages: [
+          {
+            role: "user",
+            content,
+            ...(attachments?.length ? { attachments: [...attachments] } : {}),
+          },
+        ],
       },
       background.owner,
       {
@@ -249,6 +272,7 @@ export async function sendTelegramTurn(
         allowComputerUse: false,
         allowSubagents: false,
         allowMcpTools: false,
+        interactionSurface: "telegram",
         usageSource: "telegram",
         turnId: streamId,
         providerFingerprint: scheduledProviderFingerprint(provider.provider),
@@ -285,4 +309,10 @@ export async function waitForTelegramChatIdle(
   chatId: string,
 ): Promise<boolean> {
   return deps.llmClient.waitForChatIdle(chatId);
+}
+
+/** Abort and settle the persistent Telegram chat through Aiden's generation owner. */
+export async function abortTelegramChat(deps: TelegramTurnDeps, chatId: string): Promise<void> {
+  if (!deps.llmClient.cancelChat) return;
+  await deps.llmClient.cancelChat(chatId);
 }

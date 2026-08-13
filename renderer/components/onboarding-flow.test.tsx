@@ -266,7 +266,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     "Private Usage Profile",
     "Permissioned by Default",
     "Themes & Accessibility",
-    "Telegram Remote Control",
+    "Aiden in Telegram",
   ]) {
     assert.match(featurePresentation, new RegExp(title, "u"));
   }

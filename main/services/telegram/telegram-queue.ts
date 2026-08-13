@@ -15,11 +15,18 @@
 
 export type QueueLane = "control" | "priority" | "default";
 
+import type { Attachment } from "../types.js";
+
 export interface QueuedTelegramTurn {
+  /** Process-local opaque id used by Telegram queue controls. */
+  readonly id?: number;
   readonly lane: QueueLane;
   readonly text: string;
+  readonly attachments?: readonly Attachment[];
   /** Telegram chat ID — used for API calls (sendMessage, sendChatAction). */
   readonly chatId: number;
+  readonly sourceMessageId?: number;
+  readonly sourceMediaGroupId?: string;
   /** Paired owner's Telegram user ID — used for the persistent Aiden chat key. */
   readonly ownerUserId: number;
   readonly fromUsername?: string;
@@ -37,18 +44,22 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
   const priority: QueuedTelegramTurn[] = [];
   const def: QueuedTelegramTurn[] = [];
 
-  function enqueue(turn: QueuedTelegramTurn): void {
-    switch (turn.lane) {
+  let nextId = 1;
+
+  function enqueue(turn: QueuedTelegramTurn): QueuedTelegramTurn {
+    const accepted = turn.id === undefined ? { ...turn, id: nextId++ } : turn;
+    switch (accepted.lane) {
       case "control":
-        control.push(turn);
+        control.push(accepted);
         break;
       case "priority":
-        priority.push(turn);
+        priority.push(accepted);
         break;
       default:
-        def.push(turn);
+        def.push(accepted);
         break;
     }
+    return accepted;
   }
 
   function size(): number {
@@ -87,21 +98,57 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
     def.length = 0;
   }
 
+  function list(): readonly QueuedTelegramTurn[] {
+    return [...control, ...priority, ...def];
+  }
+
+  function find(id: number): QueuedTelegramTurn | undefined {
+    return list().find((turn) => turn.id === id);
+  }
+
+  function remove(id: number): QueuedTelegramTurn | undefined {
+    for (const lane of [control, priority, def]) {
+      const index = lane.findIndex((turn) => turn.id === id);
+      if (index >= 0) return lane.splice(index, 1)[0];
+    }
+    return undefined;
+  }
+
+  function setPriority(id: number, enabled: boolean): boolean {
+    const item = remove(id);
+    if (!item) return false;
+    const replacement = { ...item, lane: enabled ? "priority" : "default" } as const;
+    (enabled ? priority : def).push(replacement);
+    return true;
+  }
+
+  function replace(id: number, replacement: QueuedTelegramTurn): boolean {
+    const current = remove(id);
+    if (!current) return false;
+    enqueue({ ...replacement, id });
+    return true;
+  }
+
   /** Drain control messages without dispatch gates (commands bypass the LLM). */
   function drainControl(): QueuedTelegramTurn[] {
     return control.splice(0, control.length);
   }
 
-  return { enqueue, dequeue, peek, size, isEmpty, clear, drainControl };
+  return { enqueue, dequeue, peek, size, isEmpty, clear, list, find, remove, replace, setPriority, drainControl };
 }
 
 export interface TelegramQueue {
-  enqueue(turn: QueuedTelegramTurn): void;
+  enqueue(turn: QueuedTelegramTurn): QueuedTelegramTurn;
   dequeue(): QueuedTelegramTurn | null;
   peek(): QueuedTelegramTurn | null;
   size(): number;
   isEmpty(): boolean;
   clear(): void;
+  list(): readonly QueuedTelegramTurn[];
+  find(id: number): QueuedTelegramTurn | undefined;
+  remove(id: number): QueuedTelegramTurn | undefined;
+  replace(id: number, replacement: QueuedTelegramTurn): boolean;
+  setPriority(id: number, enabled: boolean): boolean;
   drainControl(): QueuedTelegramTurn[];
 }
 

@@ -30,6 +30,73 @@ export interface TelegramMessage {
   text?: string;
   caption?: string;
   entities?: TelegramMessageEntity[];
+  reply_to_message?: TelegramMessage;
+  media_group_id?: string;
+  photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
+  voice?: TelegramVoice;
+  audio?: TelegramAudio;
+  video?: TelegramVideo;
+  animation?: TelegramDocument;
+  forward_origin?: unknown;
+}
+
+export interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+
+export interface TelegramDocument {
+  file_id: string;
+  file_unique_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
+export interface TelegramVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+}
+
+export interface TelegramAudio extends TelegramVoice {
+  file_name?: string;
+  title?: string;
+  performer?: string;
+}
+
+export interface TelegramVideo extends TelegramDocument {
+  width: number;
+  height: number;
+  duration: number;
+}
+
+export interface TelegramFile {
+  file_id: string;
+  file_unique_id: string;
+  file_size?: number;
+  file_path?: string;
+}
+
+export interface TelegramBotCommand {
+  command: string;
+  description: string;
+}
+
+export interface TelegramInlineKeyboardButton {
+  text: string;
+  callback_data?: string;
+  url?: string;
+}
+
+export interface TelegramInlineKeyboardMarkup {
+  inline_keyboard: TelegramInlineKeyboardButton[][];
 }
 
 export interface TelegramCallbackQuery {
@@ -76,6 +143,13 @@ export type TelegramTransport = (
   body: Record<string, unknown>,
 ) => Promise<TelegramApiResponse<unknown>>;
 
+export type TelegramFileDownloader = (filePath: string) => Promise<Uint8Array>;
+export type TelegramUploadTransport = (
+  method: string,
+  fields: Record<string, string>,
+  file: { field: string; bytes: Uint8Array; name: string; mimeType: string },
+) => Promise<TelegramApiResponse<unknown>>;
+
 /** Production transport: posts JSON to api.telegram.org. Resolves the token
  *  per request so runtime key changes are picked up without re-creation. */
 export function createFetchTransport(tokenResolver: () => Promise<string | null>): TelegramTransport {
@@ -86,6 +160,40 @@ export function createFetchTransport(tokenResolver: () => Promise<string | null>
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+    });
+    return (await response.json()) as TelegramApiResponse<unknown>;
+  };
+}
+
+export function createFetchFileDownloader(
+  tokenResolver: () => Promise<string | null>,
+): TelegramFileDownloader {
+  return async (filePath: string) => {
+    const token = await tokenResolver();
+    if (!token) throw new Error("No Telegram bot token configured.");
+    const response = await fetch(`https://api.telegram.org/file/bot${token}/${filePath}`);
+    if (!response.ok) {
+      throw new TelegramApiError(
+        `Telegram file download failed: ${response.status} ${response.statusText}`,
+        response.status,
+      );
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  };
+}
+
+export function createFetchUploadTransport(
+  tokenResolver: () => Promise<string | null>,
+): TelegramUploadTransport {
+  return async (method, fields, file) => {
+    const token = await tokenResolver();
+    if (!token) throw new Error("No Telegram bot token configured.");
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.append(key, value);
+    form.append(file.field, new Blob([file.bytes as BlobPart], { type: file.mimeType }), file.name);
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+      method: "POST",
+      body: form,
     });
     return (await response.json()) as TelegramApiResponse<unknown>;
   };
@@ -135,7 +243,11 @@ function callWithAbort(
 }
 
 export class TelegramBotApi {
-  constructor(private readonly transport: TelegramTransport) {}
+  constructor(
+    private readonly transport: TelegramTransport,
+    private readonly fileDownloader?: TelegramFileDownloader,
+    private readonly uploadTransport?: TelegramUploadTransport,
+  ) {}
 
   /** Long-poll for updates. Returns immediately on timeout (empty array). */
   async getUpdates(
@@ -145,7 +257,7 @@ export class TelegramBotApi {
   ): Promise<TelegramUpdate[]> {
     const body: Record<string, unknown> = {
       timeout: timeoutSeconds,
-      allowed_updates: ["message", "callback_query"],
+      allowed_updates: ["message", "edited_message", "callback_query"],
     };
     if (offset !== undefined) body.offset = offset;
     return callWithAbort(
@@ -156,6 +268,50 @@ export class TelegramBotApi {
 
   async getMe(): Promise<TelegramUser> {
     return unwrap<TelegramUser>(await this.transport("getMe", {}));
+  }
+
+  async getFile(fileId: string): Promise<TelegramFile> {
+    return unwrap<TelegramFile>(await this.transport("getFile", { file_id: fileId }));
+  }
+
+  async downloadFile(fileId: string): Promise<{ file: TelegramFile; bytes: Uint8Array }> {
+    if (!this.fileDownloader) throw new Error("Telegram file downloads are unavailable.");
+    const file = await this.getFile(fileId);
+    if (!file.file_path) throw new Error("Telegram did not return a file path.");
+    return { file, bytes: await this.fileDownloader(file.file_path) };
+  }
+
+  async sendDocument(params: {
+    chatId: number;
+    bytes: Uint8Array;
+    name: string;
+    mimeType?: string;
+    caption?: string;
+  }): Promise<TelegramMessage> {
+    if (!this.uploadTransport) throw new Error("Telegram file uploads are unavailable.");
+    return unwrap<TelegramMessage>(await this.uploadTransport(
+      "sendDocument",
+      {
+        chat_id: String(params.chatId),
+        ...(params.caption ? { caption: params.caption } : {}),
+      },
+      {
+        field: "document",
+        bytes: params.bytes,
+        name: params.name,
+        mimeType: params.mimeType ?? "application/octet-stream",
+      },
+    ));
+  }
+
+  /** Publish the private-chat command palette shown by Telegram clients. */
+  async setMyCommands(commands: readonly TelegramBotCommand[]): Promise<void> {
+    await unwrap<boolean>(
+      await this.transport("setMyCommands", {
+        commands,
+        scope: { type: "all_private_chats" },
+      }),
+    );
   }
 
   async sendMessage(params: {
@@ -181,7 +337,7 @@ export class TelegramBotApi {
     text: string;
     parseMode?: "HTML" | "MarkdownV2";
     replyMarkup?: unknown;
-  }): Promise<void> {
+  }): Promise<TelegramMessage> {
     const body: Record<string, unknown> = {
       chat_id: params.chatId,
       message_id: params.messageId,
@@ -189,7 +345,21 @@ export class TelegramBotApi {
     };
     if (params.parseMode) body.parse_mode = params.parseMode;
     if (params.replyMarkup !== undefined) body.reply_markup = params.replyMarkup;
-    await this.transport("editMessageText", body);
+    return unwrap<TelegramMessage>(await this.transport("editMessageText", body));
+  }
+
+
+  async editMessageReplyMarkup(params: {
+    chatId: number;
+    messageId: number;
+    replyMarkup?: TelegramInlineKeyboardMarkup;
+  }): Promise<void> {
+    const body: Record<string, unknown> = {
+      chat_id: params.chatId,
+      message_id: params.messageId,
+      reply_markup: params.replyMarkup ?? { inline_keyboard: [] },
+    };
+    await unwrap<unknown>(await this.transport("editMessageReplyMarkup", body));
   }
 
   async sendChatAction(chatId: number, action: string): Promise<void> {

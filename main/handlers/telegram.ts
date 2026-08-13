@@ -12,6 +12,7 @@ import {
   telegramWorkspaceSelectionId,
 } from "../services/telegram/telegram-workspace-core.js";
 import { TELEGRAM_PROVIDER_ID } from "../services/telegram/telegram-service.js";
+import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 
 export interface TelegramStatusResponse {
   enabled: boolean;
@@ -22,6 +23,9 @@ export interface TelegramStatusResponse {
   polling: boolean;
   workspaceId?: string;
   queuedCount: number;
+  thinkingLevel?: import("../../renderer/shared/generation-thinking.js").GenerationThinkingLevel;
+  draftPreviews: boolean;
+  activity: "quiet" | "thinking" | "tools" | "verbose";
   lastError?: string;
 }
 
@@ -38,6 +42,9 @@ export function registerTelegramHandlers(): void {
       workspaceId: settings.telegramWorkspaceId,
       polling: status.status !== "disabled",
       queuedCount: status.queuedCount,
+      thinkingLevel: settings.telegramThinkingLevel,
+      draftPreviews: settings.telegramDraftPreviews ?? false,
+      activity: settings.telegramActivity ?? "quiet",
       lastError: status.lastError,
     } satisfies TelegramStatusResponse;
   });
@@ -97,5 +104,21 @@ export function registerTelegramHandlers(): void {
     }
     await configStore.setSettings({ telegramWorkspaceId: selectedWorkspaceId });
     return { workspaceId: selectedWorkspaceId };
+  });
+
+  ipcMain.handle("telegram:setExperience", async (_event, input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Invalid Telegram experience settings.");
+    }
+    const value = input as Record<string, unknown>;
+    const thinkingLevel = isGenerationThinkingLevel(value.thinkingLevel)
+      ? value.thinkingLevel
+      : undefined;
+    const draftPreviews = value.draftPreviews === true;
+    const activity = ["quiet", "thinking", "tools", "verbose"].includes(String(value.activity))
+      ? value.activity as "quiet" | "thinking" | "tools" | "verbose"
+      : "quiet";
+    await configStore.setSettings({ telegramThinkingLevel: thinkingLevel, telegramDraftPreviews: draftPreviews, telegramActivity: activity });
+    return { thinkingLevel, draftPreviews, activity };
   });
 }

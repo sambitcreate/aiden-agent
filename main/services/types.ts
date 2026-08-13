@@ -498,6 +498,12 @@ export interface AppSettings {
   telegramProviderId?: string;
   /** Model for Telegram turns; falls back to provider default when unset. */
   telegramModel?: string;
+  /** Explicit reasoning effort for Telegram-originated turns. */
+  telegramThinkingLevel?: GenerationThinkingLevel;
+  /** Stream bounded answer previews into one edited Telegram message. */
+  telegramDraftPreviews?: boolean;
+  /** Technical activity projected into Telegram during a turn. */
+  telegramActivity?: "quiet" | "thinking" | "tools" | "verbose";
   /**
    * Explicit folder workspace authorized for Telegram project automation.
    * Omitted keeps Telegram turns assistant-only.

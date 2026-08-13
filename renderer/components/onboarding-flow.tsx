@@ -331,8 +331,8 @@ const featureBentos: FeatureBento[] = [
   {
     id: "telegram",
     group: "control",
-    title: "Telegram Remote Control",
-    description: "Run trusted workspace automations from your paired Telegram account.",
+    title: "Aiden in Telegram",
+    description: "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
     size: "standard",

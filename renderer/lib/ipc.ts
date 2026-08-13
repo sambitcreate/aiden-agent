@@ -343,6 +343,9 @@ export interface TelegramStatus {
   workspaceId?: string;
   polling: boolean;
   queuedCount: number;
+  thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
+  draftPreviews: boolean;
+  activity: "quiet" | "thinking" | "tools" | "verbose";
   lastError?: string;
 }
 export const telegramApi = {
@@ -356,6 +359,11 @@ export const telegramApi = {
     invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
   setWorkspace: (workspaceId?: string) =>
     invoke<{ workspaceId?: string }>("telegram:setWorkspace", workspaceId),
+  setExperience: (input: {
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
+    draftPreviews: boolean;
+    activity: "quiet" | "thinking" | "tools" | "verbose";
+  }) => invoke("telegram:setExperience", input),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────

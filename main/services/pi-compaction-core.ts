@@ -22,7 +22,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 
-export type PiCompactionReason = "threshold" | "overflow";
+export type PiCompactionReason = "threshold" | "overflow" | "manual";
 
 export interface PiCompactionDetails {
   readFiles: string[];
@@ -102,6 +102,11 @@ export class PiCompactionCoordinator {
   /** Pi resets overflow recovery when a new user prompt enters the agent. */
   beginPrompt(): void {
     this.overflowRecoveryAttempted = false;
+  }
+
+  /** Run the same Pi-owned compaction path on an explicit operator request. */
+  compact(): Promise<PiCompactionCheckResult> {
+    return this.run("manual", false);
   }
 
   async check(

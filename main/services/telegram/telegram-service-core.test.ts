@@ -621,7 +621,7 @@ test("messages from a user other than the paired owner are ignored", async () =>
 // Control commands
 // ---------------------------------------------------------------------------
 
-test("/start replies with a help message and starts no LLM turn", async () => {
+test("/start opens the operator menu and starts no LLM turn", async () => {
   const owner = person(42, "owner");
   const { service, api, turnMock } = harness({
     enabled: true,
@@ -632,15 +632,15 @@ test("/start replies with a help message and starts no LLM turn", async () => {
   });
 
   await service.start();
-  await waitFor(() => api.sentMessages.some((m) => m.text.includes("Aiden Telegram Bridge")));
+  await waitFor(() => api.sentMessages.some((m) => m.text.includes("Aiden Telegram Agent")));
 
   assert.equal(turnMock.startCalls(), 0, "no LLM turn for /start");
   assert.equal(service.queueSize, 0, "command not enqueued");
 
-  const help = api.sentMessages.find((m) => m.text.includes("Aiden Telegram Bridge"));
-  assert.ok(help, "help message present");
-  assert.equal(help?.parseMode, undefined, "help sent as plain text");
-  assert.match(help.text, /\/workspace — list and choose a workspace/);
+  const menu = api.sentMessages.find((m) => m.text.includes("Aiden Telegram Agent"));
+  assert.ok(menu, "operator menu present");
+  assert.equal(menu?.parseMode, "HTML", "operator menu uses Telegram HTML");
+  assert.match(menu.text, /Queue:/);
 });
 
 test("/workspace lists configured folders without creating a turn", async () => {
@@ -665,7 +665,7 @@ test("/workspace lists configured folders without creating a turn", async () => 
   assert.ok(reply, "workspace list sent");
   assert.match(reply.text, /1\. Aiden/);
   assert.match(reply.text, /2\. Notes/);
-  assert.match(reply.text, /\/workspace <number>/);
+  assert.match(reply.text, /\/workspace &lt;number&gt;/);
   assert.equal(turnMock.startCalls(), 0, "workspace command is never an LLM prompt");
 });
 test("/workspace identifies the currently selected workspace", async () => {
@@ -851,13 +851,13 @@ test("/status replies with bridge status info", async () => {
   });
 
   await service.start();
-  await waitFor(() => api.sentMessages.some((m) => m.text.includes("Bot:")));
+  await waitFor(() => api.sentMessages.some((m) => m.text.includes("<b>Bot:</b>")));
 
-  const status = api.sentMessages.find((m) => m.text.includes("Bot:"));
+  const status = api.sentMessages.find((m) => m.text.includes("<b>Bot:</b>"));
   assert.ok(status, "status message sent");
-  assert.match(status?.text ?? "", /Bot: @aiden_bot/);
-  assert.match(status?.text ?? "", /Paired owner: 42/);
-  assert.match(status?.text ?? "", /Queue:/);
+  assert.match(status?.text ?? "", /<b>Bot:<\/b> @aiden_bot/);
+  assert.match(status?.text ?? "", /<b>Paired owner:<\/b> <code>42<\/code>/);
+  assert.match(status?.text ?? "", /<b>Queue:<\/b>/);
 });
 
 // ---------------------------------------------------------------------------

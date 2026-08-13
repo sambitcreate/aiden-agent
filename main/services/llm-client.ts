@@ -112,6 +112,7 @@ import {
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import {
   buildAssistantSystemPrompt,
+  withTelegramAgentContract,
   withUnattendedAssistantContract,
 } from "./assistant/system-prompt.js";
 import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
@@ -202,6 +203,8 @@ export interface GenerationExecutionOptions {
   turnId?: string;
   /** Fires once the persisted turn has synchronously transferred to generation ownership. */
   onTurnAccepted?: () => void;
+  /** Main-owned interactive delivery surface; renderer starts cannot set this. */
+  interactionSurface?: "telegram";
 }
 
 interface LoadMonitorState {
@@ -1075,6 +1078,7 @@ export const llmClient = {
               omittedInvalidIdentities: 0,
               truncated: false,
             };
+      const telegramInteractive = options.interactionSurface === "telegram";
       const systemPrompt =
         authoritativeMode === "assistant" ||
         authoritativeMode === "assistant-unattended"
@@ -1087,18 +1091,32 @@ export const llmClient = {
               mcpInventoryTruncated: assistantMcpInventory.truncated,
               mcpOmittedInvalidIdentities:
                 assistantMcpInventory.omittedInvalidIdentities,
-              unattended: authoritativeMode === "assistant-unattended",
+              unattended:
+                authoritativeMode === "assistant-unattended" &&
+                !telegramInteractive,
+              surface: telegramInteractive ? "telegram" : "desktop",
             })
           : authoritativeMode === "assistant-automation"
-            ? withUnattendedAssistantContract(
-                await buildSystemPrompt(
-                  folderPath,
-                  git.branch,
-                  permission,
-                  false,
-                  false,
-                ),
-              )
+            ? telegramInteractive
+              ? withTelegramAgentContract(
+                  await buildSystemPrompt(
+                    folderPath,
+                    git.branch,
+                    permission,
+                    false,
+                    false,
+                  ),
+                  { workspaceBound: Boolean(folderPath) },
+                )
+              : withUnattendedAssistantContract(
+                  await buildSystemPrompt(
+                    folderPath,
+                    git.branch,
+                    permission,
+                    false,
+                    false,
+                  ),
+                )
             : await buildSystemPrompt(
                 folderPath,
                 git.branch,

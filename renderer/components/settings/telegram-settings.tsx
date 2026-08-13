@@ -28,6 +28,10 @@ import {
   TELEGRAM_ASSISTANT_ONLY_VALUE,
   telegramWorkspaceOptions,
 } from "../../lib/telegram-workspace-options";
+import {
+  GENERATION_THINKING_LEVELS,
+  type GenerationThinkingLevel,
+} from "../../shared/generation-thinking";
 
 export function TelegramSettings() {
   const qc = useQueryClient();
@@ -46,6 +50,9 @@ export function TelegramSettings() {
   const telegramProviderId = telegram.data?.providerId ?? "";
   const telegramModel = telegram.data?.model ?? "";
   const telegramWorkspaceId = telegram.data?.workspaceId;
+  const thinkingLevel = telegram.data?.thinkingLevel ?? "medium";
+  const draftPreviews = telegram.data?.draftPreviews ?? false;
+  const activity = telegram.data?.activity ?? "quiet";
   const workspaceOptions = telegramWorkspaceOptions(
     workspaces.data ?? [],
     telegramWorkspaceId,
@@ -114,6 +121,23 @@ export function TelegramSettings() {
     }
   };
 
+  const saveExperience = async (patch: {
+    thinkingLevel?: GenerationThinkingLevel;
+    draftPreviews?: boolean;
+    activity?: "quiet" | "thinking" | "tools" | "verbose";
+  }) => {
+    try {
+      await telegramApi.setExperience({
+        thinkingLevel: patch.thinkingLevel ?? thinkingLevel,
+        draftPreviews: patch.draftPreviews ?? draftPreviews,
+        activity: patch.activity ?? activity,
+      });
+      await invalidate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to save Telegram controls.");
+    }
+  };
+
   // Providers that have at least one model and a key (or don't need one).
   const usableProviders = (providers.data ?? []).filter(
     (p) => p.models.length > 0 && (p.hasKey || !p.needsKey),
@@ -123,7 +147,7 @@ export function TelegramSettings() {
   const selectedModel = telegramModel || selectedProvider?.defaultModel || selectedProvider?.models[0] || "";
 
   return (
-    <FieldSet title="Telegram Remote Control">
+    <FieldSet title="Telegram Agent">
       <Field
         label="Enable Telegram bridge"
         description={
@@ -243,6 +267,61 @@ export function TelegramSettings() {
             Configure at least one provider in Settings → Providers, then return here to select it for Telegram.
           </p>
         )}
+      </Field>
+
+      <Field
+        label="Thinking level"
+        description="Reasoning effort for Telegram turns. The selected model safely normalizes unsupported levels."
+      >
+        <Select
+          value={thinkingLevel}
+          onValueChange={(value) =>
+            void saveExperience({ thinkingLevel: value as GenerationThinkingLevel })
+          }
+        >
+          <SelectTrigger size="small" aria-label="Telegram thinking level">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {GENERATION_THINKING_LEVELS.map((level) => (
+              <SelectItem key={level} value={level}>
+                {level}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+
+      <Field
+        label="Live answer drafts"
+        description="Edit one Telegram message while Aiden answers, then replace it with the final response. Off by default for a quieter chat."
+      >
+        <Switch
+          checked={draftPreviews}
+          onCheckedChange={(checked) => void saveExperience({ draftPreviews: checked })}
+        />
+      </Field>
+
+      <Field
+        label="Technical activity"
+        description="Choose whether Telegram shows provider reasoning, completed tool activity, both, or neither."
+      >
+        <Select
+          value={activity}
+          onValueChange={(value) =>
+            void saveExperience({ activity: value as typeof activity })
+          }
+        >
+          <SelectTrigger size="small" aria-label="Telegram technical activity">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="quiet">Quiet</SelectItem>
+            <SelectItem value="thinking">Thinking</SelectItem>
+            <SelectItem value="tools">Tools</SelectItem>
+            <SelectItem value="verbose">Thinking and tools</SelectItem>
+          </SelectContent>
+        </Select>
       </Field>
 
       {hasToken && (
