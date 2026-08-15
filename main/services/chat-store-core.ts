@@ -673,9 +673,6 @@ export function createChatStore(
           charge(message.content);
           charge(message.model);
           charge(message.skill?.name);
-          if (sourceMessage?.role === "assistant" && sourceMessage.pi) {
-            charge(JSON.stringify(sourceMessage.pi));
-          }
           for (const attachment of message.attachments ?? []) {
             chargedBytes += 256;
             charge(attachment.id);
@@ -694,14 +691,6 @@ export function createChatStore(
             content: message.content,
             createdAt: message.createdAt,
             model: message.model,
-            reasoning:
-              sourceMessage?.role === "assistant"
-                ? sourceMessage.reasoning
-                : undefined,
-            pi:
-              sourceMessage?.role === "assistant"
-                ? parseStoredPiAssistantMessage(sourceMessage.pi)
-                : undefined,
             attachments: safeStoredAttachments(message.attachments),
             skill:
               message.role === "user"

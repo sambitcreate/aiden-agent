@@ -63,7 +63,7 @@ test("serializes assistant persistence with a background title update", async (t
   );
 });
 
-test("persists canonical Pi assistant provenance across restart and visible-history copy", async (t) => {
+test("persists canonical Pi assistant provenance across restart without crossing the visible-copy boundary", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-pi-provenance-"),
   );
@@ -113,8 +113,8 @@ test("persists canonical Pi assistant provenance across restart and visible-hist
     sourceChatId: chat.id,
     throughAssistantMessageId: assistantId,
   });
-  assert.equal(copied.messages[1]?.pi?.model, "claude-old");
-  assert.equal(copied.messages[1]?.reasoning, "Historical reasoning");
+  assert.equal(copied.messages[1]?.pi, undefined);
+  assert.equal(copied.messages[1]?.reasoning, undefined);
 });
 
 test("chat payload writes are atomic when staged-file sync fails", async (t) => {
