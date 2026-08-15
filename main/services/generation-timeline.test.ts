@@ -65,6 +65,46 @@ test("binds approval and denial to the existing tool step", () => {
   });
 });
 
+test("projects only safe completed file line changes", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
+  projector.toolFinished("edit", "completed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 12,
+    deletions: 3,
+  });
+  projector.toolStarted("read", "read_file", { path: "src/app.ts" });
+  projector.toolFinished("read", "completed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 99,
+    deletions: 99,
+  });
+  projector.toolStarted("failed", "write_file", { path: "failed.ts" });
+  projector.toolFinished("failed", "failed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: 2,
+    deletions: 1,
+  });
+  projector.toolStarted("invalid", "write_file", { path: "invalid.ts" });
+  projector.toolFinished("invalid", "completed", {
+    kind: "file_line_changes",
+    version: 1,
+    additions: -1,
+    deletions: 0,
+    privateContent: "must not cross the renderer boundary",
+  });
+
+  const [edit, read, failed, invalid] = toolSteps(projector.snapshot());
+  assert.deepEqual(edit?.lineChanges, { additions: 12, deletions: 3 });
+  assert.equal(read?.lineChanges, undefined);
+  assert.equal(failed?.lineChanges, undefined);
+  assert.equal(invalid?.lineChanges, undefined);
+  assert.doesNotMatch(JSON.stringify(projector.snapshot()), /privateContent|must not cross/u);
+});
+
 test("does not expose raw command, search, content, or absolute path arguments", () => {
   const snapshots: GenerationTimeline[] = [];
   const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
@@ -356,6 +396,18 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
   const final = projector.finish("completed");
 
   assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(final))), final);
+  const editable = {
+    ...final,
+    steps: [
+      {
+        ...final.steps[0],
+        toolName: "edit_file",
+        label: "Edit file",
+        lineChanges: { additions: 7, deletions: 2 },
+      },
+    ],
+  };
+  assert.deepEqual(parseGenerationTimeline(editable), editable);
   assert.equal(
     parseGenerationTimeline({
       ...final,
@@ -367,6 +419,20 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
     parseGenerationTimeline({
       ...final,
       steps: [{ ...final.steps[0], label: "x".repeat(121) }],
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseGenerationTimeline({
+      ...editable,
+      steps: [{ ...editable.steps[0], lineChanges: { additions: -1, deletions: 2 } }],
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseGenerationTimeline({
+      ...editable,
+      steps: [{ ...editable.steps[0], status: "failed" }],
     }),
     undefined,
   );

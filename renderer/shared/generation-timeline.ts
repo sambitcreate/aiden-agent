@@ -25,6 +25,11 @@ export interface AgentToolStep {
   finishedAt?: number;
   /** UTF-16 offset into the visible assistant text when this activity began. */
   contentOffset?: number;
+  /** Renderer-safe line totals reported by a completed first-party file mutation. */
+  lineChanges?: {
+    additions: number;
+    deletions: number;
+  };
   /** A workspace-relative file or directory. Never raw file contents or commands. */
   target?: string;
   /**
@@ -94,6 +99,7 @@ const TIMELINE_STATUSES = new Set<GenerationTimelineStatus>([
 const SAFE_ID = /^[a-z0-9._:-]+$/iu;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const MAX_DETAIL_LENGTH = 120;
+const MAX_LINE_CHANGE_COUNT = 100_000_000;
 
 export function isToolStep(step: AgentStep): step is AgentToolStep {
   return step.kind === "tool";
@@ -134,7 +140,13 @@ function parseToolStep(
   step: Record<string, unknown>,
   index: number,
   contentOffset?: number,
+  allowLineChanges = false,
 ): AgentToolStep | undefined {
+  const rawLineChanges = step.lineChanges;
+  const lineChanges =
+    rawLineChanges && typeof rawLineChanges === "object"
+      ? (rawLineChanges as Record<string, unknown>)
+      : undefined;
   if (
     typeof step.id !== "string" ||
     !/^tool-[1-9]\d*$/u.test(step.id) ||
@@ -149,7 +161,18 @@ function parseToolStep(
     typeof step.status !== "string" ||
     !STEP_STATUSES.has(step.status as AgentStepStatus) ||
     (step.target !== undefined && !safeStoredTarget(step.target)) ||
-    (step.detail !== undefined && !safeStoredDetail(step.detail))
+    (step.detail !== undefined && !safeStoredDetail(step.detail)) ||
+    (rawLineChanges !== undefined &&
+      (!allowLineChanges ||
+        !lineChanges ||
+        (step.toolName !== "write_file" && step.toolName !== "edit_file") ||
+        step.status !== "completed" ||
+        !Number.isSafeInteger(lineChanges.additions) ||
+        (lineChanges.additions as number) < 0 ||
+        (lineChanges.additions as number) > MAX_LINE_CHANGE_COUNT ||
+        !Number.isSafeInteger(lineChanges.deletions) ||
+        (lineChanges.deletions as number) < 0 ||
+        (lineChanges.deletions as number) > MAX_LINE_CHANGE_COUNT))
   ) {
     return undefined;
   }
@@ -167,6 +190,14 @@ function parseToolStep(
     ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.target === undefined ? {} : { target: step.target as string }),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
+    ...(lineChanges === undefined
+      ? {}
+      : {
+          lineChanges: {
+            additions: lineChanges.additions as number,
+            deletions: lineChanges.deletions as number,
+          },
+        }),
   };
 }
 
@@ -245,7 +276,12 @@ export function parseGenerationTimeline(
     // Version 1 predates reasoning steps. Version 2 predates text offsets.
     const parsed =
       step.kind === "tool"
-        ? parseToolStep(step, index, contentOffset as number | undefined)
+        ? parseToolStep(
+            step,
+            index,
+            contentOffset as number | undefined,
+            candidate.version === GENERATION_TIMELINE_VERSION,
+          )
         : step.kind === "thinking" && candidate.version !== 1
           ? parseThinkingStep(step, index, contentOffset as number | undefined)
           : undefined;

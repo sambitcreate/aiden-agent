@@ -13,12 +13,34 @@ import {
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
 const MAX_DETAIL_LENGTH = 120;
+const MAX_LINE_CHANGE_COUNT = 100_000_000;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 
 interface SafeToolDescriptor {
   label: string;
   target?: string;
   detail?: string;
+}
+
+function safeLineChanges(toolName: string, value: unknown): AgentToolStep["lineChanges"] {
+  if (toolName !== "write_file" && toolName !== "edit_file") return undefined;
+  const details = record(value);
+  if (
+    details.kind !== "file_line_changes" ||
+    details.version !== 1 ||
+    !Number.isSafeInteger(details.additions) ||
+    (details.additions as number) < 0 ||
+    (details.additions as number) > MAX_LINE_CHANGE_COUNT ||
+    !Number.isSafeInteger(details.deletions) ||
+    (details.deletions as number) < 0 ||
+    (details.deletions as number) > MAX_LINE_CHANGE_COUNT
+  ) {
+    return undefined;
+  }
+  return {
+    additions: details.additions as number,
+    deletions: details.deletions as number,
+  };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -282,8 +304,9 @@ export class GenerationTimelineProjector {
   toolFinished(
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
+    resultDetails?: unknown,
   ): void {
-    this.updateTool(toolCallId, status, true);
+    this.updateTool(toolCallId, status, true, resultDetails);
   }
 
   finish(status: Exclude<GenerationTimelineStatus, "running">): GenerationTimeline {
@@ -327,7 +350,12 @@ export class GenerationTimelineProjector {
     step.finishedAt = timestamp;
   }
 
-  private updateTool(toolCallId: string, status: AgentStepStatus, terminal = false): void {
+  private updateTool(
+    toolCallId: string,
+    status: AgentStepStatus,
+    terminal = false,
+    resultDetails?: unknown,
+  ): void {
     if (this.timeline.status !== "running") return;
     const index = this.stepIndex.get(toolCallId);
     if (index === undefined) return;
@@ -336,7 +364,13 @@ export class GenerationTimelineProjector {
     const timestamp = this.now();
     step.status = status;
     step.updatedAt = timestamp;
-    if (terminal) step.finishedAt = timestamp;
+    if (terminal) {
+      step.finishedAt = timestamp;
+      if (status === "completed") {
+        const lineChanges = safeLineChanges(step.toolName, resultDetails);
+        if (lineChanges) step.lineChanges = lineChanges;
+      }
+    }
     this.emit();
   }
 

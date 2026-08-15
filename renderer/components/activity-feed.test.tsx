@@ -145,6 +145,28 @@ test("activity typography keeps summaries above compact details", () => {
   assert.match(markup, /text-red font-medium">run_command failed/u);
 });
 
+test("completed file mutations show accessible inline line totals", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "edit_file", "completed", {
+          target: "renderer/app.tsx",
+          lineChanges: { additions: 1_240, deletions: 17 },
+        }),
+        step(1, "write_file", "completed", {
+          target: "empty.ts",
+          lineChanges: { additions: 0, deletions: 0 },
+        }),
+      ])}
+    />,
+  );
+
+  assert.match(markup, /aria-label="1240 additions, 17 deletions"/u);
+  assert.match(markup, /text-support-green">\+1\.2k/u);
+  assert.match(markup, /text-support-red">−17/u);
+  assert.equal((markup.match(/role="group"/gu) ?? []).length, 1);
+});
+
 test("the feed carries no outline of its own", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed timeline={timeline("completed", [step(0, "read_file")])} />,

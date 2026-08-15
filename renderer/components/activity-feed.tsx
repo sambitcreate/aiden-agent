@@ -25,12 +25,37 @@ function toneClass(tone: ActivityLine["tone"]): string {
   return "text-secondary";
 }
 
+function compactLineCount(value: number): string {
+  if (value < 1_000) return String(value);
+  if (value < 1_000_000) {
+    const thousands = value / 1_000;
+    return `${thousands < 10 ? thousands.toFixed(1).replace(/\.0$/u, "") : Math.round(thousands)}k`;
+  }
+  const millions = value / 1_000_000;
+  return `${millions < 10 ? millions.toFixed(1).replace(/\.0$/u, "") : Math.round(millions)}m`;
+}
+
+function LineChanges({ additions, deletions }: { additions: number; deletions: number }) {
+  if (additions === 0 && deletions === 0) return null;
+  return (
+    <span
+      className="ml-1 inline-flex whitespace-nowrap font-mono text-[0.9em] font-medium tabular-nums"
+      role="group"
+      aria-label={`${additions} additions, ${deletions} deletions`}
+    >
+      <span className="text-support-green">+{compactLineCount(additions)}</span>
+      <span className="ml-1 text-support-red">−{compactLineCount(deletions)}</span>
+    </span>
+  );
+}
+
 function StepLine({ step }: { step: AgentStep }) {
   const line = activityLine(step);
   return (
     <>
       <span className={`${toneClass(line.tone)} font-medium`}>{line.verb}</span>
       {line.object ? <span className="font-normal text-tertiary"> {line.object}</span> : null}
+      {isToolStep(step) && step.lineChanges ? <LineChanges {...step.lineChanges} /> : null}
     </>
   );
 }

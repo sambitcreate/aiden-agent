@@ -1699,6 +1699,7 @@ export const llmClient = {
                   : event.isError
                     ? "failed"
                     : "completed",
+              event.result?.details,
             );
             sendGeneration(streamId, "chat:tool", {
               streamId,
