@@ -1,12 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
+import {
+  appendFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   InMemorySessionRepo,
+  JsonlSessionRepo,
   type Session,
 } from "@earendil-works/pi-agent-core";
+import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import {
   createModels,
   fauxAssistantMessage,
@@ -21,6 +31,7 @@ import {
 } from "./pi-compaction-core.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
+  AIDEN_PI_TRANSACTION,
   appendPiMessages,
   PiCompactionSessionStore,
   syncChatMessagesToPiSession,
@@ -529,6 +540,37 @@ test("Pi message batches roll back partial appends before a safe retry", async (
   );
 });
 
+test("visible assistant synchronization reconciles a committed unmarked Pi tail", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  await appendPiMessages(session, [
+    assistant(model, { text: "Recovered exactly once", timestamp: 20 }),
+  ]);
+  await syncChatMessagesToPiSession(
+    session,
+    [
+      {
+        id: "assistant-recovered",
+        role: "assistant",
+        content: "Recovered exactly once",
+        createdAt: 21,
+      },
+    ],
+    model,
+    false,
+  );
+  const branch = await session.getBranch();
+  assert.equal(branch.filter((entry) => entry.type === "message").length, 1);
+  assert.equal(
+    branch.filter(
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === AIDEN_CHAT_MESSAGE_MARKER,
+    ).length,
+    1,
+  );
+});
+
 test("primary generation reconciles a visible assistant after a journal batch failure", async () => {
   const source = await readFile(
     new URL("./llm-client.ts", import.meta.url),
@@ -585,5 +627,97 @@ test("durable journals are private and delete with their chat", async (t) => {
   assert.equal((await stat(metadata.path)).mode & 0o777, 0o600);
 
   await store.deleteChat("chat-privacy-test");
+  await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+test("reopen rolls back a transaction interrupted by process death", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-crash-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const firstStore = new PiCompactionSessionStore({ root: async () => root });
+  const first = await firstStore.openChat("chat-crash-test");
+  await first.appendMessage(user("committed", 10));
+  await first.appendCustomEntry(AIDEN_PI_TRANSACTION, {
+    transactionId: "interrupted",
+    phase: "begin",
+  });
+  await first.appendMessage(user("partial duplicate", 20));
+
+  const reopened = await new PiCompactionSessionStore({
+    root: async () => root,
+  }).openChat("chat-crash-test");
+  assert.deepEqual(
+    (await reopened.buildContext()).messages.map((message) =>
+      message.role === "user" ? message.content : message.role,
+    ),
+    ["committed"],
+  );
+});
+
+test("newest corrupt duplicate is quarantined and older valid history reopens", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-fallback-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const repo = new JsonlSessionRepo({
+    fs: new NodeExecutionEnv({ cwd: root }),
+    sessionsRoot: root,
+  });
+  const older = await repo.create({
+    id: "chat-fallback-test",
+    cwd: root,
+    metadata: {
+      kind: "aiden-chat-compaction-v1",
+      chatId: "chat-fallback-test",
+    },
+  });
+  await older.appendMessage(user("older valid", 10));
+  const newer = await repo.create({
+    id: "chat-fallback-test",
+    cwd: root,
+    metadata: {
+      kind: "aiden-chat-compaction-v1",
+      chatId: "chat-fallback-test",
+    },
+  });
+  await newer.appendMessage(user("newer but corrupt", 20));
+  await appendFile((await newer.getMetadata()).path, "{not-json\n");
+
+  const reopened = await new PiCompactionSessionStore({
+    root: async () => root,
+  }).openChat("chat-fallback-test");
+  assert.match(JSON.stringify(await reopened.buildContext()), /older valid/u);
+});
+
+test("corrupt indexed headers delete with private chat data", async (t) => {
+  const temporary = await mkdtemp(
+    path.join(os.tmpdir(), "aiden-pi-corrupt-delete-"),
+  );
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const session = await store.openChat("chat-corrupt-delete");
+  await session.appendMessage(user("PRIVATE BODY", 10));
+  const metadata = await session.getMetadata();
+  const lines = (await readFile(metadata.path, "utf8")).split("\n");
+  lines[0] = `{broken-header,\"chatId\":\"chat-corrupt-delete\"}`;
+  await writeFile(metadata.path, lines.join("\n"));
+
+  await store.deleteChat("chat-corrupt-delete");
+  await assert.rejects(stat(metadata.path), { code: "ENOENT" });
+});
+
+test("startup reconciliation removes indexed orphan journals", async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-orphan-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const root = path.join(temporary, "sessions");
+  await mkdir(root, { recursive: true });
+  const store = new PiCompactionSessionStore({ root: async () => root });
+  const orphan = await store.openChat("chat-orphan-test");
+  const metadata = await orphan.getMetadata();
+
+  await store.reconcileChats(new Set());
   await assert.rejects(stat(metadata.path), { code: "ENOENT" });
 });
