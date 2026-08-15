@@ -893,7 +893,7 @@ test("corrupt indexed headers delete with private chat data", async (t) => {
   await session.appendMessage(user("PRIVATE BODY", 10));
   const metadata = await session.getMetadata();
   const lines = (await readFile(metadata.path, "utf8")).split("\n");
-  lines[0] = `{broken-header,\"chatId\":\"chat-corrupt-delete\"}`;
+  lines[0] = `{broken-header,"chatId":"chat-corrupt-delete"}`;
   await writeFile(metadata.path, lines.join("\n"));
 
   await store.deleteChat("chat-corrupt-delete");
