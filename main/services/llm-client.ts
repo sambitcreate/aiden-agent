@@ -8,11 +8,7 @@
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import {
-  Agent,
-  convertToLlm,
-  type AgentMessage,
-} from "@earendil-works/pi-agent-core";
+import { convertToLlm, type AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
@@ -181,8 +177,16 @@ import { ChatWorkspaceMutationGate } from "./chat-workspace-mutation-gate.js";
 import { ChatTurnAdmission } from "./chat-turn-admission.js";
 import type { ChatTurnLease } from "./chat-turn-admission.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import {
+  PiAgentRuntimeHarness,
+  piAgentRuntimeExtensions,
+  resolvePiAgentRuntimeStaticContributions,
+} from "./pi-agent-runtime-harness.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
+subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
+  logger.warn("subagents", `Pi child runtime fault (${source}).`);
+});
 
 type GenerationPermission = WorkspacePermission | "read-only";
 
@@ -217,7 +221,7 @@ interface LoadMonitorState {
 }
 
 interface ActiveGeneration {
-  agent: Agent;
+  agent: PiAgentRuntimeHarness;
   compaction: PiCompactionCoordinator;
   chatId: string;
   owner: ChatGenerationOwner;
@@ -342,7 +346,10 @@ const approvals = new ToolApprovalCoordinator((prompt) => {
 const SHUTDOWN_GENERATION_GRACE_MS =
   DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS + 1_000;
 
-function resetGenerationAgent(agent: Agent, streamId: string): void {
+function resetGenerationAgent(
+  agent: PiAgentRuntimeHarness,
+  streamId: string,
+): void {
   try {
     agent.reset();
   } catch (error) {
@@ -1069,11 +1076,18 @@ export const llmClient = {
     let piSession:
       Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
     let compaction: PiCompactionCoordinator | undefined;
-    let candidate: Agent | null = null;
+    let candidate: PiAgentRuntimeHarness | null = null;
     let piJournalHealthy = true;
     let flushPiMessages: () => Promise<boolean> = async () =>
       pendingPiMessages.length === 0;
     try {
+      const runtimeExtensions = piAgentRuntimeExtensions.snapshot();
+      const toolsWithRuntimeContributions =
+        resolvePiAgentRuntimeStaticContributions(
+          "",
+          tools,
+          runtimeExtensions,
+        ).tools;
       const assistantMcpInventory =
         authoritativeMode === "assistant"
           ? await configStore
@@ -1091,13 +1105,15 @@ export const llmClient = {
               omittedInvalidIdentities: 0,
               truncated: false,
             };
-      const systemPrompt =
+      const baseSystemPrompt =
         authoritativeMode === "assistant" ||
         authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
-              availableTools: tools.map((tool) => tool.name),
+              availableTools: toolsWithRuntimeContributions.map(
+                (tool) => tool.name,
+              ),
               mcpServers: assistantMcpInventory.servers,
               mcpServerTotal: assistantMcpInventory.totalEnabledServers,
               mcpInventoryTruncated: assistantMcpInventory.truncated,
@@ -1119,15 +1135,23 @@ export const llmClient = {
                 folderPath,
                 git.branch,
                 permission,
-                tools.some((tool) => tool.name === "subagent"),
+                toolsWithRuntimeContributions.some(
+                  (tool) => tool.name === "subagent",
+                ),
                 true,
                 skillSnapshot,
-                new Set(tools.map((tool) => tool.name)),
+                new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
               );
+      const { systemPrompt, tools: runtimeTools } =
+        resolvePiAgentRuntimeStaticContributions(
+          baseSystemPrompt,
+          tools,
+          runtimeExtensions,
+        );
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
-        tools,
+        tools: runtimeTools,
       });
       piSession = await piCompactionSessionStore.openChat(params.chatId);
       const onCompactionEvent = (event: PiCompactionEvent) => {
@@ -1281,7 +1305,15 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       if (!currentUser) compaction.beginPrompt();
-      candidate = new Agent({
+      candidate = new PiAgentRuntimeHarness({
+        extensions: runtimeExtensions,
+        staticContributionsApplied: true,
+        onFault: ({ source, extensionId }) => {
+          logger.warn(
+            "pi",
+            `Pi runtime fault (${source}${extensionId ? `:${extensionId}` : ""}) for stream ${streamId}.`,
+          );
+        },
         ...buildAgentRuntimeOptions(params.chatId, runtime),
         convertToLlm,
         ...(params.providerId === GOOGLE_PROVIDER_ID &&
@@ -1300,7 +1332,7 @@ export const llmClient = {
           {
             contextWindow: model.contextWindow,
             systemPrompt,
-            tools,
+            tools: runtimeTools,
             supportsImages,
           },
           (result) => {
@@ -1326,12 +1358,9 @@ export const llmClient = {
           systemPrompt,
           model,
           thinkingLevel,
-          tools,
+          tools: runtimeTools,
           messages: initialMessages,
         },
-        // Aiden tools can mutate the same workspace, scheduler, or external
-        // service. Preserve model-authored ordering across the foreground run.
-        toolExecution: "sequential",
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
           let nextContext = context;
           let changed = false;
@@ -1854,7 +1883,7 @@ export const llmClient = {
         const reasoningLengthBeforeAttempt = reasoning.length;
         lastAssistantMessage = undefined;
         try {
-          await agent.continue();
+          await agent.continueFromDurableTail();
         } catch (error) {
           await flushPiMessages();
           throw error;

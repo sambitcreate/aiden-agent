@@ -446,7 +446,7 @@ test("child runner resets retry failures and treats length stops as terminal fai
   );
   assert.match(
     source,
-    /message_start[\s\S]{0,220}terminalError = null;[\s\S]{0,80}terminalAborted = false;/u,
+    /message_start[\s\S]{0,360}terminalError = null;[\s\S]{0,80}terminalAborted = false;/u,
   );
   assert.match(source, /terminalGenerationLengthError\(message\)/u);
   assert.match(source, /const exactOutput = terminalAssistantText\(message\)/u);
@@ -1226,6 +1226,61 @@ test("shutdown timeout preserves ownership until non-cooperative work actually s
     assert.equal(registry.activeCount, 0);
     assert.equal(runningChild.agent.state.isStreaming, false);
   });
+});
+
+test("cleanup quarantine rejects new deployment work until an unresponsive child settles", async () => {
+  const model: Model<Api> = {
+    id: "compat-quarantine",
+    name: "Compatibility quarantine",
+    api: "openai-completions",
+    provider: "aiden-compat-quarantine",
+    baseUrl: "https://compat.invalid/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8_192,
+    maxTokens: 1_024,
+  };
+  const started = deferred();
+  const release = deferred();
+  const streamSimple: ResolvedModelRuntime["streams"]["streamSimple"] = (
+    requestModel,
+  ) => {
+    const stream = createAssistantMessageEventStream();
+    started.resolve();
+    void release.promise.then(() => {
+      const completed = providerMessage(
+        requestModel,
+        "stop",
+        "late completion",
+      );
+      stream.push({ type: "done", reason: "stop", message: completed });
+      stream.end(completed);
+    });
+    return stream;
+  };
+  const runtime = runtimeFrom(model, streamSimple, { deployment: "local" });
+  const registry = new SubagentRuntimeRegistry();
+  const running = child(registry, runtime);
+  const prompt = running.prompt("Hold the local request.");
+  await started.promise;
+  running.cancel(new Error("deadline elapsed"));
+  running.markCleanupPending?.();
+
+  assert.equal(registry.isDeploymentQuarantined("local"), true);
+  assert.throws(
+    () => child(registry, runtime),
+    /waiting for an unresponsive request to settle/u,
+  );
+  assert.equal(registry.activeCount, 1);
+
+  release.resolve();
+  await prompt;
+  assert.equal(registry.activeCount, 0);
+  assert.equal(registry.isDeploymentQuarantined("local"), false);
+  const recovered = child(registry, runtime);
+  recovered.cancel();
+  assert.equal(registry.activeCount, 0);
 });
 
 test("main-process shutdown continues to application quit after the subagent deadline", async () => {

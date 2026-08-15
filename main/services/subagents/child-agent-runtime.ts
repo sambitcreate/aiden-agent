@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
-  Agent,
   convertToLlm,
   InMemorySessionRepo,
+  type Agent,
 } from "@earendil-works/pi-agent-core";
 import type {
   AgentMessage,
@@ -34,6 +34,7 @@ import {
   PiCompactionCoordinator,
 } from "../pi-compaction-core.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
+import { PiAgentRuntimeHarness } from "../pi-agent-runtime-harness.js";
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 export const MAX_REGISTERED_SUBAGENT_CHILDREN = 32;
@@ -64,15 +65,20 @@ export interface SubagentChildSpec {
 export interface SubagentRuntimeChild {
   childId: string;
   sessionId: string;
-  agent: Agent;
+  agent: Pick<
+    Agent,
+    "state" | "signal" | "subscribe" | "prompt" | "prepareNextTurnWithContext"
+  >;
   prompt(input: string): Promise<void>;
   /** Temporarily yield the real provider inference slot while a nested batch runs. */
   withoutInferenceLease?<T>(operation: () => Promise<T>): Promise<T>;
+  /** Quarantine this deployment after cancellation grace expires. */
+  markCleanupPending?(): void;
   cancel(reason?: Error): void;
 }
 
 interface RegisteredSubagentChild {
-  agent: Agent;
+  agent: PiAgentRuntimeHarness;
   compaction: Promise<PiCompactionCoordinator>;
   cancellation: AbortController;
   completion: Promise<void> | null;
@@ -82,6 +88,7 @@ interface RegisteredSubagentChild {
   deployment: SubagentDeployment;
   releaseInference?: () => void;
   yieldingInference: boolean;
+  cleanupPending: boolean;
 }
 
 export interface SubagentRuntimeRegistryOptions {
@@ -132,7 +139,9 @@ export class SubagentRuntimeRegistry {
   private readonly appendSessionMessages: typeof appendPiMessages;
   private readonly onPiJournalError: (error: unknown) => void;
   private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
+  private reportRuntimeFault: (source: string) => void = () => {};
   private shuttingDown = false;
+  private readonly quarantinedDeployments = new Set<SubagentDeployment>();
 
   constructor(
     private healthMetrics?: SubagentHealthMetricsSink,
@@ -163,8 +172,16 @@ export class SubagentRuntimeRegistry {
     this.healthMetrics = healthMetrics;
   }
 
+  setRuntimeFaultReporter(reporter: (source: string) => void): void {
+    this.reportRuntimeFault = reporter;
+  }
+
   get activeCount(): number {
     return this.children.size;
+  }
+
+  isDeploymentQuarantined(deployment: SubagentDeployment): boolean {
+    return this.quarantinedDeployments.has(deployment);
   }
 
   create(spec: SubagentChildSpec): SubagentRuntimeChild {
@@ -180,6 +197,16 @@ export class SubagentRuntimeRegistry {
     ) {
       throw new Error("Subagent runtime authority is incomplete.");
     }
+    const deployment: SubagentDeployment = isLocalProviderDeployment(
+      spec.runtime.provider,
+    )
+      ? "local"
+      : "hosted";
+    if (this.quarantinedDeployments.has(deployment)) {
+      throw new Error(
+        `The ${deployment} subagent runtime is waiting for an unresponsive request to settle.`,
+      );
+    }
     const { childId, sessionId } = childIdentity(spec.groupId, spec.childId);
     if (this.children.has(childId))
       throw new Error("Subagent child identity was reused.");
@@ -192,7 +219,13 @@ export class SubagentRuntimeRegistry {
     };
     assertGenerationContextCapacity(contextOptions);
     let emergencyContextReduction = false;
-    const agent = new Agent({
+    const agent = new PiAgentRuntimeHarness({
+      onFault: ({ source, extensionId }) => {
+        this.reportRuntimeFault(source);
+        writeDevLog("error", "subagents", [
+          `Pi child runtime fault (${source}${extensionId ? `:${extensionId}` : ""}).`,
+        ]);
+      },
       ...buildAgentRuntimeOptions(sessionId, spec.runtime),
       convertToLlm,
       transformContext: createGenerationContextTransform(contextOptions, () => {
@@ -212,7 +245,6 @@ export class SubagentRuntimeRegistry {
         tools: spec.tools,
         messages: spec.initialMessages ?? [],
       },
-      toolExecution: "sequential",
     });
     const sessionPromise = (async () => {
       const session = await new InMemorySessionRepo().create({ id: sessionId });
@@ -281,11 +313,6 @@ export class SubagentRuntimeRegistry {
       agent.state.messages = [...result.messages];
       return { context: { ...context, messages: [...result.messages] } };
     };
-    const deployment: SubagentDeployment = isLocalProviderDeployment(
-      spec.runtime.provider,
-    )
-      ? "local"
-      : "hosted";
     entry = {
       agent,
       compaction,
@@ -296,6 +323,7 @@ export class SubagentRuntimeRegistry {
       authority: { ...spec.authority },
       deployment,
       yieldingInference: false,
+      cleanupPending: false,
     };
     this.children.set(childId, entry);
 
@@ -374,7 +402,7 @@ export class SubagentRuntimeRegistry {
                 firstAttempt = false;
                 await agent.prompt(userMessage);
               } else {
-                await agent.continue();
+                await agent.continueFromDurableTail();
               }
               const journalFlushed = await flushPiMessages(session);
               if (!journalFlushed) break;
@@ -401,6 +429,15 @@ export class SubagentRuntimeRegistry {
           await completion;
         } finally {
           this.children.delete(childId);
+          if (
+            entry.cleanupPending &&
+            ![...this.children.values()].some(
+              (candidate) =>
+                candidate.cleanupPending && candidate.deployment === deployment,
+            )
+          ) {
+            this.quarantinedDeployments.delete(deployment);
+          }
         }
       },
       withoutInferenceLease: async <T>(
@@ -438,6 +475,11 @@ export class SubagentRuntimeRegistry {
             entry.yieldingInference = false;
           }
         }
+      },
+      markCleanupPending: () => {
+        if (entry.closed || !entry.completion) return;
+        entry.cleanupPending = true;
+        this.quarantinedDeployments.add(deployment);
       },
       cancel,
     };
