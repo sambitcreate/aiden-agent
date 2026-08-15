@@ -4,9 +4,9 @@
 
 Aiden now ships the Pi-native baseline described by this research plan. The implementation is pinned to the installed `@earendil-works/pi-agent-core@0.80.10` behavior and delegates summary prompting, cut points, retained-tail reconstruction, split turns, repeated-summary updates, and tool-pair safety to Pi core.
 
-The delivered boundary includes append-only private chat journals, current-turn-aware pre-prompt and post-response checks, proactive threshold compaction, one compact-and-retry attempt for context overflow, transactional journal branches, failure-safe checkpoint commits, child-agent parity, bounded renderer activity, and journal removal with chat deletion. The pre-existing deterministic `generation-context` transform remains an emergency request-safety layer for pathological payloads and static prompt/tool overhead; whenever it reduces a request, Aiden now forces a durable semantic checkpoint afterward.
+The delivered boundary includes append-only private chat journals, current-turn-aware pre-prompt and post-response checks, proactive threshold compaction, one compact-and-retry attempt for context overflow, crash-recoverable journal transactions, failure-safe checkpoint commits, child-agent parity, bounded renderer activity, corrupt/orphan journal recovery, model-neutral historical images, structurally validated summaries, and bounded map-reduce when the summarizer input itself is too large. The pre-existing deterministic `generation-context` transform remains an emergency request-safety layer for pathological payloads and static prompt/tool overhead; whenever it reduces a request, Aiden now forces a durable semantic checkpoint afterward.
 
-The broader plan intentionally remains Partial. Durable cross-task memory, independent summary-quality validation and repair, provider-native compaction, replay benchmarks, rollout telemetry, and per-model policy tuning remain follow-on work rather than being implied by the Pi parity delivery.
+The broader plan intentionally remains Partial. Durable cross-task memory, semantic identifier/latest-request audits with repair, provider-native compaction, replay benchmarks, rollout telemetry, and per-model policy tuning remain follow-on work rather than being implied by the Pi parity delivery.
 
 I treated **“Py” as Pi**, and I also included **PydanticAI**, because its newer tiered-compaction design captures many of the best ideas in one framework.
 
@@ -23,11 +23,11 @@ The strongest approach is **not** “summarize the entire conversation when the 
 
 My recommended design combines:
 
-* **PydanticAI’s tiered orchestration**
-* **OpenCode and Pi’s recent-tail and turn-boundary handling**
-* **OpenClaw’s memory flush and summary quality audit**
-* **Hermes’s configurable context-engine abstraction and dual trigger system**
-* **Codex’s provider-native compaction lifecycle when the backend supports it**
+- **PydanticAI’s tiered orchestration**
+- **OpenCode and Pi’s recent-tail and turn-boundary handling**
+- **OpenClaw’s memory flush and summary quality audit**
+- **Hermes’s configurable context-engine abstraction and dual trigger system**
+- **Codex’s provider-native compaction lifecycle when the backend supports it**
 
 ---
 
@@ -46,11 +46,11 @@ My recommended design combines:
 
 OpenCode currently uses several distinct mechanisms rather than one destructive summary operation:
 
-* Older completed tool results can be marked compacted while a protected recent tool-output region remains.
-* A recent tail is selected by turns and token budget.
-* The preserved tail can include part of an oversized turn when necessary.
-* Media is stripped and tool output is truncated before asking the compaction model to summarize.
-* The previous summary is supplied as an anchor and updated rather than blindly stacking summaries.
+- Older completed tool results can be marked compacted while a protected recent tool-output region remains.
+- A recent tail is selected by turns and token budget.
+- The preserved tail can include part of an oversized turn when necessary.
+- Media is stripped and tool output is truncated before asking the compaction model to summarize.
+- The previous summary is supplied as an anchor and updated rather than blindly stacking summaries.
 
 Its summary contract is explicitly operational: objective, important details, work state, next move, and relevant files. It also instructs the model to preserve exact paths, commands, symbols, errors, URLs, and identifiers.
 
@@ -70,8 +70,8 @@ The entry records the summary, first retained entry, token count before compacti
 
 Pi also handles two cases that many simple implementations overlook:
 
-* It avoids separating tool results from their corresponding calls.
-* When one enormous turn cannot fit, it supports a split-turn summary rather than discarding the entire turn.
+- It avoids separating tool results from their corresponding calls.
+- When one enormous turn cannot fit, it supports a split-turn summary rather than discarding the entire turn.
 
 It tracks files read and modified cumulatively across repeated compactions and branch summaries.
 
@@ -81,8 +81,8 @@ It tracks files read and modified cumulatively across repeated compactions and b
 
 Hermes separates compression into two levels:
 
-* An in-loop compressor for normal context management.
-* A higher-threshold gateway safety net that catches sessions which reach the agent already too large.
+- An in-loop compressor for normal context management.
+- A higher-threshold gateway safety net that catches sessions which reach the agent already too large.
 
 Its main compressor follows a head-middle-tail architecture:
 
@@ -110,18 +110,18 @@ Before compaction, it can run a silent **memory flush** that asks the agent to w
 
 Its pruning system is cache-aware:
 
-* It can delay pruning while a provider prompt cache is still useful.
-* It first soft-trims large tool outputs.
-* It hard-clears them only when pressure remains high and enough tokens will actually be reclaimed.
-* It protects recent assistant turns and bootstrap context.
+- It can delay pruning while a provider prompt cache is still useful.
+- It first soft-trims large tool outputs.
+- It hard-clears them only when pressure remains high and enough tokens will actually be reclaimed.
+- It protects recent assistant turns and bootstrap context.
 
 Most importantly, OpenClaw treats summary generation as an output requiring verification. Its safeguard contract requires sections for:
 
-* decisions,
-* open work,
-* constraints,
-* pending user asks,
-* exact identifiers.
+- decisions,
+- open work,
+- constraints,
+- pending user asks,
+- exact identifiers.
 
 It checks that required sections exist, opaque identifiers survived, and the latest user request is represented.
 
@@ -185,14 +185,14 @@ The full event history should remain recoverable.
 
 Do not replace the original transcript with the summary. Instead, append a compaction checkpoint containing:
 
-* checkpoint ID,
-* transcript range covered,
-* retained-tail boundary,
-* summary,
-* token counts before and after,
-* model and prompt version,
-* validation result,
-* relevant structured metadata.
+- checkpoint ID,
+- transcript range covered,
+- retained-tail boundary,
+- summary,
+- token counts before and after,
+- model and prompt version,
+- validation result,
+- relevant structured metadata.
 
 This makes compaction reversible, debuggable, and auditable.
 
@@ -218,14 +218,14 @@ A checkpoint is a **task handoff**, not a generic chat summary.
 
 Its purpose is to let the next model continue the work correctly. It should communicate:
 
-* current objective,
-* current task state,
-* decisions already made,
-* unresolved work,
-* important constraints,
-* active blockers,
-* exact references needed for continuity,
-* immediate next action.
+- current objective,
+- current task state,
+- decisions already made,
+- unresolved work,
+- important constraints,
+- active blockers,
+- exact references needed for continuity,
+- immediate next action.
 
 Use a fixed schema rather than unstructured prose. A JSON object can be stored internally and rendered to Markdown for models that respond better to natural text.
 
@@ -253,42 +253,42 @@ The exact policy should be configurable, but this is a strong default.
 
 These should survive without paraphrasing whenever feasible:
 
-* System, developer, safety, and permission instructions
-* The most recent unresolved user request
-* Recent working turns
-* Exact IDs, paths, hashes, ports, URLs, dates, commands, and error strings
-* Tool-call and tool-result relationships
-* User corrections and explicit reversals
-* Approval status and action boundaries
-* Current active artifact references
-* Any information whose wording has contractual or operational significance
+- System, developer, safety, and permission instructions
+- The most recent unresolved user request
+- Recent working turns
+- Exact IDs, paths, hashes, ports, URLs, dates, commands, and error strings
+- Tool-call and tool-result relationships
+- User corrections and explicit reversals
+- Approval status and action boundaries
+- Current active artifact references
+- Any information whose wording has contractual or operational significance
 
 ## Preserve semantically
 
 These can be converted into structured state:
 
-* Goal and desired outcome
-* Completed work
-* Current work
-* Decisions and rationale
-* Constraints and preferences
-* Known blockers
-* Failed approaches worth avoiding
-* Tests run and high-level results
-* Next actions
+- Goal and desired outcome
+- Completed work
+- Current work
+- Decisions and rationale
+- Constraints and preferences
+- Known blockers
+- Failed approaches worth avoiding
+- Tests run and high-level results
+- Next actions
 
 ## Externalize
 
 These should normally move out of the prompt and remain retrievable:
 
-* Full source files
-* Long shell output
-* Search-result dumps
-* Large API responses
-* Generated patches
-* Images and audio already processed
-* Detailed reports and documents
-* Old execution traces
+- Full source files
+- Long shell output
+- Search-result dumps
+- Large API responses
+- Generated patches
+- Images and audio already processed
+- Detailed reports and documents
+- Old execution traces
 
 The checkpoint should retain a reference plus a short statement of why the artifact matters.
 
@@ -296,15 +296,15 @@ The checkpoint should retain a reference plus a short statement of why the artif
 
 These are usually safe to eliminate from the prompt view:
 
-* Duplicate file reads
-* Repeated tool results
-* Superseded plans
-* Retries containing identical user input
-* Routine acknowledgements
-* Successful low-value command output
-* Old reasoning that produced a decision already recorded
-* Previous summaries that have been incorporated into a newer validated summary
-* Stale speculative branches
+- Duplicate file reads
+- Repeated tool results
+- Superseded plans
+- Retries containing identical user input
+- Routine acknowledgements
+- Successful low-value command output
+- Old reasoning that produced a decision already recorded
+- Previous summaries that have been incorporated into a newer validated summary
+- Stale speculative branches
 
 The original records should still remain in the transcript or artifact store.
 
@@ -331,10 +331,10 @@ Then run a trigger ladder.
 
 Run inexpensive cleanup before significant pressure develops:
 
-* deduplicate repeated reads,
-* remove stale media payloads,
-* clamp abnormal single messages,
-* trim large old tool outputs.
+- deduplicate repeated reads,
+- remove stale media payloads,
+- clamp abnormal single messages,
+- trim large old tool outputs.
 
 This can run per request, but only apply mutations when the token savings justify invalidating provider caches.
 
@@ -377,14 +377,14 @@ Keep this distinct from normal compaction so you can measure how often your regu
 
 Calculate token usage for each category:
 
-* stable instructions,
-* memory,
-* checkpoint,
-* recent messages,
-* tool schemas,
-* tool calls/results,
-* attachments,
-* expected response.
+- stable instructions,
+- memory,
+- checkpoint,
+- recent messages,
+- tool schemas,
+- tool calls/results,
+- attachments,
+- expected response.
 
 Use the active model’s tokenizer when available. Character estimates are acceptable only as a fallback.
 
@@ -392,12 +392,12 @@ Use the active model’s tokenizer when available. Character estimates are accep
 
 Before selecting boundaries:
 
-* repair malformed tool pairs,
-* normalize message roles,
-* replace stale binary/media content with references,
-* mark duplicate retry messages,
-* identify previous compaction checkpoints,
-* classify messages by source and authority.
+- repair malformed tool pairs,
+- normalize message roles,
+- replace stale binary/media content with references,
+- mark duplicate retry messages,
+- identify previous compaction checkpoints,
+- classify messages by source and authority.
 
 This prevents the summarizer from receiving an invalid or misleading transcript.
 
@@ -425,12 +425,12 @@ Walk backward from the newest message using a token budget.
 
 Boundary rules:
 
-* Prefer complete user turns.
-* Never separate a tool result from the call that created it.
-* Preserve a minimum number of recent turns.
-* Allow a controlled split-turn mode for a single enormous agent run.
-* Record the exact first retained event ID.
-* Use token budgets rather than message counts as the primary mechanism.
+- Prefer complete user turns.
+- Never separate a tool result from the call that created it.
+- Preserve a minimum number of recent turns.
+- Allow a controlled split-turn mode for a single enormous agent run.
+- Record the exact first retained event ID.
+- Use token budgets rather than message counts as the primary mechanism.
 
 ## Stage E: Build the summary input
 
@@ -463,10 +463,10 @@ Generate into temporary state. Nothing should be removed yet.
 
 A dedicated summarization model can be used, but it must:
 
-* have enough context for the selected input,
-* reliably follow the schema,
-* preserve literal identifiers,
-* cost less only when quality remains acceptable.
+- have enough context for the selected input,
+- reliably follow the schema,
+- preserve literal identifiers,
+- cost less only when quality remains acceptable.
 
 A smaller model is not automatically a good summarizer.
 
@@ -476,16 +476,16 @@ Validation should be partly deterministic.
 
 Check:
 
-* required sections or schema fields exist,
-* summary is non-empty,
-* latest unresolved user request is represented,
-* required exact identifiers remain,
-* current objective exists,
-* open work exists when the task is unfinished,
-* summary does not introduce unknown files or completed actions,
-* tool and artifact references remain valid,
-* compacted context is actually smaller,
-* expected next request now fits.
+- required sections or schema fields exist,
+- summary is non-empty,
+- latest unresolved user request is represented,
+- required exact identifiers remain,
+- current objective exists,
+- open work exists when the task is unfinished,
+- summary does not introduce unknown files or completed actions,
+- tool and artifact references remain valid,
+- compacted context is actually smaller,
+- expected next request now fits.
 
 A second model can provide an optional semantic audit, but it should not replace deterministic checks.
 
@@ -506,12 +506,12 @@ Never commit an empty summary.
 
 Only after validation:
 
-* append the checkpoint,
-* mark the covered event range,
-* update the active context boundary,
-* record token and quality metrics,
-* preserve the old transcript,
-* increment the compaction generation.
+- append the checkpoint,
+- mark the covered event range,
+- update the active context boundary,
+- record token and quality metrics,
+- preserve the old transcript,
+- increment the compaction generation.
 
 The session should either use the old valid context or the new valid context—never a half-written mixture.
 
@@ -534,22 +534,22 @@ ContextEngine
 
 Possible implementations:
 
-* `TieredSummaryEngine`
-* `ProviderNativeEngine`
-* `SlidingWindowEngine`
-* `RetrievalBackedEngine`
-* `TokenBudgetResetEngine`
-* future lossless or hierarchical engines
+- `TieredSummaryEngine`
+- `ProviderNativeEngine`
+- `SlidingWindowEngine`
+- `RetrievalBackedEngine`
+- `TokenBudgetResetEngine`
+- future lossless or hierarchical engines
 
 The provider adapter should tell the engine:
 
-* context-window size,
-* maximum output,
-* tokenizer,
-* prompt-cache behavior,
-* native compaction support,
-* supported message/tool structure,
-* overflow error patterns.
+- context-window size,
+- maximum output,
+- tokenizer,
+- prompt-cache behavior,
+- native compaction support,
+- supported message/tool structure,
+- overflow error patterns.
 
 This resembles Hermes’s configurable context-engine approach while avoiding provider-specific logic inside the main agent loop.
 
@@ -561,13 +561,13 @@ Compaction can reduce token use while simultaneously destroying cache reuse.
 
 Treat cache behavior as part of the planner:
 
-* Keep the stable system prefix unchanged.
-* Avoid modifying old messages on every turn.
-* Perform pruning in meaningful batches.
-* Require a minimum expected token reduction before invalidating a cached prefix.
-* Prefer append-only checkpoints.
-* Track cache read and write tokens independently from ordinary input tokens.
-* Use provider-native context editing when it preserves server-side state more efficiently.
+- Keep the stable system prefix unchanged.
+- Avoid modifying old messages on every turn.
+- Perform pruning in meaningful batches.
+- Require a minimum expected token reduction before invalidating a cached prefix.
+- Prefer append-only checkpoints.
+- Track cache read and write tokens independently from ordinary input tokens.
+- Use provider-native context editing when it preserves server-side state more efficiently.
 
 OpenClaw’s pruning system explicitly delays edits around cache TTLs, while Hermes notes that changes in the middle of the prompt invalidate the later cache prefix.
 
@@ -581,14 +581,14 @@ Do not evaluate compaction only by token reduction.
 
 Create long synthetic agent runs containing:
 
-* multiple user corrections,
-* exact IDs and paths,
-* a current unresolved ask,
-* several completed and incomplete tasks,
-* large tool outputs,
-* failed commands,
-* branching plans,
-* permission-sensitive instructions.
+- multiple user corrections,
+- exact IDs and paths,
+- a current unresolved ask,
+- several completed and incomplete tasks,
+- large tool outputs,
+- failed commands,
+- branching plans,
+- permission-sensitive instructions.
 
 After compaction, give the agent a continuation task and measure whether it behaves correctly.
 
@@ -627,11 +627,11 @@ Track:
 
 Build:
 
-* provider-aware token measurement,
-* per-message and per-category usage,
-* projected next-turn budget,
-* overflow detection,
-* compaction telemetry.
+- provider-aware token measurement,
+- per-message and per-category usage,
+- projected next-turn budget,
+- overflow detection,
+- compaction telemetry.
 
 **Exit condition:** You can explain exactly why a session compacted.
 
@@ -639,11 +639,11 @@ Build:
 
 Introduce:
 
-* append-only transcript events,
-* compaction checkpoint events,
-* retained-boundary IDs,
-* checkpoint generations,
-* active-context reconstruction.
+- append-only transcript events,
+- compaction checkpoint events,
+- retained-boundary IDs,
+- checkpoint generations,
+- active-context reconstruction.
 
 **Exit condition:** Every compacted session can be reconstructed or rolled back.
 
@@ -651,11 +651,11 @@ Introduce:
 
 Implement:
 
-* oversized-message clamping,
-* repeated-read deduplication,
-* stale media replacement,
-* soft and hard tool-result trimming,
-* tool-pair repair.
+- oversized-message clamping,
+- repeated-read deduplication,
+- stale media replacement,
+- soft and hard tool-result trimming,
+- tool-pair repair.
 
 **Exit condition:** Large tool-heavy sessions survive longer without semantic summarization.
 
@@ -663,12 +663,12 @@ Implement:
 
 Add:
 
-* fixed summary schema,
-* previous-checkpoint reconciliation,
-* recent-tail selection,
-* split-turn support,
-* staged summarization,
-* optional dedicated summarizer.
+- fixed summary schema,
+- previous-checkpoint reconciliation,
+- recent-tail selection,
+- split-turn support,
+- staged summarization,
+- optional dedicated summarizer.
 
 **Exit condition:** Checkpoints consistently let a fresh model continue the task.
 
@@ -676,11 +676,11 @@ Add:
 
 Add:
 
-* pre-compaction memory extraction,
-* durable versus working memory,
-* provenance and expiration metadata,
-* retrieval of externalized artifacts,
-* once-per-cycle flush tracking.
+- pre-compaction memory extraction,
+- durable versus working memory,
+- provenance and expiration metadata,
+- retrieval of externalized artifacts,
+- once-per-cycle flush tracking.
 
 **Exit condition:** Long-term facts do not depend on a task summary surviving forever.
 
@@ -688,14 +688,14 @@ Add:
 
 Implement:
 
-* structural validation,
-* identifier checking,
-* pending-ask coverage,
-* contradiction checks,
-* minimum token-reduction check,
-* repair retry,
-* model fallback,
-* non-destructive failure.
+- structural validation,
+- identifier checking,
+- pending-ask coverage,
+- contradiction checks,
+- minimum token-reduction check,
+- repair retry,
+- model fallback,
+- non-destructive failure.
 
 **Exit condition:** No failed or empty summary can replace valid context.
 
@@ -703,11 +703,11 @@ Implement:
 
 Add adapters for:
 
-* native Responses compaction,
-* server-side context editing,
-* provider prompt caching,
-* model-specific thresholds,
-* local transcript reconciliation.
+- native Responses compaction,
+- server-side context editing,
+- provider prompt caching,
+- model-specific thresholds,
+- local transcript reconciliation.
 
 **Exit condition:** Local and server-side context cannot silently diverge.
 
@@ -715,11 +715,11 @@ Add adapters for:
 
 Build:
 
-* replay benchmark,
-* long-horizon task suite,
-* compaction dashboard,
-* per-model policy configuration,
-* gradual rollout controls.
+- replay benchmark,
+- long-horizon task suite,
+- compaction dashboard,
+- per-model policy configuration,
+- gradual rollout controls.
 
 **Exit condition:** Threshold and model choices are based on measured continuation quality, not intuition.
 

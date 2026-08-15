@@ -1296,6 +1296,7 @@ export const llmClient = {
             contextWindow: model.contextWindow,
             systemPrompt,
             tools,
+            supportsImages,
           },
           (result) => {
             emergencyContextReduction = true;

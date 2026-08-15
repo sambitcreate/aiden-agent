@@ -411,9 +411,11 @@ test("a malformed successful summary is rejected without hiding history", async 
 
 test("pre-prompt pressure compacts zero-usage reconstructed history", async () => {
   const { faux, models, model } = compactionFixture();
-  faux.setResponses([
-    fauxAssistantMessage(structuredSummary("seeded checkpoint")),
-  ]);
+  faux.setResponses(
+    Array.from({ length: 20 }, () =>
+      fauxAssistantMessage(structuredSummary("seeded checkpoint")),
+    ),
+  );
   const session = await memorySession();
   await session.appendMessage(user(`older-seeded-${"x".repeat(4_000)}`, 10));
   await session.appendMessage(
@@ -446,6 +448,38 @@ test("pre-prompt pressure compacts zero-usage reconstructed history", async () =
 
   assert.equal(result.compacted, true);
   assert.equal(result.messages?.[0]?.role, "compactionSummary");
+});
+
+test("oversized summarizer input is reduced through bounded summary fragments", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses(
+    Array.from({ length: 20 }, (_, index) =>
+      fauxAssistantMessage(structuredSummary(`fragment-${index}`)),
+    ),
+  );
+  const session = await memorySession();
+  await session.appendMessage(user(`oversized-${"x".repeat(12_000)}`, 10));
+  await session.appendMessage(
+    assistant(model, { input: 950, text: "older answer", timestamp: 20 }),
+  );
+  await session.appendMessage(user("latest", 30));
+  const last = assistant(model, {
+    input: 950,
+    text: "latest answer",
+    timestamp: 40,
+  });
+  await session.appendMessage(last);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.check(last);
+  assert.equal(result.compacted, true);
+  assert.match(JSON.stringify(result.messages), /fragment-/u);
 });
 
 test("cancelling summary generation leaves the journal uncompacted", async () => {
@@ -509,6 +543,34 @@ test("chat synchronization is idempotent and markers stay out of context", async
     2,
   );
   assert.equal((await session.buildContext()).messages.length, 2);
+});
+
+test("chat synchronization keeps historical images model-neutral", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const message: ChatMessage = {
+    id: "image-user",
+    role: "user",
+    content: "Inspect this image",
+    createdAt: 10,
+    attachments: [
+      {
+        id: "image-1",
+        kind: "image",
+        name: "screen.png",
+        mimeType: "image/png",
+        size: 128,
+        data: "private-image-data",
+      },
+    ],
+  };
+
+  await syncChatMessagesToPiSession(session, [message], model, false);
+  const context = await session.buildContext();
+  assert.equal(
+    JSON.stringify(context.messages).includes("private-image-data"),
+    true,
+  );
 });
 
 test("chat synchronization rolls back a message when its marker append fails", async () => {

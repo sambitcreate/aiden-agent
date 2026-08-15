@@ -56,6 +56,20 @@ A follow-up audit closed lifecycle gaps around the shipped boundary:
 
 The focused `test:compaction` gate now covers the core coordinator, emergency projection, child runtime, renderer stream reset, and terminal cache handoff.
 
+## Completeness hardening — 2026-08-15
+
+A full Pi core/SDK integration audit closed the remaining correctness and durability gaps inside Aiden's shipped architecture:
+
+- foreground effectful tools now execute sequentially, cancellation reaches network and schedule mutations, and transient provider failures retry once from a durably abandoned attempt;
+- long tool loops compact between provider turns, output-limit overflows recover safely, and terminal Pi content replaces incomplete stream projections exactly;
+- journals use crash-recoverable transaction envelopes, validate and quarantine malformed duplicates, delete corrupt indexed data, reconcile generic orphans, and clean Pi session resources with chat deletion;
+- historical images remain model-neutral in the journal and are projected per request, while compaction replaces binary payloads with continuity markers;
+- oversized summarizer input uses bounded map-reduce, structurally malformed summaries cannot become checkpoints, and summary calls are included in usage accounting;
+- canonical assistant protocol payloads preserve provider/API/model, reasoning/tool blocks, signatures, response identity, and usage across restart or provider switches without exposing that private payload to the renderer;
+- custom endpoints now use Pi provider composition, generic Pi reasoning levels are honored, and one-hour cache-write usage is retained.
+
+Pi `AgentHarness` remains an architectural reference rather than Aiden's top-level runtime: Aiden intentionally owns Electron chat persistence, workspace authority, approval UI, renderer streaming, and child-agent supervision. Harness-only branch-tree UI, interactive foreground steer/follow-up UX, and image-generation surfaces remain deliberate product features, not hidden parity claims.
+
 ## Phases
 
 ### Phase 1 — Native session and compaction controller

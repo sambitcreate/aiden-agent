@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   chmod,
+  open,
   readFile,
   readdir,
   rename,
@@ -29,6 +30,7 @@ export const AIDEN_PI_TRANSACTION = "aiden.pi-transaction.v1";
 const SESSION_METADATA_KIND = "aiden-chat-compaction-v1";
 const SAFE_SESSION_ID = /^[a-zA-Z0-9._-]{1,200}$/u;
 const JOURNAL_INDEX_FILE = "aiden-journal-index.json";
+const JOURNAL_HEADER_SCAN_BYTES = 65_536;
 
 interface JournalIndex {
   version: 1;
@@ -102,6 +104,22 @@ function markerId(data: unknown): string | undefined {
   return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
+async function readJournalPrefix(filePath: string): Promise<string> {
+  const handle = await open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(JOURNAL_HEADER_SCAN_BYTES);
+    const { bytesRead } = await handle.read(
+      buffer,
+      0,
+      JOURNAL_HEADER_SCAN_BYTES,
+      0,
+    );
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 /**
  * Append visible messages that are not yet represented in Pi's journal.
  * Custom marker entries are ignored by Session.buildContext(), while making
@@ -111,7 +129,7 @@ export async function syncChatMessagesToPiSession(
   session: Session,
   messages: readonly ChatMessage[],
   model: Model<Api>,
-  supportsImages: boolean,
+  _supportsImages: boolean,
   contentOverrides: ReadonlyMap<string, string> = new Map(),
 ): Promise<void> {
   const entries = await session.getBranch();
@@ -133,7 +151,9 @@ export async function syncChatMessagesToPiSession(
     const desired = chatMessageToPiMessage(
       message,
       model,
-      supportsImages,
+      // Journals are model-neutral. Request-time projection removes images for
+      // text-only models, so a later switch to a vision model remains faithful.
+      true,
       contentOverrides.get(message.id),
     );
     const context = await session.buildContext();
@@ -400,10 +420,10 @@ export class PiCompactionSessionStore {
           continue;
         }
         if (!entry.name.includes(".jsonl")) continue;
-        const prefix = await readFile(candidate, "utf8").catch(() => "");
+        const prefix = await readJournalPrefix(candidate).catch(() => "");
         if (
-          prefix.slice(0, 65_536).includes(`\"id\":\"${chatId}\"`) ||
-          prefix.slice(0, 65_536).includes(`\"chatId\":\"${chatId}\"`)
+          prefix.includes(`\"id\":\"${chatId}\"`) ||
+          prefix.includes(`\"chatId\":\"${chatId}\"`)
         ) {
           await unlink(candidate);
         }

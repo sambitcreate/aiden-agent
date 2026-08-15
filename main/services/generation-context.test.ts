@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  ToolResultMessage,
+  UserMessage,
+} from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   assertGenerationContextCapacity,
   compactGenerationContext,
   createGenerationContextTransform,
   limitComputerUseImages,
+  projectMessagesForModel,
 } from "./generation-context.js";
 
 const options = {
@@ -19,7 +24,10 @@ function user(content: string): UserMessage {
   return { role: "user", content, timestamp: Date.now() };
 }
 
-function assistant(toolCallId: string, toolName = "read_file"): AssistantMessage {
+function assistant(
+  toolCallId: string,
+  toolName = "read_file",
+): AssistantMessage {
   return {
     role: "assistant",
     content: [
@@ -55,7 +63,8 @@ function toolResult(
     role: "toolResult",
     toolCallId,
     toolName,
-    content: typeof content === "string" ? [{ type: "text", text: content }] : content,
+    content:
+      typeof content === "string" ? [{ type: "text", text: content }] : content,
     isError: false,
     timestamp: Date.now(),
   };
@@ -65,24 +74,58 @@ function assertToolProtocolIsPaired(messages: AgentMessage[]): void {
   const toolCallIds = new Set(
     messages.flatMap((message) =>
       message.role === "assistant"
-        ? message.content.filter((part) => part.type === "toolCall").map((part) => part.id)
+        ? message.content
+            .filter((part) => part.type === "toolCall")
+            .map((part) => part.id)
         : [],
     ),
   );
   const toolResultIds = new Set(
-    messages.flatMap((message) => (message.role === "toolResult" ? [message.toolCallId] : [])),
+    messages.flatMap((message) =>
+      message.role === "toolResult" ? [message.toolCallId] : [],
+    ),
   );
   assert.deepEqual(toolResultIds, toolCallIds);
 }
 
 test("returns the original context when it fits the model window", () => {
-  const messages: AgentMessage[] = [user("Hello"), assistant("one"), toolResult("one", "small")];
+  const messages: AgentMessage[] = [
+    user("Hello"),
+    assistant("one"),
+    toolResult("one", "small"),
+  ];
   const result = compactGenerationContext(messages, options);
 
   assert.equal(result.compacted, false);
   assert.equal(result.messages, messages);
   assert.equal(result.estimatedTokensAfter, result.estimatedTokensBefore);
   assert.equal(result.usedContextFallback, false);
+});
+
+test("projects model-neutral image history only for vision requests", () => {
+  const imageUser: UserMessage = {
+    role: "user",
+    content: [
+      { type: "text", text: "inspect this" },
+      { type: "image", data: "private-image", mimeType: "image/png" },
+    ],
+    timestamp: Date.now(),
+  };
+  const neutral: AgentMessage[] = [imageUser];
+
+  assert.equal(
+    JSON.stringify(projectMessagesForModel(neutral, true)).includes(
+      "private-image",
+    ),
+    true,
+  );
+  const textOnly = projectMessagesForModel(neutral, false);
+  assert.equal(JSON.stringify(textOnly).includes("private-image"), false);
+  assert.match(
+    JSON.stringify(textOnly),
+    /retained in Aiden's private journal/u,
+  );
+  assert.equal(JSON.stringify(neutral).includes("private-image"), true);
 });
 
 test("limitComputerUseImages keeps the newest screenshots and leaves other results alone", () => {
@@ -118,11 +161,14 @@ test("limitComputerUseImages keeps the newest screenshots and leaves other resul
       message.role === "toolResult" && message.toolName === "computer_use",
   );
   const captures = computerUseResults.filter((result) =>
-    result.content.some((part) => part.type === "text" && part.text.startsWith("capture-")),
+    result.content.some(
+      (part) => part.type === "text" && part.text.startsWith("capture-"),
+    ),
   );
   assert.equal(computerUseResults.length, 10);
   assert.equal(
-    computerUseResults.filter((r) => r.content.some((p) => p.type === "image")).length,
+    computerUseResults.filter((r) => r.content.some((p) => p.type === "image"))
+      .length,
     3,
   );
   assert.equal(
@@ -147,7 +193,11 @@ test("limitComputerUseImages keeps the newest screenshots and leaves other resul
     true,
   );
   assert.match(
-    String(captures[0]?.content[0]?.type === "text" ? captures[0].content[0].text : ""),
+    String(
+      captures[0]?.content[0]?.type === "text"
+        ? captures[0].content[0].text
+        : "",
+    ),
     /capture-0/u,
   );
 });
@@ -206,11 +256,17 @@ test("bounds a Codex-sized discovery loop while preserving recent evidence and t
   const messages: AgentMessage[] = [user("Inspect the provider runtime.")];
   for (let index = 0; index < 38; index += 1) {
     const id = `read-${index}`;
-    messages.push(assistant(id), toolResult(id, `${id}\n${"x".repeat(20_000)}`));
+    messages.push(
+      assistant(id),
+      toolResult(id, `${id}\n${"x".repeat(20_000)}`),
+    );
   }
   for (let index = 0; index < 8; index += 1) {
     const id = `grep-${index}`;
-    messages.push(assistant(id, "grep"), toolResult(id, `${id}\n${"y".repeat(20_000)}`, "grep"));
+    messages.push(
+      assistant(id, "grep"),
+      toolResult(id, `${id}\n${"y".repeat(20_000)}`, "grep"),
+    );
   }
   const originalFirstResult = (messages[2] as ToolResultMessage).content[0];
   const result = compactGenerationContext(messages, options);
@@ -220,10 +276,16 @@ test("bounds a Codex-sized discovery loop while preserving recent evidence and t
   assert.ok(result.estimatedTokensBefore > result.inputBudgetTokens);
   assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
   assert.equal(originalFirstResult?.type, "text");
-  assert.equal(originalFirstResult?.type === "text" ? originalFirstResult.text.length : 0, 20_007);
+  assert.equal(
+    originalFirstResult?.type === "text" ? originalFirstResult.text.length : 0,
+    20_007,
+  );
 
   const transformedText = JSON.stringify(result.messages);
-  assert.match(transformedText, /payload omitted to stay within the model context window/);
+  assert.match(
+    transformedText,
+    /payload omitted to stay within the model context window/,
+  );
   assert.match(transformedText, /grep-7/);
   assert.doesNotMatch(transformedText, /Call the tool again/u);
   assertToolProtocolIsPaired(result.messages);
@@ -280,7 +342,9 @@ test("drops oldest complete chat turns before sacrificing the active request", (
   for (let index = 0; index < 5; index += 1) {
     messages.push(user(`old-user-${index}-${"u".repeat(18_000)}`), {
       ...assistant(`old-${index}`),
-      content: [{ type: "text", text: `old-answer-${index}-${"a".repeat(18_000)}` }],
+      content: [
+        { type: "text", text: `old-answer-${index}-${"a".repeat(18_000)}` },
+      ],
       stopReason: "stop",
     });
   }
@@ -295,7 +359,10 @@ test("drops oldest complete chat turns before sacrificing the active request", (
   assert.ok(result.removedHistoryMessages > 0);
   const finalMessage = result.messages[result.messages.length - 1];
   assert.equal(finalMessage?.role, "user");
-  assert.equal(finalMessage?.role === "user" ? finalMessage.content : "", "current-request");
+  assert.equal(
+    finalMessage?.role === "user" ? finalMessage.content : "",
+    "current-request",
+  );
   assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
 });
 
@@ -311,7 +378,9 @@ test("keeps the semantic checkpoint while pruning its retained tail", () => {
   for (let index = 0; index < 4; index += 1) {
     messages.push(user(`tail-user-${index}-${"u".repeat(12_000)}`), {
       ...assistant(`tail-${index}`),
-      content: [{ type: "text", text: `tail-answer-${index}-${"a".repeat(12_000)}` }],
+      content: [
+        { type: "text", text: `tail-answer-${index}-${"a".repeat(12_000)}` },
+      ],
       stopReason: "stop",
     });
   }
@@ -355,7 +424,10 @@ test("bounds oversized tool text while retaining image evidence without mutating
   const transformedResult = result.messages.find(
     (message): message is ToolResultMessage => message.role === "toolResult",
   );
-  assert.equal(transformedResult?.content.filter((part) => part.type === "image").length, 2);
+  assert.equal(
+    transformedResult?.content.filter((part) => part.type === "image").length,
+    2,
+  );
   assert.deepEqual(messages, snapshot);
   assertToolProtocolIsPaired(result.messages);
 });
@@ -371,7 +443,10 @@ test("replaces an oversized active request with a bounded fail-safe notice", () 
   assert.equal(result.usedContextFallback, true);
   assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
   assert.equal(result.messages.length, 1);
-  assert.match(JSON.stringify(result.messages), /fewer\/lower-size attachments/u);
+  assert.match(
+    JSON.stringify(result.messages),
+    /fewer\/lower-size attachments/u,
+  );
   assert.equal((messages[0] as UserMessage).content.length, 100_000);
 });
 
@@ -395,7 +470,10 @@ test("rejects a model whose static prompt and tools cannot fit even the fail-saf
 test("never rejects when compaction inputs or observers fail", async () => {
   const circular: Record<string, unknown> = {};
   circular.self = circular;
-  const messages: AgentMessage[] = [user("safe fallback"), user("x".repeat(100_000))];
+  const messages: AgentMessage[] = [
+    user("safe fallback"),
+    user("x".repeat(100_000)),
+  ];
   let observerCalls = 0;
   const transform = createGenerationContextTransform(
     {

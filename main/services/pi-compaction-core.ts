@@ -4,6 +4,7 @@ import {
   compact,
   estimateContextTokens,
   estimateTokens,
+  generateSummary,
   prepareCompaction,
   shouldCompact,
   type AgentMessage,
@@ -22,6 +23,7 @@ import {
   type ProviderStreams,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import { projectMessagesForModel } from "./generation-context.js";
 
 export type PiCompactionReason = "threshold" | "overflow";
 
@@ -100,6 +102,88 @@ function validCompactionSummary(summary: string): boolean {
     "Context for Suffix",
   ].every((heading) => new RegExp(`^## ${heading}`, "mu").test(summary));
   return structured || splitTurn;
+}
+
+function compactionTranscript(messages: readonly AgentMessage[]): string {
+  return messages
+    .map((message) =>
+      JSON.stringify(message, (_key, value) =>
+        value &&
+        typeof value === "object" &&
+        (value as { type?: unknown }).type === "image"
+          ? {
+              type: "image",
+              mimeType: (value as { mimeType?: unknown }).mimeType,
+              note: "binary image retained in the private journal",
+            }
+          : value,
+      ),
+    )
+    .join("\n");
+}
+
+/** Map-reduce oversized history so the summary request cannot overflow too. */
+async function collapseOversizedCompactionInput(options: {
+  messages: readonly AgentMessage[];
+  models: Models;
+  model: import("@earendil-works/pi-ai").Model<Api>;
+  reserveTokens: number;
+  signal: AbortSignal;
+  thinkingLevel: ThinkingLevel;
+}): Promise<AgentMessage[]> {
+  const safeInputTokens = Math.max(
+    128,
+    Math.min(
+      Math.max(128, options.model.contextWindow - options.reserveTokens - 256),
+      Math.floor(options.model.contextWindow * 0.45),
+    ),
+  );
+  if (estimatedMessageTokens(options.messages) <= safeInputTokens) {
+    return [...options.messages];
+  }
+  const transcript = compactionTranscript(options.messages);
+  const fragmentCharacters = Math.max(512, safeInputTokens * 3);
+  const fragments: string[] = [];
+  for (
+    let offset = 0;
+    offset < transcript.length;
+    offset += fragmentCharacters
+  ) {
+    fragments.push(transcript.slice(offset, offset + fragmentCharacters));
+  }
+  let accumulated: string | undefined;
+  for (let index = 0; index < fragments.length; index += 1) {
+    const result = await generateSummary(
+      [
+        {
+          role: "user",
+          content: `Compaction source fragment ${index + 1} of ${fragments.length}:\n\n${fragments[index]}`,
+          timestamp: Date.now(),
+        },
+      ],
+      options.models,
+      options.model,
+      options.reserveTokens,
+      options.signal,
+      "Preserve exact requests, decisions, identifiers, paths, errors, tool outcomes, and unresolved work across every fragment.",
+      accumulated,
+      options.thinkingLevel,
+    );
+    if (!result.ok) throw result.error;
+    if (!validCompactionSummary(result.value)) {
+      throw new Error(
+        "The compaction model returned a malformed intermediate summary.",
+      );
+    }
+    accumulated = result.value;
+  }
+  return [
+    {
+      role: "user",
+      content: `Structured map-reduce summary of oversized journal history:\n\n${accumulated ?? ""}`,
+      timestamp: Date.now(),
+    },
+  ];
 }
 
 /** Large current-turn batches must be summarized before the next provider call. */
@@ -411,8 +495,41 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
+      // Binary images stay model-neutral in the durable journal, but summary
+      // generation needs only a continuity marker and must never resend large
+      // historical image payloads to the compaction model.
+      const imageProjected = {
+        ...preparation,
+        messagesToSummarize: projectMessagesForModel(
+          preparation.messagesToSummarize,
+          false,
+        ),
+        turnPrefixMessages: projectMessagesForModel(
+          preparation.turnPrefixMessages,
+          false,
+        ),
+      };
+      const boundedPreparation = {
+        ...imageProjected,
+        messagesToSummarize: await collapseOversizedCompactionInput({
+          messages: imageProjected.messagesToSummarize,
+          models: this.options.models,
+          model: this.options.model,
+          reserveTokens: imageProjected.settings.reserveTokens,
+          signal: abortController.signal,
+          thinkingLevel: this.options.thinkingLevel,
+        }),
+        turnPrefixMessages: await collapseOversizedCompactionInput({
+          messages: imageProjected.turnPrefixMessages,
+          models: this.options.models,
+          model: this.options.model,
+          reserveTokens: imageProjected.settings.reserveTokens,
+          signal: abortController.signal,
+          thinkingLevel: this.options.thinkingLevel,
+        }),
+      };
       const compactResult = await compact(
-        preparation,
+        boundedPreparation,
         this.options.models,
         this.options.model,
         undefined,

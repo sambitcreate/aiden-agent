@@ -188,6 +188,7 @@ export class SubagentRuntimeRegistry {
       contextWindow: spec.runtime.model.contextWindow,
       systemPrompt: spec.systemPrompt,
       tools: spec.tools,
+      supportsImages: spec.runtime.model.input.includes("image"),
     };
     assertGenerationContextCapacity(contextOptions);
     let emergencyContextReduction = false;

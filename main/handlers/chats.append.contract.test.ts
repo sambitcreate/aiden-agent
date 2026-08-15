@@ -10,6 +10,16 @@ import {
 
 const source = fs.readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
 
+test("private canonical Pi protocol never crosses the renderer chat boundary", () => {
+  assert.match(
+    source,
+    /const \{ pi: _privatePiProtocol, \.\.\.visible \} = message/u,
+  );
+  assert.match(source, /chat: chatForRenderer\(chat\)/u);
+  assert.match(source, /return chatForRenderer\(chat\)/u);
+  assert.match(source, /return chatForRenderer\(copied\)/u);
+});
+
 test("indeterminate appends fence create and append for the renderer document", () => {
   const create = source.slice(
     source.indexOf('"chats:create"'),
@@ -184,5 +194,8 @@ test("append admission charges encoded image representation and metadata", () =>
     },
     { turnId: "turn-1", providerId: "provider", model: "model" },
   );
-  assert.ok(parsed.retainedBytes >= data.length + Buffer.byteLength("providermodel", "utf8"));
+  assert.ok(
+    parsed.retainedBytes >=
+      data.length + Buffer.byteLength("providermodel", "utf8"),
+  );
 });
