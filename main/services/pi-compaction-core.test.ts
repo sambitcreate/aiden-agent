@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,12 +15,19 @@ import {
 import { PiCompactionCoordinator, type PiCompactionEvent } from "./pi-compaction-core.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
+  appendPiMessages,
   PiCompactionSessionStore,
   syncChatMessagesToPiSession,
 } from "./pi-compaction-session-store.js";
 import type { ChatMessage } from "./types.js";
 
-const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+const ZERO_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  total: 0,
+};
 
 async function memorySession(id = "compaction-test"): Promise<Session> {
   return new InMemorySessionRepo().create({ id });
@@ -172,6 +179,25 @@ test("overflow compacts and retries at most once", async () => {
   const first = await coordinator.check(firstOverflow);
   assert.equal(first.compacted, true);
   assert.equal(first.shouldRetry, true);
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "assistant" && message.stopReason === "error",
+    ),
+    false,
+  );
+
+  const recovered = assistant(model, {
+    stopReason: "stop",
+    text: "Recovered answer.",
+    timestamp: Date.now() + 5,
+  });
+  await session.appendMessage(recovered);
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "assistant" && message.stopReason === "error",
+    ),
+    false,
+  );
 
   const secondOverflow = assistant(model, {
     stopReason: "error",
@@ -188,12 +214,57 @@ test("overflow compacts and retries at most once", async () => {
     1,
   );
   assert.equal(events.filter((event) => event.type === "start").length, 1);
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        (message.stopReason === "error" || message.stopReason === "length"),
+    ),
+    false,
+  );
+});
+
+test("length-stop overflow is abandoned before retry context is rebuilt", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage("length checkpoint")]);
+  const session = await memorySession();
+  await appendCompressibleHistory(session, model);
+  await session.appendMessage(user("current overflow request", Date.now() + 1));
+  const overflow = assistant(model, {
+    input: model.contextWindow,
+    output: 0,
+    stopReason: "length",
+  });
+  await session.appendMessage(overflow);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.check(overflow);
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.shouldRetry, true);
+  const retryMessages = result.messages ?? [];
+  assert.notEqual(retryMessages[retryMessages.length - 1]?.role, "assistant");
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "assistant" && message.stopReason === "length",
+    ),
+    false,
+  );
 });
 
 test("summary failure leaves the append-only history authoritative", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([
-    fauxAssistantMessage("", { stopReason: "error", errorMessage: "summarizer unavailable" }),
+    fauxAssistantMessage("", {
+      stopReason: "error",
+      errorMessage: "summarizer unavailable",
+    }),
   ]);
   const session = await memorySession();
   const last = await appendCompressibleHistory(session, model);
@@ -213,13 +284,74 @@ test("summary failure leaves the append-only history authoritative", async () =>
   assert.deepEqual(await session.getEntries(), before);
 });
 
+test("an empty successful summary is rejected without hiding history", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage("")]);
+  const session = await memorySession();
+  const last = await appendCompressibleHistory(session, model);
+  const before = await session.getEntries();
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.check(last);
+
+  assert.equal(result.compacted, false);
+  assert.match(result.errorMessage ?? "", /empty summary/u);
+  assert.deepEqual(await session.getEntries(), before);
+});
+
+test("pre-prompt pressure compacts zero-usage reconstructed history", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([fauxAssistantMessage("seeded checkpoint")]);
+  const session = await memorySession();
+  await session.appendMessage(user(`older-seeded-${"x".repeat(4_000)}`, 10));
+  await session.appendMessage(
+    assistant(model, {
+      input: 0,
+      output: 0,
+      text: "rehydrated",
+      timestamp: 20,
+    }),
+  );
+  await session.appendMessage(user(`newer-seeded-${"y".repeat(4_000)}`, 30));
+  await session.appendMessage(
+    assistant(model, {
+      input: 0,
+      output: 0,
+      text: "also rehydrated",
+      timestamp: 40,
+    }),
+  );
+  await session.appendMessage(user("current", 50));
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.checkContextPressure();
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.messages?.[0]?.role, "compactionSummary");
+});
+
 test("cancelling summary generation leaves the journal uncompacted", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([
     async (_context, options) => {
       await new Promise<void>((resolve) => {
         if (options?.signal?.aborted) resolve();
-        else options?.signal?.addEventListener("abort", () => resolve(), { once: true });
+        else
+          options?.signal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
       });
       return fauxAssistantMessage("", {
         stopReason: "aborted",
@@ -269,6 +401,95 @@ test("chat synchronization is idempotent and markers stay out of context", async
     2,
   );
   assert.equal((await session.buildContext()).messages.length, 2);
+});
+
+test("chat synchronization rolls back a message when its marker append fails", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const message: ChatMessage = {
+    id: "user-atomic",
+    role: "user",
+    content: "Only once",
+    createdAt: 10,
+  };
+  const appendMarker = session.appendCustomEntry.bind(session);
+  let failMarker = true;
+  session.appendCustomEntry = async (...args) => {
+    if (failMarker) {
+      failMarker = false;
+      throw new Error("injected marker failure");
+    }
+    return appendMarker(...args);
+  };
+
+  await assert.rejects(
+    syncChatMessagesToPiSession(session, [message], model, false),
+    /marker failure/u,
+  );
+  assert.equal((await session.buildContext()).messages.length, 0);
+  await syncChatMessagesToPiSession(session, [message], model, false);
+  assert.deepEqual(
+    (await session.buildContext()).messages.map((entry) => entry.role),
+    ["user"],
+  );
+});
+
+test("Pi message batches roll back partial appends before a safe retry", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const first = user("first", 10);
+  const second = assistant(model, { text: "second", timestamp: 20 });
+  const appendMessage = session.appendMessage.bind(session);
+  let calls = 0;
+  session.appendMessage = async (message) => {
+    calls += 1;
+    if (calls === 2) throw new Error("injected batch failure");
+    return appendMessage(message);
+  };
+
+  await assert.rejects(appendPiMessages(session, [first, second]), /batch failure/u);
+  assert.equal((await session.buildContext()).messages.length, 0);
+  session.appendMessage = appendMessage;
+  await appendPiMessages(session, [first, second]);
+  assert.deepEqual(
+    (await session.buildContext()).messages.map((entry) => entry.role),
+    ["user", "assistant"],
+  );
+});
+
+test("primary generation reconciles a visible assistant after a journal batch failure", async () => {
+  const source = await readFile(new URL("./llm-client.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /!persisted\.messageId \|\| !piJournalHealthy/u);
+  assert.match(
+    source,
+    /if \(!piJournalHealthy\) \{[\s\S]{0,500}await reconcileVisibleAssistant\(\);/u,
+  );
+});
+
+test("journal synchronization stores the exact enriched skill turn once", async () => {
+  const { model } = compactionFixture();
+  const session = await memorySession();
+  const message: ChatMessage = {
+    id: "skill-user",
+    role: "user",
+    content: "Review this",
+    createdAt: 10,
+  };
+  const enriched = "<skill>Exact private instructions</skill>\n\nReview this";
+
+  await syncChatMessagesToPiSession(
+    session,
+    [message],
+    model,
+    false,
+    new Map([[message.id, enriched]]),
+  );
+  await syncChatMessagesToPiSession(session, [message], model, false);
+
+  const context = await session.buildContext();
+  assert.equal(context.messages.length, 1);
+  assert.equal(context.messages[0]?.role, "user");
+  assert.equal(context.messages[0]?.role === "user" ? context.messages[0].content : "", enriched);
 });
 
 test("durable journals are private and delete with their chat", async (t) => {

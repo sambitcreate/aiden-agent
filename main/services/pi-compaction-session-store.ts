@@ -36,8 +36,9 @@ export async function syncChatMessagesToPiSession(
   messages: readonly ChatMessage[],
   model: Model<Api>,
   supportsImages: boolean,
+  contentOverrides: ReadonlyMap<string, string> = new Map(),
 ): Promise<void> {
-  const entries = await session.getEntries();
+  const entries = await session.getBranch();
   const synchronized = new Set(
     entries.flatMap((entry) => {
       if (entry.type !== "custom" || entry.customType !== AIDEN_CHAT_MESSAGE_MARKER) {
@@ -50,10 +51,31 @@ export async function syncChatMessagesToPiSession(
 
   for (const message of messages) {
     if (synchronized.has(message.id)) continue;
-    await session.appendMessage(chatMessageToPiMessage(message, model, supportsImages));
-    await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
-      chatMessageId: message.id,
-    } satisfies ChatMessageMarker);
+    await appendPiTransaction(session, async () => {
+      await session.appendMessage(
+        chatMessageToPiMessage(message, model, supportsImages, contentOverrides.get(message.id)),
+      );
+      await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
+        chatMessageId: message.id,
+      } satisfies ChatMessageMarker);
+    });
+    synchronized.add(message.id);
+  }
+}
+
+async function appendPiTransaction<T>(session: Session, operation: () => Promise<T>): Promise<T> {
+  const originalLeafId = await session.getLeafId();
+  try {
+    return await operation();
+  } catch (error) {
+    try {
+      await session.moveTo(originalLeafId);
+    } catch (rollbackError) {
+      throw new Error(
+        `The Pi journal write failed and its partial branch could not be rolled back: ${error instanceof Error ? error.message : String(error)}; rollback: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+      );
+    }
+    throw error;
   }
 }
 
@@ -62,12 +84,14 @@ export async function appendPiMessages(
   messages: readonly AgentMessage[],
   visibleChatMessageId?: string,
 ): Promise<void> {
-  for (const message of messages) await session.appendMessage(message);
-  if (visibleChatMessageId) {
-    await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
-      chatMessageId: visibleChatMessageId,
-    } satisfies ChatMessageMarker);
-  }
+  await appendPiTransaction(session, async () => {
+    for (const message of messages) await session.appendMessage(message);
+    if (visibleChatMessageId) {
+      await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
+        chatMessageId: visibleChatMessageId,
+      } satisfies ChatMessageMarker);
+    }
+  });
 }
 
 export interface PiCompactionSessionStoreOptions {
@@ -117,7 +141,9 @@ export class PiCompactionSessionStore {
       const matches = (await repo.list()).filter(
         (metadata) => metadata.id === chatId && metadata.metadata?.kind === SESSION_METADATA_KIND,
       );
-      const metadata = matches[matches.length - 1];
+      // Pi lists newest sessions first. If recovery ever leaves duplicates,
+      // continue from the newest valid journal instead of reviving stale state.
+      const metadata = matches[0];
       const session = metadata
         ? await repo.open(metadata)
         : await repo.create({

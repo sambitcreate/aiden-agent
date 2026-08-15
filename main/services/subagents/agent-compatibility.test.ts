@@ -563,7 +563,6 @@ test("child context compaction bounds oversized tool output before the next prov
       return fauxAssistantMessage("bounded");
     },
     fauxAssistantMessage("semantic history checkpoint"),
-    fauxAssistantMessage("semantic turn-prefix checkpoint"),
     async (context) => {
       continuationContext = JSON.stringify(context);
       return fauxAssistantMessage("continued from checkpoint");
@@ -589,14 +588,17 @@ test("child context compaction bounds oversized tool output before the next prov
   await runningChild.prompt("Read the oversized payload, then conclude.");
   await runningChild.agent.prompt("Continue from the compacted checkpoint.");
 
-  assert.equal(core.state.callCount, 5);
+  assert.equal(core.state.callCount, 4);
   assert.match(
     secondContext,
     /context window|characters compacted|payload omitted/u,
   );
   assert.ok(secondContext.length < 100_000);
   assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
-  assert.match(continuationContext, /conversation history.*compacted.*summary/isu);
+  assert.match(
+    continuationContext,
+    /conversation history.*compacted.*summary/isu,
+  );
   assert.match(continuationContext, /semantic history checkpoint/u);
   assert.equal(registry.activeCount, 0);
 });
@@ -606,7 +608,9 @@ test("child completion survives a Pi journal append failure", async () => {
     provider: "aiden-compat-journal-resilience",
     models: [{ id: "compat-journal-resilience", contextWindow: 8_192 }],
   });
-  core.setResponses([fauxAssistantMessage("completed despite journal failure")]);
+  core.setResponses([
+    fauxAssistantMessage("completed despite journal failure"),
+  ]);
   const journalErrors: unknown[] = [];
   let failedAssistantBatch = false;
   const registry = new SubagentRuntimeRegistry(undefined, undefined, {
@@ -628,7 +632,9 @@ test("child completion survives a Pi journal append failure", async () => {
   );
 
   await assert.doesNotReject(
-    runningChild.prompt("Complete even if the in-memory journal cannot append."),
+    runningChild.prompt(
+      "Complete even if the in-memory journal cannot append.",
+    ),
   );
 
   assert.equal(core.state.callCount, 1);
@@ -648,11 +654,11 @@ test("forked initial context is compacted before the first provider request", as
   });
   let firstContext = "";
   core.setResponses([
+    fauxAssistantMessage("semantic checkpoint"),
     async (context) => {
       firstContext = JSON.stringify(context);
       return fauxAssistantMessage("bounded");
     },
-    fauxAssistantMessage("semantic checkpoint"),
   ]);
   const registry = new SubagentRuntimeRegistry();
   const modelRuntime = runtimeFrom(

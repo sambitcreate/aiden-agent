@@ -134,6 +134,25 @@ test("a committed append is not presented as unsent when generation start later 
   assert.doesNotMatch(handleSend, /if \(!started\.ok\) throw/u);
 });
 
+test("terminal chat snapshots reach cache before visual stream handoff awaits", () => {
+  const pane = source("./chat-pane.tsx");
+  const generation = between(
+    pane,
+    "const runGeneration = React.useCallback(",
+    "const handleSend = React.useCallback(",
+  );
+  const done = between(generation, "onDone: async", "onError:");
+  assert.ok(
+    done.indexOf("qc.setQueryData(queryKeys.chat(chatId), updatedChat)") <
+      done.indexOf("await waitForStreamHandoff"),
+  );
+  const error = generation.slice(generation.indexOf("onError:"));
+  assert.ok(
+    error.indexOf("qc.setQueryData(queryKeys.chat(chatId), updatedChat)") <
+      error.indexOf("await waitForStreamHandoff"),
+  );
+});
+
 test("an indeterminate append blocks retries until an application reload reconciles storage", () => {
   const pane = source("./chat-pane.tsx");
   assert.match(pane, /isAppendReconciliationRequired\(appendError\)/u);
@@ -172,8 +191,14 @@ test("append reconciliation is surfaced across route remounts and chat creation 
   );
   const scratchMutation = pane.indexOf("workspacesApi.createScratch(", scratchGuard);
   assert.ok(scratchGuard >= 0 && scratchMutation > scratchGuard);
-  assert.match(pane, /workspaceChangeBlockedReason=\{[\s\S]{0,180}documentAppendReconciliationRequired/u);
-  assert.match(pane, /documentAppendReconciliationRequired \|\| appendReconciliationRequiredChats/u);
+  assert.match(
+    pane,
+    /workspaceChangeBlockedReason=\{[\s\S]{0,180}documentAppendReconciliationRequired/u,
+  );
+  assert.match(
+    pane,
+    /documentAppendReconciliationRequired \|\| appendReconciliationRequiredChats/u,
+  );
 });
 
 test("composer stays keyed so drafts and attachments do not leak between chats", () => {

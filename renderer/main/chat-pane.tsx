@@ -549,6 +549,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
               scheduleStreamFlush();
             }
           },
+          onReset: () => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            if (deltaFrameRef.current !== null) {
+              window.cancelAnimationFrame(deltaFrameRef.current);
+            }
+            deltaFrameRef.current = null;
+            pendingDeltaRef.current = "";
+            pendingReasoningDeltaRef.current = "";
+            streamedTextRef.current = "";
+            streamedReasoningRef.current = "";
+            setStreamingText("");
+            setStreamingReasoning(null);
+            setStreamComplete(false);
+          },
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
@@ -610,12 +624,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               generationTimelineRef.current = finalTimeline;
               setGenerationTimeline(finalTimeline);
             }
-            await waitForStreamHandoff(Boolean(full.trim()));
-            if (generationIntentRef.current !== generationIntent) return;
             if (updatedChat) {
               qc.setQueryData(queryKeys.chat(chatId), updatedChat);
               void qc.invalidateQueries({ queryKey: queryKeys.chats });
             }
+            await waitForStreamHandoff(Boolean(full.trim()));
+            if (generationIntentRef.current !== generationIntent) return;
             if (mountedRef.current) {
               setLiveSubagents([]);
               setStreamingText(null);
@@ -658,15 +672,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 void refreshCodexProviderState(qc);
               }
               const partial = resolvedPartialContent.trim();
+              if (updatedChat) {
+                qc.setQueryData(queryKeys.chat(chatId), updatedChat);
+                void qc.invalidateQueries({ queryKey: queryKeys.chats });
+              }
               if (partial) {
                 setStreamingText(resolvedPartialContent);
                 setStreamComplete(true);
                 await waitForStreamHandoff(true);
                 if (generationIntentRef.current !== generationIntent) return;
-              }
-              if (updatedChat) {
-                qc.setQueryData(queryKeys.chat(chatId), updatedChat);
-                void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
               if (mountedRef.current) {
                 if (updatedChat || !partial) setLiveSubagents([]);
@@ -734,7 +748,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               content: text,
               attachments: attachments.length ? attachments : undefined,
             },
-            { providerId, model, autoTitle: true, turnId: messageTurnId, skillInvocation },
+            {
+              providerId,
+              model,
+              autoTitle: true,
+              turnId: messageTurnId,
+              skillInvocation,
+            },
           );
         } catch (appendError) {
           if (isAppendReconciliationRequired(appendError)) {
@@ -862,7 +882,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       await workspacesApi.update(effectiveWorkspace.id, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
-        qc.invalidateQueries({ queryKey: queryKeys.skillCatalog(effectiveWorkspace.id) }),
+        qc.invalidateQueries({
+          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+        }),
       ]);
     },
     [

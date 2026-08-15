@@ -299,6 +299,36 @@ test("drops oldest complete chat turns before sacrificing the active request", (
   assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
 });
 
+test("keeps the semantic checkpoint while pruning its retained tail", () => {
+  const messages: AgentMessage[] = [
+    {
+      role: "compactionSummary",
+      summary: "Durable checkpoint: keep this exact decision.",
+      tokensBefore: 100_000,
+      timestamp: 1,
+    },
+  ];
+  for (let index = 0; index < 4; index += 1) {
+    messages.push(user(`tail-user-${index}-${"u".repeat(12_000)}`), {
+      ...assistant(`tail-${index}`),
+      content: [{ type: "text", text: `tail-answer-${index}-${"a".repeat(12_000)}` }],
+      stopReason: "stop",
+    });
+  }
+  messages.push(user("current-request"));
+
+  const result = compactGenerationContext(messages, {
+    ...options,
+    contextWindow: 16_000,
+  });
+
+  assert.equal(result.compacted, true);
+  assert.equal(result.messages[0]?.role, "compactionSummary");
+  assert.match(JSON.stringify(result.messages[0]), /keep this exact decision/u);
+  assert.equal(result.messages[result.messages.length - 1]?.role, "user");
+  assert.ok(result.estimatedTokensAfter <= result.inputBudgetTokens);
+});
+
 test("bounds oversized tool text while retaining image evidence without mutating the result", () => {
   const content: ToolResultMessage["content"] = [
     { type: "text", text: `head-${"a".repeat(50_000)}` },

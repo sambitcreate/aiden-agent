@@ -153,7 +153,10 @@ function truncateToolResult(message: ToolResultMessage): {
     message: {
       ...message,
       content: [
-        { type: "text", text: truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS) },
+        {
+          type: "text",
+          text: truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS),
+        },
         ...images,
       ],
     },
@@ -177,8 +180,11 @@ function removeOldHistoricalTurn(messages: AgentMessage[], preserveUserTurns: nu
   if (userIndexes.length <= preserveUserTurns) return 0;
   const nextUser = userIndexes[1];
   if (nextUser === undefined || nextUser > currentUser) return 0;
-  messages.splice(0, nextUser);
-  return nextUser;
+  const firstUser = userIndexes[0];
+  if (firstUser === undefined) return 0;
+  const removed = nextUser - firstUser;
+  messages.splice(firstUser, removed);
+  return removed;
 }
 
 function replaceToolResult(messages: AgentMessage[], index: number): boolean {
@@ -400,8 +406,17 @@ export function compactGenerationContext(
   if (overBudget()) {
     const currentUser = lastUserIndex(transformed);
     if (currentUser > 0) {
-      transformed.splice(0, currentUser);
-      removedHistoryMessages += currentUser;
+      let checkpointIndex = -1;
+      for (let index = currentUser - 1; index >= 0; index -= 1) {
+        if (transformed[index]?.role === "compactionSummary") {
+          checkpointIndex = index;
+          break;
+        }
+      }
+      const start = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
+      const removed = currentUser - start;
+      transformed.splice(start, removed);
+      removedHistoryMessages += removed;
     }
   }
 

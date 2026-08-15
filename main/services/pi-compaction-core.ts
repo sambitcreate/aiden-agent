@@ -89,9 +89,27 @@ export class PiCompactionCoordinator {
   private activeAbortController?: AbortController;
 
   constructor(private readonly options: PiCompactionCoordinatorOptions) {
+    const contextWindow = Math.max(2, Math.floor(options.model.contextWindow));
+    const defaultReserveTokens = Math.min(
+      DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+      Math.max(1_024, Math.floor(contextWindow * 0.2)),
+    );
+    const reserveTokens = Math.min(
+      contextWindow - 1,
+      Math.max(1, Math.floor(options.settings?.reserveTokens ?? defaultReserveTokens)),
+    );
+    const defaultKeepRecentTokens = Math.min(
+      DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
+      Math.max(1_024, Math.floor((contextWindow - reserveTokens) * 0.5)),
+    );
     this.settings = {
       ...DEFAULT_COMPACTION_SETTINGS,
       ...options.settings,
+      reserveTokens,
+      keepRecentTokens: Math.min(
+        Math.max(1, contextWindow - reserveTokens - 1),
+        Math.max(1, Math.floor(options.settings?.keepRecentTokens ?? defaultKeepRecentTokens)),
+      ),
     };
   }
 
@@ -104,9 +122,31 @@ export class PiCompactionCoordinator {
     this.overflowRecoveryAttempted = false;
   }
 
+  /** Check the reconstructed journal before provider I/O, including the new user turn. */
+  async checkContextPressure(): Promise<PiCompactionCheckResult> {
+    if (!this.settings.enabled) return { compacted: false, shouldRetry: false };
+    const branch = await this.options.session.getBranch();
+    const compactionEntry = latestCompaction(branch);
+    const context = await this.options.session.buildContext();
+    const estimate = estimateContextTokens(context.messages);
+    const heuristicTokens = estimatedMessageTokens(context.messages);
+    const usageMessage =
+      estimate.lastUsageIndex === null ? undefined : context.messages[estimate.lastUsageIndex];
+    const usageIsStale =
+      compactionEntry &&
+      usageMessage?.role === "assistant" &&
+      usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+    const contextTokens = usageIsStale
+      ? heuristicTokens
+      : Math.max(estimate.tokens, heuristicTokens);
+    return shouldCompact(contextTokens, this.options.model.contextWindow, this.settings)
+      ? this.run("threshold", false)
+      : { compacted: false, shouldRetry: false };
+  }
+
   async check(
     assistantMessage: AssistantMessage,
-    options: { includeAborted?: boolean } = {},
+    options: { includeAborted?: boolean; forceThreshold?: boolean } = {},
   ): Promise<PiCompactionCheckResult> {
     if (!this.settings.enabled) return { compacted: false, shouldRetry: false };
     if (!options.includeAborted && assistantMessage.stopReason === "aborted") {
@@ -130,6 +170,14 @@ export class PiCompactionCoordinator {
     if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
       const willRetry = assistantMessage.stopReason !== "stop";
       if (!willRetry) return this.run("overflow", false);
+      const abandoned = await this.abandonRetryableOverflow(assistantMessage);
+      if (!abandoned.ok) {
+        return {
+          compacted: false,
+          shouldRetry: false,
+          errorMessage: abandoned.errorMessage,
+        };
+      }
       if (this.overflowRecoveryAttempted) {
         const errorMessage =
           "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.";
@@ -154,22 +202,51 @@ export class PiCompactionCoordinator {
       const context = await this.options.session.buildContext();
       const estimate = estimateContextTokens(context.messages);
       if (estimate.lastUsageIndex === null) {
-        return { compacted: false, shouldRetry: false };
+        contextTokens = estimatedMessageTokens(context.messages);
+      } else {
+        const usageMessage = context.messages[estimate.lastUsageIndex];
+        contextTokens =
+          compactionEntry &&
+          usageMessage.role === "assistant" &&
+          usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
+            ? estimatedMessageTokens(context.messages)
+            : estimate.tokens;
       }
-      const usageMessage = context.messages[estimate.lastUsageIndex];
-      if (
-        compactionEntry &&
-        usageMessage.role === "assistant" &&
-        usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
-      ) {
-        return { compacted: false, shouldRetry: false };
-      }
-      contextTokens = estimate.tokens;
     }
 
-    return shouldCompact(contextTokens, contextWindow, this.settings)
+    return options.forceThreshold || shouldCompact(contextTokens, contextWindow, this.settings)
       ? this.run("threshold", false)
       : { compacted: false, shouldRetry: false };
+  }
+
+  private async abandonRetryableOverflow(
+    assistantMessage: AssistantMessage,
+  ): Promise<{ ok: true } | { ok: false; errorMessage: string }> {
+    try {
+      const branch = await this.options.session.getBranch();
+      const entry = branch[branch.length - 1];
+      if (
+        entry?.type !== "message" ||
+        entry.message.role !== "assistant" ||
+        entry.message.timestamp !== assistantMessage.timestamp ||
+        entry.message.provider !== assistantMessage.provider ||
+        entry.message.model !== assistantMessage.model ||
+        entry.message.stopReason !== assistantMessage.stopReason
+      ) {
+        return {
+          ok: false,
+          errorMessage:
+            "Context overflow recovery could not isolate the failed model attempt safely.",
+        };
+      }
+      await this.options.session.moveTo(entry.parentId);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        errorMessage: `Context overflow recovery could not roll back the failed model attempt: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
   }
 
   private async run(
@@ -182,8 +259,31 @@ export class PiCompactionCoordinator {
       const branch = await this.options.session.getBranch();
       const preparationResult = prepareCompaction(branch, this.settings);
       if (!preparationResult.ok) throw preparationResult.error;
-      const preparation = preparationResult.value;
+      let preparation = preparationResult.value;
       if (!preparation) return { compacted: false, shouldRetry: false };
+      if (
+        preparation.messagesToSummarize.length === 0 &&
+        preparation.turnPrefixMessages.length === 0
+      ) {
+        // One oversized older turn can exceed the retained-tail budget by
+        // itself. Pi's normal cut then keeps everything. Retry its cut-point
+        // selection with the smallest tail so a newer turn can become the
+        // boundary and the oversized history is summarized instead of pruned
+        // on every outbound request.
+        const aggressiveResult = prepareCompaction(branch, {
+          ...this.settings,
+          keepRecentTokens: 1,
+        });
+        if (!aggressiveResult.ok) throw aggressiveResult.error;
+        preparation = aggressiveResult.value;
+        if (
+          !preparation ||
+          (preparation.messagesToSummarize.length === 0 &&
+            preparation.turnPrefixMessages.length === 0)
+        ) {
+          return { compacted: false, shouldRetry: false };
+        }
+      }
 
       const abortController = new AbortController();
       this.activeAbortController = abortController;
@@ -215,6 +315,9 @@ export class PiCompactionCoordinator {
       }
 
       const result = compactResult.value;
+      if (!result.summary.trim()) {
+        throw new Error("The compaction model returned an empty summary.");
+      }
       await this.options.session.appendCompaction(
         result.summary,
         result.firstKeptEntryId,

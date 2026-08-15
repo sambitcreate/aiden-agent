@@ -41,6 +41,21 @@ The Pi journal lives below Electron `userData`, is keyed by chat ID, and is neve
 
 All four delivery phases and their verification gates completed on 2026-08-06.
 
+## Reliability hardening — 2026-08-14
+
+A follow-up audit closed lifecycle gaps around the shipped boundary:
+
+- the exact enriched slash-skill user turn is now journaled before provider I/O;
+- pre-prompt pressure includes the current user turn and zero-usage rehydrated history;
+- deterministic emergency reduction forces a durable semantic checkpoint afterward;
+- failed overflow attempts, including silent `length` overflows, are moved off the active journal branch before retry;
+- journal message/marker batches roll back atomically on partial append failure;
+- child prompts are journaled once and receive the same pre-prompt pressure check;
+- empty summaries are rejected, small context windows receive bounded reserve/tail settings, and semantic checkpoints survive emergency pruning;
+- overflow retries reset streamed renderer text, and terminal chat snapshots reach cache before animation handoff.
+
+The focused `test:compaction` gate now covers the core coordinator, emergency projection, child runtime, renderer stream reset, and terminal cache handoff.
+
 ## Phases
 
 ### Phase 1 — Native session and compaction controller

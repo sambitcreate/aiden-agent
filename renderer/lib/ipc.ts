@@ -651,6 +651,8 @@ export const subagentsApi = {
 interface ChatDelta {
   streamId: string;
   delta: string;
+  /** Discard deltas from a failed overflow attempt before its retry starts. */
+  reset?: boolean;
 }
 interface ChatReasoningDelta {
   streamId: string;
@@ -709,6 +711,7 @@ export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
 
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
+  onReset?: () => void;
   onReasoningDelta?: (delta: string) => void;
   onDone: (
     fullContent: string,
@@ -753,7 +756,9 @@ export function startGeneration(
 
   unsubs.push(
     onNotification<ChatDelta>("chat:delta", (p) => {
-      if (p.streamId === streamId) callbacks.onDelta(p.delta);
+      if (p.streamId !== streamId) return;
+      if (p.reset) callbacks.onReset?.();
+      else callbacks.onDelta(p.delta);
     }),
   );
   unsubs.push(
