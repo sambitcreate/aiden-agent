@@ -53,7 +53,7 @@ import type {
   AppUpdateCheckResult,
   AppUpdateRestartResult,
 } from "../renderer/shared/app-update.js";
-import { devLogPath, initDevLog } from "./services/dev-log.js";
+import { devLogPath } from "./services/dev-log.js";
 import { scheduleService } from "./services/schedule-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
@@ -903,7 +903,14 @@ async function createMainWindow(): Promise<void> {
     resetRendererReadiness();
     terminalService.closeForWebContents(createdWebContentsId);
   });
-  createdWindow.webContents.on("render-process-gone", () => {
+  createdWindow.webContents.on("render-process-gone", (_event, details) => {
+    logger.error("renderer-lifecycle", "Main renderer process exited", {
+      webContentsId: createdWebContentsId,
+      reason: details.reason,
+      exitCode: details.exitCode,
+      cleanupStarted,
+      shutdownStarted,
+    });
     rendererReadiness.reset();
     terminalService.closeForWebContents(createdWebContentsId);
     if (
@@ -925,6 +932,37 @@ async function createMainWindow(): Promise<void> {
       );
       if (!createdWindow.isDestroyed()) createdWindow.destroy();
     });
+  });
+  createdWindow.webContents.on("unresponsive", () => {
+    logger.warn("renderer-lifecycle", "Main renderer became unresponsive", {
+      webContentsId: createdWebContentsId,
+      url: createdWindow.webContents.getURL(),
+    });
+  });
+  createdWindow.webContents.on("responsive", () => {
+    logger.info("renderer-lifecycle", "Main renderer became responsive", {
+      webContentsId: createdWebContentsId,
+    });
+  });
+  createdWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      logger.error("renderer-lifecycle", "Renderer load failed", {
+        webContentsId: createdWebContentsId,
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
+    },
+  );
+  createdWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
+    logger.error(
+      "renderer-lifecycle",
+      "Renderer preload failed",
+      { webContentsId: createdWebContentsId, preloadPath },
+      error,
+    );
   });
   createdWindow.once("ready-to-show", () => createdWindow.show());
   createdWindow.on("close", (event) => {
@@ -1289,8 +1327,15 @@ if (!ownsSingleInstanceLock) {
   registerNativeHandlers();
   registerHandlers();
 
+  app.on("child-process-gone", (_event, details) => {
+    logger.error("electron-lifecycle", "Electron child process exited unexpectedly", details);
+  });
+
   app.on("second-instance", () => showMainWindow());
   app.on("window-all-closed", () => {
+    logger.info("electron-lifecycle", "All application windows closed", {
+      platform: process.platform,
+    });
     if (process.platform !== "darwin") app.quit();
   });
 
@@ -1300,6 +1345,12 @@ if (!ownsSingleInstanceLock) {
   });
 
   app.on("before-quit", (event) => {
+    logger.info("electron-lifecycle", "Application before-quit", {
+      forceAppQuit,
+      shutdownStarted,
+      lifecycleCheckInFlight,
+      hasMainWindow: Boolean(mainWindow && !mainWindow.isDestroyed()),
+    });
     if (forceAppQuit) return;
     event.preventDefault();
     if (shutdownStarted || lifecycleCheckInFlight) return;
@@ -1310,7 +1361,13 @@ if (!ownsSingleInstanceLock) {
     }
   });
 
-  app.on("will-quit", cleanupApplication);
+  app.on("will-quit", () => {
+    logger.info("electron-lifecycle", "Application will-quit");
+    cleanupApplication();
+  });
+  app.on("quit", (_event, exitCode) => {
+    logger.info("electron-lifecycle", "Application quit", { exitCode });
+  });
 
   // Only a real content change reaches the renderer, and concurrent triggers
   // coalesce, which is what makes this affordable on every focus.
@@ -1375,11 +1432,16 @@ if (!ownsSingleInstanceLock) {
         );
       }
       if (!isPackagedRuntime()) {
-        initDevLog(path.join(runtimeProfile.logsPath, "aiden-dev.log"));
-        logger.info(
-          "dev-log",
-          `Writing dev log to ${devLogPath() ?? "unknown"}`,
-        );
+        logger.info("dev-log", `Writing dev log to ${devLogPath() ?? "unknown"}`);
+        logger.info("electron-lifecycle", "Electron application ready", {
+          appName: app.getName(),
+          appVersion: app.getVersion(),
+          electronVersion: process.versions.electron,
+          chromeVersion: process.versions.chrome,
+          pid: process.pid,
+          userDataPath: runtimeProfile.userDataPath,
+          crashDumpsPath: runtimeProfile.crashDumpsPath,
+        });
       }
       try {
         terminalService.installHistoryStore(
