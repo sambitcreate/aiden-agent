@@ -125,6 +125,26 @@ test("the trail is a flat list, never a nested disclosure", () => {
   assert.match(markup, /Grepped<\/span><span[^>]*> export in services/u);
 });
 
+test("activity typography keeps summaries above compact details", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "read_file", "completed", { target: "package.json" }),
+        step(1, "run_command", "failed", { detail: "Run the test suite" }),
+      ])}
+    />,
+  );
+
+  assert.match(
+    markup,
+    /text-small-strong font-medium text-secondary activity-feed-summary-label/u,
+  );
+  assert.match(markup, /activity-feed-detail-label[^"]*text-mini text-secondary/u);
+  assert.match(markup, /text-secondary font-medium">Read/u);
+  assert.match(markup, /font-normal text-tertiary"> package\.json/u);
+  assert.match(markup, /text-red font-medium">run_command failed/u);
+});
+
 test("the feed carries no outline of its own", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed timeline={timeline("completed", [step(0, "read_file")])} />,

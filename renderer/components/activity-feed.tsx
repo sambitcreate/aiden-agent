@@ -29,8 +29,8 @@ function StepLine({ step }: { step: AgentStep }) {
   const line = activityLine(step);
   return (
     <>
-      <span className={toneClass(line.tone)}>{line.verb}</span>
-      {line.object ? <span className="text-tertiary"> {line.object}</span> : null}
+      <span className={`${toneClass(line.tone)} font-medium`}>{line.verb}</span>
+      {line.object ? <span className="font-normal text-tertiary"> {line.object}</span> : null}
     </>
   );
 }
@@ -40,23 +40,23 @@ function TickerRow({ step }: { step: AgentStep }) {
   const active = !isToolStep(step) ? step.finishedAt === undefined : step.status === "running";
   return (
     <div className="activity-feed-row flex h-6 min-w-0 items-center">
-      <Text
-        variant="small"
-        color="secondary"
-        className={`min-w-0 truncate ${active ? "agent-thinking-shimmer" : ""}`}
+      <span
+        className={`activity-feed-detail-label min-w-0 truncate text-mini text-secondary ${
+          active ? "agent-thinking-shimmer" : ""
+        }`}
       >
         <StepLine step={step} />
-      </Text>
+      </span>
     </div>
   );
 }
 
 function TrailRow({ step }: { step: AgentStep }) {
   return (
-    <div className="flex min-h-6 min-w-0 items-start py-px" role="listitem">
-      <Text variant="small" color="secondary" className="min-w-0 break-words">
+    <div className="flex min-h-5 min-w-0 items-start py-px" role="listitem">
+      <span className="activity-feed-detail-label min-w-0 break-words text-mini text-secondary">
         <StepLine step={step} />
-      </Text>
+      </span>
     </div>
   );
 }
@@ -138,15 +138,17 @@ export function ActivityFeed({
           </div>
         ) : (
           <Text
-            variant="small"
+            variant="small-strong"
             color="secondary"
-            className={`min-w-0 flex-1 truncate ${running ? "agent-thinking-shimmer" : ""}`}
+            className={`activity-feed-summary-label min-w-0 flex-1 truncate ${
+              running ? "agent-thinking-shimmer" : ""
+            }`}
           >
             {summarizeActivity(visible)}
           </Text>
         )}
         {issues ? (
-          <Text variant="small" className="shrink-0 text-support-warning">
+          <Text variant="small-strong" className="shrink-0 text-support-warning">
             {issues === 1 ? "1 issue" : `${issues} issues`}
           </Text>
         ) : null}
