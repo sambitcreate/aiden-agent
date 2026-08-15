@@ -19,6 +19,7 @@ import {
   isRetryableAssistantError,
   type Api,
   type AssistantMessage,
+  type AssistantMessageEventStream,
   type Models,
   type ProviderStreams,
 } from "@earendil-works/pi-ai";
@@ -87,21 +88,74 @@ function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
   );
 }
 
-function validCompactionSummary(summary: string): boolean {
-  const structured = [
+const SPLIT_SUMMARY_MARKER = "\n\n---\n\n**Turn Context (split turn):**\n\n";
+const STRUCTURED_HEADINGS = [
     "Goal",
     "Constraints & Preferences",
     "Progress",
     "Key Decisions",
     "Next Steps",
     "Critical Context",
-  ].every((heading) => new RegExp(`^## ${heading}`, "mu").test(summary));
-  const splitTurn = [
+  ];
+const SPLIT_HEADINGS = [
     "Original Request",
     "Early Progress",
     "Context for Suffix",
-  ].every((heading) => new RegExp(`^## ${heading}`, "mu").test(summary));
-  return structured || splitTurn;
+  ];
+
+function hasHeadings(summary: string, headings: readonly string[]): boolean {
+  return headings.every((heading) =>
+    new RegExp(`^## ${heading}`, "mu").test(summary),
+  );
+}
+
+function validStructuredSummary(summary: string): boolean {
+  return hasHeadings(summary, STRUCTURED_HEADINGS);
+}
+
+function validFinalCompactionSummary(
+  summary: string,
+  preparation: { isSplitTurn: boolean; messagesToSummarize: AgentMessage[] },
+): boolean {
+  if (!preparation.isSplitTurn) return validStructuredSummary(summary);
+  const markerIndex = summary.indexOf(SPLIT_SUMMARY_MARKER);
+  if (
+    markerIndex < 0 ||
+    summary.indexOf(SPLIT_SUMMARY_MARKER, markerIndex + 1) >= 0
+  ) {
+    return false;
+  }
+  const history = summary.slice(0, markerIndex).trim();
+  const prefix = summary.slice(markerIndex + SPLIT_SUMMARY_MARKER.length);
+  return (
+    (preparation.messagesToSummarize.length > 0
+      ? validStructuredSummary(history)
+      : history === "No prior history.") &&
+    hasHeadings(prefix, SPLIT_HEADINGS)
+  );
+}
+
+function requireCompleteSummaryModels(models: Models): Models {
+  return new Proxy(models, {
+    get(target, property, receiver) {
+      if (property === "completeSimple") {
+        return async (...args: Parameters<Models["completeSimple"]>) => {
+          const message = await target.completeSimple(...args);
+          if (
+            message.stopReason === "length" ||
+            message.stopReason === "toolUse"
+          ) {
+            throw new Error(
+              `The compaction model stopped before completing its summary (${message.stopReason}).`,
+            );
+          }
+          return message;
+        };
+      }
+      const value = Reflect.get(target, property, receiver) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 function compactionTranscript(messages: readonly AgentMessage[]): string {
@@ -131,33 +185,54 @@ async function collapseOversizedCompactionInput(options: {
   signal: AbortSignal;
   thinkingLevel: ThinkingLevel;
 }): Promise<AgentMessage[]> {
+  const fixedPiSafetyTokens = Math.min(
+    4_096,
+    Math.floor(options.model.contextWindow * 0.25),
+  );
+  const requestedOutputTokens = Math.max(
+    1,
+    Math.min(
+      Math.floor(options.reserveTokens * 0.8),
+      options.model.maxTokens > 0
+        ? options.model.maxTokens
+        : Number.POSITIVE_INFINITY,
+    ),
+  );
+  const promptOverheadTokens = Math.min(
+    1_200,
+    Math.floor(options.model.contextWindow * 0.15),
+  );
   const safeInputTokens = Math.max(
     128,
-    Math.min(
-      Math.max(128, options.model.contextWindow - options.reserveTokens - 256),
-      Math.floor(options.model.contextWindow * 0.45),
-    ),
+    options.model.contextWindow -
+      fixedPiSafetyTokens -
+      requestedOutputTokens -
+      promptOverheadTokens,
   );
   if (estimatedMessageTokens(options.messages) <= safeInputTokens) {
     return [...options.messages];
   }
   const transcript = compactionTranscript(options.messages);
-  const fragmentCharacters = Math.max(512, safeInputTokens * 3);
-  const fragments: string[] = [];
-  for (
-    let offset = 0;
-    offset < transcript.length;
-    offset += fragmentCharacters
-  ) {
-    fragments.push(transcript.slice(offset, offset + fragmentCharacters));
-  }
   let accumulated: string | undefined;
-  for (let index = 0; index < fragments.length; index += 1) {
+  let offset = 0;
+  let index = 0;
+  while (offset < transcript.length) {
+    const accumulatedTokens = Math.ceil((accumulated?.length ?? 0) / 3);
+    const availableSourceTokens = Math.max(
+      128,
+      safeInputTokens - accumulatedTokens,
+    );
+    const fragmentCharacters = Math.max(384, availableSourceTokens * 3);
+    const fragment = transcript.slice(offset, offset + fragmentCharacters);
+    const estimatedFragmentCount = Math.max(
+      index + 1,
+      index + Math.ceil((transcript.length - offset) / fragmentCharacters),
+    );
     const result = await generateSummary(
       [
         {
           role: "user",
-          content: `Compaction source fragment ${index + 1} of ${fragments.length}:\n\n${fragments[index]}`,
+          content: `Compaction source fragment ${index + 1} of approximately ${estimatedFragmentCount}:\n\n${fragment}`,
           timestamp: Date.now(),
         },
       ],
@@ -170,12 +245,14 @@ async function collapseOversizedCompactionInput(options: {
       options.thinkingLevel,
     );
     if (!result.ok) throw result.error;
-    if (!validCompactionSummary(result.value)) {
+    if (!validStructuredSummary(result.value)) {
       throw new Error(
         "The compaction model returned a malformed intermediate summary.",
       );
     }
     accumulated = result.value;
+    offset += fragment.length;
+    index += 1;
   }
   return [
     {
@@ -509,11 +586,12 @@ export class PiCompactionCoordinator {
           false,
         ),
       };
+      const summaryModels = requireCompleteSummaryModels(this.options.models);
       const boundedPreparation = {
         ...imageProjected,
         messagesToSummarize: await collapseOversizedCompactionInput({
           messages: imageProjected.messagesToSummarize,
-          models: this.options.models,
+          models: summaryModels,
           model: this.options.model,
           reserveTokens: imageProjected.settings.reserveTokens,
           signal: abortController.signal,
@@ -521,7 +599,7 @@ export class PiCompactionCoordinator {
         }),
         turnPrefixMessages: await collapseOversizedCompactionInput({
           messages: imageProjected.turnPrefixMessages,
-          models: this.options.models,
+          models: summaryModels,
           model: this.options.model,
           reserveTokens: imageProjected.settings.reserveTokens,
           signal: abortController.signal,
@@ -530,7 +608,7 @@ export class PiCompactionCoordinator {
       };
       const compactResult = await compact(
         boundedPreparation,
-        this.options.models,
+        summaryModels,
         this.options.model,
         undefined,
         abortController.signal,
@@ -551,7 +629,7 @@ export class PiCompactionCoordinator {
       if (!result.summary.trim()) {
         throw new Error("The compaction model returned an empty summary.");
       }
-      if (!validCompactionSummary(result.summary)) {
+      if (!validFinalCompactionSummary(result.summary, boundedPreparation)) {
         throw new Error(
           "The compaction model returned a malformed summary without the required continuity sections.",
         );
@@ -630,13 +708,18 @@ export function createPiCompactionModels(
         ? { ...options?.headers, ...runtime.headers }
         : options?.headers,
     });
-    if (onAssistantMessage) {
-      void stream
-        .result()
-        .then(onAssistantMessage)
-        .catch(() => undefined);
-    }
-    return stream;
+    if (!onAssistantMessage) return stream;
+    const accountedResult = stream.result().then(async (message) => {
+      await onAssistantMessage(message);
+      return message;
+    });
+    return new Proxy(stream, {
+      get(target, property, receiver) {
+        if (property === "result") return () => accountedResult;
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as AssistantMessageEventStream;
   };
   const streams: ProviderStreams = {
     stream: streamSimple as ProviderStreams["stream"],

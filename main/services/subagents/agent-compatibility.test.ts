@@ -439,6 +439,19 @@ test("Aiden child factory shares its resolved transport while generating isolate
   });
 });
 
+test("child runner resets retry failures and treats length stops as terminal failures", async () => {
+  const source = await readFile(
+    new URL("./subagent-child-runner.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /message_start[\s\S]{0,220}terminalError = null;[\s\S]{0,80}terminalAborted = false;/u,
+  );
+  assert.match(source, /terminalGenerationLengthError\(message\)/u);
+  assert.match(source, /const exactOutput = terminalAssistantText\(message\)/u);
+});
+
 test("real Agent approval hook authorizes and consumes one exact outbound effect", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-approval",
@@ -561,6 +574,11 @@ test("child semantically compacts oversized tool output before the next provider
   const respondAfterTool = async (context: unknown) => {
     const serialized = JSON.stringify(context);
     if (/context summarization assistant/u.test(serialized)) {
+      if (/PREFIX of a turn/u.test(serialized)) {
+        return fauxAssistantMessage(
+          "## Original Request\nRead the oversized payload.\n\n## Early Progress\n- Read completed into a semantic history checkpoint.\n\n## Context for Suffix\n- Continue from bounded evidence.",
+        );
+      }
       return fauxAssistantMessage(
         semanticCheckpointSummary("semantic history checkpoint"),
       );
