@@ -191,10 +191,7 @@ test("long task previews remain renderer-safe after privacy-sensitive truncation
   const snapshot = projector.snapshot()[0]!;
   assert.ok(parseSubagentRunSnapshotV1(snapshot));
   assert.ok(snapshot.taskPreview.length <= 240);
-  assert.equal(
-    sanitizeSubagentSnapshotText(snapshot.taskPreview),
-    snapshot.taskPreview,
-  );
+  assert.equal(sanitizeSubagentSnapshotText(snapshot.taskPreview), snapshot.taskPreview);
 });
 
 test("multiline provider failures produce valid single-line warnings and errors", () => {
@@ -212,7 +209,11 @@ test("multiline provider failures produce valid single-line warnings and errors"
       groupId: "generation-provider-error:group-1",
       childId: "child-provider-error",
     },
-    { role: "reviewer", label: "Review implementation", task: "Review the workspace." },
+    {
+      role: "reviewer",
+      label: "Review implementation",
+      task: "Review the workspace.",
+    },
   );
   now += 1;
 
@@ -250,7 +251,11 @@ test("long terminal summaries remain renderer-safe after both display cuts", () 
       groupId: "generation-long-summary:group-1",
       childId: "child-long-summary",
     },
-    { role: "reviewer", label: "Review implementation", task: "Review the workspace." },
+    {
+      role: "reviewer",
+      label: "Review implementation",
+      task: "Review the workspace.",
+    },
   );
   now += 1;
   projector.finish("run-long-summary", {
@@ -265,10 +270,7 @@ test("long terminal summaries remain renderer-safe after both display cuts", () 
   assert.equal(snapshot.state, "completed");
   assert.ok((snapshot.latestText?.length ?? 0) <= 2_000);
   assert.ok((snapshot.terminalMarkdown?.length ?? 0) <= 12_000);
-  assert.equal(
-    sanitizeSubagentSnapshotText(snapshot.latestText ?? ""),
-    snapshot.latestText,
-  );
+  assert.equal(sanitizeSubagentSnapshotText(snapshot.latestText ?? ""), snapshot.latestText);
   assert.equal(
     sanitizeSubagentSnapshotText(snapshot.terminalMarkdown ?? ""),
     snapshot.terminalMarkdown,
@@ -291,11 +293,17 @@ test("snapshot parser rejects raw secrets, absolute paths, unknown fields, and i
   const valid = projector.snapshot()[0]!;
   assert.ok(parseSubagentRunSnapshotV1(valid));
   assert.equal(
-    parseSubagentRunSnapshotV1({ ...valid, latestText: "token=secret-value-here" }),
+    parseSubagentRunSnapshotV1({
+      ...valid,
+      latestText: "token=secret-value-here",
+    }),
     undefined,
   );
   assert.equal(
-    parseSubagentRunSnapshotV1({ ...valid, activity: "/Users/example/private" }),
+    parseSubagentRunSnapshotV1({
+      ...valid,
+      activity: "/Users/example/private",
+    }),
     undefined,
   );
   assert.equal(parseSubagentRunSnapshotV1({ ...valid, rawToolArgs: {} }), undefined);
@@ -533,7 +541,7 @@ next-environment-line,semicolon;brace}`,
     "X: coordinate",
     "lowercase: coordinate",
     "mixedName: coordinate",
-    '<div data-state=ready data-mode=compact></div>',
+    "<div data-state=ready data-mode=compact></div>",
     '<a href="https://example.com/docs?mode=compact">Docs</a>',
     "https://example.com/docs?mode=compact&view=grid",
     "QUJDREVGR0g=",
@@ -582,7 +590,11 @@ test("live text activity publishes only on an actual state transition", async ()
       groupId: "generation-delta-bound:group",
       childId: "child-delta-bound",
     },
-    { role: "reviewer", label: "Delta bound", task: "Bound live projection writes." },
+    {
+      role: "reviewer",
+      label: "Delta bound",
+      task: "Bound live projection writes.",
+    },
   );
   projector.running("run-delta-bound");
   for (let index = 0; index < 500; index += 1) {
@@ -649,6 +661,46 @@ test("milestones are bounded enum-only projections that cannot carry private too
   assert.ok(parseSubagentRunSnapshotV1(snapshot));
 });
 
+test("privileged child tools use truthful closed activity classes", () => {
+  const cases = [
+    ["write_file", "Preparing a workspace update", "inspecting"],
+    ["edit_file", "Preparing a workspace update", "inspecting"],
+    ["run_command", "Preparing a command", "inspecting"],
+    ["web_search", "Using public-web access", "inspecting"],
+    ["subagent", "Preparing a delegation", "inspecting"],
+    ["docs__publish_012345abcdef", "Preparing connector access", "inspecting"],
+    ["future_private_tool", "Preparing a tool", "inspecting"],
+  ] as const;
+
+  for (const [toolName, activity, milestone] of cases) {
+    const projector = new SubagentEventProjector({
+      generationId: `generation-${milestone}`,
+      chatId: "chat-safe-activity",
+      workspaceId: "workspace-safe-activity",
+      modelId: "model-safe-activity",
+    });
+    const runId = `run-${milestone}-${toolName.length}`;
+    projector.begin(
+      {
+        runId,
+        groupId: `group-${milestone}`,
+        childId: `child-${milestone}-${toolName.length}`,
+      },
+      {
+        role: "reviewer",
+        label: "Safe activity",
+        task: "Exercise one approved capability.",
+      },
+    );
+    projector.toolStarted(runId, toolName);
+    const snapshot = projector.snapshot()[0]!;
+    assert.equal(snapshot.activity, activity);
+    assert.deepEqual(snapshot.milestones, [milestone]);
+    assert.doesNotMatch(snapshot.activity, /read-only/u);
+    assert.doesNotMatch(snapshot.activity, /publish|private|docs/u);
+  }
+});
+
 test("turn, usage, and tool telemetry has a hard durable-write bound", async () => {
   const emitted: SubagentRunSnapshotV1[] = [];
   const projector = new SubagentEventProjector({
@@ -666,7 +718,11 @@ test("turn, usage, and tool telemetry has a hard durable-write bound", async () 
       groupId: "generation-telemetry-bound:group",
       childId: "child-telemetry-bound",
     },
-    { role: "reviewer", label: "Telemetry bound", task: "Bound durable telemetry." },
+    {
+      role: "reviewer",
+      label: "Telemetry bound",
+      task: "Bound durable telemetry.",
+    },
   );
   projector.running("run-telemetry-bound");
   const tools = ["read_file", "list_dir", "glob", "grep"] as const;
@@ -988,7 +1044,11 @@ test("unsafe text cannot survive projector, parser, or the production Markdown p
         groupId: `generation-entity-${index}:group-1`,
         childId: `child-entity-${index}`,
       },
-      { role: "reviewer", label: "Entity review", task: "Review encoded output." },
+      {
+        role: "reviewer",
+        label: "Entity review",
+        task: "Review encoded output.",
+      },
     );
     now += 1;
     projector.finish(runId, {
@@ -1071,7 +1131,11 @@ test("JSON named control escapes cannot hide snapshot credentials", () => {
         groupId: `generation-named-control-${index}:group-1`,
         childId: `child-named-control-${index}`,
       },
-      { role: "reviewer", label: "Control review", task: "Inspect encoded output." },
+      {
+        role: "reviewer",
+        label: "Control review",
+        task: "Inspect encoded output.",
+      },
     );
     now += 1;
     projector.finish(runId, {
@@ -1336,7 +1400,11 @@ test("framed irregular encodings stay private through projection, parsing, and M
         groupId: `generation-framed-${index}:group-1`,
         childId: `child-framed-${index}`,
       },
-      { role: "reviewer", label: "Framed review", task: "Inspect framed output." },
+      {
+        role: "reviewer",
+        label: "Framed review",
+        task: "Inspect framed output.",
+      },
     );
     now += 1;
     projector.finish(runId, {
@@ -1421,7 +1489,11 @@ test("projector preserves timestamp and revision monotonicity across a backward 
       groupId: "generation-clock:group-1",
       childId: "child-clock",
     },
-    { role: "reviewer", label: "Clock review", task: "Review monotonic state." },
+    {
+      role: "reviewer",
+      label: "Clock review",
+      task: "Review monotonic state.",
+    },
   );
 
   now = 99;
@@ -1513,7 +1585,11 @@ test("control projection rejects stale, non-stop, foreign, and post-terminal tra
     now: () => 2_000,
   });
   projector.begin(
-    { runId: "run-control-reject", groupId: "group-control-reject", childId: "child-control-reject" },
+    {
+      runId: "run-control-reject",
+      groupId: "group-control-reject",
+      childId: "child-control-reject",
+    },
     { role: "reviewer", label: "Review", task: "Reject invalid controls." },
   );
   const current = projector.snapshot()[0]!;
@@ -1532,7 +1608,11 @@ test("control projection rejects stale, non-stop, foreign, and post-terminal tra
   };
 
   assert.throws(
-    () => projector.applyControlSnapshot({ ...stopped, revision: current.revision }),
+    () =>
+      projector.applyControlSnapshot({
+        ...stopped,
+        revision: current.revision,
+      }),
     /moved backward/u,
   );
   assert.throws(
@@ -1544,7 +1624,14 @@ test("control projection rejects stale, non-stop, foreign, and post-terminal tra
     /immutable run identity/u,
   );
   projector.applyControlSnapshot(stopped);
-  assert.throws(() => projector.applyControlSnapshot({ ...stopped, revision: stopped.revision + 1 }), /moved backward/u);
+  assert.throws(
+    () =>
+      projector.applyControlSnapshot({
+        ...stopped,
+        revision: stopped.revision + 1,
+      }),
+    /moved backward/u,
+  );
 });
 
 test("assistant message reference is bounded, terminal-only, and strictly parsed", () => {

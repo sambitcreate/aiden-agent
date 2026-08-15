@@ -66,6 +66,9 @@ export const MAX_SUBAGENT_CHILD_TURNS = 24;
 export const MAX_SUBAGENT_CHILD_TOOL_CALLS = 64;
 export const MAX_SUBAGENT_CHILD_EVENTS = 512;
 export const MAX_SUBAGENT_CHILD_OUTPUT_CHARS = 120_000;
+export const MAX_SUBAGENT_CHILD_PROTOCOL_CHARS = 512_000;
+const SAFE_CHILD_PROVIDER_FAILURE =
+  "The child model could not complete this task.";
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
@@ -74,6 +77,7 @@ export interface SubagentChildRunnerPolicy {
   maxToolCalls?: number;
   maxEvents?: number;
   maxOutputChars?: number;
+  maxProtocolChars?: number;
 }
 
 export interface SubagentChildRunnerDependencies {
@@ -170,6 +174,11 @@ export interface RunSubagentChildInput {
     turnStarted(): void;
     toolStarted(toolName: string): void;
     textDelta(delta: string): void;
+    /** Exact terminal text not already observed through text deltas. */
+    textReconciled(additionalChars: number): void;
+    /** Hidden thinking/tool-call protocol charged to the shared tree ceiling. */
+    protocolDelta?(additionalChars: number): void;
+    protocolReconciled?(additionalChars: number): void;
     usage(message: AssistantMessage): void;
   };
 }
@@ -194,6 +203,42 @@ function safeFailure(
     summary: "",
     warning,
   };
+}
+
+function assistantProtocolChars(message: AssistantMessage): number {
+  let total = 0;
+  for (const block of message.content) {
+    if (block.type === "text") total += block.text.length;
+    else if (block.type === "thinking") total += block.thinking.length;
+    else {
+      total += block.id.length + block.name.length;
+      try {
+        total += JSON.stringify(block.arguments).length;
+      } catch {
+        return Number.MAX_SAFE_INTEGER;
+      }
+    }
+    if (!Number.isSafeInteger(total)) return Number.MAX_SAFE_INTEGER;
+  }
+  return total;
+}
+
+function assistantHiddenProtocolChars(message: AssistantMessage): number {
+  let total = 0;
+  for (const block of message.content) {
+    if (block.type === "text") continue;
+    if (block.type === "thinking") total += block.thinking.length;
+    else {
+      total += block.id.length + block.name.length;
+      try {
+        total += JSON.stringify(block.arguments).length;
+      } catch {
+        return Number.MAX_SAFE_INTEGER;
+      }
+    }
+    if (!Number.isSafeInteger(total)) return Number.MAX_SAFE_INTEGER;
+  }
+  return total;
 }
 
 function throwIfParentAborted(signal: AbortSignal | undefined): void {
@@ -270,6 +315,8 @@ export async function runSubagentChild(
     maxEvents: input.policy?.maxEvents ?? MAX_SUBAGENT_CHILD_EVENTS,
     maxOutputChars:
       input.policy?.maxOutputChars ?? MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
+    maxProtocolChars:
+      input.policy?.maxProtocolChars ?? MAX_SUBAGENT_CHILD_PROTOCOL_CHARS,
   };
   if (
     !Number.isFinite(policy.deadlineMs) ||
@@ -284,7 +331,9 @@ export async function runSubagentChild(
     !Number.isInteger(policy.maxEvents) ||
     policy.maxEvents <= 0 ||
     !Number.isInteger(policy.maxOutputChars) ||
-    policy.maxOutputChars <= 0
+    policy.maxOutputChars <= 0 ||
+    !Number.isInteger(policy.maxProtocolChars) ||
+    policy.maxProtocolChars <= 0
   ) {
     throw new Error("Invalid subagent child resource policy.");
   }
@@ -300,6 +349,10 @@ export async function runSubagentChild(
   if (!buildTools)
     throw new Error("Subagent child tool construction is unavailable.");
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const constructionCancellation = new AbortController();
+  const constructionSignal = input.signal
+    ? AbortSignal.any([input.signal, constructionCancellation.signal])
+    : constructionCancellation.signal;
   let removeParentAbort = () => {};
   let unsubscribe = () => {};
   let workspaceWriteApproval: SubagentWorkspaceWriteApprovalGateV2 | undefined;
@@ -307,13 +360,23 @@ export async function runSubagentChild(
   let shellApproval: SubagentShellGateV2 | undefined;
   const deadline = new Promise<{ kind: "timed_out" }>((resolve) => {
     deadlineTimer = setTimeout(
-      () => resolve({ kind: "timed_out" }),
+      () => {
+        constructionCancellation.abort(
+          new Error("Subagent child construction deadline exceeded."),
+        );
+        resolve({ kind: "timed_out" });
+      },
       Math.max(0, deadlineAt - now()),
     );
   });
   const parentAbort = new Promise<{ kind: "parent_aborted" }>((resolve) => {
     if (!input.signal) return;
-    const abort = () => resolve({ kind: "parent_aborted" });
+    const abort = () => {
+      constructionCancellation.abort(
+        input.signal?.reason ?? new Error("Parent generation cancelled."),
+      );
+      resolve({ kind: "parent_aborted" });
+    };
     if (input.signal.aborted) abort();
     else {
       input.signal.addEventListener("abort", abort, { once: true });
@@ -337,7 +400,7 @@ export async function runSubagentChild(
           authority: input.v2Authority,
           currentAuthority: input.currentV2Authority,
           consumeNetworkOperation: input.consumeNetworkOperation,
-          signal: input.signal,
+          signal: constructionSignal,
         }),
       )
       .then(
@@ -612,6 +675,11 @@ export async function runSubagentChild(
     let currentTurnOutput = "";
     let terminalOutput = "";
     let observedOutputChars = 0;
+    let observedProtocolChars = 0;
+    let currentTurnTextDeltaChars = 0;
+    let currentTurnProtocolDeltaChars = 0;
+    let currentTurnHiddenProtocolDeltaChars = 0;
+    let observedTerminalAssistant = false;
     let turns = 0;
     let toolCalls = 0;
     let lifecycleEvents = 0;
@@ -638,6 +706,9 @@ export async function runSubagentChild(
         event.message.role === "assistant"
       ) {
         currentTurnHadTextDelta = false;
+        currentTurnTextDeltaChars = 0;
+        currentTurnProtocolDeltaChars = 0;
+        currentTurnHiddenProtocolDeltaChars = 0;
         currentTurnOutput = "";
         terminalError = null;
         terminalAborted = false;
@@ -646,6 +717,9 @@ export async function runSubagentChild(
         if (update.type === "text_delta") {
           input.telemetry?.textDelta(update.delta);
           currentTurnHadTextDelta = true;
+          currentTurnTextDeltaChars += update.delta.length;
+          currentTurnProtocolDeltaChars += update.delta.length;
+          observedProtocolChars += update.delta.length;
           observedOutputChars += update.delta.length;
           const remaining = policy.maxOutputChars - currentTurnOutput.length;
           if (remaining > 0)
@@ -656,9 +730,22 @@ export async function runSubagentChild(
           ) {
             stopForLimit("The child reached its output limit.");
           }
+          if (observedProtocolChars > policy.maxProtocolChars) {
+            stopForLimit("The child reached its protocol limit.");
+          }
+        } else if (
+          update.type === "thinking_delta" ||
+          update.type === "toolcall_delta"
+        ) {
+          currentTurnProtocolDeltaChars += update.delta.length;
+          currentTurnHiddenProtocolDeltaChars += update.delta.length;
+          observedProtocolChars += update.delta.length;
+          input.telemetry?.protocolDelta?.(update.delta.length);
+          if (observedProtocolChars > policy.maxProtocolChars) {
+            stopForLimit("The child reached its protocol limit.");
+          }
         } else if (update.type === "error" && update.reason === "error") {
-          terminalError =
-            update.error.errorMessage?.trim() || "The child model failed.";
+          terminalError = SAFE_CHILD_PROVIDER_FAILURE;
         }
       } else if (event.type === "turn_start") {
         if (turns >= policy.maxTurns) {
@@ -687,13 +774,30 @@ export async function runSubagentChild(
           const error =
             terminalGenerationError(message) ??
             terminalGenerationLengthError(message);
-          if (error) terminalError = error;
+          if (error) {
+            terminalError =
+              message.stopReason === "error"
+                ? SAFE_CHILD_PROVIDER_FAILURE
+                : error;
+          }
           if (terminalGenerationWasAborted(message)) terminalAborted = true;
           const exactOutput = terminalAssistantText(message);
           const additionalObserved = currentTurnHadTextDelta
-            ? Math.max(0, exactOutput.length - currentTurnOutput.length)
+            ? Math.max(0, exactOutput.length - currentTurnTextDeltaChars)
             : exactOutput.length;
           observedOutputChars += additionalObserved;
+          input.telemetry?.textReconciled(additionalObserved);
+          const exactProtocolChars = assistantProtocolChars(message);
+          observedProtocolChars += Math.max(
+            0,
+            exactProtocolChars - currentTurnProtocolDeltaChars,
+          );
+          const additionalHiddenProtocolChars = Math.max(
+            0,
+            assistantHiddenProtocolChars(message) -
+              currentTurnHiddenProtocolDeltaChars,
+          );
+          input.telemetry?.protocolReconciled?.(additionalHiddenProtocolChars);
           currentTurnOutput = exactOutput.slice(0, policy.maxOutputChars);
           if (
             observedOutputChars > policy.maxOutputChars ||
@@ -701,7 +805,13 @@ export async function runSubagentChild(
           ) {
             stopForLimit("The child reached its output limit.");
           }
-          terminalOutput = currentTurnOutput;
+          if (observedProtocolChars > policy.maxProtocolChars) {
+            stopForLimit("The child reached its protocol limit.");
+          }
+          if (message.stopReason !== "toolUse") {
+            observedTerminalAssistant = true;
+            terminalOutput = currentTurnOutput;
+          }
         }
       }
     });
@@ -720,6 +830,7 @@ export async function runSubagentChild(
           : new Error("Parent generation cancelled."),
       );
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
+        child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
       throwIfParentAborted(input.signal);
@@ -728,6 +839,7 @@ export async function runSubagentChild(
     if (outcome.kind === "timed_out" || deadlineElapsed()) {
       child.cancel(new Error("Subagent child deadline exceeded."));
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
+        child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
       return timedOutResult(input.request);
@@ -746,6 +858,12 @@ export async function runSubagentChild(
         summary: "",
         warning: "The child was interrupted before completion.",
       };
+    }
+    if (!observedTerminalAssistant || !terminalOutput.trim()) {
+      return safeFailure(
+        input.request,
+        "The child completed without a textual assistant result.",
+      );
     }
     return {
       role: input.request.role,

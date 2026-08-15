@@ -160,6 +160,7 @@ function phase6Authority(input: {
   maxQueued?: number;
   maxToolCalls?: number;
   maxOutputChars?: number;
+  context?: "fresh" | "fork";
 }): SubagentAuthorityV2 {
   return createSubagentAuthorityV2({
     grantId: `grant-${input.runId}`,
@@ -177,7 +178,7 @@ function phase6Authority(input: {
     modelFingerprint: "c".repeat(64),
     contextRevision: input.contextRevision,
     execution: "foreground",
-    context: "fresh",
+    context: input.context ?? "fresh",
     thinkingLevel: "high",
     capabilities: {
       workspaceRead: true,
@@ -487,7 +488,8 @@ test("V2 authority admission floors a high-resolution remaining deadline", async
         }),
       );
     },
-    runChild: async ({ request: childRequest }) => completed(childRequest.label),
+    runChild: async ({ request: childRequest }) =>
+      completed(childRequest.label),
   });
   now = 1_000.75;
 
@@ -656,6 +658,52 @@ test("supervisor runs siblings in parallel but returns deterministic request ord
   assert.ok(result.indexOf("## 2. Second") < result.indexOf("## 3. Third"));
 });
 
+test("stopping one queued V2 child preserves its running siblings and ordered results", async () => {
+  const releases = new Map<string, ReturnType<typeof deferred<void>>>();
+  const stops: Array<(reason?: Error) => void> = [];
+  const started = deferred<void>();
+  let startedCount = 0;
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-phase6b",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    prepareRun: async ({ identity, contextRevision, stop }) => {
+      stops.push(stop);
+      return phase6Prepared(
+        phase6Authority({
+          runId: identity.runId,
+          contextRevision,
+          delegate: false,
+        }),
+      );
+    },
+    runChild: async ({ request: task }) => {
+      const release = deferred<void>();
+      releases.set(task.label, release);
+      startedCount += 1;
+      if (startedCount === 2) started.resolve();
+      await release.promise;
+      return completed(task.label);
+    },
+  });
+
+  const execution = supervisor.execute(request(["First", "Second", "Third"]));
+  await started.promise;
+  stops[2]?.(new Error("stop exact queued child"));
+  releases.get("First")?.resolve();
+  releases.get("Second")?.resolve();
+  const result = await execution;
+
+  assert.deepEqual([...releases.keys()], ["First", "Second"]);
+  assert.match(result, /## 1\. First[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Second[\s\S]*Status: completed/u);
+  assert.match(result, /## 3\. Third[\s\S]*Status: interrupted/u);
+});
+
 test("Phase 6B runs fresh depth-2 children without exposing delegation to descendants", async () => {
   const preparedAuthorities: SubagentAuthorityV2[] = [];
   const observed: Array<{
@@ -737,6 +785,86 @@ test("Phase 6B runs fresh depth-2 children without exposing delegation to descen
     preparedAuthorities[0]?.runId,
   );
   assert.equal(supervisor.launchesUsed, 3);
+});
+
+test("Phase 6C preserves fork mode and bounded fork messages for depth-2 children", async () => {
+  const observed: Array<{ mode: string; serialized: string }> = [];
+  const supervisor = new SubagentSupervisor({
+    generationId: "generation-phase6c-fork",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    prepareRun: async ({
+      identity,
+      requestedCapabilities,
+      contextMode,
+      contextRevision,
+      parentAuthority,
+    }) =>
+      phase6Prepared(
+        phase6Authority({
+          runId: identity.runId,
+          contextRevision,
+          delegate: requestedCapabilities.delegate === true,
+          parent: parentAuthority,
+          context: contextMode,
+        }),
+      ),
+    runChild: async (child) => {
+      if (child.v2Authority?.depth === 1) {
+        const forkContext: SubagentContextCapture = {
+          mode: "fork",
+          revisionHash: "a".repeat(64),
+          chatId: TEST_SUPERVISOR_SCOPE.chatId,
+          messages: [
+            {
+              role: "user",
+              content: "Visible bounded parent decision",
+              createdAt: 1,
+            },
+          ],
+        };
+        await child.executeNested!(
+          {
+            context: "fork",
+            tasks: [
+              {
+                role: "reviewer",
+                label: "Forked reviewer",
+                task: "Review the bounded decision.",
+              },
+            ],
+          },
+          child.signal,
+          forkContext,
+        );
+      } else {
+        observed.push({
+          mode: child.context.mode,
+          serialized: JSON.stringify(child.context.messages),
+        });
+      }
+      return completed(child.request.label);
+    },
+  });
+
+  await supervisor.execute({
+    context: "fresh",
+    capabilities: { workspaceRead: true, delegate: true, web: false, mcp: [] },
+    tasks: [
+      { role: "planner", label: "Parent", task: "Delegate a forked review." },
+    ],
+  });
+
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0]?.mode, "fork");
+  assert.match(
+    observed[0]?.serialized ?? "",
+    /Visible bounded parent decision/u,
+  );
 });
 
 test("Phase 6B rejects nested fan-out synchronously before projection and releases preparation", async () => {
@@ -1388,9 +1516,22 @@ test("Phase 6C captures an exact immutable live fork before nested execution", a
       {
         ...assistant("Visible parent finding"),
         content: [
-          { type: "thinking", thinking: "private reasoning", thinkingSignature: "private-signature" },
-          { type: "text", text: "Visible parent finding", textSignature: "private-text-signature" },
-          { type: "toolCall", id: "call-private", name: "read_file", arguments: { path: "/private" } },
+          {
+            type: "thinking",
+            thinking: "private reasoning",
+            thinkingSignature: "private-signature",
+          },
+          {
+            type: "text",
+            text: "Visible parent finding",
+            textSignature: "private-text-signature",
+          },
+          {
+            type: "toolCall",
+            id: "call-private",
+            name: "read_file",
+            arguments: { path: "/private" },
+          },
         ],
       },
     );
@@ -1398,12 +1539,25 @@ test("Phase 6C captures an exact immutable live fork before nested execution", a
       "nested-call",
       {
         context: "fork",
-        tasks: [{ role: "scout", label: "Nested", task: "Check the visible finding." }],
+        tasks: [
+          {
+            role: "scout",
+            label: "Nested",
+            task: "Check the visible finding.",
+          },
+        ],
       },
       undefined,
     );
-    messages.push({ role: "user", content: "Mutation after capture", timestamp: 3 });
-    await emit({ type: "message_end", message: assistant("Done.") } as AgentEvent);
+    messages.push({
+      role: "user",
+      content: "Mutation after capture",
+      timestamp: 3,
+    });
+    await emit({
+      type: "message_end",
+      message: assistant("Done."),
+    } as AgentEvent);
   });
   const parentAuthority = phase6Authority({
     runId: "run-live-fork-parent",
@@ -1430,7 +1584,10 @@ test("Phase 6C captures an exact immutable live fork before nested execution", a
       buildTools: async () => [],
       createChild: (spec) => {
         nestedTool = spec.tools.find(({ name }) => name === "subagent");
-        return { ...control.child, withoutInferenceLease: async (operation) => operation() };
+        return {
+          ...control.child,
+          withoutInferenceLease: async (operation) => operation(),
+        };
       },
       recordUsage: async () => {},
     },
@@ -1481,6 +1638,250 @@ test("child runner returns only the terminal assistant answer", async () => {
   assert.equal(result.status, "completed");
   assert.equal(result.summary, "FINAL-CONCLUSION");
   assert.doesNotMatch(result.summary, /INTERMEDIATE-NARRATION/u);
+});
+
+test("child runner rejects protocol-less and empty assistant completions", async () => {
+  for (const control of [
+    fakeChild(async () => {}),
+    fakeChild(async ({ emit }) => {
+      const message = assistant("");
+      await emit({ type: "message_start", message } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+    }),
+    fakeChild(async ({ emit }) => {
+      const message = {
+        ...assistant("I will inspect that."),
+        stopReason: "toolUse" as const,
+      };
+      await emit({ type: "message_start", message } as AgentEvent);
+      await emit({ type: "message_end", message } as AgentEvent);
+    }),
+  ]) {
+    const result = await runSubagentChild({
+      authority: TEST_CHILD_AUTHORITY,
+      context: TEST_CHILD_CONTEXT,
+      groupId: "empty-completion",
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/unused",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      request: { role: "reviewer", label: "Empty", task: "Return a review." },
+      dependencies: {
+        buildTools: async () => [],
+        createChild: () => control.child,
+        recordUsage: async () => {},
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.match(result.warning ?? "", /without a textual assistant result/u);
+  }
+});
+
+test("provider failure details remain private across child, parent, and snapshot projections", async () => {
+  const canary = "PRIVATE-PROMPT-TOOL-RESULT-CANARY";
+  const control = fakeChild(async ({ emit }) => {
+    const message = {
+      ...assistant(""),
+      stopReason: "error" as const,
+      errorMessage: `Provider echoed ${canary}`,
+    };
+    await emit({ type: "message_start", message } as AgentEvent);
+    await emit({ type: "message_end", message } as AgentEvent);
+  });
+  const childResult = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "private-provider-failure",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: {
+      role: "reviewer",
+      label: "Provider boundary",
+      task: "Return a bounded review.",
+    },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => control.child,
+      recordUsage: async () => {},
+    },
+  });
+  assert.equal(childResult.status, "failed");
+  assert.doesNotMatch(JSON.stringify(childResult), new RegExp(canary, "u"));
+
+  const projector = new SubagentEventProjector({
+    generationId: "private-provider-failure",
+    ...TEST_SUPERVISOR_SCOPE,
+    modelId: runtime().model.id,
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "private-provider-failure",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    runChild: async () => childResult,
+  });
+  const parentResult = await supervisor.execute(request(["Provider boundary"]));
+  assert.doesNotMatch(parentResult, new RegExp(canary, "u"));
+  assert.doesNotMatch(
+    JSON.stringify(projector.snapshot()),
+    new RegExp(canary, "u"),
+  );
+});
+
+test("child runner reconciles non-streamed output into the shared telemetry budget", async () => {
+  const reconciled: number[] = [];
+  const run = async (streamed: boolean) => {
+    const control = fakeChild(async ({ emit }) => {
+      const message = assistant("abcdef");
+      await emit({ type: "message_start", message } as AgentEvent);
+      if (streamed) {
+        await emit({
+          type: "message_update",
+          message,
+          assistantMessageEvent: {
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "abc",
+            partial: message,
+          },
+        } as AgentEvent);
+      }
+      await emit({ type: "message_end", message } as AgentEvent);
+    });
+    const deltas: string[] = [];
+    const result = await runSubagentChild({
+      authority: TEST_CHILD_AUTHORITY,
+      context: TEST_CHILD_CONTEXT,
+      groupId: streamed ? "mixed-output" : "terminal-output",
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/unused",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      request: { role: "scout", label: "Output", task: "Return evidence." },
+      dependencies: {
+        buildTools: async () => [],
+        createChild: () => control.child,
+        recordUsage: async () => {},
+      },
+      telemetry: {
+        starting: () => {},
+        running: () => {},
+        turnStarted: () => {},
+        toolStarted: () => {},
+        textDelta: (delta) => deltas.push(delta),
+        textReconciled: (count) => reconciled.push(count),
+        usage: () => {},
+      },
+    });
+    assert.equal(result.status, "completed");
+    return deltas.join("");
+  };
+
+  assert.equal(await run(false), "");
+  assert.equal(await run(true), "abc");
+  assert.deepEqual(reconciled, [6, 3]);
+});
+
+test("child runner bounds hidden thinking and tool-call protocol content", async () => {
+  const streamedProtocol: number[] = [];
+  for (const kind of ["thinking_delta", "toolcall_delta"] as const) {
+    const control = fakeChild(async ({ emit }) => {
+      const message = assistant("ok");
+      await emit({ type: "message_start", message } as AgentEvent);
+      await emit({
+        type: "message_update",
+        message,
+        assistantMessageEvent: {
+          type: kind,
+          contentIndex: 0,
+          delta: "x".repeat(20),
+          partial: message,
+        },
+      } as AgentEvent);
+    });
+    const result = await runSubagentChild({
+      authority: TEST_CHILD_AUTHORITY,
+      context: TEST_CHILD_CONTEXT,
+      groupId: `protocol-${kind}`,
+      runtime: runtime(),
+      thinkingLevel: "high",
+      workspaceRoot: "/unused",
+      permission: "full",
+      inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+      request: { role: "scout", label: "Protocol", task: "Stay bounded." },
+      policy: { maxProtocolChars: 10 },
+      dependencies: {
+        buildTools: async () => [],
+        createChild: () => control.child,
+        recordUsage: async () => {},
+      },
+      telemetry: {
+        starting: () => {},
+        running: () => {},
+        turnStarted: () => {},
+        toolStarted: () => {},
+        textDelta: () => {},
+        textReconciled: () => {},
+        protocolDelta: (count) => streamedProtocol.push(count),
+        usage: () => {},
+      },
+    });
+    assert.equal(result.status, "failed");
+    assert.match(result.warning ?? "", /protocol limit/u);
+    assert.equal(control.cancelCount, 1);
+  }
+  assert.deepEqual(streamedProtocol, [20, 20]);
+
+  const terminalOnly = fakeChild(async ({ emit }) => {
+    const message = {
+      ...assistant("ok"),
+      content: [
+        { type: "thinking" as const, thinking: "x".repeat(20) },
+        { type: "text" as const, text: "ok" },
+      ],
+    };
+    await emit({ type: "message_start", message } as AgentEvent);
+    await emit({ type: "message_end", message } as AgentEvent);
+  });
+  const terminalResult = await runSubagentChild({
+    authority: TEST_CHILD_AUTHORITY,
+    context: TEST_CHILD_CONTEXT,
+    groupId: "terminal-protocol",
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    request: { role: "scout", label: "Protocol", task: "Stay bounded." },
+    policy: { maxProtocolChars: 10 },
+    dependencies: {
+      buildTools: async () => [],
+      createChild: () => terminalOnly.child,
+      recordUsage: async () => {},
+    },
+    telemetry: {
+      starting: () => {},
+      running: () => {},
+      turnStarted: () => {},
+      toolStarted: () => {},
+      textDelta: () => {},
+      textReconciled: () => {},
+      protocolReconciled: (count) => streamedProtocol.push(count),
+      usage: () => {},
+    },
+  });
+  assert.equal(terminalResult.status, "failed");
+  assert.match(terminalResult.warning ?? "", /protocol limit/u);
+  assert.deepEqual(streamedProtocol, [20, 20, 20]);
 });
 
 test("child runner starts write-broker shutdown and bounds a non-cooperative drain", async () => {

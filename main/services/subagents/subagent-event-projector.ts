@@ -73,11 +73,7 @@ function boundedSingleLine(value: string, maximum: number): string {
   return bounded(normalizeProjectedText(value).replace(/\s+/gu, " "), maximum);
 }
 
-function boundedRequiredSingleLine(
-  value: string,
-  maximum: number,
-  fallback: string,
-): string {
+function boundedRequiredSingleLine(value: string, maximum: number, fallback: string): string {
   return boundedSingleLine(value, maximum) || fallback;
 }
 
@@ -89,13 +85,45 @@ function safeToolMilestone(toolName: string): {
     case "read_file":
       return { activity: "Reading a workspace file", milestone: "reading" };
     case "list_dir":
-      return { activity: "Listing a workspace directory", milestone: "listing" };
+      return {
+        activity: "Listing a workspace directory",
+        milestone: "listing",
+      };
     case "glob":
-      return { activity: "Matching workspace file names", milestone: "matching" };
+      return {
+        activity: "Matching workspace file names",
+        milestone: "matching",
+      };
     case "grep":
       return { activity: "Searching workspace text", milestone: "searching" };
+    case "write_file":
+    case "edit_file":
+      return {
+        activity: "Preparing a workspace update",
+        milestone: "inspecting",
+      };
+    case "run_command":
+      return {
+        activity: "Preparing a command",
+        milestone: "inspecting",
+      };
+    case "web_search":
+      return {
+        activity: "Using public-web access",
+        milestone: "inspecting",
+      };
+    case "subagent":
+      return {
+        activity: "Preparing a delegation",
+        milestone: "inspecting",
+      };
     default:
-      return { activity: "Using a bounded read-only tool", milestone: "inspecting" };
+      return /__.*_[a-f0-9]{12}$/u.test(toolName)
+        ? {
+            activity: "Preparing connector access",
+            milestone: "inspecting",
+          }
+        : { activity: "Preparing a tool", milestone: "inspecting" };
   }
 }
 
@@ -300,7 +328,9 @@ export class SubagentEventProjector {
       control.tools < current.tools ||
       control.tokens < current.tokens
     ) {
-      throw new Error("Subagent control snapshot changed immutable run identity or moved backward.");
+      throw new Error(
+        "Subagent control snapshot changed immutable run identity or moved backward.",
+      );
     }
     const projected = adaptSubagentRunSnapshotV2ToV1(control);
     if (!projected || projected.finishedAt === undefined) {

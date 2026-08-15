@@ -301,6 +301,8 @@ export class SubagentSupervisor {
   private v2TokensUsed = 0;
   private v2ToolCallsUsed = 0;
   private v2OutputCharsUsed = 0;
+  private v2TurnsUsed = 0;
+  private v2NetworkOperationsUsed = 0;
   private calls = 0;
   private treeExpired = false;
   private treeBudgetExhausted = false;
@@ -417,7 +419,9 @@ export class SubagentSupervisor {
         input.forkContext.mode !== "fork" ||
         input.forkContext.chatId !== this.input.chatId
       ) {
-        throw new Error("Nested fork context was not captured at the parent tool boundary.");
+        throw new Error(
+          "Nested fork context was not captured at the parent tool boundary.",
+        );
       }
     } else if (input.forkContext) {
       throw new Error("Fresh nested context cannot carry a fork capture.");
@@ -483,6 +487,7 @@ export class SubagentSupervisor {
             stop: (reason = new Error("Nested subagent run stopped.")) => {
               if (!controllers[index]!.signal.aborted)
                 controllers[index]!.abort(reason);
+              input.lease.cancelRun(identities[index]!.runId, reason);
             },
           }),
         ),
@@ -527,6 +532,7 @@ export class SubagentSupervisor {
               this.input.runtime.provider.deployment === "local"
                 ? "local"
                 : "hosted",
+            cancelledResult: safeInterruptedResult(task),
             execute: async () => {
               await startBarrier;
               const identity = identities[index]!;
@@ -571,7 +577,35 @@ export class SubagentSupervisor {
                   inheritedCeiling: this.input.inheritedCeiling,
                   v2Authority: authority,
                   currentV2Authority: preparedRun.currentAuthority,
-                  consumeNetworkOperation: preparedRun.consumeNetworkOperation,
+                  consumeNetworkOperation: preparedRun.consumeNetworkOperation
+                    ? (currentAuthority) => {
+                        if (
+                          preparedRun.consumeNetworkOperation?.(
+                            currentAuthority,
+                          ) !== true
+                        ) {
+                          return false;
+                        }
+                        try {
+                          input.ledger.consumeUsage({
+                            tokens: 0,
+                            toolCalls: 0,
+                            outputChars: 0,
+                            turns: 0,
+                            networkOperations: 1,
+                          });
+                          return true;
+                        } catch (error) {
+                          this.treeBudgetExhausted = true;
+                          input.abortTree(
+                            error instanceof Error
+                              ? error
+                              : new Error("Subagent tree budget exhausted."),
+                          );
+                          return false;
+                        }
+                      }
+                    : undefined,
                   prepareOutboundApproval: preparedRun.prepareOutboundApproval,
                   prepareWorkspaceWriteApproval:
                     preparedRun.prepareWorkspaceWriteApproval,
@@ -579,7 +613,7 @@ export class SubagentSupervisor {
                     preparedRun.prepareMcpMutationApproval,
                   prepareShellApproval: preparedRun.prepareShellApproval,
                   context: {
-                    mode: "fresh",
+                    mode: context.mode,
                     revisionHash: context.revisionHash,
                     messages: cloneSubagentContextMessages(
                       context,
@@ -597,14 +631,33 @@ export class SubagentSupervisor {
                       this.input.projector?.starting(identity.runId),
                     running: () =>
                       this.input.projector?.running(identity.runId),
-                    turnStarted: () =>
-                      this.input.projector?.turnStarted(identity.runId),
+                    turnStarted: () => {
+                      try {
+                        input.ledger.consumeUsage({
+                          tokens: 0,
+                          toolCalls: 0,
+                          outputChars: 0,
+                          turns: 1,
+                          networkOperations: 0,
+                        });
+                      } catch (error) {
+                        this.treeBudgetExhausted = true;
+                        input.abortTree(
+                          error instanceof Error
+                            ? error
+                            : new Error("Subagent tree budget exhausted."),
+                        );
+                      }
+                      this.input.projector?.turnStarted(identity.runId);
+                    },
                     toolStarted: (toolName) => {
                       try {
                         input.ledger.consumeUsage({
                           tokens: 0,
                           toolCalls: 1,
                           outputChars: 0,
+                          turns: 0,
+                          networkOperations: 0,
                         });
                       } catch (error) {
                         this.treeBudgetExhausted = true;
@@ -625,6 +678,8 @@ export class SubagentSupervisor {
                           tokens: 0,
                           toolCalls: 0,
                           outputChars: delta.length,
+                          turns: 0,
+                          networkOperations: 0,
                         });
                       } catch (error) {
                         this.treeBudgetExhausted = true;
@@ -636,12 +691,68 @@ export class SubagentSupervisor {
                       }
                       this.input.projector?.textDelta(identity.runId, delta);
                     },
+                    textReconciled: (additionalChars) => {
+                      try {
+                        input.ledger.consumeUsage({
+                          tokens: 0,
+                          toolCalls: 0,
+                          outputChars: additionalChars,
+                          turns: 0,
+                          networkOperations: 0,
+                        });
+                      } catch (error) {
+                        this.treeBudgetExhausted = true;
+                        input.abortTree(
+                          error instanceof Error
+                            ? error
+                            : new Error("Subagent tree budget exhausted."),
+                        );
+                      }
+                    },
+                    protocolDelta: (additionalChars) => {
+                      try {
+                        input.ledger.consumeUsage({
+                          tokens: 0,
+                          toolCalls: 0,
+                          outputChars: additionalChars,
+                          turns: 0,
+                          networkOperations: 0,
+                        });
+                      } catch (error) {
+                        this.treeBudgetExhausted = true;
+                        input.abortTree(
+                          error instanceof Error
+                            ? error
+                            : new Error("Subagent tree budget exhausted."),
+                        );
+                      }
+                    },
+                    protocolReconciled: (additionalChars) => {
+                      try {
+                        input.ledger.consumeUsage({
+                          tokens: 0,
+                          toolCalls: 0,
+                          outputChars: additionalChars,
+                          turns: 0,
+                          networkOperations: 0,
+                        });
+                      } catch (error) {
+                        this.treeBudgetExhausted = true;
+                        input.abortTree(
+                          error instanceof Error
+                            ? error
+                            : new Error("Subagent tree budget exhausted."),
+                        );
+                      }
+                    },
                     usage: (message: AssistantMessage) => {
                       try {
                         input.ledger.consumeUsage({
                           tokens: reportedTokens(message.usage)?.total ?? 0,
                           toolCalls: 0,
                           outputChars: 0,
+                          turns: 0,
+                          networkOperations: 0,
                         });
                       } catch (error) {
                         this.treeBudgetExhausted = true;
@@ -913,6 +1024,7 @@ export class SubagentSupervisor {
               stop: (reason = new Error("Subagent run stopped.")) => {
                 const controller = childControllers[index]!;
                 if (!controller.signal.aborted) controller.abort(reason);
+                treeScheduler?.cancelRun(identities[index]!.runId, reason);
               },
             }),
           ),
@@ -1004,7 +1116,36 @@ export class SubagentSupervisor {
               inheritedCeiling: this.input.inheritedCeiling,
               v2Authority: preparedRun?.authority,
               currentV2Authority: preparedRun?.currentAuthority,
-              consumeNetworkOperation: preparedRun?.consumeNetworkOperation,
+              consumeNetworkOperation: preparedRun?.consumeNetworkOperation
+                ? (currentAuthority) => {
+                    if (
+                      preparedRun.consumeNetworkOperation?.(
+                        currentAuthority,
+                      ) !== true
+                    ) {
+                      return false;
+                    }
+                    try {
+                      tree?.ledger.consumeUsage({
+                        tokens: 0,
+                        toolCalls: 0,
+                        outputChars: 0,
+                        turns: 0,
+                        networkOperations: 1,
+                      });
+                      return true;
+                    } catch (error) {
+                      this.treeBudgetExhausted = true;
+                      abortExecution(
+                        "interrupted",
+                        error instanceof Error
+                          ? error
+                          : new Error("Subagent tree budget exhausted."),
+                      );
+                      return false;
+                    }
+                  }
+                : undefined,
               prepareOutboundApproval: preparedRun?.prepareOutboundApproval,
               prepareWorkspaceWriteApproval:
                 preparedRun?.prepareWorkspaceWriteApproval,
@@ -1046,14 +1187,34 @@ export class SubagentSupervisor {
               telemetry: {
                 starting: () => this.input.projector?.starting(identity.runId),
                 running: () => this.input.projector?.running(identity.runId),
-                turnStarted: () =>
-                  this.input.projector?.turnStarted(identity.runId),
+                turnStarted: () => {
+                  try {
+                    tree?.ledger.consumeUsage({
+                      tokens: 0,
+                      toolCalls: 0,
+                      outputChars: 0,
+                      turns: 1,
+                      networkOperations: 0,
+                    });
+                  } catch (error) {
+                    this.treeBudgetExhausted = true;
+                    abortExecution(
+                      "interrupted",
+                      error instanceof Error
+                        ? error
+                        : new Error("Subagent tree budget exhausted."),
+                    );
+                  }
+                  this.input.projector?.turnStarted(identity.runId);
+                },
                 toolStarted: (toolName) => {
                   try {
                     tree?.ledger.consumeUsage({
                       tokens: 0,
                       toolCalls: 1,
                       outputChars: 0,
+                      turns: 0,
+                      networkOperations: 0,
                     });
                   } catch (error) {
                     this.treeBudgetExhausted = true;
@@ -1072,6 +1233,8 @@ export class SubagentSupervisor {
                       tokens: 0,
                       toolCalls: 0,
                       outputChars: delta.length,
+                      turns: 0,
+                      networkOperations: 0,
                     });
                   } catch (error) {
                     this.treeBudgetExhausted = true;
@@ -1084,12 +1247,71 @@ export class SubagentSupervisor {
                   }
                   this.input.projector?.textDelta(identity.runId, delta);
                 },
+                textReconciled: (additionalChars) => {
+                  try {
+                    tree?.ledger.consumeUsage({
+                      tokens: 0,
+                      toolCalls: 0,
+                      outputChars: additionalChars,
+                      turns: 0,
+                      networkOperations: 0,
+                    });
+                  } catch (error) {
+                    this.treeBudgetExhausted = true;
+                    abortExecution(
+                      "interrupted",
+                      error instanceof Error
+                        ? error
+                        : new Error("Subagent tree budget exhausted."),
+                    );
+                  }
+                },
+                protocolDelta: (additionalChars) => {
+                  try {
+                    tree?.ledger.consumeUsage({
+                      tokens: 0,
+                      toolCalls: 0,
+                      outputChars: additionalChars,
+                      turns: 0,
+                      networkOperations: 0,
+                    });
+                  } catch (error) {
+                    this.treeBudgetExhausted = true;
+                    abortExecution(
+                      "interrupted",
+                      error instanceof Error
+                        ? error
+                        : new Error("Subagent tree budget exhausted."),
+                    );
+                  }
+                },
+                protocolReconciled: (additionalChars) => {
+                  try {
+                    tree?.ledger.consumeUsage({
+                      tokens: 0,
+                      toolCalls: 0,
+                      outputChars: additionalChars,
+                      turns: 0,
+                      networkOperations: 0,
+                    });
+                  } catch (error) {
+                    this.treeBudgetExhausted = true;
+                    abortExecution(
+                      "interrupted",
+                      error instanceof Error
+                        ? error
+                        : new Error("Subagent tree budget exhausted."),
+                    );
+                  }
+                },
                 usage: (message) => {
                   try {
                     tree?.ledger.consumeUsage({
                       tokens: reportedTokens(message.usage)?.total ?? 0,
                       toolCalls: 0,
                       outputChars: 0,
+                      turns: 0,
+                      networkOperations: 0,
                     });
                   } catch (error) {
                     this.treeBudgetExhausted = true;
@@ -1227,11 +1449,23 @@ export class SubagentSupervisor {
           Math.min(
             ...authorities.map(({ budgets }) => budgets.maxOutputChars),
           ) - this.v2OutputCharsUsed;
+        const remainingTurns =
+          Math.min(...authorities.map(({ budgets }) => budgets.maxTurns)) -
+          this.v2TurnsUsed;
+        const remainingNetworkOperations =
+          Math.min(
+            ...authorities.map(({ budgets }) => budgets.maxNetworkOperations),
+          ) - this.v2NetworkOperationsUsed;
+        const needsNetworkOperations = authorities.some(
+          ({ capabilities }) => capabilities.web || capabilities.mcp.length > 0,
+        );
         if (
           remainingLaunches < request.tasks.length ||
           remainingTokens < 1 ||
           remainingToolCalls < 1 ||
-          remainingOutputChars < 1
+          remainingOutputChars < 1 ||
+          remainingTurns < 1 ||
+          (needsNetworkOperations && remainingNetworkOperations < 1)
         ) {
           throw new Error("Subagent generation tree budget exhausted.");
         }
@@ -1246,6 +1480,8 @@ export class SubagentSupervisor {
           ),
           maxTokens: remainingTokens,
           maxToolCalls: remainingToolCalls,
+          maxTurns: remainingTurns,
+          maxNetworkOperations: Math.max(1, remainingNetworkOperations),
           maxWallTimeMs: Math.max(1, Math.floor(remainingTreeMs)),
           maxOutputChars: remainingOutputChars,
         });
@@ -1269,6 +1505,7 @@ export class SubagentSupervisor {
                 this.input.runtime.provider.deployment === "local"
                   ? "local"
                   : "hosted",
+              cancelledResult: safeInterruptedResult(task),
               execute: (lease) =>
                 runPreparedTask(task, index, {
                   node: nodes[index]!,
@@ -1283,6 +1520,8 @@ export class SubagentSupervisor {
           this.v2TokensUsed += usage.tokens;
           this.v2ToolCallsUsed += usage.toolCalls;
           this.v2OutputCharsUsed += usage.outputChars;
+          this.v2TurnsUsed += usage.turns;
+          this.v2NetworkOperationsUsed += usage.networkOperations;
           treeScheduler = undefined;
         }
       } else {
