@@ -45,7 +45,10 @@ import {
 import { sanitizeSubagentText } from "./safe-text.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
-import { isSafeSubagentIdentifier } from "../../../renderer/shared/subagent-runs.js";
+import {
+  isSafeSubagentIdentifier,
+  parseSubagentRunSnapshotV1,
+} from "../../../renderer/shared/subagent-runs.js";
 import {
   createSubagentAuthorityV2,
   type SubagentAuthorityV2,
@@ -528,6 +531,97 @@ test("supervisor records only canonical non-interrupted terminal outcomes", asyn
 
   assert.deepEqual(health.terminals, ["completed", "failed", "timed_out"]);
   assert.equal(health.cleanupFailures, 0);
+});
+
+test("projection failures cannot publish a false terminal health outcome", async () => {
+  const health = healthProbe();
+  const projector = new SubagentEventProjector({
+    generationId: "projection-health-failure",
+    ...TEST_SUPERVISOR_SCOPE,
+    modelId: runtime().model.id,
+  });
+  projector.finish = () => {
+    throw new Error("Synthetic projection failure.");
+  };
+  const supervisor = new SubagentSupervisor({
+    generationId: "projection-health-failure",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    healthMetrics: health.sink,
+    runChild: async ({ request: task }) => completed(task.label),
+  });
+
+  await assert.rejects(
+    supervisor.execute(request(["Projection failure"])),
+    /Synthetic projection failure/u,
+  );
+  assert.deepEqual(health.terminals, []);
+});
+
+test("supervisor settles long reports and multiline provider failures without projection errors", async () => {
+  const health = healthProbe();
+  const projector = new SubagentEventProjector({
+    generationId: "projection-boundaries",
+    ...TEST_SUPERVISOR_SCOPE,
+    modelId: runtime().model.id,
+  });
+  const supervisor = new SubagentSupervisor({
+    generationId: "projection-boundaries",
+    ...TEST_SUPERVISOR_SCOPE,
+    runtime: runtime(),
+    thinkingLevel: "high",
+    workspaceRoot: "/workspace",
+    permission: "full",
+    inheritedCeiling: SUBAGENT_READ_TOOL_NAMES,
+    projector,
+    healthMetrics: health.sink,
+    runChild: async ({ request: task }) =>
+      task.label === "Long report"
+        ? completed(task.label, "Evidence-backed review. ".repeat(600))
+        : {
+            role: task.role,
+            label: task.label,
+            status: "failed",
+            summary: "",
+            warning: "Provider request failed.\nPlease retry the request.",
+          },
+  });
+
+  const result = await supervisor.execute({
+    tasks: [
+      {
+        role: "scout",
+        label: "Long report",
+        task: "Review the workspace implementation for correctness and maintainability. ".repeat(
+          5,
+        ),
+      },
+      {
+        role: "scout",
+        label: "Provider failure",
+        task: "Inspect the provider failure boundary.",
+      },
+    ],
+  });
+
+  assert.match(result, /## 1\. Long report[\s\S]*Status: completed/u);
+  assert.match(result, /## 2\. Provider failure[\s\S]*Status: failed/u);
+  assert.doesNotMatch(result, /Invalid renderer-safe subagent snapshot/u);
+  const snapshots = projector.snapshot();
+  assert.deepEqual(
+    snapshots.map(({ state }) => state),
+    ["completed", "failed"],
+  );
+  assert.ok(
+    snapshots.every((snapshot) => parseSubagentRunSnapshotV1(snapshot)),
+  );
+  assert.doesNotMatch(snapshots[1]?.error ?? "", /[\r\n]/u);
+  assert.deepEqual(health.terminals, ["completed", "failed"]);
 });
 
 test("supervisor runs siblings in parallel but returns deterministic request order", async () => {

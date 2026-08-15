@@ -314,6 +314,7 @@ export class SubagentSupervisor {
     input: RunSubagentChildInput,
   ) => Promise<SubagentTaskResult>;
   private readonly randomUUID: () => string;
+  private readonly terminalHealthRuns = new Set<string>();
 
   constructor(private readonly input: SubagentSupervisorInput) {
     this.now = input.now ?? (() => performance.now());
@@ -364,15 +365,16 @@ export class SubagentSupervisor {
   }
 
   private finishRun(runId: string, result: SubagentTaskResult): void {
-    try {
-      this.input.projector?.finish(runId, result);
-    } finally {
-      if (result.status !== "interrupted") {
-        try {
-          this.input.healthMetrics?.terminal(result.status);
-        } catch {
-          // Aggregate health evidence cannot affect the tool result.
-        }
+    this.input.projector?.finish(runId, result);
+    if (
+      result.status !== "interrupted" &&
+      !this.terminalHealthRuns.has(runId)
+    ) {
+      this.terminalHealthRuns.add(runId);
+      try {
+        this.input.healthMetrics?.terminal(result.status);
+      } catch {
+        // Aggregate health evidence cannot affect the tool result.
       }
     }
   }
