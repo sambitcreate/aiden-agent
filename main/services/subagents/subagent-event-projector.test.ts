@@ -166,6 +166,115 @@ test("projector emits only bounded safe lifecycle snapshots with monotonic revis
   assert.ok(emitted.every((snapshot) => parseSubagentRunSnapshotV1(snapshot)));
 });
 
+test("long task previews remain renderer-safe after privacy-sensitive truncation", () => {
+  const projector = new SubagentEventProjector({
+    generationId: "generation-long-preview",
+    chatId: "chat-long-preview",
+    workspaceId: "workspace-long-preview",
+    modelId: "model-long-preview",
+    now: () => 1,
+  });
+  const task =
+    "Review the workspace implementation for correctness architecture performance and maintainability. ".repeat(
+      3,
+    );
+
+  projector.begin(
+    {
+      runId: "run-long-preview",
+      groupId: "generation-long-preview:group-1",
+      childId: "child-long-preview",
+    },
+    { role: "reviewer", label: "Review implementation", task },
+  );
+
+  const snapshot = projector.snapshot()[0]!;
+  assert.ok(parseSubagentRunSnapshotV1(snapshot));
+  assert.ok(snapshot.taskPreview.length <= 240);
+  assert.equal(
+    sanitizeSubagentSnapshotText(snapshot.taskPreview),
+    snapshot.taskPreview,
+  );
+});
+
+test("multiline provider failures produce valid single-line warnings and errors", () => {
+  let now = 10;
+  const projector = new SubagentEventProjector({
+    generationId: "generation-provider-error",
+    chatId: "chat-provider-error",
+    workspaceId: "workspace-provider-error",
+    modelId: "model-provider-error",
+    now: () => now,
+  });
+  projector.begin(
+    {
+      runId: "run-provider-error",
+      groupId: "generation-provider-error:group-1",
+      childId: "child-provider-error",
+    },
+    { role: "reviewer", label: "Review implementation", task: "Review the workspace." },
+  );
+  now += 1;
+
+  projector.finish("run-provider-error", {
+    role: "reviewer",
+    label: "Review implementation",
+    status: "failed",
+    summary: "",
+    warning:
+      "Provider request failed.\nRetry after checking /Users/example/private and token=secret-value-here.",
+  });
+
+  const snapshot = projector.snapshot()[0]!;
+  assert.ok(parseSubagentRunSnapshotV1(snapshot));
+  assert.equal(snapshot.state, "failed");
+  assert.doesNotMatch(snapshot.error ?? "", /[\r\n]/u);
+  assert.doesNotMatch(snapshot.warnings[0] ?? "", /[\r\n]/u);
+  assert.match(snapshot.error ?? "", /\[REDACTED/u);
+  assert.match(snapshot.terminalMarkdown ?? "", /\n/u);
+  assert.match(snapshot.terminalMarkdown ?? "", /\[REDACTED/u);
+});
+
+test("long terminal summaries remain renderer-safe after both display cuts", () => {
+  let now = 20;
+  const projector = new SubagentEventProjector({
+    generationId: "generation-long-summary",
+    chatId: "chat-long-summary",
+    workspaceId: "workspace-long-summary",
+    modelId: "model-long-summary",
+    now: () => now,
+  });
+  projector.begin(
+    {
+      runId: "run-long-summary",
+      groupId: "generation-long-summary:group-1",
+      childId: "child-long-summary",
+    },
+    { role: "reviewer", label: "Review implementation", task: "Review the workspace." },
+  );
+  now += 1;
+  projector.finish("run-long-summary", {
+    role: "reviewer",
+    label: "Review implementation",
+    status: "completed",
+    summary: "Evidence-backed review. ".repeat(600),
+  });
+
+  const snapshot = projector.snapshot()[0]!;
+  assert.ok(parseSubagentRunSnapshotV1(snapshot));
+  assert.equal(snapshot.state, "completed");
+  assert.ok((snapshot.latestText?.length ?? 0) <= 2_000);
+  assert.ok((snapshot.terminalMarkdown?.length ?? 0) <= 12_000);
+  assert.equal(
+    sanitizeSubagentSnapshotText(snapshot.latestText ?? ""),
+    snapshot.latestText,
+  );
+  assert.equal(
+    sanitizeSubagentSnapshotText(snapshot.terminalMarkdown ?? ""),
+    snapshot.terminalMarkdown,
+  );
+});
+
 test("snapshot parser rejects raw secrets, absolute paths, unknown fields, and invalid terminal state", () => {
   let now = 5;
   const projector = new SubagentEventProjector({
