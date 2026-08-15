@@ -25,6 +25,10 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import { projectMessagesForModel } from "./generation-context.js";
+import {
+  AIDEN_CHAT_MESSAGE_MARKER,
+  AIDEN_PI_TRANSACTION,
+} from "./pi-compaction-session-store.js";
 
 export type PiCompactionReason = "threshold" | "overflow";
 
@@ -500,7 +504,19 @@ export class PiCompactionCoordinator {
   ): Promise<{ ok: true } | { ok: false; errorMessage: string }> {
     try {
       const branch = await this.options.session.getBranch();
-      const entry = branch[branch.length - 1];
+      let entryIndex = branch.length - 1;
+      while (entryIndex >= 0) {
+        const candidate = branch[entryIndex];
+        if (
+          candidate?.type !== "custom" ||
+          (candidate.customType !== AIDEN_PI_TRANSACTION &&
+            candidate.customType !== AIDEN_CHAT_MESSAGE_MARKER)
+        ) {
+          break;
+        }
+        entryIndex -= 1;
+      }
+      const entry = branch[entryIndex];
       if (
         entry?.type !== "message" ||
         entry.message.role !== "assistant" ||
@@ -515,7 +531,45 @@ export class PiCompactionCoordinator {
             "Automatic retry could not isolate the failed model attempt safely.",
         };
       }
-      await this.options.session.moveTo(entry.parentId);
+      let rollbackTarget = entry.parentId;
+      const transactionBegin = branch.find(
+        (candidate) => candidate.id === entry.parentId,
+      );
+      if (
+        transactionBegin?.type === "custom" &&
+        transactionBegin.customType === AIDEN_PI_TRANSACTION &&
+        transactionBegin.data &&
+        typeof transactionBegin.data === "object"
+      ) {
+        const begin = transactionBegin.data as {
+          transactionId?: unknown;
+          phase?: unknown;
+        };
+        const hasMatchingCommit = branch
+          .slice(entryIndex + 1)
+          .some((candidate) => {
+            if (
+              candidate.type !== "custom" ||
+              candidate.customType !== AIDEN_PI_TRANSACTION ||
+              !candidate.data ||
+              typeof candidate.data !== "object"
+            ) {
+              return false;
+            }
+            const marker = candidate.data as {
+              transactionId?: unknown;
+              phase?: unknown;
+            };
+            return (
+              begin.phase === "begin" &&
+              typeof begin.transactionId === "string" &&
+              marker.phase === "commit" &&
+              marker.transactionId === begin.transactionId
+            );
+          });
+        if (hasMatchingCommit) rollbackTarget = transactionBegin.parentId;
+      }
+      await this.options.session.moveTo(rollbackTarget);
       return { ok: true };
     } catch (error) {
       return {

@@ -198,7 +198,7 @@ test("overflow compacts and retries at most once", async () => {
     stopReason: "error",
     errorMessage: "Request exceeds the context window.",
   });
-  await session.appendMessage(firstOverflow);
+  await appendPiMessages(session, [firstOverflow]);
   const events: PiCompactionEvent[] = [];
   const coordinator = new PiCompactionCoordinator({
     session,
@@ -212,6 +212,14 @@ test("overflow compacts and retries at most once", async () => {
   const first = await coordinator.check(firstOverflow);
   assert.equal(first.compacted, true);
   assert.equal(first.shouldRetry, true);
+  assert.equal(
+    (await session.getBranch()).some(
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === AIDEN_PI_TRANSACTION,
+    ),
+    false,
+  );
   assert.equal(
     (await session.buildContext()).messages.some(
       (message) =>
@@ -305,7 +313,7 @@ test("transient provider failures are durably abandoned and retried only once", 
     stopReason: "error",
     errorMessage: "503 service unavailable",
   });
-  await session.appendMessage(firstFailure);
+  await appendPiMessages(session, [firstFailure]);
   const coordinator = new PiCompactionCoordinator({
     session,
     models,
@@ -331,7 +339,7 @@ test("transient provider failures are durably abandoned and retried only once", 
     errorMessage: "network error: connection reset",
     timestamp: firstFailure.timestamp + 1,
   });
-  await session.appendMessage(secondFailure);
+  await appendPiMessages(session, [secondFailure]);
   const second = await coordinator.check(secondFailure);
   assert.equal(second.shouldRetry, false);
   assert.match(second.errorMessage ?? "", /after one automatic retry/iu);
