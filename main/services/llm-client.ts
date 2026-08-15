@@ -28,6 +28,7 @@ import {
 } from "./skill-registry.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
+  assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
   reconcileTerminalAssistantProjection,
   resolveGenerationThinkingLevel,
@@ -1057,6 +1058,7 @@ export const llmClient = {
     let reasoning = "";
     let errored: string | null = null;
     let aborted = false;
+    let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
     let pendingPiMessages: AgentMessage[] = [];
@@ -1550,6 +1552,7 @@ export const llmClient = {
         switch (event.type) {
           case "message_start":
             if (event.message.role === "assistant") {
+              currentAssistantTurnHadVisibleText = false;
               currentAssistantTurnHadReasoningDelta = false;
               currentAssistantTurnStart = {
                 full: full.length,
@@ -1568,11 +1571,18 @@ export const llmClient = {
               noteModelBecameReady();
             } else if (e.type === "thinking_end") timeline.thinkingEnded();
             if (e.type === "text_delta") {
-              full += e.delta;
+              const separator =
+                !currentAssistantTurnHadVisibleText
+                  ? assistantTurnTextSeparator(full, e.delta)
+                  : "";
+              const delta = `${separator}${e.delta}`;
+              full += delta;
+              if (e.delta.trim()) currentAssistantTurnHadVisibleText = true;
+              timeline.setContentOffset(full.length);
               noteModelBecameReady();
               sendGeneration(streamId, "chat:delta", {
                 streamId,
-                delta: e.delta,
+                delta,
               });
             } else if (e.type === "thinking_delta" && exposeReasoning) {
               const separator =
@@ -1639,6 +1649,10 @@ export const llmClient = {
                 });
               }
             }
+            timeline.reconcileContentOffset(
+              currentAssistantTurnStart.full,
+              full.length,
+            );
             break;
           }
           case "tool_execution_start":
@@ -1862,6 +1876,7 @@ export const llmClient = {
         if (!result.shouldRetry) return;
         full = full.slice(0, fullLengthBeforeAttempt);
         reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
+        timeline.rewindContentOffset(full.length);
         errored = null;
         aborted = false;
         sendGeneration(streamId, "chat:delta", {

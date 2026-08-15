@@ -6,7 +6,7 @@ import type { AgentToolStep, GenerationTimeline } from "./generation-timeline.js
 
 function timeline(toolName: string, status: AgentToolStep["status"]): GenerationTimeline {
   return {
-    version: 2,
+    version: 3,
     generationId: "generation-1",
     status: "completed",
     startedAt: 1,
@@ -23,6 +23,7 @@ function timeline(toolName: string, status: AgentToolStep["status"]): Generation
         startedAt: 1,
         updatedAt: 2,
         finishedAt: 2,
+        contentOffset: 0,
       },
     ],
   };

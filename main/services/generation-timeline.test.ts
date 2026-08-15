@@ -60,6 +60,7 @@ test("binds approval and denial to the existing tool step", () => {
     startedAt: projector.snapshot().steps[0]?.startedAt,
     updatedAt: projector.snapshot().steps[0]?.updatedAt,
     finishedAt: projector.snapshot().steps[0]?.finishedAt,
+    contentOffset: 0,
     target: "renderer/app.tsx",
   });
 });
@@ -232,7 +233,45 @@ test("reasoning steps replay only from the current version", () => {
   );
 });
 
-test("version 1 timelines still replay as the current version", () => {
+test("anchors activity to assistant text and groups parallel calls at one boundary", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.setContentOffset(7);
+  projector.toolStarted("call-a", "read_file", { path: "a.ts" });
+  projector.toolStarted("call-b", "grep", { pattern: "export" });
+  projector.setContentOffset(15);
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  projector.toolStarted("call-c", "subagent", {});
+
+  assert.deepEqual(
+    projector.snapshot().steps.map((step) => step.contentOffset),
+    [7, 7, 15, 15],
+  );
+});
+
+test("terminal reconciliation and retry rewind keep future offsets monotonic", () => {
+  const snapshots: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (timeline) =>
+    snapshots.push(timeline),
+  );
+  projector.setContentOffset(20);
+  projector.thinkingStarted();
+  projector.thinkingEnded();
+  projector.reconcileContentOffset(10, 15);
+  projector.toolStarted("after-terminal", "read_file", {});
+  projector.setContentOffset(30);
+  projector.toolStarted("failed-attempt", "grep", {});
+  projector.rewindContentOffset(15);
+  projector.toolStarted("retry", "edit_file", {});
+
+  assert.deepEqual(
+    projector.snapshot().steps.map((step) => step.contentOffset),
+    [15, 15, 15, 15],
+  );
+  assert.ok(snapshots.length > 0);
+});
+
+test("version 1 timelines replay without pretending to have presentation offsets", () => {
   const legacy = {
     version: 1,
     generationId: "generation-1",
@@ -257,9 +296,33 @@ test("version 1 timelines still replay as the current version", () => {
   };
 
   const parsed = parseGenerationTimeline(legacy);
-  assert.equal(parsed?.version, 2);
+  assert.equal(parsed?.version, 1);
   assert.equal(parsed?.steps.length, 1);
   assert.equal(toolSteps(parsed as GenerationTimeline)[0]?.target, "README.md");
+});
+
+test("version 2 reasoning timelines replay without presentation offsets", () => {
+  const legacy = {
+    version: 2,
+    generationId: "generation-1",
+    status: "completed",
+    startedAt: 100,
+    finishedAt: 200,
+    steps: [
+      {
+        id: "think-1",
+        order: 0,
+        kind: "thinking",
+        startedAt: 100,
+        updatedAt: 150,
+        finishedAt: 150,
+        durationMs: 50,
+      },
+    ],
+  };
+  const parsed = parseGenerationTimeline(legacy);
+  assert.equal(parsed?.version, 2);
+  assert.equal(parsed?.steps[0]?.contentOffset, undefined);
 });
 
 test("compaction is a renderer-safe bounded activity milestone", () => {
@@ -319,6 +382,13 @@ test("validates persisted timelines and rejects unsafe replay data", () => {
     parseGenerationTimeline({
       ...final,
       claimCheck: { kind: "unverified_success", stepIds: ["tool-404"] },
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseGenerationTimeline({
+      ...final,
+      steps: [{ ...final.steps[0], contentOffset: -1 }],
     }),
     undefined,
   );

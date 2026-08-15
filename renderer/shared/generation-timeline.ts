@@ -1,7 +1,7 @@
-export const GENERATION_TIMELINE_VERSION = 2 as const;
+export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
-const REPLAYABLE_VERSIONS = new Set([1, GENERATION_TIMELINE_VERSION]);
+const REPLAYABLE_VERSIONS = new Set([1, 2, GENERATION_TIMELINE_VERSION]);
 
 export type AgentStepStatus =
   | "pending"
@@ -23,6 +23,8 @@ export interface AgentToolStep {
   startedAt: number;
   updatedAt: number;
   finishedAt?: number;
+  /** UTF-16 offset into the visible assistant text when this activity began. */
+  contentOffset?: number;
   /** A workspace-relative file or directory. Never raw file contents or commands. */
   target?: string;
   /**
@@ -41,6 +43,8 @@ export interface AgentThinkingStep {
   startedAt: number;
   updatedAt: number;
   finishedAt?: number;
+  /** UTF-16 offset into the visible assistant text when this activity began. */
+  contentOffset?: number;
   /** Wall-clock reasoning time measured by the host; pi reports no duration. */
   durationMs?: number;
 }
@@ -56,7 +60,8 @@ export interface GenerationClaimCheck {
 }
 
 export interface GenerationTimeline {
-  version: typeof GENERATION_TIMELINE_VERSION;
+  /** Preserve legacy versions on replay; only newly projected timelines use v3. */
+  version: 1 | 2 | typeof GENERATION_TIMELINE_VERSION;
   generationId: string;
   status: GenerationTimelineStatus;
   startedAt: number;
@@ -125,7 +130,11 @@ function safeStoredDetail(value: unknown): value is string {
   );
 }
 
-function parseToolStep(step: Record<string, unknown>, index: number): AgentToolStep | undefined {
+function parseToolStep(
+  step: Record<string, unknown>,
+  index: number,
+  contentOffset?: number,
+): AgentToolStep | undefined {
   if (
     typeof step.id !== "string" ||
     !/^tool-[1-9]\d*$/u.test(step.id) ||
@@ -155,6 +164,7 @@ function parseToolStep(step: Record<string, unknown>, index: number): AgentToolS
     startedAt: step.startedAt as number,
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
+    ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.target === undefined ? {} : { target: step.target as string }),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
   };
@@ -163,6 +173,7 @@ function parseToolStep(step: Record<string, unknown>, index: number): AgentToolS
 function parseThinkingStep(
   step: Record<string, unknown>,
   index: number,
+  contentOffset?: number,
 ): AgentThinkingStep | undefined {
   if (
     typeof step.id !== "string" ||
@@ -178,12 +189,16 @@ function parseThinkingStep(
     startedAt: step.startedAt as number,
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
+    ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.durationMs === undefined ? {} : { durationMs: step.durationMs as number }),
   };
 }
 
 /** Validate the renderer-safe subset before replaying a timeline from local chat storage. */
-export function parseGenerationTimeline(value: unknown): GenerationTimeline | undefined {
+export function parseGenerationTimeline(
+  value: unknown,
+  contentLength?: number,
+): GenerationTimeline | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
   if (
@@ -204,6 +219,7 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
   }
 
   const steps: AgentStep[] = [];
+  let previousContentOffset = 0;
   for (const [index, rawStep] of candidate.steps.entries()) {
     if (!rawStep || typeof rawStep !== "object") return undefined;
     const step = rawStep as Record<string, unknown>;
@@ -215,12 +231,23 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
     ) {
       return undefined;
     }
-    // Version 1 predates reasoning steps, so it may only contain tool steps.
+    const contentOffset =
+      candidate.version === GENERATION_TIMELINE_VERSION ? step.contentOffset : undefined;
+    if (
+      candidate.version === GENERATION_TIMELINE_VERSION &&
+      (!Number.isSafeInteger(contentOffset) ||
+        (contentOffset as number) < previousContentOffset ||
+        (contentLength !== undefined && (contentOffset as number) > contentLength))
+    ) {
+      return undefined;
+    }
+    if (contentOffset !== undefined) previousContentOffset = contentOffset as number;
+    // Version 1 predates reasoning steps. Version 2 predates text offsets.
     const parsed =
       step.kind === "tool"
-        ? parseToolStep(step, index)
-        : step.kind === "thinking" && candidate.version === GENERATION_TIMELINE_VERSION
-          ? parseThinkingStep(step, index)
+        ? parseToolStep(step, index, contentOffset as number | undefined)
+        : step.kind === "thinking" && candidate.version !== 1
+          ? parseThinkingStep(step, index, contentOffset as number | undefined)
           : undefined;
     if (!parsed) return undefined;
     steps.push(parsed);
@@ -259,7 +286,7 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
   }
 
   return {
-    version: GENERATION_TIMELINE_VERSION,
+    version: candidate.version as GenerationTimeline["version"],
     generationId: candidate.generationId,
     status: candidate.status as GenerationTimelineStatus,
     startedAt: candidate.startedAt,

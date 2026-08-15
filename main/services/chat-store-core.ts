@@ -402,7 +402,7 @@ export function createChatStore(
           : undefined,
       timeline:
         message.role === "assistant"
-          ? parseGenerationTimeline(message.timeline)
+          ? parseGenerationTimeline(message.timeline, message.content.length)
           : undefined,
       subagents:
         message.role === "assistant"
@@ -850,7 +850,7 @@ export function createChatStore(
               : undefined,
           timeline:
             message.role === "assistant"
-              ? parseGenerationTimeline(message.timeline)
+              ? parseGenerationTimeline(message.timeline, message.content.length)
               : undefined,
           subagents:
             message.role === "assistant"

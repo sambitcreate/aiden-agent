@@ -35,7 +35,7 @@ function timeline(
   extra: Partial<GenerationTimeline> = {},
 ): GenerationTimeline {
   return {
-    version: 2,
+    version: 3,
     generationId: "generation-1",
     status,
     startedAt: 1,
@@ -137,11 +137,9 @@ test("the feed carries no outline of its own", () => {
 test("failed work is counted for review and states why", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed
-      timeline={timeline(
-        "completed",
-        [step(0, "read_file"), step(1, "run_command", "cancelled")],
-        { claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] } },
-      )}
+      timeline={timeline("completed", [step(0, "read_file"), step(1, "run_command", "cancelled")], {
+        claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] },
+      })}
     />,
   );
   assert.match(markup, />1 issue</u);

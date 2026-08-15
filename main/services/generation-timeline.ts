@@ -126,6 +126,7 @@ export class GenerationTimelineProjector {
   private toolSequence = 0;
   private thinkingSequence = 0;
   private compactionSequence = 0;
+  private contentOffset = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
@@ -157,6 +158,7 @@ export class GenerationTimelineProjector {
       status: "pending",
       startedAt: timestamp,
       updatedAt: timestamp,
+      contentOffset: this.contentOffset,
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.detail ? { detail: descriptor.detail } : {}),
     };
@@ -174,7 +176,7 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || this.openThinking) return;
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
-    if (last && !isToolStep(last)) {
+    if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
       this.openThinking = { index: this.timeline.steps.length - 1, startedAt: timestamp };
       return;
     }
@@ -186,6 +188,7 @@ export class GenerationTimelineProjector {
       startedAt: timestamp,
       updatedAt: timestamp,
       durationMs: 0,
+      contentOffset: this.contentOffset,
     };
     this.openThinking = { index: this.timeline.steps.length, startedAt: timestamp };
     this.timeline.steps.push(step);
@@ -211,6 +214,54 @@ export class GenerationTimelineProjector {
     status: Extract<AgentStepStatus, "completed" | "failed" | "cancelled">,
   ): void {
     this.toolFinished(id, status);
+  }
+
+  /** Keep future activity anchored to the current visible assistant text. */
+  setContentOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    this.contentOffset = offset;
+  }
+
+  /**
+   * Terminal Pi content can replace a streamed assistant turn. Clamp activity
+   * that was observed beyond the canonical turn end before anchoring later work.
+   */
+  reconcileContentOffset(turnStart: number, turnEnd: number): void {
+    if (
+      !Number.isSafeInteger(turnStart) ||
+      turnStart < 0 ||
+      !Number.isSafeInteger(turnEnd) ||
+      turnEnd < turnStart
+    ) {
+      return;
+    }
+    let changed = false;
+    for (const step of this.timeline.steps) {
+      if (
+        step.contentOffset !== undefined &&
+        step.contentOffset >= turnStart &&
+        step.contentOffset > turnEnd
+      ) {
+        step.contentOffset = turnEnd;
+        changed = true;
+      }
+    }
+    this.contentOffset = turnEnd;
+    if (changed) this.emit();
+  }
+
+  /** Compact-and-retry removes failed prose but keeps its activity at the retry boundary. */
+  rewindContentOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    let changed = false;
+    for (const step of this.timeline.steps) {
+      if (step.contentOffset !== undefined && step.contentOffset > offset) {
+        step.contentOffset = offset;
+        changed = true;
+      }
+    }
+    this.contentOffset = offset;
+    if (changed) this.emit();
   }
 
   publicToolCallId(toolCallId: string): string | undefined {
