@@ -1,7 +1,7 @@
 /* global Buffer */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,12 +20,15 @@ import {
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
+  assertPackagedNodePtyHelperEntries,
+  assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
   assertHardenedRuntime,
   assertRegularFile,
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
+  verifyPackagedNodePtyResources,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
 
@@ -176,6 +179,78 @@ test("package verifier rejects directory, symlink, and unpacked catalog entries"
       unpack: "**/model-capabilities.json",
     });
     await assert.rejects(verifyPackagedModelCatalogResources(unpackedAsar), /packed regular file/u);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires unpacked executable node-pty helpers for both macOS architectures", async () => {
+  const expectedEntries = [
+    "/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+    "/node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
+  ];
+  assert.doesNotThrow(() => assertPackagedNodePtyHelperEntries(expectedEntries));
+  assert.throws(
+    () => assertPackagedNodePtyHelperEntries(expectedEntries.slice(0, 1)),
+    /missing node-pty spawn-helper entries.*darwin-x64/u,
+  );
+  assert.doesNotThrow(() => assertNodePtySpawnHelperMode(0o100755, "spawn-helper"));
+  assert.throws(
+    () => assertNodePtySpawnHelperMode(0o100644, "spawn-helper"),
+    /spawn-helper mode 0755/u,
+  );
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-node-pty-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const armHelper = path.join(
+    source,
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "darwin-arm64",
+    "spawn-helper",
+  );
+  const x64Helper = path.join(
+    source,
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "darwin-x64",
+    "spawn-helper",
+  );
+  const unpackedAsar = path.join(root, "unpacked.asar");
+  const packedAsar = path.join(root, "packed.asar");
+  try {
+    await Promise.all([
+      mkdir(path.dirname(armHelper), { recursive: true }),
+      mkdir(path.dirname(x64Helper), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(armHelper, "arm helper", { mode: 0o755 }),
+      writeFile(x64Helper, "x64 helper", { mode: 0o755 }),
+    ]);
+    await createPackageWithOptions(source, unpackedAsar, {
+      unpack: "**/node-pty/prebuilds/**/spawn-helper",
+    });
+    await assert.doesNotReject(verifyPackagedNodePtyResources(unpackedAsar));
+
+    const packagedX64Helper = path.join(
+      `${unpackedAsar}.unpacked`,
+      "node_modules",
+      "node-pty",
+      "prebuilds",
+      "darwin-x64",
+      "spawn-helper",
+    );
+    await chmod(packagedX64Helper, 0o644);
+    await assert.rejects(verifyPackagedNodePtyResources(unpackedAsar), /spawn-helper mode 0755/u);
+
+    await createPackage(source, packedAsar);
+    await assert.rejects(
+      verifyPackagedNodePtyResources(packedAsar),
+      /must be an unpacked regular file/u,
+    );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

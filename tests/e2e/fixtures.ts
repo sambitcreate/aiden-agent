@@ -20,6 +20,7 @@ export const E2E_MODEL_ID = "aiden-e2e-vision";
 export const E2E_MODEL_DISPLAY_NAME = "Aiden E2E Vision";
 export const E2E_PROFILE_NAME = "E2E Local User";
 export const E2E_ASSISTANT_RESPONSE = "Deterministic E2E response received.";
+export const E2E_WORKSPACE_ID = "aiden-e2e-workspace";
 export const LIVE_LM_STUDIO_ACCEPTANCE = process.env.AIDEN_E2E_LIVE_LMSTUDIO === "1";
 
 // Playwright's config loader currently resolves its test package through the
@@ -94,12 +95,14 @@ export type AidenE2e = {
   userDataDir: string;
   configDir: string;
   rootDir: string;
+  workspaceDir: string;
   lmStudio: LmStudioEndpoint;
   relaunch: () => Promise<Page>;
 };
 
 type AidenE2eOptions = {
   portableConfigSeed: PortableConfigSeed;
+  workspaceSeed: boolean;
 };
 
 type MockLmStudio = LmStudioEndpoint & {
@@ -301,6 +304,24 @@ async function seedPortableConfig(
     providerIdAliases: {},
     mcpServers: [],
     skills: [],
+  });
+}
+
+async function seedWorkspace(userDataDir: string, workspaceDir: string): Promise<void> {
+  const now = Date.now();
+  await writePrivateJson(path.join(userDataDir, "config.json"), {
+    workspaces: [
+      {
+        id: E2E_WORKSPACE_ID,
+        name: "Aiden E2E workspace",
+        folderPath: workspaceDir,
+        permission: "full",
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    seeded: true,
+    aidenDirMigratedAt: now,
   });
 }
 
@@ -547,7 +568,8 @@ function formatFailure(error: unknown): string {
 
 export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
   portableConfigSeed: ["lmstudio", { option: true }],
-  aiden: async ({ browserName: _browserName, portableConfigSeed }, use, testInfo) => {
+  workspaceSeed: [false, { option: true }],
+  aiden: async ({ browserName: _browserName, portableConfigSeed, workspaceSeed }, use, testInfo) => {
     let rootDir: string | undefined;
     let mock: MockLmStudio | undefined;
     let app: ElectronApplication | undefined;
@@ -562,6 +584,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
       const testXdgCacheDir = path.join(testRootDir, "xdg-cache");
       const testXdgConfigDir = path.join(testRootDir, "xdg-config");
       const testXdgDataDir = path.join(testRootDir, "xdg-data");
+      const testWorkspaceDir = path.join(testRootDir, "workspace");
       rootDir = testRootDir;
       await Promise.all([
         mkdir(testUserDataDir, { recursive: true, mode: 0o700 }),
@@ -569,7 +592,9 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         mkdir(testXdgCacheDir, { recursive: true, mode: 0o700 }),
         mkdir(testXdgConfigDir, { recursive: true, mode: 0o700 }),
         mkdir(testXdgDataDir, { recursive: true, mode: 0o700 }),
+        mkdir(testWorkspaceDir, { recursive: true, mode: 0o700 }),
       ]);
+      if (workspaceSeed) await seedWorkspace(testUserDataDir, testWorkspaceDir);
 
       mock = LIVE_LM_STUDIO_ACCEPTANCE ? undefined : await startMockLmStudio();
       const lmStudio: LmStudioEndpoint = mock ?? {
@@ -635,6 +660,7 @@ export const test = base.extend<AidenE2eOptions & { aiden: AidenE2e }>({
         userDataDir: testUserDataDir,
         configDir: testConfigDir,
         rootDir: testRootDir,
+        workspaceDir: testWorkspaceDir,
         lmStudio,
         relaunch: async () => {
           const previous = app;
