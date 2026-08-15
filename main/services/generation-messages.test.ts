@@ -8,6 +8,7 @@ import {
   toPiMessages,
 } from "./generation-messages.js";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
+import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -157,6 +158,27 @@ test("journal rehydration preserves canonical mixed-provider Pi provenance", () 
     message.role === "assistant" ? message.model : "",
     "claude-historical",
   );
+});
+
+test("stored Pi provenance rejects malformed nested provider protocol", () => {
+  const valid = {
+    role: "assistant", content: [{ type: "text", text: "answer" }],
+    api: "anthropic-messages", provider: "anthropic", model: "claude",
+    usage: {
+      input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop", timestamp: 10,
+  };
+  assert.deepEqual(parseStoredPiAssistantMessage(valid), valid);
+  for (const malformed of [
+    { ...valid, provider: "" },
+    { ...valid, content: [{ type: "image", data: "private" }] },
+    { ...valid, content: [{ type: "toolCall", id: "", name: "read", arguments: {} }] },
+    { ...valid, usage: {} },
+    { ...valid, usage: { ...valid.usage, input: Number.NaN } },
+    { ...valid, usage: { ...valid.usage, cost: { ...valid.usage.cost, total: -1 } } },
+  ]) assert.equal(parseStoredPiAssistantMessage(malformed), undefined);
 });
 
 test("an explicit invocation overrides only the exact in-memory current turn", () => {

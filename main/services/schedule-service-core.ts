@@ -405,8 +405,11 @@ export function createScheduleServiceCore(
         }
         const task = await store.setEnabled(id, false);
         if (options.signal?.aborted) {
-          const restored = await store.setEnabled(id, true);
-          await schedule(restored);
+          if (current) {
+            const restored = await store.setEnabled(id, current.enabled);
+            if (current.enabled) await schedule(restored);
+            else stopJob(id);
+          }
           throwIfAborted(options.signal, "pause");
         }
         dependencies.broadcast({ taskId: id });
@@ -419,16 +422,23 @@ export function createScheduleServiceCore(
       options: { signal?: AbortSignal } = {},
     ): Promise<ScheduledTask> {
       return withTaskLifecycle(id, async () => {
+        const current = await store.get(id);
         throwIfAborted(options.signal, "resume");
         const task = await store.setEnabled(id, true);
+        const restore = async () => {
+          if (!current) return;
+          const restored = await store.setEnabled(id, current.enabled);
+          if (current.enabled) await schedule(restored);
+          else stopJob(id);
+        };
         if (options.signal?.aborted) {
-          await store.setEnabled(id, false);
+          await restore();
           throwIfAborted(options.signal, "resume");
         }
         await schedule(task);
         if (options.signal?.aborted) {
           stopJob(id);
-          await store.setEnabled(id, false);
+          await restore();
           throwIfAborted(options.signal, "resume");
         }
         dependencies.broadcast({ taskId: id });
