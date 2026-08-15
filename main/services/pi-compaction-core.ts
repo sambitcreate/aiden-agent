@@ -85,6 +85,23 @@ function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
   );
 }
 
+function validCompactionSummary(summary: string): boolean {
+  const structured = [
+    "Goal",
+    "Constraints & Preferences",
+    "Progress",
+    "Key Decisions",
+    "Next Steps",
+    "Critical Context",
+  ].every((heading) => new RegExp(`^## ${heading}`, "mu").test(summary));
+  const splitTurn = [
+    "Original Request",
+    "Early Progress",
+    "Context for Suffix",
+  ].every((heading) => new RegExp(`^## ${heading}`, "mu").test(summary));
+  return structured || splitTurn;
+}
+
 /** Large current-turn batches must be summarized before the next provider call. */
 export function needsImmediatePiCompaction(
   messages: readonly AgentMessage[],
@@ -417,6 +434,11 @@ export class PiCompactionCoordinator {
       if (!result.summary.trim()) {
         throw new Error("The compaction model returned an empty summary.");
       }
+      if (!validCompactionSummary(result.summary)) {
+        throw new Error(
+          "The compaction model returned a malformed summary without the required continuity sections.",
+        );
+      }
       await this.options.session.appendCompaction(
         result.summary,
         result.firstKeptEntryId,
@@ -476,20 +498,29 @@ export class PiCompactionCoordinator {
 /** Use Aiden's resolved, connection-bound transport for Pi's summary call. */
 export function createPiCompactionModels(
   runtime: ResolvedModelRuntime,
+  onAssistantMessage?: (message: AssistantMessage) => void | Promise<void>,
 ): Models {
   const models = createModels();
   const streamSimple: ProviderStreams["streamSimple"] = (
     model,
     context,
     options,
-  ) =>
-    runtime.streams.streamSimple(model, context, {
+  ) => {
+    const stream = runtime.streams.streamSimple(model, context, {
       ...options,
       apiKey: options?.apiKey ?? runtime.apiKey,
       headers: runtime.headers
         ? { ...options?.headers, ...runtime.headers }
         : options?.headers,
     });
+    if (onAssistantMessage) {
+      void stream
+        .result()
+        .then(onAssistantMessage)
+        .catch(() => undefined);
+    }
+    return stream;
+  };
   const streams: ProviderStreams = {
     stream: streamSimple as ProviderStreams["stream"],
     streamSimple,

@@ -46,6 +46,10 @@ const ZERO_COST = {
   total: 0,
 };
 
+function structuredSummary(label: string): string {
+  return `## Goal\n${label}\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] preserved state\n\n### In Progress\n- [ ] continue\n\n### Blocked\n- none\n\n## Key Decisions\n- preserve continuity\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- ${label}`;
+}
+
 async function memorySession(id = "compaction-test"): Promise<Session> {
   return new InMemorySessionRepo().create({ id });
 }
@@ -115,11 +119,7 @@ async function appendCompressibleHistory(
 
 test("Pi coordinator appends a native checkpoint and rebuilds from it", async () => {
   const { faux, models, model } = compactionFixture();
-  faux.setResponses([
-    fauxAssistantMessage(
-      "## Goal\nContinue.\n\n## Progress\nDone: preserved exact state.",
-    ),
-  ]);
+  faux.setResponses([fauxAssistantMessage(structuredSummary("Continue."))]);
   const session = await memorySession();
   const last = await appendCompressibleHistory(session, model);
   const before = await session.getEntries();
@@ -151,10 +151,10 @@ test("repeated compaction updates the previous Pi summary", async () => {
   const { faux, models, model } = compactionFixture();
   const summarySeen: boolean[] = [];
   faux.setResponses([
-    fauxAssistantMessage("first checkpoint"),
+    fauxAssistantMessage(structuredSummary("first checkpoint")),
     (context) => {
       summarySeen.push(JSON.stringify(context).includes("first checkpoint"));
-      return fauxAssistantMessage("updated checkpoint");
+      return fauxAssistantMessage(structuredSummary("updated checkpoint"));
     },
   ]);
   const session = await memorySession();
@@ -178,13 +178,15 @@ test("repeated compaction updates the previous Pi summary", async () => {
   assert.equal(compactions.length, 2);
   assert.equal(
     compactions[compactions.length - 1]?.summary,
-    "updated checkpoint",
+    structuredSummary("updated checkpoint"),
   );
 });
 
 test("overflow compacts and retries at most once", async () => {
   const { faux, models, model } = compactionFixture();
-  faux.setResponses([fauxAssistantMessage("overflow checkpoint")]);
+  faux.setResponses([
+    fauxAssistantMessage(structuredSummary("overflow checkpoint")),
+  ]);
   const session = await memorySession();
   await appendCompressibleHistory(session, model);
   const firstOverflow = assistant(model, {
@@ -255,7 +257,9 @@ test("overflow compacts and retries at most once", async () => {
 
 test("length-stop overflow is abandoned before retry context is rebuilt", async () => {
   const { faux, models, model } = compactionFixture();
-  faux.setResponses([fauxAssistantMessage("length checkpoint")]);
+  faux.setResponses([
+    fauxAssistantMessage(structuredSummary("length checkpoint")),
+  ]);
   const session = await memorySession();
   await appendCompressibleHistory(session, model);
   await session.appendMessage(user("current overflow request", Date.now() + 1));
@@ -383,9 +387,33 @@ test("an empty successful summary is rejected without hiding history", async () 
   assert.deepEqual(await session.getEntries(), before);
 });
 
+test("a malformed successful summary is rejected without hiding history", async () => {
+  const { faux, models, model } = compactionFixture();
+  faux.setResponses([
+    fauxAssistantMessage("A vague paragraph with no continuity structure."),
+  ]);
+  const session = await memorySession();
+  const last = await appendCompressibleHistory(session, model);
+  const before = await session.getEntries();
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+  });
+
+  const result = await coordinator.check(last);
+  assert.equal(result.compacted, false);
+  assert.match(result.errorMessage ?? "", /malformed summary/iu);
+  assert.deepEqual(await session.getEntries(), before);
+});
+
 test("pre-prompt pressure compacts zero-usage reconstructed history", async () => {
   const { faux, models, model } = compactionFixture();
-  faux.setResponses([fauxAssistantMessage("seeded checkpoint")]);
+  faux.setResponses([
+    fauxAssistantMessage(structuredSummary("seeded checkpoint")),
+  ]);
   const session = await memorySession();
   await session.appendMessage(user(`older-seeded-${"x".repeat(4_000)}`, 10));
   await session.appendMessage(

@@ -9,6 +9,7 @@ import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -188,6 +189,8 @@ export interface ChatMessage {
   model?: string;
   /** Deliberately exposed provider reasoning retained on an assistant message. */
   reasoning?: string;
+  /** Canonical Pi assistant protocol payload; diagnostics are deliberately excluded. */
+  pi?: Omit<AssistantMessage, "diagnostics">;
   /** Files attached to a user message. */
   attachments?: Attachment[];
   /** Safe display-only provenance for an explicitly invoked skill. */
@@ -209,11 +212,7 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "artificial-analysis"
-  | "models-dev"
-  | "fallback";
+  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
@@ -392,7 +391,8 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
+export type ChatTitleProviderId =
+  "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -531,6 +531,8 @@ export interface UsageTokenBreakdown {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Anthropic's one-hour cache writes, already included in cacheWrite. */
+  cacheWrite1h?: number;
   reasoning: number;
   total: number;
 }

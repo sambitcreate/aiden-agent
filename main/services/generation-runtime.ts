@@ -48,7 +48,7 @@ export function shouldExposeReasoning(providerId: string): boolean {
   );
 }
 
-/** Fail closed outside Aiden's native, reasoning-capable provider contracts. */
+/** Preserve provider-specific normalization while honoring every Pi reasoning model. */
 export function resolveGenerationThinkingLevel(
   providerId: string,
   model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
@@ -74,7 +74,15 @@ export function resolveGenerationThinkingLevel(
       ? requested
       : normalizeAnthropicThinkingLevel(levels, undefined);
   }
-  return "off";
+  if (!model.reasoning || !requested || requested === "off") return "off";
+  if (
+    model.thinkingLevelMap &&
+    (!(requested in model.thinkingLevelMap) ||
+      model.thinkingLevelMap[requested] === null)
+  ) {
+    return "off";
+  }
+  return requested;
 }
 
 /** The connection-bound runtime model is the sole request-time image authority. */

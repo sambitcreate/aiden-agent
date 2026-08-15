@@ -45,6 +45,7 @@ import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
+import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import type {
   ApprovalDecision,
@@ -1020,6 +1021,9 @@ export const llmClient = {
             content,
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
+            pi: lastAssistantMessage
+              ? storedPiAssistantMessage(lastAssistantMessage)
+              : undefined,
             timeline: finalTimeline.steps.length ? finalTimeline : undefined,
             subagents,
           },
@@ -1159,7 +1163,16 @@ export const llmClient = {
       };
       compaction = new PiCompactionCoordinator({
         session: piSession,
-        models: createPiCompactionModels(runtime),
+        models: createPiCompactionModels(runtime, (message) =>
+          usageStore.record(
+            assistantUsageRecord({
+              message,
+              provider: runtime.provider,
+              model,
+              source: "compaction",
+            }),
+          ),
+        ),
         model,
         thinkingLevel,
         signal: initialization.controller.signal,

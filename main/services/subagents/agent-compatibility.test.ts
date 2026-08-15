@@ -557,7 +557,9 @@ test("child semantically compacts oversized tool output before the next provider
   const respondAfterTool = async (context: unknown) => {
     const serialized = JSON.stringify(context);
     if (/context summarization assistant/u.test(serialized)) {
-      return fauxAssistantMessage("semantic history checkpoint");
+      return fauxAssistantMessage(
+        `## Original Request\nPreserve semantic history checkpoint\n\n## Early Progress\n- Tool completed\n\n## Context for Suffix\n- semantic history checkpoint`,
+      );
     }
     if (/Continue from the compacted checkpoint/u.test(serialized)) {
       continuationContext = serialized;
@@ -671,7 +673,9 @@ test("forked initial context is compacted before the first provider request", as
   });
   let firstContext = "";
   core.setResponses([
-    fauxAssistantMessage("semantic checkpoint"),
+    fauxAssistantMessage(
+      `## Goal\nsemantic checkpoint\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] preserved\n\n## Key Decisions\n- continue\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- semantic checkpoint`,
+    ),
     async (context) => {
       firstContext = JSON.stringify(context);
       return fauxAssistantMessage("bounded");

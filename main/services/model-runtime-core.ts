@@ -1,5 +1,15 @@
-import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
-import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
+import {
+  anthropicMessagesApi,
+  openAICompletionsApi,
+} from "@earendil-works/pi-ai/compat";
+import {
+  createModels,
+  createProvider,
+  type Api,
+  type Model,
+  type ProviderHeaders,
+  type ProviderStreams,
+} from "@earendil-works/pi-ai";
 import {
   OPENAI_CODEX_BASE_URL,
   OPENAI_CODEX_PROVIDER_ID,
@@ -32,7 +42,9 @@ function streamsFor(api: Api): ProviderStreams {
 }
 
 function apiFor(provider: StoredProvider): Api {
-  return provider.kind === "anthropic" ? "anthropic-messages" : "openai-completions";
+  return provider.kind === "anthropic"
+    ? "anthropic-messages"
+    : "openai-completions";
 }
 
 function buildModel(
@@ -70,9 +82,15 @@ export interface ResolvedModelRuntime {
 export interface ModelRuntimeDependencies {
   getProvider(providerId: string): Promise<StoredProvider | undefined>;
   getApiKey(provider: StoredProvider): Promise<string | null>;
-  resolveRuntimeLimits(provider: StoredProvider, modelId: string): Promise<RuntimeModelLimits>;
+  resolveRuntimeLimits(
+    provider: StoredProvider,
+    modelId: string,
+  ): Promise<RuntimeModelLimits>;
   codex: {
-    prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
+    prepareRuntimeModel(
+      modelId: string,
+      signal?: AbortSignal,
+    ): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
   };
   native: {
@@ -128,19 +146,46 @@ export async function resolveModelRuntimeWith(
     );
   }
 
-  const storedApiKey = provider.needsKey ? await dependencies.getApiKey(provider) : null;
+  const storedApiKey = provider.needsKey
+    ? await dependencies.getApiKey(provider)
+    : null;
   const apiKey = resolveRuntimeApiKey(provider, storedApiKey);
   if (provider.needsKey && !apiKey) {
-    throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
+    throw new Error(
+      `No API key set for ${provider.label}. Add one in Settings → Providers.`,
+    );
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
   const model = buildModel(provider, modelId, limits);
+  const headers = resolveRuntimeHeaders(provider);
+  const models = createModels();
+  models.setProvider(
+    createProvider<Api>({
+      id: provider.id,
+      name: provider.label,
+      baseUrl: model.baseUrl,
+      headers,
+      models: [model],
+      auth: {
+        apiKey: {
+          name: `${provider.label} runtime key`,
+          resolve: async () => ({
+            auth: { apiKey, headers },
+            source: "Aiden custom provider",
+          }),
+        },
+      },
+      api: streamsFor(model.api),
+    }),
+  );
   return {
     provider,
     model,
     apiKey,
-    headers: resolveRuntimeHeaders(provider),
-    streams: streamsFor(model.api),
+    headers,
+    // Custom endpoints now use the same Pi provider/auth/model composition as
+    // built-ins; the compat adapter is only the provider's API implementation.
+    streams: { streamSimple: models.streamSimple.bind(models) },
   };
 }

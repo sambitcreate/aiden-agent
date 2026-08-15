@@ -80,7 +80,11 @@ test("matches Pi's installed tool-result image serialization gate", () => {
     toolName: "computer_use",
     content: [
       { type: "text" as const, text: "capture" },
-      { type: "image" as const, data: "TOOL_IMAGE_SENTINEL", mimeType: "image/png" },
+      {
+        type: "image" as const,
+        data: "TOOL_IMAGE_SENTINEL",
+        mimeType: "image/png",
+      },
     ],
     details: null,
     isError: false,
@@ -109,6 +113,52 @@ test("journal rehydration preserves the authoritative chat timestamp", () => {
   assert.equal(message.timestamp, 123_456);
 });
 
+test("journal rehydration preserves canonical mixed-provider Pi provenance", () => {
+  const canonical = {
+    role: "assistant" as const,
+    content: [
+      { type: "thinking" as const, thinking: "Provider-authored thought" },
+      { type: "text" as const, text: "Historical answer" },
+    ],
+    api: "anthropic-messages" as const,
+    provider: "anthropic",
+    model: "claude-historical",
+    responseModel: "claude-historical-2026",
+    responseId: "response-historical",
+    usage: {
+      input: 10,
+      output: 4,
+      cacheRead: 2,
+      cacheWrite: 3,
+      cacheWrite1h: 1,
+      totalTokens: 19,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 456,
+  };
+  const message = chatMessageToPiMessage(
+    {
+      id: "message-provenance",
+      role: "assistant",
+      content: "Historical answer",
+      createdAt: 456,
+      pi: canonical,
+    },
+    model,
+    false,
+  );
+  assert.deepEqual(message, canonical);
+  assert.equal(
+    message.role === "assistant" ? message.provider : "",
+    "anthropic",
+  );
+  assert.equal(
+    message.role === "assistant" ? message.model : "",
+    "claude-historical",
+  );
+});
+
 test("an explicit invocation overrides only the exact in-memory current turn", () => {
   const persisted = {
     id: "message-2",
@@ -130,18 +180,24 @@ test("an explicit invocation overrides only the exact in-memory current turn", (
   assert.match(serialized, /PRIVATE_SKILL_INSTRUCTIONS/u);
   assert.equal(serialized.match(/Attached file: note\.txt/gu)?.length, 1);
   assert.equal(serialized.includes("IMAGE_SENTINEL"), true);
-  assert.ok(serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") < serialized.indexOf("note.txt"));
+  assert.ok(
+    serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") <
+      serialized.indexOf("note.txt"),
+  );
 });
 
 test("skill message text is rejected before aggregate attachment concatenation exceeds its budget", () => {
   assert.throws(
     () => chatUserTextWithAttachments("12345", undefined, 4),
     (error: unknown) =>
-      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+      error instanceof SkillInvocationError &&
+      error.code === "instructions_too_large",
   );
   assert.throws(
-    () => chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
+    () =>
+      chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
     (error: unknown) =>
-      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+      error instanceof SkillInvocationError &&
+      error.code === "instructions_too_large",
   );
 });

@@ -34,7 +34,7 @@ test("uses only the connection-bound runtime model as the image gate", () => {
   assert.equal(runtimeSupportsImages({ input: ["text", "image"] }), true);
 });
 
-test("native model thinking stays a small fail-closed runtime contract", () => {
+test("model thinking preserves native normalization and honors generic Pi reasoning", () => {
   assert.equal(
     resolveGenerationThinkingLevel("google", { reasoning: true }, "high"),
     "high",
@@ -49,6 +49,14 @@ test("native model thinking stays a small fail-closed runtime contract", () => {
   );
   assert.equal(
     resolveGenerationThinkingLevel("openai", { reasoning: true }, "high"),
+    "high",
+  );
+  assert.equal(
+    resolveGenerationThinkingLevel(
+      "bedrock",
+      { reasoning: true, thinkingLevelMap: { low: "low" } },
+      "high",
+    ),
     "off",
   );
   assert.equal(

@@ -87,6 +87,10 @@ interface RegisteredSubagentChild {
 export interface SubagentRuntimeRegistryOptions {
   appendPiMessages?: typeof appendPiMessages;
   onPiJournalError?: (error: unknown) => void;
+  recordCompactionUsage?: (
+    message: AssistantMessage,
+    runtime: ResolvedModelRuntime,
+  ) => void | Promise<void>;
 }
 
 function childIdentity(
@@ -127,6 +131,7 @@ export class SubagentRuntimeRegistry {
   private readonly concurrency: SubagentConcurrencyGate;
   private readonly appendSessionMessages: typeof appendPiMessages;
   private readonly onPiJournalError: (error: unknown) => void;
+  private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
   private shuttingDown = false;
 
   constructor(
@@ -151,6 +156,7 @@ export class SubagentRuntimeRegistry {
           error,
         ]);
       });
+    this.recordCompactionUsage = options.recordCompactionUsage;
   }
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
@@ -217,7 +223,9 @@ export class SubagentRuntimeRegistry {
       (session) =>
         new PiCompactionCoordinator({
           session,
-          models: createPiCompactionModels(spec.runtime),
+          models: createPiCompactionModels(spec.runtime, (message) =>
+            this.recordCompactionUsage?.(message, spec.runtime),
+          ),
           model: spec.runtime.model,
           thinkingLevel: spec.thinkingLevel,
           signal: cancellation.signal,
@@ -549,4 +557,23 @@ export class SubagentRuntimeRegistry {
   }
 }
 
-export const subagentRuntimeRegistry = new SubagentRuntimeRegistry();
+export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(
+  undefined,
+  undefined,
+  {
+    recordCompactionUsage: async (message, runtime) => {
+      const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
+        import("../usage-accounting.js"),
+        import("../usage-store.js"),
+      ]);
+      await usageStore.record(
+        assistantUsageRecord({
+          message,
+          provider: runtime.provider,
+          model: runtime.model,
+          source: "compaction",
+        }),
+      );
+    },
+  },
+);
