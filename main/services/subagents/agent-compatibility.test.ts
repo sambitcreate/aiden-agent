@@ -547,26 +547,33 @@ test("real Agent approval hook authorizes and consumes one exact outbound effect
   assert.equal(registry.activeCount, 0);
 });
 
-test("child context compaction bounds oversized tool output before the next provider call", async () => {
+test("child semantically compacts oversized tool output before the next provider call", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-context",
     models: [{ id: "compat-context", contextWindow: 8_192 }],
   });
   let secondContext = "";
   let continuationContext = "";
+  const respondAfterTool = async (context: unknown) => {
+    const serialized = JSON.stringify(context);
+    if (/context summarization assistant/u.test(serialized)) {
+      return fauxAssistantMessage("semantic history checkpoint");
+    }
+    if (/Continue from the compacted checkpoint/u.test(serialized)) {
+      continuationContext = serialized;
+      return fauxAssistantMessage("continued from checkpoint");
+    }
+    secondContext = serialized;
+    return fauxAssistantMessage("bounded");
+  };
   core.setResponses([
     fauxAssistantMessage(fauxToolCall("oversized_read", {}), {
       stopReason: "toolUse",
     }),
-    async (context) => {
-      secondContext = JSON.stringify(context);
-      return fauxAssistantMessage("bounded");
-    },
-    fauxAssistantMessage("semantic history checkpoint"),
-    async (context) => {
-      continuationContext = JSON.stringify(context);
-      return fauxAssistantMessage("continued from checkpoint");
-    },
+    respondAfterTool,
+    respondAfterTool,
+    respondAfterTool,
+    respondAfterTool,
   ]);
   const oversizedRead: AgentTool = {
     name: "oversized_read",
@@ -584,15 +591,25 @@ test("child context compaction bounds oversized tool output before the next prov
     runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
     [oversizedRead],
   );
+  let preparationCalls = 0;
+  let preparationCompacted = false;
+  const prepare = runningChild.agent.prepareNextTurnWithContext;
+  runningChild.agent.prepareNextTurnWithContext = async (value, signal) => {
+    preparationCalls += 1;
+    const prepared = await prepare?.(value, signal);
+    preparationCompacted ||=
+      prepared?.context?.messages[0]?.role === "compactionSummary";
+    return prepared;
+  };
 
   await runningChild.prompt("Read the oversized payload, then conclude.");
   await runningChild.agent.prompt("Continue from the compacted checkpoint.");
 
-  assert.equal(core.state.callCount, 4);
-  assert.match(
-    secondContext,
-    /context window|characters compacted|payload omitted/u,
-  );
+  assert.ok(preparationCalls > 0);
+  assert.equal(preparationCompacted, true);
+  assert.ok(core.state.callCount >= 4);
+  assert.match(secondContext, /semantic history checkpoint/u);
+  assert.doesNotMatch(secondContext, /START-x{1000}/u);
   assert.ok(secondContext.length < 100_000);
   assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
   assert.match(

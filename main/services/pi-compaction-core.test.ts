@@ -3,7 +3,10 @@ import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { InMemorySessionRepo, type Session } from "@earendil-works/pi-agent-core";
+import {
+  InMemorySessionRepo,
+  type Session,
+} from "@earendil-works/pi-agent-core";
 import {
   createModels,
   fauxAssistantMessage,
@@ -12,7 +15,10 @@ import {
   type AssistantMessage,
   type Model,
 } from "@earendil-works/pi-ai";
-import { PiCompactionCoordinator, type PiCompactionEvent } from "./pi-compaction-core.js";
+import {
+  PiCompactionCoordinator,
+  type PiCompactionEvent,
+} from "./pi-compaction-core.js";
 import {
   AIDEN_CHAT_MESSAGE_MARKER,
   appendPiMessages,
@@ -87,7 +93,9 @@ async function appendCompressibleHistory(
   suffix = "one",
 ): Promise<AssistantMessage> {
   await session.appendMessage(user(`old-${suffix}: ${"x".repeat(1_200)}`));
-  await session.appendMessage(assistant(model, { input: 400, text: `middle-${suffix}` }));
+  await session.appendMessage(
+    assistant(model, { input: 400, text: `middle-${suffix}` }),
+  );
   await session.appendMessage(user(`latest-${suffix}: ${"y".repeat(500)}`));
   const last = assistant(model, { input: 950, text: `answer-${suffix}` });
   await session.appendMessage(last);
@@ -97,7 +105,9 @@ async function appendCompressibleHistory(
 test("Pi coordinator appends a native checkpoint and rebuilds from it", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([
-    fauxAssistantMessage("## Goal\nContinue.\n\n## Progress\nDone: preserved exact state."),
+    fauxAssistantMessage(
+      "## Goal\nContinue.\n\n## Progress\nDone: preserved exact state.",
+    ),
   ]);
   const session = await memorySession();
   const last = await appendCompressibleHistory(session, model);
@@ -151,9 +161,14 @@ test("repeated compaction updates the previous Pi summary", async () => {
   assert.equal((await coordinator.check(second)).compacted, true);
 
   assert.deepEqual(summarySeen, [true]);
-  const compactions = (await session.getEntries()).filter((entry) => entry.type === "compaction");
+  const compactions = (await session.getEntries()).filter(
+    (entry) => entry.type === "compaction",
+  );
   assert.equal(compactions.length, 2);
-  assert.equal(compactions[compactions.length - 1]?.summary, "updated checkpoint");
+  assert.equal(
+    compactions[compactions.length - 1]?.summary,
+    "updated checkpoint",
+  );
 });
 
 test("overflow compacts and retries at most once", async () => {
@@ -181,7 +196,8 @@ test("overflow compacts and retries at most once", async () => {
   assert.equal(first.shouldRetry, true);
   assert.equal(
     (await session.buildContext()).messages.some(
-      (message) => message.role === "assistant" && message.stopReason === "error",
+      (message) =>
+        message.role === "assistant" && message.stopReason === "error",
     ),
     false,
   );
@@ -194,7 +210,8 @@ test("overflow compacts and retries at most once", async () => {
   await session.appendMessage(recovered);
   assert.equal(
     (await session.buildContext()).messages.some(
-      (message) => message.role === "assistant" && message.stopReason === "error",
+      (message) =>
+        message.role === "assistant" && message.stopReason === "error",
     ),
     false,
   );
@@ -210,7 +227,8 @@ test("overflow compacts and retries at most once", async () => {
   assert.equal(second.shouldRetry, false);
   assert.match(second.errorMessage ?? "", /after one compact-and-retry/u);
   assert.equal(
-    (await session.getEntries()).filter((entry) => entry.type === "compaction").length,
+    (await session.getEntries()).filter((entry) => entry.type === "compaction")
+      .length,
     1,
   );
   assert.equal(events.filter((event) => event.type === "start").length, 1);
@@ -252,7 +270,56 @@ test("length-stop overflow is abandoned before retry context is rebuilt", async 
   assert.notEqual(retryMessages[retryMessages.length - 1]?.role, "assistant");
   assert.equal(
     (await session.buildContext()).messages.some(
-      (message) => message.role === "assistant" && message.stopReason === "length",
+      (message) =>
+        message.role === "assistant" && message.stopReason === "length",
+    ),
+    false,
+  );
+});
+
+test("transient provider failures are durably abandoned and retried only once", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession();
+  await session.appendMessage(user("keep this request"));
+  const firstFailure = assistant(model, {
+    stopReason: "error",
+    errorMessage: "503 service unavailable",
+  });
+  await session.appendMessage(firstFailure);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    retryDelayMs: 0,
+  });
+
+  const first = await coordinator.check(firstFailure);
+  assert.equal(first.shouldRetry, true);
+  assert.equal(first.retryDelayMs, 0);
+  assert.equal(first.messages?.[first.messages.length - 1]?.role, "user");
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) =>
+        message.role === "assistant" && message.stopReason === "error",
+    ),
+    false,
+  );
+
+  const secondFailure = assistant(model, {
+    stopReason: "error",
+    errorMessage: "network error: connection reset",
+    timestamp: firstFailure.timestamp + 1,
+  });
+  await session.appendMessage(secondFailure);
+  const second = await coordinator.check(secondFailure);
+  assert.equal(second.shouldRetry, false);
+  assert.match(second.errorMessage ?? "", /after one automatic retry/iu);
+  assert.equal(second.messages?.[second.messages.length - 1]?.role, "user");
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) =>
+        message.role === "assistant" && message.stopReason === "error",
     ),
     false,
   );
@@ -396,7 +463,9 @@ test("chat synchronization is idempotent and markers stay out of context", async
   assert.equal(entries.filter((entry) => entry.type === "message").length, 2);
   assert.equal(
     entries.filter(
-      (entry) => entry.type === "custom" && entry.customType === AIDEN_CHAT_MESSAGE_MARKER,
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === AIDEN_CHAT_MESSAGE_MARKER,
     ).length,
     2,
   );
@@ -447,7 +516,10 @@ test("Pi message batches roll back partial appends before a safe retry", async (
     return appendMessage(message);
   };
 
-  await assert.rejects(appendPiMessages(session, [first, second]), /batch failure/u);
+  await assert.rejects(
+    appendPiMessages(session, [first, second]),
+    /batch failure/u,
+  );
   assert.equal((await session.buildContext()).messages.length, 0);
   session.appendMessage = appendMessage;
   await appendPiMessages(session, [first, second]);
@@ -458,7 +530,10 @@ test("Pi message batches roll back partial appends before a safe retry", async (
 });
 
 test("primary generation reconciles a visible assistant after a journal batch failure", async () => {
-  const source = await readFile(new URL("./llm-client.ts", import.meta.url), "utf8");
+  const source = await readFile(
+    new URL("./llm-client.ts", import.meta.url),
+    "utf8",
+  );
   assert.doesNotMatch(source, /!persisted\.messageId \|\| !piJournalHealthy/u);
   assert.match(
     source,
@@ -489,7 +564,10 @@ test("journal synchronization stores the exact enriched skill turn once", async 
   const context = await session.buildContext();
   assert.equal(context.messages.length, 1);
   assert.equal(context.messages[0]?.role, "user");
-  assert.equal(context.messages[0]?.role === "user" ? context.messages[0].content : "", enriched);
+  assert.equal(
+    context.messages[0]?.role === "user" ? context.messages[0].content : "",
+    enriched,
+  );
 });
 
 test("durable journals are private and delete with their chat", async (t) => {

@@ -13,7 +13,10 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { writeDevLog } from "../dev-log.js";
-import { buildAgentRuntimeOptions } from "../generation-runtime.js";
+import {
+  buildAgentRuntimeOptions,
+  waitForAbortableDelay,
+} from "../generation-runtime.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -27,6 +30,7 @@ import {
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
 import {
   createPiCompactionModels,
+  needsImmediatePiCompaction,
   PiCompactionCoordinator,
 } from "../pi-compaction-core.js";
 import { appendPiMessages } from "../pi-compaction-session-store.js";
@@ -247,6 +251,27 @@ export class SubagentRuntimeRegistry {
         return false;
       }
     };
+    agent.prepareNextTurnWithContext = async ({ context, toolResults }) => {
+      const session = await sessionPromise;
+      const coordinator = await compaction;
+      if (!(await flushPiMessages(session))) {
+        return undefined;
+      }
+      // Include the just-flushed tool results in pressure estimation before
+      // the next provider request.
+      const immediate = needsImmediatePiCompaction(
+        toolResults,
+        spec.runtime.model.contextWindow,
+      );
+      const result = await coordinator.checkContextPressure({
+        forceThreshold: immediate,
+        sealCurrentTurnIfNeeded: immediate,
+      });
+      emergencyContextReduction = false;
+      if (!result.messages) return undefined;
+      agent.state.messages = [...result.messages];
+      return { context: { ...context, messages: [...result.messages] } };
+    };
     const deployment: SubagentDeployment = isLocalProviderDeployment(
       spec.runtime.provider,
     )
@@ -350,13 +375,12 @@ export class SubagentRuntimeRegistry {
               });
               emergencyContextReduction = false;
               if (!result.messages) break;
-              const rebuiltMessages = [...result.messages];
-              const trailing = rebuiltMessages[rebuiltMessages.length - 1];
-              if (result.shouldRetry && trailing?.role === "assistant") {
-                rebuiltMessages.pop();
-              }
-              agent.state.messages = rebuiltMessages;
+              agent.state.messages = [...result.messages];
               if (!result.shouldRetry) break;
+              await waitForAbortableDelay(
+                result.retryDelayMs ?? 0,
+                entry.cancellation.signal,
+              );
             }
           } finally {
             entry.releaseInference?.();

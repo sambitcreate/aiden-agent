@@ -29,15 +29,16 @@ import {
 import { skillRegistry } from "./skill-registry-main.js";
 import {
   buildAgentRuntimeOptions,
+  reconcileTerminalAssistantProjection,
   resolveGenerationThinkingLevel,
   runtimeSupportsImages,
   settleGenerationCleanup,
   shouldExposeReasoning,
-  terminalAssistantReasoningFallback,
-  terminalAssistantTextFallback,
   terminalGenerationError,
+  terminalGenerationLengthError,
   terminalGenerationInterruptionError,
   terminalGenerationWasAborted,
+  waitForAbortableDelay,
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
@@ -74,6 +75,7 @@ import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
 import {
   createPiCompactionModels,
+  needsImmediatePiCompaction,
   PiCompactionCoordinator,
   type PiCompactionEvent,
 } from "./pi-compaction-core.js";
@@ -1048,18 +1050,20 @@ export const llmClient = {
     let reasoning = "";
     let errored: string | null = null;
     let aborted = false;
-    let currentAssistantTurnHadTextDelta = false;
     let currentAssistantTurnHadReasoningDelta = false;
+    let currentAssistantTurnStart = { full: 0, reasoning: 0 };
     let pendingPiMessages: AgentMessage[] = [];
     let lastAssistantMessage: AssistantMessage | undefined;
     let emergencyContextReduction = false;
     let activeCompactionStepId: string | undefined;
     let generationJournalLeafId: string | null = null;
     let piSession:
-      | Awaited<ReturnType<typeof piCompactionSessionStore.openChat>>
-      | undefined;
+      Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
     let compaction: PiCompactionCoordinator | undefined;
     let candidate: Agent | null = null;
+    let piJournalHealthy = true;
+    let flushPiMessages: () => Promise<boolean> = async () =>
+      pendingPiMessages.length === 0;
     try {
       const assistantMcpInventory =
         authoritativeMode === "assistant"
@@ -1161,6 +1165,25 @@ export const llmClient = {
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
       });
+      const promptJournal = piSession;
+      flushPiMessages = async (): Promise<boolean> => {
+        if (pendingPiMessages.length === 0) return true;
+        const batch = pendingPiMessages;
+        pendingPiMessages = [];
+        try {
+          await appendPiMessages(promptJournal, batch);
+          return true;
+        } catch (error) {
+          piJournalHealthy = false;
+          pendingPiMessages = [...batch, ...pendingPiMessages];
+          logger.error(
+            "pi",
+            `Could not append Pi session messages for stream ${streamId}.`,
+            error,
+          );
+          return false;
+        }
+      };
 
       const currentUser = [...authoritativeChat.messages]
         .reverse()
@@ -1287,23 +1310,50 @@ export const llmClient = {
           tools,
           messages: initialMessages,
         },
+        // Aiden tools can mutate the same workspace, scheduler, or external
+        // service. Preserve model-authored ordering across the foreground run.
+        toolExecution: "sequential",
         prepareNextTurnWithContext: async ({ toolResults, context }) => {
-          if (!attendedAssistant) return undefined;
-          const state = advanceAttendedToolErrorState(
-            consecutiveAttendedToolErrorTurns,
-            toolResults,
-          );
-          consecutiveAttendedToolErrorTurns = state.consecutiveErrorTurns;
-          if (state.shouldStop) {
-            logger.warn(
-              "pi",
-              `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
+          let nextContext = context;
+          let changed = false;
+          if (attendedAssistant) {
+            const state = advanceAttendedToolErrorState(
+              consecutiveAttendedToolErrorTurns,
+              toolResults,
             );
+            consecutiveAttendedToolErrorTurns = state.consecutiveErrorTurns;
+            if (state.shouldStop) {
+              logger.warn(
+                "pi",
+                `Stopped attended Assistant tool retries for stream ${streamId} and requested a text-only recovery.`,
+              );
+              nextContext = recoverAttendedToolErrorContext(context);
+              changed = true;
+            }
+          }
+          if (!(await flushPiMessages())) {
+            return changed ? { context: nextContext } : undefined;
+          }
+          // Tool results are now durable, so estimate the complete journal
+          // rather than the preceding assistant usage alone.
+          const immediate = needsImmediatePiCompaction(
+            toolResults,
+            model.contextWindow,
+          );
+          const result = await compaction?.checkContextPressure({
+            forceThreshold: immediate,
+            sealCurrentTurnIfNeeded: immediate,
+          });
+          emergencyContextReduction = false;
+          if (result?.messages) {
+            // Pi's loop uses the returned context for this run; explicitly
+            // install the checkpoint for the Agent's next prompt too.
+            if (candidate) candidate.state.messages = [...result.messages];
             return {
-              context: recoverAttendedToolErrorContext(context),
+              context: { ...nextContext, messages: [...result.messages] },
             };
           }
-          return undefined;
+          return changed ? { context: nextContext } : undefined;
         },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
@@ -1483,8 +1533,11 @@ export const llmClient = {
         switch (event.type) {
           case "message_start":
             if (event.message.role === "assistant") {
-              currentAssistantTurnHadTextDelta = false;
               currentAssistantTurnHadReasoningDelta = false;
+              currentAssistantTurnStart = {
+                full: full.length,
+                reasoning: reasoning.length,
+              };
             }
             break;
           case "message_update": {
@@ -1499,7 +1552,6 @@ export const llmClient = {
             } else if (e.type === "thinking_end") timeline.thinkingEnded();
             if (e.type === "text_delta") {
               full += e.delta;
-              currentAssistantTurnHadTextDelta = true;
               noteModelBecameReady();
               sendGeneration(streamId, "chat:delta", {
                 streamId,
@@ -1538,22 +1590,36 @@ export const llmClient = {
             }
             const terminalError = terminalGenerationError(event.message);
             if (terminalError) errored = terminalError;
+            const lengthError = terminalGenerationLengthError(event.message);
+            if (lengthError) errored = lengthError;
             if (terminalGenerationWasAborted(event.message)) aborted = true;
-            if (!terminalError) {
-              // Pi may finish any assistant turn without preceding text_delta
-              // events. Fall back per turn so a later tool-followup is retained
-              // without duplicating normally streamed text.
-              full += terminalAssistantTextFallback(
-                event.message,
-                currentAssistantTurnHadTextDelta,
-              );
-              if (exposeReasoning) {
-                const fallback = terminalAssistantReasoningFallback(
-                  event.message,
-                  currentAssistantTurnHadReasoningDelta,
-                );
-                if (fallback)
-                  reasoning += `${reasoning.trim() ? "\n\n" : ""}${fallback}`;
+            const projection = reconcileTerminalAssistantProjection(
+              { full, reasoning },
+              currentAssistantTurnStart,
+              event.message,
+              exposeReasoning,
+            );
+            if (projection.changed) {
+              full = projection.full;
+              reasoning = projection.reasoning;
+              // Rebuild the whole visible projection after provider block
+              // interleaving or a terminal-only response.
+              sendGeneration(streamId, "chat:delta", {
+                streamId,
+                delta: "",
+                reset: true,
+              });
+              if (full) {
+                sendGeneration(streamId, "chat:delta", {
+                  streamId,
+                  delta: full,
+                });
+              }
+              if (reasoning) {
+                sendGeneration(streamId, "chat:reasoning-delta", {
+                  streamId,
+                  delta: reasoning,
+                });
               }
             }
             break;
@@ -1659,25 +1725,6 @@ export const llmClient = {
     const piJournal = piSession;
     const piCoordinator = compaction;
     const piTurnStartLeafId = generationJournalLeafId;
-    let piJournalHealthy = true;
-    const flushPiMessages = async (): Promise<boolean> => {
-      if (pendingPiMessages.length === 0) return true;
-      const batch = pendingPiMessages;
-      pendingPiMessages = [];
-      try {
-        await appendPiMessages(piJournal, batch);
-        return true;
-      } catch (error) {
-        piJournalHealthy = false;
-        pendingPiMessages = [...batch, ...pendingPiMessages];
-        logger.error(
-          "pi",
-          `Could not append Pi session messages for stream ${streamId}.`,
-          error,
-        );
-        return false;
-      }
-    };
     const finalizePiTurnPersistence = async (persisted: {
       chat: Chat | undefined;
       error: string | undefined;
@@ -1759,8 +1806,7 @@ export const llmClient = {
         const journalFlushed = await flushPiMessages();
         if (!journalFlushed) return;
         const completedAssistant = lastAssistantMessage as
-          | AssistantMessage
-          | undefined;
+          AssistantMessage | undefined;
         if (!completedAssistant) return;
         const result = await piCoordinator.check(completedAssistant, {
           forceThreshold: emergencyContextReduction,
@@ -1771,12 +1817,7 @@ export const llmClient = {
         }
         if (!result.messages) return;
 
-        const rebuiltMessages = [...result.messages];
-        const trailing = rebuiltMessages[rebuiltMessages.length - 1];
-        if (result.shouldRetry && trailing?.role === "assistant") {
-          rebuiltMessages.pop();
-        }
-        agent.state.messages = rebuiltMessages;
+        agent.state.messages = [...result.messages];
         if (!result.shouldRetry) return;
         full = full.slice(0, fullLengthBeforeAttempt);
         reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
@@ -1787,6 +1828,10 @@ export const llmClient = {
           delta: "",
           reset: true,
         });
+        await waitForAbortableDelay(
+          result.retryDelayMs ?? 0,
+          initialization.controller.signal,
+        );
       }
     };
 

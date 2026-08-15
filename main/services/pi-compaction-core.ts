@@ -15,6 +15,7 @@ import {
   createModels,
   createProvider,
   isContextOverflow,
+  isRetryableAssistantError,
   type Api,
   type AssistantMessage,
   type Models,
@@ -54,6 +55,7 @@ export interface PiCompactionCheckResult {
   /** Pi-reconstructed state to install on the live Agent after compaction. */
   messages?: AgentMessage[];
   errorMessage?: string;
+  retryDelayMs?: number;
 }
 
 export interface PiCompactionCoordinatorOptions {
@@ -64,6 +66,8 @@ export interface PiCompactionCoordinatorOptions {
   settings?: CompactionSettings;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
+  /** Bounded host backoff for transient provider/transport retries. */
+  retryDelayMs?: number;
 }
 
 function latestCompaction(entries: Awaited<ReturnType<Session["getBranch"]>>) {
@@ -75,7 +79,24 @@ function latestCompaction(entries: Awaited<ReturnType<Session["getBranch"]>>) {
 }
 
 function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
-  return messages.reduce((total, message) => total + estimateTokens(message), 0);
+  return messages.reduce(
+    (total, message) => total + estimateTokens(message),
+    0,
+  );
+}
+
+/** Large current-turn batches must be summarized before the next provider call. */
+export function needsImmediatePiCompaction(
+  messages: readonly AgentMessage[],
+  contextWindow: number,
+): boolean {
+  // Pi's fast estimator intentionally caps some tool payloads. Raw serialized
+  // size is the conservative backstop for a just-produced current-turn batch.
+  const serializedTokenFloor = Math.ceil(JSON.stringify(messages).length / 4);
+  return (
+    Math.max(estimatedMessageTokens(messages), serializedTokenFloor) >=
+    Math.max(1_024, Math.floor(Math.max(1, contextWindow) * 0.25))
+  );
 }
 
 /**
@@ -85,7 +106,7 @@ function estimatedMessageTokens(messages: readonly AgentMessage[]): number {
  */
 export class PiCompactionCoordinator {
   private readonly settings: CompactionSettings;
-  private overflowRecoveryAttempted = false;
+  private retryRecoveryAttempted = false;
   private activeAbortController?: AbortController;
 
   constructor(private readonly options: PiCompactionCoordinatorOptions) {
@@ -96,7 +117,10 @@ export class PiCompactionCoordinator {
     );
     const reserveTokens = Math.min(
       contextWindow - 1,
-      Math.max(1, Math.floor(options.settings?.reserveTokens ?? defaultReserveTokens)),
+      Math.max(
+        1,
+        Math.floor(options.settings?.reserveTokens ?? defaultReserveTokens),
+      ),
     );
     const defaultKeepRecentTokens = Math.min(
       DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
@@ -108,7 +132,12 @@ export class PiCompactionCoordinator {
       reserveTokens,
       keepRecentTokens: Math.min(
         Math.max(1, contextWindow - reserveTokens - 1),
-        Math.max(1, Math.floor(options.settings?.keepRecentTokens ?? defaultKeepRecentTokens)),
+        Math.max(
+          1,
+          Math.floor(
+            options.settings?.keepRecentTokens ?? defaultKeepRecentTokens,
+          ),
+        ),
       ),
     };
   }
@@ -119,11 +148,17 @@ export class PiCompactionCoordinator {
 
   /** Pi resets overflow recovery when a new user prompt enters the agent. */
   beginPrompt(): void {
-    this.overflowRecoveryAttempted = false;
+    this.retryRecoveryAttempted = false;
   }
 
   /** Check the reconstructed journal before provider I/O, including the new user turn. */
-  async checkContextPressure(): Promise<PiCompactionCheckResult> {
+  async checkContextPressure(
+    options: {
+      forceThreshold?: boolean;
+      /** Add a private user boundary when the active oversized tool turn has no native cut point. */
+      sealCurrentTurnIfNeeded?: boolean;
+    } = {},
+  ): Promise<PiCompactionCheckResult> {
     if (!this.settings.enabled) return { compacted: false, shouldRetry: false };
     const branch = await this.options.session.getBranch();
     const compactionEntry = latestCompaction(branch);
@@ -131,7 +166,9 @@ export class PiCompactionCoordinator {
     const estimate = estimateContextTokens(context.messages);
     const heuristicTokens = estimatedMessageTokens(context.messages);
     const usageMessage =
-      estimate.lastUsageIndex === null ? undefined : context.messages[estimate.lastUsageIndex];
+      estimate.lastUsageIndex === null
+        ? undefined
+        : context.messages[estimate.lastUsageIndex];
     const usageIsStale =
       compactionEntry &&
       usageMessage?.role === "assistant" &&
@@ -139,9 +176,36 @@ export class PiCompactionCoordinator {
     const contextTokens = usageIsStale
       ? heuristicTokens
       : Math.max(estimate.tokens, heuristicTokens);
-    return shouldCompact(contextTokens, this.options.model.contextWindow, this.settings)
-      ? this.run("threshold", false)
-      : { compacted: false, shouldRetry: false };
+    if (
+      !options.forceThreshold &&
+      !shouldCompact(
+        contextTokens,
+        this.options.model.contextWindow,
+        this.settings,
+      )
+    ) {
+      return { compacted: false, shouldRetry: false };
+    }
+    const result = await this.run("threshold", false);
+    if (result.compacted || !options.sealCurrentTurnIfNeeded) return result;
+
+    // Pi cannot cut an oversized tool batch when it is the entire open turn.
+    // A private continuation user entry gives native compaction a valid next
+    // boundary; it remains in the Pi journal only and never appears in chat.
+    const priorLeaf = await this.options.session.getLeafId();
+    await this.options.session.appendMessage({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "Continue the same request using the compacted current-turn checkpoint. Do not repeat completed tool calls.",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    const sealed = await this.run("threshold", false);
+    if (!sealed.compacted) await this.options.session.moveTo(priorLeaf);
+    return sealed;
   }
 
   async check(
@@ -157,7 +221,8 @@ export class PiCompactionCoordinator {
     const compactionEntry = latestCompaction(branch);
     if (
       compactionEntry &&
-      assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
+      assistantMessage.timestamp <=
+        new Date(compactionEntry.timestamp).getTime()
     ) {
       return { compacted: false, shouldRetry: false };
     }
@@ -170,7 +235,7 @@ export class PiCompactionCoordinator {
     if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
       const willRetry = assistantMessage.stopReason !== "stop";
       if (!willRetry) return this.run("overflow", false);
-      const abandoned = await this.abandonRetryableOverflow(assistantMessage);
+      const abandoned = await this.abandonRetryableAssistant(assistantMessage);
       if (!abandoned.ok) {
         return {
           compacted: false,
@@ -178,7 +243,7 @@ export class PiCompactionCoordinator {
           errorMessage: abandoned.errorMessage,
         };
       }
-      if (this.overflowRecoveryAttempted) {
+      if (this.retryRecoveryAttempted) {
         const errorMessage =
           "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.";
         this.options.onEvent?.({
@@ -190,8 +255,39 @@ export class PiCompactionCoordinator {
         });
         return { compacted: false, shouldRetry: false, errorMessage };
       }
-      this.overflowRecoveryAttempted = true;
+      this.retryRecoveryAttempted = true;
       return this.run("overflow", true);
+    }
+
+    if (isRetryableAssistantError(assistantMessage)) {
+      const abandoned = await this.abandonRetryableAssistant(assistantMessage);
+      if (!abandoned.ok) {
+        return {
+          compacted: false,
+          shouldRetry: false,
+          errorMessage: abandoned.errorMessage,
+        };
+      }
+      const context = await this.options.session.buildContext();
+      if (this.retryRecoveryAttempted) {
+        return {
+          compacted: false,
+          shouldRetry: false,
+          messages: context.messages,
+          errorMessage:
+            "The provider failed again after one automatic retry. Try again in a moment or switch models.",
+        };
+      }
+      this.retryRecoveryAttempted = true;
+      return {
+        compacted: false,
+        shouldRetry: true,
+        messages: context.messages,
+        retryDelayMs: Math.max(
+          0,
+          Math.min(5_000, this.options.retryDelayMs ?? 500),
+        ),
+      };
     }
 
     const directContextTokens = assistantMessage.usage
@@ -208,18 +304,20 @@ export class PiCompactionCoordinator {
         contextTokens =
           compactionEntry &&
           usageMessage.role === "assistant" &&
-          usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
+          usageMessage.timestamp <=
+            new Date(compactionEntry.timestamp).getTime()
             ? estimatedMessageTokens(context.messages)
             : estimate.tokens;
       }
     }
 
-    return options.forceThreshold || shouldCompact(contextTokens, contextWindow, this.settings)
+    return options.forceThreshold ||
+      shouldCompact(contextTokens, contextWindow, this.settings)
       ? this.run("threshold", false)
       : { compacted: false, shouldRetry: false };
   }
 
-  private async abandonRetryableOverflow(
+  private async abandonRetryableAssistant(
     assistantMessage: AssistantMessage,
   ): Promise<{ ok: true } | { ok: false; errorMessage: string }> {
     try {
@@ -236,7 +334,7 @@ export class PiCompactionCoordinator {
         return {
           ok: false,
           errorMessage:
-            "Context overflow recovery could not isolate the failed model attempt safely.",
+            "Automatic retry could not isolate the failed model attempt safely.",
         };
       }
       await this.options.session.moveTo(entry.parentId);
@@ -244,7 +342,7 @@ export class PiCompactionCoordinator {
     } catch (error) {
       return {
         ok: false,
-        errorMessage: `Context overflow recovery could not roll back the failed model attempt: ${error instanceof Error ? error.message : String(error)}`,
+        errorMessage: `Automatic retry could not roll back the failed model attempt: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
@@ -291,7 +389,8 @@ export class PiCompactionCoordinator {
       else if (this.options.signal) {
         const abort = () => abortController.abort();
         this.options.signal.addEventListener("abort", abort, { once: true });
-        removeParentAbort = () => this.options.signal?.removeEventListener("abort", abort);
+        removeParentAbort = () =>
+          this.options.signal?.removeEventListener("abort", abort);
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
@@ -330,7 +429,9 @@ export class PiCompactionCoordinator {
         firstKeptEntryId: result.firstKeptEntryId,
         tokensBefore: result.tokensBefore,
         estimatedTokensAfter: estimatedMessageTokens(context.messages),
-        ...(result.details ? { details: result.details as PiCompactionDetails } : {}),
+        ...(result.details
+          ? { details: result.details as PiCompactionDetails }
+          : {}),
       };
       this.options.onEvent?.({
         type: "end",
@@ -345,7 +446,8 @@ export class PiCompactionCoordinator {
         messages: context.messages,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "compaction failed";
+      const errorMessage =
+        error instanceof Error ? error.message : "compaction failed";
       if (started) {
         const aborted = this.activeAbortController?.signal.aborted === true;
         this.options.onEvent?.({
@@ -372,13 +474,21 @@ export class PiCompactionCoordinator {
 }
 
 /** Use Aiden's resolved, connection-bound transport for Pi's summary call. */
-export function createPiCompactionModels(runtime: ResolvedModelRuntime): Models {
+export function createPiCompactionModels(
+  runtime: ResolvedModelRuntime,
+): Models {
   const models = createModels();
-  const streamSimple: ProviderStreams["streamSimple"] = (model, context, options) =>
+  const streamSimple: ProviderStreams["streamSimple"] = (
+    model,
+    context,
+    options,
+  ) =>
     runtime.streams.streamSimple(model, context, {
       ...options,
       apiKey: options?.apiKey ?? runtime.apiKey,
-      headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
+      headers: runtime.headers
+        ? { ...options?.headers, ...runtime.headers }
+        : options?.headers,
     });
   const streams: ProviderStreams = {
     stream: streamSimple as ProviderStreams["stream"],
