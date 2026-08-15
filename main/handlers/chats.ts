@@ -42,18 +42,7 @@ import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
 } from "../services/chat-export.js";
-import type { Chat } from "../services/types.js";
-
-function chatForRenderer(chat: Chat | null): Chat | null {
-  if (!chat) return null;
-  return {
-    ...chat,
-    messages: chat.messages.map((message) => {
-      const { pi: _privatePiProtocol, ...visible } = message;
-      return visible;
-    }),
-  };
-}
+import { chatForRenderer } from "../services/visible-chat-projection.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {

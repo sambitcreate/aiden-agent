@@ -9,10 +9,14 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 
 const source = fs.readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
+const projectionSource = fs.readFileSync(
+  new URL("../services/visible-chat-projection.ts", import.meta.url),
+  "utf8",
+);
 
 test("private canonical Pi protocol never crosses the renderer chat boundary", () => {
   assert.match(
-    source,
+    projectionSource,
     /const \{ pi: _privatePiProtocol, \.\.\.visible \} = message/u,
   );
   assert.match(source, /chat: chatForRenderer\(chat\)/u);

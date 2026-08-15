@@ -46,6 +46,7 @@ import { resolveModelRuntime } from "./model-runtime.js";
 import { assistantUsageRecord } from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
+import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import type {
   ApprovalDecision,
@@ -82,6 +83,8 @@ import {
 } from "./pi-compaction-core.js";
 import {
   appendPiMessages,
+  beginPiGenerationTurn,
+  commitPiGenerationTurn,
   piCompactionSessionStore,
   syncChatMessagesToPiSession,
 } from "./pi-compaction-session-store.js";
@@ -1739,6 +1742,17 @@ export const llmClient = {
     const piJournal = piSession;
     const piCoordinator = compaction;
     const piTurnStartLeafId = generationJournalLeafId;
+    let generationTurnTransactionId: string | undefined;
+    try {
+      generationTurnTransactionId = await beginPiGenerationTurn(piJournal);
+    } catch (error) {
+      piJournalHealthy = false;
+      logger.warn(
+        "pi",
+        `Could not begin the crash-recovery envelope for stream ${streamId}.`,
+        error,
+      );
+    }
     const finalizePiTurnPersistence = async (persisted: {
       chat: Chat | undefined;
       error: string | undefined;
@@ -1755,9 +1769,14 @@ export const llmClient = {
           );
         }
         piJournalHealthy = false;
+        generationTurnTransactionId = undefined;
         return;
       }
-      if (!persisted.messageId) return;
+      if (!persisted.messageId) {
+        await piJournal.moveTo(piTurnStartLeafId).catch(() => undefined);
+        generationTurnTransactionId = undefined;
+        return;
+      }
       const reconcileVisibleAssistant = async () => {
         await piJournal.moveTo(piTurnStartLeafId);
         const visible = persisted.chat?.messages.find(
@@ -1774,6 +1793,7 @@ export const llmClient = {
           model,
           supportsImages,
         );
+        generationTurnTransactionId = undefined;
       };
       if (!piJournalHealthy) {
         try {
@@ -1789,6 +1809,13 @@ export const llmClient = {
       }
       try {
         await appendPiMessages(piJournal, [], persisted.messageId);
+        if (generationTurnTransactionId) {
+          await commitPiGenerationTurn(
+            piJournal,
+            generationTurnTransactionId,
+          );
+          generationTurnTransactionId = undefined;
+        }
       } catch (error) {
         logger.warn(
           "pi",
@@ -1914,7 +1941,7 @@ export const llmClient = {
             content: full || undefined,
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
-            chat: persisted.chat,
+            chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           });
         } else if (!full.trim() && !wasCancelled) {
           const finalTimeline = attachClaimCheck(
@@ -1934,7 +1961,7 @@ export const llmClient = {
               : "The model returned an empty response. Try again.",
             reasoning: reasoning || undefined,
             timeline: finalTimeline,
-            chat: persisted.chat,
+            chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           });
         } else {
           // Covers both normal completion and user abort (partial `full`).
@@ -1962,7 +1989,7 @@ export const llmClient = {
               content: full,
               reasoning: reasoning || undefined,
               timeline: finalTimeline,
-              chat: persisted.chat,
+              chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
             });
           }
         }
@@ -1984,7 +2011,7 @@ export const llmClient = {
           content: full || undefined,
           reasoning: reasoning || undefined,
           timeline: finalTimeline,
-          chat: persisted.chat,
+          chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
         });
       } finally {
         try {

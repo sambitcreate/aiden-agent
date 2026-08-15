@@ -114,10 +114,56 @@ async function readJournalPrefix(filePath: string): Promise<string> {
       JOURNAL_HEADER_SCAN_BYTES,
       0,
     );
-    return buffer.subarray(0, bytesRead).toString("utf8");
+    const prefix = buffer.subarray(0, bytesRead).toString("utf8");
+    const newline = prefix.indexOf("\n");
+    return newline >= 0 ? prefix.slice(0, newline) : prefix;
   } finally {
     await handle.close();
   }
+}
+
+function journalHeaderOwnsChat(headerLine: string, chatId: string): boolean {
+  try {
+    const header = JSON.parse(headerLine) as {
+      type?: unknown;
+      version?: unknown;
+      id?: unknown;
+      metadata?: { kind?: unknown; chatId?: unknown };
+    };
+    return (
+      header.type === "session" &&
+      header.version === 3 &&
+      header.id === chatId &&
+      header.metadata?.kind === SESSION_METADATA_KIND &&
+      header.metadata.chatId === chatId
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Preserve a valid durable prefix when only the final JSONL write was torn. */
+async function repairTornFinalLine(filePath: string): Promise<boolean> {
+  const contents = await readFile(filePath, "utf8");
+  if (!contents || contents.endsWith("\n")) return false;
+  const finalNewline = contents.lastIndexOf("\n");
+  if (finalNewline < 0) return false;
+  const completePrefix = contents.slice(0, finalNewline + 1);
+  try {
+    for (const line of completePrefix.split("\n")) {
+      if (line.trim()) JSON.parse(line);
+    }
+  } catch {
+    return false;
+  }
+  const handle = await open(filePath, "r+");
+  try {
+    await handle.truncate(Buffer.byteLength(completePrefix, "utf8"));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  return true;
 }
 
 /**
@@ -200,6 +246,26 @@ async function appendPiTransaction<T>(
     }
     throw error;
   }
+}
+
+/** Hold a generation suffix open until its visible assistant is durable. */
+export async function beginPiGenerationTurn(session: Session): Promise<string> {
+  const transactionId = randomUUID();
+  await session.appendCustomEntry(AIDEN_PI_TRANSACTION, {
+    transactionId,
+    phase: "begin",
+  } satisfies PiTransactionMarker);
+  return transactionId;
+}
+
+export async function commitPiGenerationTurn(
+  session: Session,
+  transactionId: string,
+): Promise<void> {
+  await session.appendCustomEntry(AIDEN_PI_TRANSACTION, {
+    transactionId,
+    phase: "commit",
+  } satisfies PiTransactionMarker);
 }
 
 async function recoverUncommittedTransaction(session: Session): Promise<void> {
@@ -364,6 +430,16 @@ export class PiCompactionSessionStore {
           session = candidate;
           break;
         } catch {
+          if (await repairTornFinalLine(metadata.path).catch(() => false)) {
+            try {
+              const repaired = await repo.open(metadata);
+              await repaired.getBranch();
+              session = repaired;
+              break;
+            } catch {
+              // A complete-but-invalid prefix is not safe to guess at.
+            }
+          }
           await this.quarantine(root, chatId, metadata.path);
         }
       }
@@ -408,8 +484,8 @@ export class PiCompactionSessionStore {
         if (error.code !== "ENOENT") throw error;
       });
     }
-    // Legacy journals created before the private index can still be found by
-    // bounded header metadata, even when the header is syntactically corrupt.
+    // Legacy journals are deleted only when their first JSONL header line has
+    // an exact identity. Body text may mention a different chat in tool args.
     const directories = [root];
     while (directories.length > 0) {
       const directory = directories.pop()!;
@@ -421,10 +497,7 @@ export class PiCompactionSessionStore {
         }
         if (!entry.name.includes(".jsonl")) continue;
         const prefix = await readJournalPrefix(candidate).catch(() => "");
-        if (
-          prefix.includes(`\"id\":\"${chatId}\"`) ||
-          prefix.includes(`\"chatId\":\"${chatId}\"`)
-        ) {
+        if (journalHeaderOwnsChat(prefix, chatId)) {
           await unlink(candidate);
         }
       }
