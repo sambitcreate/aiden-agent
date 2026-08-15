@@ -14,7 +14,10 @@ import {
 
 test("every V1 role resolves through the same positive read/search ceiling", () => {
   for (const role of SUBAGENT_ROLES) {
-    const profile = resolveCapabilityProfile({ kind: "subagent", role }, "full");
+    const profile = resolveCapabilityProfile(
+      { kind: "subagent", role },
+      "full",
+    );
     assert.deepEqual(profile.tools, SUBAGENT_READ_TOOL_NAMES);
   }
 });
@@ -32,20 +35,29 @@ test("capabilities are the parent, role, feature, and inherited intersection", (
     ).tools,
     ["grep"],
   );
-  assert.deepEqual(resolveCapabilityProfile({ kind: "subagent", role: "scout" }, "none").tools, []);
+  assert.deepEqual(
+    resolveCapabilityProfile({ kind: "subagent", role: "scout" }, "none").tools,
+    [],
+  );
 });
 
 test("parent tool exclusions become a positive child read-tool ceiling", () => {
   assert.deepEqual(
-    inheritedSubagentReadToolCeiling(new Set(["read_file", "grep", "run_command"])),
+    inheritedSubagentReadToolCeiling(
+      new Set(["read_file", "grep", "run_command"]),
+    ),
     ["list_dir", "glob"],
   );
-  assert.deepEqual(inheritedSubagentReadToolCeiling(undefined), SUBAGENT_READ_TOOL_NAMES);
+  assert.deepEqual(
+    inheritedSubagentReadToolCeiling(undefined),
+    SUBAGENT_READ_TOOL_NAMES,
+  );
 });
 
 test("unknown roles fail closed before workspace tool construction", () => {
   assert.throws(
-    () => resolveCapabilityProfile({ kind: "subagent", role: "worker" }, "full"),
+    () =>
+      resolveCapabilityProfile({ kind: "subagent", role: "worker" }, "full"),
     /Unknown subagent role/,
   );
   assert.throws(
@@ -77,10 +89,17 @@ test("malformed capability profiles and permissions fail closed", () => {
     { kind: "subagent", role: "scout", unexpected: true },
     { kind: "subagent", role: "scout", featurePolicy: "read_file" },
   ]) {
-    assert.throws(() => parseSubagentCapabilityRequest(input), /Invalid subagent capability/);
+    assert.throws(
+      () => parseSubagentCapabilityRequest(input),
+      /Invalid subagent capability/,
+    );
   }
   assert.throws(
-    () => resolveCapabilityProfile({ kind: "subagent", role: "scout" }, "owner" as never),
+    () =>
+      resolveCapabilityProfile(
+        { kind: "subagent", role: "scout" },
+        "owner" as never,
+      ),
     /Invalid parent workspace permission/,
   );
 });
@@ -114,14 +133,20 @@ test("the child builder constructs only the four permitted tool objects", () => 
 });
 
 test("production assembly resolves capability tools before ambient settings or factories", async () => {
-  const source = await readFile(new URL("../tools.ts", import.meta.url), "utf-8");
+  const source = await readFile(
+    new URL("../tools.ts", import.meta.url),
+    "utf-8",
+  );
   const builder = source.indexOf("export async function buildAgentTools");
   const capabilityBranch = source.indexOf(
     'if (ctx.mode === "subagent" || hasCapabilityProfile)',
     builder,
   );
   const settingsRead = source.indexOf("configStore.getSettings()", builder);
-  const normalCodingTools = source.indexOf("buildCodingTools(ctx.workspaceRoot)", builder);
+  const normalCodingTools = source.indexOf(
+    "buildCodingTools(ctx.workspaceRoot)",
+    builder,
+  );
 
   assert.ok(builder >= 0);
   assert.ok(capabilityBranch > builder);
@@ -133,7 +158,7 @@ test("production assembly resolves capability tools before ambient settings or f
   );
   assert.match(
     source.slice(builder, capabilityBranch),
-    /hasOwnProperty\.call\(ctx, "capabilityProfile"\)/,
+    /hasOwnProperty\.call\(\s*ctx,\s*"capabilityProfile",?\s*\)/,
   );
   assert.match(
     source.slice(capabilityBranch, settingsRead),

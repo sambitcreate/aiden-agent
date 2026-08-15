@@ -48,6 +48,10 @@ const EMPTY_USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
+function semanticCheckpointSummary(label: string): string {
+  return `## Goal\n${label}\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] preserved state\n\n### In Progress\n- [ ] continue\n\n### Blocked\n- none\n\n## Key Decisions\n- preserve continuity\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- ${label}`;
+}
+
 function deferred<T = void>() {
   let resolve = (_value: T | PromiseLike<T>): void => undefined;
   const promise = new Promise<T>((resolvePromise) => {
@@ -435,6 +439,19 @@ test("Aiden child factory shares its resolved transport while generating isolate
   });
 });
 
+test("child runner resets retry failures and treats length stops as terminal failures", async () => {
+  const source = await readFile(
+    new URL("./subagent-child-runner.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /message_start[\s\S]{0,220}terminalError = null;[\s\S]{0,80}terminalAborted = false;/u,
+  );
+  assert.match(source, /terminalGenerationLengthError\(message\)/u);
+  assert.match(source, /const exactOutput = terminalAssistantText\(message\)/u);
+});
+
 test("real Agent approval hook authorizes and consumes one exact outbound effect", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-approval",
@@ -547,27 +564,37 @@ test("real Agent approval hook authorizes and consumes one exact outbound effect
   assert.equal(registry.activeCount, 0);
 });
 
-test("child context compaction bounds oversized tool output before the next provider call", async () => {
+test("child semantically compacts oversized tool output before the next provider call", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-context",
     models: [{ id: "compat-context", contextWindow: 8_192 }],
   });
   let secondContext = "";
   let continuationContext = "";
+  const respondAfterTool = async (context: unknown) => {
+    const serialized = JSON.stringify(context);
+    if (/context summarization assistant/u.test(serialized)) {
+      if (/PREFIX of a turn/u.test(serialized)) {
+        return fauxAssistantMessage(
+          "## Original Request\nRead the oversized payload.\n\n## Early Progress\n- Read completed into a semantic history checkpoint.\n\n## Context for Suffix\n- Continue from bounded evidence.",
+        );
+      }
+      return fauxAssistantMessage(
+        semanticCheckpointSummary("semantic history checkpoint"),
+      );
+    }
+    if (/Continue from the compacted checkpoint/u.test(serialized)) {
+      continuationContext = serialized;
+      return fauxAssistantMessage("continued from checkpoint");
+    }
+    secondContext = serialized;
+    return fauxAssistantMessage("bounded");
+  };
   core.setResponses([
     fauxAssistantMessage(fauxToolCall("oversized_read", {}), {
       stopReason: "toolUse",
     }),
-    async (context) => {
-      secondContext = JSON.stringify(context);
-      return fauxAssistantMessage("bounded");
-    },
-    fauxAssistantMessage("semantic history checkpoint"),
-    fauxAssistantMessage("semantic turn-prefix checkpoint"),
-    async (context) => {
-      continuationContext = JSON.stringify(context);
-      return fauxAssistantMessage("continued from checkpoint");
-    },
+    ...Array.from({ length: 64 }, () => respondAfterTool),
   ]);
   const oversizedRead: AgentTool = {
     name: "oversized_read",
@@ -585,18 +612,31 @@ test("child context compaction bounds oversized tool output before the next prov
     runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
     [oversizedRead],
   );
+  let preparationCalls = 0;
+  let preparationCompacted = false;
+  const prepare = runningChild.agent.prepareNextTurnWithContext;
+  runningChild.agent.prepareNextTurnWithContext = async (value, signal) => {
+    preparationCalls += 1;
+    const prepared = await prepare?.(value, signal);
+    preparationCompacted ||=
+      prepared?.context?.messages[0]?.role === "compactionSummary";
+    return prepared;
+  };
 
   await runningChild.prompt("Read the oversized payload, then conclude.");
   await runningChild.agent.prompt("Continue from the compacted checkpoint.");
 
-  assert.equal(core.state.callCount, 5);
-  assert.match(
-    secondContext,
-    /context window|characters compacted|payload omitted/u,
-  );
+  assert.ok(preparationCalls > 0);
+  assert.equal(preparationCompacted, true);
+  assert.ok(core.state.callCount >= 4);
+  assert.match(secondContext, /semantic history checkpoint/u);
+  assert.doesNotMatch(secondContext, /START-x{1000}/u);
   assert.ok(secondContext.length < 100_000);
   assert.equal(runningChild.agent.state.messages[0]?.role, "compactionSummary");
-  assert.match(continuationContext, /conversation history.*compacted.*summary/isu);
+  assert.match(
+    continuationContext,
+    /conversation history.*compacted.*summary/isu,
+  );
   assert.match(continuationContext, /semantic history checkpoint/u);
   assert.equal(registry.activeCount, 0);
 });
@@ -606,7 +646,9 @@ test("child completion survives a Pi journal append failure", async () => {
     provider: "aiden-compat-journal-resilience",
     models: [{ id: "compat-journal-resilience", contextWindow: 8_192 }],
   });
-  core.setResponses([fauxAssistantMessage("completed despite journal failure")]);
+  core.setResponses([
+    fauxAssistantMessage("completed despite journal failure"),
+  ]);
   const journalErrors: unknown[] = [];
   let failedAssistantBatch = false;
   const registry = new SubagentRuntimeRegistry(undefined, undefined, {
@@ -628,7 +670,9 @@ test("child completion survives a Pi journal append failure", async () => {
   );
 
   await assert.doesNotReject(
-    runningChild.prompt("Complete even if the in-memory journal cannot append."),
+    runningChild.prompt(
+      "Complete even if the in-memory journal cannot append.",
+    ),
   );
 
   assert.equal(core.state.callCount, 1);
@@ -647,13 +691,17 @@ test("forked initial context is compacted before the first provider request", as
     models: [{ id: "compat-initial-fork", contextWindow: 8_192 }],
   });
   let firstContext = "";
-  core.setResponses([
-    async (context) => {
-      firstContext = JSON.stringify(context);
-      return fauxAssistantMessage("bounded");
-    },
-    fauxAssistantMessage("semantic checkpoint"),
-  ]);
+  const respond = async (context: unknown) => {
+    const serialized = JSON.stringify(context);
+    if (/context summarization assistant/u.test(serialized)) {
+      return fauxAssistantMessage(
+        semanticCheckpointSummary("semantic checkpoint"),
+      );
+    }
+    firstContext = JSON.stringify(context);
+    return fauxAssistantMessage("bounded");
+  };
+  core.setResponses(Array.from({ length: 64 }, () => respond));
   const registry = new SubagentRuntimeRegistry();
   const modelRuntime = runtimeFrom(
     core.getModel() as Model<Api>,
@@ -681,7 +729,7 @@ test("forked initial context is compacted before the first provider request", as
 
   await runningChild.prompt("Conclude from the forked conversation.");
 
-  assert.equal(core.state.callCount, 2);
+  assert.ok(core.state.callCount > 2);
   assert.doesNotMatch(firstContext, /FORK-START|FORK-END/u);
   assert.match(firstContext, /Conclude from the forked conversation/u);
   assert.ok(firstContext.length < 100_000);

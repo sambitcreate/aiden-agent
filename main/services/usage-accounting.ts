@@ -1,4 +1,9 @@
-import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Model,
+  Usage,
+} from "@earendil-works/pi-ai";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import type { StoredProvider, UsageTokenBreakdown } from "./types.js";
 import type {
@@ -8,10 +13,14 @@ import type {
 } from "./usage-store-core.js";
 
 function positiveInteger(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
 }
 
-export function openAITranscriptionTokens(value: unknown): UsageTokenBreakdown | null {
+export function openAITranscriptionTokens(
+  value: unknown,
+): UsageTokenBreakdown | null {
   if (!value || typeof value !== "object") return null;
   const usage = value as Record<string, unknown>;
   if (usage.type === "duration") return null;
@@ -22,7 +31,9 @@ export function openAITranscriptionTokens(value: unknown): UsageTokenBreakdown |
   return { input, output, cacheRead: 0, cacheWrite: 0, reasoning: 0, total };
 }
 
-export function geminiTranscriptionTokens(value: unknown): UsageTokenBreakdown | null {
+export function geminiTranscriptionTokens(
+  value: unknown,
+): UsageTokenBreakdown | null {
   if (!value || typeof value !== "object") return null;
   const usage = value as Record<string, unknown>;
   // Gemini's prompt count already includes cached content. Keep the same
@@ -33,7 +44,8 @@ export function geminiTranscriptionTokens(value: unknown): UsageTokenBreakdown |
   const reasoning = positiveInteger(usage.thoughtsTokenCount);
   const output = positiveInteger(usage.candidatesTokenCount) + reasoning;
   const total = positiveInteger(usage.totalTokenCount) || prompt + output;
-  if (total === 0 && prompt === 0 && output === 0 && cacheRead === 0) return null;
+  if (total === 0 && prompt === 0 && output === 0 && cacheRead === 0)
+    return null;
   return { input, output, cacheRead, cacheWrite: 0, reasoning, total };
 }
 
@@ -41,11 +53,13 @@ export function reportedTokens(
   usage: Partial<Usage> | null | undefined,
 ): UsageTokenBreakdown | null {
   if (!usage) return null;
+  const cacheWrite1h = positiveInteger(usage.cacheWrite1h);
   const tokens: UsageTokenBreakdown = {
     input: positiveInteger(usage.input),
     output: positiveInteger(usage.output),
     cacheRead: positiveInteger(usage.cacheRead),
     cacheWrite: positiveInteger(usage.cacheWrite),
+    ...(cacheWrite1h > 0 ? { cacheWrite1h } : {}),
     reasoning: positiveInteger(usage.reasoning),
     total: positiveInteger(usage.totalTokens),
   };
@@ -58,13 +72,17 @@ export function reportedTokens(
     tokens.reasoning > 0;
   if (!reported) return null;
   if (tokens.total === 0) {
-    tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
+    tokens.total =
+      tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
   }
   return tokens;
 }
 
 export function isLocalModelProvider(
-  provider: Pick<StoredProvider, "id" | "label" | "baseUrl" | "needsKey" | "deployment">,
+  provider: Pick<
+    StoredProvider,
+    "id" | "label" | "baseUrl" | "needsKey" | "deployment"
+  >,
 ): boolean {
   return isLocalProviderDeployment(provider);
 }
@@ -72,14 +90,16 @@ export function isLocalModelProvider(
 function modelHasPricing(model: Model<Api>): boolean {
   return [model.cost, ...(model.cost.tiers ?? [])].some((rates) =>
     [rates.input, rates.output, rates.cacheRead, rates.cacheWrite].some(
-      (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
+      (value) =>
+        typeof value === "number" && Number.isFinite(value) && value > 0,
     ),
   );
 }
 
 function statusFor(message: AssistantMessage): UsageRequestStatus {
   if (message.stopReason === "aborted") return "cancelled";
-  if (message.stopReason === "error") return "failed";
+  if (message.stopReason === "error" || message.stopReason === "length")
+    return "failed";
   return "completed";
 }
 

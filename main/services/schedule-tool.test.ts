@@ -67,7 +67,9 @@ function scheduledTask(input: ScheduledTaskInput, id: string): ScheduledTask {
     workspaceId: input.workspaceId,
     ...(input.providerId ? { providerId: input.providerId } : {}),
     ...(input.model ? { model: input.model } : {}),
-    ...(input.providerFingerprint ? { providerFingerprint: input.providerFingerprint } : {}),
+    ...(input.providerFingerprint
+      ? { providerFingerprint: input.providerFingerprint }
+      : {}),
     prompt: input.prompt,
     script: input.script,
     permission: input.permission ?? "read-only",
@@ -84,7 +86,9 @@ function scheduledTask(input: ScheduledTaskInput, id: string): ScheduledTask {
 
 function fakeDependencies() {
   const tasks: ScheduledTask[] = [];
-  const calls = { validatedScripts: [] as Array<{ script: string; workspaceRoot?: string }> };
+  const calls = {
+    validatedScripts: [] as Array<{ script: string; workspaceRoot?: string }>,
+  };
   const workspace: Workspace = {
     id: "workspace-1",
     name: "Project",
@@ -97,13 +101,17 @@ function fakeDependencies() {
     list: async () => structuredClone(tasks),
     get: async (id) => structuredClone(tasks.find((task) => task.id === id)),
     save: async (input, expectedUpdatedAt, signal) => {
-      if (signal?.aborted) throw new Error("Scheduled task save was cancelled.");
+      if (signal?.aborted)
+        throw new Error("Scheduled task save was cancelled.");
       const existingIndex = input.id
         ? tasks.findIndex((candidate) => candidate.id === input.id)
         : -1;
       const existing = existingIndex >= 0 ? tasks[existingIndex] : undefined;
       if (input.id && !existing) throw new Error("not found");
-      if (expectedUpdatedAt !== undefined && existing?.updatedAt !== expectedUpdatedAt) {
+      if (
+        expectedUpdatedAt !== undefined &&
+        existing?.updatedAt !== expectedUpdatedAt
+      ) {
         throw new Error("stale revision");
       }
       const task = {
@@ -154,7 +162,8 @@ function fakeDependencies() {
 function jsonResult(value: AgentToolResult<null>): Record<string, unknown> {
   const block = value.content[0];
   assert.equal(block?.type, "text");
-  if (!block || block.type !== "text") throw new Error("Expected a text tool result.");
+  if (!block || block.type !== "text")
+    throw new Error("Expected a text tool result.");
   return JSON.parse(block.text) as Record<string, unknown>;
 }
 
@@ -190,21 +199,59 @@ test("schedule_task supports the full create/list/pause/resume/run/remove lifecy
   );
   assert.equal(
     (
-      jsonResult(await tool.execute("resume", { action: "resume", id: "task-1" }))
-        .task as ScheduledTask
+      jsonResult(
+        await tool.execute("resume", { action: "resume", id: "task-1" }),
+      ).task as ScheduledTask
     ).enabled,
     true,
   );
   assert.equal(
-    (jsonResult(await tool.execute("run", { action: "run_now", id: "task-1" })).run as ScheduledRun)
-      .result,
+    (
+      jsonResult(await tool.execute("run", { action: "run_now", id: "task-1" }))
+        .run as ScheduledRun
+    ).result,
     "success",
   );
   assert.equal(
-    jsonResult(await tool.execute("remove", { action: "remove", id: "task-1" })).removed,
+    jsonResult(await tool.execute("remove", { action: "remove", id: "task-1" }))
+      .removed,
     "task-1",
   );
   assert.equal(fake.tasks.length, 0);
+});
+
+test("schedule_task forwards cancellation to every standard mutation", async () => {
+  const fake = fakeDependencies();
+  const observed: Array<[string, AbortSignal | undefined]> = [];
+  for (const action of ["pause", "resume", "remove", "runNow"] as const) {
+    const original = fake.dependencies[action];
+    Object.assign(fake.dependencies, {
+      [action]: async (id: string, signal?: AbortSignal) => {
+        observed.push([action, signal]);
+        if (signal?.aborted) throw new Error("cancelled before mutation");
+        return original(id, signal);
+      },
+    });
+  }
+  await fake.dependencies.save({
+    name: "Cancelable",
+    cron: "0 9 * * *",
+    mode: "llm",
+    prompt: "Summarize.",
+    permission: "read-only",
+  });
+  const tool = createScheduleTaskTool({ kind: "standard" }, fake.dependencies);
+  for (const action of ["pause", "resume", "run_now", "remove"] as const) {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      tool.execute(action, { action, id: "task-1" }, controller.signal),
+      /cancel/iu,
+    );
+  }
+  // Pre-aborted calls are rejected before a dependency can commit anything.
+  assert.deepEqual(observed, []);
+  assert.equal(fake.tasks.length, 1);
 });
 
 test("schedule_task validates scripts in the bound workspace and rejects unsafe prompts", async () => {
@@ -272,11 +319,17 @@ test("standard scheduled tasks reject combined project and MCP capability scope"
 
 test("scheduled generation contexts omit schedule_task to prevent recursion", () => {
   assert.deepEqual(
-    scheduleTaskToolsForContext({ workspaceId: "workspace-1", allowScheduling: false }),
+    scheduleTaskToolsForContext({
+      workspaceId: "workspace-1",
+      allowScheduling: false,
+    }),
     [],
   );
   assert.equal(
-    scheduleTaskToolsForContext({ workspaceId: "workspace-1", allowScheduling: true })[0]?.name,
+    scheduleTaskToolsForContext({
+      workspaceId: "workspace-1",
+      allowScheduling: true,
+    })[0]?.name,
     SCHEDULE_TOOL_NAME,
   );
 });
@@ -290,7 +343,11 @@ test("attended Assistant scheduling exposes separate list, create, and edit tool
       allowScheduling: true,
       assistantModelSelection: ASSISTANT_MODEL_SELECTION,
     }).map((candidate) => candidate.name),
-    [LIST_SCHEDULED_TASKS_TOOL_NAME, SCHEDULE_TOOL_NAME, EDIT_AUTOMATION_TOOL_NAME],
+    [
+      LIST_SCHEDULED_TASKS_TOOL_NAME,
+      SCHEDULE_TOOL_NAME,
+      EDIT_AUTOMATION_TOOL_NAME,
+    ],
   );
   const schema = tool.parameters as {
     properties?: Record<string, { const?: unknown }>;
@@ -309,7 +366,12 @@ test("attended Assistant scheduling exposes separate list, create, and edit tool
     "timezone",
     "workspaceId",
   ]);
-  assert.deepEqual(schema.required?.slice().sort(), ["action", "cron", "name", "prompt"]);
+  assert.deepEqual(schema.required?.slice().sort(), [
+    "action",
+    "cron",
+    "name",
+    "prompt",
+  ]);
   assert.equal(schema.additionalProperties, false);
   assert.doesNotMatch(JSON.stringify(schema), /run_now|pause|resume|remove/u);
 
@@ -375,14 +437,20 @@ test("edit_automation updates one exact task without creating a duplicate", asyn
     }),
   );
 
-  const editTool = createAssistantEditAutomationTool(ASSISTANT_MODEL_SELECTION, fake.dependencies);
+  const editTool = createAssistantEditAutomationTool(
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+  );
   assert.equal(editTool.name, EDIT_AUTOMATION_TOOL_NAME);
   const schema = editTool.parameters as {
     properties?: Record<string, unknown>;
     required?: string[];
     additionalProperties?: boolean;
   };
-  assert.deepEqual(schema.required?.slice().sort(), ["expectedUpdatedAt", "id"]);
+  assert.deepEqual(schema.required?.slice().sort(), [
+    "expectedUpdatedAt",
+    "id",
+  ]);
   assert.equal(schema.additionalProperties, false);
   assert.equal(schema.properties?.action, undefined);
   assert.equal(schema.properties?.mode, undefined);
@@ -440,7 +508,10 @@ test("edit_automation rejects stale, ambiguous, and non-Assistant edits", async 
     createdAt: 1,
     updatedAt: 4,
   });
-  const tool = createAssistantEditAutomationTool(ASSISTANT_MODEL_SELECTION, fake.dependencies);
+  const tool = createAssistantEditAutomationTool(
+    ASSISTANT_MODEL_SELECTION,
+    fake.dependencies,
+  );
   await assert.rejects(
     tool.execute("stale", {
       id: "task-1",
@@ -518,7 +589,10 @@ test("attended Assistant allows confirmed project access but rejects unbound Ful
     },
     { action: "remove", id: "task-1" },
   ]) {
-    await assert.rejects(tool.execute("blocked", params), /cannot|only|requires/iu);
+    await assert.rejects(
+      tool.execute("blocked", params),
+      /cannot|only|requires/iu,
+    );
   }
   await assert.rejects(
     tool.execute("missing-project", {
@@ -654,7 +728,10 @@ test("attended Assistant bounds every string copied into the confirmation", asyn
       prompt: "p".repeat(32 * 1024 + 1),
     },
   ]) {
-    await assert.rejects(tool.execute("too-long", params), /characters or fewer/iu);
+    await assert.rejects(
+      tool.execute("too-long", params),
+      /characters or fewer/iu,
+    );
   }
   assert.equal(fake.tasks.length, 0);
 });
@@ -700,7 +777,10 @@ test("Assistant approval resolution binds a trusted project name to the exact pr
   assert.equal(proposal.details.workspaceId, "workspace-1");
   assert.equal(proposal.details.permission, "full");
   assert.deepEqual(
-    await resolveAssistantScheduleProject(proposal, fake.dependencies.getWorkspace),
+    await resolveAssistantScheduleProject(
+      proposal,
+      fake.dependencies.getWorkspace,
+    ),
     {
       workspaceId: "workspace-1",
       workspaceName: "Project",
@@ -723,7 +803,10 @@ test("Assistant approval resolution binds exact enabled MCP names", async () => 
   );
   assert.equal(proposal.details.permission, "full");
   assert.deepEqual(
-    await resolveAssistantScheduleMcpServers(proposal, fake.dependencies.listMcpServers),
+    await resolveAssistantScheduleMcpServers(
+      proposal,
+      fake.dependencies.listMcpServers,
+    ),
     {
       mcpServerIds: ["gmail"],
       mcpServerNames: ["Gmail"],

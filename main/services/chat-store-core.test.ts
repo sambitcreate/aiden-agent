@@ -63,6 +63,60 @@ test("serializes assistant persistence with a background title update", async (t
   );
 });
 
+test("persists canonical Pi assistant provenance across restart without crossing the visible-copy boundary", async (t) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "aiden-chat-pi-provenance-"),
+  );
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const first = createChatStore(async () => directory);
+  const chat = await first.create({ providerId: "google", model: "new-model" });
+  await first.appendMessage(chat.id, {
+    role: "user",
+    content: "Remember provider history",
+  });
+  const saved = await first.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Historical answer",
+    model: "claude-old",
+    reasoning: "Historical reasoning",
+    pi: {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Historical reasoning" },
+        { type: "text", text: "Historical answer" },
+      ],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-old",
+      responseId: "response-old",
+      usage: {
+        input: 8,
+        output: 4,
+        cacheRead: 1,
+        cacheWrite: 2,
+        cacheWrite1h: 1,
+        totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 20,
+    },
+  });
+  const assistantId = saved.messages[saved.messages.length - 1]!.id;
+
+  const restarted = createChatStore(async () => directory);
+  const restored = await restarted.get(chat.id);
+  assert.equal(restored?.messages[1]?.pi?.provider, "anthropic");
+  assert.equal(restored?.messages[1]?.pi?.api, "anthropic-messages");
+  assert.equal(restored?.messages[1]?.pi?.responseId, "response-old");
+  const copied = await restarted.copyVisibleHistory({
+    sourceChatId: chat.id,
+    throughAssistantMessageId: assistantId,
+  });
+  assert.equal(copied.messages[1]?.pi, undefined);
+  assert.equal(copied.messages[1]?.reasoning, undefined);
+});
+
 test("chat payload writes are atomic when staged-file sync fails", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-sync-failure-"),

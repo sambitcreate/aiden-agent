@@ -17,6 +17,7 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import {
   projectVisibleChatMessage,
   projectVisibleChatMetadata,
@@ -395,6 +396,10 @@ export function createChatStore(
         message.reasoning.trim()
           ? message.reasoning
           : undefined,
+      pi:
+        message.role === "assistant"
+          ? parseStoredPiAssistantMessage(message.pi)
+          : undefined,
       timeline:
         message.role === "assistant"
           ? parseGenerationTimeline(message.timeline)
@@ -645,9 +650,7 @@ export function createChatStore(
           }
         };
         const metadata = projectVisibleChatMetadata(source);
-        const suffix = input.throughAssistantMessageId
-          ? " (fork)"
-          : " (copy)";
+        const suffix = input.throughAssistantMessageId ? " (fork)" : " (copy)";
         const maximumBaseLength = Math.max(1, 120 - suffix.length);
         const title = `${Array.from(
           metadata.title.slice(0, maximumBaseLength * 2),
@@ -660,7 +663,8 @@ export function createChatStore(
         charge(metadata.providerId);
         charge(metadata.model);
         for (let index = 0; index <= throughIndex; index += 1) {
-          const message = projectVisibleChatMessage(source.messages[index]);
+          const sourceMessage = source.messages[index];
+          const message = projectVisibleChatMessage(sourceMessage);
           if (!message) continue;
           if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
             throw new Error("This chat has too many messages to copy safely.");
@@ -834,6 +838,10 @@ export function createChatStore(
             typeof message.reasoning === "string" &&
             message.reasoning.trim()
               ? message.reasoning
+              : undefined,
+          pi:
+            message.role === "assistant"
+              ? parseStoredPiAssistantMessage(message.pi)
               : undefined,
           attachments: safeStoredAttachments(message.attachments),
           skill:

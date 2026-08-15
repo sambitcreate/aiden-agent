@@ -9,8 +9,9 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import { performance } from "node:perf_hooks";
 import {
-  terminalAssistantTextFallback,
+  terminalAssistantText,
   terminalGenerationError,
+  terminalGenerationLengthError,
   terminalGenerationWasAborted,
 } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
@@ -638,6 +639,8 @@ export async function runSubagentChild(
       ) {
         currentTurnHadTextDelta = false;
         currentTurnOutput = "";
+        terminalError = null;
+        terminalAborted = false;
       } else if (event.type === "message_update") {
         const update = event.assistantMessageEvent;
         if (update.type === "text_delta") {
@@ -681,23 +684,22 @@ export async function runSubagentChild(
         if (message) {
           input.telemetry?.usage(message);
           await recordUsage(message, input.runtime);
-          const error = terminalGenerationError(message);
+          const error =
+            terminalGenerationError(message) ??
+            terminalGenerationLengthError(message);
           if (error) terminalError = error;
           if (terminalGenerationWasAborted(message)) terminalAborted = true;
-          const fallback = terminalAssistantTextFallback(
-            message,
-            currentTurnHadTextDelta,
-          );
-          if (fallback) {
-            observedOutputChars += fallback.length;
-            const remaining = policy.maxOutputChars - currentTurnOutput.length;
-            currentTurnOutput += fallback.slice(0, Math.max(0, remaining));
-            if (
-              observedOutputChars > policy.maxOutputChars ||
-              fallback.length > remaining
-            ) {
-              stopForLimit("The child reached its output limit.");
-            }
+          const exactOutput = terminalAssistantText(message);
+          const additionalObserved = currentTurnHadTextDelta
+            ? Math.max(0, exactOutput.length - currentTurnOutput.length)
+            : exactOutput.length;
+          observedOutputChars += additionalObserved;
+          currentTurnOutput = exactOutput.slice(0, policy.maxOutputChars);
+          if (
+            observedOutputChars > policy.maxOutputChars ||
+            exactOutput.length > policy.maxOutputChars
+          ) {
+            stopForLimit("The child reached its output limit.");
           }
           terminalOutput = currentTurnOutput;
         }
@@ -735,7 +737,7 @@ export async function runSubagentChild(
     if (outcome.kind === "failed") {
       return safeFailure(input.request);
     }
-    if (terminalError) return safeFailure(input.request);
+    if (terminalError) return safeFailure(input.request, terminalError);
     if (terminalAborted) {
       return {
         role: input.request.role,

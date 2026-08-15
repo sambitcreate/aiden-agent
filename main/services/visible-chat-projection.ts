@@ -1,4 +1,4 @@
-import type { Attachment } from "./types.js";
+import type { Attachment, Chat } from "./types.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
@@ -25,6 +25,18 @@ export interface VisibleChatMessage {
   model?: string;
   attachments?: Attachment[];
   skill?: SkillProvenanceV1;
+}
+
+/** Strip private provider protocol before a Chat crosses into the renderer. */
+export function chatForRenderer(chat: Chat | null): Chat | null {
+  if (!chat) return null;
+  return {
+    ...chat,
+    messages: chat.messages.map((message) => {
+      const { pi: _privatePiProtocol, ...visible } = message;
+      return visible;
+    }),
+  };
 }
 
 function boundedString(

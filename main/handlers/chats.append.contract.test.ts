@@ -9,6 +9,20 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 
 const source = fs.readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
+const projectionSource = fs.readFileSync(
+  new URL("../services/visible-chat-projection.ts", import.meta.url),
+  "utf8",
+);
+
+test("private canonical Pi protocol never crosses the renderer chat boundary", () => {
+  assert.match(
+    projectionSource,
+    /const \{ pi: _privatePiProtocol, \.\.\.visible \} = message/u,
+  );
+  assert.match(source, /chat: chatForRenderer\(chat\)/u);
+  assert.match(source, /return chatForRenderer\(chat\)/u);
+  assert.match(source, /return chatForRenderer\(copied\)/u);
+});
 
 test("indeterminate appends fence create and append for the renderer document", () => {
   const create = source.slice(
@@ -184,5 +198,8 @@ test("append admission charges encoded image representation and metadata", () =>
     },
     { turnId: "turn-1", providerId: "provider", model: "model" },
   );
-  assert.ok(parsed.retainedBytes >= data.length + Buffer.byteLength("providermodel", "utf8"));
+  assert.ok(
+    parsed.retainedBytes >=
+      data.length + Buffer.byteLength("providermodel", "utf8"),
+  );
 });
