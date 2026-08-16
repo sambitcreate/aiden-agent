@@ -544,9 +544,10 @@ export class PiRuntimeEffectStore {
   }
 
   /**
-   * A foreground visible-turn commit proves every terminal effect currently
-   * owned by that chat has a durable Pi result/no-repeat boundary. Child
-   * effects share the foreground chat identity and settle before its result.
+   * A foreground visible-turn commit proves only foreground-lane effects have
+   * a durable Pi result. Child sessions are intentionally in-memory, so their
+   * effects remain pending until an explicit no-repeat recovery boundary is
+   * committed to the foreground journal.
    */
   async acknowledgeChatEffectsDurable(chatId: string): Promise<void> {
     this.requireInitialized();
@@ -559,6 +560,7 @@ export class PiRuntimeEffectStore {
       database.effects = database.effects.map((effect) => {
         if (
           effect.chatId !== chatId ||
+          effect.lane !== "foreground" ||
           effect.recoveryRecordedAt !== undefined ||
           !isPiRuntimeEffectTerminal(effect.state) ||
           effect.state === "cancelled_before_dispatch"

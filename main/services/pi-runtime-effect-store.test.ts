@@ -284,6 +284,56 @@ test("restart recovery installs one durable no-repeat boundary before releasing 
     await restarted.finishOperation(committedOperation.operationId, "completed");
     await restarted.acknowledgeChatEffectsDurable("chat-recovery");
     assert.equal((await restarted.listEffectsNeedingRecoveryByChat("chat-recovery")).length, 0);
+
+    const childOperation = {
+      ...operation("operation-child", "chat-recovery"),
+      lane: "child" as const,
+    };
+    await restarted.startOperation(childOperation);
+    const childEffect = effect(childOperation, "effect-child", {
+      toolName: "write_file",
+      replay: "never",
+    });
+    await restarted.prepareEffect(childEffect);
+    await restarted.markEffectDispatchStarted(effectOwner(childEffect));
+    await restarted.finishEffect({
+      ...effectOwner(childEffect),
+      state: "completed",
+      terminalDigest: piRuntimeTerminalDigest("child write complete"),
+    });
+    await restarted.finishOperation(childOperation.operationId, "completed");
+    await restarted.acknowledgeChatEffectsDurable("chat-recovery");
+    assert.deepEqual(
+      (await restarted.listEffectsNeedingRecoveryByChat("chat-recovery")).map(
+        ({ effectId }) => effectId,
+      ),
+      ["effect-child"],
+    );
+
+    const childRestart = makeStore(effectRoot, 3_000);
+    await childRestart.initialize();
+    const childPending = await childRestart.listEffectsNeedingRecoveryByChat("chat-recovery");
+    assert.deepEqual(
+      childPending.map(({ effectId }) => effectId),
+      ["effect-child"],
+    );
+    await recordPiEffectRecoveryBoundary(session, childPending);
+    for (const recovered of childPending) {
+      await childRestart.markRecoveryRecorded({
+        effectId: recovered.effectId,
+        operationId: recovered.operationId,
+        runId: recovered.runId,
+        chatId: recovered.chatId,
+      });
+    }
+    const recoveredContext = await session.buildContext();
+    const childBoundary = recoveredContext.messages[recoveredContext.messages.length - 1];
+    assert.equal(childBoundary?.role, "assistant");
+    assert.match(JSON.stringify(childBoundary), /write_file/u);
+    assert.equal(
+      (await childRestart.listEffectsNeedingRecoveryByChat("chat-recovery")).length,
+      0,
+    );
   });
 });
 
