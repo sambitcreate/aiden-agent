@@ -11,6 +11,7 @@ import {
   assistantLiveStartErrorDetail,
   PcmPlayer,
   reconcileAssistantLiveCaption,
+  sealAssistantLiveCaption,
   type AssistantLiveController,
   type AssistantLiveDependencies,
   useAssistantLiveWithDependencies,
@@ -379,7 +380,10 @@ test("fixed provider-start diagnostics remain actionable without exposing raw de
 });
 
 test("runtime diagnostics preserve fixed actionable categories without raw detail", () => {
-  assert.match(assistantLiveRuntimeErrorDetail("idle_timeout"), /stopped responding/iu);
+  assert.match(
+    assistantLiveRuntimeErrorDetail("idle_timeout"),
+    /stopped responding/iu,
+  );
   assert.match(
     assistantLiveRuntimeErrorDetail("malformed_server_event"),
     /unsupported event/iu,
@@ -876,6 +880,112 @@ test("audio rejection stops capture and the provider session instead of claiming
   await fixture.unmount();
 });
 
+test("microphone activity is measured locally, throttled, and reset on Stop", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  const oldWorklet = fixture.worklets[0];
+  const data = new ArrayBuffer(640);
+  const view = new DataView(data);
+  for (let offset = 0; offset < data.byteLength; offset += 2)
+    view.setInt16(offset, 8_192, true);
+  fixture.worklets[0]?.emit({ type: "pcm", data });
+  await settle();
+  assert.equal(fixture.controller().microphoneLevel > 0.7, true);
+  await fixture.controller().stop();
+  await settle();
+  assert.equal(fixture.controller().microphoneLevel, 0);
+  oldWorklet?.emit({ type: "pcm", data: data.slice(0) });
+  await settle();
+  assert.equal(
+    fixture.controller().microphoneLevel,
+    0,
+    "stale post-teardown PCM cannot restore microphone activity",
+  );
+  await fixture.unmount();
+});
+
+test("local microphone activity keeps decaying while four audio sends are backpressured", async () => {
+  let snapshot: AssistantLiveSnapshot = {
+    available: true,
+    reason: "available",
+    model: "gemini-live-test",
+    state: "idle",
+  };
+  const pendingSends: Array<ReturnType<typeof deferred<boolean>>> = [];
+  const fixture = await mountHook({
+    api: {
+      status: async () => snapshot,
+      start: async () => {
+        snapshot = {
+          ...snapshot,
+          sessionId: "meter-backpressure",
+          state: "open",
+        };
+        return snapshot;
+      },
+      stop: async () => {
+        snapshot = { ...snapshot, sessionId: undefined, state: "idle" };
+        return snapshot;
+      },
+      sendAudio: async () => {
+        const pending = deferred<boolean>();
+        pendingSends.push(pending);
+        return pending.promise;
+      },
+      onEvent: () => () => undefined,
+    },
+  });
+  await fixture.controller().start();
+  const signal = new ArrayBuffer(640);
+  const signalView = new DataView(signal);
+  for (let offset = 0; offset < signal.byteLength; offset += 2)
+    signalView.setInt16(offset, 8_192, true);
+  for (let index = 0; index < 4; index += 1)
+    fixture.worklets[0]?.emit({ type: "pcm", data: signal.slice(0) });
+  await settle();
+  const loudLevel = fixture.controller().microphoneLevel;
+  assert.equal(pendingSends.length, 4);
+  for (let index = 0; index < 4; index += 1)
+    fixture.worklets[0]?.emit({ type: "pcm", data: new ArrayBuffer(640) });
+  await settle();
+  assert.equal(fixture.controller().microphoneLevel < loudLevel, true);
+  for (const pending of pendingSends) pending.resolve(true);
+  await fixture.unmount();
+});
+
+test("provider turn boundaries seal same-speaker transcript turns exactly once", async () => {
+  const fixture = await mountHook();
+  await fixture.controller().start();
+  for (const text of ["Feel", "free to ask"]) {
+    fixture.emit({
+      type: "caption",
+      sessionId: "session-1",
+      direction: "output",
+      text,
+      final: true,
+    });
+  }
+  assert.equal(fixture.controller().captions.length, 1);
+  assert.equal(fixture.controller().captions[0]?.text, "Feel free to ask");
+  assert.equal(fixture.controller().captions[0]?.sealed, false);
+  fixture.emit({
+    type: "turn",
+    sessionId: "session-1",
+    state: "turn_complete",
+  });
+  assert.equal(fixture.controller().captions[0]?.sealed, true);
+  fixture.emit({
+    type: "caption",
+    sessionId: "session-1",
+    direction: "output",
+    text: "What else?",
+    final: true,
+  });
+  assert.equal(fixture.controller().captions.length, 2);
+  assert.equal(fixture.controller().captions[1]?.sealed, false);
+  await fixture.unmount();
+});
+
 test("stale availability cannot restore an open session after audio-failure shutdown", async () => {
   const staleOpen = deferred<AssistantLiveSnapshot>();
   let statusCalls = 0;
@@ -935,7 +1045,11 @@ test("audio-failure stop rejection preserves a conservative open-session warning
     api: {
       status: async () => snapshot,
       start: async () => {
-        snapshot = { ...snapshot, sessionId: "audio-stop-failure", state: "open" };
+        snapshot = {
+          ...snapshot,
+          sessionId: "audio-stop-failure",
+          state: "open",
+        };
         return snapshot;
       },
       stop: async () => {
@@ -1170,9 +1284,50 @@ test("caption reconciliation updates one interim utterance and finalizes its sta
     event("hello", true),
     () => ++id,
   );
+  captions = reconcileAssistantLiveCaption(
+    captions,
+    event("world", true),
+    () => ++id,
+  );
   assert.deepEqual(captions, [
-    { id: 1, direction: "input", text: "hello", final: true },
+    {
+      id: 1,
+      direction: "input",
+      text: "hello world",
+      final: true,
+      sealed: false,
+    },
   ]);
+  captions = sealAssistantLiveCaption(captions);
+  captions = reconcileAssistantLiveCaption(
+    captions,
+    event("A separate turn", true),
+    () => ++id,
+  );
+  assert.equal(captions.length, 2);
+  assert.equal(captions[0]?.sealed, true);
+  assert.equal(captions[1]?.text, "A separate turn");
+});
+
+test("caption turns preserve a long response beyond the former fragment cap", () => {
+  let captions: AssistantLiveController["captions"] = [];
+  let id = 0;
+  for (let index = 0; index < 64; index += 1) {
+    captions = reconcileAssistantLiveCaption(
+      captions,
+      {
+        type: "caption",
+        sessionId: "s",
+        direction: "output",
+        text: `word${index}`,
+        final: true,
+      },
+      () => ++id,
+    );
+  }
+  assert.equal(captions.length, 1);
+  assert.match(captions[0]?.text ?? "", /^word0 word1/u);
+  assert.match(captions[0]?.text ?? "", /word63$/u);
 });
 
 test("playback interruption invalidates a pending resume before a source can start", async () => {
