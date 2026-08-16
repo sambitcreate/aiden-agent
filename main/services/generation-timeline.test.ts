@@ -134,8 +134,18 @@ test("terminal cancellation settles active steps", () => {
   projector.toolStarted("call-a", "read_file", { path: "README.md" });
   projector.toolRunning("call-a");
 
-  const final = projector.finish("cancelled");
+  const final = projector.finish("cancelled", "user_stop");
   assert.equal(final.status, "cancelled");
+  assert.equal(final.cancellationOrigin, "user_stop");
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(final))), final);
+  assert.equal(
+    parseGenerationTimeline({ ...final, cancellationOrigin: "renderer_lifecycle" }),
+    undefined,
+  );
+  assert.equal(
+    parseGenerationTimeline({ ...final, status: "completed" }),
+    undefined,
+  );
   assert.equal(toolSteps(final)[0]?.status, "cancelled");
   assert.equal(typeof final.finishedAt, "number");
   assert.equal(typeof final.steps[0]?.finishedAt, "number");

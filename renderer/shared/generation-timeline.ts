@@ -58,6 +58,17 @@ export type AgentStep = AgentToolStep | AgentThinkingStep;
 
 export type GenerationTimelineStatus = "running" | "completed" | "failed" | "cancelled";
 
+export const GENERATION_CANCELLATION_ORIGINS = [
+  "user_stop",
+  "chat_deletion",
+  "workspace_authority_change",
+  "computer_use_disabled",
+  "scheduled_task_cancel",
+  "application_shutdown",
+] as const;
+
+export type GenerationCancellationOrigin = (typeof GENERATION_CANCELLATION_ORIGINS)[number];
+
 export interface GenerationClaimCheck {
   kind: "unverified_success";
   /** Renderer-safe local step IDs whose outcomes conflict with the response. */
@@ -72,6 +83,8 @@ export interface GenerationTimeline {
   startedAt: number;
   finishedAt?: number;
   steps: AgentStep[];
+  /** Content-free first-writer-wins provenance for an actual app cancellation. */
+  cancellationOrigin?: GenerationCancellationOrigin;
   /** Append-only post-turn outcome. The assistant's prose is never rewritten. */
   claimCheck?: GenerationClaimCheck;
 }
@@ -96,6 +109,9 @@ const TIMELINE_STATUSES = new Set<GenerationTimelineStatus>([
   "failed",
   "cancelled",
 ]);
+const CANCELLATION_ORIGINS = new Set<GenerationCancellationOrigin>(
+  GENERATION_CANCELLATION_ORIGINS,
+);
 const SAFE_ID = /^[a-z0-9._:-]+$/iu;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const MAX_DETAIL_LENGTH = 120;
@@ -248,6 +264,14 @@ export function parseGenerationTimeline(
   ) {
     return undefined;
   }
+  if (
+    candidate.cancellationOrigin !== undefined &&
+    (candidate.status !== "cancelled" ||
+      typeof candidate.cancellationOrigin !== "string" ||
+      !CANCELLATION_ORIGINS.has(candidate.cancellationOrigin as GenerationCancellationOrigin))
+  ) {
+    return undefined;
+  }
 
   const steps: AgentStep[] = [];
   let previousContentOffset = 0;
@@ -328,6 +352,9 @@ export function parseGenerationTimeline(
     startedAt: candidate.startedAt,
     ...(candidate.finishedAt === undefined ? {} : { finishedAt: candidate.finishedAt }),
     steps,
+    ...(candidate.cancellationOrigin === undefined
+      ? {}
+      : { cancellationOrigin: candidate.cancellationOrigin as GenerationCancellationOrigin }),
     ...(claimCheck ? { claimCheck } : {}),
   };
 }

@@ -34,7 +34,8 @@ test("chat route renders ChatPane without remounting it per chatId", () => {
 test("chat pane owns its own per-chat reset instead of relying on a remount", () => {
   const pane = source("./chat-pane.tsx");
 
-  // Cancels in-flight generation for the outgoing chat.
+  // Detaches only the outgoing chat's generation; main continues the work.
+  assert.match(pane, /generationChatIdRef\.current === departingChatId/u);
   assert.match(pane, /generationRef\.current\?\.cancel\("lifecycle"\)/u);
 
   const reset = between(pane, "// Reset transient state when switching chats.", "}, [chatId]);");

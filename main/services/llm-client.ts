@@ -36,7 +36,11 @@ import {
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { resolveModelRuntime } from "./model-runtime.js";
-import { assistantUsageRecord } from "./usage-accounting.js";
+import {
+  AssistantRequestUsageTracker,
+  assistantUsageRecord,
+  unreportedUsageRecord,
+} from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
@@ -75,6 +79,7 @@ import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
+import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -228,6 +233,8 @@ interface ActiveGeneration {
   removeOwnerInvalidation: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
+  cancellationOrigin?: GenerationCancellationOrigin;
+  rendererDetached: boolean;
   computerUse?: ComputerUseController;
   completion: Promise<void> | null;
   loadMonitor?: LoadMonitorState;
@@ -245,6 +252,8 @@ const initializing = new Map<
     removeOwnerInvalidation: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
+    cancellationOrigin?: GenerationCancellationOrigin;
+    rendererDetached: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
     loadMonitor?: LoadMonitorState;
@@ -743,6 +752,8 @@ export const llmClient = {
       removeOwnerInvalidation: () => {},
       workspaceId: undefined as string | undefined,
       cancelRequested: false,
+      cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
+      rendererDetached: false,
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
       loadMonitor: undefined as LoadMonitorState | undefined,
@@ -774,7 +785,7 @@ export const llmClient = {
     }
     options.onTurnAccepted?.();
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
-      this.cancel(streamId);
+      this.detachRenderer(streamId, owner.documentId);
     });
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
@@ -835,12 +846,14 @@ export const llmClient = {
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
+        approvals.releaseStream(streamId);
         broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
+      approvals.releaseStream(streamId);
       broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
@@ -914,7 +927,13 @@ export const llmClient = {
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
     ) => {
       const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
-      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0 && !subagents) {
+      if (
+        !content.trim() &&
+        !reasoning.trim() &&
+        finalTimeline.steps.length === 0 &&
+        finalTimeline.status !== "cancelled" &&
+        !subagents
+      ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
       try {
@@ -929,7 +948,10 @@ export const llmClient = {
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
-            timeline: finalTimeline.steps.length ? finalTimeline : undefined,
+            timeline:
+              finalTimeline.steps.length || finalTimeline.status === "cancelled"
+                ? finalTimeline
+                : undefined,
             subagents,
           },
           {
@@ -957,6 +979,7 @@ export const llmClient = {
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
+    const requestUsage = new AssistantRequestUsageTracker();
     let emergencyContextReduction = false;
     let activeCompactionStepId: string | undefined;
     let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
@@ -1376,6 +1399,7 @@ export const llmClient = {
         switch (event.type) {
           case "message_start":
             if (event.message.role === "assistant") {
+              requestUsage.started();
               currentAssistantTurnHadVisibleText = false;
               currentAssistantTurnHadReasoningDelta = false;
               currentAssistantTurnStart = {
@@ -1423,6 +1447,7 @@ export const llmClient = {
           }
           case "message_end": {
             if (event.message.role === "assistant") {
+              requestUsage.ended();
               lastAssistantMessage = event.message;
               try {
                 await usageStore.record(
@@ -1532,12 +1557,14 @@ export const llmClient = {
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
+        approvals.releaseStream(streamId);
         broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
+      approvals.releaseStream(streamId);
       broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
@@ -1547,6 +1574,7 @@ export const llmClient = {
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
+      approvals.releaseStream(streamId);
       broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
@@ -1701,7 +1729,9 @@ export const llmClient = {
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
       workspaceId: initialization.workspaceId,
-      cancelRequested: false,
+      cancelRequested: initialization.cancelRequested,
+      cancellationOrigin: initialization.cancellationOrigin,
+      rendererDetached: initialization.rendererDetached,
       computerUse,
       completion: null,
       loadMonitor: initialization.loadMonitor,
@@ -1729,6 +1759,7 @@ export const llmClient = {
       releaseGenerationSkillReservation(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
+      approvals.releaseStream(streamId);
       broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
       return false;
     }
@@ -1779,6 +1810,27 @@ export const llmClient = {
         lastAssistantMessage = runtimeOutcome.finalMessage ?? lastAssistantMessage;
         const wasCancelled =
           runtimeOutcome.kind === "app_cancelled" || activeGeneration.cancelRequested;
+        if (wasCancelled && requestUsage.takeUnreportedCancellation()) {
+          try {
+            await usageStore.record(
+              unreportedUsageRecord({
+                source: options.usageSource ?? "chat",
+                providerId: runtime.provider.id,
+                providerLabel: runtime.provider.label,
+                modelId: model.id,
+                modelLabel: model.name,
+                local: isLocalProviderDeployment(runtime.provider),
+                status: "cancelled",
+              }),
+            );
+          } catch (error) {
+            logger.warn(
+              "usage",
+              `Could not record cancelled provider request for stream ${streamId}.`,
+              error,
+            );
+          }
+        }
         const finalError =
           runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
@@ -1823,7 +1875,10 @@ export const llmClient = {
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
-            timeline.finish(wasCancelled ? "cancelled" : "completed"),
+            timeline.finish(
+              wasCancelled ? "cancelled" : "completed",
+              wasCancelled ? activeGeneration.cancellationOrigin : undefined,
+            ),
             full,
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
@@ -1871,6 +1926,7 @@ export const llmClient = {
           releaseGenerationSkillReservation(activeGeneration);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
+          approvals.releaseStream(streamId);
           broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
         }
       }
@@ -1885,27 +1941,61 @@ export const llmClient = {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
   },
 
-  cancel(streamId: string, ownerDocumentId?: string): boolean {
+  /**
+   * Release renderer-owned interaction surfaces without stopping the
+   * main-owned model operation. Terminal chat state is reconciled by the
+   * detached-stream listener in the renderer shell.
+   */
+  detachRenderer(streamId: string, ownerDocumentId?: string): boolean {
     const initialization = initializing.get(streamId);
     const generation = active.get(streamId);
     const owner = initialization?.owner ?? generation?.owner;
     if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
+    if (initialization?.rendererDetached && (!generation || generation.rendererDetached)) {
+      return false;
+    }
+    if (initialization) initialization.rendererDetached = true;
+    if (generation) generation.rendererDetached = true;
+    const runtimeOwner = generation ?? initialization;
+    if (!runtimeOwner) return false;
+    endLoadMonitor(runtimeOwner, streamId, false);
+    void runtimeOwner.computerUse?.close();
+    approvals.detachStream(streamId);
+    logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);
+    return true;
+  },
+
+  cancel(
+    streamId: string,
+    origin: GenerationCancellationOrigin,
+    ownerDocumentId?: string,
+  ): boolean {
+    const initialization = initializing.get(streamId);
+    const generation = active.get(streamId);
+    const owner = initialization?.owner ?? generation?.owner;
+    if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
+      return false;
+    }
+    if (initialization?.cancelRequested || generation?.cancelRequested) return false;
     if (initialization) {
       initialization.cancelRequested = true;
+      initialization.cancellationOrigin = origin;
       initialization.controller.abort(new Error("Chat initialization cancelled."));
       endLoadMonitor(initialization, streamId, false);
       void initialization.computerUse?.close();
     }
     if (generation) {
       generation.cancelRequested = true;
+      generation.cancellationOrigin = origin;
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       void generation.computerUse?.close();
     }
     subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
+    logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
     return true;
   },
 
@@ -1947,10 +2037,10 @@ export const llmClient = {
   /** Stop and drain foreground work before cross-store chat deletion begins. */
   async cancelChat(chatId: string): Promise<void> {
     for (const [streamId, entry] of [...initializing.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId);
+      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
     }
     for (const [streamId, entry] of [...active.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId);
+      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
     }
     subagentRuntimeRegistry.abortChat(chatId);
     const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
@@ -2037,7 +2127,7 @@ export const llmClient = {
       ...activatedComputerUseStreamIds(active),
     ]);
     for (const streamId of activated) {
-      this.cancel(streamId);
+      this.cancel(streamId, "computer_use_disabled");
     }
   },
 
@@ -2048,7 +2138,7 @@ export const llmClient = {
       initializations: () => initializing,
       active: () => active,
       cancel: (streamId) => {
-        this.cancel(streamId);
+        this.cancel(streamId, "workspace_authority_change");
       },
       abortChildren: (targetWorkspaceId) => {
         subagentRuntimeRegistry.abortWorkspace(targetWorkspaceId);
@@ -2063,8 +2153,8 @@ export const llmClient = {
 
   abortAll(): void {
     chatTurnAdmission.releaseAll();
-    for (const [streamId] of initializing) this.cancel(streamId);
-    for (const [streamId] of active) this.cancel(streamId);
+    for (const [streamId] of initializing) this.cancel(streamId, "application_shutdown");
+    for (const [streamId] of active) this.cancel(streamId, "application_shutdown");
     approvals.shutdown();
   },
 

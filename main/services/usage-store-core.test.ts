@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import {
+  AssistantRequestUsageTracker,
   assistantUsageRecord,
   geminiTranscriptionTokens,
   isLocalModelProvider,
@@ -32,6 +33,21 @@ function memoryPersistence(): UsagePersistence & { read(): UsageDatabase } {
 }
 
 const NOW = new Date(2026, 6, 21, 12).getTime();
+
+test("assistant request tracking accounts a pre-message-end cancellation exactly once", () => {
+  const tracker = new AssistantRequestUsageTracker();
+  for (let index = 0; index < 23; index += 1) {
+    tracker.started();
+    tracker.ended();
+  }
+  tracker.started();
+  assert.equal(tracker.takeUnreportedCancellation(), true);
+  assert.equal(tracker.takeUnreportedCancellation(), false);
+
+  tracker.started();
+  tracker.ended();
+  assert.equal(tracker.takeUnreportedCancellation(), false);
+});
 
 function record(
   patch: Partial<UsageRequestRecord> &
