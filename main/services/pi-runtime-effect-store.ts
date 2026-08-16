@@ -2,6 +2,7 @@ import { DataStore } from "./data-store.js";
 import {
   MAX_PI_RUNTIME_EFFECTS,
   MAX_PI_RUNTIME_OPERATIONS,
+  digestPiRuntimeEffectArguments,
   emptyPiRuntimeEffectDatabase,
   isPiRuntimeEffectTerminal,
   isPiRuntimeOperationTerminal,
@@ -23,6 +24,7 @@ import {
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
 const MAX_STORE_BYTES = 8 * 1024 * 1024;
+const STORE_WRITE_HEADROOM_BYTES = 256 * 1024;
 const STARTUP_CANCELLED = piRuntimeTerminalDigest("startup_cancelled_before_dispatch");
 const STARTUP_UNKNOWN = piRuntimeTerminalDigest("startup_never_replay_outcome_unknown");
 const STARTUP_INTERRUPTED = piRuntimeTerminalDigest("startup_safe_replay_not_resumed");
@@ -82,6 +84,18 @@ function pruneOneTerminalOperation(database: DurablePiRuntimeEffectDatabase): bo
   return true;
 }
 
+function serializedDatabaseBytes(database: DurablePiRuntimeEffectDatabase): number {
+  return Buffer.byteLength(`${JSON.stringify(database, null, 2)}\n`, "utf8");
+}
+
+function pruneToWritableSize(database: DurablePiRuntimeEffectDatabase): void {
+  while (serializedDatabaseBytes(database) > MAX_STORE_BYTES - STORE_WRITE_HEADROOM_BYTES) {
+    if (!pruneOneTerminalOperation(database)) {
+      throw new Error("Pi runtime effect history is at byte capacity.");
+    }
+  }
+}
+
 function makeDataStore(
   options: PiRuntimeEffectStoreOptions,
 ): DataStore<DurablePiRuntimeEffectDatabase> {
@@ -97,6 +111,7 @@ function makeDataStore(
       rejectCorruptWrite: true,
       rejectUnsafeWrite: true,
       reloadBeforeWrite: false,
+      fileMode: 0o600,
     },
   );
 }
@@ -208,6 +223,7 @@ export class PiRuntimeEffectStore {
       };
       database.operations.push(operation);
       database.revision += 1;
+      pruneToWritableSize(database);
       return structuredClone(operation);
     });
   }
@@ -283,7 +299,10 @@ export class PiRuntimeEffectStore {
       throw new Error("Invalid Pi runtime effect identity.");
     }
     const replay = piRuntimeReplayPolicy(input);
-    const argumentsSnapshot = snapshotPiRuntimeEffectArguments(input.arguments);
+    const argumentsSnapshot =
+      replay === "safe" ? snapshotPiRuntimeEffectArguments(input.arguments) : undefined;
+    const argumentDigest =
+      argumentsSnapshot?.digest ?? digestPiRuntimeEffectArguments(input.arguments);
     const preparedAt = this.currentTime();
     return this.data.update((database) => {
       const operation = database.operations.find(
@@ -306,7 +325,7 @@ export class PiRuntimeEffectStore {
           existing.toolCallId === input.toolCallId &&
           existing.toolName === input.toolName &&
           existing.replay === replay &&
-          existing.argumentDigest === argumentsSnapshot.digest
+          existing.argumentDigest === argumentDigest
         ) {
           return structuredClone(existing);
         }
@@ -315,7 +334,9 @@ export class PiRuntimeEffectStore {
       if (
         database.effects.some(
           (effect) =>
-            effect.operationId === input.operationId && effect.toolCallId === input.toolCallId,
+            effect.operationId === input.operationId &&
+            effect.turnId === input.turnId &&
+            effect.toolCallId === input.toolCallId,
         )
       ) {
         throw new Error("Pi runtime tool-call identity was reused.");
@@ -338,13 +359,14 @@ export class PiRuntimeEffectStore {
         toolName: input.toolName,
         replay,
         state: "prepared",
-        argumentDigest: argumentsSnapshot.digest,
-        ...(replay === "safe" ? { arguments: argumentsSnapshot.value } : {}),
+        argumentDigest,
+        ...(argumentsSnapshot ? { arguments: argumentsSnapshot.value } : {}),
         preparedAt,
         updatedAt: preparedAt,
       };
       database.effects.push(effect);
       database.revision += 1;
+      pruneToWritableSize(database);
       return structuredClone(effect);
     });
   }

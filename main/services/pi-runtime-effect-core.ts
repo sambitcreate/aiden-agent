@@ -127,7 +127,12 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
     if (!descriptor || descriptor.enumerable !== true || !("value" in descriptor)) {
       return undefined;
     }
-    result[key] = descriptor.value;
+    Object.defineProperty(result, key, {
+      value: descriptor.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return result;
 }
@@ -253,7 +258,12 @@ function snapshotJson(
     if (!record) throw new Error("Pi runtime effect arguments are not a plain object.");
     const result: Record<string, PiRuntimeJson> = {};
     for (const key of Object.keys(record).sort()) {
-      result[key] = snapshotJson(record[key], state, depth + 1);
+      Object.defineProperty(result, key, {
+        value: snapshotJson(record[key], state, depth + 1),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return result;
   } finally {
@@ -279,6 +289,92 @@ export function snapshotPiRuntimeEffectArguments(value: unknown): {
       .update(canonical, "utf8")
       .digest("hex"),
   };
+}
+
+/**
+ * Hash never-replay arguments without retaining them or imposing the much
+ * smaller safe-replay storage ceiling. Structural limits still bound traversal.
+ */
+export function digestPiRuntimeEffectArguments(value: unknown): string {
+  const hash = createHash("sha256").update("aiden-pi-runtime-effect-arguments-v2\0", "utf8");
+  const state = { nodes: 0, seen: new Set<object>() };
+  const visit = (current: unknown, depth = 0): void => {
+    if (depth > MAX_PI_RUNTIME_JSON_DEPTH) {
+      throw new Error("Pi runtime effect arguments are too deeply nested.");
+    }
+    state.nodes += 1;
+    if (state.nodes > MAX_PI_RUNTIME_JSON_NODES) {
+      throw new Error("Pi runtime effect arguments contain too many values.");
+    }
+    if (current === null) {
+      hash.update("n;");
+      return;
+    }
+    if (typeof current === "boolean") {
+      hash.update(current ? "b1;" : "b0;");
+      return;
+    }
+    if (typeof current === "number") {
+      if (!Number.isFinite(current)) {
+        throw new Error("Pi runtime effect arguments are not JSON-safe.");
+      }
+      hash.update(`d${JSON.stringify(current)};`, "utf8");
+      return;
+    }
+    if (typeof current === "string") {
+      hash.update(`s${Buffer.byteLength(current, "utf8")}:`, "utf8");
+      hash.update(current, "utf8");
+      hash.update(";");
+      return;
+    }
+    if (typeof current !== "object" || utilTypes.isProxy(current)) {
+      throw new Error("Pi runtime effect arguments are not plain JSON.");
+    }
+    if (state.seen.has(current)) throw new Error("Pi runtime effect arguments are cyclic.");
+    state.seen.add(current);
+    try {
+      if (Array.isArray(current)) {
+        const descriptors = Object.getOwnPropertyDescriptors(current);
+        if (
+          Reflect.ownKeys(descriptors).some(
+            (key) =>
+              key !== "length" && (typeof key !== "string" || !/^(?:0|[1-9]\d*)$/u.test(key)),
+          )
+        ) {
+          throw new Error("Pi runtime effect arguments contain an invalid array.");
+        }
+        const length = Object.getOwnPropertyDescriptor(current, "length")?.value;
+        if (!Number.isSafeInteger(length) || length < 0) {
+          throw new Error("Pi runtime effect arguments contain an invalid array.");
+        }
+        hash.update(`a${length}[`, "utf8");
+        for (let index = 0; index < length; index += 1) {
+          const descriptor = descriptors[String(index)];
+          if (!descriptor || descriptor.enumerable !== true || !("value" in descriptor)) {
+            throw new Error("Pi runtime effect arguments contain a sparse or accessor array.");
+          }
+          visit(descriptor.value, depth + 1);
+        }
+        hash.update("]");
+        return;
+      }
+      const record = plainRecord(current);
+      if (!record) throw new Error("Pi runtime effect arguments are not a plain object.");
+      const keys = Object.keys(record).sort();
+      hash.update(`o${keys.length}{`, "utf8");
+      for (const key of keys) {
+        hash.update(`k${Buffer.byteLength(key, "utf8")}:`, "utf8");
+        hash.update(key, "utf8");
+        hash.update(";");
+        visit(record[key], depth + 1);
+      }
+      hash.update("}");
+    } finally {
+      state.seen.delete(current);
+    }
+  };
+  visit(value);
+  return hash.digest("hex");
 }
 
 export function piRuntimeTerminalDigest(label: string): string {
@@ -473,7 +569,7 @@ export function parseDurablePiRuntimeEffectDatabase(
     ) {
       return undefined;
     }
-    const toolCallKey = `${effect.operationId}\0${effect.toolCallId}`;
+    const toolCallKey = `${effect.operationId}\0${effect.turnId}\0${effect.toolCallId}`;
     if (toolCalls.has(toolCallKey)) return undefined;
     toolCalls.add(toolCallKey);
   }

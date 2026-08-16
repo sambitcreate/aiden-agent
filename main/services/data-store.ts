@@ -11,6 +11,8 @@ import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 export interface DataStoreOptions<T> {
   /** Refuse descriptor reads larger than this byte ceiling, including files that grow mid-read. */
   maxBytes?: number;
+  /** POSIX mode applied to every atomically staged replacement. */
+  fileMode?: number;
   /**
    * Copy an unparseable file aside before a write replaces it. Set this for any
    * file the user maintains by hand: a JSON typo must cost them a restart, not
@@ -455,7 +457,10 @@ export class DataStore<T> {
       `.${path.basename(destination)}.${randomUUID()}.tmp`,
     );
     try {
-      await fs.writeFile(staged, serialized, "utf-8");
+      await fs.writeFile(staged, serialized, {
+        encoding: "utf-8",
+        ...(this.options.fileMode === undefined ? {} : { mode: this.options.fileMode }),
+      });
       const stagedHandle = await fs.open(staged, "r");
       try {
         await stagedHandle.sync();

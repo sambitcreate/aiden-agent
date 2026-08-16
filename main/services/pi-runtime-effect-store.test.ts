@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
 import {
   MAX_PI_RUNTIME_OPERATIONS,
+  digestPiRuntimeEffectArguments,
   emptyPiRuntimeEffectDatabase,
   parseDurablePiRuntimeEffect,
   parseDurablePiRuntimeEffectDatabase,
@@ -85,6 +86,12 @@ test("argument snapshots are canonical, bounded, and reject hostile non-JSON inp
   const right = snapshotPiRuntimeEffectArguments({ a: { x: 3, y: 2 }, z: 1 });
   assert.equal(left.canonical, '{"a":{"x":3,"y":2},"z":1}');
   assert.equal(left.digest, right.digest);
+
+  const reserved = JSON.parse('{"__proto__":{"sentinel":"retained"}}') as unknown;
+  const reservedSnapshot = snapshotPiRuntimeEffectArguments(reserved);
+  assert.equal(reservedSnapshot.canonical, '{"__proto__":{"sentinel":"retained"}}');
+  assert.notEqual(reservedSnapshot.digest, snapshotPiRuntimeEffectArguments({}).digest);
+  assert.notEqual(digestPiRuntimeEffectArguments(reserved), digestPiRuntimeEffectArguments({}));
 
   let getterCalls = 0;
   const accessor = Object.defineProperty({}, "secret", {
@@ -225,6 +232,24 @@ test("prepare, dispatch, and terminal writes are durable, minimal, and idempoten
     ) as DurablePiRuntimeEffectDatabase;
     assert.equal(disk.effects[0]?.arguments, undefined);
     assert.ok(parseDurablePiRuntimeEffectDatabase(disk));
+    assert.equal((await stat(path.join(directory, STORE_NAME))).mode & 0o777, 0o600);
+  });
+});
+
+test("never-replay effects accept large arguments without retaining them", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = makeStore(directory);
+    await store.initialize();
+    const operationInput = operation();
+    await store.startOperation(operationInput);
+    const input = effect(operationInput, "large-never", {
+      replay: "never",
+      toolName: "write_file",
+      arguments: { path: "large.txt", content: "x".repeat(70 * 1024) },
+    });
+    const prepared = await store.prepareEffect(input);
+    assert.equal(prepared.arguments, undefined);
+    assert.match(prepared.argumentDigest, /^[a-f0-9]{64}$/u);
   });
 });
 
@@ -244,12 +269,13 @@ test("identity reuse, ownership mismatch, and invalid transitions fail closed", 
       () => store.prepareEffect({ ...input, arguments: { different: true } }),
       /identity was reused/u,
     );
+    await store.prepareEffect({
+      ...input,
+      effectId: "different-effect",
+      turnId: "later-turn",
+    });
     await assert.rejects(
-      () =>
-        store.prepareEffect({
-          ...input,
-          effectId: "different-effect",
-        }),
+      () => store.prepareEffect({ ...input, effectId: "same-turn-effect" }),
       /tool-call identity was reused/u,
     );
     await assert.rejects(
@@ -275,6 +301,82 @@ test("identity reuse, ownership mismatch, and invalid transitions fail closed", 
           terminalDigest: piRuntimeTerminalDigest("impossible"),
         }),
       /not dispatch-started/u,
+    );
+  });
+});
+
+test("byte pressure prunes terminal history before it can block a new run", async () => {
+  await withTempDirectory(async (directory) => {
+    const operations: DurablePiRuntimeOperation[] = [];
+    const effects: DurablePiRuntimeEffect[] = [];
+    for (let index = 0; ; index += 1) {
+      const operationId = `operation-${index}`;
+      const runId = `run-${index}`;
+      const chatId = `chat-${index}`;
+      const argument = snapshotPiRuntimeEffectArguments({ value: "x".repeat(60 * 1024) });
+      operations.push({
+        version: 1,
+        operationId,
+        runId,
+        sessionId: `session-${index}`,
+        chatId,
+        lane: "foreground",
+        contributionRevision: 0,
+        state: "completed",
+        startedAt: index + 1,
+        updatedAt: index + 1,
+      });
+      effects.push({
+        version: 1,
+        effectId: `effect-${index}`,
+        operationId,
+        runId,
+        sessionId: `session-${index}`,
+        chatId,
+        lane: "foreground",
+        turnId: `turn-${index}`,
+        toolCallId: `call-${index}`,
+        toolName: "read_file",
+        replay: "safe",
+        state: "completed",
+        argumentDigest: argument.digest,
+        arguments: argument.value,
+        preparedAt: index + 1,
+        updatedAt: index + 1,
+        terminalDigest: piRuntimeTerminalDigest("completed"),
+      });
+      const candidate: DurablePiRuntimeEffectDatabase = {
+        version: 1,
+        revision: 1,
+        operations,
+        effects,
+      };
+      if (
+        Buffer.byteLength(`${JSON.stringify(candidate, null, 2)}\n`) >
+        8 * 1024 * 1024 - 32 * 1024
+      ) {
+        operations.pop();
+        effects.pop();
+        break;
+      }
+    }
+    const seeded: DurablePiRuntimeEffectDatabase = {
+      version: 1,
+      revision: 1,
+      operations,
+      effects,
+    };
+    assert.ok(parseDurablePiRuntimeEffectDatabase(seeded));
+    await writeFile(path.join(directory, STORE_NAME), `${JSON.stringify(seeded, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    const store = makeStore(directory, 10_000);
+    await store.initialize();
+    await store.startOperation(operation("new-operation", "new-chat"));
+    assert.equal((await store.listOperationsByChat("new-chat")).length, 1);
+    assert.ok(
+      (await store.listOperationsByChat(operations[0]!.chatId)).length === 0,
+      "oldest terminal history should be pruned under byte pressure",
     );
   });
 });

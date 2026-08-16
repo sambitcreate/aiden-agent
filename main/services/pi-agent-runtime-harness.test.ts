@@ -688,6 +688,43 @@ test("managed effects record dispatch and terminal evidence outside the Pi journ
   assert.doesNotMatch(JSON.stringify(effect), /private argument/u);
 });
 
+test("managed effects allow provider tool-call IDs to repeat across turns", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  let toolCalls = 0;
+  const tool: AgentTool = {
+    name: "repeated_provider_id",
+    label: "Repeated provider id",
+    description: "Execute twice across distinct assistant turns.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: `effect ${toolCalls}` }], details: null };
+    },
+  };
+  const repeated = { id: "provider-call-0" };
+  const { core, harness } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {}, repeated)], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall(tool.name, {}, repeated)], { stopReason: "toolUse" }),
+      fauxAssistantMessage("complete"),
+    ],
+    {
+      tools: [tool],
+      identity: { runId: "repeat-run", sessionId: "repeat-session", lane: "foreground" },
+      effects: { store: effectStore, chatId: "repeat-chat" },
+    },
+  );
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "run twice", timestamp: 1 },
+  });
+  assert.equal(outcome.kind, "completed");
+  assert.equal(core.state.callCount, 3);
+  assert.equal(toolCalls, 2);
+  assert.equal((await effectStore.listEffectsByChat("repeat-chat")).length, 2);
+});
+
 test("managed effects fail before dispatch when preparation cannot become durable", async (t) => {
   const effectStore = await effectStoreFixture(t);
   effectStore.prepareEffect = async () => {

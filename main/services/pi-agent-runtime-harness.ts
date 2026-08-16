@@ -740,6 +740,7 @@ export class PiAgentRuntimeHarness {
   private activeEffectOperation:
     | {
         operationId: string;
+        nextEffectOrdinal: number;
         effects: Map<
           string,
           {
@@ -2126,7 +2127,7 @@ export class PiAgentRuntimeHarness {
       lane: this.identity.lane,
       contributionRevision: this.contributionRevision,
     });
-    this.activeEffectOperation = { operationId, effects: new Map() };
+    this.activeEffectOperation = { operationId, nextEffectOrdinal: 0, effects: new Map() };
   }
 
   private async prepareDurableEffect(
@@ -2154,7 +2155,7 @@ export class PiAgentRuntimeHarness {
       lane: this.identity.lane,
       contributionRevision: this.contributionRevision,
       effectId,
-      turnId: randomUUID(),
+      turnId: `turn-${operation.nextEffectOrdinal++}`,
       toolCallId: context.toolCall.id,
       toolName: context.toolCall.name,
       replay,
