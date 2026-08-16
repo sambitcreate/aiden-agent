@@ -36,6 +36,7 @@ export interface SubagentRuntimeAuthority {
 
 export interface SubagentChildSpec {
   authority: SubagentRuntimeAuthority;
+  runId?: string;
   groupId: string;
   childId?: string;
   runtime: ResolvedModelRuntime;
@@ -201,6 +202,13 @@ export class SubagentRuntimeRegistry {
       signal: cancellation.signal,
     };
     const agent = new PiAgentRuntimeHarness({
+      models: spec.runtime.models,
+      identity: {
+        runId: spec.runId ?? childId,
+        sessionId,
+        lane: "child",
+        parentRunId: spec.authority.generationId,
+      },
       onFault: ({ source, extensionId }) => {
         this.reportRuntimeFault(source);
         writeDevLog("error", "subagents", [

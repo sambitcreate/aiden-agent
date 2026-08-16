@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { Type } from "@earendil-works/pi-ai";
+import { createModels, Type } from "@earendil-works/pi-ai";
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -110,6 +110,7 @@ function runtimeFrom(
   } = {},
 ): ResolvedModelRuntime {
   return {
+    models: createModels(),
     provider: {
       id: model.provider,
       kind: "openai",

@@ -1,12 +1,10 @@
-import {
-  anthropicMessagesApi,
-  openAICompletionsApi,
-} from "@earendil-works/pi-ai/compat";
+import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import {
   createModels,
   createProvider,
   type Api,
   type Model,
+  type Models,
   type ProviderHeaders,
   type ProviderStreams,
 } from "@earendil-works/pi-ai";
@@ -42,9 +40,7 @@ function streamsFor(api: Api): ProviderStreams {
 }
 
 function apiFor(provider: StoredProvider): Api {
-  return provider.kind === "anthropic"
-    ? "anthropic-messages"
-    : "openai-completions";
+  return provider.kind === "anthropic" ? "anthropic-messages" : "openai-completions";
 }
 
 function buildModel(
@@ -74,6 +70,8 @@ function buildModel(
 export interface ResolvedModelRuntime {
   provider: StoredProvider;
   model: Model<Api>;
+  /** Owning Pi collection for auth, streaming, and future native Harness operations. */
+  models: Models;
   apiKey: string | undefined;
   headers: ProviderHeaders | undefined;
   streams: Pick<ProviderStreams, "streamSimple">;
@@ -82,18 +80,14 @@ export interface ResolvedModelRuntime {
 export interface ModelRuntimeDependencies {
   getProvider(providerId: string): Promise<StoredProvider | undefined>;
   getApiKey(provider: StoredProvider): Promise<string | null>;
-  resolveRuntimeLimits(
-    provider: StoredProvider,
-    modelId: string,
-  ): Promise<RuntimeModelLimits>;
+  resolveRuntimeLimits(provider: StoredProvider, modelId: string): Promise<RuntimeModelLimits>;
   codex: {
-    prepareRuntimeModel(
-      modelId: string,
-      signal?: AbortSignal,
-    ): Promise<Model<Api>>;
+    models: Models;
+    prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
   };
   native: {
+    models: Models;
     getProvider(providerId: string): StoredProvider | undefined;
     getModel(providerId: string, modelId: string): Model<Api> | undefined;
     streamSimple: ProviderStreams["streamSimple"];
@@ -112,6 +106,7 @@ export async function resolveModelRuntimeWith(
     return {
       provider: codexRuntimeProvider,
       model,
+      models: dependencies.codex.models,
       apiKey: undefined,
       headers: undefined,
       streams: { streamSimple: dependencies.codex.streamSimple },
@@ -132,6 +127,7 @@ export async function resolveModelRuntimeWith(
     return {
       provider: nativeProvider,
       model,
+      models: dependencies.native.models,
       apiKey: undefined,
       headers: undefined,
       streams: { streamSimple: dependencies.native.streamSimple },
@@ -146,14 +142,10 @@ export async function resolveModelRuntimeWith(
     );
   }
 
-  const storedApiKey = provider.needsKey
-    ? await dependencies.getApiKey(provider)
-    : null;
+  const storedApiKey = provider.needsKey ? await dependencies.getApiKey(provider) : null;
   const apiKey = resolveRuntimeApiKey(provider, storedApiKey);
   if (provider.needsKey && !apiKey) {
-    throw new Error(
-      `No API key set for ${provider.label}. Add one in Settings → Providers.`,
-    );
+    throw new Error(`No API key set for ${provider.label}. Add one in Settings → Providers.`);
   }
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
@@ -182,6 +174,7 @@ export async function resolveModelRuntimeWith(
   return {
     provider,
     model,
+    models,
     apiKey,
     headers,
     // Custom endpoints now use the same Pi provider/auth/model composition as

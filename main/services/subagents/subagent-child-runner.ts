@@ -76,6 +76,7 @@ export interface SubagentChildRunnerPolicy {
 export interface SubagentChildRunnerDependencies {
   createChild?: (input: {
     authority: SubagentRuntimeAuthority;
+    runId?: string;
     groupId: string;
     childId?: string;
     runtime: ResolvedModelRuntime;
@@ -560,6 +561,7 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     }
     child = createChild({
       authority: input.authority,
+      runId: input.runId ?? input.childId ?? input.groupId,
       groupId: input.groupId,
       childId: input.childId,
       runtime: input.runtime,

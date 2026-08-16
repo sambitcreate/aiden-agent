@@ -8,7 +8,11 @@
 // before any mutating tool (write/edit/run_command) via pi's `beforeToolCall`
 // hook and waits for the user to Allow or Deny in the UI.
 
-import { convertToLlm, type AgentMessage } from "@earendil-works/pi-agent-core";
+import {
+  convertToLlm,
+  type AgentHarnessResources,
+  type AgentMessage,
+} from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
@@ -155,6 +159,7 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import {
   PiAgentRuntimeHarness,
   piAgentRuntimeExtensions,
+  resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
 } from "./pi-agent-runtime-harness.js";
 
@@ -164,6 +169,25 @@ subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
 });
 
 type GenerationPermission = WorkspacePermission | "read-only";
+
+function piResourcesForSkillSnapshot(
+  snapshot: SkillRegistrySnapshot | undefined,
+): AgentHarnessResources {
+  if (!snapshot) return {};
+  return {
+    // Pi resources promise a truthful filePath. Configured database skills
+    // keep their existing leased invocation path until Pi supports in-memory
+    // resource locations.
+    skills: snapshot.available
+      .filter((skill) => Boolean(skill.path))
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        content: skill.instructions,
+        filePath: skill.path!,
+      })),
+  };
+}
 
 export interface GenerationExecutionOptions {
   /** Internal-only execution policy. Renderer chat starts always use the workspace permission. */
@@ -939,7 +963,8 @@ export const llmClient = {
     let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
     try {
-      const runtimeExtensions = piAgentRuntimeExtensions.snapshot();
+      const runtimeExtensionSnapshot = piAgentRuntimeExtensions.snapshotWithRevision();
+      const runtimeExtensions = runtimeExtensionSnapshot.extensions;
       const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
         "",
         tools,
@@ -987,11 +1012,14 @@ export const llmClient = {
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
               );
-      const { systemPrompt, tools: runtimeTools } = resolvePiAgentRuntimeStaticContributions(
+      const runtimeContributions = resolvePiAgentRuntimeContributionSnapshot(
         baseSystemPrompt,
         tools,
+        piResourcesForSkillSnapshot(skillSnapshot),
         runtimeExtensions,
+        runtimeExtensionSnapshot.revision,
       );
+      const { systemPrompt, tools: runtimeTools } = runtimeContributions;
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -1070,8 +1098,13 @@ export const llmClient = {
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
       candidate = new PiAgentRuntimeHarness({
-        extensions: runtimeExtensions,
-        staticContributionsApplied: true,
+        contributions: runtimeContributions,
+        models: runtime.models,
+        identity: {
+          runId: streamId,
+          sessionId: params.chatId,
+          lane: "foreground",
+        },
         onFault: ({ source, extensionId }) => {
           logger.warn(
             "pi",
@@ -1148,7 +1181,7 @@ export const llmClient = {
           systemPrompt,
           model,
           thinkingLevel,
-          tools: runtimeTools,
+          tools: [...runtimeTools],
           messages: initialMessages,
         },
         prepareNextTurnWithContext: async ({ toolResults, context }) => {

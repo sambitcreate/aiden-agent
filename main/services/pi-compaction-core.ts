@@ -13,15 +13,12 @@ import {
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import {
-  createModels,
-  createProvider,
   isContextOverflow,
   isRetryableAssistantError,
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Models,
-  type ProviderStreams,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import { projectMessagesForModel } from "./generation-context.js";
@@ -879,13 +876,14 @@ export function createPiCompactionModels(
   runtime: ResolvedModelRuntime,
   onAssistantMessage?: (message: AssistantMessage) => void | Promise<void>,
 ): Models {
-  const models = createModels();
-  const streamSimple: ProviderStreams["streamSimple"] = (model, context, options) => {
-    const stream = runtime.streams.streamSimple(model, context, {
-      ...options,
-      apiKey: options?.apiKey ?? runtime.apiKey,
-      headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
-    });
+  const streamSimple: Models["streamSimple"] = (model, context, options) => {
+    const stream = runtime.models.getModel(model.provider, model.id)
+      ? runtime.models.streamSimple(model, context, options)
+      : runtime.streams.streamSimple(model, context, {
+          ...options,
+          apiKey: options?.apiKey ?? runtime.apiKey,
+          headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
+        });
     if (!onAssistantMessage) return stream;
     const accountedResult = stream.result().then(async (message) => {
       await onAssistantMessage(message);
@@ -899,29 +897,14 @@ export function createPiCompactionModels(
       },
     }) as AssistantMessageEventStream;
   };
-  const streams: ProviderStreams = {
-    stream: streamSimple as ProviderStreams["stream"],
-    streamSimple,
-  };
-  models.setProvider(
-    createProvider<Api>({
-      id: runtime.model.provider,
-      name: runtime.provider.label,
-      models: [runtime.model],
-      auth: {
-        apiKey: {
-          name: `${runtime.provider.label} runtime`,
-          resolve: async () => ({
-            auth: {
-              apiKey: runtime.apiKey,
-              headers: runtime.headers,
-            },
-            source: "Aiden generation runtime",
-          }),
-        },
-      },
-      api: streams,
-    }),
-  );
-  return models;
+  return new Proxy(runtime.models, {
+    get(target, property) {
+      if (property === "streamSimple") return streamSimple;
+      if (property === "completeSimple") {
+        return (...args: Parameters<Models["completeSimple"]>) => streamSimple(...args).result();
+      }
+      const value = Reflect.get(target, property, target) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as Models;
 }

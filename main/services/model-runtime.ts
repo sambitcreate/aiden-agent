@@ -1,6 +1,6 @@
 // Main-process dependency wiring for the Electron-free runtime resolver.
 
-import type { AnthropicMessagesCompat } from "@earendil-works/pi-ai";
+import type { AnthropicMessagesCompat, Models } from "@earendil-works/pi-ai";
 import { configStore } from "./config-store.js";
 import { resolveModelRuntimeWith, type ResolvedModelRuntime } from "./model-runtime-core.js";
 import { catalogProviderSlug } from "./models-catalog-core.js";
@@ -11,6 +11,19 @@ import { secrets } from "./secrets.js";
 import { listProvidersWithLegacyPiCredentialMigration } from "./legacy-pi-credential-migration.js";
 
 export type { ResolvedModelRuntime };
+
+/** Preserve Codex credential-generation safeguards behind the Pi Models shape. */
+const codexRuntimeModels = new Proxy(providerRegistry.models, {
+  get(target, property) {
+    if (property === "streamSimple") return providerRegistry.codex.streamSimple;
+    if (property === "completeSimple") {
+      return (...args: Parameters<Models["completeSimple"]>) =>
+        providerRegistry.codex.streamSimple(...args).result();
+    }
+    const value = Reflect.get(target, property, target) as unknown;
+    return typeof value === "function" ? value.bind(target) : value;
+  },
+}) as Models;
 
 export async function resolveModelRuntime(
   providerId: string,
@@ -43,8 +56,15 @@ export async function resolveModelRuntime(
         const exact = piModel ? { ...piModel, forceAdaptiveThinking } : undefined;
         return modelsCatalog.runtimeLimits(provider, id, exact);
       },
-      codex: providerRegistry.codex,
+      codex: {
+        models: codexRuntimeModels,
+        prepareRuntimeModel: providerRegistry.codex.prepareRuntimeModel.bind(
+          providerRegistry.codex,
+        ),
+        streamSimple: providerRegistry.codex.streamSimple,
+      },
       native: {
+        models: providerRegistry.models,
         getProvider: (id) => providerRegistry.builtinProvider(id),
         getModel: (providerId, id) => providerRegistry.getBuiltinModel(providerId, id),
         streamSimple: providerRegistry.streamSimple,

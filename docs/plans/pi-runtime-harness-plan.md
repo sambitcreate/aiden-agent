@@ -82,6 +82,42 @@ Aiden pins `@earendil-works/pi-agent-core` and `pi-ai` `0.80.10`.
 - Typed public host errors expose only a closed fault kind. Raw hook/subscriber
   exceptions stay inside the trusted diagnostic callback and never become an
   enumerable error cause that a caller could log.
+- Resolved foreground and child runtimes retain their owning Pi `Models`
+  collection. Native/custom/Codex requests and compaction share the same
+  connection authority; Codex keeps its credential-generation dispatch guard.
+- Foreground contributions resolve once into an immutable revisioned snapshot.
+  Atomic replacement is reload-safe, active operations keep their old snapshot,
+  and future operations observe the new revision.
+- Pi-compatible disk skill resources, prompt-template snapshots, curated
+  provider request/payload/response hooks, and custom session entry projectors
+  now share that operation snapshot. Provider hooks cannot observe credentials
+  or replace host auth policy; `aiden.*` transaction/marker entries can never be
+  projected into model context.
+- Managed steer and follow-up queues return typed acceptance receipts and make
+  every drained user message durable before the next provider boundary. Queue
+  tracking uses a cloned structural fingerprint rather than Pi object identity,
+  terminal provider failures recover already accepted input, and admission is
+  capped at 32 messages. Legacy prompt/continue entry points reject on durable
+  runtimes.
+- Main-process runtime envelopes provide stable run/session/lane, monotonic
+  sequence, attempt, and turn identity. Their critical reducer runs before
+  ordered best-effort observers. The observer projection contains public prose
+  and lifecycle/tool metadata, but no hidden reasoning, tool payloads, provider
+  diagnostics, or raw errors; observer shutdown is abortable.
+
+## Trusted contribution compatibility matrix
+
+| Pi-shaped capability                                   | Aiden adapter                       | Boundary                                                                                                                 |
+| ------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| System prompt and tools                                | Supported                           | Trusted foreground modules; one immutable operation snapshot; all tools sequential                                       |
+| Skills                                                 | Supported for disk-backed resources | Same leased skill revision used by prompt/tool construction; configured in-memory skills retain Aiden's invocation lease |
+| Prompt templates                                       | Snapshotted/exported                | No renderer command surface yet                                                                                          |
+| Provider request/payload/response hooks                | Supported                           | Curated secret-free request options; host auth/payload policy last; response observers passive                           |
+| Custom session entries                                 | Supported                           | Custom non-`aiden.*` types only; one bound Session projection across generation/compaction/retry                         |
+| Canonical runtime events                               | Supported                           | Renderer-safe envelopes; observers never own durability or settlement                                                    |
+| Steer/follow-up                                        | Supported in managed runtime        | Active run only; user messages only; durable on drain; product UI remains intentionally single-turn                      |
+| Child contributions                                    | Not ambient                         | Requires explicit authority/budget narrowing before any future opt-in                                                    |
+| Coding-agent commands/UI/process/provider registration | Unsupported                         | Requires a separately signed or sandboxed plugin loader                                                                  |
 
 ## Trust policy
 
@@ -93,21 +129,37 @@ signed or sandboxed plugin design.
 
 ## Remaining work
 
-1. Add canonical main-process run/turn/event envelopes and separate durable
-   reducers from best-effort renderer projection.
-2. Adapt Aiden's leased skill snapshot and future prompt templates to explicit
-   Pi resource snapshots. Add provider request/payload/response hooks and
-   custom entry projectors.
-3. Retain the owning Pi `Models` collection in resolved runtimes for a future
-   native Harness migration.
-4. Add durable operation/effect records with replay-safe versus never-replay
+1. Add durable operation/effect records with replay-safe versus never-replay
    metadata. Current journal recovery is not exactly-once external-effect
    recovery.
-5. Isolate child inference in a killable worker/process before claiming hard
+2. Isolate child inference in a killable worker/process before claiming hard
    termination of a transport that ignores abort.
-6. Add a strict, zero-activity-only startup retry and finish the internal
+3. Add a strict, zero-activity-only startup retry and finish the internal
    host/session failure taxonomy. Provider failure text is already closed at
    the child boundary.
+
+## Known lower-priority adapter limits
+
+- Passive observer drains are deliberately excluded from run, cancellation,
+  and disposal settlement. The explicit diagnostic `settleRuntimeObservers()`
+  can still wait for a trusted observer that ignores its abort signal.
+- Canonical observer delivery is bounded and may drop the oldest pending
+  envelope under sustained backpressure; the current public envelope does not
+  yet carry a dropped-event count.
+- Runtime-event `attempt` is local to one input segment. If an already accepted
+  queued user segment is recovered after a failed provider attempt, its attempt
+  counter restarts at one while envelope sequence and turn identity remain
+  monotonic for the overall managed run.
+- Binding extension entry projectors reopens the Aiden-created Session storage
+  with the operation snapshot. A future general plugin loader must compose or
+  reject any pre-existing non-Aiden Session projector configuration instead of
+  assuming the production Aiden Session factory.
+- Passive legacy Agent-event observations share one bounded operation pool, so
+  an especially noisy trusted observer can reduce best-effort delivery to its
+  peers. Canonical reducer state and durability are unaffected.
+- Trusted JavaScript contribution outputs receive structural cloning and the
+  closed checks needed by each active boundary, but do not yet share one
+  schema-level validator for every Pi message and tool-result variant.
 
 ## Gates
 
@@ -115,10 +167,9 @@ signed or sandboxed plugin design.
   subscriber failure, contribution snapshots, durable-before-effect ordering,
   prior-tail repair, typed failure privacy, policy termination, and
   cancellation during retry, session/storage waits, and active compaction.
-- Follow-up coverage should inject a non-cooperative journal mutation during
-  between-tool compaction and assert detached settlement plus production-store
-  quarantine; the shared mutation path is currently covered by adversarial
-  review probes.
+- Coverage injects a non-cooperative journal mutation during between-tool
+  compaction and asserts its detached settlement remains exposed for the
+  production-store quarantine.
 - Child/supervisor tests cover fork identity, empty completion, terminal-only
   output, hidden protocol limits, construction abort, aggregate budgets,
   exact queued cancellation, quarantine recovery, and renderer-safe activity.

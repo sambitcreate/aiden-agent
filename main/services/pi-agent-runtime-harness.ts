@@ -7,11 +7,23 @@ import {
   type AgentOptions,
   type AgentState,
   type AgentTool,
+  type AgentHarnessResources,
+  type AgentHarnessStreamOptions,
+  type AgentHarnessStreamOptionsPatch,
   type BeforeToolCallContext,
   type BeforeToolCallResult,
-  type Session,
+  type CustomEntryContextMessageProjector,
+  formatSkillsForSystemPrompt,
+  Session,
 } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type ImageContent,
+  type Model,
+  type Models,
+  type ProviderResponse,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import {
   needsImmediatePiCompaction,
   PiCompactionCoordinator as PiCompactionCoordinatorImpl,
@@ -20,11 +32,22 @@ import {
   type PiCompactionCoordinatorOptions,
 } from "./pi-compaction-core.js";
 import { appendPiMessages } from "./pi-compaction-session-store.js";
+import {
+  PiRuntimeEventChannel,
+  projectPiRuntimeAgentEvent,
+  type PiRuntimeEventObserver,
+  type PiRuntimeEventState,
+  type PiRuntimeIdentity,
+} from "./pi-runtime-events.js";
 
 export type PiHarnessFaultSource =
   | "extension_context"
   | "extension_before_tool"
   | "extension_after_tool"
+  | "extension_before_provider"
+  | "extension_provider_payload"
+  | "extension_after_provider"
+  | "extension_runtime_observer"
   | "extension_observer"
   | "host_context"
   | "host_before_tool"
@@ -47,6 +70,10 @@ export interface PiAgentRuntimeExtension {
   systemPrompt?: string;
   /** Pi-native tools contributed to this one runtime. */
   tools?: readonly AgentTool[];
+  /** Pi-compatible skills/templates snapshotted with the runtime. */
+  resources?: AgentHarnessResources;
+  /** Custom durable entry projection into provider context. */
+  entryProjectors?: Readonly<Record<string, CustomEntryContextMessageProjector>>;
   transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
   beforeToolCall?: (
     context: BeforeToolCallContext,
@@ -56,16 +83,61 @@ export interface PiAgentRuntimeExtension {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  beforeProviderRequest?: (
+    context: PiProviderRequestContext,
+    signal?: AbortSignal,
+  ) => Promise<PiProviderRequestPatch | undefined>;
+  beforeProviderPayload?: (
+    context: PiProviderPayloadContext,
+    signal?: AbortSignal,
+  ) => Promise<unknown | undefined>;
+  afterProviderResponse?: (
+    context: PiProviderResponseContext,
+    signal?: AbortSignal,
+  ) => Promise<void> | void;
+  /** Ordered best-effort canonical events; never part of critical durability. */
+  onRuntimeEvent?: PiRuntimeEventObserver;
   /** Passive observers can report activity but cannot break a Pi run. */
   onEvent?: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void;
 }
 
 export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution"> {
   extensions?: readonly PiAgentRuntimeExtension[];
+  /** Fully resolved immutable contributions for one foreground operation. */
+  contributions?: PiRuntimeContributionSnapshot;
+  /** Owning Pi collection retained for native Harness-compatible operations. */
+  models?: Models;
+  resources?: AgentHarnessResources;
+  identity?: PiRuntimeIdentity;
   onFault?: (fault: PiHarnessFault) => void;
-  /** Static extension prompt/tool contributions were already applied by the host. */
-  staticContributionsApplied?: boolean;
   durability?: PiRuntimeSessionBinding;
+}
+
+export interface PiRuntimeContributionSnapshot {
+  revision: number;
+  extensions: readonly PiAgentRuntimeExtension[];
+  systemPrompt: string;
+  tools: readonly AgentTool[];
+  resources: AgentHarnessResources;
+}
+
+export interface PiProviderRequestContext {
+  model: Model<any>;
+  sessionId?: string;
+  /** Secret-free curated options. Auth, callbacks, and the live signal are never exposed. */
+  options: Readonly<AgentHarnessStreamOptions>;
+}
+
+export type PiProviderRequestPatch = AgentHarnessStreamOptionsPatch;
+
+export interface PiProviderPayloadContext {
+  model: Model<any>;
+  payload: unknown;
+}
+
+export interface PiProviderResponseContext {
+  model: Model<any>;
+  response: ProviderResponse;
 }
 
 export type PiRuntimeFailureReason =
@@ -140,6 +212,13 @@ export interface PiRuntimeRunOptions {
   }) => Promise<void> | void;
 }
 
+export type PiRuntimeQueueReceipt =
+  | { accepted: true; queue: "steer" | "follow-up" }
+  | {
+      accepted: false;
+      reason: "not-active" | "cancelled" | "invalid-message" | "capacity";
+    };
+
 export class PiAgentRuntimeHostError extends Error {
   readonly code = "pi_harness_host_failure";
 
@@ -183,23 +262,56 @@ function validateExtensions(extensions: readonly PiAgentRuntimeExtension[]): voi
 }
 
 function snapshotExtension(extension: PiAgentRuntimeExtension): PiAgentRuntimeExtension {
-  const tools = extension.tools?.map((tool) =>
-    Object.freeze({
-      ...tool,
-      parameters: cloneAndDeepFreeze(tool.parameters),
-    }),
-  );
+  const tools = extension.tools?.map(snapshotAgentTool);
   return Object.freeze({
-    id: extension.id,
+    id: extension.id.trim(),
     ...(extension.systemPrompt === undefined ? {} : { systemPrompt: extension.systemPrompt }),
     ...(tools === undefined ? {} : { tools: Object.freeze(tools) }),
+    ...(extension.resources === undefined
+      ? {}
+      : { resources: snapshotResources(extension.resources) }),
+    ...(extension.entryProjectors === undefined
+      ? {}
+      : { entryProjectors: Object.freeze({ ...extension.entryProjectors }) }),
     ...(extension.transformContext === undefined
       ? {}
       : { transformContext: extension.transformContext }),
     ...(extension.beforeToolCall === undefined ? {} : { beforeToolCall: extension.beforeToolCall }),
     ...(extension.afterToolCall === undefined ? {} : { afterToolCall: extension.afterToolCall }),
+    ...(extension.beforeProviderRequest === undefined
+      ? {}
+      : { beforeProviderRequest: extension.beforeProviderRequest }),
+    ...(extension.beforeProviderPayload === undefined
+      ? {}
+      : { beforeProviderPayload: extension.beforeProviderPayload }),
+    ...(extension.afterProviderResponse === undefined
+      ? {}
+      : { afterProviderResponse: extension.afterProviderResponse }),
+    ...(extension.onRuntimeEvent === undefined ? {} : { onRuntimeEvent: extension.onRuntimeEvent }),
     ...(extension.onEvent === undefined ? {} : { onEvent: extension.onEvent }),
   });
+}
+
+function snapshotAgentTool(tool: AgentTool): AgentTool {
+  return Object.freeze({
+    ...tool,
+    parameters: cloneAndDeepFreeze(tool.parameters),
+  });
+}
+
+function snapshotResources(resources: AgentHarnessResources): AgentHarnessResources {
+  return Object.freeze({
+    ...(resources.skills
+      ? { skills: Object.freeze(resources.skills.map((skill) => cloneAndDeepFreeze(skill))) }
+      : {}),
+    ...(resources.promptTemplates
+      ? {
+          promptTemplates: Object.freeze(
+            resources.promptTemplates.map((template) => cloneAndDeepFreeze(template)),
+          ),
+        }
+      : {}),
+  }) as AgentHarnessResources;
 }
 
 function cloneAndDeepFreeze<T>(value: T, seen = new Map<object, object>()): T {
@@ -229,7 +341,10 @@ function composeTools(
   baseTools: readonly AgentTool[],
   extensions: readonly PiAgentRuntimeExtension[],
 ): AgentTool[] {
-  const tools = [...baseTools, ...extensions.flatMap((extension) => extension.tools ?? [])];
+  const tools = [
+    ...baseTools.map(snapshotAgentTool),
+    ...extensions.flatMap((extension) => extension.tools?.map(snapshotAgentTool) ?? []),
+  ];
   const names = new Set<string>();
   for (const tool of tools) {
     if (!tool.name || names.has(tool.name)) {
@@ -247,9 +362,152 @@ function composeSystemPrompt(
   const contributions = extensions
     .map((extension) => extension.systemPrompt?.trim())
     .filter((value): value is string => Boolean(value));
-  return contributions.length > 0
-    ? [basePrompt, ...contributions].filter(Boolean).join("\n\n")
-    : basePrompt;
+  const extensionSkills = extensions.flatMap((extension) => extension.resources?.skills ?? []);
+  const skillsPrompt = formatSkillsForSystemPrompt(extensionSkills);
+  return [basePrompt, ...contributions, skillsPrompt].filter(Boolean).join("\n\n");
+}
+
+function composeResources(
+  baseResources: AgentHarnessResources,
+  extensions: readonly PiAgentRuntimeExtension[],
+): AgentHarnessResources {
+  const skills = [
+    ...(baseResources.skills ?? []),
+    ...extensions.flatMap((extension) => extension.resources?.skills ?? []),
+  ];
+  const promptTemplates = [
+    ...(baseResources.promptTemplates ?? []),
+    ...extensions.flatMap((extension) => extension.resources?.promptTemplates ?? []),
+  ];
+  for (const [kind, resources] of [
+    ["skill", skills],
+    ["prompt template", promptTemplates],
+  ] as const) {
+    const names = new Set<string>();
+    for (const resource of resources) {
+      if (!resource.name.trim() || names.has(resource.name)) {
+        throw new Error(`Pi runtime ${kind} name is missing or duplicated: ${resource.name}.`);
+      }
+      names.add(resource.name);
+    }
+  }
+  return snapshotResources({ skills, promptTemplates });
+}
+
+function composeEntryProjectors(
+  extensions: readonly PiAgentRuntimeExtension[],
+  onError: (extensionId: string, error: unknown) => never,
+): Readonly<Record<string, CustomEntryContextMessageProjector>> {
+  const projectors: Record<string, CustomEntryContextMessageProjector> = {};
+  for (const extension of extensions) {
+    for (const [customType, projector] of Object.entries(extension.entryProjectors ?? {})) {
+      if (!customType.trim() || customType.startsWith("aiden.") || projectors[customType]) {
+        throw new Error(
+          `Pi runtime custom entry projector is reserved, missing, or duplicated: ${customType || "<empty>"}.`,
+        );
+      }
+      projectors[customType] = (entry, index, entries) => {
+        try {
+          const visibleEntries = entries.filter(
+            (candidate) =>
+              !(candidate.type === "custom" || candidate.type === "custom_message") ||
+              candidate.customType === customType,
+          );
+          const visibleIndex = visibleEntries.findIndex((candidate) => candidate.id === entry.id);
+          const projected = projector(
+            structuredClone(entry),
+            visibleIndex < 0 ? index : visibleIndex,
+            structuredClone(visibleEntries),
+          );
+          return projected === undefined ? undefined : structuredClone(projected);
+        } catch (error) {
+          return onError(extension.id, error);
+        }
+      };
+    }
+  }
+  return Object.freeze(projectors);
+}
+
+const PRIVATE_PROVIDER_HEADERS = new Set([
+  "authorization",
+  "authentication-info",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-authentication-info",
+  "set-cookie",
+  "cookie",
+  "api-key",
+  "x-api-key",
+  "x-auth-token",
+  "x-goog-api-key",
+  "x-goog-user-project",
+  "ocp-apim-subscription-key",
+  "cf-access-client-id",
+  "cf-access-client-secret",
+  "cf-aig-authorization",
+]);
+
+function isPrivateProviderHeader(name: string): boolean {
+  const lower = name.toLowerCase();
+  return PRIVATE_PROVIDER_HEADERS.has(lower) || lower.startsWith("x-amz-");
+}
+
+function publicProviderResponseHeaders(
+  headers: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => {
+      const lower = name.toLowerCase();
+      return (
+        lower === "content-length" ||
+        lower === "content-type" ||
+        lower === "date" ||
+        lower === "request-id" ||
+        lower === "retry-after" ||
+        lower === "server-timing" ||
+        lower === "traceparent" ||
+        lower === "x-correlation-id" ||
+        lower === "x-request-id" ||
+        lower.startsWith("ratelimit-") ||
+        lower.startsWith("x-ratelimit-")
+      );
+    }),
+  );
+}
+
+function cloneAgentMessages(messages: readonly AgentMessage[]): AgentMessage[] {
+  if (!Array.isArray(messages)) {
+    throw new Error("Pi runtime context extension returned an invalid message list.");
+  }
+  const cloned = structuredClone(messages) as AgentMessage[];
+  if (
+    cloned.some(
+      (message) =>
+        message === null || typeof message !== "object" || typeof message.role !== "string",
+    )
+  ) {
+    throw new Error("Pi runtime context extension returned an invalid message.");
+  }
+  return cloned;
+}
+
+function cloneAfterToolPatch(patch: AfterToolCallResult): AfterToolCallResult {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) {
+    throw new Error("Pi runtime tool-result extension returned an invalid patch.");
+  }
+  return structuredClone(patch);
+}
+
+function snapshotQueuedMessage(
+  message: AgentMessage,
+): { message: AgentMessage; fingerprint: string } | undefined {
+  try {
+    const snapshot = structuredClone(message);
+    return { message: snapshot, fingerprint: JSON.stringify(snapshot) };
+  } catch {
+    return undefined;
+  }
 }
 
 export function resolvePiAgentRuntimeStaticContributions(
@@ -261,6 +519,102 @@ export function resolvePiAgentRuntimeStaticContributions(
   return {
     systemPrompt: composeSystemPrompt(systemPrompt, extensions),
     tools: composeTools(tools, extensions),
+  };
+}
+
+export function resolvePiAgentRuntimeResources(
+  resources: AgentHarnessResources,
+  extensions: readonly PiAgentRuntimeExtension[],
+): AgentHarnessResources {
+  validateExtensions(extensions);
+  return composeResources(resources, extensions);
+}
+
+export function resolvePiAgentRuntimeContributionSnapshot(
+  systemPrompt: string,
+  tools: readonly AgentTool[],
+  resources: AgentHarnessResources,
+  extensions: readonly PiAgentRuntimeExtension[],
+  revision = 0,
+): PiRuntimeContributionSnapshot {
+  const extensionSnapshot = Object.freeze(extensions.map(snapshotExtension));
+  validateExtensions(extensionSnapshot);
+  return Object.freeze({
+    revision,
+    extensions: extensionSnapshot,
+    systemPrompt: composeSystemPrompt(systemPrompt, extensionSnapshot),
+    tools: Object.freeze(composeTools(tools, extensionSnapshot)),
+    resources: composeResources(resources, extensionSnapshot),
+  });
+}
+
+function applyProviderRequestPatch(
+  options: SimpleStreamOptions,
+  patch: PiProviderRequestPatch,
+): SimpleStreamOptions {
+  if (
+    patch.transport !== undefined &&
+    !["sse", "websocket", "websocket-cached", "auto"].includes(patch.transport)
+  ) {
+    throw new Error("Pi provider request patch transport is invalid.");
+  }
+  if (
+    patch.cacheRetention !== undefined &&
+    !["none", "short", "long"].includes(patch.cacheRetention)
+  ) {
+    throw new Error("Pi provider request patch cache retention is invalid.");
+  }
+  for (const [name, value] of [
+    ["timeoutMs", patch.timeoutMs],
+    ["maxRetries", patch.maxRetries],
+    ["maxRetryDelayMs", patch.maxRetryDelayMs],
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+      throw new Error(`Pi provider request patch ${name} must be a finite non-negative number.`);
+    }
+  }
+  const hasOwn = (key: keyof PiProviderRequestPatch) =>
+    Object.prototype.hasOwnProperty.call(patch, key);
+  const headers = hasOwn("headers")
+    ? patch.headers === undefined
+      ? undefined
+      : { ...options.headers }
+    : options.headers;
+  if (headers && patch.headers) {
+    for (const [name, value] of Object.entries(patch.headers)) {
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$/u.test(name)) {
+        throw new Error("Pi provider request patch header name is invalid.");
+      }
+      if (value !== undefined && (typeof value !== "string" || /[\r\n]/u.test(value))) {
+        throw new Error("Pi provider request patch header value is invalid.");
+      }
+      if (isPrivateProviderHeader(name)) {
+        throw new Error("Pi provider request patch cannot replace host authentication headers.");
+      }
+      if (value === undefined) delete headers[name];
+      else headers[name] = value;
+    }
+  }
+  const metadata = hasOwn("metadata")
+    ? patch.metadata === undefined
+      ? undefined
+      : { ...options.metadata }
+    : options.metadata;
+  if (metadata && patch.metadata) {
+    for (const [name, value] of Object.entries(patch.metadata)) {
+      if (value === undefined) delete metadata[name];
+      else metadata[name] = structuredClone(value);
+    }
+  }
+  return {
+    ...options,
+    ...(patch.transport === undefined ? {} : { transport: patch.transport }),
+    ...(patch.cacheRetention === undefined ? {} : { cacheRetention: patch.cacheRetention }),
+    ...(patch.timeoutMs === undefined ? {} : { timeoutMs: patch.timeoutMs }),
+    ...(patch.maxRetries === undefined ? {} : { maxRetries: patch.maxRetries }),
+    ...(patch.maxRetryDelayMs === undefined ? {} : { maxRetryDelayMs: patch.maxRetryDelayMs }),
+    ...(hasOwn("headers") ? { headers } : {}),
+    ...(hasOwn("metadata") ? { metadata } : {}),
   };
 }
 
@@ -350,13 +704,23 @@ async function waitForManagedPromise<T>(
  * prompt resources, hooks, and passive events.
  */
 export class PiAgentRuntimeHarness {
+  private static readonly MAX_ACCEPTED_QUEUE_MESSAGES = 32;
   private readonly agent: Agent;
   private readonly onFault: (fault: PiHarnessFault) => void;
   private readonly durability?: PiRuntimeSessionBinding;
+  readonly models?: Models;
+  private readonly resources: AgentHarnessResources;
+  private readonly contributionRevision: number;
+  private readonly entryProjectors: Readonly<Record<string, CustomEntryContextMessageProjector>>;
+  private readonly runtimeEvents?: PiRuntimeEventChannel;
+  private readonly passiveObserverAbort = new AbortController();
+  private providerObserverSettlement = Promise.resolve();
+  private readonly passiveAgentObservers = new Set<Promise<void>>();
   private sessionPromise?: Promise<Session>;
   private sessionSeedPromise?: Promise<void>;
   private compactionPromise?: Promise<PiCompactionCoordinator>;
   private pendingDurableMessages: AgentMessage[] = [];
+  private acceptedQueuedMessages: Array<{ message: AgentMessage; fingerprint: string }> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
   private lastAssistantMessage: AssistantMessage | undefined;
@@ -368,6 +732,7 @@ export class PiAgentRuntimeHarness {
   private managedAbortController: AbortController | undefined;
   private lastManagedOutcome: PiRuntimeTerminalOutcome | undefined;
   private managedRunning = false;
+  private managedQueueOpen = false;
   private managedOperationSettlement: Promise<void> | undefined;
   private readonly detachedDurabilityOperations = new Set<Promise<void>>();
   private running = false;
@@ -377,24 +742,42 @@ export class PiAgentRuntimeHarness {
   constructor(options: PiAgentRuntimeHarnessOptions = {}) {
     const {
       extensions: requestedExtensions = [],
+      contributions,
       onFault,
-      staticContributionsApplied = false,
       durability,
+      models,
+      resources: requestedResources = {},
+      identity,
       ...agentOptions
     } = options;
-    const extensions = requestedExtensions.map(snapshotExtension);
+    if (contributions && requestedExtensions.length > 0) {
+      throw new Error(
+        "Pi runtime extensions must be supplied directly or as one contribution snapshot.",
+      );
+    }
+    const extensions = (contributions?.extensions ?? requestedExtensions).map(snapshotExtension);
     validateExtensions(extensions);
     this.onFault = onFault ?? (() => {});
     this.durability = durability;
+    this.models = models;
+    this.contributionRevision = contributions?.revision ?? 0;
+    this.resources = contributions
+      ? snapshotResources(contributions.resources)
+      : composeResources(requestedResources, extensions);
+    this.entryProjectors = composeEntryProjectors(extensions, (extensionId, error) => {
+      this.policyFault ??= toError(error);
+      this.reportFault({ source: "extension_context", extensionId, error: toError(error) });
+      throw new PiAgentRuntimeHostError("A Pi runtime entry projector failed.", "policy");
+    });
 
     const baseState = agentOptions.initialState ?? {};
     const initialState = {
       ...baseState,
-      systemPrompt: staticContributionsApplied
-        ? (baseState.systemPrompt ?? "")
-        : composeSystemPrompt(baseState.systemPrompt ?? "", extensions),
-      tools: staticContributionsApplied
-        ? [...(baseState.tools ?? [])]
+      systemPrompt:
+        contributions?.systemPrompt ??
+        composeSystemPrompt(baseState.systemPrompt ?? "", extensions),
+      tools: contributions
+        ? [...contributions.tools]
         : composeTools(baseState.tools ?? [], extensions),
     };
     const reportExtensionFault = (
@@ -408,9 +791,164 @@ export class PiAgentRuntimeHarness {
         error: toError(error),
       });
     };
+    const runtimeObservers = extensions.flatMap((extension) =>
+      extension.onRuntimeEvent ? [{ id: extension.id, observer: extension.onRuntimeEvent }] : [],
+    );
+    if (identity || runtimeObservers.length > 0) {
+      this.runtimeEvents = new PiRuntimeEventChannel(
+        identity ?? {
+          runId: agentOptions.sessionId ?? "pi-runtime",
+          sessionId: agentOptions.sessionId ?? "pi-runtime",
+          lane: "foreground",
+        },
+      );
+      for (const { id, observer } of runtimeObservers) {
+        this.runtimeEvents.observe(async (event, signal) => {
+          try {
+            await observer(event, signal);
+          } catch (error) {
+            reportExtensionFault("extension_runtime_observer", id, error);
+          }
+        });
+      }
+    }
+    const hasProviderHooks = extensions.some(
+      (extension) =>
+        extension.beforeProviderRequest ||
+        extension.beforeProviderPayload ||
+        extension.afterProviderResponse,
+    );
+    const baseStreamFn = agentOptions.streamFn ?? models?.streamSimple.bind(models);
+    if (hasProviderHooks && !baseStreamFn) {
+      throw new Error("Pi provider hooks require an owning Models collection or stream function.");
+    }
+    const providerStreamFn: AgentOptions["streamFn"] = hasProviderHooks
+      ? async (model, context, requestedOptions = {}) => {
+          let streamOptions = { ...requestedOptions };
+          for (const extension of extensions) {
+            if (!extension.beforeProviderRequest) continue;
+            try {
+              const patch = await extension.beforeProviderRequest(
+                {
+                  model: cloneAndDeepFreeze(model),
+                  sessionId: requestedOptions.sessionId ?? agentOptions.sessionId,
+                  options: cloneAndDeepFreeze({
+                    ...(streamOptions.transport === undefined
+                      ? {}
+                      : { transport: streamOptions.transport }),
+                    ...(streamOptions.cacheRetention === undefined
+                      ? {}
+                      : { cacheRetention: streamOptions.cacheRetention }),
+                    ...(streamOptions.timeoutMs === undefined
+                      ? {}
+                      : { timeoutMs: streamOptions.timeoutMs }),
+                    ...(streamOptions.maxRetries === undefined
+                      ? {}
+                      : { maxRetries: streamOptions.maxRetries }),
+                    ...(streamOptions.maxRetryDelayMs === undefined
+                      ? {}
+                      : { maxRetryDelayMs: streamOptions.maxRetryDelayMs }),
+                    ...(streamOptions.headers === undefined
+                      ? {}
+                      : {
+                          headers: Object.fromEntries(
+                            Object.entries(streamOptions.headers).filter(
+                              (entry): entry is [string, string] => typeof entry[1] === "string",
+                            ),
+                          ),
+                        }),
+                    ...(streamOptions.metadata === undefined
+                      ? {}
+                      : { metadata: structuredClone(streamOptions.metadata) }),
+                  }),
+                },
+                requestedOptions.signal,
+              );
+              if (patch) streamOptions = applyProviderRequestPatch(streamOptions, patch);
+            } catch (error) {
+              this.policyFault ??= toError(error);
+              reportExtensionFault("extension_before_provider", extension.id, error);
+              throw new PiAgentRuntimeHostError(
+                "A Pi runtime provider request extension failed.",
+                "policy",
+              );
+            }
+          }
+          const hostOnPayload = streamOptions.onPayload;
+          const hostOnResponse = streamOptions.onResponse;
+          return baseStreamFn!(model, context, {
+            ...streamOptions,
+            onPayload: extensions.some((extension) => extension.beforeProviderPayload)
+              ? async (payload, payloadModel) => {
+                  let current = payload;
+                  for (const extension of extensions) {
+                    if (!extension.beforeProviderPayload) continue;
+                    try {
+                      const replacement = await extension.beforeProviderPayload(
+                        {
+                          model: cloneAndDeepFreeze(payloadModel),
+                          payload: cloneAndDeepFreeze(current),
+                        },
+                        requestedOptions.signal,
+                      );
+                      if (replacement !== undefined) current = structuredClone(replacement);
+                    } catch (error) {
+                      this.policyFault ??= toError(error);
+                      reportExtensionFault("extension_provider_payload", extension.id, error);
+                      throw new PiAgentRuntimeHostError(
+                        "A Pi runtime provider payload extension failed.",
+                        "policy",
+                      );
+                    }
+                  }
+                  const hostReplacement = await hostOnPayload?.(current, payloadModel);
+                  return hostReplacement ?? current;
+                }
+              : hostOnPayload,
+            onResponse: extensions.some((extension) => extension.afterProviderResponse)
+              ? async (response, responseModel) => {
+                  await hostOnResponse?.(response, responseModel);
+                  const modelSnapshot = cloneAndDeepFreeze(responseModel);
+                  const responseSnapshot = cloneAndDeepFreeze({
+                    status: response.status,
+                    headers: publicProviderResponseHeaders(response.headers),
+                  });
+                  this.providerObserverSettlement = this.providerObserverSettlement.then(
+                    async () => {
+                      if (this.passiveObserverAbort.signal.aborted) return;
+                      for (const extension of extensions) {
+                        if (!extension.afterProviderResponse) continue;
+                        try {
+                          await extension.afterProviderResponse(
+                            {
+                              model: cloneAndDeepFreeze(modelSnapshot),
+                              response: responseSnapshot,
+                            },
+                            this.passiveObserverAbort.signal,
+                          );
+                        } catch (error) {
+                          reportExtensionFault("extension_after_provider", extension.id, error);
+                        }
+                      }
+                    },
+                  );
+                  void this.providerObserverSettlement.catch((error: unknown) => {
+                    if (!this.passiveObserverAbort.signal.aborted) {
+                      this.reportFault({
+                        source: "extension_after_provider",
+                        error: toError(error),
+                      });
+                    }
+                  });
+                }
+              : hostOnResponse,
+          });
+        }
+      : agentOptions.streamFn;
 
     this.agent = new Agent({
       ...agentOptions,
+      ...(providerStreamFn ? { streamFn: providerStreamFn } : {}),
       initialState,
       // Aiden tools share workspace, scheduler, and external-service state.
       // Pi defaults to parallel execution, so the host must state this policy.
@@ -418,11 +956,13 @@ export class PiAgentRuntimeHarness {
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
           ? async (messages, signal) => {
-              let current = messages;
+              let current = cloneAgentMessages(messages);
               for (const extension of extensions) {
                 if (!extension.transformContext) continue;
                 try {
-                  current = await extension.transformContext(current, signal);
+                  current = cloneAgentMessages(
+                    await extension.transformContext(cloneAndDeepFreeze(current), signal),
+                  );
                 } catch (error) {
                   this.policyFault ??= toError(error);
                   reportExtensionFault("extension_context", extension.id, error);
@@ -472,7 +1012,10 @@ export class PiAgentRuntimeHarness {
               for (const extension of extensions) {
                 if (!extension.beforeToolCall) continue;
                 try {
-                  const result = await extension.beforeToolCall(context, signal);
+                  const result = await extension.beforeToolCall(
+                    cloneAndDeepFreeze(context),
+                    signal,
+                  );
                   if (result?.block) return result;
                 } catch (error) {
                   this.policyFault ??= toError(error);
@@ -516,8 +1059,12 @@ export class PiAgentRuntimeHarness {
               for (const extension of extensions) {
                 if (!extension.afterToolCall) continue;
                 try {
-                  const patch = await extension.afterToolCall(current, signal);
-                  if (!patch) continue;
+                  const extensionPatch = await extension.afterToolCall(
+                    cloneAndDeepFreeze(current),
+                    signal,
+                  );
+                  if (!extensionPatch) continue;
+                  const patch = cloneAfterToolPatch(extensionPatch);
                   combined = { ...combined, ...patch };
                   current = applyAfterToolPatch(current, patch);
                 } catch (error) {
@@ -548,10 +1095,28 @@ export class PiAgentRuntimeHarness {
           : undefined,
     });
 
+    this.agent.subscribe((event) => {
+      if (event.type === "agent_start" && this.managedRunning && !this.appCancelRequested) {
+        this.managedQueueOpen = true;
+      } else if (
+        event.type === "message_end" &&
+        event.message.role === "assistant" &&
+        event.message.stopReason !== "stop" &&
+        event.message.stopReason !== "toolUse"
+      ) {
+        // Pi does not drain steer/follow-up queues after an error, abort, or
+        // output-limit terminal. Close admission before external subscribers
+        // can observe the later turn_end event and enqueue work that cannot run.
+        this.managedQueueOpen = false;
+      } else if (event.type === "agent_end") {
+        this.managedQueueOpen = false;
+      }
+    });
+
     for (const extension of extensions) {
       const observer = extension.onEvent;
       if (!observer) continue;
-      this.agent.subscribe((event, signal) => {
+      this.agent.subscribe((event) => {
         let snapshot: AgentEvent;
         try {
           snapshot = structuredClone(event) as AgentEvent;
@@ -561,11 +1126,14 @@ export class PiAgentRuntimeHarness {
         }
         // Passive observers never participate in Pi's serial lifecycle or
         // receive mutable references used to construct the next model turn.
-        void Promise.resolve()
-          .then(() => observer(snapshot, signal))
+        if (this.passiveAgentObservers.size >= 128) return;
+        const observation = Promise.resolve()
+          .then(() => observer(snapshot, this.passiveObserverAbort.signal))
           .catch((error: unknown) =>
             reportExtensionFault("extension_observer", extension.id, error),
           );
+        this.passiveAgentObservers.add(observation);
+        void observation.finally(() => this.passiveAgentObservers.delete(observation));
       });
     }
 
@@ -576,9 +1144,17 @@ export class PiAgentRuntimeHarness {
           return;
         }
         if (event.type !== "message_end") return;
-        if (event.message.role !== "user" || durability.journalUserMessages === true) {
-          this.pendingDurableMessages.push(event.message);
-          this.capturedTurnMessages.push(structuredClone(event.message));
+        // The managed initial input is already durable and Agent.continue()
+        // does not re-emit it. Any emitted user is queued steer/follow-up input.
+        this.pendingDurableMessages.push(event.message);
+        this.capturedTurnMessages.push(structuredClone(event.message));
+        if (event.message.role === "user") {
+          const emittedFingerprint = snapshotQueuedMessage(event.message)?.fingerprint;
+          const acceptedIndex = this.acceptedQueuedMessages.findIndex(
+            (accepted) =>
+              accepted.message === event.message || accepted.fingerprint === emittedFingerprint,
+          );
+          if (acceptedIndex >= 0) this.acceptedQueuedMessages.splice(acceptedIndex, 1);
         }
         if (event.message.role === "assistant") {
           this.lastAssistantMessage = event.message;
@@ -643,7 +1219,7 @@ export class PiAgentRuntimeHarness {
             return hostPrepared;
           }
           if (result.failureCode === "session-failed") {
-            this.managedHostFault ??= "session";
+            this.managedHostFault ??= this.policyFault ? "policy" : "session";
             this.agent.abort();
             return hostPrepared;
           }
@@ -674,6 +1250,13 @@ export class PiAgentRuntimeHarness {
         }
       };
     }
+    this.agent.subscribe((event) => {
+      this.runtimeEvents?.emit({
+        type: "agent_event",
+        event: projectPiRuntimeAgentEvent(event),
+        durable: Boolean(this.durability && event.type === "message_end"),
+      });
+    });
   }
 
   get state(): AgentState {
@@ -682,6 +1265,32 @@ export class PiAgentRuntimeHarness {
 
   get signal(): AbortSignal | undefined {
     return this.agent.signal;
+  }
+
+  /** Immutable per-runtime resource snapshot used by prompt and explicit invocation adapters. */
+  getResources(): AgentHarnessResources {
+    return this.resources;
+  }
+
+  getContributionRevision(): number {
+    return this.contributionRevision;
+  }
+
+  observeRuntime(observer: PiRuntimeEventObserver): () => void {
+    if (!this.runtimeEvents) throw new Error("Pi runtime canonical events are not configured.");
+    return this.runtimeEvents.observe(observer);
+  }
+
+  runtimeEventState(): PiRuntimeEventState | undefined {
+    return this.runtimeEvents?.snapshot();
+  }
+
+  settleRuntimeObservers(): Promise<void> {
+    return Promise.all([
+      this.runtimeEvents?.settleObservers() ?? Promise.resolve(),
+      this.providerObserverSettlement,
+      ...this.passiveAgentObservers,
+    ]).then(() => undefined);
   }
 
   subscribe(
@@ -738,6 +1347,7 @@ export class PiAgentRuntimeHarness {
       throw new Error("Pi runtime harness is busy.");
     }
     this.managedRunning = true;
+    this.managedQueueOpen = false;
     let settleManagedOperation!: () => void;
     const managedOperationSettlement = new Promise<void>((resolve) => {
       settleManagedOperation = resolve;
@@ -748,6 +1358,7 @@ export class PiAgentRuntimeHarness {
     this.managedProviderFailure = undefined;
     this.lastManagedOutcome = undefined;
     this.pendingDurableMessages = [];
+    this.acceptedQueuedMessages = [];
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
     this.lastAssistantMessage = undefined;
@@ -783,8 +1394,20 @@ export class PiAgentRuntimeHarness {
               ),
             };
       this.lastManagedOutcome = closed;
+      this.runtimeEvents?.emit({
+        type: "run_end",
+        outcome: closed.kind,
+        attempts: closed.attempts,
+        ...(closed.kind === "provider_failed"
+          ? { reason: closed.reason }
+          : closed.kind === "host_failed"
+            ? { reason: closed.faultKind }
+            : {}),
+      });
       return closed;
     };
+    this.runtimeEvents?.setAttempt(0);
+    this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
     try {
       if (this.appCancelRequested) {
         return finish({ kind: "app_cancelled", attempts });
@@ -861,7 +1484,11 @@ export class PiAgentRuntimeHarness {
           repaired.value.failureCode === "unsafe-rollback" ||
           repaired.value.failureCode === "session-failed"
         ) {
-          return finish({ kind: "host_failed", faultKind: "session", attempts });
+          return finish({
+            kind: "host_failed",
+            faultKind: this.policyFault ? "policy" : "session",
+            attempts,
+          });
         }
         if (repaired.value.errorMessage) {
           return finish({
@@ -934,7 +1561,11 @@ export class PiAgentRuntimeHarness {
         if (checked.kind === "failed") throw checked.error;
         preflight = checked.value;
         if (preflight.failureCode === "session-failed") {
-          return finish({ kind: "host_failed", faultKind: "session", attempts });
+          return finish({
+            kind: "host_failed",
+            faultKind: this.policyFault ? "policy" : "session",
+            attempts,
+          });
         }
         if (preflight.errorMessage) {
           return finish({
@@ -966,7 +1597,11 @@ export class PiAgentRuntimeHarness {
         }
       } catch (error) {
         this.reportFault({ source: "session", error: toError(error) });
-        return finish({ kind: "host_failed", faultKind: "session", attempts });
+        return finish({
+          kind: "host_failed",
+          faultKind: this.policyFault ? "policy" : "session",
+          attempts,
+        });
       }
       this.agent.state.messages = [...preparedMessages];
       if (cancelled()) return finish({ kind: "app_cancelled", attempts });
@@ -980,6 +1615,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         attempts = (attempts + 1) as 1 | 2;
+        this.runtimeEvents?.setAttempt(attempts);
         this.lastAssistantMessage = undefined;
         try {
           // The operation input is already durable and installed in state, so
@@ -1095,6 +1731,16 @@ export class PiAgentRuntimeHarness {
             this.capturedTurnMessages.pop();
           }
           if (attempts >= 2) {
+            if (
+              !cancelled() &&
+              compactionResult.failureCode !== "session-failed" &&
+              compactionResult.failureCode !== "unsafe-rollback" &&
+              this.requeueAcceptedMessagesAfterTerminal()
+            ) {
+              attempts = 0;
+              this.lastAssistantMessage = undefined;
+              continue;
+            }
             return finish({
               kind: "provider_failed",
               reason:
@@ -1107,6 +1753,12 @@ export class PiAgentRuntimeHarness {
             });
           }
           const delayMs = compactionResult.retryDelayMs ?? 0;
+          this.runtimeEvents?.emit({
+            type: "retry",
+            attempt: 2,
+            reason: compactionResult.compacted === true ? "overflow" : "provider",
+            delayMs,
+          });
           const retryHook = await waitForManagedHook(
             Promise.resolve().then(() =>
               options.onRetry?.({
@@ -1161,20 +1813,31 @@ export class PiAgentRuntimeHarness {
         if (compactionResult.failureCode === "session-failed") {
           return finish({
             kind: "host_failed",
+            faultKind: this.policyFault ? "policy" : "session",
+            finalMessage: assistant,
+            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            attempts,
+          });
+        }
+        if (compactionResult.failureCode === "unsafe-rollback") {
+          return finish({
+            kind: "host_failed",
             faultKind: "session",
             finalMessage: assistant,
             ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
             attempts,
           });
         }
+        if (
+          assistant.stopReason !== "stop" &&
+          assistant.stopReason !== "toolUse" &&
+          this.requeueAcceptedMessagesAfterTerminal()
+        ) {
+          attempts = 0;
+          this.lastAssistantMessage = undefined;
+          continue;
+        }
         if (assistant.stopReason === "error") {
-          if (compactionResult.failureCode === "unsafe-rollback") {
-            return finish({
-              kind: "host_failed",
-              faultKind: "session",
-              attempts,
-            });
-          }
           return finish({
             kind: "provider_failed",
             reason:
@@ -1214,6 +1877,7 @@ export class PiAgentRuntimeHarness {
         this.managedAbortController = undefined;
       }
       this.managedRunning = false;
+      this.managedQueueOpen = false;
       settleManagedOperation();
       if (this.managedOperationSettlement === managedOperationSettlement) {
         this.managedOperationSettlement = undefined;
@@ -1221,18 +1885,29 @@ export class PiAgentRuntimeHarness {
     }
   }
 
-  steer(message: AgentMessage): void {
-    this.assertUsable();
-    this.agent.steer(message);
+  queueSteer(message: AgentMessage): PiRuntimeQueueReceipt {
+    const rejected = this.rejectedQueueReceipt(message);
+    if (rejected) return rejected;
+    const queued = snapshotQueuedMessage(message);
+    if (!queued) return { accepted: false, reason: "invalid-message" };
+    this.acceptedQueuedMessages.push(queued);
+    this.agent.steer(queued.message);
+    return { accepted: true, queue: "steer" };
   }
 
-  followUp(message: AgentMessage): void {
-    this.assertUsable();
-    this.agent.followUp(message);
+  queueFollowUp(message: AgentMessage): PiRuntimeQueueReceipt {
+    const rejected = this.rejectedQueueReceipt(message);
+    if (rejected) return rejected;
+    const queued = snapshotQueuedMessage(message);
+    if (!queued) return { accepted: false, reason: "invalid-message" };
+    this.acceptedQueuedMessages.push(queued);
+    this.agent.followUp(queued.message);
+    return { accepted: true, queue: "follow-up" };
   }
 
   abort(): void {
     this.appCancelRequested = true;
+    this.managedQueueOpen = false;
     this.managedAbortController?.abort(new Error("The app cancelled the Pi runtime operation."));
     void this.compactionPromise?.then((coordinator) => coordinator.abort()).catch(() => undefined);
     this.agent.abort();
@@ -1302,8 +1977,10 @@ export class PiAgentRuntimeHarness {
     this.managedHostFault = undefined;
     this.managedProviderFailure = undefined;
     this.appCancelRequested = false;
+    this.managedQueueOpen = false;
     this.lastManagedOutcome = undefined;
     this.pendingDurableMessages = [];
+    this.acceptedQueuedMessages = [];
     this.lastAssistantMessage = undefined;
     this.capturedTurnMessages = [];
     this.turnHadToolExecution = false;
@@ -1314,10 +1991,15 @@ export class PiAgentRuntimeHarness {
     if (this.disposed) return;
     this.disposed = true;
     await this.cancelAndSettle();
+    this.passiveObserverAbort.abort(new Error("Pi runtime observation ended."));
+    this.runtimeEvents?.close();
     this.agent.reset();
   }
 
   private async runLegacy(operation: () => Promise<void>): Promise<void> {
+    if (this.durability) {
+      throw new Error("Durable Pi runtimes must use runManaged().");
+    }
     if (this.managedRunning) throw new Error("Pi runtime harness is busy.");
     await this.executeAgentAttempt(operation);
   }
@@ -1403,6 +2085,16 @@ export class PiAgentRuntimeHarness {
     }
   }
 
+  private requeueAcceptedMessagesAfterTerminal(): boolean {
+    if (this.acceptedQueuedMessages.length === 0 || !this.agent.hasQueuedMessages()) return false;
+    // Pi does not drain either queue after an error/aborted terminal. Convert
+    // every already-accepted item to steering so the next continuation emits
+    // and journals it before making another provider request.
+    this.agent.clearAllQueues();
+    for (const accepted of this.acceptedQueuedMessages) this.agent.steer(accepted.message);
+    return true;
+  }
+
   private resolveCompaction(): Promise<PiCompactionCoordinator> {
     const durability = this.durability;
     if (!durability) {
@@ -1423,7 +2115,11 @@ export class PiAgentRuntimeHarness {
     if (!durability) {
       return Promise.reject(new Error("Pi runtime durability is not configured."));
     }
-    this.sessionPromise ??= Promise.resolve(durability.session);
+    this.sessionPromise ??= Promise.resolve(durability.session).then((session) =>
+      Object.keys(this.entryProjectors).length === 0
+        ? session
+        : new Session(session.getStorage(), { entryProjectors: this.entryProjectors }),
+    );
     return this.sessionPromise;
   }
 
@@ -1452,6 +2148,20 @@ export class PiAgentRuntimeHarness {
     if (this.disposed) throw new Error("Pi runtime harness is disposed.");
   }
 
+  private rejectedQueueReceipt(
+    message: AgentMessage,
+  ): Extract<PiRuntimeQueueReceipt, { accepted: false }> | undefined {
+    if (this.disposed || !this.managedRunning || !this.managedQueueOpen) {
+      return { accepted: false, reason: "not-active" };
+    }
+    if (this.appCancelRequested) return { accepted: false, reason: "cancelled" };
+    if (message.role !== "user") return { accepted: false, reason: "invalid-message" };
+    if (this.acceptedQueuedMessages.length >= PiAgentRuntimeHarness.MAX_ACCEPTED_QUEUE_MESSAGES) {
+      return { accepted: false, reason: "capacity" };
+    }
+    return undefined;
+  }
+
   private reportFault(fault: PiHarnessFault): void {
     try {
       this.onFault(fault);
@@ -1464,19 +2174,52 @@ export class PiAgentRuntimeHarness {
 /** Host-owned registry. Loading executable extension files is a separate trust decision. */
 export class PiAgentRuntimeExtensionRegistry {
   private readonly extensions = new Map<string, PiAgentRuntimeExtension>();
+  private revision = 0;
 
   register(extension: PiAgentRuntimeExtension): () => void {
-    validateExtensions([...this.extensions.values(), extension]);
-    this.extensions.set(extension.id, extension);
+    const registered = snapshotExtension(extension);
+    validateExtensions([...this.extensions.values(), registered]);
+    const key = registered.id;
+    this.extensions.set(key, registered);
+    this.revision += 1;
     return () => {
-      if (this.extensions.get(extension.id) === extension) {
-        this.extensions.delete(extension.id);
+      if (this.extensions.get(key) === registered) {
+        this.extensions.delete(key);
+        this.revision += 1;
+      }
+    };
+  }
+
+  /** Atomic trusted-extension reload; stale disposers cannot remove the replacement. */
+  replace(extension: PiAgentRuntimeExtension): () => void {
+    const registered = snapshotExtension(extension);
+    const key = registered.id;
+    validateExtensions([
+      ...[...this.extensions.entries()].filter(([id]) => id !== key).map(([, value]) => value),
+      registered,
+    ]);
+    this.extensions.set(key, registered);
+    this.revision += 1;
+    return () => {
+      if (this.extensions.get(key) === registered) {
+        this.extensions.delete(key);
+        this.revision += 1;
       }
     };
   }
 
   snapshot(): readonly PiAgentRuntimeExtension[] {
     return Object.freeze([...this.extensions.values()].map(snapshotExtension));
+  }
+
+  snapshotWithRevision(): {
+    revision: number;
+    extensions: readonly PiAgentRuntimeExtension[];
+  } {
+    return Object.freeze({
+      revision: this.revision,
+      extensions: this.snapshot(),
+    });
   }
 }
 

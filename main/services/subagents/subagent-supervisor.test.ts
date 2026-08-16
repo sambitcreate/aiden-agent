@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { createModels, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { Agent, AgentEvent, AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
@@ -51,6 +51,7 @@ const TEST_CHILD_CONTEXT = {
 
 function runtime(): ResolvedModelRuntime {
   return {
+    models: createModels(),
     provider: {
       id: "phase2-provider",
       kind: "openai",
