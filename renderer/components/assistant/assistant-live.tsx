@@ -2,7 +2,10 @@ import * as React from "react";
 import { Mic, MonitorOff, Radio, Square } from "lucide-react";
 import { Button, Dialog, Switch } from "../ui";
 import { computerUseControlState } from "../../lib/computer-use-control";
-import type { AssistantLiveController } from "./use-assistant-live";
+import type {
+  AssistantLiveCaption,
+  AssistantLiveController,
+} from "./use-assistant-live";
 
 export const ASSISTANT_LIVE_FOCUS_CLASS =
   "focus-visible:ring-[3px] focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover";
@@ -18,6 +21,147 @@ const STATE_LABEL: Record<AssistantLiveController["state"], string> = {
   disconnected: "Disconnected",
 };
 
+function presenceDetail(live: AssistantLiveController): string {
+  if (live.microphoneActive) return "Start speaking when you’re ready.";
+  if (live.busy) return "Preparing your microphone…";
+  return "The microphone is not capturing.";
+}
+
+export function assistantLiveTranscriptFollowsLatest(
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight <= 24;
+}
+
+function AssistantLiveTranscript({
+  captions,
+}: {
+  captions: readonly AssistantLiveCaption[];
+}): React.ReactElement {
+  const viewportRef = React.useRef<HTMLDivElement>(null);
+  const followLatest = React.useRef(true);
+  const latestText = captions[captions.length - 1]?.text ?? "";
+
+  React.useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !followLatest.current) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }, [captions.length, latestText]);
+
+  return (
+    <div
+      ref={viewportRef}
+      className="assistant-live-transcript min-h-0 flex-1 overflow-y-auto px-3"
+      aria-label="Live captions"
+      onScroll={(event) => {
+        const viewport = event.currentTarget;
+        followLatest.current = assistantLiveTranscriptFollowsLatest(
+          viewport.scrollHeight,
+          viewport.scrollTop,
+          viewport.clientHeight,
+        );
+      }}
+    >
+      {captions.map((turn) => (
+        <p key={turn.id} className="assistant-live-caption-turn">
+          <span className="assistant-live-caption-speaker">
+            {turn.direction === "input" ? "You" : "Aiden"}
+          </span>
+          <span>{turn.text}</span>
+          {turn.final ? null : <span className="sr-only">, interim</span>}
+        </p>
+      ))}
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        className="sr-only"
+      >
+        {captions
+          .filter((turn) => turn.sealed)
+          .map((turn) => (
+            <p key={turn.id}>
+              {turn.direction === "input" ? "You" : "Aiden"}: {turn.text}
+            </p>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function AssistantLivePresence({
+  live,
+}: {
+  live: AssistantLiveController;
+}): React.ReactElement {
+  return (
+    <div
+      className="assistant-live-presence"
+      data-state={live.state}
+      data-has-captions={live.captions.length > 0}
+      data-microphone-active={live.microphoneActive}
+    >
+      <div className="assistant-live-orb" aria-hidden="true">
+        <span className="assistant-live-orb-core">
+          <span className="assistant-live-orb-pearl" />
+        </span>
+      </div>
+      <p className="assistant-live-presence-detail">{presenceDetail(live)}</p>
+    </div>
+  );
+}
+
+function AssistantLiveControlDock({
+  live,
+}: {
+  live: AssistantLiveController;
+}): React.ReactElement {
+  return (
+    <div
+      className="assistant-live-control-dock"
+      role="group"
+      aria-label="Live controls"
+      data-state={live.state}
+      data-microphone-active={live.microphoneActive}
+    >
+      <div
+        className="assistant-live-microphone-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <Mic className="size-4" aria-hidden="true" />
+        <span>
+          {live.microphoneActive
+            ? "Microphone on"
+            : live.busy
+              ? "Starting microphone…"
+              : "Microphone off"}
+        </span>
+      </div>
+      <div className="assistant-live-signal" aria-hidden="true">
+        {Array.from({ length: 5 }, (_, index) => (
+          <span key={index} />
+        ))}
+      </div>
+      <Button
+        variant="filled"
+        size="small"
+        iconOnly
+        className={`${ASSISTANT_LIVE_FOCUS_CLASS} assistant-live-stop-button`}
+        aria-label="Stop Live"
+        title="Stop Live"
+        onClick={() => void live.stop()}
+        disabled={live.busy}
+      >
+        <Square className="fill-current" aria-hidden="true" />
+      </Button>
+    </div>
+  );
+}
+
 export function AssistantLiveSetupContent({
   live,
 }: {
@@ -28,8 +172,29 @@ export function AssistantLiveSetupContent({
     ready: live.computerUseReady,
     busy: live.computerUseBusy,
   });
+  const distinctBlockedReason =
+    live.startBlockedReason &&
+    live.startBlockedReason !== live.availabilityDetail &&
+    live.startBlockedReason !== live.microphonePermissionDetail
+      ? live.startBlockedReason
+      : null;
   return (
     <div className="space-y-3">
+      {live.error ? (
+        <p
+          role="alert"
+          className="rounded-xl bg-support-red/10 px-3 py-2 text-xs leading-4 text-support-red"
+        >
+          {live.error}
+        </p>
+      ) : distinctBlockedReason ? (
+        <p
+          role="status"
+          className="rounded-xl bg-well px-3 py-2 text-xs leading-4 text-secondary"
+        >
+          {distinctBlockedReason}
+        </p>
+      ) : null}
       <div className="flex items-center justify-between gap-4 rounded-xl bg-well px-3 py-2.5">
         <div>
           <p className="flex items-center gap-1.5 text-sm font-medium text-primary">
@@ -129,6 +294,39 @@ export function AssistantLiveSetupContent({
   );
 }
 
+export function AssistantLiveEntryPoint({
+  live,
+}: {
+  live: AssistantLiveController;
+}): React.ReactElement | null {
+  if (!live.visible || live.active) return null;
+  const action = live.reconnectRequired
+    ? "Reconnect Gemini Live"
+    : "Start Gemini Live";
+  const blocked = Boolean(live.startBlockedReason);
+  return (
+    <Button
+      variant="transparent"
+      size="small"
+      iconOnly
+      className={`${ASSISTANT_LIVE_FOCUS_CLASS} assistant-live-entry-button`}
+      aria-label={
+        blocked ? `${action} unavailable: ${live.startBlockedReason}` : action
+      }
+      aria-haspopup="dialog"
+      aria-expanded={live.setupOpen}
+      title={live.startBlockedReason ?? action}
+      data-state={
+        live.setupOpen ? "open" : live.reconnectRequired ? "reconnect" : "idle"
+      }
+      disabled={blocked || live.busy}
+      onClick={() => live.setSetupOpen(true)}
+    >
+      <span className="assistant-live-entry-material" aria-hidden="true" />
+    </Button>
+  );
+}
+
 export function AssistantLive({
   live,
 }: {
@@ -140,82 +338,51 @@ export function AssistantLive({
       {live.active ? (
         <section
           aria-label="Live conversation"
-          className="flex min-h-0 flex-1 flex-col"
+          className="assistant-live-shell flex min-h-0 flex-1 flex-col"
+          style={
+            {
+              "--assistant-live-level": live.microphoneLevel.toFixed(3),
+              "--assistant-live-bar-scale": (
+                0.35 +
+                live.microphoneLevel * 1.1
+              ).toFixed(3),
+              "--assistant-live-orb-scale": (
+                0.98 +
+                live.microphoneLevel * 0.08
+              ).toFixed(3),
+              "--assistant-live-orb-bloom": (
+                0.96 +
+                live.microphoneLevel * 0.1
+              ).toFixed(3),
+              "--assistant-live-orb-speed": `${(
+                5.2 -
+                live.microphoneLevel * 3.4
+              ).toFixed(2)}s`,
+              "--assistant-live-orb-glow": `${(
+                20 +
+                live.microphoneLevel * 26
+              ).toFixed(1)}px`,
+            } as React.CSSProperties
+          }
         >
-          <div className="flex items-center justify-between border-b border-separator px-3 py-2">
-            <div className="min-w-0">
-              <p
-                role="status"
-                aria-live="polite"
-                className="flex items-center gap-1.5 text-sm font-medium text-primary"
-              >
-                <Radio className="size-3.5 text-accent" aria-hidden="true" />{" "}
-                {STATE_LABEL[live.state]}
-              </p>
-              <p className="mt-0.5 text-xs text-tertiary">
-                {live.microphoneActive
-                  ? "Microphone on"
-                  : live.busy
-                    ? "Starting microphone…"
-                    : "Microphone off"}{" "}
-                · Sent to Google Gemini
-                {live.model ? ` · ${live.model}` : ""}
-              </p>
-            </div>
-            <Button
-              variant="filled"
-              size="small"
-              className={ASSISTANT_LIVE_FOCUS_CLASS}
-              onClick={() => void live.stop()}
-              disabled={live.busy}
-            >
-              <Square className="fill-current" aria-hidden="true" /> Stop
-            </Button>
-          </div>
-          <div
-            className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-            aria-label="Live captions"
-          >
-            {live.captions.length ? (
-              live.captions.map((caption) => (
-                <p
-                  key={caption.id}
-                  className="mb-2 text-sm leading-5 text-primary"
-                >
-                  <span className="mr-1.5 text-xs font-medium text-tertiary">
-                    {caption.direction === "input" ? "You" : "Aiden"}
-                  </span>
-                  <span>{caption.text}</span>
-                  {caption.final ? null : (
-                    <span className="sr-only">, interim</span>
-                  )}
-                </p>
-              ))
-            ) : (
-              <p className="text-sm text-tertiary">
-                {live.microphoneActive
-                  ? "Start speaking when you’re ready."
-                  : live.busy
-                    ? "Preparing your microphone…"
-                    : "The microphone is not capturing."}
-              </p>
-            )}
-            <div
-              role="log"
+          <div className="assistant-live-session-header">
+            <p
+              role="status"
               aria-live="polite"
-              aria-relevant="additions"
-              className="sr-only"
+              className="flex items-center gap-1.5 text-sm font-medium text-primary"
             >
-              {live.captions
-                .filter((caption) => caption.final)
-                .map((caption) => (
-                  <p key={caption.id}>
-                    {caption.direction === "input" ? "You" : "Aiden"}:{" "}
-                    {caption.text}
-                  </p>
-                ))}
-            </div>
+              <Radio className="size-3.5 text-accent" aria-hidden="true" />{" "}
+              {STATE_LABEL[live.state]}
+            </p>
+            <p
+              className="mt-0.5 truncate text-xs text-tertiary"
+              title={live.model ?? "Google Gemini"}
+            >
+              Google Gemini{live.model ? ` · ${live.model}` : ""}
+            </p>
           </div>
+          <AssistantLivePresence live={live} />
+          <AssistantLiveTranscript captions={live.captions} />
           {live.error ? (
             <p
               role="alert"
@@ -224,50 +391,11 @@ export function AssistantLive({
               {live.error}
             </p>
           ) : null}
-        </section>
-      ) : (
-        <div className="px-3 pt-2">
-          <div className="rounded-xl bg-well px-3 py-2.5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <p className="flex items-center gap-1.5 text-sm font-medium text-primary">
-                  <Radio className="size-3.5 text-accent" aria-hidden="true" />{" "}
-                  Gemini Live
-                  <span className="rounded-full bg-control px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-tertiary">
-                    Experimental
-                  </span>
-                </p>
-                <p className="mt-1 text-xs text-secondary">
-                  {live.availabilityDetail}
-                </p>
-                <p className="mt-1 text-xs text-tertiary">
-                  {live.microphonePermissionDetail}
-                </p>
-              </div>
-              <Button
-                variant="filled"
-                size="small"
-                className={`${ASSISTANT_LIVE_FOCUS_CLASS} shrink-0`}
-                onClick={() => live.setSetupOpen(true)}
-                disabled={Boolean(live.startBlockedReason)}
-                title={live.startBlockedReason ?? undefined}
-              >
-                {live.reconnectRequired ? "Reconnect" : "Start"}
-              </Button>
-            </div>
+          <div className="assistant-live-control-wrap">
+            <AssistantLiveControlDock live={live} />
           </div>
-          {live.startBlockedReason ? (
-            <p role="status" className="mt-1.5 text-xs text-tertiary">
-              {live.startBlockedReason}
-            </p>
-          ) : null}
-          {live.error ? (
-            <p role="alert" className="mt-1.5 text-xs text-support-red">
-              {live.error}
-            </p>
-          ) : null}
-        </div>
-      )}
+        </section>
+      ) : null}
       <Dialog
         open={live.setupOpen}
         onOpenChange={live.setSetupOpen}
