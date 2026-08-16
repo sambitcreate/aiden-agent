@@ -78,6 +78,7 @@ import {
   type SubagentPackagedSoakSession,
 } from "./services/subagents/subagent-packaged-soak-core.js";
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
+import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
 import { chatStore } from "./services/chat-store.js";
 import {
@@ -1456,14 +1457,20 @@ if (!ownsSingleInstanceLock) {
       }
       // Reconcile every persisted active child at the actual restart boundary,
       // before a renderer can read or append run history.
+      await piRuntimeEffectStore.initialize();
       await subagentRunStore.initialize();
       await reconcilePendingChatDeletions(subagentRunStore, async (chatId) => {
+        await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
-      await piCompactionSessionStore.reconcileChats(
-        new Set((await chatStore.list()).map((chat) => chat.id)),
+      const visibleChatIds = new Set(
+        (await chatStore.list()).map((chat) => chat.id),
       );
+      await Promise.all([
+        piRuntimeEffectStore.reconcileChats(visibleChatIds),
+        piCompactionSessionStore.reconcileChats(visibleChatIds),
+      ]);
       await reconcilePendingManagedWorktreeDeletions({
         listWorkspaces: () => configStore.listWorkspaces(),
         deletionPending: (workspace) => {

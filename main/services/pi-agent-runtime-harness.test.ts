@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import {
   createFauxCore,
@@ -24,7 +27,10 @@ import {
   resolvePiAgentRuntimeContributionSnapshot,
   type PiAgentRuntimeHarnessOptions,
   type PiHarnessFault,
+  type PiRuntimeSessionBinding,
 } from "./pi-agent-runtime-harness.js";
+import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 
 function testHarness(
   responses: Parameters<ReturnType<typeof createFauxCore>["setResponses"]>[0],
@@ -67,6 +73,7 @@ async function managedTestHarness(
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     contextWindow?: number;
     retryDelayMs?: number;
+    effects?: PiRuntimeSessionBinding["effects"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -115,9 +122,18 @@ async function managedTestHarness(
         thinkingLevel: "off",
         retryDelayMs: options.retryDelayMs,
       },
+      ...(options.effects ? { effects: options.effects } : {}),
     },
   });
   return { core, harness, session };
+}
+
+async function effectStoreFixture(t: { after(callback: () => Promise<void>): void }) {
+  const root = await mkdtemp(join(tmpdir(), "aiden-pi-effects-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new PiRuntimeEffectStore({ root: () => root });
+  await store.initialize();
+  return store;
 }
 
 test("Pi runtime harness preserves sequential execution for effectful tool batches", async () => {
@@ -623,6 +639,128 @@ test("managed run commits an assistant tool plan before executing effects", asyn
   const outcome = await running;
   assert.equal(outcome.kind, "completed");
   assert.deepEqual(trace, ["plan-append", "tool"]);
+});
+
+test("managed effects record dispatch and terminal evidence outside the Pi journal", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  const tool = declarePiRuntimeReplay(
+    {
+      name: "durably_recorded_effect",
+      label: "Durably recorded effect",
+      description: "Execute one non-replayable effect.",
+      parameters: Type.Object({ value: Type.String() }),
+      execute: async () => ({
+        content: [{ type: "text", text: "effect complete" }],
+        details: null,
+      }),
+    },
+    "never",
+  );
+  const { harness } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, { value: "private argument" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("complete"),
+    ],
+    {
+      tools: [tool],
+      identity: { runId: "effect-run", sessionId: "effect-session", lane: "foreground" },
+      effects: { store: effectStore, chatId: "effect-chat" },
+    },
+  );
+
+  assert.equal(
+    (
+      await harness.runManaged({
+        kind: "append-and-run",
+        message: { role: "user", content: "run", timestamp: 1 },
+      })
+    ).kind,
+    "completed",
+  );
+  const [operation] = await effectStore.listOperationsByChat("effect-chat");
+  const [effect] = await effectStore.listEffectsByChat("effect-chat");
+  assert.equal(operation?.state, "completed");
+  assert.equal(effect?.state, "completed");
+  assert.equal(effect?.replay, "never");
+  assert.equal(effect?.arguments, undefined);
+  assert.doesNotMatch(JSON.stringify(effect), /private argument/u);
+});
+
+test("managed effects fail before dispatch when preparation cannot become durable", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  effectStore.prepareEffect = async () => {
+    throw new Error("PRIVATE_EFFECT_PREPARE_CANARY");
+  };
+  let toolCalls = 0;
+  const tool: AgentTool = {
+    name: "blocked_effect_dispatch",
+    label: "Blocked effect",
+    description: "Must not execute.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "unsafe" }], details: null };
+    },
+  };
+  const { core, harness } = await managedTestHarness(
+    [fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" })],
+    {
+      tools: [tool],
+      identity: { runId: "prepare-run", sessionId: "prepare-session", lane: "foreground" },
+      effects: { store: effectStore, chatId: "prepare-chat" },
+    },
+  );
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "run", timestamp: 1 },
+  });
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
+  assert.equal(core.state.callCount, 1);
+  assert.equal(toolCalls, 0);
+  assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_EFFECT_PREPARE_CANARY/u);
+});
+
+test("managed effects stop continuation when terminal evidence cannot persist", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  effectStore.finishEffect = async () => {
+    throw new Error("PRIVATE_EFFECT_FINISH_CANARY");
+  };
+  let toolCalls = 0;
+  const tool: AgentTool = {
+    name: "terminal_write_failure",
+    label: "Terminal write failure",
+    description: "Execute once, then stop.",
+    parameters: Type.Object({}),
+    execute: async () => {
+      toolCalls += 1;
+      return { content: [{ type: "text", text: "effect happened" }], details: null };
+    },
+  };
+  const { core, harness } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("must not receive a second request"),
+    ],
+    {
+      tools: [tool],
+      identity: { runId: "finish-run", sessionId: "finish-session", lane: "foreground" },
+      effects: { store: effectStore, chatId: "finish-chat" },
+    },
+  );
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "run", timestamp: 1 },
+  });
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "session");
+  assert.equal(core.state.callCount, 1);
+  assert.equal(toolCalls, 1);
+  assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_EFFECT_FINISH_CANARY/u);
 });
 
 test("managed run fails closed when a tool plan cannot become durable", async () => {

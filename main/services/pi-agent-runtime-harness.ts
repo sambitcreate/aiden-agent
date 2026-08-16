@@ -24,6 +24,7 @@ import {
   type ProviderResponse,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { randomUUID } from "node:crypto";
 import {
   needsImmediatePiCompaction,
   PiCompactionCoordinator as PiCompactionCoordinatorImpl,
@@ -39,6 +40,13 @@ import {
   type PiRuntimeEventState,
   type PiRuntimeIdentity,
 } from "./pi-runtime-events.js";
+import {
+  piRuntimeTerminalDigest,
+  type DurablePiRuntimeEffectOwner,
+  type DurablePiRuntimeOperationState,
+} from "./pi-runtime-effect-core.js";
+import type { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
 export type PiHarnessFaultSource =
   | "extension_context"
@@ -196,6 +204,11 @@ export interface PiRuntimeSessionBinding {
   forcePostRunCompaction?: () => boolean;
   clearForcePostRunCompaction?: () => void;
   onJournalError?: (error: unknown) => void;
+  /** Separate, non-rollbackable evidence for tool effects that may escape the chat journal. */
+  effects?: {
+    store: PiRuntimeEffectStore;
+    chatId: string;
+  };
 }
 
 export type PiRuntimeRunInput =
@@ -708,6 +721,7 @@ export class PiAgentRuntimeHarness {
   private readonly agent: Agent;
   private readonly onFault: (fault: PiHarnessFault) => void;
   private readonly durability?: PiRuntimeSessionBinding;
+  private readonly identity: PiRuntimeIdentity;
   readonly models?: Models;
   private readonly resources: AgentHarnessResources;
   private readonly contributionRevision: number;
@@ -723,6 +737,19 @@ export class PiAgentRuntimeHarness {
   private acceptedQueuedMessages: Array<{ message: AgentMessage; fingerprint: string }> = [];
   private capturedTurnMessages: AgentMessage[] = [];
   private turnHadToolExecution = false;
+  private activeEffectOperation:
+    | {
+        operationId: string;
+        effects: Map<
+          string,
+          {
+            owner: DurablePiRuntimeEffectOwner;
+            replay: "safe" | "never";
+            state: "prepared" | "dispatch_started";
+          }
+        >;
+      }
+    | undefined;
   private lastAssistantMessage: AssistantMessage | undefined;
   private criticalFault: Error | undefined;
   private policyFault: Error | undefined;
@@ -760,6 +787,11 @@ export class PiAgentRuntimeHarness {
     this.onFault = onFault ?? (() => {});
     this.durability = durability;
     this.models = models;
+    this.identity = identity ?? {
+      runId: agentOptions.sessionId ?? "pi-runtime",
+      sessionId: agentOptions.sessionId ?? "pi-runtime",
+      lane: "foreground",
+    };
     this.contributionRevision = contributions?.revision ?? 0;
     this.resources = contributions
       ? snapshotResources(contributions.resources)
@@ -795,13 +827,7 @@ export class PiAgentRuntimeHarness {
       extension.onRuntimeEvent ? [{ id: extension.id, observer: extension.onRuntimeEvent }] : [],
     );
     if (identity || runtimeObservers.length > 0) {
-      this.runtimeEvents = new PiRuntimeEventChannel(
-        identity ?? {
-          runId: agentOptions.sessionId ?? "pi-runtime",
-          sessionId: agentOptions.sessionId ?? "pi-runtime",
-          lane: "foreground",
-        },
-      );
+      this.runtimeEvents = new PiRuntimeEventChannel(this.identity);
       for (const { id, observer } of runtimeObservers) {
         this.runtimeEvents.observe(async (event, signal) => {
           try {
@@ -988,7 +1014,9 @@ export class PiAgentRuntimeHarness {
             }
           : undefined,
       beforeToolCall:
-        options.beforeToolCall || extensions.some((extension) => extension.beforeToolCall)
+        options.beforeToolCall ||
+        durability?.effects ||
+        extensions.some((extension) => extension.beforeToolCall)
           ? async (context, signal) => {
               let hostResult: BeforeToolCallResult | undefined;
               try {
@@ -1027,12 +1055,47 @@ export class PiAgentRuntimeHarness {
                   };
                 }
               }
+              try {
+                await this.prepareDurableEffect(context, signal);
+              } catch (error) {
+                if (error instanceof PiManagedCancellationError) {
+                  this.agent.abort();
+                  return { block: true, reason: "The tool operation was cancelled." };
+                }
+                this.managedHostFault ??= "session";
+                this.reportFault({ source: "session", error: toError(error) });
+                this.agent.abort();
+                return {
+                  block: true,
+                  reason: "The tool effect could not be prepared durably.",
+                };
+              }
               return hostResult;
             }
           : undefined,
       afterToolCall:
-        options.afterToolCall || extensions.some((extension) => extension.afterToolCall)
+        options.afterToolCall ||
+        durability?.effects ||
+        extensions.some((extension) => extension.afterToolCall)
           ? async (context, signal) => {
+              try {
+                await this.finishDurableEffect(context);
+              } catch (error) {
+                this.managedHostFault ??= "session";
+                this.reportFault({ source: "session", error: toError(error) });
+                this.agent.abort();
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: "The tool effect completed, but its durable outcome could not be recorded.",
+                    },
+                  ],
+                  details: {},
+                  isError: true,
+                  terminate: true,
+                };
+              }
               let current = context;
               let combined: AfterToolCallResult | undefined;
               try {
@@ -1167,6 +1230,13 @@ export class PiAgentRuntimeHarness {
 
       const hostPrepare = options.prepareNextTurnWithContext;
       this.agent.prepareNextTurnWithContext = async (input, signal) => {
+        if (this.managedHostFault) {
+          this.agent.abort();
+          throw new PiAgentRuntimeHostError(
+            "The active Pi runtime host boundary failed before the next model turn.",
+            this.managedHostFault,
+          );
+        }
         if (this.policyFault) {
           this.agent.abort();
           throw new PiAgentRuntimeHostError(
@@ -1378,17 +1448,39 @@ export class PiAgentRuntimeHarness {
 
     let attempts: 0 | 1 | 2 = 0;
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
-    const finish = (outcome: PiRuntimeTerminalOutcome) => {
+    const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
+      let finalized = outcome;
+      try {
+        await this.finishEffectOperation(
+          outcome.kind === "completed"
+            ? "completed"
+            : outcome.kind === "app_cancelled"
+              ? "app_cancelled"
+              : outcome.kind === "provider_failed"
+                ? "provider_failed"
+                : "host_failed",
+        );
+      } catch (error) {
+        this.managedHostFault ??= "session";
+        this.reportFault({ source: "session", error: toError(error) });
+        finalized = {
+          kind: "host_failed",
+          faultKind: "session",
+          attempts: outcome.attempts,
+          ...(outcome.finalMessage ? { finalMessage: outcome.finalMessage } : {}),
+          ...(outcome.finalMessageWasAbandoned ? { finalMessageWasAbandoned: true } : {}),
+        };
+      }
       const closed =
-        outcome.kind === "completed" || !outcome.finalMessage
-          ? outcome
+        finalized.kind === "completed" || !finalized.finalMessage
+          ? finalized
           : {
-              ...outcome,
+              ...finalized,
               finalMessage: closedFailureMessage(
-                outcome.finalMessage,
-                outcome.kind === "app_cancelled"
+                finalized.finalMessage,
+                finalized.kind === "app_cancelled"
                   ? "The app cancelled the model operation."
-                  : outcome.kind === "host_failed"
+                  : finalized.kind === "host_failed"
                     ? "The local agent runtime failed."
                     : "The provider did not complete the model operation.",
               ),
@@ -1410,14 +1502,14 @@ export class PiAgentRuntimeHarness {
     this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
     try {
       if (this.appCancelRequested) {
-        return finish({ kind: "app_cancelled", attempts });
+        return await finish({ kind: "app_cancelled", attempts });
       }
       const sessionResult = await waitForManagedPromise(
         this.resolveSession(),
         abortController.signal,
       );
       if (sessionResult.kind === "cancelled") {
-        return finish({ kind: "app_cancelled", attempts });
+        return await finish({ kind: "app_cancelled", attempts });
       }
       if (sessionResult.kind === "failed") {
         try {
@@ -1429,16 +1521,24 @@ export class PiAgentRuntimeHarness {
           source: "session",
           error: toError(sessionResult.error),
         });
-        return finish({ kind: "host_failed", faultKind: "session", attempts });
+        return await finish({ kind: "host_failed", faultKind: "session", attempts });
       }
       const session = sessionResult.value;
-      if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
+      try {
+        await this.startEffectOperation();
+      } catch (error) {
+        this.managedHostFault ??= "session";
+        this.reportFault({ source: "session", error: toError(error) });
+        return await finish({ kind: "host_failed", faultKind: "session", attempts });
+      }
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
       try {
         const seedOperation = this.ensureSessionSeeded(session);
         const seeded = await waitForManagedPromise(seedOperation, abortController.signal);
         if (seeded.kind === "cancelled") {
           this.trackDetachedDurability(seedOperation);
-          return finish({ kind: "app_cancelled", attempts });
+          return await finish({ kind: "app_cancelled", attempts });
         }
         if (seeded.kind === "failed") throw seeded.error;
       } catch (error) {
@@ -1448,9 +1548,9 @@ export class PiAgentRuntimeHarness {
           // Diagnostics cannot widen a closed session failure.
         }
         this.reportFault({ source: "session", error: toError(error) });
-        return finish({ kind: "host_failed", faultKind: "session", attempts });
+        return await finish({ kind: "host_failed", faultKind: "session", attempts });
       }
-      if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
       let coordinator: PiCompactionCoordinator;
       try {
         const resolved = await waitForManagedPromise(
@@ -1458,40 +1558,40 @@ export class PiAgentRuntimeHarness {
           abortController.signal,
         );
         if (resolved.kind === "cancelled") {
-          return finish({ kind: "app_cancelled", attempts });
+          return await finish({ kind: "app_cancelled", attempts });
         }
         if (resolved.kind === "failed") throw resolved.error;
         coordinator = resolved.value;
       } catch (error) {
         this.reportFault({ source: "compaction", error: toError(error) });
-        return finish({
+        return await finish({
           kind: "host_failed",
           faultKind: "compaction",
           attempts,
         });
       }
-      if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
       try {
         const repairOperation = coordinator.prepareForPrompt();
         const repaired = await waitForManagedPromise(repairOperation, abortController.signal);
         if (repaired.kind === "cancelled") {
           this.trackDetachedDurability(repairOperation);
-          return finish({ kind: "app_cancelled", attempts });
+          return await finish({ kind: "app_cancelled", attempts });
         }
         if (repaired.kind === "failed") throw repaired.error;
         if (
           repaired.value.failureCode === "unsafe-rollback" ||
           repaired.value.failureCode === "session-failed"
         ) {
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: this.policyFault ? "policy" : "session",
             attempts,
           });
         }
         if (repaired.value.errorMessage) {
-          return finish({
+          return await finish({
             kind: "provider_failed",
             reason: "compaction-failed",
             attempts,
@@ -1502,9 +1602,9 @@ export class PiAgentRuntimeHarness {
         }
       } catch (error) {
         this.reportFault({ source: "session", error: toError(error) });
-        return finish({ kind: "host_failed", faultKind: "session", attempts });
+        return await finish({ kind: "host_failed", faultKind: "session", attempts });
       }
-      if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
       const turnBoundaryOperation = Promise.resolve().then(() =>
         options.beforeDurableTurn?.(abortController.signal),
@@ -1512,14 +1612,14 @@ export class PiAgentRuntimeHarness {
       const turnBoundary = await waitForManagedHook(turnBoundaryOperation, abortController.signal);
       if (turnBoundary.cancelled || cancelled()) {
         this.trackDetachedDurability(turnBoundaryOperation);
-        return finish({ kind: "app_cancelled", attempts });
+        return await finish({ kind: "app_cancelled", attempts });
       }
       if (turnBoundary.error) {
         this.reportFault({
           source: "session",
           error: toError(turnBoundary.error),
         });
-        return finish({ kind: "host_failed", faultKind: "session", attempts });
+        return await finish({ kind: "host_failed", faultKind: "session", attempts });
       }
 
       if (input.kind === "append-and-run") {
@@ -1535,7 +1635,7 @@ export class PiAgentRuntimeHarness {
             } catch {
               // Diagnostics cannot alter app-cancellation precedence.
             }
-            return finish({ kind: "app_cancelled", attempts });
+            return await finish({ kind: "app_cancelled", attempts });
           }
           if (appended.kind === "failed") throw appended.error;
         } catch (error) {
@@ -1545,9 +1645,9 @@ export class PiAgentRuntimeHarness {
             // Diagnostics cannot widen a durable session failure.
           }
           this.reportFault({ source: "session", error: toError(error) });
-          return finish({ kind: "host_failed", faultKind: "session", attempts });
+          return await finish({ kind: "host_failed", faultKind: "session", attempts });
         }
-        if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+        if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
       }
       coordinator.beginPrompt();
       let preflight: PiCompactionCheckResult;
@@ -1556,19 +1656,19 @@ export class PiAgentRuntimeHarness {
         const checked = await waitForManagedPromise(preflightOperation, abortController.signal);
         if (checked.kind === "cancelled") {
           this.trackDetachedDurability(preflightOperation);
-          return finish({ kind: "app_cancelled", attempts });
+          return await finish({ kind: "app_cancelled", attempts });
         }
         if (checked.kind === "failed") throw checked.error;
         preflight = checked.value;
         if (preflight.failureCode === "session-failed") {
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: this.policyFault ? "policy" : "session",
             attempts,
           });
         }
         if (preflight.errorMessage) {
-          return finish({
+          return await finish({
             kind: "provider_failed",
             reason: "compaction-failed",
             attempts,
@@ -1576,13 +1676,13 @@ export class PiAgentRuntimeHarness {
         }
       } catch (error) {
         this.reportFault({ source: "compaction", error: toError(error) });
-        return finish({
+        return await finish({
           kind: "host_failed",
           faultKind: "compaction",
           attempts,
         });
       }
-      if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
       let preparedMessages: AgentMessage[];
       try {
         if (preflight.messages) {
@@ -1590,25 +1690,25 @@ export class PiAgentRuntimeHarness {
         } else {
           const built = await waitForManagedPromise(session.buildContext(), abortController.signal);
           if (built.kind === "cancelled") {
-            return finish({ kind: "app_cancelled", attempts });
+            return await finish({ kind: "app_cancelled", attempts });
           }
           if (built.kind === "failed") throw built.error;
           preparedMessages = built.value.messages;
         }
       } catch (error) {
         this.reportFault({ source: "session", error: toError(error) });
-        return finish({
+        return await finish({
           kind: "host_failed",
           faultKind: this.policyFault ? "policy" : "session",
           attempts,
         });
       }
       this.agent.state.messages = [...preparedMessages];
-      if (cancelled()) return finish({ kind: "app_cancelled", attempts });
+      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
       for (;;) {
         if (cancelled()) {
-          return finish({
+          return await finish({
             kind: "app_cancelled",
             finalMessage: this.lastAssistantMessage,
             attempts,
@@ -1628,21 +1728,21 @@ export class PiAgentRuntimeHarness {
             // The flush method already records the closed host-fault kind.
           }
           if (error instanceof PiAgentRuntimeHostError) {
-            return finish({
+            return await finish({
               kind: "host_failed",
               faultKind: error.faultKind,
               attempts,
             });
           }
           if (this.managedHostFault) {
-            return finish({
+            return await finish({
               kind: "host_failed",
               faultKind: this.managedHostFault,
               attempts,
             });
           }
           if (cancelled() || error instanceof PiManagedCancellationError) {
-            return finish({
+            return await finish({
               kind: "app_cancelled",
               finalMessage: this.lastAssistantMessage,
               attempts,
@@ -1652,7 +1752,7 @@ export class PiAgentRuntimeHarness {
             source: "lifecycle_subscriber",
             error: toError(error),
           });
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: "lifecycle",
             attempts,
@@ -1660,7 +1760,7 @@ export class PiAgentRuntimeHarness {
         }
 
         if (this.managedHostFault) {
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: this.managedHostFault,
             finalMessage: this.lastAssistantMessage,
@@ -1668,7 +1768,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (this.managedProviderFailure) {
-          return finish({
+          return await finish({
             kind: "provider_failed",
             reason: this.managedProviderFailure,
             finalMessage: this.lastAssistantMessage,
@@ -1679,7 +1779,7 @@ export class PiAgentRuntimeHarness {
         try {
           await this.flushDurableMessages();
         } catch {
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: this.managedHostFault ?? "session",
             attempts,
@@ -1687,7 +1787,7 @@ export class PiAgentRuntimeHarness {
         }
         const assistant = this.lastAssistantMessage as AssistantMessage | undefined;
         if (!assistant) {
-          return finish(
+          return await finish(
             this.appCancelRequested
               ? { kind: "app_cancelled", attempts }
               : { kind: "host_failed", faultKind: "invariant", attempts },
@@ -1702,7 +1802,7 @@ export class PiAgentRuntimeHarness {
           const checked = await waitForManagedPromise(compactionOperation, abortController.signal);
           if (checked.kind === "cancelled") {
             this.trackDetachedDurability(compactionOperation);
-            return finish({
+            return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
               attempts,
@@ -1713,7 +1813,7 @@ export class PiAgentRuntimeHarness {
           durability.clearForcePostRunCompaction?.();
         } catch (error) {
           this.reportFault({ source: "compaction", error: toError(error) });
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: "compaction",
             attempts,
@@ -1741,7 +1841,7 @@ export class PiAgentRuntimeHarness {
               this.lastAssistantMessage = undefined;
               continue;
             }
-            return finish({
+            return await finish({
               kind: "provider_failed",
               reason:
                 compactionResult.failureCode === "context-overflow"
@@ -1774,7 +1874,7 @@ export class PiAgentRuntimeHarness {
               source: "lifecycle_subscriber",
               error: toError(retryHook.error),
             });
-            return finish({
+            return await finish({
               kind: "host_failed",
               faultKind: "lifecycle",
               finalMessage: assistant,
@@ -1783,7 +1883,7 @@ export class PiAgentRuntimeHarness {
             });
           }
           if (retryHook.cancelled || cancelled()) {
-            return finish({
+            return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
               ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
@@ -1792,7 +1892,7 @@ export class PiAgentRuntimeHarness {
           }
           await waitForManagedDelay(delayMs, abortController.signal);
           if (cancelled()) {
-            return finish({
+            return await finish({
               kind: "app_cancelled",
               finalMessage: assistant,
               ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
@@ -1803,7 +1903,7 @@ export class PiAgentRuntimeHarness {
         }
 
         if (cancelled()) {
-          return finish({
+          return await finish({
             kind: "app_cancelled",
             finalMessage: assistant,
             ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
@@ -1811,7 +1911,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (compactionResult.failureCode === "session-failed") {
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: this.policyFault ? "policy" : "session",
             finalMessage: assistant,
@@ -1820,7 +1920,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (compactionResult.failureCode === "unsafe-rollback") {
-          return finish({
+          return await finish({
             kind: "host_failed",
             faultKind: "session",
             finalMessage: assistant,
@@ -1838,7 +1938,7 @@ export class PiAgentRuntimeHarness {
           continue;
         }
         if (assistant.stopReason === "error") {
-          return finish({
+          return await finish({
             kind: "provider_failed",
             reason:
               compactionResult.failureCode === "context-overflow"
@@ -1852,7 +1952,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (assistant.stopReason === "aborted") {
-          return finish({
+          return await finish({
             kind: "provider_failed",
             reason: "interrupted",
             finalMessage: assistant,
@@ -1861,7 +1961,7 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (assistant.stopReason === "length") {
-          return finish({
+          return await finish({
             kind: "provider_failed",
             reason: "output-limit",
             finalMessage: assistant,
@@ -1869,10 +1969,17 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
-        return finish({ kind: "completed", finalMessage: assistant, attempts });
+        return await finish({ kind: "completed", finalMessage: assistant, attempts });
       }
     } finally {
       parentSignal?.removeEventListener("abort", abortFromParent);
+      if (this.activeEffectOperation) {
+        try {
+          await this.finishEffectOperation("host_failed");
+        } catch (error) {
+          this.reportFault({ source: "session", error: toError(error) });
+        }
+      }
       if (this.managedAbortController === abortController) {
         this.managedAbortController = undefined;
       }
@@ -2002,6 +2109,126 @@ export class PiAgentRuntimeHarness {
     }
     if (this.managedRunning) throw new Error("Pi runtime harness is busy.");
     await this.executeAgentAttempt(operation);
+  }
+
+  private async startEffectOperation(): Promise<void> {
+    const effects = this.durability?.effects;
+    if (!effects) return;
+    if (this.activeEffectOperation) {
+      throw new Error("A Pi runtime effect operation is already active.");
+    }
+    const operationId = randomUUID();
+    await effects.store.startOperation({
+      operationId,
+      runId: this.identity.runId,
+      sessionId: this.identity.sessionId,
+      chatId: effects.chatId,
+      lane: this.identity.lane,
+      contributionRevision: this.contributionRevision,
+    });
+    this.activeEffectOperation = { operationId, effects: new Map() };
+  }
+
+  private async prepareDurableEffect(
+    context: BeforeToolCallContext,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const binding = this.durability?.effects;
+    const operation = this.activeEffectOperation;
+    if (!binding && !operation) return;
+    if (!binding || !operation) {
+      throw new Error("The Pi runtime effect operation is unavailable.");
+    }
+    if (operation.effects.has(context.toolCall.id)) {
+      throw new Error("The Pi runtime tool-call identity was reused.");
+    }
+    const tool = context.context.tools?.find(({ name }) => name === context.toolCall.name);
+    if (!tool) throw new Error("The Pi runtime tool metadata is unavailable.");
+    const effectId = randomUUID();
+    const replay = piRuntimeReplayPolicy(tool);
+    const prepared = await binding.store.prepareEffect({
+      operationId: operation.operationId,
+      runId: this.identity.runId,
+      sessionId: this.identity.sessionId,
+      chatId: binding.chatId,
+      lane: this.identity.lane,
+      contributionRevision: this.contributionRevision,
+      effectId,
+      turnId: randomUUID(),
+      toolCallId: context.toolCall.id,
+      toolName: context.toolCall.name,
+      replay,
+      arguments: context.args,
+    });
+    const owner: DurablePiRuntimeEffectOwner = {
+      effectId: prepared.effectId,
+      operationId: prepared.operationId,
+      runId: prepared.runId,
+      chatId: prepared.chatId,
+    };
+    operation.effects.set(context.toolCall.id, { owner, replay, state: "prepared" });
+    if (signal?.aborted || this.appCancelRequested) {
+      await binding.store.cancelEffectBeforeDispatch(owner);
+      operation.effects.delete(context.toolCall.id);
+      throw new PiManagedCancellationError();
+    }
+    await binding.store.markEffectDispatchStarted(owner);
+    const tracked = operation.effects.get(context.toolCall.id);
+    if (tracked) tracked.state = "dispatch_started";
+  }
+
+  private async finishDurableEffect(context: AfterToolCallContext): Promise<void> {
+    const binding = this.durability?.effects;
+    const operation = this.activeEffectOperation;
+    if (!binding && !operation) return;
+    if (!binding || !operation) {
+      throw new Error("The Pi runtime effect operation is unavailable.");
+    }
+    const tracked = operation.effects.get(context.toolCall.id);
+    if (!tracked || tracked.state !== "dispatch_started") {
+      throw new Error("The Pi runtime effect dispatch evidence is unavailable.");
+    }
+    const state = context.isError ? "remote_error" : "completed";
+    await binding.store.finishEffect({
+      ...tracked.owner,
+      state,
+      terminalDigest: piRuntimeTerminalDigest(state),
+    });
+    operation.effects.delete(context.toolCall.id);
+  }
+
+  private async finishEffectOperation(
+    state: Exclude<DurablePiRuntimeOperationState, "running" | "interrupted">,
+  ): Promise<void> {
+    const binding = this.durability?.effects;
+    const operation = this.activeEffectOperation;
+    if (!binding || !operation) return;
+    let failure: unknown;
+    for (const tracked of operation.effects.values()) {
+      try {
+        if (tracked.state === "prepared") {
+          await binding.store.cancelEffectBeforeDispatch(tracked.owner);
+        } else {
+          const terminalState = tracked.replay === "safe" ? "interrupted" : "unknown";
+          await binding.store.finishEffect({
+            ...tracked.owner,
+            state: terminalState,
+            terminalDigest: piRuntimeTerminalDigest(terminalState),
+          });
+        }
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    operation.effects.clear();
+    try {
+      await binding.store.finishOperation(operation.operationId, failure ? "host_failed" : state);
+    } catch (error) {
+      failure ??= error;
+    } finally {
+      if (this.activeEffectOperation === operation) this.activeEffectOperation = undefined;
+    }
+    if (failure) throw failure;
   }
 
   private async executeAgentAttempt(operation: () => Promise<void>): Promise<void> {

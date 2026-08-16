@@ -70,6 +70,7 @@ import {
   syncChatMessagesToPiSession,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
+import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
@@ -1151,6 +1152,7 @@ export const llmClient = {
           session: promptJournal,
           compaction: compactionOptions,
           signal: initialization.controller.signal,
+          effects: { store: piRuntimeEffectStore, chatId: params.chatId },
           ...(currentUser
             ? {
                 appendInput: async () => {

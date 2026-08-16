@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import * as path from "node:path";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "./skill-registry.js";
 import { skillToolKey } from "./skill-registry-core.js";
@@ -10,7 +11,7 @@ function textResult(text: string): AgentToolResult<null> {
 
 export function makeSkillTool(skill: RegisteredSkill): AgentTool {
   const summary = skill.description ? `${skill.name}: ${skill.description}` : skill.name;
-  return {
+  return declarePiRuntimeReplay({
     name: skillToolKey(skill),
     label: skill.name,
     description: `${summary} — call this to load detailed instructions before performing the task.`,
@@ -29,7 +30,7 @@ export function makeSkillTool(skill: RegisteredSkill): AgentTool {
         ].join("\n"),
       );
     },
-  };
+  }, "safe");
 }
 
 export function buildSkillTools(

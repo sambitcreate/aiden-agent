@@ -1,0 +1,483 @@
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { DataStore } from "./data-store.js";
+import {
+  MAX_PI_RUNTIME_OPERATIONS,
+  emptyPiRuntimeEffectDatabase,
+  parseDurablePiRuntimeEffect,
+  parseDurablePiRuntimeEffectDatabase,
+  parseDurablePiRuntimeEffectOwner,
+  piRuntimeTerminalDigest,
+  snapshotPiRuntimeEffectArguments,
+  type DurablePiRuntimeEffect,
+  type DurablePiRuntimeEffectDatabase,
+  type DurablePiRuntimeOperation,
+  type PreparePiRuntimeEffectInput,
+  type StartPiRuntimeOperationInput,
+} from "./pi-runtime-effect-core.js";
+import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
+
+const STORE_NAME = "pi-runtime-effects.json";
+
+function operation(operationId = "operation-1", chatId = "chat-1"): StartPiRuntimeOperationInput {
+  return {
+    operationId,
+    runId: `run-${operationId}`,
+    sessionId: `session-${chatId}`,
+    chatId,
+    lane: "foreground",
+    contributionRevision: 0,
+  };
+}
+
+function effect(
+  owner: StartPiRuntimeOperationInput,
+  effectId = "effect-1",
+  overrides: Partial<PreparePiRuntimeEffectInput> = {},
+): PreparePiRuntimeEffectInput {
+  return {
+    ...owner,
+    effectId,
+    turnId: `turn-${effectId}`,
+    toolCallId: `call-${effectId}`,
+    toolName: "read",
+    arguments: { path: "/tmp/example", nested: [true, 2] },
+    ...overrides,
+  };
+}
+
+function effectOwner(input: PreparePiRuntimeEffectInput) {
+  return {
+    effectId: input.effectId,
+    operationId: input.operationId,
+    runId: input.runId,
+    chatId: input.chatId,
+  };
+}
+
+async function withTempDirectory(run: (directory: string) => Promise<void>): Promise<void> {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-pi-effect-"));
+  try {
+    await run(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+function makeStore(directory: string, startAt = 1_000): PiRuntimeEffectStore {
+  let clock = startAt;
+  return new PiRuntimeEffectStore({ root: () => directory, now: () => clock++ });
+}
+
+test("replay metadata is closed and defaults every non-safe declaration to never", () => {
+  assert.equal(piRuntimeReplayPolicy({}), "never");
+  assert.equal(piRuntimeReplayPolicy({ replay: "never" }), "never");
+  assert.equal(piRuntimeReplayPolicy({ replay: "later" }), "never");
+  assert.equal(piRuntimeReplayPolicy({ replay: "safe" }), "safe");
+});
+
+test("argument snapshots are canonical, bounded, and reject hostile non-JSON input", () => {
+  const left = snapshotPiRuntimeEffectArguments({ z: 1, a: { y: 2, x: 3 } });
+  const right = snapshotPiRuntimeEffectArguments({ a: { x: 3, y: 2 }, z: 1 });
+  assert.equal(left.canonical, '{"a":{"x":3,"y":2},"z":1}');
+  assert.equal(left.digest, right.digest);
+
+  let getterCalls = 0;
+  const accessor = Object.defineProperty({}, "secret", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return "no";
+    },
+  });
+  assert.throws(() => snapshotPiRuntimeEffectArguments(accessor), /plain object/u);
+  assert.equal(getterCalls, 0);
+  assert.throws(() => snapshotPiRuntimeEffectArguments(new Proxy({ value: 1 }, {})), /plain JSON/u);
+  const cyclic: { self?: unknown } = {};
+  cyclic.self = cyclic;
+  assert.throws(() => snapshotPiRuntimeEffectArguments(cyclic), /cyclic/u);
+  const sparse: unknown[] = [];
+  sparse.length = 2;
+  sparse[1] = 1;
+  assert.throws(() => snapshotPiRuntimeEffectArguments(sparse), /sparse/u);
+  assert.throws(() => snapshotPiRuntimeEffectArguments(Number.POSITIVE_INFINITY), /JSON-safe/u);
+  assert.throws(
+    () => snapshotPiRuntimeEffectArguments("x".repeat(65 * 1024)),
+    /durable replay limit/u,
+  );
+});
+
+test("strict parsers enforce exact schemas and replay argument invariants", () => {
+  const argument = snapshotPiRuntimeEffectArguments({ value: 1 });
+  const base: DurablePiRuntimeEffect = {
+    version: 1,
+    effectId: "effect",
+    operationId: "operation",
+    runId: "run",
+    sessionId: "session",
+    chatId: "chat",
+    lane: "child",
+    turnId: "turn",
+    toolCallId: "call",
+    toolName: "read",
+    replay: "safe",
+    state: "prepared",
+    argumentDigest: argument.digest,
+    arguments: argument.value,
+    preparedAt: 1,
+    updatedAt: 1,
+  };
+  assert.deepEqual(parseDurablePiRuntimeEffect(base), base);
+  assert.equal(parseDurablePiRuntimeEffect({ ...base, extra: true }), undefined);
+  assert.equal(parseDurablePiRuntimeEffect({ ...base, arguments: undefined }), undefined);
+  assert.equal(parseDurablePiRuntimeEffect({ ...base, argumentDigest: "0".repeat(64) }), undefined);
+  assert.equal(
+    parseDurablePiRuntimeEffect({ ...base, replay: "never", arguments: argument.value }),
+    undefined,
+  );
+  assert.equal(
+    parseDurablePiRuntimeEffect({
+      ...base,
+      state: "completed",
+      terminalDigest: undefined,
+    }),
+    undefined,
+  );
+  assert.equal(
+    parseDurablePiRuntimeEffectOwner({
+      effectId: "effect",
+      operationId: "operation",
+      runId: "run",
+      chatId: "chat",
+      extra: true,
+    }),
+    undefined,
+  );
+});
+
+test("prepare, dispatch, and terminal writes are durable, minimal, and idempotent", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = makeStore(directory);
+    await assert.rejects(() => store.startOperation(operation()), /not initialized/u);
+    await store.initialize();
+    const operationInput = operation();
+    const started = await store.startOperation(operationInput);
+    assert.deepEqual(await store.startOperation(operationInput), started);
+
+    const input = effect(operationInput);
+    const prepared = await store.prepareEffect(input);
+    assert.equal(prepared.replay, "never");
+    assert.equal(prepared.arguments, undefined);
+    assert.match(prepared.argumentDigest, /^[a-f0-9]{64}$/u);
+    assert.deepEqual(await store.prepareEffect(input), prepared);
+
+    const dispatching = await store.markEffectDispatchStarted(effectOwner(input));
+    assert.equal(dispatching.state, "dispatch_started");
+    assert.deepEqual(await store.markEffectDispatchStarted(effectOwner(input)), dispatching);
+    assert.deepEqual(await store.prepareEffect(input), dispatching);
+
+    const terminalDigest = piRuntimeTerminalDigest("tool-result");
+    const [completed, concurrentDuplicate] = await Promise.all([
+      store.finishEffect({
+        ...effectOwner(input),
+        state: "completed",
+        terminalDigest,
+      }),
+      store.finishEffect({
+        ...effectOwner(input),
+        state: "completed",
+        terminalDigest,
+      }),
+    ]);
+    assert.equal(completed.state, "completed");
+    assert.deepEqual(concurrentDuplicate, completed);
+    assert.deepEqual(
+      await store.finishEffect({
+        ...effectOwner(input),
+        state: "completed",
+        terminalDigest,
+      }),
+      completed,
+    );
+    await assert.rejects(
+      () =>
+        store.finishEffect({
+          ...effectOwner(input),
+          state: "remote_error",
+          terminalDigest: piRuntimeTerminalDigest("conflict"),
+        }),
+      /not dispatch-started/u,
+    );
+    assert.equal((await store.getEffect(effectOwner(input)))?.state, "completed");
+    const finished = await store.finishOperation(operationInput.operationId, "completed");
+    assert.equal(finished.state, "completed");
+    assert.deepEqual(
+      await store.finishOperation(operationInput.operationId, "completed"),
+      finished,
+    );
+
+    const disk = JSON.parse(
+      await readFile(path.join(directory, STORE_NAME), "utf8"),
+    ) as DurablePiRuntimeEffectDatabase;
+    assert.equal(disk.effects[0]?.arguments, undefined);
+    assert.ok(parseDurablePiRuntimeEffectDatabase(disk));
+  });
+});
+
+test("identity reuse, ownership mismatch, and invalid transitions fail closed", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = makeStore(directory);
+    await store.initialize();
+    const operationInput = operation();
+    await store.startOperation(operationInput);
+    await assert.rejects(
+      () => store.startOperation({ ...operationInput, runId: "different" }),
+      /identity was reused/u,
+    );
+    const input = effect(operationInput);
+    await store.prepareEffect(input);
+    await assert.rejects(
+      () => store.prepareEffect({ ...input, arguments: { different: true } }),
+      /identity was reused/u,
+    );
+    await assert.rejects(
+      () =>
+        store.prepareEffect({
+          ...input,
+          effectId: "different-effect",
+        }),
+      /tool-call identity was reused/u,
+    );
+    await assert.rejects(
+      () =>
+        store.markEffectDispatchStarted({
+          ...effectOwner(input),
+          runId: "wrong-run",
+        }),
+      /ownership mismatch/u,
+    );
+    await assert.rejects(
+      () => store.finishOperation(operationInput.operationId, "completed"),
+      /unsettled effect/u,
+    );
+    const cancelled = await store.cancelEffectBeforeDispatch(effectOwner(input));
+    assert.equal(cancelled.state, "cancelled_before_dispatch");
+    assert.deepEqual(await store.cancelEffectBeforeDispatch(effectOwner(input)), cancelled);
+    await assert.rejects(
+      () =>
+        store.finishEffect({
+          ...effectOwner(input),
+          state: "completed",
+          terminalDigest: piRuntimeTerminalDigest("impossible"),
+        }),
+      /not dispatch-started/u,
+    );
+  });
+});
+
+test("startup reconciliation distinguishes prepared, never-replay, and safe effects", async () => {
+  await withTempDirectory(async (directory) => {
+    const first = makeStore(directory, 10);
+    await first.initialize();
+    const operationInput = operation();
+    await first.startOperation(operationInput);
+
+    const preparedInput = effect(operationInput, "prepared");
+    await first.prepareEffect(preparedInput);
+    const neverInput = effect(operationInput, "never");
+    await first.prepareEffect(neverInput);
+    await first.markEffectDispatchStarted(effectOwner(neverInput));
+    const safeInput = effect(operationInput, "safe", {
+      replay: "safe",
+      arguments: { exact: ["bounded", 1] },
+    });
+    await first.prepareEffect(safeInput);
+    await first.markEffectDispatchStarted(effectOwner(safeInput));
+
+    const restarted = makeStore(directory, 1_000);
+    await restarted.initialize();
+    const effects = new Map(
+      (await restarted.listEffectsByChat(operationInput.chatId)).map((entry) => [
+        entry.effectId,
+        entry,
+      ]),
+    );
+    assert.equal(effects.get("prepared")?.state, "cancelled_before_dispatch");
+    assert.equal(effects.get("never")?.state, "unknown");
+    assert.equal(effects.get("never")?.arguments, undefined);
+    assert.equal(effects.get("safe")?.state, "interrupted");
+    assert.deepEqual(effects.get("safe")?.arguments, { exact: ["bounded", 1] });
+    assert.equal(
+      (await restarted.listOperationsByChat(operationInput.chatId))[0]?.state,
+      "interrupted",
+    );
+  });
+});
+
+test("a terminal persistence failure exposes local unknown evidence and restart preserves uncertainty", async () => {
+  await withTempDirectory(async (directory) => {
+    let failWrites = false;
+    const dataStore = new DataStore(STORE_NAME, emptyPiRuntimeEffectDatabase(), () => directory, {
+      maxBytes: 8 * 1024 * 1024,
+      normalize: (value) =>
+        parseDurablePiRuntimeEffectDatabase(value) ?? emptyPiRuntimeEffectDatabase(),
+      isSafe: (value) => parseDurablePiRuntimeEffectDatabase(value) !== undefined,
+      rejectCorruptWrite: true,
+      rejectUnsafeWrite: true,
+      beforeWritePublish: () => {
+        if (failWrites) throw new Error("simulated terminal write failure");
+      },
+    });
+    let clock = 1;
+    const store = new PiRuntimeEffectStore({
+      root: () => directory,
+      dataStore,
+      now: () => clock++,
+    });
+    await store.initialize();
+    const operationInput = operation();
+    await store.startOperation(operationInput);
+    const input = effect(operationInput);
+    await store.prepareEffect(input);
+    await store.markEffectDispatchStarted(effectOwner(input));
+    failWrites = true;
+    await assert.rejects(
+      () =>
+        store.finishEffect({
+          ...effectOwner(input),
+          state: "completed",
+          terminalDigest: piRuntimeTerminalDigest("result"),
+        }),
+      /simulated terminal write failure/u,
+    );
+    assert.equal((await store.getEffect(effectOwner(input)))?.state, "unknown");
+
+    const restarted = makeStore(directory, 100);
+    await restarted.initialize();
+    assert.equal((await restarted.getEffect(effectOwner(input)))?.state, "unknown");
+  });
+});
+
+test("unknown effects are never evicted under pressure but explicit chat deletion removes them", async () => {
+  await withTempDirectory(async (directory) => {
+    const argumentDigest = snapshotPiRuntimeEffectArguments({ value: 1 }).digest;
+    const operations: DurablePiRuntimeOperation[] = [];
+    const effects: DurablePiRuntimeEffect[] = [];
+    for (let index = 0; index < MAX_PI_RUNTIME_OPERATIONS; index += 1) {
+      const operationId = `operation-${index}`;
+      const runId = `run-${index}`;
+      const chatId = `chat-${index}`;
+      operations.push({
+        version: 1,
+        operationId,
+        runId,
+        sessionId: `session-${index}`,
+        chatId,
+        lane: "child",
+        contributionRevision: index,
+        state: "interrupted",
+        startedAt: 1,
+        updatedAt: 2,
+      });
+      effects.push({
+        version: 1,
+        effectId: `effect-${index}`,
+        operationId,
+        runId,
+        sessionId: `session-${index}`,
+        chatId,
+        lane: "child",
+        turnId: `turn-${index}`,
+        toolCallId: `call-${index}`,
+        toolName: "write",
+        replay: "never",
+        state: "unknown",
+        argumentDigest,
+        preparedAt: 1,
+        updatedAt: 2,
+        terminalDigest: piRuntimeTerminalDigest(`unknown-${index}`),
+      });
+    }
+    const database: DurablePiRuntimeEffectDatabase = {
+      version: 1,
+      revision: 1,
+      operations,
+      effects,
+    };
+    assert.ok(parseDurablePiRuntimeEffectDatabase(database));
+    await writeFile(path.join(directory, STORE_NAME), JSON.stringify(database));
+
+    const store = makeStore(directory, 10);
+    await store.initialize();
+    await assert.rejects(
+      () => store.startOperation(operation("overflow", "overflow-chat")),
+      /history is at capacity/u,
+    );
+    assert.equal((await store.listEffectsByChat("chat-0"))[0]?.state, "unknown");
+    await store.deleteChat("chat-0");
+    assert.deepEqual(await store.listEffectsByChat("chat-0"), []);
+    assert.deepEqual(await store.listOperationsByChat("chat-0"), []);
+    await store.startOperation(operation("replacement", "replacement-chat"));
+  });
+});
+
+test("chat deletion rejects live work and then explicitly deletes terminal unknown records", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = makeStore(directory);
+    await store.initialize();
+    const operationInput = operation();
+    await store.startOperation(operationInput);
+    const input = effect(operationInput);
+    await store.prepareEffect(input);
+    await store.markEffectDispatchStarted(effectOwner(input));
+    await assert.rejects(() => store.deleteChat(operationInput.chatId), /active durable effects/u);
+    await store.finishEffect({
+      ...effectOwner(input),
+      state: "unknown",
+      terminalDigest: piRuntimeTerminalDigest("host-lost-result"),
+    });
+    await store.finishOperation(operationInput.operationId, "interrupted");
+    await store.deleteChat(operationInput.chatId);
+    assert.deepEqual(await store.listEffectsByChat(operationInput.chatId), []);
+    assert.deepEqual(await store.listOperationsByChat(operationInput.chatId), []);
+  });
+});
+
+test("startup reconciliation removes orphan effect history but retains visible chats", async () => {
+  await withTempDirectory(async (directory) => {
+    const store = makeStore(directory);
+    await store.initialize();
+    for (const [operationId, chatId] of [
+      ["kept-operation", "kept-chat"],
+      ["orphan-operation", "orphan-chat"],
+    ] as const) {
+      const input = operation(operationId, chatId);
+      await store.startOperation(input);
+      await store.finishOperation(operationId, "completed");
+    }
+
+    await store.reconcileChats(new Set(["kept-chat"]));
+    assert.equal((await store.listOperationsByChat("kept-chat")).length, 1);
+    assert.deepEqual(await store.listOperationsByChat("orphan-chat"), []);
+  });
+});
+
+test("corrupt and unsupported stores are rejected without overwriting their bytes", async () => {
+  await withTempDirectory(async (directory) => {
+    const filename = path.join(directory, STORE_NAME);
+    const corrupt = "{not-json";
+    await writeFile(filename, corrupt);
+    await assert.rejects(() => makeStore(directory).initialize(), /unreadable/u);
+    assert.equal(await readFile(filename, "utf8"), corrupt);
+
+    await rm(filename);
+    const unsupported = JSON.stringify({ version: 2, revision: 0, operations: [], effects: [] });
+    await writeFile(filename, unsupported);
+    await assert.rejects(() => makeStore(directory).initialize(), /unsupported shape/u);
+    assert.equal(await readFile(filename, "utf8"), unsupported);
+  });
+});

@@ -19,6 +19,7 @@ import * as path from "path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { containsHighConfidenceSecretIncludingEncodings } from "./subagents/safe-text.js";
 
 const MAX_READ_BYTES = 200_000;
@@ -1684,13 +1685,13 @@ export function buildCodingTools(
 ): AgentTool[] {
   const workspace = createParentWorkspaceRoot(root, testObserver);
   return [
-    makeParentReadFile(workspace),
-    makeParentListDir(workspace),
-    makeParentGlob(workspace),
-    makeParentGrep(workspace),
-    makeEditFile(workspace),
-    makeWriteFile(workspace),
-    makeRunCommand(workspace),
+    declarePiRuntimeReplay(makeParentReadFile(workspace), "safe"),
+    declarePiRuntimeReplay(makeParentListDir(workspace), "safe"),
+    declarePiRuntimeReplay(makeParentGlob(workspace), "safe"),
+    declarePiRuntimeReplay(makeParentGrep(workspace), "safe"),
+    declarePiRuntimeReplay(makeEditFile(workspace), "never"),
+    declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
+    declarePiRuntimeReplay(makeRunCommand(workspace), "never"),
   ];
 }
 
@@ -1713,7 +1714,7 @@ export function buildSubagentCodingTools(
   if (permitted.has("grep")) tools.push(makeSubagentGrep(workspace));
   return tools.map((tool) => {
     const execute = tool.execute.bind(tool);
-    return {
+    return declarePiRuntimeReplay({
       ...tool,
       execute: async (toolCallId, params, signal, onUpdate) => {
         try {
@@ -1735,6 +1736,6 @@ export function buildSubagentCodingTools(
           throw error;
         }
       },
-    };
+    }, "safe");
   });
 }
