@@ -13,6 +13,7 @@ import type {
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import { cleanupSessionResources, lazyStream } from "@earendil-works/pi-ai";
+import { isCodexAuthenticationFailure } from "./codex-auth-failure.js";
 import {
   codexThinkingLevelsForModel,
   isCodexThinkingLevel,
@@ -70,7 +71,7 @@ export interface PreparedCodexIsolatedStream {
   options: ModelsSimpleStreamOptions;
   /** Aborts immediately when login/logout supersedes the credential generation. */
   signal: AbortSignal;
-  observeResult(result: AssistantMessage): void;
+  observeResult(result: AssistantMessage, metadata?: { authenticationFailure?: boolean }): void;
 }
 
 interface CodexAuthAttempt {
@@ -212,25 +213,6 @@ function errorMessages(error: unknown): string {
     }
   }
   return messages.join("\n");
-}
-
-function isCodexAuthenticationFailure(errorMessage: string | undefined): boolean {
-  if (!errorMessage) return false;
-  return (
-    /\b401\b/u.test(errorMessage) ||
-    /\bunauthori[sz]ed\b/iu.test(errorMessage) ||
-    /\b(?:invalid|expired|revoked)[ _-](?:access[ _-])?(?:auth(?:entication)?|token|api[ _-]?key)\b/iu.test(
-      errorMessage,
-    ) ||
-    /\b(?:access |authentication )?token (?:is |has )?(?:invalid|expired|revoked)\b/iu.test(
-      errorMessage,
-    ) ||
-    /\bauthentication (?:error|failed|required)\b/iu.test(errorMessage) ||
-    /\bnot authenticated\b/iu.test(errorMessage) ||
-    /\binvalid_grant\b/iu.test(errorMessage) ||
-    /\btoken refresh failed \((?:400|401|403)\)(?=\s|:|$)/iu.test(errorMessage) ||
-    /\bfailed to extract accountId from token\b/iu.test(errorMessage)
-  );
 }
 
 function summarizeModel(model: Model<Api>): CodexModelSummary {
@@ -764,9 +746,12 @@ export class CodexProviderService {
               await options?.onResponse?.(response, responseModel);
             },
           },
-          observeResult: (result) => {
+          observeResult: (result, metadata) => {
             if (result.stopReason === "error") {
-              if (isCodexAuthenticationFailure(result.errorMessage)) {
+              if (
+                metadata?.authenticationFailure === true ||
+                isCodexAuthenticationFailure(result.errorMessage)
+              ) {
                 this.updateRemoteAttention(attempt, true);
               }
             } else if (result.stopReason !== "aborted") {
@@ -794,7 +779,10 @@ export class CodexProviderService {
       if (!provider) throw new Error("OpenAI Codex provider is unavailable.");
       const prepared = await this.prepareIsolatedStream(model, options);
       const source = provider.streamSimple(prepared.model, context, prepared.options);
-      void source.result().then(prepared.observeResult).catch(() => undefined);
+      void source
+        .result()
+        .then(prepared.observeResult)
+        .catch(() => undefined);
       return source;
     });
 }

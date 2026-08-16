@@ -1,8 +1,10 @@
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import { isCodexAuthenticationFailure } from "../codex-auth-failure.js";
 import {
   isSubagentInferenceParentMessage,
   compactAssistantMessageEvent,
+  SubagentInferenceOutboundBudget,
   serializeError,
   SUBAGENT_INFERENCE_PROTOCOL_VERSION,
 } from "./subagent-inference-protocol.js";
@@ -14,9 +16,22 @@ let active: { requestId: string; cancellation: AbortController } | undefined;
 let nextCallId = 0;
 const pendingHooks = new Map<number, (payload: unknown) => void>();
 let resolveTerminalAck: (() => void) | undefined;
+let outboundBudget = new SubagentInferenceOutboundBudget();
 
 function post(message: unknown): void {
+  outboundBudget.consume(message);
   parentPort.postMessage(message);
+}
+
+function postFailure(requestId: string, error: unknown): void {
+  // The fixed failure frame remains available even when a provider frame was
+  // rejected for exceeding the data budget.
+  parentPort.postMessage({
+    kind: "failure",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId,
+    message: serializeError(error),
+  });
 }
 
 parentPort.on("message", (messageEvent) => {
@@ -41,6 +56,7 @@ parentPort.on("message", (messageEvent) => {
   if (message.kind !== "start" || active) return;
   const cancellation = new AbortController();
   active = { requestId: message.requestId, cancellation };
+  outboundBudget = new SubagentInferenceOutboundBudget();
   void (async () => {
     const terminalAck = new Promise<void>((resolve) => {
       resolveTerminalAck = resolve;
@@ -64,18 +80,14 @@ parentPort.on("message", (messageEvent) => {
         message.model.api === "anthropic-messages"
           ? anthropicMessagesApi()
           : openAICompletionsApi();
-      const stream = (builtIn ?? compatibility).streamSimple(
-        message.model,
-        message.context,
-        {
-          ...message.options,
-          signal: cancellation.signal,
-          onPayload: (payload) => invokeHook("payload", payload),
-          onResponse: async (response) => {
-            await invokeHook("response", response);
-          },
+      const stream = (builtIn ?? compatibility).streamSimple(message.model, message.context, {
+        ...message.options,
+        signal: cancellation.signal,
+        onPayload: (payload) => invokeHook("payload", payload),
+        onResponse: async (response) => {
+          await invokeHook("response", response);
         },
-      );
+      });
       let sequence = 0;
       let terminalSent = false;
       for await (const event of stream) {
@@ -92,12 +104,17 @@ parentPort.on("message", (messageEvent) => {
                 },
               }
             : event;
+        const authenticationFailure =
+          message.model.provider === "openai-codex" &&
+          event.type === "error" &&
+          isCodexAuthenticationFailure(event.error.errorMessage);
         post({
           kind: "event",
           version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
           requestId: message.requestId,
           sequence: sequence++,
           event: compactAssistantMessageEvent(safeEvent),
+          ...(authenticationFailure ? { authenticationFailure: true } : {}),
         });
         if (event.type === "done" || event.type === "error") terminalSent = true;
       }
@@ -108,16 +125,8 @@ parentPort.on("message", (messageEvent) => {
         ]);
       }
     } catch (error) {
-      post({
-        kind: "failure",
-        version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
-        requestId: message.requestId,
-        message: serializeError(error),
-      });
-      await Promise.race([
-        terminalAck,
-        new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-      ]);
+      postFailure(message.requestId, error);
+      await Promise.race([terminalAck, new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
     } finally {
       pendingHooks.clear();
       resolveTerminalAck = undefined;

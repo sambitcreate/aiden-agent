@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { UtilityProcess } from "electron";
 import type {
@@ -32,13 +33,51 @@ function mergeHeaders(
 }
 
 class ElectronInferenceProcess implements KillableInferenceProcess {
-  constructor(private readonly child: UtilityProcess) {}
+  private exited: boolean;
+  private launchIdentity: string | undefined;
+  private launchError: Error | undefined;
 
-  get pid(): number | undefined {
-    return this.child.pid;
+  constructor(
+    private readonly child: UtilityProcess,
+    launchIdentity: string | undefined,
+    private readonly expectedIdentityToken: string,
+    launchError?: Error,
+    initiallyExited = false,
+  ) {
+    this.exited = initiallyExited;
+    this.launchIdentity = launchIdentity;
+    this.launchError = launchError;
+    child.once("spawn", () => {
+      const identity = readOwnedProcessIdentity(child.pid);
+      if (identity.kind === "found" && identity.identity.includes(this.expectedIdentityToken)) {
+        this.launchIdentity = identity.identity;
+      }
+    });
+    child.once("exit", () => {
+      this.exited = true;
+    });
+  }
+
+  setLaunchError(error: Error): void {
+    this.launchError = error;
+  }
+
+  captureLaunchIdentity(): boolean {
+    if (this.launchIdentity) return true;
+    const identity = readOwnedProcessIdentity(this.child.pid);
+    if (identity.kind !== "found" || !identity.identity.includes(this.expectedIdentityToken)) {
+      return false;
+    }
+    this.launchIdentity = identity.identity;
+    return true;
+  }
+
+  isLaunchVerified(): boolean {
+    return this.launchError === undefined && this.captureLaunchIdentity();
   }
 
   postMessage(message: unknown): void {
+    if (this.launchError) throw this.launchError;
     this.child.postMessage(message);
   }
 
@@ -46,22 +85,39 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     return this.child.kill();
   }
 
-  killHard(pid: number): void {
+  killHard(): void {
+    const pid = this.child.pid;
+    if (this.exited) return;
+    if (!this.launchIdentity) {
+      throw new Error("The isolated inference process launch identity is unavailable.");
+    }
+    const current = readOwnedProcessIdentity(pid);
+    if (
+      current.kind === "missing" ||
+      (current.kind === "found" && current.identity !== this.launchIdentity)
+    ) {
+      return;
+    }
+    if (current.kind === "indeterminate") {
+      throw new Error("Could not verify the isolated inference process identity before SIGKILL.");
+    }
+    if (typeof pid !== "number") {
+      throw new Error("The isolated inference process PID is unavailable.");
+    }
     process.kill(pid, "SIGKILL");
   }
 
-  isAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return !(
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ESRCH"
-      );
+  hasExited(): boolean {
+    if (this.exited) return true;
+    const current = readOwnedProcessIdentity(this.child.pid);
+    if (current.kind === "missing") return true;
+    if (current.kind === "indeterminate") {
+      throw new Error("Could not verify isolated inference process termination.");
     }
+    if (!this.launchIdentity) {
+      throw new Error("The isolated inference process launch identity is unavailable.");
+    }
+    return current.identity !== this.launchIdentity;
   }
 
   onMessage(listener: (message: unknown) => void): () => void {
@@ -82,12 +138,47 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
   }
 }
 
+type OwnedProcessIdentityResult =
+  | { kind: "found"; identity: string }
+  | { kind: "missing" }
+  | { kind: "indeterminate" };
+
+function readOwnedProcessIdentity(pid: number | undefined): OwnedProcessIdentityResult {
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) {
+    return { kind: "indeterminate" };
+  }
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") {
+      return { kind: "missing" };
+    }
+  }
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    return { kind: "indeterminate" };
+  }
+  try {
+    const identity = execFileSync("ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], {
+      encoding: "utf8",
+      timeout: 1_000,
+      maxBuffer: 16 * 1024,
+    }).trim();
+    return identity ? { kind: "found", identity } : { kind: "indeterminate" };
+  } catch {
+    return { kind: "indeterminate" };
+  }
+}
+
 async function launchElectronInferenceProcess(
   request: import("./subagent-inference-protocol.js").SubagentInferenceStartMessage,
+  signal?: AbortSignal,
 ): Promise<KillableInferenceProcess> {
   const { utilityProcess } = await import("electron");
   const entry = fileURLToPath(new URL("./subagent-inference-worker.js", import.meta.url));
-  const child = utilityProcess.fork(entry, [], {
+  // The nonce is non-secret and makes the OS command identity unique even if
+  // PID reuse occurs within ps(1)'s one-second start-time resolution.
+  const launchNonce = randomUUID();
+  const child = utilityProcess.fork(entry, [`--aiden-inference-owner=${launchNonce}`], {
     serviceName: "Aiden Subagent Inference",
     stdio: "ignore",
     env: {
@@ -97,37 +188,78 @@ async function launchElectronInferenceProcess(
       ...(request.options.env ?? {}),
     },
   });
-  await new Promise<void>((resolve, reject) => {
-    const onSpawn = () => {
+  const initialIdentity = readOwnedProcessIdentity(child.pid);
+  const owned = new ElectronInferenceProcess(
+    child,
+    initialIdentity.kind === "found" && initialIdentity.identity.includes(launchNonce)
+      ? initialIdentity.identity
+      : undefined,
+    launchNonce,
+  );
+  return new Promise<KillableInferenceProcess>((resolve) => {
+    let settled = false;
+    let identityRetry: NodeJS.Timeout | undefined;
+    const finish = (launchError?: Error, initiallyExited = false) => {
+      if (settled) return;
+      settled = true;
       cleanup();
-      resolve();
+      if (launchError) owned.setLaunchError(launchError);
+      if (launchError && !initiallyExited) child.kill();
+      resolve(owned);
     };
+    const verifySpawnIdentity = (attempt = 0) => {
+      if (settled) return;
+      if (owned.captureLaunchIdentity()) {
+        finish();
+        return;
+      }
+      if (attempt >= 9) {
+        finish(new Error("Subagent inference process launch identity could not be verified."));
+        return;
+      }
+      identityRetry = setTimeout(() => verifySpawnIdentity(attempt + 1), 25);
+    };
+    const onSpawn = () => verifySpawnIdentity();
     const onExit = (code: number) => {
-      cleanup();
-      reject(new Error(`Subagent inference process exited during launch (${code}).`));
+      finish(new Error(`Subagent inference process exited during launch (${code}).`), true);
     };
     const onError = (type: "FatalError", location: string) => {
-      cleanup();
-      reject(new Error(`Subagent inference process ${type} at ${location}.`));
+      finish(new Error(`Subagent inference process ${type} at ${location}.`));
     };
+    const onAbort = () => finish(new Error("Subagent inference process launch cancelled."));
+    const timeout = setTimeout(
+      () => finish(new Error("Subagent inference process launch timed out.")),
+      5_000,
+    );
     const cleanup = () => {
+      clearTimeout(timeout);
+      if (identityRetry) clearTimeout(identityRetry);
       child.off("spawn", onSpawn);
       child.off("exit", onExit);
       child.off("error", onError);
+      signal?.removeEventListener("abort", onAbort);
     };
     child.on("spawn", onSpawn);
     child.on("exit", onExit);
     child.on("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
-  return new ElectronInferenceProcess(child);
 }
 
-function ambientProviderEnv(providerId: string): Record<string, string> {
+export function ambientProviderEnv(
+  providerId: string,
+  source: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
   const names =
     providerId === "amazon-bedrock"
       ? [
           "HOME",
           "AWS_ACCESS_KEY_ID",
+          "AWS_BEARER_TOKEN_BEDROCK",
+          "AWS_BEDROCK_FORCE_CACHE",
+          "AWS_BEDROCK_FORCE_HTTP1",
+          "AWS_BEDROCK_SKIP_AUTH",
           "AWS_SECRET_ACCESS_KEY",
           "AWS_SESSION_TOKEN",
           "AWS_PROFILE",
@@ -135,21 +267,43 @@ function ambientProviderEnv(providerId: string): Record<string, string> {
           "AWS_DEFAULT_REGION",
           "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
           "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+          "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+          "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
           "AWS_WEB_IDENTITY_TOKEN_FILE",
           "AWS_ROLE_ARN",
           "AWS_ROLE_SESSION_NAME",
+          "AWS_CONFIG_FILE",
+          "AWS_SHARED_CREDENTIALS_FILE",
+          "HTTP_PROXY",
+          "HTTPS_PROXY",
+          "ALL_PROXY",
+          "NO_PROXY",
+          "http_proxy",
+          "https_proxy",
+          "all_proxy",
+          "no_proxy",
         ]
-      : providerId === "google-vertex"
+      : providerId === "azure-openai-responses"
         ? [
-            "HOME",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "GOOGLE_CLOUD_PROJECT",
-            "GCLOUD_PROJECT",
-            "GOOGLE_CLOUD_LOCATION",
+            "AZURE_OPENAI_BASE_URL",
+            "AZURE_OPENAI_RESOURCE_NAME",
+            "AZURE_OPENAI_API_VERSION",
+            "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
           ]
-        : [];
+        : providerId === "google-vertex"
+          ? [
+              "HOME",
+              "GOOGLE_APPLICATION_CREDENTIALS",
+              "GOOGLE_CLOUD_PROJECT",
+              "GCLOUD_PROJECT",
+              "GOOGLE_CLOUD_LOCATION",
+            ]
+          : providerId === "cloudflare-workers-ai" || providerId === "cloudflare-ai-gateway"
+            ? ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]
+            : [];
+  names.push("PI_CACHE_RETENTION");
   return Object.fromEntries(
-    names.flatMap((name) => (process.env[name] ? [[name, process.env[name] as string]] : [])),
+    names.flatMap((name) => (source[name] ? [[name, source[name] as string]] : [])),
   );
 }
 
@@ -184,7 +338,9 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
         let requestModel: Model<Api>;
         let requestOptions: ModelsSimpleStreamOptions;
         let leaseSignal: AbortSignal | undefined;
-        let observeResult: ((message: AssistantMessage) => void) | undefined;
+        let observeResult:
+          | ((message: AssistantMessage, metadata?: { authenticationFailure?: boolean }) => void)
+          | undefined;
         if (model.provider === OPENAI_CODEX_PROVIDER_ID) {
           if (!runtime.prepareIsolatedStream) {
             throw new Error("OpenAI Codex isolated dispatch is unavailable.");
@@ -201,22 +357,22 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           });
           if (!resolution) throw new Error(`Provider is not configured: ${model.provider}`);
           const apiKey = options?.apiKey ?? resolution.auth.apiKey;
-          let headers = mergeHeaders(
-            resolution.auth.headers ?? runtime.headers,
-            options?.headers,
-          );
+          let headers = mergeHeaders(resolution.auth.headers ?? runtime.headers, options?.headers);
           if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
           requestModel = resolution.auth.baseUrl
             ? { ...model, baseUrl: resolution.auth.baseUrl }
             : model;
-          const env =
-            resolution.env || options?.env || Object.keys(ambientProviderEnv(model.provider)).length
-              ? {
-                  ...ambientProviderEnv(model.provider),
-                  ...(resolution.env ?? {}),
-                  ...(options?.env ?? {}),
-                }
-              : undefined;
+          // Only reviewed provider configuration crosses the worker boundary.
+          // The worker bootstrap disables every child_process entry point, so
+          // static/role/SSO profiles can resolve but credential_process cannot
+          // escape the owned UtilityProcess.
+          const envSource = {
+            ...process.env,
+            ...(resolution.env ?? {}),
+            ...(options?.env ?? {}),
+          };
+          const allowedEnv = ambientProviderEnv(model.provider, envSource);
+          const env = Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined;
           requestOptions = { ...options, apiKey, headers, env };
         }
         const {
@@ -242,7 +398,7 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
             model: requestModel,
             onPayload: requestOptions.onPayload,
             onResponse: requestOptions.onResponse,
-            onTerminal: observeResult,
+            onTerminal: (message, metadata) => observeResult?.(message, metadata),
           },
           leaseSignal && signal ? AbortSignal.any([leaseSignal, signal]) : (leaseSignal ?? signal),
         );

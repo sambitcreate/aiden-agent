@@ -155,6 +155,7 @@ test("package verifier requires a bounded packed subagent inference worker", asy
   assert.doesNotThrow(() =>
     assertPackagedSubagentInferenceWorkerEntries([
       "/build/main/subagent-inference-worker.js",
+      "/build/main/subagent-inference-worker-runtime.js",
     ]),
   );
   assert.throws(
@@ -167,13 +168,20 @@ test("package verifier requires a bounded packed subagent inference worker", asy
   const workerDirectory = path.join(source, "build", "main");
   try {
     await mkdir(workerDirectory, { recursive: true });
-    await writeFile(path.join(workerDirectory, "subagent-inference-worker.js"), "export {};\n");
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'syncBuiltinESMExports();\nthrow new Error("Provider credential subprocesses are disabled");\nawait import("./subagent-inference-worker-runtime.js");\n',
+    );
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker-runtime.js"),
+      "export {};\n",
+    );
     const packedAsar = path.join(root, "packed.asar");
     await createPackage(source, packedAsar);
     await assert.doesNotReject(verifyPackagedSubagentInferenceWorker(packedAsar));
     const unpackedAsar = path.join(root, "unpacked.asar");
     await createPackageWithOptions(source, unpackedAsar, {
-      unpack: "**/subagent-inference-worker.js",
+      unpack: "**/subagent-inference-worker-runtime.js",
     });
     await assert.rejects(
       verifyPackagedSubagentInferenceWorker(unpackedAsar),
@@ -460,21 +468,11 @@ test("package verifier checks each architecture deployment floor independently",
         ),
       );
       assert.throws(
-        () =>
-          assertMacOSArchitectureMinimum(
-            "platform IOS\nminos 14.4\n",
-            target,
-            architecture,
-          ),
+        () => assertMacOSArchitectureMinimum("platform IOS\nminos 14.4\n", target, architecture),
         new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
       );
       assert.throws(
-        () =>
-          assertMacOSArchitectureMinimum(
-            "platform MACOS\nminos 13.0\n",
-            target,
-            architecture,
-          ),
+        () => assertMacOSArchitectureMinimum("platform MACOS\nminos 13.0\n", target, architecture),
         new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
       );
       assert.throws(

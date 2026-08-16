@@ -48,8 +48,8 @@ const reviewedHelperInfoPlistPath = path.join(
   "Info.plist",
 );
 const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
-const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY =
-  "build/main/subagent-inference-worker.js";
+const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-worker.js";
+const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
 const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
 const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
   "node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
@@ -146,7 +146,10 @@ export async function verifyPackagedModelCatalogResources(appAsar) {
 
 export function assertPackagedSubagentInferenceWorkerEntries(entries) {
   const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
-  if (!normalized.has(`/${PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY}`)) {
+  if (
+    !normalized.has(`/${PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY}`) ||
+    !normalized.has(`/${PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY}`)
+  ) {
     throw new Error("Packaged app.asar is missing the subagent inference worker.");
   }
 }
@@ -154,20 +157,36 @@ export function assertPackagedSubagentInferenceWorkerEntries(entries) {
 export async function verifyPackagedSubagentInferenceWorker(appAsar) {
   await assertRegularFile(appAsar);
   assertPackagedSubagentInferenceWorkerEntries(listPackage(appAsar, { isPack: false }));
-  const entry = statFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false);
+  for (const workerEntry of [
+    PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY,
+    PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY,
+  ]) {
+    const entry = statFile(appAsar, workerEntry, false);
+    if (
+      !entry ||
+      entry.unpacked === true ||
+      typeof entry.size !== "number" ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size <= 0 ||
+      entry.size > MAX_SUBAGENT_INFERENCE_WORKER_BYTES ||
+      typeof entry.offset !== "string" ||
+      "files" in entry ||
+      "link" in entry
+    ) {
+      throw new Error("Packaged subagent inference worker must be a bounded packed regular file.");
+    }
+  }
+  const bootstrap = extractFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false).toString(
+    "utf8",
+  );
   if (
-    !entry ||
-    entry.unpacked === true ||
-    typeof entry.size !== "number" ||
-    !Number.isSafeInteger(entry.size) ||
-    entry.size <= 0 ||
-    entry.size > MAX_SUBAGENT_INFERENCE_WORKER_BYTES ||
-    typeof entry.offset !== "string" ||
-    "files" in entry ||
-    "link" in entry
+    !bootstrap.includes("Provider credential subprocesses are disabled") ||
+    !bootstrap.includes("syncBuiltinESMExports") ||
+    !bootstrap.includes("subagent-inference-worker-runtime.js") ||
+    bootstrap.includes("@earendil-works/pi-ai/providers/all")
   ) {
     throw new Error(
-      "Packaged subagent inference worker must be a bounded packed regular file.",
+      "Packaged subagent inference bootstrap must disable subprocesses before loading providers.",
     );
   }
 }
@@ -408,9 +427,7 @@ export function assertMinimalComputerUseEntitlements(entitlements) {
 
 function assertExactTrueEntitlements(entitlements, expectedKeys, description) {
   const expected = [...expectedKeys].sort();
-  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)]
-    .map((match) => match[1])
-    .sort();
+  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1]).sort();
   const enabled = [...entitlements.matchAll(/<key>([^<]+)<\/key>\s*<true\s*\/>/g)]
     .map((match) => match[1])
     .sort();

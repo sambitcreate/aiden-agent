@@ -11,6 +11,24 @@ import type {
 export const SUBAGENT_INFERENCE_PROTOCOL_VERSION = 1;
 export const MAX_SUBAGENT_INFERENCE_MESSAGE_BYTES = 32 * 1024 * 1024;
 
+export class SubagentInferenceOutboundBudget {
+  private bytes = 0;
+
+  constructor(private readonly maxBytes = MAX_SUBAGENT_INFERENCE_MESSAGE_BYTES) {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+      throw new Error("Invalid isolated inference IPC budget.");
+    }
+  }
+
+  consume(message: unknown): void {
+    const bytes = Buffer.byteLength(JSON.stringify(message), "utf8");
+    if (bytes > this.maxBytes || this.bytes + bytes > this.maxBytes) {
+      throw new Error("The isolated provider stream exceeded its IPC budget.");
+    }
+    this.bytes += bytes;
+  }
+}
+
 export type SerializableStreamOptions = Omit<
   SimpleStreamOptions,
   "signal" | "onPayload" | "onResponse"
@@ -55,6 +73,8 @@ export interface SubagentInferenceEventMessage {
   sequence: number;
   /** Text/thinking partial snapshots are omitted from delta/end frames. */
   event: Record<string, unknown>;
+  /** Closed worker-side classification; raw provider text never crosses IPC. */
+  authenticationFailure?: true;
 }
 
 export interface SubagentInferenceFailureMessage {
@@ -63,7 +83,6 @@ export interface SubagentInferenceFailureMessage {
   requestId: string;
   message: string;
 }
-
 
 export interface SubagentInferenceHookMessage {
   kind: "hook";
@@ -96,24 +115,45 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 
 function isWireAssistantEvent(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
-  const index = () => Number.isSafeInteger(value.contentIndex) && (value.contentIndex as number) >= 0;
+  const index = () =>
+    Number.isSafeInteger(value.contentIndex) && (value.contentIndex as number) >= 0;
   switch (value.type) {
     case "start":
       return hasExactKeys(value, ["type", "partial"]) && isRecord(value.partial);
     case "text_start":
     case "thinking_start":
     case "toolcall_start":
-      return hasExactKeys(value, ["type", "contentIndex", "partial"]) && index() && isRecord(value.partial);
+      return (
+        hasExactKeys(value, ["type", "contentIndex", "partial"]) &&
+        index() &&
+        isRecord(value.partial)
+      );
     case "text_delta":
     case "thinking_delta":
-      return hasExactKeys(value, ["type", "contentIndex", "delta"]) && index() && typeof value.delta === "string";
+      return (
+        hasExactKeys(value, ["type", "contentIndex", "delta"]) &&
+        index() &&
+        typeof value.delta === "string"
+      );
     case "text_end":
     case "thinking_end":
-      return hasExactKeys(value, ["type", "contentIndex", "content"]) && index() && typeof value.content === "string";
+      return (
+        hasExactKeys(value, ["type", "contentIndex", "content"]) &&
+        index() &&
+        typeof value.content === "string"
+      );
     case "toolcall_delta":
-      return hasExactKeys(value, ["type", "contentIndex", "delta", "partial"]) && index() && typeof value.delta === "string" && isRecord(value.partial);
+      return (
+        hasExactKeys(value, ["type", "contentIndex", "delta"]) &&
+        index() &&
+        typeof value.delta === "string"
+      );
     case "toolcall_end":
-      return hasExactKeys(value, ["type", "contentIndex", "toolCall", "partial"]) && index() && isRecord(value.toolCall) && isRecord(value.partial);
+      return (
+        hasExactKeys(value, ["type", "contentIndex", "toolCall"]) &&
+        index() &&
+        isRecord(value.toolCall)
+      );
     case "done":
       return hasExactKeys(value, ["type", "reason", "message"]) && isRecord(value.message);
     case "error":
@@ -140,11 +180,16 @@ export function isSubagentInferenceWorkerMessage(
       Object.prototype.hasOwnProperty.call(value, "payload")
     );
   }
+  const eventKeys = value.authenticationFailure === true ? 6 : 5;
   return (
     value.kind === "event" &&
-    Object.keys(value).length === 5 &&
+    Object.keys(value).length === eventKeys &&
     Number.isSafeInteger(value.sequence) &&
     (value.sequence as number) >= 0 &&
+    (value.authenticationFailure === undefined ||
+      (value.authenticationFailure === true &&
+        isRecord(value.event) &&
+        value.event.type === "error")) &&
     isWireAssistantEvent(value.event)
   );
 }
@@ -156,7 +201,9 @@ export function compactAssistantMessageEvent(
     event.type === "text_delta" ||
     event.type === "text_end" ||
     event.type === "thinking_delta" ||
-    event.type === "thinking_end"
+    event.type === "thinking_end" ||
+    event.type === "toolcall_delta" ||
+    event.type === "toolcall_end"
   ) {
     const { partial: _partial, ...compact } = event;
     return compact;
@@ -186,6 +233,8 @@ export function expandAssistantMessageEvent(
     block.thinking += String(wire.delta);
   } else if (wire.type === "thinking_end" && block?.type === "thinking") {
     block.thinking = String(wire.content);
+  } else if (wire.type === "toolcall_end") {
+    partial.content[contentIndex] = wire.toolCall as AssistantMessage["content"][number];
   }
   return {
     event: { ...wire, partial } as unknown as AssistantMessageEvent,

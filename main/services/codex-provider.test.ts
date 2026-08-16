@@ -983,6 +983,36 @@ test("observes WebSocket auth rejection and recovery without an HTTP response ca
   assert.equal((await service.snapshot()).needsAttention, false);
 });
 
+test("isolated Codex preserves a closed auth-failure hint after sanitizing provider text", async () => {
+  const credentials = new InMemoryCredentialStore();
+  await credentials.modify("openai-codex", async () => oauthCredential("locally-valid"));
+  const service = new CodexProviderService(builtinModels({ credentials }), credentials);
+  const model = await service.prepareRuntimeModel("gpt-5.4");
+  const prepared = await service.prepareIsolatedStream(model);
+  prepared.observeResult(
+    {
+      role: "assistant",
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error",
+      errorMessage: "The isolated provider request failed.",
+      timestamp: Date.now(),
+    },
+    { authenticationFailure: true },
+  );
+  assert.equal((await service.snapshot()).needsAttention, true);
+});
+
 test("applies resolved Codex auth and caller transforms once to the native provider stream", async () => {
   const credentials = new InMemoryCredentialStore();
   await credentials.modify("openai-codex", async () => oauthCredential("resolved-access"));
