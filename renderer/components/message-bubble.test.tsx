@@ -89,3 +89,38 @@ test("assistant prose and activity render in chronological order with one copy a
   assert.ok(secondTool < after);
   assert.equal((markup.match(/aria-label="Copy message"/gu) ?? []).length, 1);
 });
+
+test("persisted assistant failure renders once with fixed private-safe copy", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      messages={[
+        {
+          id: "assistant-failed",
+          role: "assistant",
+          content: "Saved partial response",
+          createdAt: 1,
+          providerFailure: {
+            version: 1,
+            category: "network",
+            attempts: 2,
+            retryExhausted: true,
+          },
+        },
+      ]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+
+  assert.equal((markup.match(/data-provider-failure="network"/gu) ?? []).length, 1);
+  assert.match(markup, /role="alert"/u);
+  assert.match(markup, /aria-atomic="true"/u);
+  assert.equal((markup.match(/Generation failed/gu) ?? []).length, 1);
+  assert.match(markup, /after retrying/iu);
+});

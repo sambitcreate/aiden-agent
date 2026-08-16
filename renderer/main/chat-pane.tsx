@@ -699,8 +699,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   generationTimelineRef.current = null;
                 }
                 setApprovals([]);
+                const persistedFailure =
+                  updatedChat?.messages[updatedChat.messages.length - 1]?.role ===
+                    "assistant" &&
+                  updatedChat.messages[updatedChat.messages.length - 1]
+                    ?.providerFailure;
                 setError(
-                  partial ? `Generation stopped after a partial response: ${message}` : message,
+                  persistedFailure
+                    ? null
+                    : partial
+                      ? `Generation stopped after a partial response: ${message}`
+                      : message,
                 );
               }
             })();

@@ -43,6 +43,8 @@ import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
+import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import { compactionFailureLogMetadata } from "./provider-failure.js";
 import type {
   ComputerUseApprovalDescriptor,
   ComputerUseController,
@@ -912,9 +914,16 @@ export const llmClient = {
       content: string,
       reasoning: string,
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
+      providerFailure?: ProviderFailureV1,
     ) => {
       const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
-      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0 && !subagents) {
+      if (
+        !content.trim() &&
+        !reasoning.trim() &&
+        finalTimeline.steps.length === 0 &&
+        !subagents &&
+        !providerFailure
+      ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
       try {
@@ -929,6 +938,7 @@ export const llmClient = {
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
+            providerFailure,
             timeline: finalTimeline.steps.length ? finalTimeline : undefined,
             subagents,
           },
@@ -957,7 +967,6 @@ export const llmClient = {
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
-    let emergencyContextReduction = false;
     let activeCompactionStepId: string | undefined;
     let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
@@ -1050,7 +1059,11 @@ export const llmClient = {
           willRetry: event.willRetry,
         });
         if (event.errorMessage) {
-          logger.warn("pi", `Compaction failed for stream ${streamId}: ${event.errorMessage}`);
+          logger.warn(
+            "pi",
+            `Compaction failed for stream ${streamId}.`,
+            compactionFailureLogMetadata(event),
+          );
         }
       };
       const compactionOptions = {
@@ -1152,7 +1165,6 @@ export const llmClient = {
             supportsImages,
           },
           (result) => {
-            emergencyContextReduction = true;
             logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
               model: model.id,
               estimatedTokensBefore: result.estimatedTokensBefore,
@@ -1184,10 +1196,6 @@ export const llmClient = {
                 },
               }
             : {}),
-          forcePostRunCompaction: () => emergencyContextReduction,
-          clearForcePostRunCompaction: () => {
-            emergencyContextReduction = false;
-          },
           onJournalError: (error) => {
             piJournalHealthy = false;
             logger.error(
@@ -1793,9 +1801,23 @@ export const llmClient = {
             : runtimeOutcome.kind === "host_failed"
               ? "The local agent runtime could not complete this response safely."
               : null;
+        if (runtimeOutcome.kind === "provider_failed") {
+          logger.warn("pi", `Provider generation failed for stream ${streamId}.`, {
+            category: runtimeOutcome.providerFailure?.category ?? "unknown",
+            attempts: runtimeOutcome.attempts,
+            retryExhausted: runtimeOutcome.providerFailure?.retryExhausted ?? false,
+          });
+        }
         if (finalError) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
-          const persisted = await persistAssistant(full, reasoning, finalTimeline);
+          const persisted = await persistAssistant(
+            full,
+            reasoning,
+            finalTimeline,
+            runtimeOutcome.kind === "provider_failed"
+              ? runtimeOutcome.providerFailure
+              : undefined,
+          );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
             streamId,

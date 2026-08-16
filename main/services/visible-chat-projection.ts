@@ -3,6 +3,10 @@ import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js"
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import {
+  parseProviderFailureV1,
+  type ProviderFailureV1,
+} from "../../renderer/shared/provider-failure.js";
+import {
   MAX_CHAT_ID_BYTES,
   MAX_CHAT_ID_CHARS,
   MAX_MODEL_ID_BYTES,
@@ -25,6 +29,7 @@ export interface VisibleChatMessage {
   model?: string;
   attachments?: Attachment[];
   skill?: SkillProvenanceV1;
+  providerFailure?: ProviderFailureV1;
 }
 
 /** Strip private provider protocol before a Chat crosses into the renderer. */
@@ -34,7 +39,13 @@ export function chatForRenderer(chat: Chat | null): Chat | null {
     ...chat,
     messages: chat.messages.map((message) => {
       const { pi: _privatePiProtocol, ...visible } = message;
-      return visible;
+      return {
+        ...visible,
+        providerFailure:
+          message.role === "assistant"
+            ? parseProviderFailureV1(message.providerFailure)
+            : undefined,
+      };
     }),
   };
 }
@@ -138,6 +149,10 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     skill:
       message.role === "user"
         ? parseSkillProvenanceV1(message.skill)
+        : undefined,
+    providerFailure:
+      message.role === "assistant"
+        ? parseProviderFailureV1(message.providerFailure)
         : undefined,
   };
 }

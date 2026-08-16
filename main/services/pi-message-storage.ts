@@ -1,6 +1,9 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
-export type StoredPiAssistantMessage = Omit<AssistantMessage, "diagnostics">;
+export type StoredPiAssistantMessage = Omit<
+  AssistantMessage,
+  "diagnostics" | "errorMessage"
+>;
 
 const STOP_REASONS = new Set(["stop", "length", "toolUse", "error", "aborted"]);
 
@@ -82,11 +85,15 @@ function validUsage(value: unknown): boolean {
   );
 }
 
-/** Persist the provider-authored Pi message without raw diagnostics. */
+/** Persist provider protocol without raw diagnostics or provider-authored errors. */
 export function storedPiAssistantMessage(
   message: AssistantMessage,
 ): StoredPiAssistantMessage {
-  const { diagnostics: _diagnostics, ...stored } = message;
+  const {
+    diagnostics: _diagnostics,
+    errorMessage: _errorMessage,
+    ...stored
+  } = message;
   return structuredClone(stored);
 }
 
@@ -114,8 +121,11 @@ export function parseStoredPiAssistantMessage(
   ) {
     return undefined;
   }
-  const { diagnostics: _diagnostics, ...stored } =
-    candidate as AssistantMessage;
+  const {
+    diagnostics: _diagnostics,
+    errorMessage: _errorMessage,
+    ...stored
+  } = candidate as AssistantMessage;
   try {
     return structuredClone(stored);
   } catch {
