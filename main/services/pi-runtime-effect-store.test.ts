@@ -683,7 +683,6 @@ test("same-process local unknown evidence does not block explicit chat deletion"
       /simulated terminal write failure/u,
     );
     failWrites = false;
-    await store.finishOperation(operationInput.operationId, "interrupted");
     await store.deleteChat(operationInput.chatId);
     assert.deepEqual(await store.listEffectsByChat(operationInput.chatId), []);
     assert.deepEqual(await store.listOperationsByChat(operationInput.chatId), []);

@@ -600,7 +600,18 @@ export class PiRuntimeEffectStore {
     await this.data.update((database) => {
       if (
         database.operations.some(
-          (operation) => operation.chatId === chatId && operation.state === "running",
+          (operation) => {
+            if (operation.chatId !== chatId || operation.state !== "running") return false;
+            const localTerminal = [...this.localUnknown.values()].some(
+              (effect) => effect.operationId === operation.operationId,
+            );
+            if (!localTerminal) return true;
+            return database.effects.some((effect) => {
+              if (effect.operationId !== operation.operationId) return false;
+              const effective = this.localUnknown.get(effect.effectId) ?? effect;
+              return !isPiRuntimeEffectTerminal(effective.state);
+            });
+          },
         ) ||
         database.effects.some(
           (effect) => {
