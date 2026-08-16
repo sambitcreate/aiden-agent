@@ -18,10 +18,7 @@ import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
 import { chatStore } from "./chat-store.js";
-import {
-  formatAvailableSkills,
-  type SkillRegistrySnapshot,
-} from "./skill-registry.js";
+import { formatAvailableSkills, type SkillRegistrySnapshot } from "./skill-registry.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import {
   assistantTurnTextSeparator,
@@ -31,11 +28,6 @@ import {
   runtimeSupportsImages,
   settleGenerationCleanup,
   shouldExposeReasoning,
-  terminalGenerationError,
-  terminalGenerationLengthError,
-  terminalGenerationInterruptionError,
-  terminalGenerationWasAborted,
-  waitForAbortableDelay,
   waitForGenerationStateClear,
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
@@ -45,12 +37,7 @@ import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
-import type {
-  ApprovalDecision,
-  Chat,
-  ChatStartParams,
-  WorkspacePermission,
-} from "./types.js";
+import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type {
   ComputerUseApprovalDescriptor,
@@ -72,18 +59,12 @@ import {
 } from "./schedule-tool.js";
 import { ToolApprovalCoordinator } from "./tool-approval.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
+import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compaction-core.js";
 import {
-  createPiCompactionModels,
-  needsImmediatePiCompaction,
-  PiCompactionCoordinator,
-  type PiCompactionEvent,
-} from "./pi-compaction-core.js";
-import {
-  appendPiMessages,
-  beginPiGenerationTurn,
-  commitPiGenerationTurn,
+  beginPiVisibleTurnLease,
   piCompactionSessionStore,
   syncChatMessagesToPiSession,
+  type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
@@ -92,10 +73,7 @@ import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "./generation-context.js";
-import {
-  buildGeminiWorkspaceSnapshot,
-  GeminiContextCache,
-} from "./gemini-context-cache.js";
+import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
@@ -108,10 +86,7 @@ import {
   ComputerUseGenerationGate,
 } from "./computer-use/generation-gate.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import {
-  startLocalModelLoadMonitor,
-  type LocalModelLoadMonitor,
-} from "./local-runtime-status.js";
+import { startLocalModelLoadMonitor, type LocalModelLoadMonitor } from "./local-runtime-status.js";
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import {
   buildAssistantSystemPrompt,
@@ -222,7 +197,6 @@ interface LoadMonitorState {
 
 interface ActiveGeneration {
   agent: PiAgentRuntimeHarness;
-  compaction: PiCompactionCoordinator;
   chatId: string;
   owner: ChatGenerationOwner;
   removeOwnerInvalidation: () => void;
@@ -269,9 +243,7 @@ function chatHasGenerationOwnership(chatId: string): boolean {
   );
 }
 
-function releaseGenerationSkillReservation(entry: {
-  releaseSkillReservation: () => void;
-}): void {
+function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () => void }): void {
   const release = entry.releaseSkillReservation;
   entry.releaseSkillReservation = () => {};
   release();
@@ -282,13 +254,8 @@ function broadcastChatSettled(
   workspaceId: string | undefined,
   fallbackWorkspaceId: string | undefined,
 ): void {
-  const normalizedWorkspaceId = persistedChatWorkspaceId(
-    workspaceId ?? fallbackWorkspaceId,
-  );
-  if (
-    !isSafeSubagentIdentifier(chatId) ||
-    !isSafeSubagentIdentifier(normalizedWorkspaceId)
-  ) {
+  const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
+  if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
     return;
   }
   ipcMain.broadcast("chats:settled", {
@@ -301,11 +268,7 @@ function ownerForStream(streamId: string): ChatGenerationOwner | undefined {
   return active.get(streamId)?.owner ?? initializing.get(streamId)?.owner;
 }
 
-function sendGeneration(
-  streamId: string,
-  channel: NotificationChannel,
-  payload: unknown,
-): boolean {
+function sendGeneration(streamId: string, channel: NotificationChannel, payload: unknown): boolean {
   const owner = ownerForStream(streamId);
   if (!owner || owner.isDestroyed()) return false;
   try {
@@ -343,13 +306,9 @@ const approvals = new ToolApprovalCoordinator((prompt) => {
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
 // miss before the outer parent shutdown deadline can release a soak receipt.
-const SHUTDOWN_GENERATION_GRACE_MS =
-  DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS + 1_000;
+const SHUTDOWN_GENERATION_GRACE_MS = DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS + 1_000;
 
-function resetGenerationAgent(
-  agent: PiAgentRuntimeHarness,
-  streamId: string,
-): void {
+function resetGenerationAgent(agent: PiAgentRuntimeHarness, streamId: string): void {
   try {
     agent.reset();
   } catch (error) {
@@ -413,11 +372,7 @@ async function prepareGeneration(
   ownerDocumentId: string,
   options: GenerationExecutionOptions,
 ) {
-  const runtime = await resolveModelRuntime(
-    params.providerId,
-    params.model,
-    signal,
-  );
+  const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const attendedAssistant = params.mode === "assistant";
   const assistantPersonaMode =
     params.mode === "assistant" || params.mode === "assistant-unattended";
@@ -431,18 +386,14 @@ async function prepareGeneration(
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined;
   if (workspace) await assertManagedWorktreeAdmission(workspace);
-  const permission: GenerationPermission =
-    options.permission ?? workspace?.permission ?? "ask";
+  const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   const git = folderPath ? await gitInfo(folderPath) : { isRepo: false };
   // The resolved runtime model is the connection-bound capability authority.
   // Display metadata must not re-enable an input that Pi or discovery rejected.
   const model = runtime.model;
   if (assistantAutomationMode || params.mode === "assistant-unattended") {
-    assertScheduledProviderFingerprint(
-      runtime.provider,
-      options.providerFingerprint,
-    );
+    assertScheduledProviderFingerprint(runtime.provider, options.providerFingerprint);
   }
   const assistantModelSelection = {
     providerId: runtime.provider.id,
@@ -479,20 +430,14 @@ async function prepareGeneration(
       status.enabled &&
       !status.ready
     ) {
-      throw new Error(
-        `Computer Use is enabled for this chat but is not ready. ${status.detail}`,
-      );
+      throw new Error(`Computer Use is enabled for this chat but is not ready. ${status.detail}`);
     }
-    if (
-      computerUseGenerationGate.isCurrent(computerUseGateSnapshot) &&
-      status.ready
-    ) {
+    if (computerUseGenerationGate.isCurrent(computerUseGateSnapshot) && status.ready) {
       computerUse = createComputerUseController(streamId, supportsImages);
       activatedComputerUse(computerUse);
     }
   }
-  const toolPermission: WorkspacePermission =
-    permission === "read-only" ? "full" : permission;
+  const toolPermission: WorkspacePermission = permission === "read-only" ? "full" : permission;
   const allowSubagents = subagentsAllowedForGeneration({
     assistantMode,
     allowSubagents: options.allowSubagents,
@@ -561,25 +506,12 @@ async function prepareGeneration(
           shellEnabled: subagentShellEnabled,
           shellBinary: subagentShellEnabled ? subagentShellBinary : undefined,
           delegationEnabled: subagentDelegationEnabled,
-          requestApproval: (
-            descriptor,
-            approvalSignal,
-            approvalOwnerDocumentId,
-          ) =>
-            approvals.request(
-              descriptor,
-              approvalSignal,
-              approvalOwnerDocumentId,
-            ),
-          currentWorkspace: (workspaceId) =>
-            configStore.getWorkspace(workspaceId),
-          validateWorkspace: (candidate) =>
-            assertManagedWorktreeAdmission(candidate),
+          requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId) =>
+            approvals.request(descriptor, approvalSignal, approvalOwnerDocumentId),
+          currentWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+          validateWorkspace: (candidate) => assertManagedWorktreeAdmission(candidate),
           workspaceOperationRegistry,
-          control:
-            subagentRunStore.selection === "v2"
-              ? subagentControlMainV2
-              : undefined,
+          control: subagentRunStore.selection === "v2" ? subagentControlMainV2 : undefined,
           applyControlSnapshot: (snapshot) => {
             if (!subagentProjector) {
               throw new Error("Subagent control projector is unavailable.");
@@ -591,17 +523,13 @@ async function prepareGeneration(
               ?.snapshot()
               .find((candidate) => candidate.runId === runId);
             if (!snapshot) {
-              throw new Error(
-                "Subagent control projector state is unavailable.",
-              );
+              throw new Error("Subagent control projector state is unavailable.");
             }
             return snapshot;
           },
           settleControlSnapshots: () =>
             subagentProjector?.flush() ??
-            Promise.reject(
-              new Error("Subagent control projector is unavailable."),
-            ),
+            Promise.reject(new Error("Subagent control projector is unavailable.")),
           onControlSnapshot: (snapshot) => {
             sendGeneration(streamId, "chat:subagents", { streamId, snapshot });
           },
@@ -637,14 +565,10 @@ async function prepareGeneration(
           thinkingLevel,
           workspaceRoot: folderPath,
           permission: toolPermission,
-          inheritedCeiling: inheritedSubagentReadToolCeiling(
-            options.excludeToolNames,
-          ),
+          inheritedCeiling: inheritedSubagentReadToolCeiling(options.excludeToolNames),
           loadPersistedChatForFork: async (forkSignal) => {
             if (subagentRunStore.selection !== "v2") {
-              throw new Error(
-                "Forked subagent context is unavailable during V1 rollback.",
-              );
+              throw new Error("Forked subagent context is unavailable during V1 rollback.");
             }
             if (forkSignal?.aborted) {
               throw forkSignal.reason instanceof Error
@@ -657,13 +581,8 @@ async function prepareGeneration(
                 ? forkSignal.reason
                 : new Error("Forked subagent context was cancelled.");
             }
-            if (
-              !persisted ||
-              persistedChatWorkspaceId(persisted.workspaceId) !== workspace.id
-            ) {
-              throw new Error(
-                "Forked subagent context no longer belongs to this workspace.",
-              );
+            if (!persisted || persistedChatWorkspaceId(persisted.workspaceId) !== workspace.id) {
+              throw new Error("Forked subagent context no longer belongs to this workspace.");
             }
             return persisted;
           },
@@ -676,9 +595,7 @@ async function prepareGeneration(
   // scheduling, while an approved automation gets only its project tools and
   // exact MCP identities. Computer Use, skills, and delegation stay out.
   const skillSnapshot =
-    !assistantMode && workspace
-      ? await skillRegistry.snapshotResolved(workspace)
-      : undefined;
+    !assistantMode && workspace ? await skillRegistry.snapshotResolved(workspace) : undefined;
   const tools = (
     await buildAgentTools({
       workspaceId: workspace?.id,
@@ -687,8 +604,7 @@ async function prepareGeneration(
       permission: toolPermission,
       computerUse,
       allowScheduling:
-        (!assistantMode || attendedAssistant) &&
-        !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME),
+        (!assistantMode || attendedAssistant) && !options.excludeToolNames?.has(SCHEDULE_TOOL_NAME),
       allowMcpTools: options.allowMcpTools,
       mcpServerIds: options.mcpServerIds,
       mcpServerBindings: options.mcpServerBindings,
@@ -698,9 +614,7 @@ async function prepareGeneration(
         : assistantAutomationMode
           ? "assistant-automation"
           : undefined,
-      assistantModelSelection: attendedAssistant
-        ? assistantModelSelection
-        : undefined,
+      assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () =>
             createSubagentTool(
@@ -708,9 +622,7 @@ async function prepareGeneration(
               projectRequestableSubagentMcpInventoryV2(subagentMcpInventory),
               subagentWriteEnabled,
               childMcpMutationsRollout
-                ? projectRequestableSubagentMcpMutationInventoryV2(
-                    subagentMcpInventory,
-                  )
+                ? projectRequestableSubagentMcpMutationInventoryV2(subagentMcpInventory)
                 : [],
               subagentShellEnabled,
               subagentDelegationEnabled,
@@ -755,8 +667,7 @@ async function prepareGeneration(
     // The Aiden system prompt reads its approval posture from settings, which
     // are already loaded here; re-reading them at the prompt site would be a
     // second disk round trip inside the generation's hot path.
-    assistantSettingsPermission:
-      settings.assistant?.settingsPermission ?? "ask",
+    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -774,22 +685,16 @@ export const llmClient = {
       chatTurnAdmission.owns(params.chatId, turnId, owner.documentId);
     try {
       if (!ownsTurn) {
-        throw new Error(
-          "This message turn expired before generation could start.",
-        );
+        throw new Error("This message turn expired before generation could start.");
       }
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
       if (chatComputerUseMutationGate.isChanging(params.chatId)) {
-        throw new Error(
-          "Computer Use settings are changing for this chat. Try again in a moment.",
-        );
+        throw new Error("Computer Use settings are changing for this chat. Try again in a moment.");
       }
       if (chatWorkspaceMutationGate.isChanging(params.chatId)) {
-        throw new Error(
-          "This chat is changing workspaces. Try again in a moment.",
-        );
+        throw new Error("This chat is changing workspaces. Try again in a moment.");
       }
       if (chatCopyGate.isChanging(params.chatId)) {
         throw new Error("This chat is being copied. Try again in a moment.");
@@ -802,11 +707,7 @@ export const llmClient = {
       }
     } catch (error) {
       if (turnId) {
-        chatTurnAdmission.releaseMatching(
-          params.chatId,
-          turnId,
-          owner.documentId,
-        );
+        chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
       }
       throw error;
     }
@@ -839,25 +740,17 @@ export const llmClient = {
           },
         );
     } catch (error) {
-      if (turnId)
-        chatTurnAdmission.releaseMatching(
-          params.chatId,
-          turnId,
-          owner.documentId,
-        );
+      if (turnId) chatTurnAdmission.releaseMatching(params.chatId, turnId, owner.documentId);
       throw error;
     }
     if (!handedOff) {
-      throw new Error(
-        "This message turn expired before generation could start.",
-      );
+      throw new Error("This message turn expired before generation could start.");
     }
     options.onTurnAccepted?.();
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
       this.cancel(streamId);
     });
-    if (initialization.controller.signal.aborted)
-      initialization.removeOwnerInvalidation();
+    if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
     let authoritativeChat!: Chat;
     let authoritativeMode: ChatStartParams["mode"];
@@ -867,10 +760,7 @@ export const llmClient = {
         throw new Error("This chat is no longer available.");
       }
       authoritativeChat = chat;
-      authoritativeMode = authoritativeChatGenerationMode(
-        chat.workspaceId,
-        params.mode,
-      );
+      authoritativeMode = authoritativeChatGenerationMode(chat.workspaceId, params.mode);
       if (chatDeletionGate.isDeleting(params.chatId)) {
         throw new Error("This chat is being deleted.");
       }
@@ -914,29 +804,18 @@ export const llmClient = {
         options,
       );
     } catch (error) {
-      if (
-        initialization.cancelRequested ||
-        initialization.controller.signal.aborted
-      ) {
+      if (initialization.cancelRequested || initialization.controller.signal.aborted) {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(
-        params.chatId,
-        initialization.workspaceId,
-        params.workspaceId,
-      );
+      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const {
@@ -1002,23 +881,14 @@ export const llmClient = {
     let loadHost: { loadMonitor?: LoadMonitorState } = initialization;
     const noteModelBecameReady = () => endLoadMonitor(loadHost, streamId, true);
     const generationCancelRequested = () =>
-      initialization.cancelRequested ||
-      active.get(streamId)?.cancelRequested === true;
+      initialization.cancelRequested || active.get(streamId)?.cancelRequested === true;
     const persistAssistant = async (
       content: string,
       reasoning: string,
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
     ) => {
-      const subagents = subagentMessageReference(
-        streamId,
-        subagentSupervisor?.snapshots() ?? [],
-      );
-      if (
-        !content.trim() &&
-        !reasoning.trim() &&
-        finalTimeline.steps.length === 0 &&
-        !subagents
-      ) {
+      const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
+      if (!content.trim() && !reasoning.trim() && finalTimeline.steps.length === 0 && !subagents) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
       try {
@@ -1032,9 +902,7 @@ export const llmClient = {
             content,
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
-            pi: lastAssistantMessage
-              ? storedPiAssistantMessage(lastAssistantMessage)
-              : undefined,
+            pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
             timeline: finalTimeline.steps.length ? finalTimeline : undefined,
             subagents,
           },
@@ -1049,11 +917,7 @@ export const llmClient = {
           .find((message) => message.role === "assistant")?.id;
         return { chat, error: undefined, messageId };
       } catch (error) {
-        logger.error(
-          "pi",
-          `Could not persist response for stream ${streamId}`,
-          error,
-        );
+        logger.error("pi", `Could not persist response for stream ${streamId}`, error);
         return {
           chat: undefined,
           error: "local storage failed",
@@ -1063,31 +927,24 @@ export const llmClient = {
     };
     let full = "";
     let reasoning = "";
-    let errored: string | null = null;
-    let aborted = false;
+    let lastAssistantMessage: AssistantMessage | undefined;
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
-    let pendingPiMessages: AgentMessage[] = [];
-    let lastAssistantMessage: AssistantMessage | undefined;
     let emergencyContextReduction = false;
     let activeCompactionStepId: string | undefined;
-    let generationJournalLeafId: string | null = null;
-    let piSession:
-      Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
-    let compaction: PiCompactionCoordinator | undefined;
+    let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
+    let currentPromptMessage: AgentMessage | undefined;
+    let journalContentOverrides: ReadonlyMap<string, string> = new Map();
     let piJournalHealthy = true;
-    let flushPiMessages: () => Promise<boolean> = async () =>
-      pendingPiMessages.length === 0;
     try {
       const runtimeExtensions = piAgentRuntimeExtensions.snapshot();
-      const toolsWithRuntimeContributions =
-        resolvePiAgentRuntimeStaticContributions(
-          "",
-          tools,
-          runtimeExtensions,
-        ).tools;
+      const toolsWithRuntimeContributions = resolvePiAgentRuntimeStaticContributions(
+        "",
+        tools,
+        runtimeExtensions,
+      ).tools;
       const assistantMcpInventory =
         authoritativeMode === "assistant"
           ? await configStore
@@ -1106,48 +963,35 @@ export const llmClient = {
               truncated: false,
             };
       const baseSystemPrompt =
-        authoritativeMode === "assistant" ||
-        authoritativeMode === "assistant-unattended"
+        authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
               settingsSections: SETTINGS_SECTIONS,
               settingsPermission: assistantSettingsPermission,
-              availableTools: toolsWithRuntimeContributions.map(
-                (tool) => tool.name,
-              ),
+              availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
               mcpServerTotal: assistantMcpInventory.totalEnabledServers,
               mcpInventoryTruncated: assistantMcpInventory.truncated,
-              mcpOmittedInvalidIdentities:
-                assistantMcpInventory.omittedInvalidIdentities,
+              mcpOmittedInvalidIdentities: assistantMcpInventory.omittedInvalidIdentities,
               unattended: authoritativeMode === "assistant-unattended",
             })
           : authoritativeMode === "assistant-automation"
             ? withUnattendedAssistantContract(
-                await buildSystemPrompt(
-                  folderPath,
-                  git.branch,
-                  permission,
-                  false,
-                  false,
-                ),
+                await buildSystemPrompt(folderPath, git.branch, permission, false, false),
               )
             : await buildSystemPrompt(
                 folderPath,
                 git.branch,
                 permission,
-                toolsWithRuntimeContributions.some(
-                  (tool) => tool.name === "subagent",
-                ),
+                toolsWithRuntimeContributions.some((tool) => tool.name === "subagent"),
                 true,
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
               );
-      const { systemPrompt, tools: runtimeTools } =
-        resolvePiAgentRuntimeStaticContributions(
-          baseSystemPrompt,
-          tools,
-          runtimeExtensions,
-        );
+      const { systemPrompt, tools: runtimeTools } = resolvePiAgentRuntimeStaticContributions(
+        baseSystemPrompt,
+        tools,
+        runtimeExtensions,
+      );
       assertGenerationContextCapacity({
         contextWindow: model.contextWindow,
         systemPrompt,
@@ -1157,13 +1001,9 @@ export const llmClient = {
       const onCompactionEvent = (event: PiCompactionEvent) => {
         if (event.type === "start") {
           activeCompactionStepId = timeline.compactionStarted();
-          logger.info(
-            "pi",
-            `Started ${event.reason} compaction for stream ${streamId}.`,
-            {
-              model: model.id,
-            },
-          );
+          logger.info("pi", `Started ${event.reason} compaction for stream ${streamId}.`, {
+            model: model.id,
+          });
           return;
         }
         if (activeCompactionStepId) {
@@ -1173,25 +1013,17 @@ export const llmClient = {
           );
           activeCompactionStepId = undefined;
         }
-        logger.info(
-          "pi",
-          `Finished ${event.reason} compaction for stream ${streamId}.`,
-          {
-            aborted: event.aborted,
-            tokensBefore: event.result?.tokensBefore,
-            estimatedTokensAfter: event.result?.estimatedTokensAfter,
-            willRetry: event.willRetry,
-          },
-        );
+        logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
+          aborted: event.aborted,
+          tokensBefore: event.result?.tokensBefore,
+          estimatedTokensAfter: event.result?.estimatedTokensAfter,
+          willRetry: event.willRetry,
+        });
         if (event.errorMessage) {
-          logger.warn(
-            "pi",
-            `Compaction failed for stream ${streamId}: ${event.errorMessage}`,
-          );
+          logger.warn("pi", `Compaction failed for stream ${streamId}: ${event.errorMessage}`);
         }
       };
-      compaction = new PiCompactionCoordinator({
-        session: piSession,
+      const compactionOptions = {
         models: createPiCompactionModels(runtime, (message) =>
           usageStore.record(
             assistantUsageRecord({
@@ -1206,105 +1038,37 @@ export const llmClient = {
         thinkingLevel,
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
-      });
-      const promptJournal = piSession;
-      flushPiMessages = async (): Promise<boolean> => {
-        if (pendingPiMessages.length === 0) return true;
-        const batch = pendingPiMessages;
-        pendingPiMessages = [];
-        try {
-          await appendPiMessages(promptJournal, batch);
-          return true;
-        } catch (error) {
-          piJournalHealthy = false;
-          pendingPiMessages = [...batch, ...pendingPiMessages];
-          logger.error(
-            "pi",
-            `Could not append Pi session messages for stream ${streamId}.`,
-            error,
-          );
-          return false;
-        }
       };
+      const promptJournal = piSession;
 
       const currentUser = [...authoritativeChat.messages]
         .reverse()
         .find((message) => message.role === "user");
       const priorVisibleMessages = currentUser
-        ? authoritativeChat.messages.filter(
-            (message) => message.id !== currentUser.id,
-          )
+        ? authoritativeChat.messages.filter((message) => message.id !== currentUser.id)
         : authoritativeChat.messages;
-      await syncChatMessagesToPiSession(
-        piSession,
-        priorVisibleMessages,
-        model,
-        supportsImages,
-      );
-      const prePromptContext = await piSession.buildContext();
-      const previousAssistant = [...prePromptContext.messages]
-        .reverse()
-        .find(
-          (message): message is AssistantMessage =>
-            message.role === "assistant",
-        );
-      let prePromptMessages = prePromptContext.messages;
-      if (previousAssistant) {
-        const prePromptCompaction = await compaction.check(previousAssistant, {
-          includeAborted: true,
-        });
-        if (prePromptCompaction.messages) {
-          prePromptMessages = [...prePromptCompaction.messages];
-          const trailing = prePromptMessages[prePromptMessages.length - 1];
-          if (
-            prePromptCompaction.shouldRetry ||
-            (trailing?.role === "assistant" && trailing.stopReason === "error")
-          ) {
-            prePromptMessages.pop();
-          }
-        }
-      }
-      let currentPromptMessages: AgentMessage[] | undefined;
+      const contentOverrides = new Map<string, string>();
       if (currentUser) {
-        const contentOverrides = new Map<string, string>();
         if (
           initialization.skillInvocation?.userMessageId === currentUser.id &&
           initialization.skillPrompt
         ) {
           contentOverrides.set(currentUser.id, initialization.skillPrompt);
         }
-        await syncChatMessagesToPiSession(
-          piSession,
-          authoritativeChat.messages,
-          model,
-          supportsImages,
-          contentOverrides,
-        );
-        compaction.beginPrompt();
-        const currentPromptCompaction = await compaction.checkContextPressure();
-        if (currentPromptCompaction.messages) {
-          currentPromptMessages = [...currentPromptCompaction.messages];
-        }
       }
-      const initialMessages =
-        currentPromptMessages ??
-        (currentUser
-          ? [
-              ...prePromptMessages,
-              chatMessageToPiMessage(
-                currentUser,
-                model,
-                supportsImages,
-                initialization.skillInvocation?.userMessageId === currentUser.id
-                  ? initialization.skillPrompt
-                  : undefined,
-              ),
-            ]
-          : (await piSession.buildContext()).messages);
-      generationJournalLeafId = await piSession.getLeafId();
+      journalContentOverrides = contentOverrides;
+      await syncChatMessagesToPiSession(promptJournal, priorVisibleMessages, model, supportsImages);
+      currentPromptMessage = currentUser
+        ? chatMessageToPiMessage(
+            currentUser,
+            model,
+            supportsImages,
+            contentOverrides.get(currentUser.id),
+          )
+        : undefined;
+      const initialMessages = (await promptJournal.buildContext()).messages;
       initialization.skillInvocation = undefined;
       initialization.skillPrompt = undefined;
-      if (!currentUser) compaction.beginPrompt();
       candidate = new PiAgentRuntimeHarness({
         extensions: runtimeExtensions,
         staticContributionsApplied: true,
@@ -1337,23 +1101,49 @@ export const llmClient = {
           },
           (result) => {
             emergencyContextReduction = true;
-            logger.info(
-              "pi",
-              `Compacted generation context for stream ${streamId}.`,
-              {
-                model: model.id,
-                estimatedTokensBefore: result.estimatedTokensBefore,
-                estimatedTokensAfter: result.estimatedTokensAfter,
-                inputBudgetTokens: result.inputBudgetTokens,
-                truncatedToolResults: result.truncatedToolResults,
-                compactedToolResults: result.compactedToolResults,
-                removedHistoryMessages: result.removedHistoryMessages,
-                removedCurrentTurnMessages: result.removedCurrentTurnMessages,
-                usedContextFallback: result.usedContextFallback,
-              },
-            );
+            logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
+              model: model.id,
+              estimatedTokensBefore: result.estimatedTokensBefore,
+              estimatedTokensAfter: result.estimatedTokensAfter,
+              inputBudgetTokens: result.inputBudgetTokens,
+              truncatedToolResults: result.truncatedToolResults,
+              compactedToolResults: result.compactedToolResults,
+              removedHistoryMessages: result.removedHistoryMessages,
+              removedCurrentTurnMessages: result.removedCurrentTurnMessages,
+              usedContextFallback: result.usedContextFallback,
+            });
           },
         ),
+        durability: {
+          session: promptJournal,
+          compaction: compactionOptions,
+          signal: initialization.controller.signal,
+          ...(currentUser
+            ? {
+                appendInput: async () => {
+                  await syncChatMessagesToPiSession(
+                    promptJournal,
+                    [currentUser],
+                    model,
+                    supportsImages,
+                    contentOverrides,
+                  );
+                },
+              }
+            : {}),
+          forcePostRunCompaction: () => emergencyContextReduction,
+          clearForcePostRunCompaction: () => {
+            emergencyContextReduction = false;
+          },
+          onJournalError: (error) => {
+            piJournalHealthy = false;
+            logger.error(
+              "pi",
+              `Could not append Pi session messages for stream ${streamId}.`,
+              error,
+            );
+          },
+        },
         initialState: {
           systemPrompt,
           model,
@@ -1379,43 +1169,16 @@ export const llmClient = {
               changed = true;
             }
           }
-          if (!(await flushPiMessages())) {
-            return changed ? { context: nextContext } : undefined;
-          }
-          // Tool results are now durable, so estimate the complete journal
-          // rather than the preceding assistant usage alone.
-          const immediate = needsImmediatePiCompaction(
-            toolResults,
-            model.contextWindow,
-          );
-          const result = await compaction?.checkContextPressure({
-            forceThreshold: immediate,
-            sealCurrentTurnIfNeeded: immediate,
-          });
-          emergencyContextReduction = false;
-          if (result?.messages) {
-            // Pi's loop uses the returned context for this run; explicitly
-            // install the checkpoint for the Agent's next prompt too.
-            if (candidate) candidate.state.messages = [...result.messages];
-            return {
-              context: { ...nextContext, messages: [...result.messages] },
-            };
-          }
           return changed ? { context: nextContext } : undefined;
         },
         // Computer Use mutations always pause. Folder mutations pause in "ask" mode.
         beforeToolCall: async (context, signal) => {
-          timeline.toolStarted(
-            context.toolCall.id,
-            context.toolCall.name,
-            context.args,
-          );
+          timeline.toolStarted(context.toolCall.id, context.toolCall.name, context.args);
           let summary: string;
           let approvalDetails: ToolApprovalDetails | undefined;
           let computerUseApproval: ComputerUseApprovalDescriptor | undefined;
           let attendedScheduleApproval = false;
-          let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] =
-            [];
+          let approvedScheduleMcpBindings: import("./types.js").ScheduledMcpServerBinding[] = [];
           if (context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             if (!computerUse) {
               deniedToolCalls.add(context.toolCall.id);
@@ -1442,22 +1205,17 @@ export const llmClient = {
               return {
                 block: true,
                 reason:
-                  error instanceof Error
-                    ? error.message
-                    : "Computer Use rejected this action.",
+                  error instanceof Error ? error.message : "Computer Use rejected this action.",
               };
             }
           } else {
             const createScheduleApproval =
               context.toolCall.name === SCHEDULE_TOOL_NAME &&
               scheduleToolRequiresApproval(context.args);
-            const editScheduleApproval =
-              context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
-            const scheduleApproval =
-              createScheduleApproval || editScheduleApproval;
+            const editScheduleApproval = context.toolCall.name === EDIT_AUTOMATION_TOOL_NAME;
+            const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
-              permission === "ask" &&
-              APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+              permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
             if (!scheduleApproval && !workspaceApproval) {
               timeline.toolRunning(context.toolCall.id);
@@ -1474,12 +1232,11 @@ export const llmClient = {
                   canonicalArgs.permission = proposal.input.permission;
                   canonicalArgs.mcpServerIds = proposal.input.mcpServerIds;
                 }
-                const [project, mcpResolution, liveSettings] =
-                  await Promise.all([
-                    resolveAssistantScheduleProject(proposal),
-                    resolveAssistantScheduleMcpServers(proposal),
-                    configStore.getSettings(),
-                  ]);
+                const [project, mcpResolution, liveSettings] = await Promise.all([
+                  resolveAssistantScheduleProject(proposal),
+                  resolveAssistantScheduleMcpServers(proposal),
+                  configStore.getSettings(),
+                ]);
                 if (signal?.aborted) {
                   throw new Error("Automation change was cancelled.");
                 }
@@ -1492,8 +1249,7 @@ export const llmClient = {
                   ...approvalModelSelection,
                   // Consent reflects the current scheduler state at the point
                   // the prompt is published, not the generation-start snapshot.
-                  schedulerEnabled:
-                    liveSettings.scheduledTasksEnabled !== false,
+                  schedulerEnabled: liveSettings.scheduledTasksEnabled !== false,
                 };
               } catch (error) {
                 deniedToolCalls.add(context.toolCall.id);
@@ -1517,8 +1273,7 @@ export const llmClient = {
           const allowed = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
-              if (!toolCallId)
-                throw new Error("The tool approval step was not initialized.");
+              if (!toolCallId) throw new Error("The tool approval step was not initialized.");
               return {
                 streamId,
                 toolCallId,
@@ -1530,25 +1285,15 @@ export const llmClient = {
             signal,
             owner.documentId,
           );
-          if (!allowed && !signal?.aborted)
-            deniedToolCalls.add(context.toolCall.id);
+          if (!allowed && !signal?.aborted) deniedToolCalls.add(context.toolCall.id);
           if (allowed && attendedScheduleApproval) {
-            attachAssistantScheduleMcpApproval(
-              context.args,
-              approvedScheduleMcpBindings,
-            );
+            attachAssistantScheduleMcpApproval(context.args, approvedScheduleMcpBindings);
           }
           if (allowed) timeline.toolRunning(context.toolCall.id);
-          else if (!signal?.aborted)
-            timeline.toolFinished(context.toolCall.id, "blocked");
-          if (
-            allowed &&
-            computerUse &&
-            context.toolCall.name === COMPUTER_USE_TOOL_NAME
-          ) {
+          else if (!signal?.aborted) timeline.toolFinished(context.toolCall.id, "blocked");
+          if (allowed && computerUse && context.toolCall.name === COMPUTER_USE_TOOL_NAME) {
             try {
-              if (!computerUseApproval)
-                throw new Error("Computer Use approval was not prepared.");
+              if (!computerUseApproval) throw new Error("Computer Use approval was not prepared.");
               computerUse.authorize(
                 context.toolCall.id,
                 context.args as ComputerUseArgs,
@@ -1559,10 +1304,7 @@ export const llmClient = {
               timeline.toolFinished(context.toolCall.id, "blocked");
               return {
                 block: true,
-                reason:
-                  error instanceof Error
-                    ? error.message
-                    : "Computer Use approval expired.",
+                reason: error instanceof Error ? error.message : "Computer Use approval expired.",
               };
             }
           }
@@ -1600,10 +1342,9 @@ export const llmClient = {
               noteModelBecameReady();
             } else if (e.type === "thinking_end") timeline.thinkingEnded();
             if (e.type === "text_delta") {
-              const separator =
-                !currentAssistantTurnHadVisibleText
-                  ? assistantTurnTextSeparator(full, e.delta)
-                  : "";
+              const separator = !currentAssistantTurnHadVisibleText
+                ? assistantTurnTextSeparator(full, e.delta)
+                : "";
               const delta = `${separator}${e.delta}`;
               full += delta;
               if (e.delta.trim()) currentAssistantTurnHadVisibleText = true;
@@ -1615,9 +1356,7 @@ export const llmClient = {
               });
             } else if (e.type === "thinking_delta" && exposeReasoning) {
               const separator =
-                !currentAssistantTurnHadReasoningDelta && reasoning.trim()
-                  ? "\n\n"
-                  : "";
+                !currentAssistantTurnHadReasoningDelta && reasoning.trim() ? "\n\n" : "";
               const delta = `${separator}${e.delta}`;
               reasoning += delta;
               currentAssistantTurnHadReasoningDelta = true;
@@ -1626,29 +1365,29 @@ export const llmClient = {
                 streamId,
                 delta,
               });
-            } else if (e.type === "error" && e.reason === "error") {
-              errored = e.error.errorMessage ?? "Generation failed.";
             }
             break;
           }
           case "message_end": {
-            pendingPiMessages.push(event.message);
             if (event.message.role === "assistant") {
               lastAssistantMessage = event.message;
-              await usageStore.record(
-                assistantUsageRecord({
-                  message: event.message,
-                  provider: runtime.provider,
-                  model,
-                  source: options.usageSource ?? "chat",
-                }),
-              );
+              try {
+                await usageStore.record(
+                  assistantUsageRecord({
+                    message: event.message,
+                    provider: runtime.provider,
+                    model,
+                    source: options.usageSource ?? "chat",
+                  }),
+                );
+              } catch (error) {
+                logger.warn(
+                  "usage",
+                  `Could not record provider usage for stream ${streamId}.`,
+                  error,
+                );
+              }
             }
-            const terminalError = terminalGenerationError(event.message);
-            if (terminalError) errored = terminalError;
-            const lengthError = terminalGenerationLengthError(event.message);
-            if (lengthError) errored = lengthError;
-            if (terminalGenerationWasAborted(event.message)) aborted = true;
             const projection = reconcileTerminalAssistantProjection(
               { full, reasoning },
               currentAssistantTurnStart,
@@ -1678,10 +1417,7 @@ export const llmClient = {
                 });
               }
             }
-            timeline.reconcileContentOffset(
-              currentAssistantTurnStart.full,
-              full.length,
-            );
+            timeline.reconcileContentOffset(currentAssistantTurnStart.full, full.length);
             break;
           }
           case "tool_execution_start":
@@ -1708,16 +1444,9 @@ export const llmClient = {
                 (item: { type?: unknown; text?: unknown }) =>
                   item.type === "text" && typeof item.text === "string",
               )?.text;
-              logger.warn(
-                "pi",
-                `Attended schedule proposal failed for stream ${streamId}.`,
-                {
-                  reason:
-                    typeof reason === "string"
-                      ? reason.slice(0, 320)
-                      : "Unknown error.",
-                },
-              );
+              logger.warn("pi", `Attended schedule proposal failed for stream ${streamId}.`, {
+                reason: typeof reason === "string" ? reason.slice(0, 320) : "Unknown error.",
+              });
             }
             timeline.toolFinished(
               event.toolCallId,
@@ -1745,106 +1474,129 @@ export const llmClient = {
       if (candidate) resetGenerationAgent(candidate, streamId);
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
-      if (
-        initialization.cancelRequested ||
-        initialization.controller.signal.aborted
-      ) {
+      if (initialization.cancelRequested || initialization.controller.signal.aborted) {
         sendGeneration(streamId, "chat:done", { streamId, content: "" });
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(
-          params.chatId,
-          initialization.workspaceId,
-          params.workspaceId,
-        );
+        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(
-        params.chatId,
-        initialization.workspaceId,
-        params.workspaceId,
-      );
+      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const agent = candidate;
-    if (!agent || !piSession || !compaction) {
+    if (!agent || !piSession) {
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(
-        params.chatId,
-        initialization.workspaceId,
-        params.workspaceId,
-      );
+      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
-    const piCoordinator = compaction;
-    const piTurnStartLeafId = generationJournalLeafId;
-    let generationTurnTransactionId: string | undefined;
-    try {
-      generationTurnTransactionId = await beginPiGenerationTurn(piJournal);
-    } catch (error) {
+    let piTurnLease: PiVisibleTurnLease | undefined;
+    let pendingPiDurabilitySettlement: Promise<void> | undefined;
+    let reconcileAbandonedVisibleAssistant = false;
+    let quarantineSessionFailureWithoutLease = false;
+    const quarantineFailedPiRecovery = (message: string, error: unknown) => {
       piJournalHealthy = false;
-      logger.warn(
-        "pi",
-        `Could not begin the crash-recovery envelope for stream ${streamId}.`,
-        error,
+      logger.error("pi", message, error);
+      piCompactionSessionStore.quarantineChatUntilRecovered(
+        params.chatId,
+        Promise.reject(new Error("Pi journal recovery requires application restart.")),
       );
-    }
+    };
     const finalizePiTurnPersistence = async (persisted: {
       chat: Chat | undefined;
       error: string | undefined;
       messageId: string | undefined;
     }) => {
+      const detachedSettlement = pendingPiDurabilitySettlement;
+      if (detachedSettlement) {
+        piJournalHealthy = false;
+        pendingPiDurabilitySettlement = undefined;
+        const recovery = detachedSettlement.then(async () => {
+          const detachedLease = piTurnLease;
+          if (!detachedLease) return;
+          await detachedLease.rollback();
+          if (persisted.chat) {
+            const messagesBeforeAssistant = persisted.chat.messages.filter(
+              (message) => message.id !== persisted.messageId,
+            );
+            await syncChatMessagesToPiSession(
+              piJournal,
+              messagesBeforeAssistant,
+              model,
+              supportsImages,
+              journalContentOverrides,
+            );
+          }
+          await agent.reconcileDurableEvidenceAfterRollback();
+          const visibleAssistant = persisted.chat?.messages.find(
+            (message) => message.id === persisted.messageId,
+          );
+          if (visibleAssistant) {
+            await syncChatMessagesToPiSession(piJournal, [visibleAssistant], model, supportsImages);
+          }
+        });
+        piCompactionSessionStore.quarantineChatUntilRecovered(params.chatId, recovery);
+        return;
+      }
+      const turnLease = piTurnLease;
+      if (!turnLease) {
+        piJournalHealthy = false;
+        if (quarantineSessionFailureWithoutLease) {
+          quarantineFailedPiRecovery(
+            `A pre-lease Pi session failure quarantined stream ${streamId}.`,
+            new Error("The Pi session failed before its visible-turn lease opened."),
+          );
+        }
+        return;
+      }
       if (persisted.error) {
         try {
-          await piJournal.moveTo(piTurnStartLeafId);
+          await turnLease.rollback();
+          await agent.reconcileDurableEvidenceAfterRollback();
         } catch (error) {
-          logger.error(
-            "pi",
+          quarantineFailedPiRecovery(
             `Could not roll back an unpersisted Pi turn for stream ${streamId}.`,
             error,
           );
         }
         piJournalHealthy = false;
-        generationTurnTransactionId = undefined;
         return;
       }
       if (!persisted.messageId) {
-        await piJournal.moveTo(piTurnStartLeafId).catch(() => undefined);
-        generationTurnTransactionId = undefined;
+        try {
+          await turnLease.rollback();
+        } catch (error) {
+          quarantineFailedPiRecovery(
+            `Could not roll back an assistant-less Pi turn for stream ${streamId}.`,
+            error,
+          );
+        }
         return;
       }
       const reconcileVisibleAssistant = async () => {
-        await piJournal.moveTo(piTurnStartLeafId);
+        await turnLease.rollback();
+        await agent.reconcileDurableEvidenceAfterRollback();
         const visible = persisted.chat?.messages.find(
           (message) => message.id === persisted.messageId,
         );
         if (!visible) {
-          throw new Error(
-            "The persisted assistant could not be found for Pi journal recovery.",
-          );
+          throw new Error("The persisted assistant could not be found for Pi journal recovery.");
         }
-        await syncChatMessagesToPiSession(
-          piJournal,
-          [visible],
-          model,
-          supportsImages,
-        );
-        generationTurnTransactionId = undefined;
+        await syncChatMessagesToPiSession(piJournal, [visible], model, supportsImages);
       };
       if (!piJournalHealthy) {
         try {
           await reconcileVisibleAssistant();
         } catch (recoveryError) {
-          logger.error(
-            "pi",
+          quarantineFailedPiRecovery(
             `Could not reconcile the persisted assistant after a Pi batch failure for stream ${streamId}.`,
             recoveryError,
           );
@@ -1852,14 +1604,21 @@ export const llmClient = {
         return;
       }
       try {
-        await appendPiMessages(piJournal, [], persisted.messageId);
-        if (generationTurnTransactionId) {
-          await commitPiGenerationTurn(
-            piJournal,
-            generationTurnTransactionId,
+        if (reconcileAbandonedVisibleAssistant) {
+          const visible = persisted.chat?.messages.find(
+            (message) => message.id === persisted.messageId,
           );
-          generationTurnTransactionId = undefined;
+          if (!visible) {
+            throw new Error("The persisted assistant could not be found before Pi journal commit.");
+          }
+          // Recovery removed this failed Pi message. Reconcile only its safe
+          // visible partial; healthy tool loops already have canonical
+          // multi-message history and must not gain an aggregate duplicate.
+          await syncChatMessagesToPiSession(piJournal, [visible], model, supportsImages);
         }
+        await turnLease.commit(persisted.messageId, {
+          markerAlreadyPersisted: reconcileAbandonedVisibleAssistant,
+        });
       } catch (error) {
         logger.warn(
           "pi",
@@ -1869,61 +1628,15 @@ export const llmClient = {
         try {
           await reconcileVisibleAssistant();
         } catch (recoveryError) {
-          logger.error(
-            "pi",
+          quarantineFailedPiRecovery(
             `Could not reconcile the persisted assistant after a Pi marker failure for stream ${streamId}.`,
             recoveryError,
           );
         }
       }
     };
-    const runWithPiCompaction = async () => {
-      for (;;) {
-        const fullLengthBeforeAttempt = full.length;
-        const reasoningLengthBeforeAttempt = reasoning.length;
-        lastAssistantMessage = undefined;
-        try {
-          await agent.continueFromDurableTail();
-        } catch (error) {
-          await flushPiMessages();
-          throw error;
-        }
-        const journalFlushed = await flushPiMessages();
-        if (!journalFlushed) return;
-        const completedAssistant = lastAssistantMessage as
-          AssistantMessage | undefined;
-        if (!completedAssistant) return;
-        const result = await piCoordinator.check(completedAssistant, {
-          forceThreshold: emergencyContextReduction,
-        });
-        emergencyContextReduction = false;
-        if (result.errorMessage && completedAssistant.stopReason === "error") {
-          errored = result.errorMessage;
-        }
-        if (!result.messages) return;
-
-        agent.state.messages = [...result.messages];
-        if (!result.shouldRetry) return;
-        full = full.slice(0, fullLengthBeforeAttempt);
-        reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
-        timeline.rewindContentOffset(full.length);
-        errored = null;
-        aborted = false;
-        sendGeneration(streamId, "chat:delta", {
-          streamId,
-          delta: "",
-          reset: true,
-        });
-        await waitForAbortableDelay(
-          result.retryDelayMs ?? 0,
-          initialization.controller.signal,
-        );
-      }
-    };
-
     const activeGeneration: ActiveGeneration = {
       agent,
-      compaction: piCoordinator,
       chatId: params.chatId,
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
@@ -1942,6 +1655,13 @@ export const llmClient = {
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
+      await piTurnLease?.rollback().catch((error) => {
+        logger.error(
+          "pi",
+          `Could not roll back the cancelled Pi turn for stream ${streamId}.`,
+          error,
+        );
+      });
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       await computerUse?.close().catch(() => {});
@@ -1949,34 +1669,73 @@ export const llmClient = {
       releaseGenerationSkillReservation(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
-      broadcastChatSettled(
-        params.chatId,
-        activeGeneration.workspaceId,
-        params.workspaceId,
-      );
+      broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
       return false;
     }
 
     const completion = (async () => {
       try {
-        await runWithPiCompaction();
-        const wasCancelled = activeGeneration.cancelRequested;
-        const finalError = wasCancelled
-          ? null
-          : (terminalGenerationInterruptionError(aborted, wasCancelled) ??
-            errored ??
-            agent.state.errorMessage?.trim() ??
-            null);
+        const fullLengthBeforeAttempt = full.length;
+        const reasoningLengthBeforeAttempt = reasoning.length;
+        const runtimeOutcome = await agent.runManaged(
+          currentPromptMessage
+            ? { kind: "append-and-run", message: currentPromptMessage }
+            : { kind: "continue-durable-tail" },
+          {
+            beforeDurableTurn: async (signal) => {
+              const lease = await beginPiVisibleTurnLease(piJournal, (error) => {
+                logger.warn(
+                  "pi",
+                  `Could not begin the crash-recovery envelope for stream ${streamId}.`,
+                  error,
+                );
+              });
+              if (signal.aborted) {
+                await lease.rollback();
+                return;
+              }
+              piTurnLease = lease;
+              if (!lease.started) {
+                piJournalHealthy = false;
+                throw new Error("The Pi visible-turn transaction did not start.");
+              }
+            },
+            onRetry: () => {
+              full = full.slice(0, fullLengthBeforeAttempt);
+              reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
+              timeline.rewindContentOffset(full.length);
+              sendGeneration(streamId, "chat:delta", {
+                streamId,
+                delta: "",
+                reset: true,
+              });
+            },
+          },
+        );
+        pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
+        reconcileAbandonedVisibleAssistant = runtimeOutcome.finalMessageWasAbandoned === true;
+        quarantineSessionFailureWithoutLease =
+          runtimeOutcome.kind === "host_failed" && runtimeOutcome.faultKind === "session";
+        lastAssistantMessage = runtimeOutcome.finalMessage ?? lastAssistantMessage;
+        const wasCancelled =
+          runtimeOutcome.kind === "app_cancelled" || activeGeneration.cancelRequested;
+        const finalError =
+          runtimeOutcome.kind === "provider_failed"
+            ? runtimeOutcome.reason === "output-limit"
+              ? "The model reached its output limit."
+              : runtimeOutcome.reason === "context-overflow"
+                ? "The model context was too large to recover safely."
+                : runtimeOutcome.reason === "compaction-failed"
+                  ? "The model context could not be compacted safely."
+                  : runtimeOutcome.reason === "interrupted"
+                    ? "The provider interrupted the response."
+                    : "The model could not complete this response."
+            : runtimeOutcome.kind === "host_failed"
+              ? "The local agent runtime could not complete this response safely."
+              : null;
         if (finalError) {
-          const finalTimeline = attachClaimCheck(
-            timeline.finish("failed"),
-            full,
-          );
-          const persisted = await persistAssistant(
-            full,
-            reasoning,
-            finalTimeline,
-          );
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+          const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
             streamId,
@@ -1989,15 +1748,8 @@ export const llmClient = {
             chat: chatForRenderer(persisted.chat ?? null) ?? undefined,
           });
         } else if (!full.trim() && !wasCancelled) {
-          const finalTimeline = attachClaimCheck(
-            timeline.finish("failed"),
-            full,
-          );
-          const persisted = await persistAssistant(
-            full,
-            reasoning,
-            finalTimeline,
-          );
+          const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
+          const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
             streamId,
@@ -2014,11 +1766,7 @@ export const llmClient = {
             timeline.finish(wasCancelled ? "cancelled" : "completed"),
             full,
           );
-          const persisted = await persistAssistant(
-            full,
-            reasoning,
-            finalTimeline,
-          );
+          const persisted = await persistAssistant(full, reasoning, finalTimeline);
           await finalizePiTurnPersistence(persisted);
           if (persisted.error) {
             sendGeneration(streamId, "chat:error", {
@@ -2039,20 +1787,16 @@ export const llmClient = {
           }
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        pendingPiDurabilitySettlement ??= agent.pendingDurabilitySettlement();
         logger.error("pi", `Generation failed for stream ${streamId}`, error);
         const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
-        const persisted = await persistAssistant(
-          full,
-          reasoning,
-          finalTimeline,
-        );
+        const persisted = await persistAssistant(full, reasoning, finalTimeline);
         await finalizePiTurnPersistence(persisted);
         sendGeneration(streamId, "chat:error", {
           streamId,
           message: persisted.error
-            ? `${message} The partial response could not be saved: ${persisted.error}`
-            : message,
+            ? `The local agent runtime failed, and the partial response could not be saved: ${persisted.error}`
+            : "The local agent runtime failed.",
           content: full || undefined,
           reasoning: reasoning || undefined,
           timeline: finalTimeline,
@@ -2067,11 +1811,7 @@ export const llmClient = {
           releaseGenerationSkillReservation(activeGeneration);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
-          broadcastChatSettled(
-            params.chatId,
-            activeGeneration.workspaceId,
-            params.workspaceId,
-          );
+          broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
         }
       }
     })();
@@ -2081,11 +1821,7 @@ export const llmClient = {
   },
 
   /** Resolve a pending tool-approval request from the UI. */
-  approve(
-    approvalId: string,
-    decision: ApprovalDecision,
-    ownerDocumentId?: string,
-  ): boolean {
+  approve(approvalId: string, decision: ApprovalDecision, ownerDocumentId?: string): boolean {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
   },
 
@@ -2093,23 +1829,17 @@ export const llmClient = {
     const initialization = initializing.get(streamId);
     const generation = active.get(streamId);
     const owner = initialization?.owner ?? generation?.owner;
-    if (
-      !owner ||
-      (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)
-    ) {
+    if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
     if (initialization) {
       initialization.cancelRequested = true;
-      initialization.controller.abort(
-        new Error("Chat initialization cancelled."),
-      );
+      initialization.controller.abort(new Error("Chat initialization cancelled."));
       endLoadMonitor(initialization, streamId, false);
       void initialization.computerUse?.close();
     }
     if (generation) {
       generation.cancelRequested = true;
-      generation.compaction.abort();
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       void generation.computerUse?.close();
@@ -2120,25 +1850,17 @@ export const llmClient = {
   },
 
   isChatBusy(chatId: string): boolean {
-    return (
-      chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId)
-    );
+    return chatTurnAdmission.isAdmitted(chatId) || chatHasGenerationOwnership(chatId);
   },
 
   /** Detect only orphaned renderer ownership; normal visible generations never delay reads. */
   isChatOwnedByInactiveRenderer(chatId: string): boolean {
     return (
       [...initializing.values()].some(
-        (entry) =>
-          entry.chatId === chatId &&
-          entry.owner.id !== 0 &&
-          entry.owner.isDestroyed(),
+        (entry) => entry.chatId === chatId && entry.owner.id !== 0 && entry.owner.isDestroyed(),
       ) ||
       [...active.values()].some(
-        (entry) =>
-          entry.chatId === chatId &&
-          entry.owner.id !== 0 &&
-          entry.owner.isDestroyed(),
+        (entry) => entry.chatId === chatId && entry.owner.id !== 0 && entry.owner.isDestroyed(),
       )
     );
   },
@@ -2152,9 +1874,7 @@ export const llmClient = {
       const completions = [...active.values()]
         .filter((entry) => entry.chatId === chatId && entry.completion)
         .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) =>
-        setTimeout(resolve, Math.min(25, remaining)),
-      );
+      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
       if (completions.length > 0) {
         await Promise.race([Promise.allSettled(completions), pause]);
       } else {
@@ -2182,9 +1902,7 @@ export const llmClient = {
       const completions = [...active.values()]
         .filter((entry) => entry.chatId === chatId && entry.completion)
         .map((entry) => entry.completion!);
-      const pause = new Promise<void>((resolve) =>
-        setTimeout(resolve, Math.min(25, remaining)),
-      );
+      const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
       if (completions.length > 0) {
         await Promise.race([Promise.allSettled(completions), pause]);
       } else {
@@ -2201,10 +1919,7 @@ export const llmClient = {
   },
 
   beginComputerUseSettingChange(chatId: string): (() => void) | null {
-    return chatComputerUseMutationGate.tryBegin(
-      chatId,
-      this.isChatBusy(chatId),
-    );
+    return chatComputerUseMutationGate.tryBegin(chatId, this.isChatBusy(chatId));
   },
 
   beginChatWorkspaceChange(chatId: string): (() => void) | null {
@@ -2223,11 +1938,7 @@ export const llmClient = {
   },
 
   /** Claim one append-to-generation turn before its first persistence await. */
-  beginChatTurn(
-    chatId: string,
-    turnId: string,
-    ownerId: string,
-  ): ChatTurnLease | null {
+  beginChatTurn(chatId: string, turnId: string, ownerId: string): ChatTurnLease | null {
     if (
       !turnId ||
       !ownerId ||
@@ -2239,12 +1950,7 @@ export const llmClient = {
     ) {
       return null;
     }
-    return chatTurnAdmission.tryBegin(
-      chatId,
-      turnId,
-      ownerId,
-      chatHasGenerationOwnership(chatId),
-    );
+    return chatTurnAdmission.tryBegin(chatId, turnId, ownerId, chatHasGenerationOwnership(chatId));
   },
 
   markAppendReconciliationRequired(ownerId: string): void {
@@ -2289,8 +1995,7 @@ export const llmClient = {
       },
       hasChildren: (targetWorkspaceId) =>
         subagentRuntimeRegistry.hasWorkspaceChildren(targetWorkspaceId),
-      timeoutMessage:
-        "Aiden could not stop this workspace before changing its access.",
+      timeoutMessage: "Aiden could not stop this workspace before changing its access.",
       timeoutMs: WORKSPACE_CANCEL_SETTLEMENT_GRACE_MS,
     });
     await geminiContextCache.invalidateWorkspace(workspaceId);
@@ -2314,12 +2019,7 @@ export const llmClient = {
         completion: entry.completion,
       })),
       Math.max(0, deadline - Date.now()),
-      (error) =>
-        logger.warn(
-          "pi",
-          "Could not clear one generation during shutdown.",
-          error,
-        ),
+      (error) => logger.warn("pi", "Could not clear one generation during shutdown.", error),
     );
     // A parent can still be preparing when shutdown begins. Its controller was
     // aborted above, but do not report a clean lifecycle until it leaves the

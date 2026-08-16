@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  convertToLlm,
-  InMemorySessionRepo,
-  type Agent,
-} from "@earendil-works/pi-agent-core";
+import { convertToLlm, InMemorySessionRepo } from "@earendil-works/pi-agent-core";
 import type {
   AgentMessage,
   AgentTool,
@@ -13,28 +9,21 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { writeDevLog } from "../dev-log.js";
-import {
-  buildAgentRuntimeOptions,
-  waitForAbortableDelay,
-} from "../generation-runtime.js";
+import { buildAgentRuntimeOptions } from "../generation-runtime.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
 } from "../generation-context.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { isLocalProviderDeployment } from "../../../renderer/shared/provider-deployment.js";
-import {
-  SubagentConcurrencyGate,
-  type SubagentDeployment,
-} from "./concurrency-gate.js";
+import { SubagentConcurrencyGate, type SubagentDeployment } from "./concurrency-gate.js";
 import type { SubagentHealthMetricsSink } from "./subagent-health-metrics-core.js";
+import { createPiCompactionModels } from "../pi-compaction-core.js";
 import {
-  createPiCompactionModels,
-  needsImmediatePiCompaction,
-  PiCompactionCoordinator,
-} from "../pi-compaction-core.js";
-import { appendPiMessages } from "../pi-compaction-session-store.js";
-import { PiAgentRuntimeHarness } from "../pi-agent-runtime-harness.js";
+  PiAgentRuntimeHarness,
+  type PiRuntimeSessionBinding,
+  type PiRuntimeTerminalOutcome,
+} from "../pi-agent-runtime-harness.js";
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 export const MAX_REGISTERED_SUBAGENT_CHILDREN = 32;
@@ -65,11 +54,8 @@ export interface SubagentChildSpec {
 export interface SubagentRuntimeChild {
   childId: string;
   sessionId: string;
-  agent: Pick<
-    Agent,
-    "state" | "signal" | "subscribe" | "prompt" | "prepareNextTurnWithContext"
-  >;
-  prompt(input: string): Promise<void>;
+  agent: Pick<PiAgentRuntimeHarness, "state" | "signal" | "subscribe">;
+  prompt(input: string): Promise<PiRuntimeTerminalOutcome>;
   /** Temporarily yield the real provider inference slot while a nested batch runs. */
   withoutInferenceLease?<T>(operation: () => Promise<T>): Promise<T>;
   /** Quarantine this deployment after cancellation grace expires. */
@@ -79,9 +65,8 @@ export interface SubagentRuntimeChild {
 
 interface RegisteredSubagentChild {
   agent: PiAgentRuntimeHarness;
-  compaction: Promise<PiCompactionCoordinator>;
   cancellation: AbortController;
-  completion: Promise<void> | null;
+  completion: Promise<PiRuntimeTerminalOutcome> | null;
   closed: boolean;
   providerResponseReceived: boolean;
   authority: SubagentRuntimeAuthority;
@@ -92,7 +77,8 @@ interface RegisteredSubagentChild {
 }
 
 export interface SubagentRuntimeRegistryOptions {
-  appendPiMessages?: typeof appendPiMessages;
+  /** Failure-injection seam; production lets the shared facade own its default. */
+  appendSessionMessages?: NonNullable<PiRuntimeSessionBinding["appendMessages"]>;
   onPiJournalError?: (error: unknown) => void;
   recordCompactionUsage?: (
     message: AssistantMessage,
@@ -136,7 +122,7 @@ function boundedSettlement(
 export class SubagentRuntimeRegistry {
   private readonly children = new Map<string, RegisteredSubagentChild>();
   private readonly concurrency: SubagentConcurrencyGate;
-  private readonly appendSessionMessages: typeof appendPiMessages;
+  private readonly appendSessionMessages?: NonNullable<PiRuntimeSessionBinding["appendMessages"]>;
   private readonly onPiJournalError: (error: unknown) => void;
   private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
   private reportRuntimeFault: (source: string) => void = () => {};
@@ -148,22 +134,15 @@ export class SubagentRuntimeRegistry {
     private readonly maxChildren = MAX_REGISTERED_SUBAGENT_CHILDREN,
     options: SubagentRuntimeRegistryOptions = {},
   ) {
-    if (
-      !Number.isInteger(maxChildren) ||
-      maxChildren < 1 ||
-      maxChildren > 1_024
-    ) {
+    if (!Number.isInteger(maxChildren) || maxChildren < 1 || maxChildren > 1_024) {
       throw new Error("Invalid subagent runtime child limit.");
     }
     this.concurrency = new SubagentConcurrencyGate();
-    this.appendSessionMessages = options.appendPiMessages ?? appendPiMessages;
+    this.appendSessionMessages = options.appendSessionMessages;
     this.onPiJournalError =
       options.onPiJournalError ??
       ((error) => {
-        writeDevLog("error", "subagents", [
-          "Could not append child Pi session messages.",
-          error,
-        ]);
+        writeDevLog("error", "subagents", ["Could not append child Pi session messages.", error]);
       });
     this.recordCompactionUsage = options.recordCompactionUsage;
   }
@@ -185,21 +164,14 @@ export class SubagentRuntimeRegistry {
   }
 
   create(spec: SubagentChildSpec): SubagentRuntimeChild {
-    if (this.shuttingDown)
-      throw new Error("Subagent runtime is shutting down.");
+    if (this.shuttingDown) throw new Error("Subagent runtime is shutting down.");
     if (this.children.size >= this.maxChildren) {
       throw new Error("The app-wide subagent runtime limit was reached.");
     }
-    if (
-      !spec.authority.generationId ||
-      !spec.authority.chatId ||
-      !spec.authority.workspaceId
-    ) {
+    if (!spec.authority.generationId || !spec.authority.chatId || !spec.authority.workspaceId) {
       throw new Error("Subagent runtime authority is incomplete.");
     }
-    const deployment: SubagentDeployment = isLocalProviderDeployment(
-      spec.runtime.provider,
-    )
+    const deployment: SubagentDeployment = isLocalProviderDeployment(spec.runtime.provider)
       ? "local"
       : "hosted";
     if (this.quarantinedDeployments.has(deployment)) {
@@ -208,8 +180,7 @@ export class SubagentRuntimeRegistry {
       );
     }
     const { childId, sessionId } = childIdentity(spec.groupId, spec.childId);
-    if (this.children.has(childId))
-      throw new Error("Subagent child identity was reused.");
+    if (this.children.has(childId)) throw new Error("Subagent child identity was reused.");
     let entry!: RegisteredSubagentChild;
     const contextOptions = {
       contextWindow: spec.runtime.model.contextWindow,
@@ -219,6 +190,16 @@ export class SubagentRuntimeRegistry {
     };
     assertGenerationContextCapacity(contextOptions);
     let emergencyContextReduction = false;
+    const sessionPromise = new InMemorySessionRepo().create({ id: sessionId });
+    const cancellation = new AbortController();
+    const compactionOptions = {
+      models: createPiCompactionModels(spec.runtime, (message) =>
+        this.recordCompactionUsage?.(message, spec.runtime),
+      ),
+      model: spec.runtime.model,
+      thinkingLevel: spec.thinkingLevel,
+      signal: cancellation.signal,
+    };
     const agent = new PiAgentRuntimeHarness({
       onFault: ({ source, extensionId }) => {
         this.reportRuntimeFault(source);
@@ -231,6 +212,18 @@ export class SubagentRuntimeRegistry {
       transformContext: createGenerationContextTransform(contextOptions, () => {
         emergencyContextReduction = true;
       }),
+      durability: {
+        session: sessionPromise,
+        initialMessages: spec.initialMessages,
+        compaction: compactionOptions,
+        ...(this.appendSessionMessages ? { appendMessages: this.appendSessionMessages } : {}),
+        signal: cancellation.signal,
+        forcePostRunCompaction: () => emergencyContextReduction,
+        clearForcePostRunCompaction: () => {
+          emergencyContextReduction = false;
+        },
+        onJournalError: (error) => this.onPiJournalError(error),
+      },
       // This is the first point at which Pi has received an actual provider
       // response for this child. It deliberately carries no response content,
       // headers, model metadata, or identity beyond the already-owned entry.
@@ -246,78 +239,10 @@ export class SubagentRuntimeRegistry {
         messages: spec.initialMessages ?? [],
       },
     });
-    const sessionPromise = (async () => {
-      const session = await new InMemorySessionRepo().create({ id: sessionId });
-      await this.appendSessionMessages(session, spec.initialMessages ?? []);
-      return session;
-    })();
-    const cancellation = new AbortController();
-    const compaction = sessionPromise.then(
-      (session) =>
-        new PiCompactionCoordinator({
-          session,
-          models: createPiCompactionModels(spec.runtime, (message) =>
-            this.recordCompactionUsage?.(message, spec.runtime),
-          ),
-          model: spec.runtime.model,
-          thinkingLevel: spec.thinkingLevel,
-          signal: cancellation.signal,
-        }),
-    );
-    let pendingPiMessages: AgentMessage[] = [];
-    let lastAssistantMessage: AssistantMessage | undefined;
-    agent.subscribe((event) => {
-      if (event.type !== "message_end") return;
-      // The child prompt is appended to the session before agent.prompt(). Pi
-      // emits it again as a lifecycle event, so journaling user events here
-      // would duplicate the request and distort later compaction.
-      if (event.message.role === "user") return;
-      pendingPiMessages.push(event.message);
-      if (event.message.role === "assistant") {
-        lastAssistantMessage = event.message;
-      }
-    });
-    const flushPiMessages = async (
-      session: Awaited<typeof sessionPromise>,
-    ): Promise<boolean> => {
-      if (pendingPiMessages.length === 0) return true;
-      const batch = pendingPiMessages;
-      pendingPiMessages = [];
-      try {
-        await this.appendSessionMessages(session, batch);
-        return true;
-      } catch (error) {
-        pendingPiMessages = [...batch, ...pendingPiMessages];
-        this.onPiJournalError(error);
-        return false;
-      }
-    };
-    agent.prepareNextTurnWithContext = async ({ context, toolResults }) => {
-      const session = await sessionPromise;
-      const coordinator = await compaction;
-      if (!(await flushPiMessages(session))) {
-        return undefined;
-      }
-      // Include the just-flushed tool results in pressure estimation before
-      // the next provider request.
-      const immediate = needsImmediatePiCompaction(
-        toolResults,
-        spec.runtime.model.contextWindow,
-      );
-      const result = await coordinator.checkContextPressure({
-        forceThreshold: immediate,
-        sealCurrentTurnIfNeeded: immediate,
-      });
-      emergencyContextReduction = false;
-      if (!result.messages) return undefined;
-      agent.state.messages = [...result.messages];
-      return { context: { ...context, messages: [...result.messages] } };
-    };
     entry = {
       agent,
-      compaction,
       cancellation,
-      completion: null as Promise<void> | null,
+      completion: null,
       closed: false,
       providerResponseReceived: false,
       authority: { ...spec.authority },
@@ -329,62 +254,42 @@ export class SubagentRuntimeRegistry {
 
     const cancel = (reason = new Error("Subagent task cancelled.")) => {
       if (!entry.cancellation.signal.aborted) entry.cancellation.abort(reason);
-      void entry.compaction
-        .then((coordinator) => coordinator.abort())
-        .catch(() => {});
       agent.abort();
       if (!entry.completion) this.children.delete(childId);
+    };
+    const publicAgent: SubagentRuntimeChild["agent"] = {
+      get state() {
+        return agent.state;
+      },
+      get signal() {
+        return agent.signal;
+      },
+      subscribe: (listener) => agent.subscribe(listener),
     };
 
     return {
       childId,
       sessionId,
-      agent,
+      agent: publicAgent,
       prompt: async (input) => {
-        if (
-          this.shuttingDown ||
-          entry.closed ||
-          entry.cancellation.signal.aborted
-        ) {
+        if (this.shuttingDown || entry.closed || entry.cancellation.signal.aborted) {
           throw entry.cancellation.signal.reason instanceof Error
             ? entry.cancellation.signal.reason
             : new Error("Subagent runtime is shutting down.");
         }
-        if (entry.completion)
-          throw new Error("Subagent child has already started.");
-        const completion = (async () => {
+        if (entry.completion) throw new Error("Subagent child has already started.");
+        const completion = (async (): Promise<PiRuntimeTerminalOutcome> => {
           try {
-            const session = await sessionPromise;
-            const coordinator = await compaction;
             const userMessage: AgentMessage = {
               role: "user",
               content: [{ type: "text", text: input }],
               timestamp: Date.now(),
             };
-            await session.appendMessage(userMessage);
-            coordinator.beginPrompt();
-            const prePromptCompaction =
-              await coordinator.checkContextPressure();
-            if (prePromptCompaction.messages) {
-              const rebuilt = [...prePromptCompaction.messages];
-              const trailing = rebuilt[rebuilt.length - 1];
-              if (
-                trailing?.role === "user" &&
-                trailing.timestamp === userMessage.timestamp
-              ) {
-                rebuilt.pop();
-              }
-              agent.state.messages = rebuilt;
-            }
             entry.releaseInference = await this.concurrency.acquire(
               deployment,
               entry.cancellation.signal,
             );
-            if (
-              this.shuttingDown ||
-              entry.closed ||
-              entry.cancellation.signal.aborted
-            ) {
+            if (this.shuttingDown || entry.closed || entry.cancellation.signal.aborted) {
               throw entry.cancellation.signal.reason instanceof Error
                 ? entry.cancellation.signal.reason
                 : new Error("Subagent runtime is shutting down.");
@@ -395,30 +300,10 @@ export class SubagentRuntimeRegistry {
               // Aggregate health evidence cannot affect child execution.
             }
             spec.onStarting?.();
-            let firstAttempt = true;
-            for (;;) {
-              lastAssistantMessage = undefined;
-              if (firstAttempt) {
-                firstAttempt = false;
-                await agent.prompt(userMessage);
-              } else {
-                await agent.continueFromDurableTail();
-              }
-              const journalFlushed = await flushPiMessages(session);
-              if (!journalFlushed) break;
-              if (!lastAssistantMessage) break;
-              const result = await coordinator.check(lastAssistantMessage, {
-                forceThreshold: emergencyContextReduction,
-              });
-              emergencyContextReduction = false;
-              if (!result.messages) break;
-              agent.state.messages = [...result.messages];
-              if (!result.shouldRetry) break;
-              await waitForAbortableDelay(
-                result.retryDelayMs ?? 0,
-                entry.cancellation.signal,
-              );
-            }
+            return await agent.runManaged({
+              kind: "append-and-run",
+              message: userMessage,
+            });
           } finally {
             entry.releaseInference?.();
             entry.releaseInference = undefined;
@@ -426,23 +311,20 @@ export class SubagentRuntimeRegistry {
         })();
         entry.completion = completion;
         try {
-          await completion;
+          return await completion;
         } finally {
           this.children.delete(childId);
           if (
             entry.cleanupPending &&
             ![...this.children.values()].some(
-              (candidate) =>
-                candidate.cleanupPending && candidate.deployment === deployment,
+              (candidate) => candidate.cleanupPending && candidate.deployment === deployment,
             )
           ) {
             this.quarantinedDeployments.delete(deployment);
           }
         }
       },
-      withoutInferenceLease: async <T>(
-        operation: () => Promise<T>,
-      ): Promise<T> => {
+      withoutInferenceLease: async <T>(operation: () => Promise<T>): Promise<T> => {
         if (
           !entry.completion ||
           entry.closed ||
@@ -450,9 +332,7 @@ export class SubagentRuntimeRegistry {
           !entry.releaseInference ||
           entry.yieldingInference
         ) {
-          throw new Error(
-            "Subagent inference capacity cannot be yielded in this state.",
-          );
+          throw new Error("Subagent inference capacity cannot be yielded in this state.");
         }
         entry.yieldingInference = true;
         entry.releaseInference();
@@ -461,11 +341,7 @@ export class SubagentRuntimeRegistry {
           return await operation();
         } finally {
           try {
-            if (
-              !entry.closed &&
-              !entry.cancellation.signal.aborted &&
-              !this.shuttingDown
-            ) {
+            if (!entry.closed && !entry.cancellation.signal.aborted && !this.shuttingDown) {
               entry.releaseInference = await this.concurrency.acquire(
                 entry.deployment,
                 entry.cancellation.signal,
@@ -490,9 +366,6 @@ export class SubagentRuntimeRegistry {
       if (!entry.cancellation.signal.aborted) {
         entry.cancellation.abort(new Error("Subagent task cancelled."));
       }
-      void entry.compaction
-        .then((coordinator) => coordinator.abort())
-        .catch(() => {});
       entry.agent.abort();
       if (!entry.completion) this.children.delete(childId);
     }
@@ -505,20 +378,13 @@ export class SubagentRuntimeRegistry {
     for (const [childId, entry] of this.children) {
       if (!matches(entry.authority)) continue;
       if (!entry.cancellation.signal.aborted) entry.cancellation.abort(reason);
-      void entry.compaction
-        .then((coordinator) => coordinator.abort())
-        .catch(() => {});
       entry.agent.abort();
       if (!entry.completion) this.children.delete(childId);
     }
   }
 
-  private hasMatching(
-    matches: (authority: SubagentRuntimeAuthority) => boolean,
-  ): boolean {
-    return [...this.children.values()].some((entry) =>
-      matches(entry.authority),
-    );
+  private hasMatching(matches: (authority: SubagentRuntimeAuthority) => boolean): boolean {
+    return [...this.children.values()].some((entry) => matches(entry.authority));
   }
 
   abortWorkspace(workspaceId: string): void {
@@ -529,9 +395,7 @@ export class SubagentRuntimeRegistry {
   }
 
   hasWorkspaceChildren(workspaceId: string): boolean {
-    return this.hasMatching(
-      (authority) => authority.workspaceId === workspaceId,
-    );
+    return this.hasMatching((authority) => authority.workspaceId === workspaceId);
   }
 
   abortChat(chatId: string): void {
@@ -548,15 +412,12 @@ export class SubagentRuntimeRegistry {
   /** True only once a child has crossed Pi's actual provider-response boundary. */
   hasChatProviderResponse(chatId: string): boolean {
     return [...this.children.values()].some(
-      (entry) =>
-        entry.authority.chatId === chatId && entry.providerResponseReceived,
+      (entry) => entry.authority.chatId === chatId && entry.providerResponseReceived,
     );
   }
 
   hasGenerationChildren(generationId: string): boolean {
-    return this.hasMatching(
-      (authority) => authority.generationId === generationId,
-    );
+    return this.hasMatching((authority) => authority.generationId === generationId);
   }
 
   abortGeneration(generationId: string): void {
@@ -573,13 +434,8 @@ export class SubagentRuntimeRegistry {
     for (const entry of entries) {
       entry.closed = true;
       if (!entry.cancellation.signal.aborted) {
-        entry.cancellation.abort(
-          new Error("Subagent runtime is shutting down."),
-        );
+        entry.cancellation.abort(new Error("Subagent runtime is shutting down."));
       }
-      void entry.compaction
-        .then((coordinator) => coordinator.abort())
-        .catch(() => {});
       entry.agent.abort();
     }
     const settled = await boundedSettlement(
@@ -600,23 +456,19 @@ export class SubagentRuntimeRegistry {
   }
 }
 
-export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(
-  undefined,
-  undefined,
-  {
-    recordCompactionUsage: async (message, runtime) => {
-      const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
-        import("../usage-accounting.js"),
-        import("../usage-store.js"),
-      ]);
-      await usageStore.record(
-        assistantUsageRecord({
-          message,
-          provider: runtime.provider,
-          model: runtime.model,
-          source: "compaction",
-        }),
-      );
-    },
+export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(undefined, undefined, {
+  recordCompactionUsage: async (message, runtime) => {
+    const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
+      import("../usage-accounting.js"),
+      import("../usage-store.js"),
+    ]);
+    await usageStore.record(
+      assistantUsageRecord({
+        message,
+        provider: runtime.provider,
+        model: runtime.model,
+        source: "compaction",
+      }),
+    );
   },
-);
+});

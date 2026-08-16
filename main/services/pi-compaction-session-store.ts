@@ -1,13 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  chmod,
-  open,
-  readFile,
-  readdir,
-  rename,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   JsonlSessionRepo,
@@ -16,11 +8,7 @@ import {
   type Session,
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
-import {
-  cleanupSessionResources,
-  type Api,
-  type Model,
-} from "@earendil-works/pi-ai";
+import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
 import type { ChatMessage } from "./types.js";
@@ -65,16 +53,12 @@ function assistantProjection(message: AgentMessage):
   if (message.role !== "assistant") return undefined;
   return {
     text: message.content
-      .filter(
-        (part): part is { type: "text"; text: string } => part.type === "text",
-      )
+      .filter((part): part is { type: "text"; text: string } => part.type === "text")
       .map((part) => part.text)
       .join(""),
     reasoning: message.content
       .filter(
-        (
-          part,
-        ): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
+        (part): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
           part.type === "thinking" && part.redacted !== true,
       )
       .map((part) => part.thinking)
@@ -108,12 +92,7 @@ async function readJournalPrefix(filePath: string): Promise<string> {
   const handle = await open(filePath, "r");
   try {
     const buffer = Buffer.alloc(JOURNAL_HEADER_SCAN_BYTES);
-    const { bytesRead } = await handle.read(
-      buffer,
-      0,
-      JOURNAL_HEADER_SCAN_BYTES,
-      0,
-    );
+    const { bytesRead } = await handle.read(buffer, 0, JOURNAL_HEADER_SCAN_BYTES, 0);
     const prefix = buffer.subarray(0, bytesRead).toString("utf8");
     const newline = prefix.indexOf("\n");
     return newline >= 0 ? prefix.slice(0, newline) : prefix;
@@ -181,10 +160,7 @@ export async function syncChatMessagesToPiSession(
   const entries = await session.getBranch();
   const synchronized = new Set(
     entries.flatMap((entry) => {
-      if (
-        entry.type !== "custom" ||
-        entry.customType !== AIDEN_CHAT_MESSAGE_MARKER
-      ) {
+      if (entry.type !== "custom" || entry.customType !== AIDEN_CHAT_MESSAGE_MARKER) {
         return [];
       }
       const id = markerId(entry.data);
@@ -219,10 +195,7 @@ export async function syncChatMessagesToPiSession(
   }
 }
 
-async function appendPiTransaction<T>(
-  session: Session,
-  operation: () => Promise<T>,
-): Promise<T> {
+async function appendPiTransaction<T>(session: Session, operation: () => Promise<T>): Promise<T> {
   const originalLeafId = await session.getLeafId();
   const transactionId = randomUUID();
   try {
@@ -268,16 +241,70 @@ export async function commitPiGenerationTurn(
   } satisfies PiTransactionMarker);
 }
 
+export interface PiVisibleTurnLease {
+  readonly started: boolean;
+  commit(
+    visibleChatMessageId: string,
+    options?: { markerAlreadyPersisted?: boolean },
+  ): Promise<void>;
+  rollback(): Promise<void>;
+}
+
+/**
+ * Own the Pi side of Aiden's cross-store visible-turn boundary. ChatStore
+ * remains a separate durable system, so callers persist it first and then
+ * commit this lease; either failure path can idempotently restore the source
+ * leaf without knowing Pi transaction mechanics.
+ */
+export async function beginPiVisibleTurnLease(
+  session: Session,
+  onBeginError?: (error: unknown) => void,
+): Promise<PiVisibleTurnLease> {
+  let sourceLeafId: string | null | undefined;
+  let transactionId: string | undefined;
+  try {
+    sourceLeafId = await session.getLeafId();
+    transactionId = await beginPiGenerationTurn(session);
+  } catch (error) {
+    try {
+      onBeginError?.(error);
+    } catch {
+      // Diagnostics cannot alter the lease's fail-closed state.
+    }
+  }
+  let closed = false;
+  return {
+    started: transactionId !== undefined,
+    async commit(
+      visibleChatMessageId: string,
+      options: { markerAlreadyPersisted?: boolean } = {},
+    ): Promise<void> {
+      if (closed) throw new Error("The Pi visible-turn lease is closed.");
+      if (!transactionId) {
+        throw new Error("The Pi visible-turn transaction did not start.");
+      }
+      if (!options.markerAlreadyPersisted) {
+        await appendPiMessages(session, [], visibleChatMessageId);
+      }
+      await commitPiGenerationTurn(session, transactionId);
+      closed = true;
+    },
+    async rollback(): Promise<void> {
+      if (closed) return;
+      if (sourceLeafId !== undefined) await session.moveTo(sourceLeafId);
+      closed = true;
+    },
+  };
+}
+
 async function recoverUncommittedTransaction(session: Session): Promise<void> {
   const branch = await session.getBranch();
   const open = new Map<string, string | null>();
   for (const entry of branch) {
-    if (entry.type !== "custom" || entry.customType !== AIDEN_PI_TRANSACTION)
-      continue;
+    if (entry.type !== "custom" || entry.customType !== AIDEN_PI_TRANSACTION) continue;
     const marker = transactionMarker(entry.data);
     if (!marker) continue;
-    if (marker.phase === "begin")
-      open.set(marker.transactionId, entry.parentId);
+    if (marker.phase === "begin") open.set(marker.transactionId, entry.parentId);
     else open.delete(marker.transactionId);
   }
   if (open.size === 0) return;
@@ -319,22 +346,44 @@ export class PiCompactionSessionStore {
     root: string;
   }>;
   private readonly sessions = new Map<string, Session<JsonlSessionMetadata>>();
-  private readonly opening = new Map<
-    string,
-    Promise<Session<JsonlSessionMetadata>>
-  >();
+  private readonly opening = new Map<string, Promise<Session<JsonlSessionMetadata>>>();
+  private readonly quarantined = new Map<string, Promise<void>>();
   private indexMutation: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: PiCompactionSessionStoreOptions) {}
+
+  /**
+   * Prevent a chat journal from being reused while a non-abortable storage
+   * operation is still settling. The quarantine is removed only after the
+   * caller's recovery completes successfully; a failed recovery remains
+   * fail-closed until process restart can run normal journal recovery.
+   */
+  quarantineChatUntilRecovered(chatId: string, recovery: Promise<void>): void {
+    if (!SAFE_SESSION_ID.test(chatId)) {
+      throw new Error("Invalid chat identity for the Pi compaction journal.");
+    }
+    let guarded: Promise<void>;
+    guarded = recovery.then(() => {
+      if (this.quarantined.get(chatId) === guarded) {
+        this.quarantined.delete(chatId);
+      }
+    });
+    this.quarantined.set(chatId, guarded);
+    void guarded.catch(() => undefined);
+  }
+
+  private assertNotQuarantined(chatId: string): void {
+    if (this.quarantined.has(chatId)) {
+      throw new Error("The Pi journal is waiting for an indeterminate write to recover.");
+    }
+  }
 
   private async readIndex(root: string): Promise<JournalIndex> {
     try {
       const parsed = JSON.parse(
         await readFile(path.join(root, JOURNAL_INDEX_FILE), "utf8"),
       ) as Partial<JournalIndex>;
-      return parsed.version === 1 &&
-        parsed.chats &&
-        typeof parsed.chats === "object"
+      return parsed.version === 1 && parsed.chats && typeof parsed.chats === "object"
         ? { version: 1, chats: parsed.chats as Record<string, string[]> }
         : { version: 1, chats: {} };
     } catch {
@@ -342,10 +391,7 @@ export class PiCompactionSessionStore {
     }
   }
 
-  private async mutateIndex(
-    root: string,
-    mutation: (index: JournalIndex) => void,
-  ): Promise<void> {
+  private async mutateIndex(root: string, mutation: (index: JournalIndex) => void): Promise<void> {
     const operation = this.indexMutation.then(async () => {
       const index = await this.readIndex(root);
       mutation(index);
@@ -359,11 +405,7 @@ export class PiCompactionSessionStore {
     return operation;
   }
 
-  private async rememberPath(
-    root: string,
-    chatId: string,
-    filePath: string,
-  ): Promise<void> {
+  private async rememberPath(root: string, chatId: string, filePath: string): Promise<void> {
     const resolvedRoot = `${path.resolve(root)}${path.sep}`;
     const resolvedPath = path.resolve(filePath);
     if (!resolvedPath.startsWith(resolvedRoot)) {
@@ -376,11 +418,7 @@ export class PiCompactionSessionStore {
     });
   }
 
-  private async quarantine(
-    root: string,
-    chatId: string,
-    filePath: string,
-  ): Promise<void> {
+  private async quarantine(root: string, chatId: string, filePath: string): Promise<void> {
     const quarantined = `${filePath}.corrupt-${Date.now()}-${randomUUID()}`;
     await rename(filePath, quarantined);
     await this.rememberPath(root, chatId, quarantined);
@@ -408,6 +446,7 @@ export class PiCompactionSessionStore {
     if (!SAFE_SESSION_ID.test(chatId)) {
       throw new Error("Invalid chat identity for the Pi compaction journal.");
     }
+    this.assertNotQuarantined(chatId);
     const existing = this.sessions.get(chatId);
     if (existing) return existing;
     const inFlight = this.opening.get(chatId);
@@ -416,9 +455,7 @@ export class PiCompactionSessionStore {
     const opening = (async () => {
       const { repo, root } = await this.repository();
       const matches = (await repo.list()).filter(
-        (metadata) =>
-          metadata.id === chatId &&
-          metadata.metadata?.kind === SESSION_METADATA_KIND,
+        (metadata) => metadata.id === chatId && metadata.metadata?.kind === SESSION_METADATA_KIND,
       );
       // Pi lists newest sessions first. Validate the whole body and quarantine
       // a malformed duplicate before falling back to the next valid journal.
@@ -468,12 +505,11 @@ export class PiCompactionSessionStore {
     if (!SAFE_SESSION_ID.test(chatId)) {
       throw new Error("Invalid chat identity for the Pi compaction journal.");
     }
+    this.assertNotQuarantined(chatId);
     await this.opening.get(chatId);
     const { repo, root } = await this.repository();
     const matches = (await repo.list()).filter(
-      (metadata) =>
-        metadata.id === chatId &&
-        metadata.metadata?.kind === SESSION_METADATA_KIND,
+      (metadata) => metadata.id === chatId && metadata.metadata?.kind === SESSION_METADATA_KIND,
     );
     for (const metadata of matches) await repo.delete(metadata);
     const index = await this.readIndex(root);
