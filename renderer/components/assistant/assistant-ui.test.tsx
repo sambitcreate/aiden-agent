@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -9,7 +10,12 @@ import { AssistantComputerUseApproval } from "./assistant-computer-use-approval.
 import { AssistantPanel, assistantMinimizeLabel } from "./assistant-panel.js";
 import { AssistantDockPresentation } from "./assistant-dock.js";
 import { AssistantThread } from "./assistant-thread.js";
-import { AssistantLive, AssistantLiveSetupContent } from "./assistant-live.js";
+import {
+  AssistantLive,
+  AssistantLiveEntryPoint,
+  AssistantLiveSetupContent,
+  assistantLiveTranscriptFollowsLatest,
+} from "./assistant-live.js";
 import type { AssistantChat } from "./use-assistant-chat.js";
 import type { AssistantLiveController } from "./use-assistant-live.js";
 
@@ -43,6 +49,7 @@ const idleLive: AssistantLiveController = {
   busy: false,
   microphone: true,
   microphoneActive: false,
+  microphoneLevel: 0,
   microphonePermission: "granted",
   microphonePermissionReady: true,
   microphonePermissionDetail:
@@ -89,7 +96,31 @@ test("Live setup exposes explicit consent, provider privacy, and fail-closed scr
   assert.match(html, /focus-visible:ring-\[3px\]/u);
 });
 
-test("experimental Live stays visible with truthful availability and microphone gates", () => {
+test("Gemini Live enters from the composer immediately before Send", () => {
+  const html = renderToStaticMarkup(
+    <AssistantPanel
+      chat={idleAssistantChat}
+      draft=""
+      inputRef={React.createRef<HTMLTextAreaElement>()}
+      onDraftChange={() => undefined}
+      onMinimize={() => undefined}
+      live={idleLive}
+    />,
+  );
+  const liveEntry = html.indexOf('aria-label="Start Gemini Live"');
+  const send = html.indexOf('aria-label="Send message"');
+  assert.equal(liveEntry >= 0, true);
+  assert.equal(send > liveEntry, true);
+  assert.match(html, /assistant-live-entry-button/u);
+  assert.match(html, /assistant-live-entry-material/u);
+  assert.doesNotMatch(html, /assistant-live-entry-bar/u);
+  assert.match(html, /aria-haspopup="dialog"/u);
+  assert.match(html, /aria-expanded="false"/u);
+  assert.doesNotMatch(html, /Experimental/u);
+  assert.doesNotMatch(html, /Approved model: gemini-live-reviewed/u);
+});
+
+test("composer Live entry stays truthful for reconnect and blocked states", () => {
   const unavailableReasons = [
     "Connect Google with an API key in Settings before starting Live.",
     "The connected Google account uses OAuth. Live currently requires a Google API key.",
@@ -98,7 +129,7 @@ test("experimental Live stays visible with truthful availability and microphone 
   ];
   for (const reason of unavailableReasons) {
     const html = renderToStaticMarkup(
-      <AssistantLive
+      <AssistantLiveEntryPoint
         live={{
           ...idleLive,
           available: false,
@@ -108,17 +139,16 @@ test("experimental Live stays visible with truthful availability and microphone 
         }}
       />,
     );
-    assert.match(html, /Gemini Live/u);
-    assert.match(html, /Experimental/u);
     assert.match(
       html,
       new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
     );
     assert.match(html, /disabled=""/u);
+    assert.match(html, /Start Gemini Live unavailable/u);
   }
 
   const denied = renderToStaticMarkup(
-    <AssistantLive
+    <AssistantLiveEntryPoint
       live={{
         ...idleLive,
         microphonePermission: "denied",
@@ -132,6 +162,33 @@ test("experimental Live stays visible with truthful availability and microphone 
   );
   assert.match(denied, /Microphone permission is denied/u);
   assert.match(denied, /disabled=""/u);
+
+  const reconnect = renderToStaticMarkup(
+    <AssistantLiveEntryPoint live={{ ...idleLive, reconnectRequired: true }} />,
+  );
+  assert.match(reconnect, /aria-label="Reconnect Gemini Live"/u);
+  assert.match(reconnect, /data-state="reconnect"/u);
+});
+
+test("Live setup surfaces blocked and failed starts inside the consent UI", () => {
+  const blocked = renderToStaticMarkup(
+    <AssistantLiveSetupContent
+      live={{
+        ...idleLive,
+        startBlockedReason: "Finish the current response before starting Live.",
+      }}
+    />,
+  );
+  assert.match(blocked, /role="status"/u);
+  assert.match(blocked, /Finish the current response before starting Live/u);
+
+  const failed = renderToStaticMarkup(
+    <AssistantLiveSetupContent
+      live={{ ...idleLive, error: "Live could not start. Try again." }}
+    />,
+  );
+  assert.match(failed, /role="alert"/u);
+  assert.match(failed, /Live could not start\. Try again\./u);
 });
 
 test("active Live state keeps Stop visible and captions semantic", () => {
@@ -142,17 +199,96 @@ test("active Live state keeps Stop visible and captions semantic", () => {
         active: true,
         microphoneActive: true,
         state: "open",
-        captions: [{ id: 1, direction: "input", final: false, text: "Hello" }],
+        captions: [
+          {
+            id: 1,
+            direction: "input",
+            final: false,
+            sealed: false,
+            text: "Hello",
+          },
+        ],
       }}
     />,
   );
   assert.match(html, /aria-label="Live conversation"/u);
-  assert.match(html, / Stop<\/button>/u);
+  assert.match(html, /class="assistant-live-orb"/u);
+  assert.match(html, /class="assistant-live-orb-core"/u);
+  assert.match(html, /class="assistant-live-orb-pearl"/u);
+  assert.doesNotMatch(html, /assistant-live-orb-bar/u);
+  assert.match(html, /aria-label="Live controls"/u);
+  assert.match(html, /aria-label="Stop Live"/u);
+  assert.match(html, /Microphone on/u);
   assert.match(html, /aria-label="Live captions"/u);
   assert.match(html, />You</u);
   assert.match(html, /interim/u);
+  assert.equal((html.match(/Hello/gu) ?? []).length, 1);
   assert.match(html, /role="log" aria-live="polite"/u);
   assert.match(html, /focus-visible:ring-\[3px\]/u);
+  assert.doesNotMatch(html, /Share screen|Camera|Mute speaker/u);
+  assert.equal((html.match(/<button/gu) ?? []).length, 1);
+});
+
+test("Live transcript groups adjacent fragments into coherent speaker turns", () => {
+  const html = renderToStaticMarkup(
+    <AssistantLive
+      live={{
+        ...idleLive,
+        active: true,
+        microphoneActive: true,
+        microphoneLevel: 0.72,
+        state: "open",
+        captions: [
+          {
+            id: 1,
+            direction: "output",
+            final: true,
+            sealed: true,
+            text: "Feel free to ask",
+          },
+        ],
+      }}
+    />,
+  );
+  assert.match(html, /--assistant-live-level:0\.720/u);
+  assert.match(html, /--assistant-live-orb-scale:1\.038/u);
+  assert.match(html, /--assistant-live-orb-bloom:1\.032/u);
+  assert.match(html, /--assistant-live-orb-speed:2\.75s/u);
+  assert.match(html, /--assistant-live-orb-glow:38\.7px/u);
+  assert.equal((html.match(/assistant-live-caption-turn/gu) ?? []).length, 1);
+  assert.equal((html.match(/Feel free to ask/gu) ?? []).length, 2);
+  assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 400, 400), false);
+  assert.equal(assistantLiveTranscriptFollowsLatest(1_000, 580, 400), true);
+});
+
+test("Live presence motion follows Aiden's resolved reduced-motion contract", () => {
+  const styles = readFileSync(
+    new URL("../../styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="false"\][\s\S]{0,240}\.assistant-live-presence:is\([\s\S]{0,180}\.assistant-live-orb \{/u,
+  );
+  assert.match(styles, /@keyframes assistant-live-entry-drift/u);
+  assert.match(styles, /@keyframes assistant-live-orb-drift/u);
+  assert.match(
+    styles,
+    /\.assistant-live-orb-core \{[\s\S]{0,160}animation: assistant-live-orb-drift var\(--assistant-live-orb-speed, 5\.2s\)/u,
+  );
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="true"\][\s\S]{0,180}\.assistant-live-presence\[data-state="open"\][\s\S]{0,120}\.assistant-live-orb \{/u,
+  );
+  assert.match(
+    styles,
+    /:root\[data-reduce-motion="true"\] \.assistant-live-entry-button,[\s\S]{0,140}\.assistant-live-orb-core \{[\s\S]{0,80}animation: none/u,
+  );
+  assert.match(
+    styles,
+    /\.assistant-live-control-dock\[data-microphone-active="false"\][\s\S]{0,180}opacity: 0\.38;[\s\S]{0,80}scaleY\(0\.35\)/u,
+  );
+  assert.doesNotMatch(styles, /assistant-live-(?:entry|orb)-bar/u);
 });
 
 test("active Live setup reports microphone startup instead of claiming capture is off", () => {
@@ -169,6 +305,11 @@ test("active Live setup reports microphone startup instead of claiming capture i
   );
   assert.match(html, /Starting microphone…/u);
   assert.match(html, /Preparing your microphone…/u);
+  assert.equal((html.match(/Preparing your microphone…/gu) ?? []).length, 1);
+  assert.match(
+    html,
+    /role="status" aria-live="polite"[^>]*>.*Starting microphone…/u,
+  );
   assert.doesNotMatch(html, /Microphone off/u);
   assert.doesNotMatch(html, /Start speaking when/u);
 });
@@ -178,16 +319,21 @@ test("Live start and setup confirmation expose the exact ordinary-response colli
     "Finish or stop the current Aiden response before starting Live.",
     "Decide the pending automation approval before starting Live.",
   ]) {
-    const html = renderToStaticMarkup(
-      <AssistantLive
-        live={{ ...idleLive, setupOpen: true, startBlockedReason: reason }}
+    const setup = renderToStaticMarkup(
+      <AssistantLiveSetupContent
+        live={{ ...idleLive, startBlockedReason: reason }}
       />,
     );
     assert.match(
-      html,
+      setup,
       new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
     );
-    assert.match(html, /disabled=""[^>]*>.*Start Live|disabled=""[^>]*>Start/u);
+    const entry = renderToStaticMarkup(
+      <AssistantLiveEntryPoint
+        live={{ ...idleLive, startBlockedReason: reason }}
+      />,
+    );
+    assert.match(entry, /disabled=""/u);
   }
 });
 
@@ -544,6 +690,7 @@ test("Aiden composer reuses chat controls and grows for wrapped multiline drafts
   assert.match(html, /break-words/u);
   assert.match(html, /wrap="soft"/u);
   assert.match(html, /aria-label="Send message"/u);
+  assert.match(html, /aria-label="Start Gemini Live"/u);
   assert.match(html, /First line\nSecond line\nThird line/u);
 });
 
