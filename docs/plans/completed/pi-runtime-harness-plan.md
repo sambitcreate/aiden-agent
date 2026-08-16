@@ -1,6 +1,6 @@
 # Pi Runtime Harness
 
-Status: Partial
+Status: Complete
 
 ## Goal
 
@@ -104,6 +104,41 @@ Aiden pins `@earendil-works/pi-agent-core` and `pi-ai` `0.80.10`.
   ordered best-effort observers. The observer projection contains public prose
   and lifecycle/tool metadata, but no hidden reasoning, tool payloads, provider
   diagnostics, or raw errors; observer shutdown is abortable.
+- Every managed tool call now has private, owner-bound operation/effect
+  evidence outside the rollbackable Pi journal. Preparation commits before
+  dispatch, terminal evidence commits before continuation, replay policy is
+  closed (`safe` or default `never`), never-replay arguments are reduced to a
+  canonical digest, and the store is private, bounded, crash-reconciled, and
+  coordinated with chat deletion.
+- Restart recovery installs one idempotent private no-repeat boundary in the Pi
+  journal for any effect whose result may have been removed with an incomplete
+  visible turn. The boundary contains tool names but no arguments, and the
+  effect becomes capacity-prunable only after the boundary and marker commit.
+  Aiden deliberately does not auto-replay even a `safe` effect after process
+  death; it makes uncertainty explicit and requires state inspection or user
+  confirmation instead.
+- Child provider requests, including semantic-compaction requests, execute in
+  a one-request Electron utility process while the Pi Agent, session, tools,
+  approvals, MCP connections, and usage accounting remain main-owned. Stop and
+  shutdown freeze stream admission, then escalate cooperative cancel to TERM
+  and an exact launch-identity-checked SIGKILL; terminal events are withheld
+  until process exit is verified. Codex preserves its credential-generation
+  guard and only a closed authentication-failure hint crosses back to main.
+- Provider isolation admits only reviewed environment inputs. Bedrock supports
+  direct keys, bearer auth, ECS credentials (including authorization tokens),
+  web identity, and profile/config chains that do not invoke a subprocess.
+  Before provider modules load, the worker disables every Node child-process
+  entry point, so `credential_process` fails closed instead of escaping the
+  owned UtilityProcess; foreground model use is unchanged.
+- The first isolated request in each child runtime has one strict startup-only
+  retry envelope: at most four fresh worker launches with 250/750/1500 ms
+  backoff. A retry is permitted only for a nonzero exit within two seconds and
+  before any worker IPC, provider hook, model event, usage, or tool activity. A
+  two-way ready/ack barrier prevents request-specific provider construction or
+  network work until main has observed the worker. Cancellation owns the
+  backoff, while launch, protocol, IPC, and main-owned provider-hook faults use
+  private typed host provenance and never become Pi transcript messages or
+  provider-usage aggregates.
 
 ## Trusted contribution compatibility matrix
 
@@ -129,14 +164,9 @@ signed or sandboxed plugin design.
 
 ## Remaining work
 
-1. Add durable operation/effect records with replay-safe versus never-replay
-   metadata. Current journal recovery is not exactly-once external-effect
-   recovery.
-2. Isolate child inference in a killable worker/process before claiming hard
-   termination of a transport that ignores abort.
-3. Add a strict, zero-activity-only startup retry and finish the internal
-   host/session failure taxonomy. Provider failure text is already closed at
-   the child boundary.
+None in the original delivery scope. New executable plugin-loading or broader
+Pi coding-agent compatibility belongs in a separate signed/sandboxed plugin
+plan rather than widening this trusted main-process adapter.
 
 ## Known lower-priority adapter limits
 
@@ -160,6 +190,21 @@ signed or sandboxed plugin design.
 - Trusted JavaScript contribution outputs receive structural cloning and the
   closed checks needed by each active boundary, but do not yet share one
   schema-level validator for every Pi message and tool-result variant.
+- The private never-replay argument digest is unkeyed. Its file is `0600`, but
+  a future store version should use a keychain-backed HMAC before treating the
+  digest as resistant to same-user offline guessing of low-entropy arguments.
+- A signed-package smoke that launches the real utility worker without making
+  a provider request remains a release-soak improvement; build and package
+  contracts currently prove the worker is emitted, bounded, and packed.
+- The startup-duration window begins before launch verification. Slow launch
+  overhead can conservatively suppress a retry, which preserves safety at the
+  cost of availability.
+- Process identity verification uses a bounded synchronous `ps` probe in the
+  Electron main process. A future implementation should move it off the UI
+  thread while preserving the exact nonce-bound identity proof.
+- The helper-level retry and cancellation matrix is covered, but a signed-app
+  end-to-end test of first-request-only retry and shutdown during backoff
+  remains part of the packaged smoke above.
 
 ## Gates
 
@@ -173,5 +218,9 @@ signed or sandboxed plugin design.
 - Child/supervisor tests cover fork identity, empty completion, terminal-only
   output, hidden protocol limits, construction abort, aggregate budgets,
   exact queued cancellation, quarantine recovery, and renderer-safe activity.
-- `npm run type-check`, `npm run test:compaction`, and
-  `npm run test:subagents` must pass before release.
+- Two final fresh-memory adversarial gates returned GO after the ready/ack,
+  compaction-provenance, canonical-durability, usage-accounting, and package
+  lockdown fixes.
+- `npm run type-check`, `npm run lint`, `npm run test:compaction` (169 tests),
+  the complete `npm run test:subagents` matrix (649 JS tests plus native helper
+  and package gates), `npm run build:electron`, and package verification pass.
