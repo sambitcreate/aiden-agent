@@ -18,6 +18,9 @@ export interface MessageBubbleProps {
   streaming?: boolean;
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
+  /** Split assistant prose renders one whole-response copy action on its tail. */
+  showCopy?: boolean;
+  copyText?: string;
 }
 
 /** Isolate untrusted model-formatting failures to the individual message. */
@@ -40,6 +43,8 @@ export function MessageBubble({
   streaming,
   streamComplete,
   onStreamHandoffComplete,
+  showCopy = true,
+  copyText,
 }: MessageBubbleProps) {
   if (role === "user") {
     return (
@@ -106,13 +111,13 @@ export function MessageBubble({
         ) : (
           <Markdown content={content} />
         )}
-        {content ? (
+        {content && showCopy ? (
           <div
             className={`mt-1 ${streaming && !streamComplete ? "invisible" : ""}`}
             aria-hidden={streaming && !streamComplete}
           >
             <CopyButton
-              text={content}
+              text={copyText ?? content}
               label="Copy message"
               className="-ml-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
             />

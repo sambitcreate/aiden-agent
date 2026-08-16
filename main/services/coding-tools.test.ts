@@ -1103,6 +1103,53 @@ test("parent write and edit tools cannot commit after cancellation", async () =>
   }
 });
 
+test("file mutation tools report bounded line additions and deletions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-line-changes-"));
+  try {
+    const tools = buildCodingTools(root);
+    const writeFile = tools.find((tool) => tool.name === "write_file");
+    const editFile = tools.find((tool) => tool.name === "edit_file");
+    assert.ok(writeFile);
+    assert.ok(editFile);
+
+    const created = await writeFile.execute("create", {
+      path: "src/app.ts",
+      content: "alpha\nbeta\n",
+    });
+    assert.deepEqual(created.details, {
+      kind: "file_line_changes",
+      version: 1,
+      additions: 2,
+      deletions: 0,
+    });
+
+    const overwritten = await writeFile.execute("overwrite", {
+      path: "src/app.ts",
+      content: "alpha\ngamma\nextra\n",
+    });
+    assert.deepEqual(overwritten.details, {
+      kind: "file_line_changes",
+      version: 1,
+      additions: 2,
+      deletions: 1,
+    });
+
+    const edited = await editFile.execute("edit", {
+      path: "src/app.ts",
+      old_string: "gamma",
+      new_string: "GAMMA\ninserted",
+    });
+    assert.deepEqual(edited.details, {
+      kind: "file_line_changes",
+      version: 1,
+      additions: 2,
+      deletions: 1,
+    });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("every permitted subagent filesystem tool observes cancellation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-subagent-abort-"));
   try {

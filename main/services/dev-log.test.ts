@@ -9,6 +9,7 @@ import {
   initDevLog,
   redactDevLogSecrets,
   writeDevLog,
+  writeDevLogSync,
 } from "./dev-log.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
@@ -56,6 +57,17 @@ test("long lines are truncated to the cap", async () => {
     const data = lines.find((l) => l.includes("xxx"));
     assert.ok(data);
     assert.ok(data.length <= 4096);
+  });
+});
+
+test("fatal diagnostics are appended synchronously", async () => {
+  await withTempDir(async (dir) => {
+    const target = path.join(dir, "aiden-dev.log");
+    initDevLog(target);
+    writeDevLogSync("error", "process", ["fatal", new Error("boom")]);
+
+    const text = await fs.readFile(target, "utf8");
+    assert.match(text, /ERROR \[process\] fatal Error: boom/u);
   });
 });
 

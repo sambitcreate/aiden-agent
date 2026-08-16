@@ -31,6 +31,7 @@ import { createAssistantProjectTool } from "./assistant/project-tool.js";
 import { createAssistantMcpServerTool } from "./assistant/mcp-tool.js";
 import { selectedMcpServers } from "./mcp-selection.js";
 import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -41,7 +42,7 @@ function textResult(text: string): AgentToolResult<null> {
 export { skillToolKey } from "./skill-registry-core.js";
 
 function makeExaTool(apiKey: string): AgentTool {
-  return {
+  return declarePiRuntimeReplay({
     name: "web_search",
     label: "Web Search",
     description:
@@ -87,7 +88,7 @@ function makeExaTool(apiKey: string): AgentTool {
       }));
       return textResult(JSON.stringify({ results }));
     },
-  };
+  }, "never");
 }
 
 /** Context describing where and how much the agent may act. */

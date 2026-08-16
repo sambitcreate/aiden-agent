@@ -11,6 +11,7 @@ import { subagentRunStore } from "../services/subagents/subagent-run-store.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
+import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -431,6 +432,18 @@ export function registerChatHistoryHandlers(): void {
           error,
         );
         throw new Error("Aiden could not delete this chat's subagent history.");
+      }
+      try {
+        await piRuntimeEffectStore.deleteChat(chatId);
+      } catch (error) {
+        logger.error(
+          "pi",
+          "Could not delete private Pi effect history.",
+          error,
+        );
+        throw new Error(
+          "Aiden could not delete this chat's tool-effect history.",
+        );
       }
       try {
         await piCompactionSessionStore.deleteChat(chatId);

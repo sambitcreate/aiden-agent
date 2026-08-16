@@ -324,6 +324,23 @@ export function terminalAssistantTextFallback(
   return receivedTextDelta ? "" : terminalAssistantText(message);
 }
 
+/**
+ * Separate visible prose emitted by distinct Pi assistant turns. Providers do
+ * not guarantee boundary whitespace around tool calls, but Aiden presents the
+ * turns as one Markdown response, so preserve at least one paragraph break.
+ */
+export function assistantTurnTextSeparator(
+  previous: string,
+  next: string,
+): string {
+  if (!previous.trim() || !next.trim()) return "";
+  const trailingNewlines = previous.match(/\n*$/u)?.[0].length ?? 0;
+  const leadingNewlines = next.match(/^\n*/u)?.[0].length ?? 0;
+  return "\n".repeat(
+    Math.max(0, 2 - trailingNewlines - leadingNewlines),
+  );
+}
+
 /** Return visible, non-redacted thinking blocks from a terminal Pi assistant message. */
 export function terminalAssistantReasoning(message: {
   role?: string;
@@ -374,7 +391,9 @@ export function reconcileTerminalAssistantProjection(
   if (message.role !== "assistant") {
     return { ...accumulated, changed: false };
   }
-  const full = `${accumulated.full.slice(0, turnStart.full)}${terminalAssistantText(message)}`;
+  const fullPrefix = accumulated.full.slice(0, turnStart.full);
+  const terminalText = terminalAssistantText(message);
+  const full = `${fullPrefix}${assistantTurnTextSeparator(fullPrefix, terminalText)}${terminalText}`;
   const terminalReasoning = exposeReasoning
     ? terminalAssistantReasoning(message)
     : "";

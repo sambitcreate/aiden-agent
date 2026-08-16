@@ -4,6 +4,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -13,13 +14,47 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import {
+  appendDevLauncherEvent,
   brandMacDevRuntime,
   macDevRuntimeCodeIdentity,
+  macDevLauncherLogPath,
   macDevRuntimeLayout,
   validateMacDevRuntime,
 } from "./prepare-macos-dev-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("development launcher diagnostics use the isolated dev log root", () => {
+  assert.equal(
+    macDevLauncherLogPath({ HOME: "/Users/tester" }),
+    "/Users/tester/Library/Application Support/Aiden Agent Dev/logs/aiden-dev-launcher.log",
+  );
+  assert.equal(
+    macDevLauncherLogPath({
+      HOME: "/Users/tester",
+      AIDEN_DEV_LAUNCHER_LOG: "/tmp/custom-launcher.log",
+    }),
+    "/tmp/custom-launcher.log",
+  );
+  assert.equal(macDevLauncherLogPath({}), null);
+});
+
+test("development launcher diagnostics persist lifecycle details synchronously", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-dev-launcher-log-"));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const target = path.join(root, "nested", "launcher.log");
+
+  appendDevLauncherEvent(target, "electron_exit", {
+    code: null,
+    signal: "SIGTERM",
+    electronPid: 123,
+  });
+
+  assert.match(
+    await readFile(target, "utf8"),
+    /electron_exit \{"code":null,"signal":"SIGTERM","electronPid":123\}/u,
+  );
+});
 
 function plist({ displayName, executable, identifier, name }) {
   return `<?xml version="1.0" encoding="UTF-8"?>

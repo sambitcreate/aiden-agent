@@ -55,7 +55,7 @@ test("streaming and persisted messages reserve the same action and timeline shel
     "{timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (",
     "<AgentActivityTransition",
   );
-  assert.match(transientShell, /<ActivityFeed timeline=\{timeline\} \/>/u);
+  assert.match(transientShell, /<AssistantResponse[\s\S]*timeline=\{timeline\}/u);
   assert.match(
     transientShell,
     /<SubagentChips runs=\{liveSubagents\} onOpen=\{onOpenSubagent\} \/>/u,

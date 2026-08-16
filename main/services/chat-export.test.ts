@@ -36,7 +36,7 @@ const chat: Chat = {
       content: "Visible answer",
       reasoning: "PRIVATE REASONING",
       timeline: {
-        version: 2,
+        version: 3,
         generationId: "generation-private",
         status: "completed",
         startedAt: 2,

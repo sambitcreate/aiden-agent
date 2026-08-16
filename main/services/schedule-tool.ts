@@ -25,6 +25,7 @@ import {
   validateScheduledMcpServerBindings,
 } from "./schedule-mcp-binding.js";
 import { SCHEDULED_PROVIDER_FINGERPRINT } from "./schedule-provider-binding.js";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import {
   ASSISTANT_AUTOMATION_CRON_LIMIT,
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
@@ -844,7 +845,7 @@ export async function resolveAssistantScheduleMcpServers(
 export function createAssistantScheduleListTool(
   dependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
-  return {
+  return declarePiRuntimeReplay({
     name: LIST_SCHEDULED_TASKS_TOOL_NAME,
     label: "Scheduled Tasks",
     description:
@@ -864,7 +865,7 @@ export function createAssistantScheduleListTool(
         schedulerEnabled: await dependencies.isSchedulingEnabled(),
       });
     },
-  };
+  }, "safe");
 }
 
 export function createAssistantEditAutomationTool(

@@ -641,7 +641,7 @@ test("persists safe assistant milestones and drops invalid timeline data", async
   const store = await testStore(t);
   const chat = await store.create({});
   const timeline: GenerationTimeline = {
-    version: 2,
+    version: 3,
     generationId: "generation-1",
     status: "completed",
     startedAt: 10,
@@ -652,12 +652,14 @@ test("persists safe assistant milestones and drops invalid timeline data", async
         order: 0,
         kind: "tool",
         toolCallId: "call-1",
-        toolName: "read_file",
-        label: "Read file",
+        toolName: "edit_file",
+        label: "Edit file",
         status: "completed",
         startedAt: 11,
         updatedAt: 12,
         finishedAt: 12,
+        contentOffset: 0,
+        lineChanges: { additions: 7, deletions: 2 },
         target: "src/index.ts",
       },
     ],
@@ -677,6 +679,14 @@ test("persists safe assistant milestones and drops invalid timeline data", async
     } as GenerationTimeline,
   });
   await store.appendMessage(chat.id, {
+    role: "assistant",
+    content: "Short.",
+    timeline: {
+      ...timeline,
+      steps: [{ ...timeline.steps[0], contentOffset: 99 }],
+    },
+  });
+  await store.appendMessage(chat.id, {
     role: "user",
     content: "A renderer cannot attach milestones here.",
     timeline,
@@ -686,6 +696,7 @@ test("persists safe assistant milestones and drops invalid timeline data", async
   assert.deepEqual(updated?.messages[0]?.timeline, timeline);
   assert.equal(updated?.messages[1]?.timeline, undefined);
   assert.equal(updated?.messages[2]?.timeline, undefined);
+  assert.equal(updated?.messages[3]?.timeline, undefined);
 });
 
 test("drops a timeline injected into a stored non-assistant message", async (t) => {
@@ -696,7 +707,7 @@ test("drops a timeline injected into a stored non-assistant message", async (t) 
   const store = createChatStore(async () => directory);
   const chat = await store.create({});
   const timeline: GenerationTimeline = {
-    version: 2,
+    version: 3,
     generationId: "generation-1",
     status: "completed",
     startedAt: 10,

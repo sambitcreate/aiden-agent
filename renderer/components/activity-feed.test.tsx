@@ -35,7 +35,7 @@ function timeline(
   extra: Partial<GenerationTimeline> = {},
 ): GenerationTimeline {
   return {
-    version: 2,
+    version: 3,
     generationId: "generation-1",
     status,
     startedAt: 1,
@@ -125,6 +125,48 @@ test("the trail is a flat list, never a nested disclosure", () => {
   assert.match(markup, /Grepped<\/span><span[^>]*> export in services/u);
 });
 
+test("activity typography keeps summaries above compact details", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "read_file", "completed", { target: "package.json" }),
+        step(1, "run_command", "failed", { detail: "Run the test suite" }),
+      ])}
+    />,
+  );
+
+  assert.match(
+    markup,
+    /text-small-strong font-medium text-secondary activity-feed-summary-label/u,
+  );
+  assert.match(markup, /activity-feed-detail-label[^"]*text-mini text-secondary/u);
+  assert.match(markup, /text-secondary font-medium">Read/u);
+  assert.match(markup, /font-normal text-tertiary"> package\.json/u);
+  assert.match(markup, /text-red font-medium">run_command failed/u);
+});
+
+test("completed file mutations show accessible inline line totals", () => {
+  const markup = renderToStaticMarkup(
+    <ActivityFeed
+      timeline={timeline("completed", [
+        step(0, "edit_file", "completed", {
+          target: "renderer/app.tsx",
+          lineChanges: { additions: 1_240, deletions: 17 },
+        }),
+        step(1, "write_file", "completed", {
+          target: "empty.ts",
+          lineChanges: { additions: 0, deletions: 0 },
+        }),
+      ])}
+    />,
+  );
+
+  assert.match(markup, /aria-label="1240 additions, 17 deletions"/u);
+  assert.match(markup, /text-support-green">\+1\.2k/u);
+  assert.match(markup, /text-support-red">−17/u);
+  assert.equal((markup.match(/role="group"/gu) ?? []).length, 1);
+});
+
 test("the feed carries no outline of its own", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed timeline={timeline("completed", [step(0, "read_file")])} />,
@@ -137,11 +179,9 @@ test("the feed carries no outline of its own", () => {
 test("failed work is counted for review and states why", () => {
   const markup = renderToStaticMarkup(
     <ActivityFeed
-      timeline={timeline(
-        "completed",
-        [step(0, "read_file"), step(1, "run_command", "cancelled")],
-        { claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] } },
-      )}
+      timeline={timeline("completed", [step(0, "read_file"), step(1, "run_command", "cancelled")], {
+        claimCheck: { kind: "unverified_success", stepIds: ["tool-2"] },
+      })}
     />,
   );
   assert.match(markup, />1 issue</u);

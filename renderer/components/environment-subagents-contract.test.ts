@@ -299,8 +299,14 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   assert.match(environment, /normalizeEnvironmentPanelTab\(nextTab, subagentsEnabled\)/u);
   assert.match(environment, /if \(!subagentsEnabled\) return;/u);
   assert.match(environment, /\{subagentsEnabled \? \(\s*<SubagentLiveAnnouncer/u);
-  assert.match(messages, /\{subagentsEnabled && m\.role === "assistant" && m\.subagents \? \(/u);
-  assert.match(messages, /\{subagentsEnabled && liveSubagents\.length > 0 \? \(/u);
+  assert.match(
+    messages,
+    /subagentChips=\{\s*subagentsEnabled && m\.subagents \? \(/u,
+  );
+  assert.match(
+    messages,
+    /subagentChips=\{\s*subagentsEnabled && liveSubagents\.length > 0 \? \(/u,
+  );
   assert.match(pane, /visibleSubagentReferences\(messages, environmentPanel\.subagentsEnabled\)/u);
   assert.match(pane, /subagentsEnabled=\{environmentPanel\.subagentsEnabled\}/u);
 });

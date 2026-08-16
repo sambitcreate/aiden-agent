@@ -8,6 +8,7 @@ import {
 import type { Model, ProviderStreams } from "@earendil-works/pi-ai";
 import {
   PI_AUTH_COMPATIBILITY_TOKEN,
+  assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
   resolveGenerationThinkingLevel,
   reconcileTerminalAssistantProjection,
@@ -697,6 +698,42 @@ test("falls back per assistant turn instead of dropping a later terminal-only re
   );
 });
 
+test("separates distinct assistant turns with one Markdown paragraph boundary", () => {
+  assert.equal(
+    assistantTurnTextSeparator("First turn.", "Second turn."),
+    "\n\n",
+  );
+  assert.equal(
+    assistantTurnTextSeparator("First turn.\n", "Second turn."),
+    "\n",
+  );
+  assert.equal(
+    assistantTurnTextSeparator("First turn.\n\n", "Second turn."),
+    "",
+  );
+  assert.equal(
+    assistantTurnTextSeparator("First turn.", "\nSecond turn."),
+    "\n",
+  );
+  assert.equal(assistantTurnTextSeparator("", "Second turn."), "");
+});
+
+test("terminal reconciliation preserves paragraph boundaries across tool-separated turns", () => {
+  const projection = reconcileTerminalAssistantProjection(
+    { full: "Before the tool.", reasoning: "" },
+    { full: "Before the tool.".length, reasoning: 0 },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "After the tool." }],
+    },
+    false,
+  );
+  assert.equal(
+    projection.full,
+    "Before the tool.\n\nAfter the tool.",
+  );
+});
+
 test("reconciles interleaved streamed blocks to Pi terminal content order", () => {
   const projection = reconcileTerminalAssistantProjection(
     {
@@ -715,7 +752,10 @@ test("reconciles interleaved streamed blocks to Pi terminal content order", () =
     },
     true,
   );
-  assert.equal(projection.full, "Earlier turn.First block. Second block.");
+  assert.equal(
+    projection.full,
+    "Earlier turn.\n\nFirst block. Second block.",
+  );
   assert.equal(
     projection.reasoning,
     "Earlier reasoning.\n\nEarly thought.\n\nLate thought.",

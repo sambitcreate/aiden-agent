@@ -15,6 +15,10 @@ import {
   isActiveStep,
   summarizeActivity,
 } from "./agent-steps.js";
+import {
+  activityTimelineFragment,
+  assistantPresentationRows,
+} from "./assistant-message-presentation.js";
 
 function step(
   id: string,
@@ -50,7 +54,7 @@ function thinking(id: string, order: number, durationMs?: number): AgentThinking
 
 function timeline(status: GenerationTimeline["status"], steps: AgentStep[]): GenerationTimeline {
   return {
-    version: 2,
+    version: 3,
     generationId: "generation-1",
     status,
     startedAt: 1,
@@ -67,6 +71,14 @@ function tools(counts: Record<string, number>): AgentToolStep[] {
     }
   }
   return steps;
+}
+
+function positionedTool(
+  order: number,
+  contentOffset: number,
+  toolName = "read_file",
+): AgentToolStep {
+  return step(`tool-${order + 1}`, order, toolName, "completed", { contentOffset });
 }
 
 test("splits a row into a verb and the object it acted on", () => {
@@ -87,6 +99,83 @@ test("splits a row into a verb and the object it acted on", () => {
     activityLineText(step("automation", 2, "edit_automation", "completed")),
     "Edited automation",
   );
+});
+
+test("alternates prose and grouped activity at exact assistant-text boundaries", () => {
+  const content = "Before.Between.After.";
+  const rows = assistantPresentationRows(
+    content,
+    timeline("completed", [
+      positionedTool(0, 7),
+      positionedTool(1, 15, "grep"),
+      positionedTool(2, 15, "subagent"),
+    ]),
+  );
+
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "text"
+        ? [row.kind, row.content]
+        : [row.kind, row.steps.map((entry) => entry.id)],
+    ),
+    [
+      ["text", "Before."],
+      ["activity", ["tool-1"]],
+      ["text", "Between."],
+      ["activity", ["tool-2", "tool-3"]],
+      ["text", "After."],
+    ],
+  );
+});
+
+test("assistant presentation fails closed for legacy or invalid offsets", () => {
+  const current = timeline("completed", [positionedTool(0, 2), positionedTool(1, 3)]);
+  assert.equal(
+    assistantPresentationRows("text", {
+      ...current,
+      steps: current.steps.map(({ contentOffset: _offset, ...entry }) => entry),
+    }),
+    null,
+  );
+  assert.equal(
+    assistantPresentationRows("text", {
+      ...current,
+      steps: [positionedTool(0, 3), positionedTool(1, 2)],
+    }),
+    null,
+  );
+  assert.equal(
+    assistantPresentationRows("text", {
+      ...current,
+      steps: [positionedTool(0, 5)],
+    }),
+    null,
+  );
+});
+
+test("the active prose segment keeps a stable key while streaming grows", () => {
+  const positioned = timeline("running", [positionedTool(0, 7)]);
+  const first = assistantPresentationRows("Before.A", positioned);
+  const second = assistantPresentationRows("Before.A longer tail", positioned);
+  assert.ok(first && second);
+  assert.equal(first[first.length - 1]?.key, second[second.length - 1]?.key);
+});
+
+test("activity fragments keep only local claim checks and settle inactive live groups", () => {
+  const first = positionedTool(0, 0);
+  const second = {
+    ...positionedTool(1, 0, "edit_file"),
+    status: "failed" as const,
+  };
+  const source: GenerationTimeline = {
+    ...timeline("running", [first, second]),
+    claimCheck: { kind: "unverified_success", stepIds: [second.id] },
+  };
+  const firstFragment = activityTimelineFragment(source, [first]);
+  const secondFragment = activityTimelineFragment(source, [second]);
+  assert.equal(firstFragment.status, "completed");
+  assert.equal(firstFragment.claimCheck, undefined);
+  assert.deepEqual(secondFragment.claimCheck?.stepIds, [second.id]);
 });
 
 test("grep reads as a pattern scoped to a directory", () => {
