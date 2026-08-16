@@ -448,7 +448,14 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           }
           const lease = await runtime.prepareIsolatedStream(model, options);
           requestModel = lease.model;
-          requestOptions = lease.options;
+          const allowedEnv = ambientProviderEnv(
+            model.provider,
+            lease.options.env,
+          );
+          requestOptions = {
+            ...lease.options,
+            env: Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined,
+          };
           leaseSignal = lease.signal;
           observeResult = lease.observeResult;
         } else {

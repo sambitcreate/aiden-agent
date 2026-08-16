@@ -629,10 +629,64 @@ test("a terminal persistence failure exposes local unknown evidence and restart 
       /simulated terminal write failure/u,
     );
     assert.equal((await store.getEffect(effectOwner(input)))?.state, "unknown");
+    assert.deepEqual(
+      (await store.listEffectsNeedingRecoveryByChat(operationInput.chatId)).map(
+        ({ state }) => state,
+      ),
+      ["unknown"],
+    );
+
+    failWrites = false;
+    const recovered = await store.markRecoveryRecorded(effectOwner(input));
+    assert.equal(recovered.state, "unknown");
+    assert.equal(recovered.recoveryRecordedAt !== undefined, true);
 
     const restarted = makeStore(directory, 100);
     await restarted.initialize();
     assert.equal((await restarted.getEffect(effectOwner(input)))?.state, "unknown");
+    assert.equal(
+      (await restarted.getEffect(effectOwner(input)))?.recoveryRecordedAt !== undefined,
+      true,
+    );
+  });
+});
+
+test("same-process local unknown evidence does not block explicit chat deletion", async () => {
+  await withTempDirectory(async (directory) => {
+    let failWrites = false;
+    const dataStore = new DataStore(STORE_NAME, emptyPiRuntimeEffectDatabase(), () => directory, {
+      maxBytes: 8 * 1024 * 1024,
+      normalize: (value) =>
+        parseDurablePiRuntimeEffectDatabase(value) ?? emptyPiRuntimeEffectDatabase(),
+      isSafe: (value) => parseDurablePiRuntimeEffectDatabase(value) !== undefined,
+      rejectCorruptWrite: true,
+      rejectUnsafeWrite: true,
+      beforeWritePublish: () => {
+        if (failWrites) throw new Error("simulated terminal write failure");
+      },
+    });
+    const store = new PiRuntimeEffectStore({ root: () => directory, dataStore });
+    await store.initialize();
+    const operationInput = operation();
+    const input = effect(operationInput);
+    await store.startOperation(operationInput);
+    await store.prepareEffect(input);
+    await store.markEffectDispatchStarted(effectOwner(input));
+    failWrites = true;
+    await assert.rejects(
+      () =>
+        store.finishEffect({
+          ...effectOwner(input),
+          state: "completed",
+          terminalDigest: piRuntimeTerminalDigest("result"),
+        }),
+      /simulated terminal write failure/u,
+    );
+    failWrites = false;
+    await store.finishOperation(operationInput.operationId, "interrupted");
+    await store.deleteChat(operationInput.chatId);
+    assert.deepEqual(await store.listEffectsByChat(operationInput.chatId), []);
+    assert.deepEqual(await store.listOperationsByChat(operationInput.chatId), []);
   });
 });
 

@@ -245,14 +245,24 @@ export class PiRuntimeEffectStore {
       throw new Error("Invalid Pi runtime operation completion.");
     }
     const updatedAt = this.currentTime();
-    return this.data.update((database) => {
+    const localTerminalEffects = [...this.localUnknown.values()].filter(
+      (effect) => effect.operationId === operationId,
+    );
+    const finished = await this.data.update((database) => {
       const index = database.operations.findIndex(
         (operation) => operation.operationId === operationId,
       );
       const operation = database.operations[index];
       if (!operation) throw new Error("Pi runtime operation was not found.");
+      database.effects = database.effects.map((effect) => {
+        const local = this.localUnknown.get(effect.effectId);
+        return local && local.operationId === operationId ? local : effect;
+      });
       if (operation.state !== "running") {
-        if (operation.state === state) return structuredClone(operation);
+        if (operation.state === state) {
+          if (localTerminalEffects.length > 0) database.revision += 1;
+          return structuredClone(operation);
+        }
         throw new Error("Pi runtime operation is already terminal.");
       }
       if (
@@ -272,6 +282,8 @@ export class PiRuntimeEffectStore {
       database.revision += 1;
       return structuredClone(finished);
     });
+    for (const effect of localTerminalEffects) this.localUnknown.delete(effect.effectId);
+    return finished;
   }
 
   async prepareEffect(input: PreparePiRuntimeEffectInput): Promise<DurablePiRuntimeEffect> {
@@ -505,6 +517,7 @@ export class PiRuntimeEffectStore {
     if (!isSafePiRuntimeIdentity(chatId)) return [];
     const database = await this.data.load();
     return database.effects
+      .map((effect) => this.localUnknown.get(effect.effectId) ?? effect)
       .filter(
         (effect) =>
           effect.chatId === chatId &&
@@ -523,12 +536,14 @@ export class PiRuntimeEffectStore {
     const owner = parseDurablePiRuntimeEffectOwner(value);
     if (!owner) throw new Error("Invalid Pi runtime effect recovery owner.");
     const recordedAt = this.currentTime();
-    return this.data.update((database) => {
+    const local = this.localUnknown.get(owner.effectId);
+    const recovered = await this.data.update((database) => {
       const index = database.effects.findIndex(({ effectId }) => effectId === owner.effectId);
-      const effect = database.effects[index];
-      if (!effect || !ownerMatches(effect, owner)) {
+      const durable = database.effects[index];
+      if (!durable || !ownerMatches(durable, owner) || (local && !ownerMatches(local, owner))) {
         throw new Error("Pi runtime effect recovery ownership mismatch.");
       }
+      const effect = local ?? durable;
       if (effect.recoveryRecordedAt !== undefined) return structuredClone(effect);
       if (!isPiRuntimeEffectTerminal(effect.state)) {
         throw new Error("An active Pi runtime effect cannot be recovery-recorded.");
@@ -541,6 +556,8 @@ export class PiRuntimeEffectStore {
       database.revision += 1;
       return structuredClone(recovered);
     });
+    this.localUnknown.delete(owner.effectId);
+    return recovered;
   }
 
   /**
@@ -586,7 +603,10 @@ export class PiRuntimeEffectStore {
           (operation) => operation.chatId === chatId && operation.state === "running",
         ) ||
         database.effects.some(
-          (effect) => effect.chatId === chatId && !isPiRuntimeEffectTerminal(effect.state),
+          (effect) => {
+            const effective = this.localUnknown.get(effect.effectId) ?? effect;
+            return effective.chatId === chatId && !isPiRuntimeEffectTerminal(effective.state);
+          },
         )
       ) {
         throw new Error("Pi runtime chat has active durable effects and cannot be deleted.");

@@ -310,6 +310,9 @@ test("isolated built-in provider environments preserve only reviewed parity vari
   assert.deepEqual(ambientProviderEnv("anthropic", source), {
     PI_CACHE_RETENTION: source.PI_CACHE_RETENTION,
   });
+  assert.deepEqual(ambientProviderEnv("openai-codex", source), {
+    PI_CACHE_RETENTION: source.PI_CACHE_RETENTION,
+  });
   assert.deepEqual(ambientProviderEnv("cloudflare-ai-gateway", source), {
     CLOUDFLARE_ACCOUNT_ID: source.CLOUDFLARE_ACCOUNT_ID,
     CLOUDFLARE_GATEWAY_ID: source.CLOUDFLARE_GATEWAY_ID,

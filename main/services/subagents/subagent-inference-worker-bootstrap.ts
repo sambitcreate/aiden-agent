@@ -25,6 +25,21 @@ for (const name of [
   });
 }
 
+// Supported Node/Electron releases do not currently expose this namespace,
+// but define it as a closed trap so a future child_process promises surface
+// cannot silently bypass the top-level lockdown.
+Object.defineProperty(childProcess, "promises", {
+  value: Object.freeze({
+    exec: subprocessDisabled,
+    execFile: subprocessDisabled,
+    fork: subprocessDisabled,
+    spawn: subprocessDisabled,
+  }),
+  configurable: false,
+  enumerable: true,
+  writable: false,
+});
+
 // Keep later ESM named imports (for example `import { exec }`) bound to the
 // disabled functions rather than Node's original built-in export cells.
 syncBuiltinESMExports();
