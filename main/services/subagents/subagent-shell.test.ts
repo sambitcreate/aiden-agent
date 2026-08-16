@@ -86,6 +86,7 @@ function harness(
     outcome?: "exited" | "cleanup_unconfirmed";
     longOutput?: boolean;
     waitForAbort?: boolean;
+    onRunShellStart?: () => void;
   } = {},
 ) {
   const granted = authority(workspace);
@@ -119,6 +120,7 @@ function harness(
     },
     runShell: async ({ command, workspaceRoot, signal }) => {
       rawCalls += 1;
+      options.onRunShellStart?.();
       assert.equal(command, "printf 'one'\nprintf 'two'");
       assert.equal(workspaceRoot.path, workspace.folderPath);
       if (options.waitForAbort) {
@@ -275,7 +277,11 @@ test("workspace drift blocks dispatch and bounded output preserves head and tail
 
 test("in-flight cancellation stops the helper path and throws the original abort", async (t) => {
   const workspace = await fixture(t);
-  const run = harness(workspace, { waitForAbort: true });
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const run = harness(workspace, { waitForAbort: true, onRunShellStart: markStarted });
   const command = "printf 'one'\nprintf 'two'";
   await run.gate.beforeToolCall(call(command));
   const controller = new AbortController();
@@ -286,7 +292,8 @@ test("in-flight cancellation stops the helper path and throws the original abort
     arguments: { command },
     signal: controller.signal,
   });
-  setTimeout(() => controller.abort(reason), 5);
+  await started;
+  controller.abort(reason);
   await assert.rejects(pending, (error) => error === reason);
   assert.equal(run.rawCalls(), 1);
   assert.equal(run.transitions[run.transitions.length - 1], "remote_error");
