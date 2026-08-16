@@ -9,6 +9,7 @@ import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 export type ProviderKind = "openai" | "anthropic";
@@ -189,8 +190,10 @@ export interface ChatMessage {
   model?: string;
   /** Deliberately exposed provider reasoning retained on an assistant message. */
   reasoning?: string;
-  /** Canonical Pi assistant protocol payload; diagnostics are deliberately excluded. */
-  pi?: Omit<AssistantMessage, "diagnostics">;
+  /** Canonical Pi assistant protocol payload; raw errors and diagnostics are excluded. */
+  pi?: Omit<AssistantMessage, "diagnostics" | "errorMessage">;
+  /** Closed, renderer-safe terminal provider outcome. */
+  providerFailure?: ProviderFailureV1;
   /** Files attached to a user message. */
   attachments?: Attachment[];
   /** Safe display-only provenance for an explicitly invoked skill. */

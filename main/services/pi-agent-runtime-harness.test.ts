@@ -1072,7 +1072,16 @@ test("managed outcomes keep provider failure details behind the private journal"
   assert.equal(outcome.attempts, 2);
   assert.equal(
     outcome.kind === "provider_failed" ? outcome.finalMessageWasAbandoned : undefined,
-    true,
+    undefined,
+  );
+  assert.deepEqual(
+    outcome.kind === "provider_failed" ? outcome.providerFailure : undefined,
+    {
+      version: 1,
+      category: "network",
+      attempts: 2,
+      retryExhausted: true,
+    },
   );
   assert.doesNotMatch(JSON.stringify(outcome), /PRIVATE_PROVIDER_CANARY/u);
 });
@@ -1188,10 +1197,8 @@ test("managed cancellation settles while input journaling is still pending", asy
   assert.equal(core.state.callCount, 0);
 });
 
-test("managed cancellation exposes a detached prior-tail repair for quarantine", async () => {
-  const { core, harness, session } = await managedTestHarness([
-    fauxAssistantMessage("must not run"),
-  ]);
+test("managed startup keeps a prior failed assistant durable", async () => {
+  const { harness, session } = await managedTestHarness([fauxAssistantMessage("recovered")]);
   const model = harness.state.model;
   await appendPiMessages(session, [
     {
@@ -1210,22 +1217,7 @@ test("managed cancellation exposes a detached prior-tail repair for quarantine",
       model: model.id,
     },
   ]);
-  let moveStarted!: () => void;
-  let releaseMove!: () => void;
-  const atMove = new Promise<void>((resolve) => {
-    moveStarted = resolve;
-  });
-  const moveGate = new Promise<void>((resolve) => {
-    releaseMove = resolve;
-  });
-  const originalMoveTo = session.moveTo.bind(session);
-  session.moveTo = async (entryId) => {
-    moveStarted();
-    await moveGate;
-    return originalMoveTo(entryId);
-  };
-
-  const running = harness.runManaged({
+  const outcome = await harness.runManaged({
     kind: "append-and-run",
     message: {
       role: "user",
@@ -1233,25 +1225,16 @@ test("managed cancellation exposes a detached prior-tail repair for quarantine",
       timestamp: 30,
     },
   });
-  await atMove;
-  const outcome = await harness.cancelAndSettle();
-  const finalOutcome = await running;
-  assert.equal(outcome?.kind, "app_cancelled");
-  assert.equal(finalOutcome.kind, "app_cancelled");
-  const detached = harness.pendingDurabilitySettlement();
-  assert.ok(detached);
-  assert.equal(core.state.callCount, 0);
-
-  releaseMove();
-  await detached;
-  assert.equal(harness.pendingDurabilitySettlement(), undefined);
-  assert.deepEqual(
-    (await session.buildContext()).messages.map((message) => message.role),
-    ["user"],
+  assert.equal(outcome.kind, "completed");
+  assert.equal(
+    (await session.buildContext()).messages.some(
+      (message) => message.role === "assistant" && message.stopReason === "error",
+    ),
+    true,
   );
 });
 
-test("managed run removes a prior retryable assistant before the new provider context", async () => {
+test("managed run preserves a prior failed assistant for a later ordinary prompt", async () => {
   let observedRoles: string[] = [];
   let observedText = "";
   const { harness, session } = await managedTestHarness([
@@ -1289,11 +1272,11 @@ test("managed run removes a prior retryable assistant before the new provider co
   });
 
   assert.equal(outcome.kind, "completed");
-  assert.deepEqual(observedRoles, ["user", "user"]);
-  assert.doesNotMatch(observedText, /PRIVATE_PRIOR_FAILURE/u);
+  assert.deepEqual(observedRoles, ["user", "assistant", "user"]);
+  assert.match(observedText, /PRIVATE_PRIOR_FAILURE/u);
 });
 
-test("required preflight compaction failure starts no provider request", async () => {
+test("preflight without valid usage does not require compaction", async () => {
   const { core, harness, session } = await managedTestHarness(
     [fauxAssistantMessage("must not run")],
     { contextWindow: 2_048 },
@@ -1333,16 +1316,11 @@ test("required preflight compaction failure starts no provider request", async (
     },
   });
 
-  assert.equal(outcome.kind, "provider_failed");
-  assert.equal(
-    outcome.kind === "provider_failed" ? outcome.reason : undefined,
-    "compaction-failed",
-  );
-  assert.equal(outcome.attempts, 0);
-  assert.equal(core.state.callCount, 0);
+  assert.equal(outcome.kind, "completed");
+  assert.equal(core.state.callCount, 1);
 });
 
-test("required preflight compaction maps isolated failures to the host boundary", async () => {
+test("preflight without valid usage reaches provider before a pending host fault wins", async () => {
   let pendingFailure: "inference" | undefined = "inference";
   const { core, harness, session } = await managedTestHarness(
     [fauxAssistantMessage("must not run")],
@@ -1378,11 +1356,12 @@ test("required preflight compaction maps isolated failures to the host boundary"
     message: { role: "user", content: "current", timestamp: 50 },
   });
 
-  assert.deepEqual(outcome, { kind: "host_failed", faultKind: "inference", attempts: 0 });
-  assert.equal(core.state.callCount, 0);
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(core.state.callCount, 1);
+  assert.equal(pendingFailure, undefined);
 });
 
-test("managed cancellation during immediate compaction stays app-cancelled", async () => {
+test("cancellation after a large tool result does not wait for forced compaction", async () => {
   const provider = `aiden-immediate-compaction-${Math.random().toString(36).slice(2)}`;
   const api = `aiden-immediate-compaction-api-${Math.random().toString(36).slice(2)}`;
   const core = createFauxCore({ api, provider });
@@ -1422,10 +1401,13 @@ test("managed cancellation during immediate compaction stays app-cancelled", asy
     label: "Large result",
     description: "Produce a result that requires immediate compaction.",
     parameters: Type.Object({}),
-    execute: async () => ({
-      content: [{ type: "text", text: "x".repeat(140_000) }],
-      details: null,
-    }),
+    execute: async () => {
+      summaryStarted();
+      return {
+        content: [{ type: "text", text: "x".repeat(140_000) }],
+        details: null,
+      };
+    },
   };
   core.setResponses([
     fauxAssistantMessage([fauxToolCall(tool.name, {})], {
@@ -1471,9 +1453,10 @@ test("managed cancellation during immediate compaction stays app-cancelled", asy
   assert.equal(settled?.kind, "app_cancelled");
   assert.equal(outcome.kind, "app_cancelled");
   assert.equal(core.state.callCount, 1);
+  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
-test("non-cooperative between-tool checkpoint writes remain exposed for quarantine", async () => {
+test("cancellation exposes no detached forced between-tool checkpoint", async () => {
   const provider = `aiden-detached-checkpoint-${Math.random().toString(36).slice(2)}`;
   const api = `aiden-detached-checkpoint-api-${Math.random().toString(36).slice(2)}`;
   const core = createFauxCore({ api, provider });
@@ -1492,10 +1475,13 @@ test("non-cooperative between-tool checkpoint writes remain exposed for quaranti
     label: "Detached large result",
     description: "Produce enough output to force a between-tool checkpoint.",
     parameters: Type.Object({}),
-    execute: async () => ({
-      content: [{ type: "text", text: "x".repeat(140_000) }],
-      details: null,
-    }),
+    execute: async () => {
+      checkpointStarted();
+      return {
+        content: [{ type: "text", text: "x".repeat(140_000) }],
+        details: null,
+      };
+    },
   };
   core.setResponses([
     fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
@@ -1546,12 +1532,41 @@ test("non-cooperative between-tool checkpoint writes remain exposed for quaranti
   const settled = await harness.cancelAndSettle();
   assert.equal(settled?.kind, "app_cancelled");
   const detached = harness.pendingDurabilitySettlement();
-  assert.ok(detached);
   releaseCheckpoint();
   await detached;
   assert.equal((await running).kind, "app_cancelled");
   assert.equal(harness.pendingDurabilitySettlement(), undefined);
   assert.equal(core.state.callCount, 1);
+  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
+});
+
+test("large tool results do not force a semantic checkpoint before the next provider call", async () => {
+  const tool: AgentTool = {
+    name: "large_unforced_result",
+    label: "Large unforced result",
+    description: "Return a large result without an Aiden-only checkpoint.",
+    parameters: Type.Object({}),
+    execute: async () => ({
+      content: [{ type: "text", text: "x".repeat(140_000) }],
+      details: null,
+    }),
+  };
+  const { core, harness, session } = await managedTestHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("completed without a forced checkpoint"),
+    ],
+    { tools: [tool] },
+  );
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "produce the large result", timestamp: Date.now() },
+  });
+
+  assert.equal(outcome.kind, "completed");
+  assert.equal(core.state.callCount, 2);
+  assert.equal((await session.getBranch()).some((entry) => entry.type === "compaction"), false);
 });
 
 test("provider hooks receive curated options and compose payload/response hooks in Pi order", async () => {

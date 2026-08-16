@@ -8,7 +8,10 @@ import {
   toPiMessages,
 } from "./generation-messages.js";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
-import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
+import {
+  parseStoredPiAssistantMessage,
+  storedPiAssistantMessage,
+} from "./pi-message-storage.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -179,6 +182,37 @@ test("stored Pi provenance rejects malformed nested provider protocol", () => {
     { ...valid, usage: { ...valid.usage, input: Number.NaN } },
     { ...valid, usage: { ...valid.usage, cost: { ...valid.usage.cost, total: -1 } } },
   ]) assert.equal(parseStoredPiAssistantMessage(malformed), undefined);
+});
+
+test("stored Pi provenance strips raw provider errors and diagnostics", () => {
+  const privateCanary = "PRIVATE_PROVIDER_ERROR_91fc";
+  const failed = {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "partial" }],
+    api: "anthropic-messages" as const,
+    provider: "anthropic",
+    model: "claude",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: privateCanary,
+    diagnostics: { privateCanary },
+    timestamp: 10,
+  };
+  assert.doesNotMatch(
+    JSON.stringify(storedPiAssistantMessage(failed as never)),
+    new RegExp(privateCanary, "u"),
+  );
+  assert.doesNotMatch(
+    JSON.stringify(parseStoredPiAssistantMessage(failed)),
+    new RegExp(privateCanary, "u"),
+  );
 });
 
 test("an explicit invocation overrides only the exact in-memory current turn", () => {

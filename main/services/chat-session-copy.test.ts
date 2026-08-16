@@ -33,6 +33,12 @@ test("clone and fork copy visible linear history with fresh identities", async (
     role: "assistant",
     content: "First response",
     reasoning: "PRIVATE REASONING",
+    providerFailure: {
+      version: 1,
+      category: "network",
+      attempts: 2,
+      retryExhausted: true,
+    },
   });
   await store.appendMessage(chat.id, { role: "user", content: "Second request" });
   await store.appendMessage(chat.id, {
@@ -71,6 +77,18 @@ test("clone and fork copy visible linear history with fresh identities", async (
   assert.ok(clone.messages.every((message) => message.reasoning === undefined));
   assert.ok(clone.messages.every((message) => message.timeline === undefined));
   assert.ok(clone.messages.every((message) => message.subagents === undefined));
+  assert.deepEqual(clone.messages[1]?.providerFailure, {
+    version: 1,
+    category: "network",
+    attempts: 2,
+    retryExhausted: true,
+  });
+  assert.deepEqual(fork.messages[1]?.providerFailure, clone.messages[1]?.providerFailure);
+  const restarted = createChatStore(async () => directory);
+  assert.deepEqual(
+    (await restarted.get(clone.id))?.messages[1]?.providerFailure,
+    clone.messages[1]?.providerFailure,
+  );
   assert.deepEqual(clone.messages[0]?.skill, {
     version: 1,
     name: "Review",
