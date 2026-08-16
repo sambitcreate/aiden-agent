@@ -6,7 +6,7 @@ import { AssistantComputerUseApproval } from "./assistant-computer-use-approval"
 import { AssistantRecent } from "./assistant-recent";
 import { AssistantThread } from "./assistant-thread";
 import { Button, Textarea } from "../ui";
-import { AssistantLive } from "./assistant-live";
+import { AssistantLive, AssistantLiveEntryPoint } from "./assistant-live";
 import type { AssistantLiveController } from "./use-assistant-live";
 import { assistantThreadChangeBlockedReason } from "./assistant-live-ownership";
 import {
@@ -212,17 +212,20 @@ export function AssistantPanel({
                 <Square className="fill-current" />
               </Button>
             ) : (
-              <Button
-                variant="accent"
-                size="small"
-                iconOnly
-                className="rounded-full"
-                aria-label="Send message"
-                disabled={!canSend}
-                onClick={submit}
-              >
-                <ArrowUp />
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <AssistantLiveEntryPoint live={live} />
+                <Button
+                  variant="accent"
+                  size="small"
+                  iconOnly
+                  className="rounded-full"
+                  aria-label="Send message"
+                  disabled={!canSend}
+                  onClick={submit}
+                >
+                  <ArrowUp />
+                </Button>
+              </div>
             )}
           </div>
         </div>
