@@ -183,7 +183,9 @@ export async function verifyPackagedSubagentInferenceWorker(appAsar) {
   const promiseLockdownIndex = bootstrap.indexOf(
     'Object.defineProperty(childProcess, "promises"',
   );
-  const syncIndex = bootstrap.indexOf("syncBuiltinESMExports");
+  // The emitted ESM bootstrap names this symbol in its import before any
+  // lockdown code. Match the invocation, not the import declaration.
+  const syncIndex = bootstrap.indexOf("syncBuiltinESMExports();", promiseLockdownIndex);
   const runtimeImportIndex = bootstrap.indexOf("subagent-inference-worker-runtime.js");
   const requiredSubprocessNames = [
     '"exec"',
