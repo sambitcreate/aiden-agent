@@ -8,6 +8,20 @@ export const GEMINI_LIVE_MAX_PLAYBACK_BYTES = GEMINI_LIVE_PLAYBACK_SAMPLE_RATE *
 const TARGET_SAMPLES_PER_CHUNK =
   (GEMINI_LIVE_WORKLET_SAMPLE_RATE * GEMINI_LIVE_WORKLET_CHUNK_MS) / 1_000;
 
+/** Local-only normalized RMS used to render truthful microphone activity. */
+export function measureGeminiLivePcmLevel(pcm: Uint8Array): number {
+  if (!(pcm instanceof Uint8Array) || pcm.byteLength === 0 || pcm.byteLength % 2 !== 0)
+    return 0;
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  let squareSum = 0;
+  for (let offset = 0; offset < pcm.byteLength; offset += 2) {
+    const sample = view.getInt16(offset, true) / 32_768;
+    squareSum += sample * sample;
+  }
+  const rms = Math.sqrt(squareSum / (pcm.byteLength / 2));
+  return Math.min(1, rms * 4);
+}
+
 export interface DisplayMediaTrack {
   readonly readyState?: string;
   addEventListener(type: "ended", listener: () => void, options?: { once?: boolean }): void;
@@ -129,7 +143,6 @@ export class GeminiLivePcmChunker {
     this.pending = [];
   }
 }
-
 /** Bounded raw 24 kHz PCM queue; interruption discards every buffered byte. */
 export class GeminiLivePcmPlaybackQueue {
   private chunks: Uint8Array[] = [];
