@@ -67,6 +67,7 @@ import { createPiCompactionModels, type PiCompactionEvent } from "./pi-compactio
 import {
   beginPiVisibleTurnLease,
   piCompactionSessionStore,
+  recordPiEffectRecoveryBoundary,
   syncChatMessagesToPiSession,
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
@@ -1087,6 +1088,23 @@ export const llmClient = {
       }
       journalContentOverrides = contentOverrides;
       await syncChatMessagesToPiSession(promptJournal, priorVisibleMessages, model, supportsImages);
+      // Visible history must precede the recovery boundary. Installing this at
+      // app startup could put a recreated/rolled-back journal warning before
+      // older ChatStore messages and let compaction discard the safety tail.
+      const recoveryEffects = await piRuntimeEffectStore.listEffectsNeedingRecoveryByChat(
+        params.chatId,
+      );
+      if (recoveryEffects.length > 0) {
+        await recordPiEffectRecoveryBoundary(promptJournal, recoveryEffects);
+        for (const effect of recoveryEffects) {
+          await piRuntimeEffectStore.markRecoveryRecorded({
+            effectId: effect.effectId,
+            operationId: effect.operationId,
+            runId: effect.runId,
+            chatId: effect.chatId,
+          });
+        }
+      }
       currentPromptMessage = currentUser
         ? chatMessageToPiMessage(
             currentUser,
@@ -1654,6 +1672,13 @@ export const llmClient = {
         await turnLease.commit(persisted.messageId, {
           markerAlreadyPersisted: reconcileAbandonedVisibleAssistant,
         });
+        try {
+          await piRuntimeEffectStore.acknowledgeChatEffectsDurable(params.chatId);
+        } catch (error) {
+          // The Pi turn is already durable. Leaving the effect unacknowledged
+          // makes startup install a conservative no-repeat boundary.
+          logger.warn("pi", `Could not acknowledge durable effects for stream ${streamId}.`, error);
+        }
       } catch (error) {
         logger.warn(
           "pi",

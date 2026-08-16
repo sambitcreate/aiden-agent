@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DataStore } from "./data-store.js";
+import {
+  PiCompactionSessionStore,
+  recordPiEffectRecoveryBoundary,
+} from "./pi-compaction-session-store.js";
 import {
   MAX_PI_RUNTIME_OPERATIONS,
   digestPiRuntimeEffectArguments,
@@ -92,6 +96,14 @@ test("argument snapshots are canonical, bounded, and reject hostile non-JSON inp
   assert.equal(reservedSnapshot.canonical, '{"__proto__":{"sentinel":"retained"}}');
   assert.notEqual(reservedSnapshot.digest, snapshotPiRuntimeEffectArguments({}).digest);
   assert.notEqual(digestPiRuntimeEffectArguments(reserved), digestPiRuntimeEffectArguments({}));
+  assert.notEqual(
+    digestPiRuntimeEffectArguments("\ud800"),
+    digestPiRuntimeEffectArguments("\ud801"),
+  );
+  assert.notEqual(
+    digestPiRuntimeEffectArguments({ "\ud800": true }),
+    digestPiRuntimeEffectArguments({ "\ud801": true }),
+  );
 
   let getterCalls = 0;
   const accessor = Object.defineProperty({}, "secret", {
@@ -164,6 +176,115 @@ test("strict parsers enforce exact schemas and replay argument invariants", () =
     }),
     undefined,
   );
+});
+
+test("restart recovery installs one durable no-repeat boundary before releasing evidence", async () => {
+  await withTempDirectory(async (directory) => {
+    const effectRoot = path.join(directory, "effects");
+    const piRoot = path.join(directory, "pi");
+    await mkdir(piRoot, { recursive: true });
+    const first = makeStore(effectRoot);
+    await first.initialize();
+    const neverOperation = operation("operation-never", "chat-recovery");
+    await first.startOperation(neverOperation);
+    const neverEffect = effect(neverOperation, "effect-never", {
+      toolName: "write_file",
+      replay: "never",
+      arguments: { path: "/private/workspace/file", content: "PRIVATE_ARGUMENT" },
+    });
+    await first.prepareEffect(neverEffect);
+    await first.markEffectDispatchStarted(effectOwner(neverEffect));
+
+    const safeOperation = operation("operation-safe", "chat-recovery");
+    await first.startOperation(safeOperation);
+    const safeEffect = effect(safeOperation, "effect-safe", {
+      toolName: "read_file",
+      replay: "safe",
+    });
+    await first.prepareEffect(safeEffect);
+    await first.markEffectDispatchStarted(effectOwner(safeEffect));
+    await first.finishEffect({
+      ...effectOwner(safeEffect),
+      state: "completed",
+      terminalDigest: piRuntimeTerminalDigest("read complete"),
+    });
+    await first.finishOperation(safeOperation.operationId, "completed");
+
+    const restarted = makeStore(effectRoot, 2_000);
+    await restarted.initialize();
+    const pending = await restarted.listEffectsNeedingRecoveryByChat("chat-recovery");
+    assert.deepEqual(pending.map(({ effectId }) => effectId).sort(), [
+      "effect-never",
+      "effect-safe",
+    ]);
+
+    const sessions = new PiCompactionSessionStore({ root: async () => piRoot });
+    const session = await sessions.openChat("chat-recovery");
+    await session.appendMessage({ role: "user", content: "older request", timestamp: 1 });
+    await session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "older answer" }],
+      api: "openai-completions",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    await recordPiEffectRecoveryBoundary(session, pending);
+    for (const recovered of pending) {
+      await restarted.markRecoveryRecorded({
+        effectId: recovered.effectId,
+        operationId: recovered.operationId,
+        runId: recovered.runId,
+        chatId: recovered.chatId,
+      });
+    }
+    await recordPiEffectRecoveryBoundary(session, pending);
+    await session.appendMessage({ role: "user", content: "current request", timestamp: 3 });
+
+    const context = await session.buildContext();
+    assert.equal(context.messages.length, 4);
+    assert.deepEqual(
+      context.messages.map(({ role }) => role),
+      ["user", "assistant", "assistant", "user"],
+    );
+    const boundary = context.messages[2];
+    assert.equal(boundary?.role, "assistant");
+    const serialized = JSON.stringify(boundary);
+    assert.match(serialized, /Do not repeat/u);
+    assert.doesNotMatch(serialized, /PRIVATE_ARGUMENT|private\/workspace/u);
+    assert.equal((await restarted.listEffectsNeedingRecoveryByChat("chat-recovery")).length, 0);
+    const recoveredEffects = await restarted.listEffectsByChat("chat-recovery");
+    assert.equal(
+      recoveredEffects.every(({ recoveryRecordedAt }) => recoveryRecordedAt !== undefined),
+      true,
+    );
+
+    const committedOperation = operation("operation-committed", "chat-recovery");
+    await restarted.startOperation(committedOperation);
+    const committedEffect = effect(committedOperation, "effect-committed", {
+      toolName: "write_file",
+      replay: "never",
+    });
+    await restarted.prepareEffect(committedEffect);
+    await restarted.markEffectDispatchStarted(effectOwner(committedEffect));
+    await restarted.finishEffect({
+      ...effectOwner(committedEffect),
+      state: "completed",
+      terminalDigest: piRuntimeTerminalDigest("write complete"),
+    });
+    await restarted.finishOperation(committedOperation.operationId, "completed");
+    await restarted.acknowledgeChatEffectsDurable("chat-recovery");
+    assert.equal((await restarted.listEffectsNeedingRecoveryByChat("chat-recovery")).length, 0);
+  });
 });
 
 test("prepare, dispatch, and terminal writes are durable, minimal, and idempotent", async () => {
@@ -344,6 +465,7 @@ test("byte pressure prunes terminal history before it can block a new run", asyn
         preparedAt: index + 1,
         updatedAt: index + 1,
         terminalDigest: piRuntimeTerminalDigest("completed"),
+        recoveryRecordedAt: index + 1,
       });
       const candidate: DurablePiRuntimeEffectDatabase = {
         version: 1,

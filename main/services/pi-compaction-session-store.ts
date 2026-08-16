@@ -11,10 +11,12 @@ import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 import { cleanupSessionResources, type Api, type Model } from "@earendil-works/pi-ai";
 import { ensureUserDataDir } from "./data-store.js";
 import { chatMessageToPiMessage } from "./generation-messages.js";
+import type { DurablePiRuntimeEffect } from "./pi-runtime-effect-core.js";
 import type { ChatMessage } from "./types.js";
 
 export const AIDEN_CHAT_MESSAGE_MARKER = "aiden.chat-message.v1";
 export const AIDEN_PI_TRANSACTION = "aiden.pi-transaction.v1";
+export const AIDEN_EFFECT_RECOVERY_MARKER = "aiden.effect-recovery.v1";
 const SESSION_METADATA_KIND = "aiden-chat-compaction-v1";
 const SAFE_SESSION_ID = /^[a-zA-Z0-9._-]{1,200}$/u;
 const JOURNAL_INDEX_FILE = "aiden-journal-index.json";
@@ -32,6 +34,16 @@ interface ChatMessageMarker {
 interface PiTransactionMarker {
   transactionId: string;
   phase: "begin" | "commit";
+}
+
+interface PiEffectRecoveryMarker {
+  effectId: string;
+}
+
+function effectRecoveryId(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const id = (data as Partial<PiEffectRecoveryMarker>).effectId;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
 }
 
 function transactionMarker(data: unknown): PiTransactionMarker | undefined {
@@ -331,6 +343,64 @@ export async function appendPiMessages(
       await session.appendCustomEntry(AIDEN_CHAT_MESSAGE_MARKER, {
         chatMessageId: visibleChatMessageId,
       } satisfies ChatMessageMarker);
+    }
+  });
+}
+
+/**
+ * Install a private, idempotent no-repeat boundary for effects whose tool
+ * result may have been rolled out of the Pi branch by crash recovery. Exact
+ * arguments never enter this message. A later model must inspect state or ask
+ * before repeating an operation that may already have happened.
+ */
+export async function recordPiEffectRecoveryBoundary(
+  session: Session,
+  effects: readonly DurablePiRuntimeEffect[],
+): Promise<void> {
+  if (effects.length === 0) return;
+  const entries = await session.getBranch();
+  const recorded = new Set(
+    entries.flatMap((entry) => {
+      if (entry.type !== "custom" || entry.customType !== AIDEN_EFFECT_RECOVERY_MARKER) return [];
+      const id = effectRecoveryId(entry.data);
+      return id ? [id] : [];
+    }),
+  );
+  const pending = effects.filter((effect) => !recorded.has(effect.effectId));
+  if (pending.length === 0) return;
+  const toolNames = [...new Set(pending.map(({ toolName }) => toolName))].slice(0, 20);
+  const tools = toolNames.length > 0 ? ` Tools involved: ${toolNames.join(", ")}.` : "";
+  const message: AgentMessage = {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text:
+          "Aiden recovery boundary: one or more prior tool calls may have crossed execution before their results were durably committed." +
+          tools +
+          " Do not repeat these operations automatically. Inspect the current state or ask the user before retrying.",
+      },
+    ],
+    api: "openai-completions",
+    provider: "aiden",
+    model: "effect-recovery",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+  await appendPiTransaction(session, async () => {
+    await session.appendMessage(message);
+    for (const effect of pending) {
+      await session.appendCustomEntry(AIDEN_EFFECT_RECOVERY_MARKER, {
+        effectId: effect.effectId,
+      } satisfies PiEffectRecoveryMarker);
     }
   });
 }

@@ -69,6 +69,8 @@ export interface DurablePiRuntimeEffect {
   preparedAt: number;
   updatedAt: number;
   terminalDigest?: string;
+  /** Set only after a durable private Pi recovery boundary references this effect. */
+  recoveryRecordedAt?: number;
 }
 
 export interface DurablePiRuntimeEffectOwner {
@@ -296,7 +298,7 @@ export function snapshotPiRuntimeEffectArguments(value: unknown): {
  * smaller safe-replay storage ceiling. Structural limits still bound traversal.
  */
 export function digestPiRuntimeEffectArguments(value: unknown): string {
-  const hash = createHash("sha256").update("aiden-pi-runtime-effect-arguments-v2\0", "utf8");
+  const hash = createHash("sha256").update("aiden-pi-runtime-effect-arguments-v3\0", "utf8");
   const state = { nodes: 0, seen: new Set<object>() };
   const visit = (current: unknown, depth = 0): void => {
     if (depth > MAX_PI_RUNTIME_JSON_DEPTH) {
@@ -322,8 +324,11 @@ export function digestPiRuntimeEffectArguments(value: unknown): string {
       return;
     }
     if (typeof current === "string") {
-      hash.update(`s${Buffer.byteLength(current, "utf8")}:`, "utf8");
-      hash.update(current, "utf8");
+      // JSON escaping preserves lone UTF-16 surrogates. Encoding the raw JS
+      // string as UTF-8 would replace them with U+FFFD and create collisions.
+      const encoded = JSON.stringify(current);
+      hash.update(`s${Buffer.byteLength(encoded, "utf8")}:`, "utf8");
+      hash.update(encoded, "utf8");
       hash.update(";");
       return;
     }
@@ -363,8 +368,9 @@ export function digestPiRuntimeEffectArguments(value: unknown): string {
       const keys = Object.keys(record).sort();
       hash.update(`o${keys.length}{`, "utf8");
       for (const key of keys) {
-        hash.update(`k${Buffer.byteLength(key, "utf8")}:`, "utf8");
-        hash.update(key, "utf8");
+        const encoded = JSON.stringify(key);
+        hash.update(`k${Buffer.byteLength(encoded, "utf8")}:`, "utf8");
+        hash.update(encoded, "utf8");
         hash.update(";");
         visit(record[key], depth + 1);
       }
@@ -482,7 +488,7 @@ export function parseDurablePiRuntimeEffect(value: unknown): DurablePiRuntimeEff
         "preparedAt",
         "updatedAt",
       ],
-      ["arguments", "terminalDigest"],
+      ["arguments", "terminalDigest", "recoveryRecordedAt"],
     ) ||
     record.version !== 1 ||
     ![
@@ -501,7 +507,9 @@ export function parseDurablePiRuntimeEffect(value: unknown): DurablePiRuntimeEff
     !digest(record.argumentDigest) ||
     !timestamp(record.preparedAt) ||
     !timestamp(record.updatedAt) ||
-    record.updatedAt < record.preparedAt
+    record.updatedAt < record.preparedAt ||
+    (record.recoveryRecordedAt !== undefined &&
+      (!timestamp(record.recoveryRecordedAt) || record.recoveryRecordedAt < record.updatedAt))
   ) {
     return undefined;
   }

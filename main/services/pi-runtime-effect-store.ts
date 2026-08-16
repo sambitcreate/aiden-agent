@@ -67,7 +67,10 @@ function pruneOneTerminalOperation(database: DurablePiRuntimeEffectDatabase): bo
       (operation) =>
         isPiRuntimeOperationTerminal(operation.state) &&
         !database.effects.some(
-          (effect) => effect.operationId === operation.operationId && effect.state === "unknown",
+          (effect) =>
+            effect.operationId === operation.operationId &&
+            effect.state !== "cancelled_before_dispatch" &&
+            effect.recoveryRecordedAt === undefined,
         ),
     )
     .sort(
@@ -494,6 +497,82 @@ export class PiRuntimeEffectStore {
     return (await this.data.load()).effects
       .filter((effect) => effect.chatId === chatId)
       .map((effect) => structuredClone(this.localUnknown.get(effect.effectId) ?? effect));
+  }
+
+  /** Effects whose result may be absent from the recovered Pi branch. */
+  async listEffectsNeedingRecoveryByChat(chatId: string): Promise<DurablePiRuntimeEffect[]> {
+    this.requireInitialized();
+    if (!isSafePiRuntimeIdentity(chatId)) return [];
+    const database = await this.data.load();
+    return database.effects
+      .filter(
+        (effect) =>
+          effect.chatId === chatId &&
+          effect.recoveryRecordedAt === undefined &&
+          (effect.state === "completed" ||
+            effect.state === "remote_error" ||
+            effect.state === "unknown" ||
+            effect.state === "interrupted"),
+      )
+      .map((effect) => structuredClone(effect));
+  }
+
+  /** Publish only after the Pi recovery boundary and its idempotency marker commit. */
+  async markRecoveryRecorded(value: unknown): Promise<DurablePiRuntimeEffect> {
+    this.requireInitialized();
+    const owner = parseDurablePiRuntimeEffectOwner(value);
+    if (!owner) throw new Error("Invalid Pi runtime effect recovery owner.");
+    const recordedAt = this.currentTime();
+    return this.data.update((database) => {
+      const index = database.effects.findIndex(({ effectId }) => effectId === owner.effectId);
+      const effect = database.effects[index];
+      if (!effect || !ownerMatches(effect, owner)) {
+        throw new Error("Pi runtime effect recovery ownership mismatch.");
+      }
+      if (effect.recoveryRecordedAt !== undefined) return structuredClone(effect);
+      if (!isPiRuntimeEffectTerminal(effect.state)) {
+        throw new Error("An active Pi runtime effect cannot be recovery-recorded.");
+      }
+      const recovered: DurablePiRuntimeEffect = {
+        ...effect,
+        recoveryRecordedAt: Math.max(effect.updatedAt, recordedAt),
+      };
+      database.effects[index] = recovered;
+      database.revision += 1;
+      return structuredClone(recovered);
+    });
+  }
+
+  /**
+   * A foreground visible-turn commit proves every terminal effect currently
+   * owned by that chat has a durable Pi result/no-repeat boundary. Child
+   * effects share the foreground chat identity and settle before its result.
+   */
+  async acknowledgeChatEffectsDurable(chatId: string): Promise<void> {
+    this.requireInitialized();
+    if (!isSafePiRuntimeIdentity(chatId)) {
+      throw new Error("Invalid Pi runtime effect chat acknowledgement.");
+    }
+    const recordedAt = this.currentTime();
+    await this.data.update((database) => {
+      let changed = false;
+      database.effects = database.effects.map((effect) => {
+        if (
+          effect.chatId !== chatId ||
+          effect.recoveryRecordedAt !== undefined ||
+          !isPiRuntimeEffectTerminal(effect.state) ||
+          effect.state === "cancelled_before_dispatch"
+        ) {
+          return effect;
+        }
+        changed = true;
+        return {
+          ...effect,
+          recoveryRecordedAt: Math.max(effect.updatedAt, recordedAt),
+        };
+      });
+      if (changed) database.revision += 1;
+    });
   }
 
   async deleteChat(chatId: string): Promise<void> {
