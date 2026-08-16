@@ -66,6 +66,12 @@ export interface SubagentInferenceTerminalAckMessage {
   requestId: string;
 }
 
+export interface SubagentInferenceReadyAckMessage {
+  kind: "ready-ack";
+  version: typeof SUBAGENT_INFERENCE_PROTOCOL_VERSION;
+  requestId: string;
+}
+
 export interface SubagentInferenceEventMessage {
   kind: "event";
   version: typeof SUBAGENT_INFERENCE_PROTOCOL_VERSION;
@@ -84,6 +90,12 @@ export interface SubagentInferenceFailureMessage {
   message: string;
 }
 
+export interface SubagentInferenceReadyMessage {
+  kind: "ready";
+  version: typeof SUBAGENT_INFERENCE_PROTOCOL_VERSION;
+  requestId: string;
+}
+
 export interface SubagentInferenceHookMessage {
   kind: "hook";
   version: typeof SUBAGENT_INFERENCE_PROTOCOL_VERSION;
@@ -97,8 +109,10 @@ export type SubagentInferenceParentMessage =
   | SubagentInferenceStartMessage
   | SubagentInferenceCancelMessage
   | SubagentInferenceHookResultMessage
+  | SubagentInferenceReadyAckMessage
   | SubagentInferenceTerminalAckMessage;
 export type SubagentInferenceWorkerMessage =
+  | SubagentInferenceReadyMessage
   | SubagentInferenceEventMessage
   | SubagentInferenceFailureMessage
   | SubagentInferenceHookMessage;
@@ -168,6 +182,7 @@ export function isSubagentInferenceWorkerMessage(
 ): value is SubagentInferenceWorkerMessage {
   if (!isRecord(value) || value.version !== SUBAGENT_INFERENCE_PROTOCOL_VERSION) return false;
   if (typeof value.requestId !== "string" || value.requestId.length === 0) return false;
+  if (value.kind === "ready") return Object.keys(value).length === 3;
   if (value.kind === "failure") {
     return Object.keys(value).length === 4 && typeof value.message === "string";
   }
@@ -247,7 +262,7 @@ export function isSubagentInferenceParentMessage(
 ): value is SubagentInferenceParentMessage {
   if (!isRecord(value) || value.version !== SUBAGENT_INFERENCE_PROTOCOL_VERSION) return false;
   if (typeof value.requestId !== "string" || value.requestId.length === 0) return false;
-  if (value.kind === "cancel" || value.kind === "terminal-ack") {
+  if (value.kind === "cancel" || value.kind === "ready-ack" || value.kind === "terminal-ack") {
     return Object.keys(value).length === 3;
   }
   if (value.kind === "hook-result") {

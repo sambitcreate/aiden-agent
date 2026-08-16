@@ -81,6 +81,8 @@ export interface ResolvedModelRuntime {
     model: Model<Api>,
     options?: Parameters<ProviderStreams["streamSimple"]>[2],
   ) => Promise<PreparedCodexIsolatedStream>;
+  /** One-shot host provenance from the most recently settled isolated request. */
+  consumeIsolatedHostFailure?: () => "inference" | "policy" | undefined;
 }
 
 export interface ModelRuntimeDependencies {

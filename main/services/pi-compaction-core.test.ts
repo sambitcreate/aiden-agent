@@ -372,6 +372,40 @@ test("an empty successful summary is rejected without hiding history", async () 
   assert.deepEqual(await session.getEntries(), before);
 });
 
+test("compaction preserves closed isolated host-failure provenance", async () => {
+  for (const [failure, failureCode] of [
+    ["inference", "host-inference"],
+    ["policy", "host-policy"],
+  ] as const) {
+    const { faux, models, model } = compactionFixture();
+    faux.setResponses([
+      fauxAssistantMessage("", {
+        stopReason: "error",
+        errorMessage: "PRIVATE_COMPACTION_HOST_DETAIL",
+      }),
+    ]);
+    const session = await memorySession(`compaction-host-${failure}`);
+    const last = await appendCompressibleHistory(session, model, failure);
+    let pendingFailure: "inference" | "policy" | undefined = failure;
+    const result = await new PiCompactionCoordinator({
+      session,
+      models,
+      model,
+      thinkingLevel: "off",
+      consumeHostFailure: () => {
+        const value = pendingFailure;
+        pendingFailure = undefined;
+        return value;
+      },
+      settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
+    }).check(last);
+
+    assert.equal(result.failureCode, failureCode);
+    assert.doesNotMatch(result.errorMessage ?? "", /PRIVATE_COMPACTION_HOST_DETAIL/u);
+    assert.equal(pendingFailure, undefined);
+  }
+});
+
 test("a malformed successful summary is rejected without hiding history", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([fauxAssistantMessage("A vague paragraph with no continuity structure.")]);

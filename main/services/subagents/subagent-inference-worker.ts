@@ -15,6 +15,7 @@ if (!parentPort) throw new Error("Subagent inference worker requires an Electron
 let active: { requestId: string; cancellation: AbortController } | undefined;
 let nextCallId = 0;
 const pendingHooks = new Map<number, (payload: unknown) => void>();
+let resolveReadyAck: (() => void) | undefined;
 let resolveTerminalAck: (() => void) | undefined;
 let outboundBudget = new SubagentInferenceOutboundBudget();
 
@@ -37,6 +38,10 @@ function postFailure(requestId: string, error: unknown): void {
 parentPort.on("message", (messageEvent) => {
   const message = messageEvent.data;
   if (!isSubagentInferenceParentMessage(message)) return;
+  if (message.kind === "ready-ack") {
+    if (active?.requestId === message.requestId) resolveReadyAck?.();
+    return;
+  }
   if (message.kind === "terminal-ack") {
     if (active?.requestId === message.requestId) resolveTerminalAck?.();
     return;
@@ -61,7 +66,21 @@ parentPort.on("message", (messageEvent) => {
     const terminalAck = new Promise<void>((resolve) => {
       resolveTerminalAck = resolve;
     });
+    const readyAck = new Promise<void>((resolve) => {
+      resolveReadyAck = resolve;
+    });
     try {
+      // A parent may retry only if this process dies before acknowledging the
+      // request. The bootstrap has already loaded this module; this frame is
+      // still sent before request-specific provider construction or network work.
+      post({
+        kind: "ready",
+        version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+        requestId: message.requestId,
+      });
+      // A provider cannot be constructed or contacted until main has observed
+      // readiness. That makes an exit before the acknowledgement safe to retry.
+      await readyAck;
       const invokeHook = (hook: "payload" | "response", payload: unknown) =>
         new Promise<unknown>((resolve) => {
           const callId = nextCallId++;
@@ -129,6 +148,7 @@ parentPort.on("message", (messageEvent) => {
       await Promise.race([terminalAck, new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
     } finally {
       pendingHooks.clear();
+      resolveReadyAck = undefined;
       resolveTerminalAck = undefined;
       active = undefined;
       setImmediate(() => process.exit(0));

@@ -179,10 +179,29 @@ export async function verifyPackagedSubagentInferenceWorker(appAsar) {
   const bootstrap = extractFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false).toString(
     "utf8",
   );
+  const lockdownIndex = bootstrap.indexOf("Object.defineProperty(childProcess");
+  const syncIndex = bootstrap.indexOf("syncBuiltinESMExports");
+  const runtimeImportIndex = bootstrap.indexOf("subagent-inference-worker-runtime.js");
+  const requiredSubprocessNames = [
+    '"exec"',
+    '"execFile"',
+    '"execFileSync"',
+    '"execSync"',
+    '"fork"',
+    '"spawn"',
+    '"spawnSync"',
+  ];
   if (
     !bootstrap.includes("Provider credential subprocesses are disabled") ||
-    !bootstrap.includes("syncBuiltinESMExports") ||
-    !bootstrap.includes("subagent-inference-worker-runtime.js") ||
+    lockdownIndex < 0 ||
+    syncIndex <= lockdownIndex ||
+    runtimeImportIndex <= syncIndex ||
+    requiredSubprocessNames.some((name) => {
+      const index = bootstrap.indexOf(name);
+      return index < 0 || index >= lockdownIndex;
+    }) ||
+    !bootstrap.slice(lockdownIndex, syncIndex).includes("configurable: false") ||
+    !bootstrap.slice(lockdownIndex, syncIndex).includes("writable: false") ||
     bootstrap.includes("@earendil-works/pi-ai/providers/all")
   ) {
     throw new Error(

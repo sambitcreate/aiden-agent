@@ -62,6 +62,8 @@ export interface PiCompactionCheckResult {
     | "context-overflow"
     | "retry-exhausted"
     | "compaction-failed"
+    | "host-inference"
+    | "host-policy"
     | "session-failed"
     | "unsafe-rollback";
   retryDelayMs?: number;
@@ -72,6 +74,7 @@ export interface PiCompactionCoordinatorOptions {
   models: Models;
   model: ResolvedModelRuntime["model"];
   thinkingLevel: ThinkingLevel;
+  consumeHostFailure?: () => "inference" | "policy" | undefined;
   settings?: CompactionSettings;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
@@ -831,12 +834,17 @@ export class PiCompactionCoordinator {
         messages: context.messages,
       };
     } catch (error) {
+      const hostFailure = this.options.consumeHostFailure?.();
       const sessionFailed = error instanceof PiCompactionSessionError;
-      const errorMessage = sessionFailed
-        ? error.message
-        : error instanceof Error
+      const errorMessage = hostFailure
+        ? hostFailure === "policy"
+          ? "The main-owned provider hook failed during compaction."
+          : "The isolated inference process failed during compaction."
+        : sessionFailed
           ? error.message
-          : "compaction failed";
+          : error instanceof Error
+            ? error.message
+            : "compaction failed";
       if (started) {
         const aborted = this.activeAbortController?.signal.aborted === true;
         this.options.onEvent?.({
@@ -858,11 +866,15 @@ export class PiCompactionCoordinator {
         compacted: false,
         shouldRetry: false,
         errorMessage,
-        failureCode: sessionFailed
-          ? "session-failed"
-          : reason === "overflow"
-            ? "context-overflow"
-            : "compaction-failed",
+        failureCode: hostFailure
+          ? hostFailure === "policy"
+            ? "host-policy"
+            : "host-inference"
+          : sessionFailed
+            ? "session-failed"
+            : reason === "overflow"
+              ? "context-overflow"
+              : "compaction-failed",
       };
     } finally {
       removeParentAbort();

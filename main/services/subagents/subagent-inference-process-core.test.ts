@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { markPiRuntimePrivateFailure, piRuntimePrivateFailure } from "../pi-runtime-failure.js";
 import {
   type KillableInferenceProcess,
   SubagentInferenceProcessOwner,
@@ -16,7 +18,7 @@ import {
   SubagentInferenceOutboundBudget,
   type SubagentInferenceStartMessage,
 } from "./subagent-inference-protocol.js";
-import { ambientProviderEnv } from "./subagent-inference-process.js";
+import { ambientProviderEnv, withZeroActivityStartupRetry } from "./subagent-inference-process.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -39,6 +41,36 @@ const request: SubagentInferenceStartMessage = {
   context: { messages: [] },
   options: {},
 };
+
+function assistantError() {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: "closed startup failure",
+    timestamp: Date.now(),
+  };
+}
+
+function startupFailureStream() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    const error = markPiRuntimePrivateFailure(assistantError(), "inference-startup");
+    stream.push({ type: "error", reason: "error", error });
+  });
+  return stream;
+}
 
 class FakeProcess extends EventEmitter implements KillableInferenceProcess {
   alive = true;
@@ -113,6 +145,22 @@ class UnverifiedLaunchProcess extends FakeProcess {
 test("worker protocol rejects unknown fields and malformed sequences", () => {
   assert.equal(isSubagentInferenceParentMessage(request), true);
   assert.equal(isSubagentInferenceParentMessage({ ...request, extra: true }), false);
+  assert.equal(
+    isSubagentInferenceParentMessage({
+      kind: "ready-ack",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: request.requestId,
+    }),
+    true,
+  );
+  assert.equal(
+    isSubagentInferenceWorkerMessage({
+      kind: "ready",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: "r",
+    }),
+    true,
+  );
   const valid = {
     kind: "failure",
     version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
@@ -309,6 +357,220 @@ test("an unverified launch never receives provider request data", async () => {
   );
   assert.equal(events[events.length - 1]?.type, "error");
   assert.equal(await owner.shutdown(), true);
+});
+
+test("only a nonzero zero-activity worker exit carries private startup provenance", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, { model })) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.alive = false;
+  child.emit("exit", 9);
+  const events = await eventsPromise;
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference-startup",
+  );
+  assert.equal(JSON.stringify(terminal).includes("inference-startup"), false);
+});
+
+test("a clean zero-activity worker exit is never retryable startup evidence", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, { model })) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.alive = false;
+  child.emit("exit", 0);
+  const events = await eventsPromise;
+  const terminal = events[events.length - 1];
+
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference",
+  );
+});
+
+test("worker readiness closes startup retry before any provider event", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, { model })) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "ready",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+  });
+  assert.equal(
+    child.sent.some((message) => (message as { kind?: string }).kind === "ready-ack"),
+    true,
+  );
+  child.alive = false;
+  child.emit("exit", 9);
+  const events = await eventsPromise;
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference",
+  );
+});
+
+test("protocol and main-owned hook faults carry closed host provenance", async () => {
+  const protocolChild = new FakeProcess();
+  const protocolOwner = new SubagentInferenceProcessOwner(async () => protocolChild, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const protocolEventsPromise = (async () => {
+    const events = [];
+    for await (const event of protocolOwner.stream(request, { model })) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  protocolChild.emit("message", { kind: "unexpected" });
+  const protocolEvents = await protocolEventsPromise;
+  const protocolTerminal = protocolEvents[protocolEvents.length - 1];
+  assert.equal(
+    protocolTerminal?.type === "error"
+      ? piRuntimePrivateFailure(protocolTerminal.error)
+      : undefined,
+    "inference",
+  );
+
+  const hookChild = new FakeProcess();
+  const hookOwner = new SubagentInferenceProcessOwner(async () => hookChild, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  const hookEventsPromise = (async () => {
+    const events = [];
+    for await (const event of hookOwner.stream(request, {
+      model,
+      onPayload: async () => {
+        throw new Error("private hook detail");
+      },
+    })) {
+      events.push(event);
+    }
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  hookChild.emit("message", {
+    kind: "hook",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    callId: 0,
+    hook: "payload",
+    payload: {},
+  });
+  const hookEvents = await hookEventsPromise;
+  const hookTerminal = hookEvents[hookEvents.length - 1];
+  assert.equal(
+    hookTerminal?.type === "error" ? piRuntimePrivateFailure(hookTerminal.error) : undefined,
+    "policy",
+  );
+  assert.equal(JSON.stringify(hookTerminal).includes("private hook detail"), false);
+});
+
+test("startup retry is bounded to four zero-activity launches and emits only the final error", async () => {
+  let launches = 0;
+  const privateFailures: string[] = [];
+  const stream = withZeroActivityStartupRetry(
+    model,
+    () => {
+      launches += 1;
+      return startupFailureStream();
+    },
+    undefined,
+    true,
+    [0, 0, 0],
+    (failure) => privateFailures.push(failure),
+  );
+  const events = [];
+  for await (const event of stream) events.push(event);
+  assert.equal(launches, 4);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "error");
+  assert.deepEqual(privateFailures, ["inference-startup"]);
+});
+
+test("startup retry never repeats after model activity", async () => {
+  let launches = 0;
+  const stream = withZeroActivityStartupRetry(
+    model,
+    () => {
+      launches += 1;
+      const attempt = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const partial = assistantError();
+        attempt.push({ type: "start", partial });
+        const error = markPiRuntimePrivateFailure(partial, "inference-startup");
+        attempt.push({ type: "error", reason: "error", error });
+      });
+      return attempt;
+    },
+    undefined,
+    true,
+    [0, 0, 0],
+  );
+  const events = [];
+  for await (const event of stream) events.push(event);
+  assert.equal(launches, 1);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["start", "error"],
+  );
+});
+
+test("cancellation owns startup retry backoff", async () => {
+  const cancellation = new AbortController();
+  let launches = 0;
+  const stream = withZeroActivityStartupRetry(
+    model,
+    () => {
+      launches += 1;
+      return startupFailureStream();
+    },
+    cancellation.signal,
+    true,
+    [100],
+  );
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of stream) events.push(event);
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  cancellation.abort();
+  const events = await eventsPromise;
+  assert.equal(launches, 1);
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  if (terminal?.type === "error") assert.equal(terminal.reason, "aborted");
 });
 
 test("a provider terminal frame racing cancellation cannot become success", async () => {

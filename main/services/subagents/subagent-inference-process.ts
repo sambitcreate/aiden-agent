@@ -11,10 +11,15 @@ import type {
   ModelsSimpleStreamOptions,
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
-import { lazyStream } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  lazyStream,
+  type AssistantMessageEventStream,
+} from "@earendil-works/pi-ai";
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
 import { writeDevLog } from "../dev-log.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import { piRuntimePrivateFailure, type PiRuntimePrivateFailure } from "../pi-runtime-failure.js";
 import {
   type KillableInferenceProcess,
   SubagentInferenceProcessOwner,
@@ -23,6 +28,11 @@ import {
   SUBAGENT_INFERENCE_PROTOCOL_VERSION,
   type SerializableStreamOptions,
 } from "./subagent-inference-protocol.js";
+import {
+  isRetryableSubagentStartupFailure,
+  SUBAGENT_STARTUP_RETRY_DELAYS_MS,
+  waitForSubagentStartupRetry,
+} from "./subagent-startup-retry.js";
 
 function mergeHeaders(
   base: ProviderHeaders | undefined,
@@ -30,6 +40,91 @@ function mergeHeaders(
 ): ProviderHeaders | undefined {
   if (!base && !override) return undefined;
   return { ...(base ?? {}), ...(override ?? {}) };
+}
+
+function closedInferenceError(model: Model<Api>, reason: "error" | "aborted"): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: reason,
+    errorMessage:
+      reason === "aborted"
+        ? "The isolated provider request was cancelled."
+        : "The isolated provider request failed.",
+    timestamp: Date.now(),
+  };
+}
+
+export function withZeroActivityStartupRetry(
+  model: Model<Api>,
+  createAttempt: () => AssistantMessageEventStream,
+  signal: AbortSignal | undefined,
+  enabled: boolean,
+  retryDelays: readonly number[] = SUBAGENT_STARTUP_RETRY_DELAYS_MS,
+  onPrivateFailure?: (failure: PiRuntimePrivateFailure) => void,
+): AssistantMessageEventStream {
+  const output = createAssistantMessageEventStream();
+  void (async () => {
+    for (let attempt = 0; ; attempt += 1) {
+      let observedModelActivity = false;
+      let retry = false;
+      let sawTerminal = false;
+      for await (const event of createAttempt()) {
+        if (event.type === "done" || event.type === "error") {
+          sawTerminal = true;
+          retry =
+            enabled &&
+            event.type === "error" &&
+            attempt < retryDelays.length &&
+            isRetryableSubagentStartupFailure({
+              message: event.error,
+              observedModelActivity,
+            });
+          if (!retry) {
+            if (event.type === "error") {
+              const privateFailure = piRuntimePrivateFailure(event.error);
+              if (privateFailure) onPrivateFailure?.(privateFailure);
+            }
+            output.push(event);
+            return;
+          }
+          break;
+        }
+        observedModelActivity = true;
+        output.push(event);
+      }
+      if (!retry) {
+        if (!sawTerminal) {
+          const reason = signal?.aborted ? "aborted" : "error";
+          const error = closedInferenceError(model, reason);
+          output.push({ type: "error", reason, error });
+        }
+        return;
+      }
+      const delayMs = retryDelays[attempt] ?? 0;
+      if (!(await waitForSubagentStartupRetry(delayMs, signal))) {
+        const error = closedInferenceError(model, "aborted");
+        output.push({ type: "error", reason: "aborted", error });
+        return;
+      }
+    }
+  })().catch(() => {
+    const reason = signal?.aborted ? "aborted" : "error";
+    const error = closedInferenceError(model, reason);
+    output.push({ type: "error", reason, error });
+  });
+  return output;
 }
 
 class ElectronInferenceProcess implements KillableInferenceProcess {
@@ -317,6 +412,7 @@ export interface SubagentInferenceIsolation {
  * the provider request is delegated to a one-request Electron utility process.
  */
 export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsolation {
+  private readonly shutdownController = new AbortController();
   private readonly owner = new SubagentInferenceProcessOwner(
     launchElectronInferenceProcess,
     undefined,
@@ -329,12 +425,17 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
   );
 
   wrap(runtime: ResolvedModelRuntime): ResolvedModelRuntime {
+    let firstIsolatedRequest = true;
+    let pendingHostFailure: "inference" | "policy" | undefined;
     const isolatedStreamSimple = (
       model: Model<Api>,
       context: Context,
       options?: ModelsSimpleStreamOptions,
-    ) =>
-      lazyStream(model, async () => {
+    ) => {
+      pendingHostFailure = undefined;
+      const startupRetryEnabled = firstIsolatedRequest;
+      firstIsolatedRequest = false;
+      return lazyStream(model, async () => {
         let requestModel: Model<Api>;
         let requestOptions: ModelsSimpleStreamOptions;
         let leaseSignal: AbortSignal | undefined;
@@ -385,24 +486,40 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
         const prepared: SerializableStreamOptions = {
           ...serializable,
         };
-        return this.owner.stream(
-          {
-            kind: "start",
-            version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
-            requestId: randomUUID(),
-            model: requestModel,
-            context,
-            options: prepared,
+        const requestSignals = [leaseSignal, signal, this.shutdownController.signal].filter(
+          (candidate): candidate is AbortSignal => candidate !== undefined,
+        );
+        const requestSignal =
+          requestSignals.length > 1 ? AbortSignal.any(requestSignals) : requestSignals[0];
+        return withZeroActivityStartupRetry(
+          requestModel,
+          () =>
+            this.owner.stream(
+              {
+                kind: "start",
+                version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+                requestId: randomUUID(),
+                model: requestModel,
+                context,
+                options: prepared,
+              },
+              {
+                model: requestModel,
+                onPayload: requestOptions.onPayload,
+                onResponse: requestOptions.onResponse,
+                onTerminal: (message, metadata) => observeResult?.(message, metadata),
+              },
+              requestSignal,
+            ),
+          requestSignal,
+          startupRetryEnabled,
+          SUBAGENT_STARTUP_RETRY_DELAYS_MS,
+          (failure) => {
+            pendingHostFailure = failure === "policy" ? "policy" : "inference";
           },
-          {
-            model: requestModel,
-            onPayload: requestOptions.onPayload,
-            onResponse: requestOptions.onResponse,
-            onTerminal: (message, metadata) => observeResult?.(message, metadata),
-          },
-          leaseSignal && signal ? AbortSignal.any([leaseSignal, signal]) : (leaseSignal ?? signal),
         );
       });
+    };
 
     const models = new Proxy(runtime.models, {
       get(target, property, receiver) {
@@ -415,10 +532,16 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
       ...runtime,
       models,
       streams: { streamSimple: isolatedStreamSimple },
+      consumeIsolatedHostFailure: () => {
+        const failure = pendingHostFailure;
+        pendingHostFailure = undefined;
+        return failure;
+      },
     };
   }
 
   shutdown(): Promise<boolean> {
+    this.shutdownController.abort(new Error("Subagent inference isolation is shutting down."));
     return this.owner.shutdown();
   }
 }

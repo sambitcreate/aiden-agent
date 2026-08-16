@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, Type } from "@earendil-works/pi-ai";
 import {
   createFauxCore,
   fauxAssistantMessage,
@@ -30,6 +30,7 @@ import {
   type PiRuntimeSessionBinding,
 } from "./pi-agent-runtime-harness.js";
 import { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 
 function testHarness(
@@ -73,7 +74,9 @@ async function managedTestHarness(
     beforeToolCall?: PiAgentRuntimeHarnessOptions["beforeToolCall"];
     contextWindow?: number;
     retryDelayMs?: number;
+    consumeHostFailure?: () => "inference" | "policy" | undefined;
     effects?: PiRuntimeSessionBinding["effects"];
+    streamFn?: PiAgentRuntimeHarnessOptions["streamFn"];
   } = {},
 ) {
   const core = createFauxCore({
@@ -103,7 +106,7 @@ async function managedTestHarness(
         (message) =>
           message.role === "user" || message.role === "assistant" || message.role === "toolResult",
       ),
-    streamFn: core.streamSimple,
+    streamFn: options.streamFn ?? core.streamSimple,
     initialState: {
       systemPrompt: "Managed prompt",
       thinkingLevel: "off",
@@ -121,6 +124,7 @@ async function managedTestHarness(
         model,
         thinkingLevel: "off",
         retryDelayMs: options.retryDelayMs,
+        consumeHostFailure: options.consumeHostFailure,
       },
       ...(options.effects ? { effects: options.effects } : {}),
     },
@@ -975,6 +979,74 @@ test("managed cancellation owns retry hooks and prevents post-stop provider work
   assert.equal(core.state.callCount, 1);
 });
 
+test("managed startup infrastructure failures stay out of the journal and use host taxonomy", async () => {
+  const { harness, session } = await managedTestHarness([], {
+    streamFn: (model) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const error = markPiRuntimePrivateFailure(
+          {
+            ...fauxAssistantMessage("", { stopReason: "error" }),
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            errorMessage: "private isolated worker detail",
+          },
+          "inference-startup",
+        );
+        stream.push({ type: "error", reason: "error", error });
+      });
+      return stream;
+    },
+  });
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: Date.now() },
+  });
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "inference");
+  assert.equal(JSON.stringify(outcome).includes("private isolated worker detail"), false);
+  const context = await session.buildContext();
+  assert.deepEqual(
+    context.messages.map((message) => message.role),
+    ["user"],
+  );
+});
+
+test("managed provider-hook infrastructure faults use policy taxonomy", async () => {
+  const { harness, session } = await managedTestHarness([], {
+    streamFn: (model) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const error = markPiRuntimePrivateFailure(
+          {
+            ...fauxAssistantMessage("", { stopReason: "error" }),
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            errorMessage: "private provider hook detail",
+          },
+          "policy",
+        );
+        stream.push({ type: "error", reason: "error", error });
+      });
+      return stream;
+    },
+  });
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "start", timestamp: Date.now() },
+  });
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "policy");
+  assert.equal(JSON.stringify(outcome).includes("private provider hook detail"), false);
+  assert.deepEqual(
+    (await session.buildContext()).messages.map((message) => message.role),
+    ["user"],
+  );
+});
+
 test("managed outcomes keep provider failure details behind the private journal", async () => {
   const { harness } = await managedTestHarness([
     fauxAssistantMessage("", {
@@ -1267,6 +1339,46 @@ test("required preflight compaction failure starts no provider request", async (
     "compaction-failed",
   );
   assert.equal(outcome.attempts, 0);
+  assert.equal(core.state.callCount, 0);
+});
+
+test("required preflight compaction maps isolated failures to the host boundary", async () => {
+  let pendingFailure: "inference" | undefined = "inference";
+  const { core, harness, session } = await managedTestHarness(
+    [fauxAssistantMessage("must not run")],
+    {
+      contextWindow: 2_048,
+      consumeHostFailure: () => {
+        const failure = pendingFailure;
+        pendingFailure = undefined;
+        return failure;
+      },
+    },
+  );
+  const model = harness.state.model;
+  await appendPiMessages(session, [
+    { role: "user", content: `old ${"a".repeat(3_000)}`, timestamp: 10 },
+    {
+      ...fauxAssistantMessage("answer", { timestamp: 20 }),
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+    },
+    { role: "user", content: `newer ${"b".repeat(3_000)}`, timestamp: 30 },
+    {
+      ...fauxAssistantMessage("answer two", { timestamp: 40 }),
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+    },
+  ]);
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "current", timestamp: 50 },
+  });
+
+  assert.deepEqual(outcome, { kind: "host_failed", faultKind: "inference", attempts: 0 });
   assert.equal(core.state.callCount, 0);
 });
 
@@ -2206,4 +2318,57 @@ test("canonical observers use supplied child identity without owning settlement"
   assert.equal(observed[0], "supervisor-run:1:run_start");
   assert.match(observed[observed.length - 1] ?? "", /:run_end$/u);
   assert.equal(harness.runtimeEventState()?.phase, "settled");
+});
+
+test("canonical observers never label private synthetic host failures durable", async () => {
+  const durableFlags: boolean[] = [];
+  const { harness, session } = await managedTestHarness([], {
+    streamFn: (model) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const error = markPiRuntimePrivateFailure(
+          {
+            ...fauxAssistantMessage("", {
+              stopReason: "error",
+              errorMessage: "closed host failure",
+            }),
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+          },
+          "inference",
+        );
+        stream.push({ type: "error", reason: "error", error });
+      });
+      return stream;
+    },
+    extensions: [
+      {
+        id: "durability-observer",
+        onRuntimeEvent: (event) => {
+          if (
+            event.payload.type === "agent_event" &&
+            event.payload.event.type === "message_end" &&
+            event.payload.event.messageRole === "assistant"
+          ) {
+            durableFlags.push(event.payload.durable);
+          }
+        },
+      },
+    ],
+  });
+
+  const outcome = await harness.runManaged({
+    kind: "append-and-run",
+    message: { role: "user", content: "run", timestamp: 1 },
+  });
+  await harness.settleRuntimeObservers();
+
+  assert.equal(outcome.kind, "host_failed");
+  assert.equal(outcome.kind === "host_failed" ? outcome.faultKind : undefined, "inference");
+  assert.deepEqual(durableFlags, [false]);
+  assert.deepEqual(
+    (await session.buildContext()).messages.map((message) => message.role),
+    ["user"],
+  );
 });

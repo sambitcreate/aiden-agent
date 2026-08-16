@@ -15,6 +15,7 @@ import {
   terminalGenerationWasAborted,
 } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import { piRuntimePrivateFailure } from "../pi-runtime-failure.js";
 import type { WorkspacePermission } from "../types.js";
 import {
   MAX_SUBAGENT_SUMMARY_CHARS,
@@ -697,8 +698,12 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       } else if (event.type === "message_end" && event.message.role === "assistant") {
         const message = assistantMessage(event);
         if (message) {
-          input.telemetry?.usage(message);
-          await recordUsage(message, input.runtime);
+          // Host-owned synthetic failures carry no provider request usage and
+          // never belong in provider success/failure aggregates.
+          if (!piRuntimePrivateFailure(message)) {
+            input.telemetry?.usage(message);
+            await recordUsage(message, input.runtime);
+          }
           const error = terminalGenerationError(message) ?? terminalGenerationLengthError(message);
           if (error) {
             terminalError = message.stopReason === "error" ? SAFE_CHILD_PROVIDER_FAILURE : error;

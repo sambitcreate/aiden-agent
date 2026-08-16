@@ -28,10 +28,7 @@ import {
   ElectronSubagentInferenceIsolation,
   type SubagentInferenceIsolation,
 } from "./subagent-inference-process.js";
-import {
-  piRuntimeEffectStore,
-  type PiRuntimeEffectStore,
-} from "../pi-runtime-effect-store.js";
+import { piRuntimeEffectStore, type PiRuntimeEffectStore } from "../pi-runtime-effect-store.js";
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 export const MAX_REGISTERED_SUBAGENT_CHILDREN = 32;
@@ -217,6 +214,7 @@ export class SubagentRuntimeRegistry {
       model: spec.runtime.model,
       thinkingLevel: spec.thinkingLevel,
       signal: cancellation.signal,
+      consumeHostFailure: childRuntime.consumeIsolatedHostFailure,
     };
     const agent = new PiAgentRuntimeHarness({
       models: childRuntime.models,

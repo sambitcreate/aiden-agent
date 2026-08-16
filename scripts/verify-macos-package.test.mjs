@@ -170,7 +170,7 @@ test("package verifier requires a bounded packed subagent inference worker", asy
     await mkdir(workerDirectory, { recursive: true });
     await writeFile(
       path.join(workerDirectory, "subagent-inference-worker.js"),
-      'syncBuiltinESMExports();\nthrow new Error("Provider credential subprocesses are disabled");\nawait import("./subagent-inference-worker-runtime.js");\n',
+      'throw new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
     );
     await writeFile(
       path.join(workerDirectory, "subagent-inference-worker-runtime.js"),
@@ -179,6 +179,20 @@ test("package verifier requires a bounded packed subagent inference worker", asy
     const packedAsar = path.join(root, "packed.asar");
     await createPackage(source, packedAsar);
     await assert.doesNotReject(verifyPackagedSubagentInferenceWorker(packedAsar));
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'const names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nawait import("./subagent-inference-worker-runtime.js");\nsyncBuiltinESMExports();\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nthrow new Error("Provider credential subprocesses are disabled");\n',
+    );
+    const wrongOrderAsar = path.join(root, "wrong-order.asar");
+    await createPackage(source, wrongOrderAsar);
+    await assert.rejects(
+      verifyPackagedSubagentInferenceWorker(wrongOrderAsar),
+      /disable subprocesses before loading providers/u,
+    );
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'throw new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
+    );
     const unpackedAsar = path.join(root, "unpacked.asar");
     await createPackageWithOptions(source, unpackedAsar, {
       unpack: "**/subagent-inference-worker-runtime.js",

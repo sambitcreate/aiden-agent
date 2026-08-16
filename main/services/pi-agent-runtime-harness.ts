@@ -46,6 +46,7 @@ import {
   type DurablePiRuntimeOperationState,
 } from "./pi-runtime-effect-core.js";
 import type { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
+import { piRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
 export type PiHarnessFaultSource =
@@ -60,6 +61,8 @@ export type PiHarnessFaultSource =
   | "host_context"
   | "host_before_tool"
   | "host_after_tool"
+  | "host_provider_hook"
+  | "inference"
   | "host_prepare_turn"
   | "session"
   | "compaction"
@@ -121,6 +124,16 @@ export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolEx
   durability?: PiRuntimeSessionBinding;
 }
 
+function compactionHostFault(
+  result: PiCompactionCheckResult,
+): Extract<PiRuntimeHostFaultKind, "inference" | "policy"> | undefined {
+  return result.failureCode === "host-inference"
+    ? "inference"
+    : result.failureCode === "host-policy"
+      ? "policy"
+      : undefined;
+}
+
 export interface PiRuntimeContributionSnapshot {
   revision: number;
   extensions: readonly PiAgentRuntimeExtension[];
@@ -158,6 +171,7 @@ export type PiRuntimeFailureReason =
 export type PiRuntimeHostFaultKind =
   | "session"
   | "compaction"
+  | "inference"
   | "lifecycle"
   | "policy"
   | "invariant";
@@ -1208,6 +1222,25 @@ export class PiAgentRuntimeHarness {
           return;
         }
         if (event.type !== "message_end") return;
+        if (event.message.role === "assistant") {
+          const privateFailure = piRuntimePrivateFailure(event.message);
+          if (privateFailure) {
+            // Startup process failures belong to the host boundary, not the
+            // provider transcript. Never journal the synthetic assistant error.
+            this.managedHostFault ??= privateFailure === "policy" ? "policy" : "inference";
+            this.reportFault({
+              source: privateFailure === "policy" ? "host_provider_hook" : "inference",
+              error: new Error(
+                privateFailure === "policy"
+                  ? "The main-owned provider hook failed."
+                  : "The isolated inference process failed.",
+              ),
+            });
+            this.lastAssistantMessage = event.message;
+            this.agent.abort();
+            return;
+          }
+        }
         // The managed initial input is already durable and Agent.continue()
         // does not re-emit it. Any emitted user is queued steer/follow-up input.
         this.pendingDurableMessages.push(event.message);
@@ -1294,6 +1327,16 @@ export class PiAgentRuntimeHarness {
             this.agent.abort();
             return hostPrepared;
           }
+          const hostFault = compactionHostFault(result);
+          if (hostFault) {
+            this.managedHostFault ??= hostFault;
+            this.reportFault({
+              source: hostFault === "policy" ? "host_provider_hook" : "inference",
+              error: new Error("The isolated compaction boundary failed."),
+            });
+            this.agent.abort();
+            return hostPrepared;
+          }
           if (result.errorMessage && (immediate || forced)) {
             this.managedProviderFailure ??= "compaction-failed";
             this.agent.abort();
@@ -1322,10 +1365,14 @@ export class PiAgentRuntimeHarness {
       };
     }
     this.agent.subscribe((event) => {
+      const privateFailure =
+        event.type === "message_end" && event.message.role === "assistant"
+          ? piRuntimePrivateFailure(event.message)
+          : undefined;
       this.runtimeEvents?.emit({
         type: "agent_event",
         event: projectPiRuntimeAgentEvent(event),
-        durable: Boolean(this.durability && event.type === "message_end"),
+        durable: Boolean(this.durability && event.type === "message_end" && !privateFailure),
       });
     });
   }
@@ -1591,6 +1638,10 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
+        const repairHostFault = compactionHostFault(repaired.value);
+        if (repairHostFault) {
+          return await finish({ kind: "host_failed", faultKind: repairHostFault, attempts });
+        }
         if (repaired.value.errorMessage) {
           return await finish({
             kind: "provider_failed",
@@ -1667,6 +1718,10 @@ export class PiAgentRuntimeHarness {
             faultKind: this.policyFault ? "policy" : "session",
             attempts,
           });
+        }
+        const preflightHostFault = compactionHostFault(preflight);
+        if (preflightHostFault) {
+          return await finish({ kind: "host_failed", faultKind: preflightHostFault, attempts });
         }
         if (preflight.errorMessage) {
           return await finish({
@@ -1822,6 +1877,16 @@ export class PiAgentRuntimeHarness {
         }
         if (compactionResult.messages) {
           this.agent.state.messages = [...compactionResult.messages];
+        }
+        const terminalCompactionHostFault = compactionHostFault(compactionResult);
+        if (terminalCompactionHostFault) {
+          return await finish({
+            kind: "host_failed",
+            faultKind: terminalCompactionHostFault,
+            finalMessage: assistant,
+            ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
+            attempts,
+          });
         }
         if (compactionResult.shouldRetry) {
           const capturedTail = this.capturedTurnMessages[this.capturedTurnMessages.length - 1];
