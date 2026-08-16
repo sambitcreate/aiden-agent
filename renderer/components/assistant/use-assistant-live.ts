@@ -7,6 +7,7 @@ import {
   GEMINI_LIVE_PCM_WORKLET_NAME,
   GeminiLivePcmPlaybackQueue,
   loadGeminiLivePcmWorklet,
+  measureGeminiLivePcmLevel,
 } from "../../lib/gemini-live-media-core";
 import type {
   AssistantLiveRendererEvent,
@@ -17,6 +18,7 @@ export interface AssistantLiveCaption {
   id: number;
   direction: "input" | "output";
   final: boolean;
+  sealed: boolean;
   text: string;
 }
 
@@ -29,6 +31,7 @@ export interface AssistantLiveController {
   busy: boolean;
   microphone: boolean;
   microphoneActive: boolean;
+  microphoneLevel: number;
   microphonePermission: AssistantLiveMicrophonePermission;
   microphonePermissionReady: boolean;
   microphonePermissionDetail: string;
@@ -325,37 +328,87 @@ function activeSnapshot(snapshot: AssistantLiveSnapshot): boolean {
   );
 }
 
+const MAX_ASSISTANT_LIVE_TRANSCRIPT_TURNS = 40;
+const MAX_ASSISTANT_LIVE_TRANSCRIPT_CHARACTERS = 64 * 1_024;
+const MAX_ASSISTANT_LIVE_TURN_CHARACTERS = 32 * 1_024;
+
+function joinAssistantLiveCaptionFragments(
+  current: string,
+  next: string,
+): string {
+  const left = current.trim();
+  const right = next.trim();
+  if (!left) return right;
+  if (!right || left === right) return left;
+  if (right.startsWith(left)) return right;
+  if (left.endsWith(right)) return left;
+  const separator = /^[,.;:!?)]/u.test(right) || /[([]$/u.test(left) ? "" : " ";
+  return `${left}${separator}${right}`;
+}
+
+function boundAssistantLiveTranscript(
+  captions: AssistantLiveCaption[],
+): AssistantLiveCaption[] {
+  const bounded = captions
+    .slice(-MAX_ASSISTANT_LIVE_TRANSCRIPT_TURNS)
+    .map((caption) =>
+      caption.text.length <= MAX_ASSISTANT_LIVE_TURN_CHARACTERS
+        ? caption
+        : {
+            ...caption,
+            text: `${caption.text.slice(0, MAX_ASSISTANT_LIVE_TURN_CHARACTERS - 1)}…`,
+          },
+    );
+  let characters = bounded.reduce(
+    (total, caption) => total + caption.text.length,
+    0,
+  );
+  while (
+    bounded.length > 1 &&
+    characters > MAX_ASSISTANT_LIVE_TRANSCRIPT_CHARACTERS
+  ) {
+    characters -= bounded.shift()?.text.length ?? 0;
+  }
+  return bounded;
+}
+
+export function sealAssistantLiveCaption(
+  current: readonly AssistantLiveCaption[],
+): AssistantLiveCaption[] {
+  const last = current[current.length - 1];
+  if (!last || last.sealed) return [...current];
+  return [...current.slice(0, -1), { ...last, final: true, sealed: true }];
+}
+
 export function reconcileAssistantLiveCaption(
   current: readonly AssistantLiveCaption[],
   event: Extract<AssistantLiveRendererEvent, { type: "caption" }>,
   nextId: () => number,
 ): AssistantLiveCaption[] {
-  let openIndex = -1;
-  for (let index = current.length - 1; index >= 0; index -= 1) {
-    const caption = current[index];
-    if (caption?.direction === event.direction && !caption.final) {
-      openIndex = index;
-      break;
-    }
-  }
-  if (openIndex >= 0) {
+  const last = current[current.length - 1];
+  if (last && !last.sealed && last.direction === event.direction) {
     const updated = [...current];
-    updated[openIndex] = {
-      ...updated[openIndex]!,
+    updated[updated.length - 1] = {
+      ...last,
       final: event.final,
-      text: event.text,
+      text: last.final
+        ? joinAssistantLiveCaptionFragments(last.text, event.text)
+        : event.text,
     };
-    return updated.slice(-40);
+    return boundAssistantLiveTranscript(updated);
   }
-  return [
-    ...current.slice(-39),
+  const sealedCurrent =
+    last && !last.sealed ? sealAssistantLiveCaption(current) : [...current];
+  return boundAssistantLiveTranscript([
+    ...sealedCurrent,
     {
       id: nextId(),
       direction: event.direction,
       final: event.final,
+      sealed: false,
       text: event.text,
     },
-  ];
+  ]);
 }
 
 /** Dependency-injected variant used by renderer lifecycle tests. */
@@ -368,6 +421,8 @@ export function useAssistantLiveWithDependencies(
   const operationInFlight = React.useRef(false);
   const availabilityGeneration = React.useRef(0);
   const mediaGeneration = React.useRef(0);
+  const microphoneLevelRef = React.useRef(0);
+  const microphoneLevelFrame = React.useRef(0);
   const setupAbortRef = React.useRef<AbortController | null>(null);
   const mediaCleanupRef = React.useRef<{
     generation: number;
@@ -386,6 +441,7 @@ export function useAssistantLiveWithDependencies(
   const [setupOpen, setSetupOpenState] = React.useState(false);
   const [microphone, setMicrophone] = React.useState(true);
   const [microphoneActive, setMicrophoneActive] = React.useState(false);
+  const [microphoneLevel, setMicrophoneLevel] = React.useState(0);
   const [microphonePermission, setMicrophonePermission] =
     React.useState<AssistantLiveMicrophonePermission>("checking");
   const [busy, setBusy] = React.useState(false);
@@ -413,7 +469,12 @@ export function useAssistantLiveWithDependencies(
       }
       const teardownGeneration = ++mediaGeneration.current;
       mediaCleanupRef.current = null;
-      if (mounted.current) setMicrophoneActive(false);
+      microphoneLevelRef.current = 0;
+      microphoneLevelFrame.current = 0;
+      if (mounted.current) {
+        setMicrophoneActive(false);
+        setMicrophoneLevel(0);
+      }
       await record?.cleanup();
       if (
         mediaGeneration.current === teardownGeneration &&
@@ -460,6 +521,7 @@ export function useAssistantLiveWithDependencies(
         playerRef.current?.enqueue(event.pcm);
       } else if (event.type === "playback_flush") {
         playerRef.current?.flush();
+        setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "caption") {
         setCaptions((current) =>
           reconcileAssistantLiveCaption(
@@ -468,6 +530,8 @@ export function useAssistantLiveWithDependencies(
             () => ++captionId.current,
           ),
         );
+      } else if (event.type === "turn") {
+        setCaptions(sealAssistantLiveCaption);
       } else if (event.type === "error") {
         setError(assistantLiveRuntimeErrorDetail(event.code));
       } else if (event.type === "reconnect_required") {
@@ -733,13 +797,30 @@ export function useAssistantLiveWithDependencies(
           }
         };
         worklet.port.onmessage = (message: MessageEvent<unknown>) => {
-          if (stopped || !isCurrent() || inFlight >= 4) return;
+          if (stopped || !isCurrent()) return;
           const data = message.data as { type?: unknown; data?: unknown };
           if (data?.type !== "pcm" || !(data.data instanceof ArrayBuffer))
             return;
+          const pcm = new Uint8Array(data.data);
+          const measured = measureGeminiLivePcmLevel(pcm);
+          const previous = microphoneLevelRef.current;
+          const smoothed =
+            measured >= previous
+              ? previous * 0.25 + measured * 0.75
+              : previous * 0.72 + measured * 0.28;
+          microphoneLevelRef.current = smoothed;
+          microphoneLevelFrame.current += 1;
+          if (
+            mounted.current &&
+            (microphoneLevelFrame.current === 1 ||
+              microphoneLevelFrame.current % 4 === 0)
+          ) {
+            setMicrophoneLevel(smoothed);
+          }
+          if (inFlight >= 4) return;
           inFlight += 1;
           void dependencies.api
-            .sendAudio(sessionId, new Uint8Array(data.data))
+            .sendAudio(sessionId, pcm)
             .then((accepted) => {
               if (!accepted) void stopAfterAudioFailure();
             })
@@ -949,6 +1030,7 @@ export function useAssistantLiveWithDependencies(
     busy,
     microphone,
     microphoneActive,
+    microphoneLevel,
     microphonePermission,
     microphonePermissionReady,
     microphonePermissionDetail,
