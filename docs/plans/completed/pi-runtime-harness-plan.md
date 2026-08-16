@@ -139,6 +139,10 @@ Aiden pins `@earendil-works/pi-agent-core` and `pi-ai` `0.80.10`.
   backoff, while launch, protocol, IPC, and main-owned provider-hook faults use
   private typed host provenance and never become Pi transcript messages or
   provider-usage aggregates.
+- Foreground visible-turn commits acknowledge only foreground-lane effect
+  evidence. Child Pi sessions are intentionally in-memory, so child effects
+  remain recovery-pending across a foreground commit and process restart until
+  an explicit private no-repeat boundary is durable in the foreground journal.
 
 ## Trusted contribution compatibility matrix
 
@@ -205,6 +209,28 @@ plan rather than widening this trusted main-process adapter.
 - The helper-level retry and cancellation matrix is covered, but a signed-app
   end-to-end test of first-request-only retry and shutdown during backoff
   remains part of the packaged smoke above.
+- The foreground V2 control registry does not currently produce run-state
+  `unknown`; if it is later shared with background recovery, its terminal-state
+  set must add `unknown` to match the renderer and lifecycle contracts.
+- A worker that never receives its ready acknowledgement remains owned until
+  the child deadline or cancellation. A short worker-side ready-ack watchdog
+  would improve availability without changing the zero-activity retry proof.
+- Main-owned provider-hook continuations are fenced from late protocol output
+  but are not part of isolation shutdown settlement if a trusted hook ignores
+  cancellation; a future bounded hook-drain registry would improve diagnostics.
+- Map-reduce compaction keeps a 128-token minimum fragment. On an unusually
+  small context window the accumulated summary plus that fragment can exceed
+  the computed safe input, causing conservative compaction failure rather than
+  producing an invalid request.
+- The seal-current-turn fallback performs its final Session append/move repair
+  directly. Moving those calls under the common journal-operation wrapper would
+  improve fault taxonomy and quarantine diagnostics for storage failures.
+- The worker environment allowlist preserves reviewed positive Bedrock
+  credential sources but not every negative or ancillary AWS SDK control (for
+  example `AWS_EC2_METADATA_DISABLED`); expand only with provider-parity tests.
+- Package verification proves the bootstrap lockdown and that both worker
+  artifacts are emitted and packed, but it does not yet execute or
+  semantically hash the provider runtime artifact inside a signed app.
 
 ## Gates
 
@@ -218,9 +244,9 @@ plan rather than widening this trusted main-process adapter.
 - Child/supervisor tests cover fork identity, empty completion, terminal-only
   output, hidden protocol limits, construction abort, aggregate budgets,
   exact queued cancellation, quarantine recovery, and renderer-safe activity.
-- Two final fresh-memory adversarial gates returned GO after the ready/ack,
-  compaction-provenance, canonical-durability, usage-accounting, and package
-  lockdown fixes.
+- Three final fresh-memory adversarial gates returned GO after the ready/ack,
+  compaction-provenance, canonical-durability, usage-accounting, package
+  lockdown, and child-effect recovery fixes.
 - `npm run type-check`, `npm run lint`, `npm run test:compaction` (169 tests),
   the complete `npm run test:subagents` matrix (649 JS tests plus native helper
   and package gates), `npm run build:electron`, and package verification pass.
