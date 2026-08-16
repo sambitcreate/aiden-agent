@@ -62,6 +62,9 @@ export async function resolveModelRuntime(
           providerRegistry.codex,
         ),
         streamSimple: providerRegistry.codex.streamSimple,
+        prepareIsolatedStream: providerRegistry.codex.prepareIsolatedStream.bind(
+          providerRegistry.codex,
+        ),
       },
       native: {
         models: providerRegistry.models,

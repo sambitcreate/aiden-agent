@@ -20,6 +20,7 @@ import {
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
+  assertPackagedSubagentInferenceWorkerEntries,
   assertPackagedNodePtyHelperEntries,
   assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
@@ -28,6 +29,7 @@ import {
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
+  verifyPackagedSubagentInferenceWorker,
   verifyPackagedNodePtyResources,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
@@ -143,6 +145,39 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
     await assert.rejects(
       verifyPackagedModelCatalogResources(malformedAsar),
       /modalities\.input must be a string array/u,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires a bounded packed subagent inference worker", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedSubagentInferenceWorkerEntries([
+      "/build/main/subagent-inference-worker.js",
+    ]),
+  );
+  assert.throws(
+    () => assertPackagedSubagentInferenceWorkerEntries([]),
+    /missing the subagent inference worker/u,
+  );
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-inference-worker-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const workerDirectory = path.join(source, "build", "main");
+  try {
+    await mkdir(workerDirectory, { recursive: true });
+    await writeFile(path.join(workerDirectory, "subagent-inference-worker.js"), "export {};\n");
+    const packedAsar = path.join(root, "packed.asar");
+    await createPackage(source, packedAsar);
+    await assert.doesNotReject(verifyPackagedSubagentInferenceWorker(packedAsar));
+    const unpackedAsar = path.join(root, "unpacked.asar");
+    await createPackageWithOptions(source, unpackedAsar, {
+      unpack: "**/subagent-inference-worker.js",
+    });
+    await assert.rejects(
+      verifyPackagedSubagentInferenceWorker(unpackedAsar),
+      /bounded packed regular file/u,
     );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });

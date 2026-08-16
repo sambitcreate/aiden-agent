@@ -48,6 +48,9 @@ const reviewedHelperInfoPlistPath = path.join(
   "Info.plist",
 );
 const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
+const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY =
+  "build/main/subagent-inference-worker.js";
+const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
 const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
   "node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
   "node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
@@ -139,6 +142,34 @@ export async function verifyPackagedModelCatalogResources(appAsar) {
     throw new Error("Packaged models.dev capability snapshot is not valid JSON.");
   }
   validateModelsDevSnapshot(snapshot);
+}
+
+export function assertPackagedSubagentInferenceWorkerEntries(entries) {
+  const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
+  if (!normalized.has(`/${PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY}`)) {
+    throw new Error("Packaged app.asar is missing the subagent inference worker.");
+  }
+}
+
+export async function verifyPackagedSubagentInferenceWorker(appAsar) {
+  await assertRegularFile(appAsar);
+  assertPackagedSubagentInferenceWorkerEntries(listPackage(appAsar, { isPack: false }));
+  const entry = statFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false);
+  if (
+    !entry ||
+    entry.unpacked === true ||
+    typeof entry.size !== "number" ||
+    !Number.isSafeInteger(entry.size) ||
+    entry.size <= 0 ||
+    entry.size > MAX_SUBAGENT_INFERENCE_WORKER_BYTES ||
+    typeof entry.offset !== "string" ||
+    "files" in entry ||
+    "link" in entry
+  ) {
+    throw new Error(
+      "Packaged subagent inference worker must be a bounded packed regular file.",
+    );
+  }
 }
 
 export function assertPackagedNodePtyHelperEntries(entries) {
@@ -531,6 +562,7 @@ export async function verifyMacPackage(appPath) {
     await assertRegularFile(file);
   }
   await verifyPackagedModelCatalogResources(appAsar);
+  await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);

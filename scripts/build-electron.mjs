@@ -18,6 +18,13 @@ await Promise.all([
   }),
   build({
     ...common,
+    entryPoints: ["main/services/subagents/subagent-inference-worker.ts"],
+    outfile: "build/main/subagent-inference-worker.js",
+    format: "esm",
+    packages: "external",
+  }),
+  build({
+    ...common,
     entryPoints: ["renderer/preload.ts"],
     outfile: "build/preload/preload.cjs",
     format: "cjs",

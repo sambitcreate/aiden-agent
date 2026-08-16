@@ -24,6 +24,14 @@ import {
   type PiRuntimeSessionBinding,
   type PiRuntimeTerminalOutcome,
 } from "../pi-agent-runtime-harness.js";
+import {
+  ElectronSubagentInferenceIsolation,
+  type SubagentInferenceIsolation,
+} from "./subagent-inference-process.js";
+import {
+  piRuntimeEffectStore,
+  type PiRuntimeEffectStore,
+} from "../pi-runtime-effect-store.js";
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5_000;
 export const MAX_REGISTERED_SUBAGENT_CHILDREN = 32;
@@ -85,6 +93,10 @@ export interface SubagentRuntimeRegistryOptions {
     message: AssistantMessage,
     runtime: ResolvedModelRuntime,
   ) => void | Promise<void>;
+  /** Production-only provider-request process boundary; tests may inject a fake. */
+  inferenceIsolation?: SubagentInferenceIsolation;
+  /** Separate crash-safe tool-effect journal; omitted by isolated unit registries. */
+  effectStore?: PiRuntimeEffectStore;
 }
 
 function childIdentity(
@@ -126,6 +138,8 @@ export class SubagentRuntimeRegistry {
   private readonly appendSessionMessages?: NonNullable<PiRuntimeSessionBinding["appendMessages"]>;
   private readonly onPiJournalError: (error: unknown) => void;
   private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
+  private readonly inferenceIsolation?: SubagentInferenceIsolation;
+  private readonly effectStore?: PiRuntimeEffectStore;
   private reportRuntimeFault: (source: string) => void = () => {};
   private shuttingDown = false;
   private readonly quarantinedDeployments = new Set<SubagentDeployment>();
@@ -146,6 +160,8 @@ export class SubagentRuntimeRegistry {
         writeDevLog("error", "subagents", ["Could not append child Pi session messages.", error]);
       });
     this.recordCompactionUsage = options.recordCompactionUsage;
+    this.inferenceIsolation = options.inferenceIsolation;
+    this.effectStore = options.effectStore;
   }
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
@@ -193,8 +209,9 @@ export class SubagentRuntimeRegistry {
     let emergencyContextReduction = false;
     const sessionPromise = new InMemorySessionRepo().create({ id: sessionId });
     const cancellation = new AbortController();
+    const childRuntime = this.inferenceIsolation?.wrap(spec.runtime) ?? spec.runtime;
     const compactionOptions = {
-      models: createPiCompactionModels(spec.runtime, (message) =>
+      models: createPiCompactionModels(childRuntime, (message) =>
         this.recordCompactionUsage?.(message, spec.runtime),
       ),
       model: spec.runtime.model,
@@ -202,7 +219,7 @@ export class SubagentRuntimeRegistry {
       signal: cancellation.signal,
     };
     const agent = new PiAgentRuntimeHarness({
-      models: spec.runtime.models,
+      models: childRuntime.models,
       identity: {
         runId: spec.runId ?? childId,
         sessionId,
@@ -215,7 +232,7 @@ export class SubagentRuntimeRegistry {
           `Pi child runtime fault (${source}${extensionId ? `:${extensionId}` : ""}).`,
         ]);
       },
-      ...buildAgentRuntimeOptions(sessionId, spec.runtime),
+      ...buildAgentRuntimeOptions(sessionId, childRuntime),
       convertToLlm,
       transformContext: createGenerationContextTransform(contextOptions, () => {
         emergencyContextReduction = true;
@@ -226,6 +243,9 @@ export class SubagentRuntimeRegistry {
         compaction: compactionOptions,
         ...(this.appendSessionMessages ? { appendMessages: this.appendSessionMessages } : {}),
         signal: cancellation.signal,
+        ...(this.effectStore
+          ? { effects: { store: this.effectStore, chatId: spec.authority.chatId } }
+          : {}),
         forcePostRunCompaction: () => emergencyContextReduction,
         clearForcePostRunCompaction: () => {
           emergencyContextReduction = false;
@@ -446,11 +466,20 @@ export class SubagentRuntimeRegistry {
       }
       entry.agent.abort();
     }
+    let isolationClean = true;
+    const isolationShutdown = this.inferenceIsolation
+      ? this.inferenceIsolation.shutdown().then((clean) => {
+          isolationClean = clean;
+        })
+      : undefined;
     const settled = await boundedSettlement(
-      entries.map(({ agent, completion }) => completion ?? agent.waitForIdle()),
+      [
+        ...entries.map(({ agent, completion }) => completion ?? agent.waitForIdle()),
+        ...(isolationShutdown ? [isolationShutdown] : []),
+      ],
       graceMs,
     );
-    if (!settled) {
+    if (!settled || !isolationClean) {
       try {
         this.healthMetrics?.cleanupFailed();
       } catch {
@@ -465,6 +494,8 @@ export class SubagentRuntimeRegistry {
 }
 
 export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(undefined, undefined, {
+  inferenceIsolation: new ElectronSubagentInferenceIsolation(),
+  effectStore: piRuntimeEffectStore,
   recordCompactionUsage: async (message, runtime) => {
     const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
       import("../usage-accounting.js"),

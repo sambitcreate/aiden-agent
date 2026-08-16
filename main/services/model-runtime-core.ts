@@ -13,6 +13,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_LABEL,
 } from "./codex-provider.js";
+import type { PreparedCodexIsolatedStream } from "./codex-provider.js";
 import {
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
@@ -75,6 +76,11 @@ export interface ResolvedModelRuntime {
   apiKey: string | undefined;
   headers: ProviderHeaders | undefined;
   streams: Pick<ProviderStreams, "streamSimple">;
+  /** Main-owned guarded credential handoff for isolated provider dispatch. */
+  prepareIsolatedStream?: (
+    model: Model<Api>,
+    options?: Parameters<ProviderStreams["streamSimple"]>[2],
+  ) => Promise<PreparedCodexIsolatedStream>;
 }
 
 export interface ModelRuntimeDependencies {
@@ -85,6 +91,7 @@ export interface ModelRuntimeDependencies {
     models: Models;
     prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
+    prepareIsolatedStream?: ResolvedModelRuntime["prepareIsolatedStream"];
   };
   native: {
     models: Models;
@@ -110,6 +117,7 @@ export async function resolveModelRuntimeWith(
       apiKey: undefined,
       headers: undefined,
       streams: { streamSimple: dependencies.codex.streamSimple },
+      prepareIsolatedStream: dependencies.codex.prepareIsolatedStream,
     };
   }
 
