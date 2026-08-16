@@ -33,8 +33,11 @@ test("local Assistant, Scheduled, Profile, and About surfaces stay safe to explo
   await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
   const taskSearch = page.getByRole("searchbox", { name: "Search scheduled tasks" });
   await taskSearch.fill("definitely-not-a-schedule");
+  await expect(taskSearch).toHaveValue("definitely-not-a-schedule");
   await expect(page.getByText("No matching tasks", { exact: true })).toBeVisible();
   await taskSearch.fill("");
+  await expect(taskSearch).toHaveValue("");
+  await expect(page.getByText("No matching tasks", { exact: true })).toHaveCount(0);
   await page.getByRole("tab", { name: "Active", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Active", exact: true })).toHaveAttribute(
     "aria-selected",
