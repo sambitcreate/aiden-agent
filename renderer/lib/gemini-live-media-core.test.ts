@@ -6,6 +6,7 @@ import {
   GeminiLivePcmChunker,
   GeminiLivePcmPlaybackQueue,
   bindDisplayCaptureLifecycle,
+  measureGeminiLivePcmLevel,
   resolveGeminiLivePcmWorkletUrl,
   type DisplayMediaTrack,
 } from "./gemini-live-media-core.js";
@@ -81,6 +82,16 @@ test("the pure AudioWorklet counterpart resamples to mono 16 kHz signed PCM in 2
   assert.equal(positiveChunks.length, 1);
   assert.deepEqual([...positiveChunks[0]!.slice(0, 4)], [255, 127, 255, 127]);
   assert.throws(() => new GeminiLivePcmChunker(8_000), /unsupported/u);
+});
+
+test("the local PCM meter reports bounded silence and signal without retaining audio", () => {
+  assert.equal(measureGeminiLivePcmLevel(new Uint8Array(640)), 0);
+  const signal = new Uint8Array(640);
+  const view = new DataView(signal.buffer);
+  for (let offset = 0; offset < signal.byteLength; offset += 2)
+    view.setInt16(offset, 8_192, true);
+  assert.equal(measureGeminiLivePcmLevel(signal), 1);
+  assert.equal(measureGeminiLivePcmLevel(new Uint8Array(3)), 0);
 });
 
 test("the worklet URL resolves in both packaged file and development renderer documents", () => {
