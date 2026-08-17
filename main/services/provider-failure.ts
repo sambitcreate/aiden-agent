@@ -136,8 +136,8 @@ export function providerFailureFromLegacyPiMessage(
 
 /** Closed log metadata; raw compaction/provider text is deliberately ignored. */
 export function compactionFailureLogMetadata(value: {
-  reason: "threshold" | "overflow";
+  reason: "threshold" | "overflow" | "manual";
   errorMessage?: string;
-}): { reason: "threshold" | "overflow" } {
+}): { reason: "threshold" | "overflow" | "manual" } {
   return { reason: value.reason };
 }

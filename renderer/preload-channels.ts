@@ -26,6 +26,7 @@ export const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "telegram:",
   "subagents:",
   "terminal:",
   "titleProviders:",
@@ -75,6 +76,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "shortcut:changed",
   "terminal:data",
   "terminal:exit",
+  "telegram:model-selection-changed",
   "aiden:theme:changed",
 ] as const;
 

@@ -11,6 +11,7 @@ export type UsageRequestSource =
   | "voice-transcription"
   | "scheduled"
   | "subagent"
+  | "telegram"
   | "compaction";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
@@ -76,6 +77,7 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "voice-transcription",
   "scheduled",
   "subagent",
+  "telegram",
   "compaction",
 ]);
 
@@ -484,3 +486,4 @@ export function createUsageStore(
     },
   };
 }
+

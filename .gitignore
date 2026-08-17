@@ -33,3 +33,6 @@ tmp/*
 
 # Local agent troubleshooting notes
 .papercuts/
+
+# Local git worktrees
+.worktrees/

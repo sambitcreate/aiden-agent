@@ -721,6 +721,33 @@ export interface AppSettings {
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
   profileName?: string;
+  telegramEnabled?: boolean;
+  telegramAllowedUserId?: number;
+  telegramProviderId?: string;
+  telegramModel?: string;
+  telegramThinkingLevel?: GenerationThinkingLevel;
+  telegramDraftPreviews?: boolean;
+  telegramActivity?: "quiet" | "thinking" | "tools" | "verbose";
+  telegramRendering?: "rich" | "html";
+  telegramVoiceMode?: "hidden" | "mirror" | "always";
+  telegramWorkspaceId?: string;
+  telegramProfiles?: Record<string, TelegramProfileSettings>;
+  telegramActiveProfile?: string;
+  telegramThreadedMode?: boolean;
+}
+
+export interface TelegramProfileSettings {
+  enabled?: boolean;
+  allowedUserId?: number;
+  providerId?: string;
+  model?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  draftPreviews?: boolean;
+  activity?: "quiet" | "thinking" | "tools" | "verbose";
+  rendering?: "rich" | "html";
+  voiceMode?: "hidden" | "mirror" | "always";
+  workspaceId?: string;
+  threadedMode?: boolean;
 }
 
 export type ComputerUseStatusState =

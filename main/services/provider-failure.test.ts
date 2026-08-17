@@ -110,6 +110,15 @@ test("compaction log metadata drops raw provider text", () => {
   assert.doesNotMatch(JSON.stringify(metadata), new RegExp(PRIVATE_CANARY, "u"));
 });
 
+test("manual compaction logs only its closed reason", () => {
+  const metadata = compactionFailureLogMetadata({
+    reason: "manual",
+    errorMessage: `manual failure ${PRIVATE_CANARY}`,
+  });
+  assert.deepEqual(metadata, { reason: "manual" });
+  assert.doesNotMatch(JSON.stringify(metadata), new RegExp(PRIVATE_CANARY, "u"));
+});
+
 test("terminal retry exhaustion and attempt count survive canonicalization", () => {
   const metadata = providerFailureChatMetadata({
     kind: "provider_failed",
