@@ -32,7 +32,7 @@ if (args[0] === "release" && args[1] === "view") {
     state.transientLookups -= 1;
     fail("gh: service unavailable (HTTP 503)");
   }
-  if (!state.exists) fail("gh: Not Found (HTTP 404)");
+  if (!state.exists) fail("release not found");
   save();
   process.stdout.write(releaseJson());
   process.exit(0);
