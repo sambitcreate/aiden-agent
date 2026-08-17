@@ -22,6 +22,10 @@ import {
 } from "../lib/subagent-panel-state";
 import { isToolStep, type GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
+import {
+  providerFailurePresentation,
+  type ProviderFailureV1,
+} from "../shared/provider-failure";
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -135,6 +139,29 @@ function AssistantResponse({
   );
 }
 
+export function ProviderFailureCallout({
+  failure,
+}: {
+  failure: ProviderFailureV1;
+}) {
+  const presentation = providerFailurePresentation(failure);
+  return (
+    <Callout
+      color="red"
+      role="alert"
+      aria-atomic="true"
+      data-provider-failure={failure.category}
+    >
+      <Text variant="small-strong" color="red">
+        {presentation.title}
+      </Text>
+      <Text variant="small" color="secondary" className="mt-0.5 block">
+        {presentation.description}
+      </Text>
+    </Callout>
+  );
+}
+
 export function MessageList({
   messages,
   streamingText,
@@ -213,16 +240,21 @@ export function MessageList({
       {messages.map((m) => (
         <div key={m.id} className="flex min-w-0 flex-col gap-3">
           {m.role === "assistant" ? (
-            <AssistantResponse
-              content={m.content}
-              timeline={m.timeline}
-              reasoning={m.reasoning}
-              subagentChips={
-                subagentsEnabled && m.subagents ? (
-                  <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
-                ) : undefined
-              }
-            />
+            <>
+              <AssistantResponse
+                content={m.content}
+                timeline={m.timeline}
+                reasoning={m.reasoning}
+                subagentChips={
+                  subagentsEnabled && m.subagents ? (
+                    <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
+                  ) : undefined
+                }
+              />
+              {m.providerFailure ? (
+                <ProviderFailureCallout failure={m.providerFailure} />
+              ) : null}
+            </>
           ) : (
             <SafeMessageBubble
               role={m.role}

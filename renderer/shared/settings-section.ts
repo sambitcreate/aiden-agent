@@ -4,6 +4,7 @@ export const SETTINGS_SECTIONS = [
   "skills",
   "mcp",
   "websearch",
+  "telegram",
   "computerUse",
   "scheduledTasks",
   "assistant",
@@ -40,6 +41,7 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
   { id: "mcp", title: "MCP Servers", group: "Agent", keywords: ["connections", "protocol"] },
   { id: "websearch", title: "Web Search", group: "Agent", keywords: ["internet", "exa"] },
+  { id: "telegram", title: "Telegram", group: "Agent", keywords: ["remote", "bot", "phone", "control"] },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",

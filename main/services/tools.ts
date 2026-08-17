@@ -32,6 +32,7 @@ import { createAssistantMcpServerTool } from "./assistant/mcp-tool.js";
 import { selectedMcpServers } from "./mcp-selection.js";
 import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
+import { buildTelegramAgentTools } from "./telegram/telegram-agent-tools.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -127,6 +128,9 @@ export interface ToolContext {
    * constructs only the resolved child capability intersection.
    */
   capabilityProfile?: SubagentCapabilityRequest | unknown;
+  interactionSurface?: "telegram";
+  /** Explicitly expose cross-target Telegram delivery to attended local agents. */
+  allowTelegramDirect?: boolean;
 }
 
 export function buildSchedulingTools(
@@ -195,6 +199,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
           ];
     if (ctx.allowMcpTools === true)
       tools.push(...(await configuredMcpTools(ctx)));
+    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) {
+      tools.push(...buildTelegramAgentTools());
+    }
     return tools;
   }
 
@@ -207,12 +214,16 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
         "Assistant project automations cannot use MCP connectors.",
       );
     }
-    return ctx.workspaceRoot && ctx.permission !== "none"
-      ? buildCodingTools(ctx.workspaceRoot)
-      : [];
+    const tools =
+      ctx.workspaceRoot && ctx.permission !== "none" ? buildCodingTools(ctx.workspaceRoot) : [];
+    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) {
+      tools.push(...buildTelegramAgentTools());
+    }
+    return tools;
   }
 
   const tools: AgentTool[] = [];
+  if (ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
   if (ctx.computerUse) tools.push(createComputerUseAgentTool(ctx.computerUse));
   tools.push(...buildSchedulingTools(ctx));
   if (ctx.allowSubagents === true) {
@@ -250,3 +261,4 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
 
   return tools;
 }
+

@@ -10,6 +10,7 @@ import type { GenerationTimeline } from "../shared/generation-timeline";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
+import type { ProviderFailureV1 } from "../shared/provider-failure";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -463,6 +464,7 @@ export interface ChatMessage {
   createdAt: number;
   model?: string;
   reasoning?: string;
+  providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;
@@ -719,6 +721,33 @@ export interface AppSettings {
   scheduledDefaultTimezone?: string;
   assistant?: AssistantConfig;
   profileName?: string;
+  telegramEnabled?: boolean;
+  telegramAllowedUserId?: number;
+  telegramProviderId?: string;
+  telegramModel?: string;
+  telegramThinkingLevel?: GenerationThinkingLevel;
+  telegramDraftPreviews?: boolean;
+  telegramActivity?: "quiet" | "thinking" | "tools" | "verbose";
+  telegramRendering?: "rich" | "html";
+  telegramVoiceMode?: "hidden" | "mirror" | "always";
+  telegramWorkspaceId?: string;
+  telegramProfiles?: Record<string, TelegramProfileSettings>;
+  telegramActiveProfile?: string;
+  telegramThreadedMode?: boolean;
+}
+
+export interface TelegramProfileSettings {
+  enabled?: boolean;
+  allowedUserId?: number;
+  providerId?: string;
+  model?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  draftPreviews?: boolean;
+  activity?: "quiet" | "thinking" | "tools" | "verbose";
+  rendering?: "rich" | "html";
+  voiceMode?: "hidden" | "mirror" | "always";
+  workspaceId?: string;
+  threadedMode?: boolean;
 }
 
 export type ComputerUseStatusState =

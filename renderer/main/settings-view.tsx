@@ -19,12 +19,14 @@ import {
   Info,
   Clock3,
   Sparkles,
+  Send,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
 import { SkillsSettings } from "../components/settings/skills-settings";
 import { McpSettings } from "../components/settings/mcp-settings";
 import { WebSearchSettings } from "../components/settings/web-search-settings";
+import { TelegramSettings } from "../components/settings/telegram-settings";
 import { VoiceSettings } from "../components/settings/voice-settings";
 import { ShortcutSettings } from "../components/settings/shortcut-settings";
 import { ComputerUseSettings } from "../components/settings/computer-use-settings";
@@ -49,6 +51,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   modelData: <ChartScatter className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
+  telegram: <Send className="size-5" />,
   websearch: <Globe className="size-5" />,
   scheduledTasks: <Clock3 className="size-5" />,
   assistant: <Sparkles className="size-5" />,
@@ -71,6 +74,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   providers: ProvidersSettings,
   modelData: ModelDataSettings,
   skills: SkillsSettings,
+  telegram: TelegramSettings,
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,

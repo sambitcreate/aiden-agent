@@ -154,6 +154,18 @@ test("terminal chat snapshots reach cache before visual stream handoff awaits", 
   );
 });
 
+test("a persisted provider failure replaces the transient stream error", () => {
+  const pane = source("./chat-pane.tsx");
+  const terminal = between(
+    pane,
+    "onError: (message, partialContent, finalTimeline, updatedChat, finalReasoning) => {",
+    "messageTurnId,",
+  );
+  assert.match(terminal, /updatedChat\?\.messages\[updatedChat\.messages\.length - 1\]/u);
+  assert.match(terminal, /\.providerFailure/u);
+  assert.match(terminal, /persistedFailure\s*\? null/u);
+});
+
 test("an indeterminate append blocks retries until an application reload reconciles storage", () => {
   const pane = source("./chat-pane.tsx");
   assert.match(pane, /isAppendReconciliationRequired\(appendError\)/u);

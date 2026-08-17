@@ -604,15 +604,17 @@ test("child completion fails closed on a Pi journal append failure", async () =>
   assert.equal(registry.activeCount, 0);
 });
 
-test("forked initial context is compacted before the first provider request", async () => {
+test("forked initial context is not semantically compacted before the first provider request", async () => {
   const core = createFauxCore({
     provider: "aiden-compat-initial-fork",
     models: [{ id: "compat-initial-fork", contextWindow: 8_192 }],
   });
   let firstContext = "";
+  const requestKinds: Array<"provider" | "summary"> = [];
   const respond = async (context: unknown) => {
     const serialized = JSON.stringify(context);
     if (/context summarization assistant/u.test(serialized)) {
+      requestKinds.push("summary");
       if (/PREFIX of a turn/u.test(serialized)) {
         return fauxAssistantMessage(
           "## Original Request\nConclude from the forked conversation.\n\n## Early Progress\n- Preserved the forked context.\n\n## Context for Suffix\n- Continue from the bounded checkpoint.",
@@ -620,6 +622,7 @@ test("forked initial context is compacted before the first provider request", as
       }
       return fauxAssistantMessage(semanticCheckpointSummary("semantic checkpoint"));
     }
+    requestKinds.push("provider");
     firstContext = JSON.stringify(context);
     return fauxAssistantMessage("bounded");
   };
@@ -649,7 +652,8 @@ test("forked initial context is compacted before the first provider request", as
   const outcome = await runningChild.prompt("Conclude from the forked conversation.");
 
   assert.equal(outcome.kind, "completed", JSON.stringify(outcome));
-  assert.ok(core.state.callCount > 2);
+  assert.equal(core.state.callCount, 2);
+  assert.deepEqual(requestKinds, ["provider", "summary"]);
   assert.doesNotMatch(firstContext, /FORK-START|FORK-END/u);
   assert.match(firstContext, /Conclude from the forked conversation/u);
   assert.ok(firstContext.length < 100_000);

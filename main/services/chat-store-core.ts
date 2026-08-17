@@ -24,6 +24,8 @@ import {
 } from "./visible-chat-projection.js";
 import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contract.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
+import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -383,37 +385,63 @@ export function createChatStore(
     const providerId = await resolveProviderId(chat.providerId);
     const migratedProvider = providerId !== chat.providerId;
     if (migratedProvider) chat.providerId = providerId;
-    chat.messages = chat.messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      createdAt: message.createdAt,
-      model: message.model,
-      attachments: safeStoredAttachments(message.attachments),
-      reasoning:
-        message.role === "assistant" &&
-        typeof message.reasoning === "string" &&
-        message.reasoning.trim()
-          ? message.reasoning
-          : undefined,
-      pi:
-        message.role === "assistant"
+    let privacyMigrationRequired = false;
+    chat.messages = chat.messages.map((message) => {
+      const assistant = message.role === "assistant";
+      const providerFailure = assistant
+        ? parseProviderFailureV1(message.providerFailure) ??
+          providerFailureFromLegacyPiMessage(message.pi)
+        : undefined;
+      if (assistant) {
+        const pi =
+          message.pi && typeof message.pi === "object" && !Array.isArray(message.pi)
+            ? (message.pi as unknown as Record<string, unknown>)
+            : undefined;
+        if (
+          pi &&
+          (Object.prototype.hasOwnProperty.call(pi, "diagnostics") ||
+            Object.prototype.hasOwnProperty.call(pi, "errorMessage"))
+        ) {
+          privacyMigrationRequired = true;
+        }
+        if (
+          JSON.stringify(message.providerFailure) !==
+          JSON.stringify(providerFailure)
+        ) {
+          privacyMigrationRequired = true;
+        }
+      }
+      return {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt,
+        model: message.model,
+        attachments: safeStoredAttachments(message.attachments),
+        reasoning:
+          assistant &&
+          typeof message.reasoning === "string" &&
+          message.reasoning.trim()
+            ? message.reasoning
+            : undefined,
+        pi: assistant
           ? parseStoredPiAssistantMessage(message.pi)
           : undefined,
-      timeline:
-        message.role === "assistant"
+        providerFailure,
+        timeline: assistant
           ? parseGenerationTimeline(message.timeline, message.content.length)
           : undefined,
-      subagents:
-        message.role === "assistant"
+        subagents: assistant
           ? parseSubagentMessageReferenceV1(message.subagents)
           : undefined,
-      skill:
-        message.role === "user"
-          ? parseSkillProvenanceV1(message.skill)
-          : undefined,
-    }));
-    if (migratedProvider) await writeChat(chat).catch(() => undefined);
+        skill:
+          message.role === "user"
+            ? parseSkillProvenanceV1(message.skill)
+            : undefined,
+      };
+    });
+    if (privacyMigrationRequired) await writeChat(chat);
+    else if (migratedProvider) await writeChat(chat).catch(() => undefined);
     return chat;
   }
 
@@ -696,6 +724,10 @@ export function createChatStore(
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
                 : undefined,
+            providerFailure:
+              message.role === "assistant"
+                ? parseProviderFailureV1(message.providerFailure)
+                : undefined,
           });
         }
         const now = Date.now();
@@ -842,6 +874,10 @@ export function createChatStore(
           pi:
             message.role === "assistant"
               ? parseStoredPiAssistantMessage(message.pi)
+              : undefined,
+          providerFailure:
+            message.role === "assistant"
+              ? parseProviderFailureV1(message.providerFailure)
               : undefined,
           attachments: safeStoredAttachments(message.attachments),
           skill:

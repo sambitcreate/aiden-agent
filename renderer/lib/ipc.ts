@@ -333,6 +333,58 @@ export const exaApi = {
     invoke<AppSettings>("exa:setEnabled", enabled),
 };
 
+// ── Telegram remote control ──────────────────────────────────────────
+export interface TelegramStatus {
+  enabled: boolean;
+  hasToken: boolean;
+  allowedUserId?: number;
+  providerId?: string;
+  model?: string;
+  workspaceId?: string;
+  polling: boolean;
+  queuedCount: number;
+  thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
+  draftPreviews: boolean;
+  activity: "quiet" | "thinking" | "tools" | "verbose";
+  lastError?: string;
+  rendering: "rich" | "html";
+  voiceMode: "hidden" | "mirror" | "always";
+  threadedMode: boolean;
+  activeProfile: string;
+  profiles: Array<{
+    name: string;
+    hasToken: boolean;
+    settings: { enabled?: boolean; allowedUserId?: number };
+    status: { status: string; queuedCount: number; lastError?: string };
+  }>;
+  recentDiagnostics: Array<{ at: number; level: "info" | "warning" | "error" | "recovery"; message: string }>;
+}
+export const telegramApi = {
+  get: () => invoke<TelegramStatus>("telegram:get"),
+  setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
+  setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
+  connect: () => invoke<{ connected: boolean }>("telegram:connect"),
+  disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
+  resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
+  setProvider: (providerId: string, model: string) =>
+    invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
+  setWorkspace: (workspaceId?: string) =>
+    invoke<{ workspaceId?: string }>("telegram:setWorkspace", workspaceId),
+  setExperience: (input: {
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
+    draftPreviews: boolean;
+    activity: "quiet" | "thinking" | "tools" | "verbose";
+    rendering: "rich" | "html";
+    voiceMode: "hidden" | "mirror" | "always";
+    threadedMode: boolean;
+  }) => invoke("telegram:setExperience", input),
+  selectProfile: (profile: string) => invoke<{ profile: string }>("telegram:selectProfile", profile),
+  createProfile: (profile: string) => invoke<{ profile: string }>("telegram:createProfile", profile),
+  deleteProfile: (profile: string) => invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
+  onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
+    onNotification("telegram:model-selection-changed", handler),
+};
+
 // ── Voice + shortcut ──────────────────────────────────────────────────
 export const voiceApi = {
   transcribe: (audioBase64: string, mimeType: string) =>
@@ -547,6 +599,7 @@ async function invokeChatMutation<T>(
 }
 
 export const chatsApi = {
+  activitySnapshot: () => invoke<unknown>("chats:activitySnapshot"),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
     const response = parseChatReadResponse(

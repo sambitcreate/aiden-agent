@@ -203,7 +203,6 @@ export class SubagentRuntimeRegistry {
       supportsImages: spec.runtime.model.input.includes("image"),
     };
     assertGenerationContextCapacity(contextOptions);
-    let emergencyContextReduction = false;
     const sessionPromise = new InMemorySessionRepo().create({ id: sessionId });
     const cancellation = new AbortController();
     const childRuntime = this.inferenceIsolation?.wrap(spec.runtime) ?? spec.runtime;
@@ -232,9 +231,7 @@ export class SubagentRuntimeRegistry {
       },
       ...buildAgentRuntimeOptions(sessionId, childRuntime),
       convertToLlm,
-      transformContext: createGenerationContextTransform(contextOptions, () => {
-        emergencyContextReduction = true;
-      }),
+      transformContext: createGenerationContextTransform(contextOptions),
       durability: {
         session: sessionPromise,
         initialMessages: spec.initialMessages,
@@ -244,10 +241,6 @@ export class SubagentRuntimeRegistry {
         ...(this.effectStore
           ? { effects: { store: this.effectStore, chatId: spec.authority.chatId } }
           : {}),
-        forcePostRunCompaction: () => emergencyContextReduction,
-        clearForcePostRunCompaction: () => {
-          emergencyContextReduction = false;
-        },
         onJournalError: (error) => this.onPiJournalError(error),
       },
       // This is the first point at which Pi has received an actual provider

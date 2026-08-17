@@ -47,6 +47,8 @@ import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
 import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
+import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import { compactionFailureLogMetadata } from "./provider-failure.js";
 import type {
   ComputerUseApprovalDescriptor,
   ComputerUseController,
@@ -101,6 +103,7 @@ import { startLocalModelLoadMonitor, type LocalModelLoadMonitor } from "./local-
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import {
   buildAssistantSystemPrompt,
+  withTelegramAgentContract,
   withUnattendedAssistantContract,
 } from "./assistant/system-prompt.js";
 import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
@@ -116,6 +119,7 @@ import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
   subagentsAllowedForGeneration,
@@ -219,6 +223,8 @@ export interface GenerationExecutionOptions {
   turnId?: string;
   /** Fires once the persisted turn has synchronously transferred to generation ownership. */
   onTurnAccepted?: () => void;
+  /** Main-owned interactive delivery surface; renderer starts cannot set this. */
+  interactionSurface?: "telegram";
 }
 
 interface LoadMonitorState {
@@ -285,10 +291,12 @@ function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () 
 }
 
 function broadcastChatSettled(
+  streamId: string,
   chatId: string,
   workspaceId: string | undefined,
   fallbackWorkspaceId: string | undefined,
 ): void {
+  chatActivityRegistry.settle(streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
     return;
@@ -649,6 +657,9 @@ async function prepareGeneration(
         : assistantAutomationMode
           ? "assistant-automation"
           : undefined,
+      interactionSurface: options.interactionSurface,
+      allowTelegramDirect:
+        !assistantMode || attendedAssistant || options.interactionSurface === "telegram",
       assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () =>
@@ -774,6 +785,7 @@ export const llmClient = {
             initialization.skillInvocation = skillInvocation;
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
+            chatActivityRegistry.begin(streamId, params.chatId);
           },
         );
     } catch (error) {
@@ -847,14 +859,14 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const {
@@ -925,6 +937,7 @@ export const llmClient = {
       content: string,
       reasoning: string,
       finalTimeline: ReturnType<GenerationTimelineProjector["snapshot"]>,
+      providerFailure?: ProviderFailureV1,
     ) => {
       const subagents = subagentMessageReference(streamId, subagentSupervisor?.snapshots() ?? []);
       if (
@@ -932,7 +945,8 @@ export const llmClient = {
         !reasoning.trim() &&
         finalTimeline.steps.length === 0 &&
         finalTimeline.status !== "cancelled" &&
-        !subagents
+        !subagents &&
+        !providerFailure
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -948,6 +962,7 @@ export const llmClient = {
             model: params.model,
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
+            providerFailure,
             timeline:
               finalTimeline.steps.length || finalTimeline.status === "cancelled"
                 ? finalTimeline
@@ -980,7 +995,6 @@ export const llmClient = {
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
     const requestUsage = new AssistantRequestUsageTracker();
-    let emergencyContextReduction = false;
     let activeCompactionStepId: string | undefined;
     let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
@@ -1012,6 +1026,7 @@ export const llmClient = {
               omittedInvalidIdentities: 0,
               truncated: false,
             };
+      const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
         authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
@@ -1022,12 +1037,18 @@ export const llmClient = {
               mcpServerTotal: assistantMcpInventory.totalEnabledServers,
               mcpInventoryTruncated: assistantMcpInventory.truncated,
               mcpOmittedInvalidIdentities: assistantMcpInventory.omittedInvalidIdentities,
-              unattended: authoritativeMode === "assistant-unattended",
+              unattended: authoritativeMode === "assistant-unattended" && !telegramInteractive,
+              surface: telegramInteractive ? "telegram" : "desktop",
             })
           : authoritativeMode === "assistant-automation"
-            ? withUnattendedAssistantContract(
-                await buildSystemPrompt(folderPath, git.branch, permission, false, false),
-              )
+            ? telegramInteractive
+              ? withTelegramAgentContract(
+                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                  { workspaceBound: Boolean(folderPath) },
+                )
+              : withUnattendedAssistantContract(
+                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                )
             : await buildSystemPrompt(
                 folderPath,
                 git.branch,
@@ -1073,7 +1094,11 @@ export const llmClient = {
           willRetry: event.willRetry,
         });
         if (event.errorMessage) {
-          logger.warn("pi", `Compaction failed for stream ${streamId}: ${event.errorMessage}`);
+          logger.warn(
+            "pi",
+            `Compaction failed for stream ${streamId}.`,
+            compactionFailureLogMetadata(event),
+          );
         }
       };
       const compactionOptions = {
@@ -1175,7 +1200,6 @@ export const llmClient = {
             supportsImages,
           },
           (result) => {
-            emergencyContextReduction = true;
             logger.info("pi", `Compacted generation context for stream ${streamId}.`, {
               model: model.id,
               estimatedTokensBefore: result.estimatedTokensBefore,
@@ -1207,10 +1231,6 @@ export const llmClient = {
                 },
               }
             : {}),
-          forcePostRunCompaction: () => emergencyContextReduction,
-          clearForcePostRunCompaction: () => {
-            emergencyContextReduction = false;
-          },
           onJournalError: (error) => {
             piJournalHealthy = false;
             logger.error(
@@ -1558,14 +1578,14 @@ export const llmClient = {
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
         approvals.releaseStream(streamId);
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const agent = candidate;
@@ -1575,7 +1595,7 @@ export const llmClient = {
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
@@ -1760,7 +1780,7 @@ export const llmClient = {
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
-      broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
       return false;
     }
 
@@ -1845,9 +1865,23 @@ export const llmClient = {
             : runtimeOutcome.kind === "host_failed"
               ? "The local agent runtime could not complete this response safely."
               : null;
+        if (runtimeOutcome.kind === "provider_failed") {
+          logger.warn("pi", `Provider generation failed for stream ${streamId}.`, {
+            category: runtimeOutcome.providerFailure?.category ?? "unknown",
+            attempts: runtimeOutcome.attempts,
+            retryExhausted: runtimeOutcome.providerFailure?.retryExhausted ?? false,
+          });
+        }
         if (finalError) {
           const finalTimeline = attachClaimCheck(timeline.finish("failed"), full);
-          const persisted = await persistAssistant(full, reasoning, finalTimeline);
+          const persisted = await persistAssistant(
+            full,
+            reasoning,
+            finalTimeline,
+            runtimeOutcome.kind === "provider_failed"
+              ? runtimeOutcome.providerFailure
+              : undefined,
+          );
           await finalizePiTurnPersistence(persisted);
           sendGeneration(streamId, "chat:error", {
             streamId,
@@ -1927,7 +1961,7 @@ export const llmClient = {
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
           approvals.releaseStream(streamId);
-          broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
         }
       }
     })();

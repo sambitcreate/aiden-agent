@@ -34,6 +34,10 @@ const {
 
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 const PROCESS_EXIT_TIMEOUT_MS = 10_000;
+// Production shutdown owns sequential bounded drains for foreground generation
+// (6s), subagents (5s), and an optional packaged-soak receipt (5s). The release
+// runner can reach those bounds under load even when Electron exits cleanly.
+const ELECTRON_EXIT_TIMEOUT_MS = 20_000;
 const DEFAULT_LIVE_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
 const DEFAULT_LM_STUDIO_ORIGIN = new URL(DEFAULT_LIVE_LM_STUDIO_BASE_URL).origin;
 const LM_STUDIO_REDIRECT_ENV = "AIDEN_E2E_LMSTUDIO_REDIRECT_ORIGIN";
@@ -502,7 +506,7 @@ export async function closeAiden(app: ElectronApplication | undefined): Promise<
   const pid = child.pid;
   let closeError: unknown;
   try {
-    await withTimeout(app.close(), "Electron shutdown", PROCESS_EXIT_TIMEOUT_MS);
+    await withTimeout(app.close(), "Electron shutdown", ELECTRON_EXIT_TIMEOUT_MS);
   } catch (error) {
     closeError = error;
   }

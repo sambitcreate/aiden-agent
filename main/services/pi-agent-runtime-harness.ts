@@ -26,7 +26,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import {
-  needsImmediatePiCompaction,
   PiCompactionCoordinator as PiCompactionCoordinatorImpl,
   type PiCompactionCheckResult,
   type PiCompactionCoordinator,
@@ -48,6 +47,8 @@ import {
 import type { PiRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { piRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
+import { providerFailureFromTerminalOutcome } from "./provider-failure.js";
+import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 
 export type PiHarnessFaultSource =
   | "extension_context"
@@ -193,6 +194,8 @@ export type PiRuntimeTerminalOutcome =
       kind: "provider_failed";
       reason: PiRuntimeFailureReason;
       finalMessage?: AssistantMessage;
+      /** Closed renderer-safe classification captured before raw error text is removed. */
+      providerFailure?: ProviderFailureV1;
       /** True only when recovery removed finalMessage from the Pi branch. */
       finalMessageWasAbandoned?: boolean;
       attempts: 0 | 1 | 2;
@@ -215,8 +218,6 @@ export interface PiRuntimeSessionBinding {
   signal?: AbortSignal;
   /** Foreground continue() does not emit its already-journaled user tail. */
   journalUserMessages?: boolean;
-  forcePostRunCompaction?: () => boolean;
-  clearForcePostRunCompaction?: () => void;
   onJournalError?: (error: unknown) => void;
   /** Separate, non-rollbackable evidence for tool effects that may escape the chat journal. */
   effects?: {
@@ -1297,15 +1298,7 @@ export class PiAgentRuntimeHarness {
         try {
           await this.flushDurableMessages();
           const coordinator = await this.resolveCompaction();
-          const immediate = needsImmediatePiCompaction(
-            input.toolResults,
-            this.agent.state.model?.contextWindow ?? 0,
-          );
-          const forced = durability.forcePostRunCompaction?.() === true;
-          const operation = coordinator.checkContextPressure({
-            forceThreshold: immediate || forced,
-            sealCurrentTurnIfNeeded: immediate,
-          });
+          const operation = coordinator.checkContextPressure();
           const managedSignal = this.managedAbortController?.signal;
           const result = managedSignal
             ? await waitForManagedPromise(operation, managedSignal).then((settled) => {
@@ -1317,7 +1310,6 @@ export class PiAgentRuntimeHarness {
                 return settled.value;
               })
             : await operation;
-          durability.clearForcePostRunCompaction?.();
           if (this.appCancelRequested || signal?.aborted) {
             this.agent.abort();
             return hostPrepared;
@@ -1334,11 +1326,6 @@ export class PiAgentRuntimeHarness {
               source: hostFault === "policy" ? "host_provider_hook" : "inference",
               error: new Error("The isolated compaction boundary failed."),
             });
-            this.agent.abort();
-            return hostPrepared;
-          }
-          if (result.errorMessage && (immediate || forced)) {
-            this.managedProviderFailure ??= "compaction-failed";
             this.agent.abort();
             return hostPrepared;
           }
@@ -1519,11 +1506,18 @@ export class PiAgentRuntimeHarness {
           ...(outcome.finalMessageWasAbandoned ? { finalMessageWasAbandoned: true } : {}),
         };
       }
+      const providerFailure =
+        finalized.kind === "provider_failed"
+          ? providerFailureFromTerminalOutcome(finalized)
+          : undefined;
       const closed =
         finalized.kind === "completed" || !finalized.finalMessage
-          ? finalized
+          ? providerFailure
+            ? { ...finalized, providerFailure }
+            : finalized
           : {
               ...finalized,
+              ...(providerFailure ? { providerFailure } : {}),
               finalMessage: closedFailureMessage(
                 finalized.finalMessage,
                 finalized.kind === "app_cancelled"
@@ -1690,6 +1684,7 @@ export class PiAgentRuntimeHarness {
             return await finish({ kind: "app_cancelled", attempts });
           }
           if (appended.kind === "failed") throw appended.error;
+          this.agent.state.messages = [...this.agent.state.messages, input.message];
         } catch (error) {
           try {
             durability.onJournalError?.(error);
@@ -1702,64 +1697,6 @@ export class PiAgentRuntimeHarness {
         if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
       }
       coordinator.beginPrompt();
-      let preflight: PiCompactionCheckResult;
-      try {
-        const preflightOperation = coordinator.checkContextPressure();
-        const checked = await waitForManagedPromise(preflightOperation, abortController.signal);
-        if (checked.kind === "cancelled") {
-          this.trackDetachedDurability(preflightOperation);
-          return await finish({ kind: "app_cancelled", attempts });
-        }
-        if (checked.kind === "failed") throw checked.error;
-        preflight = checked.value;
-        if (preflight.failureCode === "session-failed") {
-          return await finish({
-            kind: "host_failed",
-            faultKind: this.policyFault ? "policy" : "session",
-            attempts,
-          });
-        }
-        const preflightHostFault = compactionHostFault(preflight);
-        if (preflightHostFault) {
-          return await finish({ kind: "host_failed", faultKind: preflightHostFault, attempts });
-        }
-        if (preflight.errorMessage) {
-          return await finish({
-            kind: "provider_failed",
-            reason: "compaction-failed",
-            attempts,
-          });
-        }
-      } catch (error) {
-        this.reportFault({ source: "compaction", error: toError(error) });
-        return await finish({
-          kind: "host_failed",
-          faultKind: "compaction",
-          attempts,
-        });
-      }
-      if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
-      let preparedMessages: AgentMessage[];
-      try {
-        if (preflight.messages) {
-          preparedMessages = preflight.messages;
-        } else {
-          const built = await waitForManagedPromise(session.buildContext(), abortController.signal);
-          if (built.kind === "cancelled") {
-            return await finish({ kind: "app_cancelled", attempts });
-          }
-          if (built.kind === "failed") throw built.error;
-          preparedMessages = built.value.messages;
-        }
-      } catch (error) {
-        this.reportFault({ source: "session", error: toError(error) });
-        return await finish({
-          kind: "host_failed",
-          faultKind: this.policyFault ? "policy" : "session",
-          attempts,
-        });
-      }
-      this.agent.state.messages = [...preparedMessages];
       if (cancelled()) return await finish({ kind: "app_cancelled", attempts });
 
       for (;;) {
@@ -1853,7 +1790,7 @@ export class PiAgentRuntimeHarness {
         let compactionResult: PiCompactionCheckResult;
         try {
           const compactionOperation = coordinator.check(assistant, {
-            forceThreshold: durability.forcePostRunCompaction?.() === true,
+            liveMessages: this.agent.state.messages,
           });
           const checked = await waitForManagedPromise(compactionOperation, abortController.signal);
           if (checked.kind === "cancelled") {
@@ -1866,7 +1803,6 @@ export class PiAgentRuntimeHarness {
           }
           if (checked.kind === "failed") throw checked.error;
           compactionResult = checked.value;
-          durability.clearForcePostRunCompaction?.();
         } catch (error) {
           this.reportFault({ source: "compaction", error: toError(error) });
           return await finish({

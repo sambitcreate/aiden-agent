@@ -37,6 +37,7 @@ const PRELOAD_PATH = path.join(REPO_ROOT, "renderer", "preload.ts");
 const RENDERER_IPC_PATH = path.join(REPO_ROOT, "renderer", "lib", "ipc.ts");
 const ATTACHMENT_HANDLER_PATH = path.join(MAIN_ROOT, "handlers", "attachments.ts");
 
+const HANDLER_BOOTSTRAP_PATH = path.join(MAIN_ROOT, "handlers", "index.ts");
 function calleeName(expression: ts.LeftHandSideExpression): string | undefined {
   if (ts.isIdentifier(expression)) return expression.text;
   if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
@@ -266,4 +267,21 @@ test("live notification sites exactly match the preload notification allowlist",
     sorted(NOTIFICATION_CHANNELS),
     "main notification sites and preload NOTIFICATION_CHANNELS drifted",
   );
+});
+
+test("handler bootstrap registers every dedicated handler surface", async () => {
+  const bootstrap = await fs.readFile(HANDLER_BOOTSTRAP_PATH, "utf8");
+
+  for (const registration of ["registerSubagentHandlers", "registerTelegramHandlers"]) {
+    assert.match(
+      bootstrap,
+      new RegExp(`import \\{ ${registration} \\} from "\\./[a-z-]+\\.js";`, "u"),
+      `${registration} must be imported by the IPC bootstrap`,
+    );
+    assert.match(
+      bootstrap,
+      new RegExp(`\\b${registration}\\(\\);`, "u"),
+      `${registration} must be invoked by the IPC bootstrap`,
+    );
+  }
 });
