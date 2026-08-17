@@ -41,8 +41,8 @@ if (args[0] === "api") {
 if (args[0] === "release" && args[1] === "create") {
   state.createCalls += 1;
   state.exists = true;
-  state.target = process.env.GITHUB_SHA;
-  state.draft = true;
+  state.target = state.createTarget || process.env.GITHUB_SHA;
+  state.draft = state.createDraft ?? true;
   state.assets = [{ name: "partial.asset", size: 1 }];
   fail("gh: service unavailable after create (HTTP 503)");
 }
@@ -96,6 +96,8 @@ async function fixture(initialState) {
       exists: false,
       draft: true,
       target: "",
+      createTarget: "",
+      createDraft: true,
       assets: [],
       edit503: false,
       ...initialState,
@@ -172,6 +174,18 @@ test("fails closed before creation when release lookup remains unavailable", asy
   const state = JSON.parse(await readFile(setup.statePath, "utf8"));
   assert.equal(state.apiCalls, 3);
   assert.equal(state.createCalls, 0);
+  assert.equal(state.uploadCalls, 0);
+  assert.equal(state.editCalls, 0);
+});
+
+test("fails closed when an ambiguous create resolves to a foreign release", async () => {
+  const setup = await fixture({ createTarget: "foreign-sha" });
+  await assert.rejects(
+    execFileAsync("bash", [publisher.pathname, setup.distribution], { env: setup.env }),
+    /collided with a release not owned by this workflow/iu,
+  );
+  const state = JSON.parse(await readFile(setup.statePath, "utf8"));
+  assert.equal(state.createCalls, 1);
   assert.equal(state.uploadCalls, 0);
   assert.equal(state.editCalls, 0);
 });
