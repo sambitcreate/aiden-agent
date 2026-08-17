@@ -64,7 +64,10 @@ export function verifyLegacyWebsiteDmgContract(response) {
       `The legacy website DMG URL must redirect with HTTP 307 to ${WEBSITE_DMG_URL}.`,
     );
   }
-  if (response.headers.get("cache-control") !== "no-store") {
+  const cacheDirectives = (response.headers.get("cache-control") ?? "")
+    .split(",")
+    .map((directive) => directive.trim().toLowerCase());
+  if (!cacheDirectives.includes("no-store")) {
     throw new Error("The legacy website DMG redirect must not be cached.");
   }
 }

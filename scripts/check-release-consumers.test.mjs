@@ -27,7 +27,7 @@ test("release consumer contract accepts the coordinated stable and versioned DMG
     verifyLegacyWebsiteDmgContract(
       new Response(null, {
         status: 307,
-        headers: { "cache-control": "no-store", location: WEBSITE_DMG_URL },
+        headers: { "cache-control": "NO-STORE, max-age=0", location: WEBSITE_DMG_URL },
       }),
     ),
   );
