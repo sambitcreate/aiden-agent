@@ -13,12 +13,34 @@ import {
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
 const MAX_DETAIL_LENGTH = 120;
+const MAX_LINE_CHANGE_COUNT = 100_000_000;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 
 interface SafeToolDescriptor {
   label: string;
   target?: string;
   detail?: string;
+}
+
+function safeLineChanges(toolName: string, value: unknown): AgentToolStep["lineChanges"] {
+  if (toolName !== "write_file" && toolName !== "edit_file") return undefined;
+  const details = record(value);
+  if (
+    details.kind !== "file_line_changes" ||
+    details.version !== 1 ||
+    !Number.isSafeInteger(details.additions) ||
+    (details.additions as number) < 0 ||
+    (details.additions as number) > MAX_LINE_CHANGE_COUNT ||
+    !Number.isSafeInteger(details.deletions) ||
+    (details.deletions as number) < 0 ||
+    (details.deletions as number) > MAX_LINE_CHANGE_COUNT
+  ) {
+    return undefined;
+  }
+  return {
+    additions: details.additions as number,
+    deletions: details.deletions as number,
+  };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -126,6 +148,7 @@ export class GenerationTimelineProjector {
   private toolSequence = 0;
   private thinkingSequence = 0;
   private compactionSequence = 0;
+  private contentOffset = 0;
   private openThinking: { index: number; startedAt: number } | null = null;
 
   constructor(
@@ -157,6 +180,7 @@ export class GenerationTimelineProjector {
       status: "pending",
       startedAt: timestamp,
       updatedAt: timestamp,
+      contentOffset: this.contentOffset,
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.detail ? { detail: descriptor.detail } : {}),
     };
@@ -174,7 +198,7 @@ export class GenerationTimelineProjector {
     if (this.timeline.status !== "running" || this.openThinking) return;
     const timestamp = this.now();
     const last = this.timeline.steps[this.timeline.steps.length - 1];
-    if (last && !isToolStep(last)) {
+    if (last && !isToolStep(last) && last.contentOffset === this.contentOffset) {
       this.openThinking = { index: this.timeline.steps.length - 1, startedAt: timestamp };
       return;
     }
@@ -186,6 +210,7 @@ export class GenerationTimelineProjector {
       startedAt: timestamp,
       updatedAt: timestamp,
       durationMs: 0,
+      contentOffset: this.contentOffset,
     };
     this.openThinking = { index: this.timeline.steps.length, startedAt: timestamp };
     this.timeline.steps.push(step);
@@ -213,6 +238,54 @@ export class GenerationTimelineProjector {
     this.toolFinished(id, status);
   }
 
+  /** Keep future activity anchored to the current visible assistant text. */
+  setContentOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    this.contentOffset = offset;
+  }
+
+  /**
+   * Terminal Pi content can replace a streamed assistant turn. Clamp activity
+   * that was observed beyond the canonical turn end before anchoring later work.
+   */
+  reconcileContentOffset(turnStart: number, turnEnd: number): void {
+    if (
+      !Number.isSafeInteger(turnStart) ||
+      turnStart < 0 ||
+      !Number.isSafeInteger(turnEnd) ||
+      turnEnd < turnStart
+    ) {
+      return;
+    }
+    let changed = false;
+    for (const step of this.timeline.steps) {
+      if (
+        step.contentOffset !== undefined &&
+        step.contentOffset >= turnStart &&
+        step.contentOffset > turnEnd
+      ) {
+        step.contentOffset = turnEnd;
+        changed = true;
+      }
+    }
+    this.contentOffset = turnEnd;
+    if (changed) this.emit();
+  }
+
+  /** Compact-and-retry removes failed prose but keeps its activity at the retry boundary. */
+  rewindContentOffset(offset: number): void {
+    if (!Number.isSafeInteger(offset) || offset < 0) return;
+    let changed = false;
+    for (const step of this.timeline.steps) {
+      if (step.contentOffset !== undefined && step.contentOffset > offset) {
+        step.contentOffset = offset;
+        changed = true;
+      }
+    }
+    this.contentOffset = offset;
+    if (changed) this.emit();
+  }
+
   publicToolCallId(toolCallId: string): string | undefined {
     const index = this.stepIndex.get(toolCallId);
     if (index === undefined) return undefined;
@@ -231,8 +304,9 @@ export class GenerationTimelineProjector {
   toolFinished(
     toolCallId: string,
     status: Extract<AgentStepStatus, "completed" | "failed" | "blocked" | "cancelled">,
+    resultDetails?: unknown,
   ): void {
-    this.updateTool(toolCallId, status, true);
+    this.updateTool(toolCallId, status, true, resultDetails);
   }
 
   finish(status: Exclude<GenerationTimelineStatus, "running">): GenerationTimeline {
@@ -276,7 +350,12 @@ export class GenerationTimelineProjector {
     step.finishedAt = timestamp;
   }
 
-  private updateTool(toolCallId: string, status: AgentStepStatus, terminal = false): void {
+  private updateTool(
+    toolCallId: string,
+    status: AgentStepStatus,
+    terminal = false,
+    resultDetails?: unknown,
+  ): void {
     if (this.timeline.status !== "running") return;
     const index = this.stepIndex.get(toolCallId);
     if (index === undefined) return;
@@ -285,7 +364,13 @@ export class GenerationTimelineProjector {
     const timestamp = this.now();
     step.status = status;
     step.updatedAt = timestamp;
-    if (terminal) step.finishedAt = timestamp;
+    if (terminal) {
+      step.finishedAt = timestamp;
+      if (status === "completed") {
+        const lineChanges = safeLineChanges(step.toolName, resultDetails);
+        if (lineChanges) step.lineChanges = lineChanges;
+      }
+    }
     this.emit();
   }
 

@@ -11,6 +11,7 @@ import { subagentRunStore } from "../services/subagents/subagent-run-store.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
+import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -29,13 +30,21 @@ import {
 } from "../services/chat-append-commit.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
-import { parseAssistantChatCreate, parseChatCreate } from "./chat-create-params.js";
+import {
+  parseAssistantChatCreate,
+  parseChatCreate,
+} from "./chat-create-params.js";
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
-import { parseChatCopyRequest, parseChatOnlyRequest } from "./chat-session-params.js";
+import {
+  parseChatCopyRequest,
+  parseChatOnlyRequest,
+} from "./chat-session-params.js";
 import {
   safeExportFileName,
   writeAidenChatExportForRenderer,
 } from "../services/chat-export.js";
+import { chatForRenderer } from "../services/visible-chat-projection.js";
+import { chatActivityRegistry } from "../services/chat-activity.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -47,8 +56,11 @@ function asString(value: unknown, name: string): string {
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
+  ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
-    chatStore.list(typeof workspaceId === "string" && workspaceId ? workspaceId : undefined),
+    chatStore.list(
+      typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
+    ),
   );
 
   ipcMain.handle("chats:get", async (_event, id: unknown) => {
@@ -63,7 +75,7 @@ export function registerChatHistoryHandlers(): void {
     // retains a retry marker even if the one-shot settlement event was missed.
     reconciliationRequired ||= llmClient.isChatOwnedByInactiveRenderer(chatId);
     return {
-      chat,
+      chat: chatForRenderer(chat),
       reconciliation: reconciliationRequired
         ? {
             chatId,
@@ -87,12 +99,15 @@ export function registerChatHistoryHandlers(): void {
     }
     const parsed = parseChatCreate(input);
     if (parsed.workspaceId === ASSISTANT_WORKSPACE_ID) {
-      throw new Error("Aiden Assistant chats require the Assistant chat creation path.");
+      throw new Error(
+        "Aiden Assistant chats require the Assistant chat creation path.",
+      );
     }
     const mutationAdmission = parsed.workspaceId
       ? workspaceMutationGate.admit(parsed.workspaceId)
       : undefined;
-    let workspaceOperation: ReturnType<typeof admitRendererOwnedWorkspaceOperation> | undefined;
+    let workspaceOperation:
+      ReturnType<typeof admitRendererOwnedWorkspaceOperation> | undefined;
     try {
       workspaceOperation = parsed.workspaceId
         ? admitRendererOwnedWorkspaceOperation(
@@ -101,12 +116,19 @@ export function registerChatHistoryHandlers(): void {
             parsed.workspaceId,
           )
         : undefined;
-      if (parsed.workspaceId && !(await configStore.getWorkspace(parsed.workspaceId))) {
+      if (
+        parsed.workspaceId &&
+        !(await configStore.getWorkspace(parsed.workspaceId))
+      ) {
         throw new Error("The selected workspace is no longer available.");
       }
       const assertCurrent = () => {
-        if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-        if (mutationAdmission?.signal.aborted || workspaceOperation?.signal.aborted) {
+        if (owner.isDestroyed())
+          throw new Error("The renderer document is no longer active.");
+        if (
+          mutationAdmission?.signal.aborted ||
+          workspaceOperation?.signal.aborted
+        ) {
           throw new Error("The workspace changed before the chat was created.");
         }
         if (llmClient.requiresAppendReconciliation(owner.documentId)) {
@@ -114,7 +136,9 @@ export function registerChatHistoryHandlers(): void {
         }
       };
       try {
-        return await chatStore.create({ ...parsed, assertCurrent });
+        return chatForRenderer(
+          await chatStore.create({ ...parsed, assertCurrent }),
+        );
       } catch (error) {
         if (isChatCreateReconciliationRequiredError(error)) {
           llmClient.markAppendReconciliationRequired(owner.documentId);
@@ -138,24 +162,28 @@ export function registerChatHistoryHandlers(): void {
     // creation from forging the persisted identity that main treats as mode.
     const owner = rendererDocumentOwner(
       event,
-      () => new Error("Assistant chats require the active application document."),
+      () =>
+        new Error("Assistant chats require the active application document."),
     );
     if (llmClient.requiresAppendReconciliation(owner.documentId)) {
       throw new Error(appendReconciliationFailureMessage("blocked"));
     }
     const parsed = parseAssistantChatCreate(input);
     const assertCurrent = () => {
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      if (owner.isDestroyed())
+        throw new Error("The renderer document is no longer active.");
       if (llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
     };
     try {
-      return await chatStore.create({
-        ...parsed,
-        workspaceId: ASSISTANT_WORKSPACE_ID,
-        assertCurrent,
-      });
+      return chatForRenderer(
+        await chatStore.create({
+          ...parsed,
+          workspaceId: ASSISTANT_WORKSPACE_ID,
+          assertCurrent,
+        }),
+      );
     } catch (error) {
       if (isChatCreateReconciliationRequiredError(error)) {
         llmClient.markAppendReconciliationRequired(owner.documentId);
@@ -168,11 +196,16 @@ export function registerChatHistoryHandlers(): void {
     }
   });
 
-  ipcMain.handle("chats:rename", async (_event, id: unknown, title: unknown) => {
+  ipcMain.handle(
+    "chats:rename",
+    async (_event, id: unknown, title: unknown) => {
       await chatStore.rename(asString(id, "id"), asString(title, "title"));
-  });
+    },
+  );
 
-  ipcMain.handle("chats:renameWithFoundationModels", async (_event, id: unknown) =>
+  ipcMain.handle(
+    "chats:renameWithFoundationModels",
+    async (_event, id: unknown) =>
       chatTitleService.renameWithFoundationModels(asString(id, "id")),
   );
 
@@ -193,13 +226,17 @@ export function registerChatHistoryHandlers(): void {
     try {
       finishCopy = llmClient.beginChatCopy(parsed.chatId);
       if (!finishCopy) {
-        throw new Error("Finish the current response or approval before copying this chat.");
+        throw new Error(
+          "Finish the current response or approval before copying this chat.",
+        );
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
       const workspaceId = persistedChatWorkspaceId(source.workspaceId);
       if (workspaceId === ASSISTANT_WORKSPACE_ID) {
-        throw new Error("Assistant chats cannot be copied into the main chat surface.");
+        throw new Error(
+          "Assistant chats cannot be copied into the main chat surface.",
+        );
       }
       const mutationAdmission = workspaceMutationGate.admit(workspaceId);
       const workspaceOperation = admitRendererOwnedWorkspaceOperation(
@@ -235,7 +272,7 @@ export function registerChatHistoryHandlers(): void {
           workspaceId: persistedChatWorkspaceId(copied.workspaceId),
           updatedAt: copied.updatedAt,
         });
-        return copied;
+        return chatForRenderer(copied);
       } catch (error) {
         if (isChatCreateReconciliationRequiredError(error)) {
           llmClient.markAppendReconciliationRequired(owner.documentId);
@@ -269,7 +306,9 @@ export function registerChatHistoryHandlers(): void {
     try {
       finishExport = llmClient.beginChatExport(chatId);
       if (!finishExport) {
-        throw new Error("Finish the current response or approval before exporting this chat.");
+        throw new Error(
+          "Finish the current response or approval before exporting this chat.",
+        );
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
@@ -286,7 +325,8 @@ export function registerChatHistoryHandlers(): void {
         filters: [{ name: "Aiden chat", extensions: ["json"] }],
         properties: ["createDirectory", "showOverwriteConfirmation"],
       });
-      if (result.canceled || !result.filePath) return { status: "cancelled" as const };
+      if (result.canceled || !result.filePath)
+        return { status: "cancelled" as const };
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -310,49 +350,72 @@ export function registerChatHistoryHandlers(): void {
       const nextWorkspaceId = asString(workspaceId, "workspaceId");
       const finishMove = llmClient.beginChatWorkspaceChange(chatId);
       if (!finishMove) {
-        throw new Error("Finish or stop the current response before changing workspaces.");
+        throw new Error(
+          "Finish or stop the current response before changing workspaces.",
+        );
       }
       try {
         if (!(await configStore.getWorkspace(nextWorkspaceId))) {
           throw new Error(`Workspace ${nextWorkspaceId} not found.`);
         }
-        return await chatStore.moveEmptyChatToWorkspace(chatId, nextWorkspaceId);
+        return chatForRenderer(
+          await chatStore.moveEmptyChatToWorkspace(chatId, nextWorkspaceId),
+        );
       } finally {
         finishMove();
       }
     },
   );
 
-  ipcMain.handle("chats:setComputerUse", async (event, id: unknown, enabled: unknown) => {
+  ipcMain.handle(
+    "chats:setComputerUse",
+    async (event, id: unknown, enabled: unknown) => {
       const owner = rendererDocumentOwner(
         event,
-      () => new Error("Computer Use settings require the active application document."),
+        () =>
+          new Error(
+            "Computer Use settings require the active application document.",
+          ),
       );
       const chatId = asString(id, "id");
-    if (typeof enabled !== "boolean") throw new Error("Invalid Computer Use chat setting.");
+      if (typeof enabled !== "boolean")
+        throw new Error("Invalid Computer Use chat setting.");
       const release = llmClient.beginComputerUseSettingChange(chatId);
       if (!release) {
-      throw new Error("Finish or stop the current response before changing Computer Use.");
+        throw new Error(
+          "Finish or stop the current response before changing Computer Use.",
+        );
       }
       const controller = new AbortController();
       const removeInvalidation = owner.onInvalidated(() =>
-      controller.abort(new Error("The renderer document is no longer active.")),
+        controller.abort(
+          new Error("The renderer document is no longer active."),
+        ),
       );
       try {
         if (enabled) {
           const status = await computerUseStatus.status({
             signal: controller.signal,
           });
-        if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+          if (owner.isDestroyed())
+            throw new Error("The renderer document is no longer active.");
           if (!status.ready) throw new Error(status.detail);
         }
-      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
-      return await chatStore.setComputerUseEnabled(chatId, enabled, () => !owner.isDestroyed());
+        if (owner.isDestroyed())
+          throw new Error("The renderer document is no longer active.");
+        return chatForRenderer(
+          await chatStore.setComputerUseEnabled(
+            chatId,
+            enabled,
+            () => !owner.isDestroyed(),
+          ),
+        );
       } finally {
         removeInvalidation();
         release();
       }
-  });
+    },
+  );
 
   ipcMain.handle("chats:remove", async (_event, id: unknown) => {
     const chatId = asString(id, "id");
@@ -365,14 +428,36 @@ export function registerChatHistoryHandlers(): void {
       try {
         await subagentRunStore.deleteChat(chatId);
       } catch (error) {
-        logger.error("subagents", "Could not delete private subagent history.", error);
+        logger.error(
+          "subagents",
+          "Could not delete private subagent history.",
+          error,
+        );
         throw new Error("Aiden could not delete this chat's subagent history.");
+      }
+      try {
+        await piRuntimeEffectStore.deleteChat(chatId);
+      } catch (error) {
+        logger.error(
+          "pi",
+          "Could not delete private Pi effect history.",
+          error,
+        );
+        throw new Error(
+          "Aiden could not delete this chat's tool-effect history.",
+        );
       }
       try {
         await piCompactionSessionStore.deleteChat(chatId);
       } catch (error) {
-        logger.error("pi", "Could not delete the private compaction journal.", error);
-        throw new Error("Aiden could not delete this chat's compaction history.");
+        logger.error(
+          "pi",
+          "Could not delete the private compaction journal.",
+          error,
+        );
+        throw new Error(
+          "Aiden could not delete this chat's compaction history.",
+        );
       }
       // remove() also reconciles an index entry whose payload is already
       // missing or corrupt, while propagating real filesystem failures.
@@ -384,11 +469,17 @@ export function registerChatHistoryHandlers(): void {
     } finally {
       if (!releaseAdmission) {
         try {
-          releaseAdmission = !(await subagentRunStore.pendingChatDeletions()).includes(chatId);
+          releaseAdmission = !(
+            await subagentRunStore.pendingChatDeletions()
+          ).includes(chatId);
         } catch (error) {
           // An indeterminate durable state must keep generation admission
           // closed until restart reconciliation can safely finish the delete.
-          logger.error("subagents", "Could not inspect pending chat deletion state.", error);
+          logger.error(
+            "subagents",
+            "Could not inspect pending chat deletion state.",
+            error,
+          );
         }
       }
       // A durable but incomplete intent keeps admission closed for this
@@ -397,7 +488,9 @@ export function registerChatHistoryHandlers(): void {
     }
   });
 
-  ipcMain.handle("chats:appendMessage", (event, id: unknown, message: unknown, meta?: unknown) => {
+  ipcMain.handle(
+    "chats:appendMessage",
+    (event, id: unknown, message: unknown, meta?: unknown) => {
       // Parse and project the entire renderer envelope synchronously. The raw
       // IPC objects are never captured by the asynchronous persistence frame.
       const parsed = parseChatAppend(id, message, meta);
@@ -416,14 +509,17 @@ export function registerChatHistoryHandlers(): void {
       } = parsed;
       const owner = rendererDocumentOwner(
         event,
-      () => new Error("Chat messages require the active application document."),
+        () =>
+          new Error("Chat messages require the active application document."),
       );
       if (llmClient.requiresAppendReconciliation(owner.documentId)) {
         throw new Error(appendReconciliationFailureMessage("blocked"));
       }
       const turn = llmClient.beginChatTurn(chatId, turnId, owner.documentId);
       if (!turn) {
-      throw new Error("Wait for the previous response to finish saving before sending again.");
+        throw new Error(
+          "Wait for the previous response to finish saving before sending again.",
+        );
       }
       turn.onReleased(owner.onInvalidated(turn.release));
       try {
@@ -438,12 +534,16 @@ export function registerChatHistoryHandlers(): void {
       return (async () => {
         let appended = false;
         try {
-        const authoritativeChat = skillReference ? await chatStore.get(chatId) : undefined;
+          const authoritativeChat = skillReference
+            ? await chatStore.get(chatId)
+            : undefined;
           if (skillReference && !authoritativeChat) {
             throw new Error("This chat is no longer available.");
           }
           if (!turn.isActive()) {
-          throw new Error("This message turn expired before it could be saved.");
+            throw new Error(
+              "This message turn expired before it could be saved.",
+            );
           }
           const workspaceId = authoritativeChat
             ? persistedChatWorkspaceId(authoritativeChat.workspaceId)
@@ -465,7 +565,8 @@ export function registerChatHistoryHandlers(): void {
             });
           }
           const userMessageId = randomUUID();
-        const isCurrent = () => turn.isActive() && workspaceAdmission?.signal.aborted !== true;
+          const isCurrent = () =>
+            turn.isActive() && workspaceAdmission?.signal.aborted !== true;
           const append = (skill?: {
             provenance: {
               version: 1;
@@ -513,15 +614,19 @@ export function registerChatHistoryHandlers(): void {
                 },
                 {
                   resolveFresh: (resolvedWorkspaceId, invocationId) =>
-                  skillRegistry.resolveFresh(resolvedWorkspaceId, invocationId),
+                    skillRegistry.resolveFresh(
+                      resolvedWorkspaceId,
+                      invocationId,
+                    ),
                   isCurrent,
-                prepareLease: (prepared) => turn.prepareSkillInvocation(prepared),
+                  prepareLease: (prepared) =>
+                    turn.prepareSkillInvocation(prepared),
                   append,
                 },
               )
             : await append();
           appended = true;
-          return chat;
+          return chatForRenderer(chat);
         } catch (error) {
           if (isAppendReconciliationRequiredError(error)) {
             llmClient.markAppendReconciliationRequired(owner.documentId);
@@ -535,7 +640,8 @@ export function registerChatHistoryHandlers(): void {
           turn.settleAsyncWork();
         }
       })();
-  });
+    },
+  );
 
   ipcMain.handle("chats:abandonTurn", (event, id: unknown, turnId: unknown) => {
     const owner = rendererDocumentOwner(
@@ -546,6 +652,10 @@ export function registerChatHistoryHandlers(): void {
     if (!isSafeSubagentIdentifier(parsedTurnId)) {
       throw new Error("Invalid chat message turn identifier.");
     }
-    return llmClient.abandonChatTurn(asString(id, "id"), parsedTurnId, owner.documentId);
+    return llmClient.abandonChatTurn(
+      asString(id, "id"),
+      parsedTurnId,
+      owner.documentId,
+    );
   });
 }

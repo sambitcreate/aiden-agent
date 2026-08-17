@@ -10,6 +10,7 @@ import type { GenerationTimeline } from "../shared/generation-timeline";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
+import type { ProviderFailureV1 } from "../shared/provider-failure";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -463,6 +464,7 @@ export interface ChatMessage {
   createdAt: number;
   model?: string;
   reasoning?: string;
+  providerFailure?: ProviderFailureV1;
   attachments?: Attachment[];
   skill?: SkillProvenanceV1;
   timeline?: GenerationTimeline;

@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { appendFileSync, mkdirSync } from "node:fs";
 import {
   cp,
   lstat,
@@ -22,6 +23,35 @@ const repositoryRoot = path.resolve(path.dirname(modulePath), "..");
 const BRANDING_SCHEMA_VERSION = 5;
 const MICROPHONE_USAGE_DESCRIPTION =
   "Aiden Agent uses the microphone only when you choose voice input or dictation.";
+
+export function macDevLauncherLogPath(environment = process.env) {
+  const explicit = environment.AIDEN_DEV_LAUNCHER_LOG?.trim();
+  if (explicit) return path.resolve(explicit);
+  const home = environment.HOME?.trim();
+  if (!home) return null;
+  return path.join(
+    home,
+    "Library",
+    "Application Support",
+    "Aiden Agent Dev",
+    "logs",
+    "aiden-dev-launcher.log",
+  );
+}
+
+export function appendDevLauncherEvent(logPath, event, details = {}) {
+  if (!logPath) return;
+  try {
+    mkdirSync(path.dirname(logPath), { recursive: true });
+    appendFileSync(
+      logPath,
+      `${new Date().toISOString()} ${event} ${JSON.stringify(details)}\n`,
+      "utf8",
+    );
+  } catch {
+    // Development diagnostics must never prevent the runtime from launching.
+  }
+}
 
 function helperName(productName, suffix) {
   return `${productName} Helper${suffix}`;
@@ -398,6 +428,12 @@ export async function prepareMacDevRuntime(root = repositoryRoot) {
 }
 
 async function runDevRuntime() {
+  const launcherLog = macDevLauncherLogPath();
+  appendDevLauncherEvent(launcherLog, "launcher_start", {
+    pid: process.pid,
+    ppid: process.ppid,
+    cwd: repositoryRoot,
+  });
   const runtime = await prepareMacDevRuntime();
   const child = spawn(runtime.executablePath, [repositoryRoot], {
     cwd: repositoryRoot,
@@ -408,14 +444,39 @@ async function runDevRuntime() {
     },
     stdio: "inherit",
   });
+  appendDevLauncherEvent(launcherLog, "electron_spawned", {
+    launcherPid: process.pid,
+    electronPid: child.pid ?? null,
+    executablePath: runtime.executablePath,
+  });
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => child.kill(signal));
+    process.once(signal, () => {
+      const forwarded = child.kill(signal);
+      appendDevLauncherEvent(launcherLog, "launcher_signal", {
+        signal,
+        launcherPid: process.pid,
+        electronPid: child.pid ?? null,
+        forwarded,
+      });
+    });
   }
 
   await new Promise((resolve, reject) => {
-    child.once("error", reject);
+    child.once("error", (error) => {
+      appendDevLauncherEvent(launcherLog, "electron_spawn_error", {
+        name: error.name,
+        message: error.message,
+      });
+      reject(error);
+    });
     child.once("exit", (code, signal) => {
+      appendDevLauncherEvent(launcherLog, "electron_exit", {
+        code,
+        signal,
+        launcherPid: process.pid,
+        electronPid: child.pid ?? null,
+      });
       if (signal) process.exitCode = 1;
       else process.exitCode = code ?? 1;
       resolve();

@@ -17,12 +17,15 @@ import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
+import { parseStoredPiAssistantMessage } from "./pi-message-storage.js";
 import {
   projectVisibleChatMessage,
   projectVisibleChatMetadata,
 } from "./visible-chat-projection.js";
 import { MAX_VISIBLE_COPY_MESSAGES } from "../../renderer/shared/chat-copy-contract.js";
 import { jsonStringBytesBounded } from "./json-representation.js";
+import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import { providerFailureFromLegacyPiMessage } from "./provider-failure.js";
 
 const INDEX = "index.json";
 const DEFAULT_WORKSPACE_ID = "default";
@@ -382,33 +385,63 @@ export function createChatStore(
     const providerId = await resolveProviderId(chat.providerId);
     const migratedProvider = providerId !== chat.providerId;
     if (migratedProvider) chat.providerId = providerId;
-    chat.messages = chat.messages.map((message) => ({
-      id: message.id,
-      role: message.role,
-      content: message.content,
-      createdAt: message.createdAt,
-      model: message.model,
-      attachments: safeStoredAttachments(message.attachments),
-      reasoning:
-        message.role === "assistant" &&
-        typeof message.reasoning === "string" &&
-        message.reasoning.trim()
-          ? message.reasoning
+    let privacyMigrationRequired = false;
+    chat.messages = chat.messages.map((message) => {
+      const assistant = message.role === "assistant";
+      const providerFailure = assistant
+        ? parseProviderFailureV1(message.providerFailure) ??
+          providerFailureFromLegacyPiMessage(message.pi)
+        : undefined;
+      if (assistant) {
+        const pi =
+          message.pi && typeof message.pi === "object" && !Array.isArray(message.pi)
+            ? (message.pi as unknown as Record<string, unknown>)
+            : undefined;
+        if (
+          pi &&
+          (Object.prototype.hasOwnProperty.call(pi, "diagnostics") ||
+            Object.prototype.hasOwnProperty.call(pi, "errorMessage"))
+        ) {
+          privacyMigrationRequired = true;
+        }
+        if (
+          JSON.stringify(message.providerFailure) !==
+          JSON.stringify(providerFailure)
+        ) {
+          privacyMigrationRequired = true;
+        }
+      }
+      return {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt,
+        model: message.model,
+        attachments: safeStoredAttachments(message.attachments),
+        reasoning:
+          assistant &&
+          typeof message.reasoning === "string" &&
+          message.reasoning.trim()
+            ? message.reasoning
+            : undefined,
+        pi: assistant
+          ? parseStoredPiAssistantMessage(message.pi)
           : undefined,
-      timeline:
-        message.role === "assistant"
-          ? parseGenerationTimeline(message.timeline)
+        providerFailure,
+        timeline: assistant
+          ? parseGenerationTimeline(message.timeline, message.content.length)
           : undefined,
-      subagents:
-        message.role === "assistant"
+        subagents: assistant
           ? parseSubagentMessageReferenceV1(message.subagents)
           : undefined,
-      skill:
-        message.role === "user"
-          ? parseSkillProvenanceV1(message.skill)
-          : undefined,
-    }));
-    if (migratedProvider) await writeChat(chat).catch(() => undefined);
+        skill:
+          message.role === "user"
+            ? parseSkillProvenanceV1(message.skill)
+            : undefined,
+      };
+    });
+    if (privacyMigrationRequired) await writeChat(chat);
+    else if (migratedProvider) await writeChat(chat).catch(() => undefined);
     return chat;
   }
 
@@ -645,9 +678,7 @@ export function createChatStore(
           }
         };
         const metadata = projectVisibleChatMetadata(source);
-        const suffix = input.throughAssistantMessageId
-          ? " (fork)"
-          : " (copy)";
+        const suffix = input.throughAssistantMessageId ? " (fork)" : " (copy)";
         const maximumBaseLength = Math.max(1, 120 - suffix.length);
         const title = `${Array.from(
           metadata.title.slice(0, maximumBaseLength * 2),
@@ -660,7 +691,8 @@ export function createChatStore(
         charge(metadata.providerId);
         charge(metadata.model);
         for (let index = 0; index <= throughIndex; index += 1) {
-          const message = projectVisibleChatMessage(source.messages[index]);
+          const sourceMessage = source.messages[index];
+          const message = projectVisibleChatMessage(sourceMessage);
           if (!message) continue;
           if (copiedMessages.length >= MAX_VISIBLE_COPY_MESSAGES) {
             throw new Error("This chat has too many messages to copy safely.");
@@ -691,6 +723,10 @@ export function createChatStore(
             skill:
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
+                : undefined,
+            providerFailure:
+              message.role === "assistant"
+                ? parseProviderFailureV1(message.providerFailure)
                 : undefined,
           });
         }
@@ -835,6 +871,14 @@ export function createChatStore(
             message.reasoning.trim()
               ? message.reasoning
               : undefined,
+          pi:
+            message.role === "assistant"
+              ? parseStoredPiAssistantMessage(message.pi)
+              : undefined,
+          providerFailure:
+            message.role === "assistant"
+              ? parseProviderFailureV1(message.providerFailure)
+              : undefined,
           attachments: safeStoredAttachments(message.attachments),
           skill:
             message.role === "user"
@@ -842,7 +886,7 @@ export function createChatStore(
               : undefined,
           timeline:
             message.role === "assistant"
-              ? parseGenerationTimeline(message.timeline)
+              ? parseGenerationTimeline(message.timeline, message.content.length)
               : undefined,
           subagents:
             message.role === "assistant"

@@ -61,6 +61,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:subagents",
   "chat:timeline",
   "chat:tool",
+  "chats:activity-changed",
   "chats:metadata-updated",
   "chats:settled",
   "dictation:state",

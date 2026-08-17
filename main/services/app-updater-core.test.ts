@@ -314,8 +314,10 @@ test("Restart now uses Aiden's protected shutdown before launching the installer
 test("production updater awaits downloads and exposes a sender-scoped retry entry point", () => {
   const service = readFileSync(new URL("./app-updater.ts", import.meta.url), "utf8");
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  const handlerStart = main.indexOf('ipcMain.handle("app:checkForUpdates"');
-  const handlerEnd = main.indexOf("\n});", handlerStart);
+  const handlerStart = main.indexOf('"app:checkForUpdates"');
+  const handlerEnd = main.indexOf("\n);", handlerStart);
+  assert.ok(handlerStart >= 0);
+  assert.ok(handlerEnd > handlerStart);
   const handler = main.slice(handlerStart, handlerEnd);
 
   assert.doesNotMatch(service, /checkForUpdatesAndNotify/u);

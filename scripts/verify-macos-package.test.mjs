@@ -20,6 +20,7 @@ import {
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
+  assertPackagedSubagentInferenceWorkerEntries,
   assertPackagedNodePtyHelperEntries,
   assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
@@ -28,6 +29,7 @@ import {
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
+  verifyPackagedSubagentInferenceWorker,
   verifyPackagedNodePtyResources,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
@@ -143,6 +145,61 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
     await assert.rejects(
       verifyPackagedModelCatalogResources(malformedAsar),
       /modalities\.input must be a string array/u,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires a bounded packed subagent inference worker", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedSubagentInferenceWorkerEntries([
+      "/build/main/subagent-inference-worker.js",
+      "/build/main/subagent-inference-worker-runtime.js",
+    ]),
+  );
+  assert.throws(
+    () => assertPackagedSubagentInferenceWorkerEntries([]),
+    /missing the subagent inference worker/u,
+  );
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-inference-worker-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const workerDirectory = path.join(source, "build", "main");
+  try {
+    await mkdir(workerDirectory, { recursive: true });
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'import { syncBuiltinESMExports } from "node:module";\nthrow new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
+    );
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker-runtime.js"),
+      "export {};\n",
+    );
+    const packedAsar = path.join(root, "packed.asar");
+    await createPackage(source, packedAsar);
+    await assert.doesNotReject(verifyPackagedSubagentInferenceWorker(packedAsar));
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'const names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nawait import("./subagent-inference-worker-runtime.js");\nsyncBuiltinESMExports();\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nthrow new Error("Provider credential subprocesses are disabled");\n',
+    );
+    const wrongOrderAsar = path.join(root, "wrong-order.asar");
+    await createPackage(source, wrongOrderAsar);
+    await assert.rejects(
+      verifyPackagedSubagentInferenceWorker(wrongOrderAsar),
+      /disable subprocesses before loading providers/u,
+    );
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'throw new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
+    );
+    const unpackedAsar = path.join(root, "unpacked.asar");
+    await createPackageWithOptions(source, unpackedAsar, {
+      unpack: "**/subagent-inference-worker-runtime.js",
+    });
+    await assert.rejects(
+      verifyPackagedSubagentInferenceWorker(unpackedAsar),
+      /bounded packed regular file/u,
     );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
@@ -425,21 +482,11 @@ test("package verifier checks each architecture deployment floor independently",
         ),
       );
       assert.throws(
-        () =>
-          assertMacOSArchitectureMinimum(
-            "platform IOS\nminos 14.4\n",
-            target,
-            architecture,
-          ),
+        () => assertMacOSArchitectureMinimum("platform IOS\nminos 14.4\n", target, architecture),
         new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
       );
       assert.throws(
-        () =>
-          assertMacOSArchitectureMinimum(
-            "platform MACOS\nminos 13.0\n",
-            target,
-            architecture,
-          ),
+        () => assertMacOSArchitectureMinimum("platform MACOS\nminos 13.0\n", target, architecture),
         new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
       );
       assert.throws(

@@ -31,7 +31,10 @@ const SGR_RESET = "\u001b[0m";
 
 test("sanitizer strips CSI cursor-position, device-attributes, and device-status queries", () => {
   const input = `hello ${CSI_CPR}${CSI_DA}world${CSI_DSR}!`;
-  const { visibleText, pendingControlSequence } = sanitizeTerminalHistoryChunk("", input);
+  const { visibleText, pendingControlSequence } = sanitizeTerminalHistoryChunk(
+    "",
+    input,
+  );
   assert.equal(pendingControlSequence, "");
   assert.equal(visibleText, "hello world!");
 });
@@ -48,7 +51,10 @@ test("sanitizer carries an incomplete escape sequence across chunk boundaries", 
   assert.equal(first.visibleText, "a");
   assert.equal(first.pendingControlSequence, "\u001b[6");
 
-  const second = sanitizeTerminalHistoryChunk(first.pendingControlSequence, "nb");
+  const second = sanitizeTerminalHistoryChunk(
+    first.pendingControlSequence,
+    "nb",
+  );
   assert.equal(second.pendingControlSequence, "");
   // The full CSI 6 n was recognized and stripped; "b" is the only new visible text.
   assert.equal(second.visibleText, "b");
@@ -64,7 +70,10 @@ test("sanitizer strips OSC color queries (10;?) and rgb: replies", () => {
 test("sanitizer strips DCS DECRQSS ($q) queries", () => {
   // DCS $ q m ST — a DECRQSS query for SGR.
   const dcsQuery = "\u001bP$qm\u001b\\";
-  const { visibleText } = sanitizeTerminalHistoryChunk("", `pre${dcsQuery}post`);
+  const { visibleText } = sanitizeTerminalHistoryChunk(
+    "",
+    `pre${dcsQuery}post`,
+  );
   assert.equal(visibleText, "prepost");
 });
 
@@ -75,7 +84,8 @@ test("capHistory keeps only the most recent N lines", () => {
 });
 
 test("capHistory preserves a trailing newline", () => {
-  const lines = Array.from({ length: 10 }, (_, i) => `line${i}`).join("\n") + "\n";
+  const lines =
+    Array.from({ length: 10 }, (_, i) => `line${i}`).join("\n") + "\n";
   const capped = capHistory(lines, 2);
   assert.equal(capped, "line8\nline9\n");
 });
@@ -112,7 +122,10 @@ test("TerminalHistoryStore preserves restored history when appending after resta
     await restarted.flush("ws-1");
 
     const verified = new TerminalHistoryStore({ logsDir: dir });
-    assert.equal(await verified.read("ws-1"), "before restart\nafter restart\n");
+    assert.equal(
+      await verified.read("ws-1"),
+      "before restart\nafter restart\n",
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -245,7 +258,7 @@ test("production startup installs and flushes persisted terminal history", async
   assert.match(main, /TerminalHistoryStore/u);
   assert.match(
     main,
-    /terminalService\.installHistoryStore\(await TerminalHistoryStore\.create\(\)\)/u,
+    /terminalService\.installHistoryStore\(\s*await TerminalHistoryStore\.create\(\),?\s*\)/u,
   );
   assert.match(main, /terminalService\.flushHistory\(\)/u);
 });

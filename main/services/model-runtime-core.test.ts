@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AnthropicMessagesCompat, Api, Model, ProviderStreams } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  type AnthropicMessagesCompat,
+  type Api,
+  type Model,
+  type ProviderStreams,
+} from "@earendil-works/pi-ai";
 
 import { resolveModelRuntimeWith, type ModelRuntimeDependencies } from "./model-runtime-core.js";
 import { CONSERVATIVE_RUNTIME_LIMITS, type RuntimeModelLimits } from "./models-catalog-core.js";
@@ -45,11 +51,13 @@ function dependencies(options?: {
   nativeProvider?: StoredProvider;
   nativeModel?: Model<Api>;
 }): ModelRuntimeDependencies {
+  const models = createModels();
   return {
     getProvider: async () => options?.provider,
     getApiKey: async () => options?.key ?? null,
     resolveRuntimeLimits: async () => options?.limits ?? CONSERVATIVE_RUNTIME_LIMITS,
     codex: {
+      models,
       prepareRuntimeModel: async (modelId) => {
         assert.equal(modelId, codexModel.id);
         return codexModel;
@@ -57,6 +65,7 @@ function dependencies(options?: {
       streamSimple: codexStream,
     },
     native: {
+      models,
       getProvider: (providerId) =>
         providerId === options?.nativeProvider?.id ? options.nativeProvider : undefined,
       getModel: (providerId, modelId) =>
@@ -91,6 +100,7 @@ test("routes Codex through Pi without consulting API-key providers", async () =>
   assert.equal(legacyReads, 0);
   assert.strictEqual(receivedSignal, controller.signal);
   assert.strictEqual(runtime.model, codexModel);
+  assert.strictEqual(runtime.models, deps.codex.models);
   assert.strictEqual(runtime.streams.streamSimple, codexStream);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.headers, undefined);
@@ -117,6 +127,7 @@ test("keeps the legacy API-key runtime contract unchanged", async () => {
   assert.equal(runtime.model.baseUrl, provider.baseUrl);
   assert.equal(runtime.apiKey, "saved-key");
   assert.equal(runtime.headers, undefined);
+  assert.strictEqual(runtime.models.getModel(provider.id, "example-model"), runtime.model);
 });
 
 test("preserves Anthropic adaptive-thinking metadata in the request model", async () => {
@@ -184,6 +195,7 @@ test("routes every Pi built-in through its native model and transport", async ()
   assert.equal(limitReads, 0);
   assert.strictEqual(runtime.provider, provider);
   assert.strictEqual(runtime.model, googleModel);
+  assert.strictEqual(runtime.models, deps.native.models);
   assert.strictEqual(runtime.streams.streamSimple, googleStream);
   assert.equal(runtime.apiKey, undefined);
   assert.equal(runtime.model.api, "google-generative-ai");

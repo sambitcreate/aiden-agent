@@ -11,7 +11,10 @@ import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
 import { collectMcpAgentTools } from "./mcp.js";
 import { buildCodingTools } from "./coding-tools.js";
-import type { ScheduledMcpServerBinding, WorkspacePermission } from "./types.js";
+import type {
+  ScheduledMcpServerBinding,
+  WorkspacePermission,
+} from "./types.js";
 import type { SkillRegistrySnapshot } from "./skill-registry.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { buildSkillTools } from "./skill-tools.js";
@@ -28,6 +31,7 @@ import { createAssistantProjectTool } from "./assistant/project-tool.js";
 import { createAssistantMcpServerTool } from "./assistant/mcp-tool.js";
 import { selectedMcpServers } from "./mcp-selection.js";
 import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { buildTelegramAgentTools } from "./telegram/telegram-agent-tools.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
@@ -39,7 +43,7 @@ function textResult(text: string): AgentToolResult<null> {
 export { skillToolKey } from "./skill-registry-core.js";
 
 function makeExaTool(apiKey: string): AgentTool {
-  return {
+  return declarePiRuntimeReplay({
     name: "web_search",
     label: "Web Search",
     description:
@@ -54,8 +58,11 @@ function makeExaTool(apiKey: string): AgentTool {
         }),
       ),
     }),
-    execute: async (_id, params): Promise<AgentToolResult<null>> => {
-      const { query, numResults } = params as { query: string; numResults?: number };
+    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
+      const { query, numResults } = params as {
+        query: string;
+        numResults?: number;
+      };
       const response = await fetch(EXA_ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": apiKey },
@@ -64,6 +71,7 @@ function makeExaTool(apiKey: string): AgentTool {
           numResults: numResults ?? 5,
           contents: { text: { maxCharacters: 1200 } },
         }),
+        signal,
       });
       if (!response.ok) {
         const body = await response.text().catch(() => "");
@@ -81,7 +89,7 @@ function makeExaTool(apiKey: string): AgentTool {
       }));
       return textResult(JSON.stringify({ results }));
     },
-  };
+  }, "never");
 }
 
 /** Context describing where and how much the agent may act. */
@@ -140,16 +148,27 @@ export function buildSchedulingTools(
 }
 
 async function configuredMcpTools(ctx: ToolContext): Promise<AgentTool[]> {
-  const servers = selectedMcpServers(await configStore.listMcpServers(), ctx.mcpServerIds);
-  if (ctx.mcpServerBindings) assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
-  return collectMcpAgentTools(servers, { strict: ctx.mcpServerIds !== undefined });
+  const servers = selectedMcpServers(
+    await configStore.listMcpServers(),
+    ctx.mcpServerIds,
+  );
+  if (ctx.mcpServerBindings)
+    assertScheduledMcpServerBindings(servers, ctx.mcpServerBindings);
+  return collectMcpAgentTools(servers, {
+    strict: ctx.mcpServerIds !== undefined,
+  });
 }
 
 export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
-  const hasCapabilityProfile = Object.prototype.hasOwnProperty.call(ctx, "capabilityProfile");
+  const hasCapabilityProfile = Object.prototype.hasOwnProperty.call(
+    ctx,
+    "capabilityProfile",
+  );
   if (ctx.mode === "subagent" || hasCapabilityProfile) {
     if (ctx.mode !== "subagent") {
-      throw new Error("Subagent capabilities require the explicit subagent tool mode.");
+      throw new Error(
+        "Subagent capabilities require the explicit subagent tool mode.",
+      );
     }
     return buildSubagentCapabilityTools({
       workspaceRoot: ctx.workspaceRoot,
@@ -157,7 +176,11 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
       capabilityProfile: ctx.capabilityProfile,
     }).tools;
   }
-  if (ctx.mode !== undefined && ctx.mode !== "assistant" && ctx.mode !== "assistant-automation") {
+  if (
+    ctx.mode !== undefined &&
+    ctx.mode !== "assistant" &&
+    ctx.mode !== "assistant-automation"
+  ) {
     throw new Error(`Unknown agent tool mode: ${JSON.stringify(ctx.mode)}.`);
   }
 
@@ -174,8 +197,11 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
             createAssistantMcpServerTool(),
             ...buildSchedulingTools(ctx),
           ];
-    if (ctx.allowMcpTools === true) tools.push(...(await configuredMcpTools(ctx)));
-    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
+    if (ctx.allowMcpTools === true)
+      tools.push(...(await configuredMcpTools(ctx)));
+    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) {
+      tools.push(...buildTelegramAgentTools());
+    }
     return tools;
   }
 
@@ -184,12 +210,15 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   // from an external service cannot flow into project mutation tools.
   if (ctx.mode === "assistant-automation") {
     if (ctx.allowMcpTools === true || (ctx.mcpServerIds?.length ?? 0) > 0) {
-      throw new Error("Assistant project automations cannot use MCP connectors.");
+      throw new Error(
+        "Assistant project automations cannot use MCP connectors.",
+      );
     }
-    const tools = ctx.workspaceRoot && ctx.permission !== "none"
-      ? buildCodingTools(ctx.workspaceRoot)
-      : [];
-    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) tools.push(...buildTelegramAgentTools());
+    const tools =
+      ctx.workspaceRoot && ctx.permission !== "none" ? buildCodingTools(ctx.workspaceRoot) : [];
+    if (ctx.interactionSurface === "telegram" || ctx.allowTelegramDirect === true) {
+      tools.push(...buildTelegramAgentTools());
+    }
     return tools;
   }
 
@@ -218,7 +247,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   // Every skill consumer uses this exact authoritative snapshot.
   const skillSnapshot =
     ctx.skillSnapshot ??
-    (ctx.workspaceId ? await skillRegistry.snapshot(ctx.workspaceId) : undefined);
+    (ctx.workspaceId
+      ? await skillRegistry.snapshot(ctx.workspaceId)
+      : undefined);
   if (skillSnapshot) {
     tools.push(...buildSkillTools(skillSnapshot, ctx.permission !== "none"));
   }
@@ -230,3 +261,4 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
 
   return tools;
 }
+

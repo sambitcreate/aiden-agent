@@ -427,6 +427,8 @@ export interface SubagentTreeBudgetLimitsV2 {
   readonly maxQueued: number;
   readonly maxTokens: number;
   readonly maxToolCalls: number;
+  readonly maxTurns: number;
+  readonly maxNetworkOperations: number;
   readonly maxWallTimeMs: number;
   readonly maxOutputChars: number;
 }
@@ -435,6 +437,8 @@ export interface SubagentTreeBudgetUsageV2 {
   readonly tokens: number;
   readonly toolCalls: number;
   readonly outputChars: number;
+  readonly turns: number;
+  readonly networkOperations: number;
 }
 
 export interface SubagentTreeBudgetSnapshotV2 extends SubagentTreeBudgetUsageV2 {
@@ -467,6 +471,8 @@ function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
     "maxQueued",
     "maxTokens",
     "maxToolCalls",
+    "maxTurns",
+    "maxNetworkOperations",
     "maxWallTimeMs",
     "maxOutputChars",
   ]);
@@ -482,6 +488,12 @@ function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
     maxQueued: positiveInteger(limits.maxQueued, 64, "queue budget"),
     maxTokens: positiveInteger(limits.maxTokens, 10_000_000, "token budget"),
     maxToolCalls: positiveInteger(limits.maxToolCalls, 512, "tool-call budget"),
+    maxTurns: positiveInteger(limits.maxTurns, 512, "turn budget"),
+    maxNetworkOperations: positiveInteger(
+      limits.maxNetworkOperations,
+      512,
+      "network-operation budget",
+    ),
     maxWallTimeMs: positiveInteger(
       limits.maxWallTimeMs,
       24 * 60 * 60_000,
@@ -496,9 +508,21 @@ function parseBudgetLimits(value: unknown): SubagentTreeBudgetLimitsV2 {
 }
 
 function parseUsage(value: unknown): SubagentTreeBudgetUsageV2 {
-  const usage = exactPlainRecord(value, ["tokens", "toolCalls", "outputChars"]);
+  const usage = exactPlainRecord(value, [
+    "tokens",
+    "toolCalls",
+    "outputChars",
+    "turns",
+    "networkOperations",
+  ]);
   if (!usage) throw new Error("Invalid subagent tree usage fields.");
-  for (const field of ["tokens", "toolCalls", "outputChars"] as const) {
+  for (const field of [
+    "tokens",
+    "toolCalls",
+    "outputChars",
+    "turns",
+    "networkOperations",
+  ] as const) {
     if (!Number.isSafeInteger(usage[field]) || (usage[field] as number) < 0) {
       throw new Error("Invalid subagent tree usage value.");
     }
@@ -507,6 +531,8 @@ function parseUsage(value: unknown): SubagentTreeBudgetUsageV2 {
     tokens: usage.tokens as number,
     toolCalls: usage.toolCalls as number,
     outputChars: usage.outputChars as number,
+    turns: usage.turns as number,
+    networkOperations: usage.networkOperations as number,
   };
 }
 
@@ -522,6 +548,8 @@ export class SubagentTreeBudgetLedgerV2 {
   private tokens = 0;
   private toolCalls = 0;
   private outputChars = 0;
+  private turns = 0;
+  private networkOperations = 0;
   private reservationSequence = 0;
 
   constructor(
@@ -668,18 +696,24 @@ export class SubagentTreeBudgetLedgerV2 {
     const tokens = this.tokens + usage.tokens;
     const toolCalls = this.toolCalls + usage.toolCalls;
     const outputChars = this.outputChars + usage.outputChars;
+    const turns = this.turns + usage.turns;
+    const networkOperations = this.networkOperations + usage.networkOperations;
     if (
       tokens > this.limits.maxTokens ||
       toolCalls > this.limits.maxToolCalls ||
-      outputChars > this.limits.maxOutputChars
+      outputChars > this.limits.maxOutputChars ||
+      turns > this.limits.maxTurns ||
+      networkOperations > this.limits.maxNetworkOperations
     ) {
       throw new Error(
-        "Subagent tree token, tool-call, or output budget exhausted.",
+        "Subagent tree token, tool-call, turn, network, or output budget exhausted.",
       );
     }
     this.tokens = tokens;
     this.toolCalls = toolCalls;
     this.outputChars = outputChars;
+    this.turns = turns;
+    this.networkOperations = networkOperations;
   }
 
   stateOf(runId: string): LedgerRunState | undefined {
@@ -697,6 +731,8 @@ export class SubagentTreeBudgetLedgerV2 {
       tokens: this.tokens,
       toolCalls: this.toolCalls,
       outputChars: this.outputChars,
+      turns: this.turns,
+      networkOperations: this.networkOperations,
       elapsedWallTimeMs,
       expired:
         !Number.isFinite(now) ||
@@ -710,6 +746,8 @@ export interface SubagentTreeSchedulerTaskV2 {
   readonly node: SubagentTreeNodeV2;
   readonly deployment: SubagentDeployment;
   readonly execute: (lease: SubagentTreeExecutionLeaseV2) => Promise<unknown>;
+  /** Exact per-run value returned when this task is stopped before dispatch. */
+  readonly cancelledResult?: unknown;
 }
 
 export interface SubagentTreeExecutionLeaseV2 {
@@ -718,6 +756,7 @@ export interface SubagentTreeExecutionLeaseV2 {
   runDescendants(
     tasks: readonly SubagentTreeSchedulerTaskV2[],
   ): Promise<readonly unknown[]>;
+  cancelRun(runId: string, reason?: Error): boolean;
 }
 
 type SchedulerState = "queued" | "running" | "waiting" | "settled";
@@ -825,7 +864,7 @@ export class SubagentTreeSchedulerV2 {
 
   private dispatch(): void {
     if (this.controller.signal.aborted) return;
-    for (let index = 0; index < this.queue.length;) {
+    for (let index = 0; index < this.queue.length; ) {
       const item = this.queue[index]!;
       const deployment = item.entry.task.deployment;
       if (this.active[deployment] >= this.limits[deployment]) {
@@ -863,6 +902,8 @@ export class SubagentTreeSchedulerV2 {
       signal: this.controller.signal,
       runDescendants: (tasks: readonly SubagentTreeSchedulerTaskV2[]) =>
         this.runDescendants(entry, tasks),
+      cancelRun: (runId: string, reason?: Error) =>
+        this.cancelRun(runId, reason),
     });
     try {
       const result = await entry.task.execute(lease);
@@ -952,16 +993,48 @@ export class SubagentTreeSchedulerV2 {
     );
   }
 
-  run(
+  async run(
     tasks: readonly SubagentTreeSchedulerTaskV2[],
   ): Promise<readonly unknown[]> {
     if (this.controller.signal.aborted)
-      return Promise.reject(cancellationError(this.controller.signal));
+      throw cancellationError(this.controller.signal);
     this.validateTasks(tasks);
     this.ledger.reserveLaunches(tasks.map(({ node }) => node));
     const entries = this.createEntries(tasks);
     this.enqueue(entries);
-    return Promise.all(entries.map(({ promise }) => promise));
+    const settled = await Promise.allSettled(
+      entries.map(({ promise }) => promise),
+    );
+    const failure = settled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+    return settled.map(
+      (result) => (result as PromiseFulfilledResult<unknown>).value,
+    );
+  }
+
+  /** Remove one exact queued child without cancelling or delaying its siblings. */
+  cancelRun(
+    runId: string,
+    reason: Error = new Error("Subagent run cancelled."),
+  ): boolean {
+    const entry = this.entries.get(runId);
+    if (!entry || entry.state !== "queued") return false;
+    for (let index = this.queue.length - 1; index >= 0; index -= 1) {
+      const item = this.queue[index]!;
+      if (item.entry !== entry || item.resume) continue;
+      this.queue.splice(index, 1);
+    }
+    this.ledger.finish(runId);
+    entry.state = "settled";
+    if (entry.task.cancelledResult !== undefined) {
+      entry.resolve(entry.task.cancelledResult);
+    } else {
+      entry.reject(reason);
+    }
+    this.dispatch();
+    return true;
   }
 
   cancel(reason: Error = new Error("Subagent tree cancelled.")): void {
@@ -971,18 +1044,15 @@ export class SubagentTreeSchedulerV2 {
       .splice(0)
       .sort((a, b) => a.entry.sequence - b.entry.sequence)) {
       item.resumeReject?.(reason);
-    }
-    for (const entry of [...this.entries.values()].sort(
-      (a, b) => a.sequence - b.sequence,
-    )) {
-      if (entry.state === "settled") continue;
+      const entry = item.entry;
+      if (item.resume || entry.state !== "queued") continue;
       entry.reject(reason);
-      if (entry.holdsCapacity) {
-        this.active[entry.task.deployment] -= 1;
-        entry.holdsCapacity = false;
-      }
       this.ledger.finish(entry.task.node.identity.runId);
       entry.state = "settled";
     }
+    // Running entries retain ownership until their execute() path observes the
+    // abort and finishes its bounded settlement protocol. This prevents the
+    // supervisor from publishing terminal state while a provider is still in
+    // the cancellation grace window.
   }
 }

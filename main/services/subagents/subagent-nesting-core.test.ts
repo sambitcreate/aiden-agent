@@ -72,6 +72,8 @@ function limits(overrides: Partial<SubagentTreeBudgetLimitsV2> = {}) {
     maxQueued: 8,
     maxTokens: 100_000,
     maxToolCalls: 32,
+    maxTurns: 32,
+    maxNetworkOperations: 8,
     maxWallTimeMs: 60_000,
     maxOutputChars: 100_000,
     ...overrides,
@@ -280,14 +282,29 @@ test("tree ledger reserves fan-out and usage atomically across every budget", ()
     tokens: 0,
     toolCalls: 0,
     outputChars: 0,
+    turns: 0,
+    networkOperations: 0,
     elapsedWallTimeMs: 0,
     expired: false,
   });
   ledger.activate(first.identity.runId);
-  ledger.consumeUsage({ tokens: 90_000, toolCalls: 30, outputChars: 90_000 });
+  ledger.consumeUsage({
+    tokens: 90_000,
+    toolCalls: 30,
+    outputChars: 90_000,
+    turns: 30,
+    networkOperations: 7,
+  });
   const beforeUsageFailure = ledger.snapshot();
   assert.throws(
-    () => ledger.consumeUsage({ tokens: 10_001, toolCalls: 0, outputChars: 0 }),
+    () =>
+      ledger.consumeUsage({
+        tokens: 10_001,
+        toolCalls: 0,
+        outputChars: 0,
+        turns: 0,
+        networkOperations: 0,
+      }),
     /budget exhausted/u,
   );
   assert.deepEqual(ledger.snapshot(), beforeUsageFailure);
@@ -297,9 +314,57 @@ test("tree ledger reserves fan-out and usage atomically across every budget", ()
   now = 1_101;
   assert.equal(ledger.snapshot().expired, true);
   assert.throws(
-    () => ledger.consumeUsage({ tokens: 0, toolCalls: 0, outputChars: 0 }),
+    () =>
+      ledger.consumeUsage({
+        tokens: 0,
+        toolCalls: 0,
+        outputChars: 0,
+        turns: 0,
+        networkOperations: 0,
+      }),
     /wall-time/u,
   );
+});
+
+test("tree ledger enforces aggregate turn and network ceilings", () => {
+  const ledger = new SubagentTreeBudgetLedgerV2(
+    "generation-root",
+    limits({ maxTurns: 2, maxNetworkOperations: 1 }),
+    () => 0,
+  );
+  ledger.consumeUsage({
+    tokens: 0,
+    toolCalls: 0,
+    outputChars: 0,
+    turns: 2,
+    networkOperations: 1,
+  });
+  const full = ledger.snapshot();
+  assert.equal(full.turns, 2);
+  assert.equal(full.networkOperations, 1);
+  assert.throws(
+    () =>
+      ledger.consumeUsage({
+        tokens: 0,
+        toolCalls: 0,
+        outputChars: 0,
+        turns: 1,
+        networkOperations: 0,
+      }),
+    /turn, network/u,
+  );
+  assert.throws(
+    () =>
+      ledger.consumeUsage({
+        tokens: 0,
+        toolCalls: 0,
+        outputChars: 0,
+        turns: 0,
+        networkOperations: 1,
+      }),
+    /turn, network/u,
+  );
+  assert.deepEqual(ledger.snapshot(), full);
 });
 
 test("ledger rejects hostile budget and usage getters without partial mutation", () => {
@@ -400,6 +465,60 @@ test("local limit one releases a waiting parent so its descendant can run", asyn
   assert.equal(ledger.snapshot().queued, 0);
 });
 
+test("scheduler removes one exact queued run without activating it", async () => {
+  const root = rootNode();
+  const first = childNode(root, "cancel-first");
+  const queued = childNode(root, "cancel-queued");
+  const ledger = new SubagentTreeBudgetLedgerV2(
+    root.identity.treeRootId,
+    limits({ maxActive: 1 }),
+  );
+  const scheduler = new SubagentTreeSchedulerV2(ledger, {
+    local: 1,
+    hosted: 2,
+  });
+  let releaseFirst!: () => void;
+  let markStarted!: () => void;
+  const firstStarted = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const firstRelease = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let queuedCalls = 0;
+  const running = scheduler.run([
+    {
+      node: first,
+      deployment: "local",
+      execute: async () => {
+        markStarted();
+        await firstRelease;
+        return "first";
+      },
+    },
+    {
+      node: queued,
+      deployment: "local",
+      cancelledResult: "stopped",
+      execute: async () => {
+        queuedCalls += 1;
+        return "queued";
+      },
+    },
+  ]);
+  await firstStarted;
+  assert.equal(ledger.snapshot().queued, 1);
+  const stopped = new Error("stop exact queued child");
+  assert.equal(scheduler.cancelRun(queued.identity.runId, stopped), true);
+  assert.equal(ledger.snapshot().queued, 0);
+  assert.equal(scheduler.cancelRun(queued.identity.runId, stopped), false);
+  releaseFirst();
+  assert.deepEqual(await running, ["first", "stopped"]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(queuedCalls, 0);
+  assert.equal(ledger.snapshot().active, 0);
+});
+
 test("hosted limit two releases simultaneous waiting parents and preserves request order", async () => {
   const root = rootNode();
   const parents = [
@@ -429,26 +548,28 @@ test("hosted limit two releases simultaneous waiting parents and preserves reque
   });
   const nestedStarts: string[] = [];
 
-  const tasks = parents.map((parent, index): SubagentTreeSchedulerTaskV2 => ({
-    node: parent,
-    deployment: "hosted",
-    execute: async (lease) => {
-      started += 1;
-      if (started === 2) releaseParents();
-      await bothParentsStarted;
-      const values = await lease.runDescendants([
-        {
-          node: nested[index]!,
-          deployment: "hosted",
-          execute: async () => {
-            nestedStarts.push(nested[index]!.identity.runId);
-            return `nested-${index + 1}`;
+  const tasks = parents.map(
+    (parent, index): SubagentTreeSchedulerTaskV2 => ({
+      node: parent,
+      deployment: "hosted",
+      execute: async (lease) => {
+        started += 1;
+        if (started === 2) releaseParents();
+        await bothParentsStarted;
+        const values = await lease.runDescendants([
+          {
+            node: nested[index]!,
+            deployment: "hosted",
+            execute: async () => {
+              nestedStarts.push(nested[index]!.identity.runId);
+              return `nested-${index + 1}`;
+            },
           },
-        },
-      ]);
-      return `parent-${index + 1}:${String(values[0])}`;
-    },
-  }));
+        ]);
+        return `parent-${index + 1}:${String(values[0])}`;
+      },
+    }),
+  );
 
   const results = await withDeadline(scheduler.run(tasks));
   assert.deepEqual(results, ["parent-1:nested-1", "parent-2:nested-2"]);
@@ -501,7 +622,7 @@ test("scheduler fan-out failure is atomic and leaves the parent execution lease 
   assert.equal(ledger.snapshot().launched, 1);
 });
 
-test("root cancellation immediately settles a waiting parent, queued sibling, and uncooperative active child", async () => {
+test("root cancellation removes queued work but retains running ownership until settlement", async () => {
   const root = rootNode();
   const parent = childNode(root, "cancel-parent");
   const activeChild = childNode(parent, "cancel-active");
@@ -518,6 +639,10 @@ test("root cancellation immediately settles a waiting parent, queued sibling, an
   const activeStarted = new Promise<void>((resolve) => {
     markActive = resolve;
   });
+  let releaseActive!: () => void;
+  const activeRelease = new Promise<void>((resolve) => {
+    releaseActive = resolve;
+  });
   let queuedCalls = 0;
   const run = scheduler.run([
     {
@@ -530,7 +655,7 @@ test("root cancellation immediately settles a waiting parent, queued sibling, an
             deployment: "local",
             execute: async () => {
               markActive();
-              await new Promise<never>(() => undefined);
+              await activeRelease;
             },
           },
           {
@@ -547,6 +672,12 @@ test("root cancellation immediately settles a waiting parent, queued sibling, an
   await withDeadline(activeStarted);
   const reason = new Error("exact root stop");
   scheduler.cancel(reason);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(ledger.snapshot().active, 1);
+  assert.equal(ledger.snapshot().queued, 1);
+  assert.equal(ledger.stateOf(activeChild.identity.runId), "active");
+  assert.equal(ledger.stateOf(queuedChild.identity.runId), "terminal");
+  releaseActive();
   await withDeadline(assert.rejects(run, (error: unknown) => error === reason));
   assert.equal(queuedCalls, 0);
   assert.equal(ledger.snapshot().active, 0);
@@ -554,4 +685,61 @@ test("root cancellation immediately settles a waiting parent, queued sibling, an
   assert.equal(ledger.stateOf(parent.identity.runId), "terminal");
   assert.equal(ledger.stateOf(activeChild.identity.runId), "terminal");
   assert.equal(ledger.stateOf(queuedChild.identity.runId), "terminal");
+});
+
+test("root cancellation drains running top-level siblings after rejecting queued work", async () => {
+  const root = rootNode();
+  const active = childNode(root, "root-active");
+  const queued = childNode(root, "root-queued");
+  const ledger = new SubagentTreeBudgetLedgerV2(
+    root.identity.treeRootId,
+    limits({ maxActive: 1 }),
+  );
+  const scheduler = new SubagentTreeSchedulerV2(ledger, {
+    local: 1,
+    hosted: 2,
+  });
+  let markStarted!: () => void;
+  let releaseActive!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const release = new Promise<void>((resolve) => {
+    releaseActive = resolve;
+  });
+  let queuedCalls = 0;
+  const run = scheduler.run([
+    {
+      node: active,
+      deployment: "local",
+      execute: async () => {
+        markStarted();
+        await release;
+      },
+    },
+    {
+      node: queued,
+      deployment: "local",
+      execute: async () => {
+        queuedCalls += 1;
+      },
+    },
+  ]);
+  await started;
+  const reason = new Error("cancel root siblings");
+  scheduler.cancel(reason);
+  const immediate = await Promise.race([
+    run.then(
+      () => "settled",
+      () => "settled",
+    ),
+    new Promise<"pending">((resolve) => setImmediate(() => resolve("pending"))),
+  ]);
+  assert.equal(immediate, "pending");
+  assert.equal(ledger.snapshot().active, 1);
+  assert.equal(ledger.stateOf(queued.identity.runId), "terminal");
+  releaseActive();
+  await assert.rejects(run, (error: unknown) => error === reason);
+  assert.equal(queuedCalls, 0);
+  assert.equal(ledger.snapshot().active, 0);
 });

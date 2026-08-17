@@ -378,3 +378,40 @@ test("cancellation while a saved task is being scheduled rolls back persistence 
   assert.deepEqual(testbed.broadcasts, []);
   testbed.service.stop();
 });
+
+test("aborted pause preserves an already-paused task", async () => {
+  const testbed = harness();
+  const task = await addTask(testbed.store);
+  await testbed.store.setEnabled(task.id, false);
+  const original = testbed.store.setEnabled.bind(testbed.store);
+  const controller = new AbortController();
+  let calls = 0;
+  Object.defineProperty(testbed.store, "setEnabled", {
+    configurable: true,
+    value: async (...args: Parameters<typeof original>) => {
+      const result = await original(...args);
+      if (++calls === 1) controller.abort();
+      return result;
+    },
+  });
+  await assert.rejects(testbed.service.pause(task.id, { signal: controller.signal }), /cancelled/iu);
+  assert.equal((await testbed.store.get(task.id))?.enabled, false);
+});
+
+test("aborted resume preserves an already-enabled task", async () => {
+  const testbed = harness();
+  const task = await addTask(testbed.store);
+  const original = testbed.store.setEnabled.bind(testbed.store);
+  const controller = new AbortController();
+  let calls = 0;
+  Object.defineProperty(testbed.store, "setEnabled", {
+    configurable: true,
+    value: async (...args: Parameters<typeof original>) => {
+      const result = await original(...args);
+      if (++calls === 1) controller.abort();
+      return result;
+    },
+  });
+  await assert.rejects(testbed.service.resume(task.id, { signal: controller.signal }), /cancelled/iu);
+  assert.equal((await testbed.store.get(task.id))?.enabled, true);
+});

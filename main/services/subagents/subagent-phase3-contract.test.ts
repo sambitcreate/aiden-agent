@@ -256,7 +256,7 @@ test("empty-chat workspace moves serialize against generation authority and term
   );
   assert.match(
     llm,
-    /chatStore\.appendMessage\([\s\S]{0,500}expectedWorkspaceId: initialization\.workspaceId/u,
+    /chatStore\.appendMessage\([\s\S]{0,900}expectedWorkspaceId: initialization\.workspaceId/u,
   );
   assert.match(
     chatStore,

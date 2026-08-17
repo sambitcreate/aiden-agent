@@ -21,6 +21,8 @@ export interface GenerationContextOptions {
   contextWindow: number;
   systemPrompt: string;
   tools: readonly AgentTool[];
+  /** Project model-neutral journal images only when this request can accept them. */
+  supportsImages?: boolean;
 }
 
 export interface GenerationContextCompaction {
@@ -67,15 +69,44 @@ function staticContextTokens(options: GenerationContextOptions): number {
 }
 
 function messageTokens(messages: AgentMessage[]): number {
-  return messages.reduce((total, message) => total + estimateTokens(message), 0);
+  return messages.reduce(
+    (total, message) => total + estimateTokens(message),
+    0,
+  );
 }
 
 function isToolResult(message: AgentMessage): message is ToolResultMessage {
   return message.role === "toolResult";
 }
 
+const OMITTED_IMAGE_TEXT =
+  "[Image content retained in Aiden's private journal but omitted from this text-only model request.]";
+
+/** Project model-neutral journal history onto one model's input modalities. */
+export function projectMessagesForModel(
+  messages: readonly AgentMessage[],
+  supportsImages: boolean,
+): AgentMessage[] {
+  if (supportsImages) return messages as AgentMessage[];
+  return messages.map((message) => {
+    if (
+      (message.role !== "user" && message.role !== "toolResult") ||
+      typeof message.content === "string" ||
+      !message.content.some((part) => part.type === "image")
+    ) {
+      return message;
+    }
+    const content = message.content.filter((part) => part.type !== "image");
+    const notice = { type: "text" as const, text: OMITTED_IMAGE_TEXT };
+    return { ...message, content: [...content, notice] } as AgentMessage;
+  });
+}
+
 /** Keep only the newest Computer Use screenshots while preserving every text result. */
-export function limitComputerUseImages(messages: AgentMessage[], keep = 3): AgentMessage[] {
+export function limitComputerUseImages(
+  messages: AgentMessage[],
+  keep = 3,
+): AgentMessage[] {
   const imageIndexes: number[] = [];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
@@ -87,7 +118,9 @@ export function limitComputerUseImages(messages: AgentMessage[], keep = 3): Agen
       imageIndexes.push(index);
     }
   }
-  const keepCount = Number.isFinite(keep) ? Math.max(0, Math.floor(keep)) : imageIndexes.length;
+  const keepCount = Number.isFinite(keep)
+    ? Math.max(0, Math.floor(keep))
+    : imageIndexes.length;
   if (imageIndexes.length <= keepCount) return messages;
   const strip = new Set(imageIndexes.slice(0, imageIndexes.length - keepCount));
   return messages.map((message, index) => {
@@ -153,7 +186,10 @@ function truncateToolResult(message: ToolResultMessage): {
     message: {
       ...message,
       content: [
-        { type: "text", text: truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS) },
+        {
+          type: "text",
+          text: truncateText(text, TOOL_RESULT_TEXT_LIMIT_CHARS),
+        },
         ...images,
       ],
     },
@@ -168,7 +204,10 @@ function lastUserIndex(messages: AgentMessage[]): number {
   return -1;
 }
 
-function removeOldHistoricalTurn(messages: AgentMessage[], preserveUserTurns: number): number {
+function removeOldHistoricalTurn(
+  messages: AgentMessage[],
+  preserveUserTurns: number,
+): number {
   const currentUser = lastUserIndex(messages);
   if (currentUser <= 0) return 0;
   const userIndexes = messages
@@ -177,8 +216,11 @@ function removeOldHistoricalTurn(messages: AgentMessage[], preserveUserTurns: nu
   if (userIndexes.length <= preserveUserTurns) return 0;
   const nextUser = userIndexes[1];
   if (nextUser === undefined || nextUser > currentUser) return 0;
-  messages.splice(0, nextUser);
-  return nextUser;
+  const firstUser = userIndexes[0];
+  if (firstUser === undefined) return 0;
+  const removed = nextUser - firstUser;
+  messages.splice(firstUser, removed);
+  return removed;
 }
 
 function replaceToolResult(messages: AgentMessage[], index: number): boolean {
@@ -211,7 +253,10 @@ function protectedRecentToolResults(
     const message = messages[index];
     if (!message || !isToolResult(message)) continue;
     const nextTokens = tokens + estimateTokens(message);
-    if (protectedIndexes.size < MIN_RECENT_TOOL_RESULTS || nextTokens <= budgetTokens) {
+    if (
+      protectedIndexes.size < MIN_RECENT_TOOL_RESULTS ||
+      nextTokens <= budgetTokens
+    ) {
       protectedIndexes.add(index);
       tokens = nextTokens;
       continue;
@@ -243,20 +288,28 @@ interface GenerationContextLimits {
   inputBudgetTokens: number;
 }
 
-function contextLimits(options: GenerationContextOptions): GenerationContextLimits {
+function contextLimits(
+  options: GenerationContextOptions,
+): GenerationContextLimits {
   const contextWindow =
     Number.isFinite(options.contextWindow) && options.contextWindow > 0
       ? Math.max(1, Math.floor(options.contextWindow))
       : 1;
   const responseReserve = Math.min(
     DEFAULT_COMPACTION_SETTINGS.reserveTokens,
-    Math.max(MIN_RESERVE_TOKENS, Math.floor(contextWindow * RESPONSE_RESERVE_RATIO)),
+    Math.max(
+      MIN_RESERVE_TOKENS,
+      Math.floor(contextWindow * RESPONSE_RESERVE_RATIO),
+    ),
   );
   const safetyReserve = Math.max(
     MIN_RESERVE_TOKENS,
     Math.floor(contextWindow * SAFETY_RESERVE_RATIO),
   );
-  const reserveTokens = Math.min(contextWindow - 1, responseReserve + safetyReserve);
+  const reserveTokens = Math.min(
+    contextWindow - 1,
+    responseReserve + safetyReserve,
+  );
   return {
     contextWindow,
     reserveTokens,
@@ -270,9 +323,13 @@ function contextLimits(options: GenerationContextOptions): GenerationContextLimi
  * system prompt or tool schemas. Fail before provider I/O when even Aiden's
  * bounded recovery notice cannot fit beside that static context.
  */
-export function assertGenerationContextCapacity(options: GenerationContextOptions): void {
+export function assertGenerationContextCapacity(
+  options: GenerationContextOptions,
+): void {
   if (!Number.isFinite(options.contextWindow) || options.contextWindow <= 0) {
-    throw new Error("The selected model does not report a usable context window.");
+    throw new Error(
+      "The selected model does not report a usable context window.",
+    );
   }
   const limits = contextLimits(options);
   const fallbackTokens = estimateTokens(contextFallback([]));
@@ -287,8 +344,11 @@ export function compactGenerationContext(
   messages: AgentMessage[],
   options: GenerationContextOptions,
 ): GenerationContextCompaction {
-  const retained = limitComputerUseImages(messages);
-  const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } = contextLimits(options);
+  const retained = limitComputerUseImages(
+    projectMessagesForModel(messages, options.supportsImages !== false),
+  );
+  const { contextWindow, reserveTokens, staticTokens, inputBudgetTokens } =
+    contextLimits(options);
   const estimatedMessageTokensBefore = messageTokens(retained);
   const providerEstimate = estimateContextTokens(retained);
   const providerAwareTokens = providerEstimate.tokens;
@@ -306,7 +366,10 @@ export function compactGenerationContext(
       : messageTokens(retained.slice(0, providerEstimate.lastUsageIndex + 1));
   const providerPrefixRatio =
     providerEstimate.usageTokens > 0 && estimatedPrefixTokens > 0
-      ? Math.max(1, (providerEstimate.usageTokens - staticTokens) / estimatedPrefixTokens)
+      ? Math.max(
+          1,
+          (providerEstimate.usageTokens - staticTokens) / estimatedPrefixTokens,
+        )
       : 1;
   const estimatedTotalTokens = (candidate: AgentMessage[]) => {
     const estimatedMessages = messageTokens(candidate);
@@ -319,12 +382,16 @@ export function compactGenerationContext(
       // measurement no longer describes this outbound request.
       return Math.ceil(heuristicTotal);
     }
-    const retainedPrefixTokens = messageTokens(candidate.slice(0, anchorIndex + 1));
+    const retainedPrefixTokens = messageTokens(
+      candidate.slice(0, anchorIndex + 1),
+    );
     const trailingTokens = messageTokens(candidate.slice(anchorIndex + 1));
     return Math.ceil(
       Math.max(
         heuristicTotal,
-        staticTokens + retainedPrefixTokens * providerPrefixRatio + trailingTokens,
+        staticTokens +
+          retainedPrefixTokens * providerPrefixRatio +
+          trailingTokens,
       ),
     );
   };
@@ -359,7 +426,8 @@ export function compactGenerationContext(
     if (truncated.truncated) truncatedToolResults += 1;
     return truncated.message;
   });
-  const overBudget = () => estimatedTotalTokens(transformed) > inputBudgetTokens;
+  const overBudget = () =>
+    estimatedTotalTokens(transformed) > inputBudgetTokens;
   let removedHistoryMessages = 0;
   let compactedToolResults = 0;
   let removedCurrentTurnMessages = 0;
@@ -378,7 +446,11 @@ export function compactGenerationContext(
       RECENT_TOOL_OUTPUT_BUDGET_TOKENS,
       Math.max(MIN_RESERVE_TOKENS, Math.floor(messageBudgetTokens * 0.45)),
     );
-    const protectedIndexes = protectedRecentToolResults(transformed, toolIndexes, recentBudget);
+    const protectedIndexes = protectedRecentToolResults(
+      transformed,
+      toolIndexes,
+      recentBudget,
+    );
 
     for (const index of toolIndexes) {
       if (!overBudget()) break;
@@ -386,7 +458,9 @@ export function compactGenerationContext(
       if (replaceToolResult(transformed, index)) compactedToolResults += 1;
     }
 
-    const newestProtected = [...protectedIndexes].sort((left, right) => left - right);
+    const newestProtected = [...protectedIndexes].sort(
+      (left, right) => left - right,
+    );
     while (overBudget() && newestProtected.length > MIN_RECENT_TOOL_RESULTS) {
       const index = newestProtected.shift();
       if (index !== undefined && replaceToolResult(transformed, index)) {
@@ -400,8 +474,17 @@ export function compactGenerationContext(
   if (overBudget()) {
     const currentUser = lastUserIndex(transformed);
     if (currentUser > 0) {
-      transformed.splice(0, currentUser);
-      removedHistoryMessages += currentUser;
+      let checkpointIndex = -1;
+      for (let index = currentUser - 1; index >= 0; index -= 1) {
+        if (transformed[index]?.role === "compactionSummary") {
+          checkpointIndex = index;
+          break;
+        }
+      }
+      const start = checkpointIndex >= 0 ? checkpointIndex + 1 : 0;
+      const removed = currentUser - start;
+      transformed.splice(start, removed);
+      removedHistoryMessages += removed;
     }
   }
 

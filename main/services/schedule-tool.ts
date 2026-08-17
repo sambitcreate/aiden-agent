@@ -6,7 +6,11 @@ import {
   recommendedScheduledPermission,
   validateScheduledMcpServerIds,
 } from "./schedule-guard.js";
-import { nextScheduledRun, systemTimezone, validateTimezone } from "./schedule-store.js";
+import {
+  nextScheduledRun,
+  systemTimezone,
+  validateTimezone,
+} from "./schedule-store.js";
 import type {
   McpServer,
   ScheduledRun,
@@ -21,6 +25,7 @@ import {
   validateScheduledMcpServerBindings,
 } from "./schedule-mcp-binding.js";
 import { SCHEDULED_PROVIDER_FINGERPRINT } from "./schedule-provider-binding.js";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import {
   ASSISTANT_AUTOMATION_CRON_LIMIT,
   ASSISTANT_AUTOMATION_EDIT_TOOL_NAME,
@@ -44,7 +49,8 @@ export const SCHEDULE_TOOL_NAME = ASSISTANT_AUTOMATION_TOOL_NAME;
 export const EDIT_AUTOMATION_TOOL_NAME = ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
 export const LIST_SCHEDULED_TASKS_TOOL_NAME = "list_scheduled_tasks";
 
-type ScheduleToolAction = "create" | "list" | "pause" | "resume" | "remove" | "run_now";
+type ScheduleToolAction =
+  "create" | "list" | "pause" | "resume" | "remove" | "run_now";
 
 interface ScheduleToolParams {
   action: ScheduleToolAction;
@@ -85,14 +91,20 @@ export interface AssistantScheduleModelSelection {
 
 export type ScheduleToolAccess =
   | { kind: "standard"; defaultWorkspaceId?: string }
-  | { kind: "assistant-attended"; modelSelection: AssistantScheduleModelSelection };
+  | {
+      kind: "assistant-attended";
+      modelSelection: AssistantScheduleModelSelection;
+    };
 
 export interface AssistantScheduleProposal {
   input: ScheduledTaskInput;
   expectedUpdatedAt?: number;
   details: Omit<
     AssistantAutomationApprovalDetails,
-    "schedulerEnabled" | "workspaceName" | "mcpServerNames" | keyof AssistantScheduleModelSelection
+    | "schedulerEnabled"
+    | "workspaceName"
+    | "mcpServerNames"
+    | keyof AssistantScheduleModelSelection
   >;
 }
 
@@ -121,14 +133,18 @@ function approvedMcpBindings(
   const bindings =
     args && typeof args === "object" && !Array.isArray(args)
       ? validateScheduledMcpServerBindings(
-          (args as { [APPROVED_MCP_BINDINGS]?: unknown })[APPROVED_MCP_BINDINGS],
+          (args as { [APPROVED_MCP_BINDINGS]?: unknown })[
+            APPROVED_MCP_BINDINGS
+          ],
         )
       : undefined;
   if (
     bindings?.length !== serverIds.length ||
     serverIds.some((id, index) => bindings[index]?.id !== id)
   ) {
-    throw new Error("The exact MCP approval expired before this automation could be saved.");
+    throw new Error(
+      "The exact MCP approval expired before this automation could be saved.",
+    );
   }
   return bindings;
 }
@@ -212,30 +228,48 @@ export interface ScheduleToolDependencies {
     expectedUpdatedAt?: number,
     signal?: AbortSignal,
   ): Promise<ScheduledTask>;
-  pause(id: string): Promise<ScheduledTask>;
-  resume(id: string): Promise<ScheduledTask>;
-  remove(id: string): Promise<void>;
-  runNow(id: string): Promise<ScheduledRun>;
+  pause(id: string, signal?: AbortSignal): Promise<ScheduledTask>;
+  resume(id: string, signal?: AbortSignal): Promise<ScheduledTask>;
+  remove(id: string, signal?: AbortSignal): Promise<void>;
+  runNow(id: string, signal?: AbortSignal): Promise<ScheduledRun>;
   getWorkspace(id: string): Promise<Workspace | undefined>;
   listMcpServers(): Promise<McpServer[]>;
-  validateScript(input: { script: string; workspaceRoot?: string }): Promise<string>;
+  validateScript(input: {
+    script: string;
+    workspaceRoot?: string;
+  }): Promise<string>;
   isSchedulingEnabled(): Promise<boolean>;
 }
 
 const defaultDependencies: ScheduleToolDependencies = {
   list: async () => (await import("./schedule-store.js")).scheduleStore.list(),
-  get: async (id) => (await import("./schedule-store.js")).scheduleStore.get(id),
+  get: async (id) =>
+    (await import("./schedule-store.js")).scheduleStore.get(id),
   save: async (input, expectedUpdatedAt, signal) =>
     (await import("./schedule-service.js")).scheduleService.save(input, {
       expectedUpdatedAt,
       signal,
     }),
-  pause: async (id) => (await import("./schedule-service.js")).scheduleService.pause(id),
-  resume: async (id) => (await import("./schedule-service.js")).scheduleService.resume(id),
-  remove: async (id) => (await import("./schedule-service.js")).scheduleService.remove(id),
-  runNow: async (id) => (await import("./schedule-service.js")).scheduleService.runNow(id),
-  getWorkspace: async (id) => (await import("./config-store.js")).configStore.getWorkspace(id),
-  listMcpServers: async () => (await import("./config-store.js")).configStore.listMcpServers(),
+  pause: async (id, signal) =>
+    (await import("./schedule-service.js")).scheduleService.pause(id, {
+      signal,
+    }),
+  resume: async (id, signal) =>
+    (await import("./schedule-service.js")).scheduleService.resume(id, {
+      signal,
+    }),
+  remove: async (id, signal) =>
+    (await import("./schedule-service.js")).scheduleService.remove(id, {
+      signal,
+    }),
+  runNow: async (id, signal) =>
+    (await import("./schedule-service.js")).scheduleService.runNow(id, {
+      signal,
+    }),
+  getWorkspace: async (id) =>
+    (await import("./config-store.js")).configStore.getWorkspace(id),
+  listMcpServers: async () =>
+    (await import("./config-store.js")).configStore.listMcpServers(),
   validateScript: async (input) =>
     (await import("./schedule-script.js")).resolveScheduledScript(input),
   isSchedulingEnabled: async () =>
@@ -251,6 +285,10 @@ function result(value: unknown): AgentToolResult<null> {
   };
 }
 
+function throwIfScheduleToolAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("Scheduled task action was cancelled.");
+}
+
 function required(value: string | undefined, label: string): string {
   const normalized = value?.trim();
   if (!normalized) throw new Error(`${label} is required for this action.`);
@@ -258,7 +296,8 @@ function required(value: string | undefined, label: string): string {
 }
 
 function bounded(value: string, label: string, limit: number): string {
-  if (value.length > limit) throw new Error(`${label} must be ${limit} characters or fewer.`);
+  if (value.length > limit)
+    throw new Error(`${label} must be ${limit} characters or fewer.`);
   return value;
 }
 
@@ -288,11 +327,16 @@ const ASSISTANT_EDIT_KEYS = new Set([
   "notify",
 ]);
 
-function assertSafeDisplayText(value: string, label: string, multiline = false): void {
+function assertSafeDisplayText(
+  value: string,
+  label: string,
+  multiline = false,
+): void {
   for (const character of value) {
     const codePoint = character.codePointAt(0) ?? 0;
     const allowedWhitespace =
-      multiline && (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d);
+      multiline &&
+      (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d);
     const unsafeControl =
       (!allowedWhitespace && codePoint <= 0x1f) ||
       (codePoint >= 0x7f && codePoint <= 0x9f) ||
@@ -320,9 +364,13 @@ export function prepareAssistantScheduleProposal(
   if (action !== "create") {
     throw new Error("Aiden can only prepare new scheduled tasks here.");
   }
-  const unexpected = Object.keys(record).filter((key) => !ASSISTANT_CREATE_KEYS.has(key));
+  const unexpected = Object.keys(record).filter(
+    (key) => !ASSISTANT_CREATE_KEYS.has(key),
+  );
   if (unexpected.length > 0) {
-    throw new Error(`Aiden cannot set scheduled task field "${unexpected[0]}".`);
+    throw new Error(
+      `Aiden cannot set scheduled task field "${unexpected[0]}".`,
+    );
   }
   if (record.notify !== undefined && typeof record.notify !== "boolean") {
     throw new Error("notify must be true or false.");
@@ -341,7 +389,10 @@ export function prepareAssistantScheduleProposal(
     ASSISTANT_AUTOMATION_NAME_LIMIT,
   );
   const prompt = bounded(
-    required(typeof record.prompt === "string" ? record.prompt : undefined, "prompt"),
+    required(
+      typeof record.prompt === "string" ? record.prompt : undefined,
+      "prompt",
+    ),
     "prompt",
     ASSISTANT_AUTOMATION_PROMPT_LIMIT,
   );
@@ -351,7 +402,9 @@ export function prepareAssistantScheduleProposal(
     ASSISTANT_AUTOMATION_CRON_LIMIT,
   );
   const requestedTimezone = bounded(
-    typeof record.timezone === "string" ? record.timezone.trim() : systemTimezone(),
+    typeof record.timezone === "string"
+      ? record.timezone.trim()
+      : systemTimezone(),
     "timezone",
     ASSISTANT_AUTOMATION_TIMEZONE_LIMIT,
   );
@@ -366,7 +419,9 @@ export function prepareAssistantScheduleProposal(
       ? undefined
       : bounded(
           required(
-            typeof record.workspaceId === "string" ? record.workspaceId : undefined,
+            typeof record.workspaceId === "string"
+              ? record.workspaceId
+              : undefined,
             "workspaceId",
           ),
           "workspaceId",
@@ -381,7 +436,8 @@ export function prepareAssistantScheduleProposal(
   const permission =
     mcpServerIds.length > 0 ||
     record.permission === "full" ||
-    (record.permission === undefined && recommendedScheduledPermission(prompt) === "full")
+    (record.permission === undefined &&
+      recommendedScheduledPermission(prompt) === "full")
       ? "full"
       : "read-only";
   if (permission === "full" && !workspaceId && mcpServerIds.length === 0) {
@@ -463,7 +519,8 @@ export async function repairAssistantScheduleMcpTarget(
 ): Promise<AssistantScheduleProposal> {
   const proposal = prepareAssistantScheduleProposal(value, from);
   const workspaceId = proposal.input.workspaceId;
-  if (!workspaceId || (proposal.input.mcpServerIds?.length ?? 0) > 0) return proposal;
+  if (!workspaceId || (proposal.input.mcpServerIds?.length ?? 0) > 0)
+    return proposal;
   if (await dependencies.getWorkspace(workspaceId)) return proposal;
   const exactEnabledServer = (await dependencies.listMcpServers()).some(
     (server) => server.id === workspaceId && server.enabled,
@@ -484,9 +541,13 @@ export async function repairAssistantScheduleMcpTarget(
   );
 }
 
-function sameStringList(left: readonly string[] | undefined, right: readonly string[]): boolean {
+function sameStringList(
+  left: readonly string[] | undefined,
+  right: readonly string[],
+): boolean {
   return (
-    (left?.length ?? 0) === right.length && right.every((value, index) => left?.[index] === value)
+    (left?.length ?? 0) === right.length &&
+    right.every((value, index) => left?.[index] === value)
   );
 }
 
@@ -504,7 +565,9 @@ export async function prepareAssistantEditAutomationProposal(
     throw new Error("Automation edit arguments must be an object.");
   }
   const record = value as Record<string, unknown>;
-  const unexpected = Object.keys(record).filter((key) => !ASSISTANT_EDIT_KEYS.has(key));
+  const unexpected = Object.keys(record).filter(
+    (key) => !ASSISTANT_EDIT_KEYS.has(key),
+  );
   if (unexpected.length > 0) {
     throw new Error(`Aiden cannot edit automation field "${unexpected[0]}".`);
   }
@@ -522,16 +585,22 @@ export async function prepareAssistantEditAutomationProposal(
       ? record.expectedUpdatedAt
       : undefined;
   if (expectedUpdatedAt === undefined) {
-    throw new Error("expectedUpdatedAt is required and must come from list_scheduled_tasks.");
+    throw new Error(
+      "expectedUpdatedAt is required and must come from list_scheduled_tasks.",
+    );
   }
 
   const patchKeys = [...ASSISTANT_EDIT_KEYS].filter(
-    (key) => key !== "id" && key !== "expectedUpdatedAt" && record[key] !== undefined,
+    (key) =>
+      key !== "id" && key !== "expectedUpdatedAt" && record[key] !== undefined,
   );
   if (patchKeys.length === 0) {
     throw new Error("Include at least one automation field to change.");
   }
-  if (record.clearWorkspace !== undefined && typeof record.clearWorkspace !== "boolean") {
+  if (
+    record.clearWorkspace !== undefined &&
+    typeof record.clearWorkspace !== "boolean"
+  ) {
     throw new Error("clearWorkspace must be true or false.");
   }
   if (record.workspaceId !== undefined && record.clearWorkspace === true) {
@@ -559,14 +628,19 @@ export async function prepareAssistantEditAutomationProposal(
     existing.mode !== "llm" ||
     existing.executionProfile !== ASSISTANT_SCHEDULE_EXECUTION_PROFILE
   ) {
-    throw new Error("Aiden can edit only automations previously created with Aiden Assistant.");
+    throw new Error(
+      "Aiden can edit only automations previously created with Aiden Assistant.",
+    );
   }
 
-  const valueOrExisting = (key: "name" | "cron" | "timezone" | "prompt"): string => {
+  const valueOrExisting = (
+    key: "name" | "cron" | "timezone" | "prompt",
+  ): string => {
     const candidate = record[key];
     if (candidate === undefined) {
       const current = existing[key];
-      if (typeof current !== "string") throw new Error(`Existing automation has no ${key}.`);
+      if (typeof current !== "string")
+        throw new Error(`Existing automation has no ${key}.`);
       return current;
     }
     return required(typeof candidate === "string" ? candidate : undefined, key);
@@ -577,7 +651,9 @@ export async function prepareAssistantEditAutomationProposal(
       : record.workspaceId === undefined
         ? existing.workspaceId
         : required(
-            typeof record.workspaceId === "string" ? record.workspaceId : undefined,
+            typeof record.workspaceId === "string"
+              ? record.workspaceId
+              : undefined,
             "workspaceId",
           );
   const mcpServerIds =
@@ -607,7 +683,8 @@ export async function prepareAssistantEditAutomationProposal(
     merged.input.permission !== existing.permission ||
     !sameStringList(existing.mcpServerIds, merged.input.mcpServerIds ?? []) ||
     merged.input.notify !== existing.notify;
-  if (!changed) throw new Error("The requested values already match this automation.");
+  if (!changed)
+    throw new Error("The requested values already match this automation.");
 
   return {
     input: {
@@ -665,7 +742,9 @@ function assistantTaskSummary(task: ScheduledTask) {
     mcpServerIds: task.mcpServerIds ?? [],
     notify: task.notify,
     updatedAt: task.updatedAt,
-    editable: task.mode === "llm" && task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
+    editable:
+      task.mode === "llm" &&
+      task.executionProfile === ASSISTANT_SCHEDULE_EXECUTION_PROFILE,
     nextRunAt: task.nextRunAt,
     lastRunAt: task.lastRunAt,
     lastResult: task.lastResult,
@@ -688,7 +767,9 @@ async function workspaceFor(
 export async function resolveAssistantScheduleProject(
   proposal: AssistantScheduleProposal,
   getWorkspace: ScheduleToolDependencies["getWorkspace"] = defaultDependencies.getWorkspace,
-): Promise<Pick<AssistantAutomationApprovalDetails, "workspaceId" | "workspaceName">> {
+): Promise<
+  Pick<AssistantAutomationApprovalDetails, "workspaceId" | "workspaceName">
+> {
   const workspaceId = proposal.input.workspaceId;
   if (!workspaceId) return { workspaceId: null, workspaceName: null };
   const workspace = await getWorkspace(workspaceId);
@@ -701,7 +782,9 @@ export async function resolveAssistantScheduleProject(
     throw new Error(`Project ${workspaceId} has No Access.`);
   }
   if (!workspace.folderPath) {
-    throw new Error("The selected project does not have a folder for this automation.");
+    throw new Error(
+      "The selected project does not have a folder for this automation.",
+    );
   }
   const workspaceName = bounded(
     required(workspace.name, "Project name"),
@@ -717,7 +800,10 @@ export async function resolveAssistantScheduleMcpServers(
   listMcpServers: ScheduleToolDependencies["listMcpServers"] = defaultDependencies.listMcpServers,
   expectedBindings?: readonly ScheduledMcpServerBinding[],
 ): Promise<
-  Pick<AssistantAutomationApprovalDetails, "mcpServerIds" | "mcpServerNames"> & {
+  Pick<
+    AssistantAutomationApprovalDetails,
+    "mcpServerIds" | "mcpServerNames"
+  > & {
     mcpServerBindings: ScheduledMcpServerBinding[];
   }
 > {
@@ -730,7 +816,8 @@ export async function resolveAssistantScheduleMcpServers(
   const servers = mcpServerIds.map((id) => {
     const server = byId.get(id);
     if (!server) throw new Error(`MCP server ${id} was not found.`);
-    if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+    if (!server.enabled)
+      throw new Error(`MCP server "${server.name}" is disabled.`);
     const name = bounded(
       required(server.name, "MCP server name"),
       "MCP server name",
@@ -739,7 +826,9 @@ export async function resolveAssistantScheduleMcpServers(
     assertSafeDisplayText(name, "MCP server name");
     return { server, name };
   });
-  const mcpServerBindings = servers.map(({ server }) => scheduledMcpServerBinding(server));
+  const mcpServerBindings = servers.map(({ server }) =>
+    scheduledMcpServerBinding(server),
+  );
   if (expectedBindings) {
     assertScheduledMcpServerBindings(
       servers.map(({ server }) => server),
@@ -756,7 +845,7 @@ export async function resolveAssistantScheduleMcpServers(
 export function createAssistantScheduleListTool(
   dependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
-  return {
+  return declarePiRuntimeReplay({
     name: LIST_SCHEDULED_TASKS_TOOL_NAME,
     label: "Scheduled Tasks",
     description:
@@ -776,7 +865,7 @@ export function createAssistantScheduleListTool(
         schedulerEnabled: await dependencies.isSchedulingEnabled(),
       });
     },
-  };
+  }, "safe");
 }
 
 export function createAssistantEditAutomationTool(
@@ -799,15 +888,21 @@ export function createAssistantEditAutomationTool(
           description:
             "Exact updatedAt revision from the same list_scheduled_tasks result. Prevents stale overwrites.",
         }),
-        name: Type.Optional(Type.String({ description: "Replacement task name." })),
+        name: Type.Optional(
+          Type.String({ description: "Replacement task name." }),
+        ),
         cron: Type.Optional(
           Type.String({
             description:
               'Replacement five- or six-part cron expression. For every day at 9 AM use "0 9 * * *".',
           }),
         ),
-        timezone: Type.Optional(Type.String({ description: "Replacement IANA timezone." })),
-        prompt: Type.Optional(Type.String({ description: "Replacement automation instruction." })),
+        timezone: Type.Optional(
+          Type.String({ description: "Replacement IANA timezone." }),
+        ),
+        prompt: Type.Optional(
+          Type.String({ description: "Replacement automation instruction." }),
+        ),
         workspaceId: Type.Optional(
           Type.String({
             description:
@@ -816,12 +911,14 @@ export function createAssistantEditAutomationTool(
         ),
         clearWorkspace: Type.Optional(
           Type.Boolean({
-            description: "Set true to remove the current project. Do not combine with workspaceId.",
+            description:
+              "Set true to remove the current project. Do not combine with workspaceId.",
           }),
         ),
         permission: Type.Optional(
           Type.Union([Type.Literal("read-only"), Type.Literal("full")], {
-            description: "Replacement access level. Omit to preserve current access.",
+            description:
+              "Replacement access level. Omit to preserve current access.",
           }),
         ),
         mcpServerIds: Type.Optional(
@@ -838,7 +935,9 @@ export function createAssistantEditAutomationTool(
           ),
         ),
         notify: Type.Optional(
-          Type.Boolean({ description: "Replacement macOS notification preference." }),
+          Type.Boolean({
+            description: "Replacement macOS notification preference.",
+          }),
         ),
       },
       {
@@ -847,14 +946,23 @@ export function createAssistantEditAutomationTool(
           "Edit one exact automation revision. id and expectedUpdatedAt are required, plus at least one field to change.",
       },
     ),
-    execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
+    execute: async (
+      _toolCallId,
+      rawParams,
+      signal,
+    ): Promise<AgentToolResult<null>> => {
       const proposal = await prepareAssistantEditAutomationProposal(rawParams, {
         get: (id) => dependencies.get(id),
       });
       if (signal?.aborted) throw new Error("Automation edit was cancelled.");
-      const mcpServerBindings = approvedMcpBindings(rawParams, proposal.input.mcpServerIds ?? []);
+      const mcpServerBindings = approvedMcpBindings(
+        rawParams,
+        proposal.input.mcpServerIds ?? [],
+      );
       await Promise.all([
-        resolveAssistantScheduleProject(proposal, (id) => dependencies.getWorkspace(id)),
+        resolveAssistantScheduleProject(proposal, (id) =>
+          dependencies.getWorkspace(id),
+        ),
         resolveAssistantScheduleMcpServers(
           proposal,
           () => dependencies.listMcpServers(),
@@ -893,7 +1001,9 @@ export function createScheduleTaskTool(
   dependencies: ScheduleToolDependencies = defaultDependencies,
 ): AgentTool {
   if (access.kind === "assistant-attended") {
-    const approvedModel = validateAssistantScheduleModelSelection(access.modelSelection);
+    const approvedModel = validateAssistantScheduleModelSelection(
+      access.modelSelection,
+    );
     return {
       name: SCHEDULE_TOOL_NAME,
       label: "Scheduled Tasks",
@@ -907,9 +1017,13 @@ export function createScheduleTaskTool(
             description:
               'Required five- or six-part cron expression. For every day at 9 AM use "0 9 * * *". The field name is cron, not schedule.',
           }),
-          prompt: Type.String({ description: "Required automation instruction." }),
+          prompt: Type.String({
+            description: "Required automation instruction.",
+          }),
           timezone: Type.Optional(
-            Type.String({ description: "IANA timezone. Defaults to the device timezone." }),
+            Type.String({
+              description: "IANA timezone. Defaults to the device timezone.",
+            }),
           ),
           workspaceId: Type.Optional(
             Type.String({
@@ -927,7 +1041,8 @@ export function createScheduleTaskTool(
             Type.Array(
               Type.String({
                 maxLength: ASSISTANT_AUTOMATION_MCP_SERVER_ID_LIMIT,
-                description: "Exact enabled MCP server ID from list_mcp_servers.",
+                description:
+                  "Exact enabled MCP server ID from list_mcp_servers.",
               }),
               {
                 maxItems: 16,
@@ -937,7 +1052,9 @@ export function createScheduleTaskTool(
             ),
           ),
           notify: Type.Optional(
-            Type.Boolean({ description: "Show a macOS notification after non-silent runs." }),
+            Type.Boolean({
+              description: "Show a macOS notification after non-silent runs.",
+            }),
           ),
         },
         {
@@ -946,22 +1063,38 @@ export function createScheduleTaskTool(
             "Propose one approval-gated automation. action, name, cron, and prompt are all required.",
         },
       ),
-      prepareArguments: (rawParams) => canonicalizeAssistantScheduleToolArguments(rawParams),
-      execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
-        const proposal = await repairAssistantScheduleMcpTarget(rawParams, dependencies);
-        const mcpServerBindings = approvedMcpBindings(rawParams, proposal.input.mcpServerIds ?? []);
-        if (signal?.aborted) throw new Error("Scheduled task creation was cancelled.");
+      prepareArguments: (rawParams) =>
+        canonicalizeAssistantScheduleToolArguments(rawParams),
+      execute: async (
+        _toolCallId,
+        rawParams,
+        signal,
+      ): Promise<AgentToolResult<null>> => {
+        const proposal = await repairAssistantScheduleMcpTarget(
+          rawParams,
+          dependencies,
+        );
+        const mcpServerBindings = approvedMcpBindings(
+          rawParams,
+          proposal.input.mcpServerIds ?? [],
+        );
+        if (signal?.aborted)
+          throw new Error("Scheduled task creation was cancelled.");
         await Promise.all([
-          resolveAssistantScheduleProject(proposal, (id) => dependencies.getWorkspace(id)),
+          resolveAssistantScheduleProject(proposal, (id) =>
+            dependencies.getWorkspace(id),
+          ),
           resolveAssistantScheduleMcpServers(
             proposal,
             () => dependencies.listMcpServers(),
             mcpServerBindings,
           ),
         ]);
-        if (signal?.aborted) throw new Error("Scheduled task creation was cancelled.");
+        if (signal?.aborted)
+          throw new Error("Scheduled task creation was cancelled.");
         const schedulerEnabled = await dependencies.isSchedulingEnabled();
-        if (signal?.aborted) throw new Error("Scheduled task creation was cancelled.");
+        if (signal?.aborted)
+          throw new Error("Scheduled task creation was cancelled.");
         const task = await dependencies.save(
           {
             ...proposal.input,
@@ -1001,14 +1134,23 @@ export function createScheduleTaskTool(
         Type.Literal("run_now"),
       ]),
       id: Type.Optional(
-        Type.String({ description: "Exact task ID for pause, resume, remove, or run_now." }),
+        Type.String({
+          description: "Exact task ID for pause, resume, remove, or run_now.",
+        }),
       ),
-      name: Type.Optional(Type.String({ description: "Task name. Required for create." })),
+      name: Type.Optional(
+        Type.String({ description: "Task name. Required for create." }),
+      ),
       cron: Type.Optional(
-        Type.String({ description: "Five- or six-part cron expression. Required for create." }),
+        Type.String({
+          description:
+            "Five- or six-part cron expression. Required for create.",
+        }),
       ),
       timezone: Type.Optional(
-        Type.String({ description: "IANA timezone. Defaults to the device timezone." }),
+        Type.String({
+          description: "IANA timezone. Defaults to the device timezone.",
+        }),
       ),
       mode: Type.Optional(
         Type.Union([Type.Literal("llm"), Type.Literal("script")], {
@@ -1020,11 +1162,14 @@ export function createScheduleTaskTool(
       ),
       script: Type.Optional(
         Type.String({
-          description: "File name from the workspace or global .aiden/scripts folder.",
+          description:
+            "File name from the workspace or global .aiden/scripts folder.",
         }),
       ),
       workspaceId: Type.Optional(
-        Type.String({ description: "Workspace ID. Defaults to the current chat workspace." }),
+        Type.String({
+          description: "Workspace ID. Defaults to the current chat workspace.",
+        }),
       ),
       permission: Type.Optional(
         Type.Union([Type.Literal("read-only"), Type.Literal("full")], {
@@ -1034,22 +1179,31 @@ export function createScheduleTaskTool(
       mcpServerIds: Type.Optional(
         Type.Array(Type.String(), {
           maxItems: 16,
-          description: "Exact configured MCP server IDs approved for unattended use.",
+          description:
+            "Exact configured MCP server IDs approved for unattended use.",
         }),
       ),
       notify: Type.Optional(
-        Type.Boolean({ description: "Show a macOS notification after non-silent runs." }),
+        Type.Boolean({
+          description: "Show a macOS notification after non-silent runs.",
+        }),
       ),
     }),
-    execute: async (_toolCallId, rawParams): Promise<AgentToolResult<null>> => {
+    execute: async (
+      _toolCallId,
+      rawParams,
+      signal,
+    ): Promise<AgentToolResult<null>> => {
       const params = rawParams as ScheduleToolParams;
+      throwIfScheduleToolAborted(signal);
       if (params.action === "list") {
         return result({ tasks: (await dependencies.list()).map(taskSummary) });
       }
 
       if (params.action === "create") {
         const mode = params.mode ?? "llm";
-        const workspaceId = params.workspaceId?.trim() || access.defaultWorkspaceId;
+        const workspaceId =
+          params.workspaceId?.trim() || access.defaultWorkspaceId;
         const workspace = await workspaceFor(workspaceId, dependencies);
         let prompt: string | undefined;
         let script: string | undefined;
@@ -1060,10 +1214,15 @@ export function createScheduleTaskTool(
           recommendation = recommendedScheduledPermission(prompt);
         } else {
           script = required(params.script, "script");
-          await dependencies.validateScript({ script, workspaceRoot: workspace?.folderPath });
+          await dependencies.validateScript({
+            script,
+            workspaceRoot: workspace?.folderPath,
+          });
         }
         const mcpServerIds =
-          mode === "llm" ? (validateScheduledMcpServerIds(params.mcpServerIds) ?? []) : [];
+          mode === "llm"
+            ? (validateScheduledMcpServerIds(params.mcpServerIds) ?? [])
+            : [];
         if (workspaceId && mcpServerIds.length > 0) {
           throw new Error(
             "Scheduled tasks must choose either one project or MCP servers, not both.",
@@ -1075,25 +1234,31 @@ export function createScheduleTaskTool(
           for (const id of mcpServerIds) {
             const server = byId.get(id);
             if (!server) throw new Error(`MCP server ${id} was not found.`);
-            if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
+            if (!server.enabled)
+              throw new Error(`MCP server "${server.name}" is disabled.`);
           }
         }
-        const task = await dependencies.save({
-          name: required(params.name, "name"),
-          cron: required(params.cron, "cron"),
-          timezone: params.timezone,
-          mode,
-          prompt,
-          script,
-          workspaceId,
-          permission:
-            mode === "script" || mcpServerIds.length > 0
-              ? "full"
-              : (params.permission ?? "read-only"),
-          mcpServerIds: mode === "llm" ? mcpServerIds : undefined,
-          notify: params.notify,
-          enabled: true,
-        });
+        throwIfScheduleToolAborted(signal);
+        const task = await dependencies.save(
+          {
+            name: required(params.name, "name"),
+            cron: required(params.cron, "cron"),
+            timezone: params.timezone,
+            mode,
+            prompt,
+            script,
+            workspaceId,
+            permission:
+              mode === "script" || mcpServerIds.length > 0
+                ? "full"
+                : (params.permission ?? "read-only"),
+            mcpServerIds: mode === "llm" ? mcpServerIds : undefined,
+            notify: params.notify,
+            enabled: true,
+          },
+          undefined,
+          signal,
+        );
         return result({
           task: taskSummary(task),
           permissionRecommendation:
@@ -1108,14 +1273,19 @@ export function createScheduleTaskTool(
 
       const id = required(params.id, "id");
       if (params.action === "pause")
-        return result({ task: taskSummary(await dependencies.pause(id)) });
+        return result({
+          task: taskSummary(await dependencies.pause(id, signal)),
+        });
       if (params.action === "resume")
-        return result({ task: taskSummary(await dependencies.resume(id)) });
+        return result({
+          task: taskSummary(await dependencies.resume(id, signal)),
+        });
       if (params.action === "remove") {
-        await dependencies.remove(id);
+        await dependencies.remove(id, signal);
         return result({ removed: id });
       }
-      if (params.action === "run_now") return result({ run: await dependencies.runNow(id) });
+      if (params.action === "run_now")
+        return result({ run: await dependencies.runNow(id, signal) });
       throw new Error(`Unsupported schedule action: ${String(params.action)}.`);
     },
   };
@@ -1130,7 +1300,9 @@ export function scheduleTaskToolsForContext(context: {
   if (context.allowScheduling === false) return [];
   if (context.mode === "assistant-attended") {
     if (!context.assistantModelSelection) {
-      throw new Error("Assistant scheduling requires an exact provider and model selection.");
+      throw new Error(
+        "Assistant scheduling requires an exact provider and model selection.",
+      );
     }
     return [
       createAssistantScheduleListTool(),
@@ -1141,5 +1313,10 @@ export function scheduleTaskToolsForContext(context: {
       createAssistantEditAutomationTool(context.assistantModelSelection),
     ];
   }
-  return [createScheduleTaskTool({ kind: "standard", defaultWorkspaceId: context.workspaceId })];
+  return [
+    createScheduleTaskTool({
+      kind: "standard",
+      defaultWorkspaceId: context.workspaceId,
+    }),
+  ];
 }

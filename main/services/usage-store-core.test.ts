@@ -34,7 +34,8 @@ function memoryPersistence(): UsagePersistence & { read(): UsageDatabase } {
 const NOW = new Date(2026, 6, 21, 12).getTime();
 
 function record(
-  patch: Partial<UsageRequestRecord> & Pick<UsageRequestRecord, "providerId" | "modelId">,
+  patch: Partial<UsageRequestRecord> &
+    Pick<UsageRequestRecord, "providerId" | "modelId">,
 ): UsageRequestRecord {
   return {
     timestamp: NOW,
@@ -57,7 +58,14 @@ test("aggregates reported tokens while keeping unmetered and local requests visi
       providerId: "openai",
       providerLabel: "OpenAI",
       modelId: "gpt-test",
-      tokens: { input: 80, output: 20, cacheRead: 10, cacheWrite: 0, reasoning: 5, total: 110 },
+      tokens: {
+        input: 80,
+        output: 20,
+        cacheRead: 10,
+        cacheWrite: 0,
+        reasoning: 5,
+        total: 110,
+      },
       costStatus: "reported",
       costUsd: 0.025,
     }),
@@ -76,7 +84,14 @@ test("aggregates reported tokens while keeping unmetered and local requests visi
       providerId: "anthropic",
       providerLabel: "Anthropic",
       modelId: "claude-test",
-      tokens: { input: 40, output: 10, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 50 },
+      tokens: {
+        input: 40,
+        output: 10,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoning: 0,
+        total: 50,
+      },
     }),
   );
 
@@ -93,6 +108,7 @@ test("aggregates reported tokens while keeping unmetered and local requests visi
     output: 30,
     cacheRead: 10,
     cacheWrite: 0,
+    cacheWrite1h: 0,
     reasoning: 5,
     total: 160,
   });
@@ -100,7 +116,10 @@ test("aggregates reported tokens while keeping unmetered and local requests visi
     summary.models.map((model) => model.modelId),
     ["gpt-test", "claude-test", "qwen-local"],
   );
-  assert.equal(summary.models.find((model) => model.local)?.unmeteredRequests, 1);
+  assert.equal(
+    summary.models.find((model) => model.local)?.unmeteredRequests,
+    1,
+  );
 });
 
 test("persists subagent requests as a first-class privacy-safe usage source", async () => {
@@ -185,12 +204,42 @@ test("persists scheduled model calls as a separate privacy-safe usage source", a
 
 test("normalizes provider usage without inventing unavailable token counts or local cost", () => {
   assert.equal(
-    reportedTokens({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 }),
+    reportedTokens({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+    }),
     null,
   );
   assert.deepEqual(
-    reportedTokens({ input: 4, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 1 }),
-    { input: 4, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 1, total: 7 },
+    reportedTokens({
+      input: 4,
+      output: 2,
+      cacheRead: 1,
+      cacheWrite: 0,
+      reasoning: 1,
+    }),
+    {
+      input: 4,
+      output: 2,
+      cacheRead: 1,
+      cacheWrite: 0,
+      reasoning: 1,
+      total: 7,
+    },
+  );
+  assert.equal(
+    reportedTokens({
+      input: 4,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 3,
+      cacheWrite1h: 2,
+      totalTokens: 9,
+    })?.cacheWrite1h,
+    2,
   );
   assert.equal(
     isLocalModelProvider({
@@ -303,9 +352,19 @@ test("maps exact OpenAI and Gemini transcription usage without double-counting c
       output_tokens: 31,
       total_tokens: 45,
     }),
-    { input: 14, output: 31, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 45 },
+    {
+      input: 14,
+      output: 31,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      total: 45,
+    },
   );
-  assert.equal(openAITranscriptionTokens({ type: "duration", seconds: 20 }), null);
+  assert.equal(
+    openAITranscriptionTokens({ type: "duration", seconds: 20 }),
+    null,
+  );
   assert.deepEqual(
     geminiTranscriptionTokens({
       promptTokenCount: 100,
@@ -314,7 +373,14 @@ test("maps exact OpenAI and Gemini transcription usage without double-counting c
       thoughtsTokenCount: 10,
       totalTokenCount: 130,
     }),
-    { input: 70, output: 30, cacheRead: 30, cacheWrite: 0, reasoning: 10, total: 130 },
+    {
+      input: 70,
+      output: 30,
+      cacheRead: 30,
+      cacheWrite: 0,
+      reasoning: 10,
+      total: 130,
+    },
   );
 });
 
@@ -360,7 +426,9 @@ test("counts every assistant turn outcome, including tool loops, failures, and a
       stopReason,
       timestamp: NOW,
     };
-    await store.record(assistantUsageRecord({ message, provider, model, source: "chat" }));
+    await store.record(
+      assistantUsageRecord({ message, provider, model, source: "chat" }),
+    );
   }
 
   const summary = await store.summary("7d");

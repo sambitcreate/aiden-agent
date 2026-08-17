@@ -8,6 +8,10 @@ import {
   toPiMessages,
 } from "./generation-messages.js";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
+import {
+  parseStoredPiAssistantMessage,
+  storedPiAssistantMessage,
+} from "./pi-message-storage.js";
 
 const model: Model<"openai-completions"> = {
   id: "test",
@@ -80,7 +84,11 @@ test("matches Pi's installed tool-result image serialization gate", () => {
     toolName: "computer_use",
     content: [
       { type: "text" as const, text: "capture" },
-      { type: "image" as const, data: "TOOL_IMAGE_SENTINEL", mimeType: "image/png" },
+      {
+        type: "image" as const,
+        data: "TOOL_IMAGE_SENTINEL",
+        mimeType: "image/png",
+      },
     ],
     details: null,
     isError: false,
@@ -109,6 +117,104 @@ test("journal rehydration preserves the authoritative chat timestamp", () => {
   assert.equal(message.timestamp, 123_456);
 });
 
+test("journal rehydration preserves canonical mixed-provider Pi provenance", () => {
+  const canonical = {
+    role: "assistant" as const,
+    content: [
+      { type: "thinking" as const, thinking: "Provider-authored thought" },
+      { type: "text" as const, text: "Historical answer" },
+    ],
+    api: "anthropic-messages" as const,
+    provider: "anthropic",
+    model: "claude-historical",
+    responseModel: "claude-historical-2026",
+    responseId: "response-historical",
+    usage: {
+      input: 10,
+      output: 4,
+      cacheRead: 2,
+      cacheWrite: 3,
+      cacheWrite1h: 1,
+      totalTokens: 19,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 456,
+  };
+  const message = chatMessageToPiMessage(
+    {
+      id: "message-provenance",
+      role: "assistant",
+      content: "Historical answer",
+      createdAt: 456,
+      pi: canonical,
+    },
+    model,
+    false,
+  );
+  assert.deepEqual(message, canonical);
+  assert.equal(
+    message.role === "assistant" ? message.provider : "",
+    "anthropic",
+  );
+  assert.equal(
+    message.role === "assistant" ? message.model : "",
+    "claude-historical",
+  );
+});
+
+test("stored Pi provenance rejects malformed nested provider protocol", () => {
+  const valid = {
+    role: "assistant", content: [{ type: "text", text: "answer" }],
+    api: "anthropic-messages", provider: "anthropic", model: "claude",
+    usage: {
+      input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop", timestamp: 10,
+  };
+  assert.deepEqual(parseStoredPiAssistantMessage(valid), valid);
+  for (const malformed of [
+    { ...valid, provider: "" },
+    { ...valid, content: [{ type: "image", data: "private" }] },
+    { ...valid, content: [{ type: "toolCall", id: "", name: "read", arguments: {} }] },
+    { ...valid, usage: {} },
+    { ...valid, usage: { ...valid.usage, input: Number.NaN } },
+    { ...valid, usage: { ...valid.usage, cost: { ...valid.usage.cost, total: -1 } } },
+  ]) assert.equal(parseStoredPiAssistantMessage(malformed), undefined);
+});
+
+test("stored Pi provenance strips raw provider errors and diagnostics", () => {
+  const privateCanary = "PRIVATE_PROVIDER_ERROR_91fc";
+  const failed = {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: "partial" }],
+    api: "anthropic-messages" as const,
+    provider: "anthropic",
+    model: "claude",
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: privateCanary,
+    diagnostics: { privateCanary },
+    timestamp: 10,
+  };
+  assert.doesNotMatch(
+    JSON.stringify(storedPiAssistantMessage(failed as never)),
+    new RegExp(privateCanary, "u"),
+  );
+  assert.doesNotMatch(
+    JSON.stringify(parseStoredPiAssistantMessage(failed)),
+    new RegExp(privateCanary, "u"),
+  );
+});
+
 test("an explicit invocation overrides only the exact in-memory current turn", () => {
   const persisted = {
     id: "message-2",
@@ -130,18 +236,24 @@ test("an explicit invocation overrides only the exact in-memory current turn", (
   assert.match(serialized, /PRIVATE_SKILL_INSTRUCTIONS/u);
   assert.equal(serialized.match(/Attached file: note\.txt/gu)?.length, 1);
   assert.equal(serialized.includes("IMAGE_SENTINEL"), true);
-  assert.ok(serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") < serialized.indexOf("note.txt"));
+  assert.ok(
+    serialized.indexOf("PRIVATE_SKILL_INSTRUCTIONS") <
+      serialized.indexOf("note.txt"),
+  );
 });
 
 test("skill message text is rejected before aggregate attachment concatenation exceeds its budget", () => {
   assert.throws(
     () => chatUserTextWithAttachments("12345", undefined, 4),
     (error: unknown) =>
-      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+      error instanceof SkillInvocationError &&
+      error.code === "instructions_too_large",
   );
   assert.throws(
-    () => chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
+    () =>
+      chatUserTextWithAttachments("tail", params.messages[0]!.attachments, 30),
     (error: unknown) =>
-      error instanceof SkillInvocationError && error.code === "instructions_too_large",
+      error instanceof SkillInvocationError &&
+      error.code === "instructions_too_large",
   );
 });

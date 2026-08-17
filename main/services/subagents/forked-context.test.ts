@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { createModels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import {
   MAX_FORK_CONTEXT_MESSAGES,
@@ -62,6 +62,7 @@ function runtime(input: readonly ("text" | "image")[] = ["text", "image"]): Reso
     maxTokens: 8_192,
   } as Model<Api>;
   return {
+    models: createModels(),
     provider: {
       id: "fork-provider",
       kind: "openai",
@@ -269,10 +270,8 @@ test("rejects corrupt or excessive persisted attachments instead of silently for
 test("redacts high-confidence secrets from visible fork prose and text files", () => {
   const chat = persistedChat();
   chat.messages[1]!.content = "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456";
-  chat.messages[1]!.attachments![0]!.text =
-    "token: sk-proj-abcdefghijklmnopqrstuvwxyz123456";
-  chat.messages[1]!.attachments![0]!.name =
-    "sk-proj-abcdefghijklmnopqrstuvwxyz123456.txt";
+  chat.messages[1]!.attachments![0]!.text = "token: sk-proj-abcdefghijklmnopqrstuvwxyz123456";
+  chat.messages[1]!.attachments![0]!.name = "sk-proj-abcdefghijklmnopqrstuvwxyz123456.txt";
   const serialized = JSON.stringify(capturePersistedSubagentContext(chat));
   assert.doesNotMatch(serialized, /sk-proj-/u);
   assert.match(serialized, /REDACTED/u);
