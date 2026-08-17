@@ -482,6 +482,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "exaEnabled",
     "shortcutEnabled",
     "dictationEnabled",
+    "showLocalModelReasoning",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
