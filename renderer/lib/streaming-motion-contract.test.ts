@@ -82,6 +82,16 @@ test("reasoning keeps its status and disclosure without a brain glyph", () => {
   assert.match(reasoning, /aria-expanded=\{expanded\}/u);
 });
 
+test("local deployments receive a presentation-only reasoning switch", () => {
+  const pane = source("../main/chat-pane.tsx");
+  const control = source("../components/reasoning-visibility-control.tsx");
+  assert.match(pane, /isLocalProviderDeployment\(selectedProvider\)/u);
+  assert.match(pane, /settingsApi\.set\(\{ showLocalModelReasoning: visible \}\)/u);
+  assert.match(pane, /<ReasoningVisibilityControl/u);
+  assert.match(control, /role="switch"/u);
+  assert.match(control, /This changes presentation only/u);
+});
+
 test("a persistence error retains the only rendered partial response", () => {
   const pane = source("../main/chat-pane.tsx");
   assert.match(pane, /const isGenerating = streamingText !== null && !hasUnpersistedResponse/u);

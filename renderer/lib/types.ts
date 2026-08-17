@@ -712,6 +712,7 @@ export interface AppSettings {
   googleThinkingByModel?: Record<string, GoogleThinkingLevel>;
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
+  showLocalModelReasoning?: boolean;
   computerUseEnabled?: boolean;
   scheduledTasksEnabled?: boolean;
   scheduledDefaultMode?: ScheduledTaskMode;

@@ -15,6 +15,7 @@ import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { ThinkingControl } from "../components/thinking-control";
+import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
   SubagentWorkspaceWriteApproval,
   subagentWorkspaceWriteOperationLabel,
@@ -94,6 +95,7 @@ import {
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { isLocalProviderDeployment } from "../shared/provider-deployment";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -250,6 +252,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     anthropicThinkingLevels,
     storedAnthropicThinkingLevel,
   );
+  const localReasoningVisibilitySupported = Boolean(
+    selectedProvider && isLocalProviderDeployment(selectedProvider),
+  );
+  const showLocalModelReasoning = settings.data?.showLocalModelReasoning !== false;
 
   React.useEffect(() => {
     if (chat.data && effectiveWorkspaceId && effectiveWorkspaceId !== activeId) {
@@ -1011,6 +1017,39 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
   );
 
+  const changeLocalReasoningVisibility = React.useCallback(
+    async (visible: boolean) => {
+      if (
+        !localReasoningVisibilitySupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      ) {
+        return;
+      }
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.set({ showLocalModelReasoning: visible });
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save the local reasoning visibility.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      isGenerating,
+      isStartingGeneration,
+      localReasoningVisibilitySupported,
+      qc,
+      thinkingSaving,
+    ],
+  );
+
   const moveNewChatToWorkspace = React.useCallback(
     async (workspaceId: string) => {
       if (documentAppendReconciliationRequired) {
@@ -1498,6 +1537,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                   disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeAnthropicThinking(level)}
+                />
+              ) : localReasoningVisibilitySupported ? (
+                <ReasoningVisibilityControl
+                  visible={showLocalModelReasoning}
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                  onChange={(visible) => void changeLocalReasoningVisibility(visible)}
                 />
               ) : undefined
             }
