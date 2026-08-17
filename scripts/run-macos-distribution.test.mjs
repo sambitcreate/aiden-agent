@@ -144,11 +144,13 @@ test("release assets stay draft-only until the complete update set is uploaded",
   assert.match(workflow, /bash scripts\/publish-github-release\.sh release\/distribution/u);
 
   const existingReleaseGuard = publisher.indexOf("if lookup_release_with_retry");
+  const draftAwareLookup = publisher.indexOf('gh release view "$RELEASE_TAG"');
   const websiteAlias = publisher.indexOf('website_dmg="$RUNNER_TEMP/Aiden-Agent-Beta-arm64.dmg"');
   const createDraft = publisher.indexOf('gh release create "$RELEASE_TAG"');
   const publishDraft = publisher.indexOf('gh release edit "$RELEASE_TAG"');
 
   assert.ok(existingReleaseGuard >= 0, "release reruns must reject an existing tag or draft");
+  assert.ok(draftAwareLookup >= 0, "release lookup must include unpublished drafts");
   assert.ok(websiteAlias > existingReleaseGuard, "the website alias must follow the guard");
   assert.ok(
     createDraft > existingReleaseGuard,
