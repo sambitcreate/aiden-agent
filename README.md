@@ -115,4 +115,12 @@ The checked-in models.dev snapshot is refreshed only through `npm run models:ref
 
 Aiden Agent is a beta macOS release. Signed DMG and ZIP builds, checksums, and automatic-update metadata are published through [GitHub Releases](https://github.com/sambitcreate/aiden-agent/releases). The release workflow is fail-closed: it verifies signing, notarization, package contents, updater metadata, and version monotonicity before publishing. See [the release guide](docs/releasing.md) for the complete process.
 
+The canonical website download is the stable
+[`Aiden-Agent-Beta-arm64.dmg`](https://github.com/sambitcreate/aiden-agent/releases/latest/download/Aiden-Agent-Beta-arm64.dmg)
+alias from the latest public release. The historical
+`download.chatwithaiden.com/Aiden-Agent-Beta.dmg` URL is maintained by the
+[`aiden-website`](https://github.com/sambitcreate/aiden-website) repository as a non-cacheable
+redirect to that same alias; its R2 object is rollback fallback only. Release preflight checks both
+paths so a stale legacy download fails closed before signing begins.
+
 The project is MIT licensed (see [LICENSE](LICENSE)).
