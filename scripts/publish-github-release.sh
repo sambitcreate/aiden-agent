@@ -36,7 +36,10 @@ lookup_release() {
   local status
   set +e
   LOOKUP_OUTPUT="$(
-    gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" 2>&1
+    gh release view "$RELEASE_TAG" \
+      --repo "$GITHUB_REPOSITORY" \
+      --json tagName,targetCommitish,isDraft,assets \
+      2>&1
   )"
   status=$?
   set -e
@@ -44,7 +47,7 @@ lookup_release() {
   if (( status == 0 )); then
     return 0
   fi
-  if grep -Eq 'HTTP (404|[0-9.]+ 404)|404 Not Found' <<<"$LOOKUP_OUTPUT"; then
+  if grep -Eq 'HTTP (404|[0-9.]+ 404)|404 Not Found|^release not found$' <<<"$LOOKUP_OUTPUT"; then
     return 1
   fi
   return 2
@@ -77,9 +80,9 @@ const expectedSha = process.argv[2];
 const expectedDraft = process.argv[3] === "true";
 if (
   !release ||
-  release.tag_name !== process.env.RELEASE_TAG ||
-  release.target_commitish !== expectedSha ||
-  release.draft !== expectedDraft
+  release.tagName !== process.env.RELEASE_TAG ||
+  release.targetCommitish !== expectedSha ||
+  release.isDraft !== expectedDraft
 ) {
   process.exit(1);
 }
