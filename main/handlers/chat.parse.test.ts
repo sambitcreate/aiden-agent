@@ -40,6 +40,10 @@ test("chat lifecycle handling detaches the renderer instead of aborting inferenc
   );
   assert.match(invalidation, /this\.detachRenderer/u);
   assert.doesNotMatch(invalidation, /this\.cancel/u);
+  assert.match(
+    runtime,
+    /if \(initialization\?\.rendererDetached \|\| generation\?\.rendererDetached\)/u,
+  );
 });
 
 test("parseParams accepts only the attended Assistant mode", () => {

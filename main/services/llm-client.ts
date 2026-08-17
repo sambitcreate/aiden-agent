@@ -1987,7 +1987,7 @@ export const llmClient = {
     if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
-    if (initialization?.rendererDetached && (!generation || generation.rendererDetached)) {
+    if (initialization?.rendererDetached || generation?.rendererDetached) {
       return false;
     }
     if (initialization) initialization.rendererDetached = true;
