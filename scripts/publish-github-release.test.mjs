@@ -20,14 +20,14 @@ const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
 const args = process.argv.slice(2);
 const fail = (message) => { save(); process.stderr.write(message + "\n"); process.exit(1); };
 const releaseJson = () => JSON.stringify({
-  tag_name: process.env.RELEASE_TAG,
-  target_commitish: state.target,
-  draft: state.draft,
+  tagName: process.env.RELEASE_TAG,
+  targetCommitish: state.target,
+  isDraft: state.draft,
   assets: state.assets,
 });
 
-if (args[0] === "api") {
-  state.apiCalls += 1;
+if (args[0] === "release" && args[1] === "view") {
+  state.viewCalls += 1;
   if (state.transientLookups > 0) {
     state.transientLookups -= 1;
     fail("gh: service unavailable (HTTP 503)");
@@ -88,7 +88,7 @@ async function fixture(initialState) {
   await writeFile(
     statePath,
     JSON.stringify({
-      apiCalls: 0,
+      viewCalls: 0,
       createCalls: 0,
       uploadCalls: 0,
       editCalls: 0,
@@ -172,7 +172,7 @@ test("fails closed before creation when release lookup remains unavailable", asy
     /release lookup did not settle after 3 attempts/iu,
   );
   const state = JSON.parse(await readFile(setup.statePath, "utf8"));
-  assert.equal(state.apiCalls, 3);
+  assert.equal(state.viewCalls, 3);
   assert.equal(state.createCalls, 0);
   assert.equal(state.uploadCalls, 0);
   assert.equal(state.editCalls, 0);
