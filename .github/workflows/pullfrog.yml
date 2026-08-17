@@ -26,7 +26,9 @@ jobs:
         with:
           fetch-depth: 1
       - name: Run agent
-        uses: pullfrog/pullfrog@v0
+        # Pin the action and its npm runtime together. The floating v0 tag can
+        # advance before the matching package is published and strand reviews.
+        uses: pullfrog/pullfrog@v0.1.57
         with:
           prompt: ${{ inputs.prompt }}
         env:

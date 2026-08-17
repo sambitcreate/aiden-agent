@@ -435,7 +435,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       const controller = activeControllers.get(taskId);
       controller?.abort();
       const streamId = activeStreams.get(taskId);
-      const streamCancelled = streamId ? llmClient.cancel(streamId) : false;
+      const streamCancelled = streamId
+        ? llmClient.cancel(streamId, "scheduled_task_cancel")
+        : false;
       return Boolean(controller) || streamCancelled;
     },
 
@@ -443,7 +445,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       for (const [taskId, controller] of activeControllers) {
         controller.abort();
         const streamId = activeStreams.get(taskId);
-        if (streamId) llmClient.cancel(streamId);
+        if (streamId) llmClient.cancel(streamId, "scheduled_task_cancel");
       }
     },
   };

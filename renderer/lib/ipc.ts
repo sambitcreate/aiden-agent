@@ -912,17 +912,29 @@ export function startGeneration(
     },
   );
 
+  let lifecycleDetached = false;
+  let userStopRequested = false;
+
   return {
     streamId,
     started,
     cancel: (origin) => {
       if (origin === "lifecycle") {
+        if (lifecycleDetached) return;
+        lifecycleDetached = true;
         rememberDetachedLifecycleStream({
           streamId,
           chatId: params.chatId,
           workspaceId: params.workspaceId ?? "default",
         });
         dispose();
+        // Renderer lifecycle only releases this document's subscriptions. The
+        // main-owned operation continues and the shell reconciles its durable
+        // terminal snapshot. Authority-changing main operations still cancel
+        // and drain the generation explicitly.
+      } else {
+        if (userStopRequested) return;
+        userStopRequested = true;
       }
       void invoke("chat:cancel", streamId, origin).catch((error: unknown) => {
         if (origin === "user_stop") {

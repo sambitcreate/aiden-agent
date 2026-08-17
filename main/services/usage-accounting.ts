@@ -103,6 +103,30 @@ function statusFor(message: AssistantMessage): UsageRequestStatus {
   return "completed";
 }
 
+/**
+ * Tracks the one provider request currently represented by Pi's assistant
+ * message lifecycle. A transport abort can end a request before Pi emits
+ * `message_end`; callers consume that open request exactly once for fallback
+ * cancellation accounting.
+ */
+export class AssistantRequestUsageTracker {
+  private open = false;
+
+  started(): void {
+    this.open = true;
+  }
+
+  ended(): void {
+    this.open = false;
+  }
+
+  takeUnreportedCancellation(): boolean {
+    if (!this.open) return false;
+    this.open = false;
+    return true;
+  }
+}
+
 export function assistantUsageRecord(input: {
   message: AssistantMessage;
   provider: StoredProvider;

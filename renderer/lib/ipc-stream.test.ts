@@ -77,7 +77,7 @@ function listenerCount(bridge: FakeBridge): number {
   return [...bridge.listeners.values()].reduce((total, listeners) => total + listeners.size, 0);
 }
 
-test("lifecycle cancellation releases every stream subscription immediately", async () => {
+test("lifecycle detachment releases subscriptions and notifies main exactly once", async () => {
   const { bridge, restore } = installFakeBridge();
   try {
     const handle = startGeneration(
@@ -94,13 +94,15 @@ test("lifecycle cancellation releases every stream subscription immediately", as
     assert.equal(bridge.listeners.has("chat:subagents"), false);
 
     handle.cancel("lifecycle");
+    handle.cancel("lifecycle");
     assert.equal(listenerCount(bridge), 0);
     await Promise.resolve();
-    assert.ok(
-      bridge.invokes.some(
+    assert.equal(
+      bridge.invokes.filter(
         ({ channel, args }) =>
           channel === "chat:cancel" && args[0] === handle.streamId && args[1] === "lifecycle",
-      ),
+      ).length,
+      1,
     );
   } finally {
     restore();
