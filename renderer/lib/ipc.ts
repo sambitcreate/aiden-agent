@@ -547,6 +547,7 @@ async function invokeChatMutation<T>(
 }
 
 export const chatsApi = {
+  activitySnapshot: () => invoke<unknown>("chats:activitySnapshot"),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
     const response = parseChatReadResponse(
