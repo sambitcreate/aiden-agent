@@ -710,6 +710,7 @@ async function prepareGeneration(
     skillSnapshot,
     workspaceId: workspace?.id,
     subagentSupervisor,
+    showLocalModelReasoning: settings.showLocalModelReasoning,
     // The Aiden system prompt reads its approval posture from settings, which
     // are already loaded here; re-reading them at the prompt site would be a
     // second disk round trip inside the generation's hot path.
@@ -883,6 +884,7 @@ export const llmClient = {
       workspaceId,
       assistantSettingsPermission,
       subagentSupervisor,
+      showLocalModelReasoning,
     } = setup;
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
@@ -893,7 +895,7 @@ export const llmClient = {
       model: model.id,
       modelName: model.name,
     };
-    const exposeReasoning = shouldExposeReasoning(params.providerId);
+    const exposeReasoning = shouldExposeReasoning(runtime.provider, showLocalModelReasoning);
 
     if (isLocalProviderDeployment(runtime.provider)) {
       const loadMonitorState: LoadMonitorState = {

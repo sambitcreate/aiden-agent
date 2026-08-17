@@ -27,9 +27,9 @@ import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import {
-  isLmStudioProviderId,
-  isOllamaProviderId,
-} from "./custom-provider-id.js";
+  isLocalProviderDeployment,
+  type ProviderDeploymentFields,
+} from "../../renderer/shared/provider-deployment.js";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -39,13 +39,16 @@ import {
  */
 export const PI_AUTH_COMPATIBILITY_TOKEN = "aiden-local-no-auth";
 
-/** Expose only provider-authored reasoning that Aiden deliberately supports in the transcript. */
-export function shouldExposeReasoning(providerId: string): boolean {
-  return (
-    providerId === GOOGLE_PROVIDER_ID ||
-    isLmStudioProviderId(providerId) ||
-    isOllamaProviderId(providerId)
-  );
+/**
+ * Match Pi's provider-neutral display contract for readable thinking blocks.
+ * Local visibility is a presentation preference only; the canonical Pi message
+ * remains private and complete regardless of this decision.
+ */
+export function shouldExposeReasoning(
+  provider: ProviderDeploymentFields,
+  showLocalModelReasoning: boolean | undefined,
+): boolean {
+  return !isLocalProviderDeployment(provider) || showLocalModelReasoning !== false;
 }
 
 /** Preserve provider-specific normalization while honoring every Pi reasoning model. */

@@ -1,6 +1,11 @@
 import * as React from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/ui-utils";
+import {
+  REASONING_PREVIEW_MS,
+  initialReasoningDisclosure,
+  reduceReasoningDisclosure,
+} from "../lib/reasoning-disclosure";
 
 interface ReasoningBlockProps {
   content: string;
@@ -19,7 +24,13 @@ export function ReasoningBlock({
   const contentId = React.useId();
   const viewportRef = React.useRef<HTMLDivElement>(null);
   const followTailRef = React.useRef(streaming);
-  const [expanded, setExpanded] = React.useState(streaming);
+  const previewOnMountRef = React.useRef(streaming);
+  const [disclosure, dispatchDisclosure] = React.useReducer(
+    reduceReasoningDisclosure,
+    streaming,
+    initialReasoningDisclosure,
+  );
+  const { expanded } = disclosure;
   const [atTop, setAtTop] = React.useState(true);
   const [atBottom, setAtBottom] = React.useState(true);
 
@@ -30,8 +41,13 @@ export function ReasoningBlock({
   }, []);
 
   React.useEffect(() => {
-    if (streaming) setExpanded(true);
-  }, [streaming]);
+    if (!previewOnMountRef.current) return;
+    const timer = window.setTimeout(
+      () => dispatchDisclosure({ type: "preview-elapsed" }),
+      REASONING_PREVIEW_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, []);
 
   React.useLayoutEffect(() => {
     const element = viewportRef.current;
@@ -57,7 +73,7 @@ export function ReasoningBlock({
         type="button"
         aria-expanded={expanded}
         aria-controls={contentId}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => dispatchDisclosure({ type: "toggle" })}
         className="flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:bg-list-hover hover:text-primary focus-visible:bg-list-selection focus-visible:outline-none"
       >
         <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>

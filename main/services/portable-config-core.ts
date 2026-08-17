@@ -509,6 +509,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "telegramEnabled",
     "shortcutEnabled",
     "dictationEnabled",
+    "showLocalModelReasoning",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",

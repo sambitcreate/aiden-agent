@@ -259,7 +259,7 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
     updatedAt: 1,
   };
   await h.store.saveWorkspace(workspace);
-  await h.store.setSettings({ exaEnabled: true });
+  await h.store.setSettings({ exaEnabled: true, showLocalModelReasoning: false });
 
   const portableRaw = await fs.readFile(h.portableFile, "utf-8");
   assert.match(portableRaw, /mcp-fs/);
@@ -274,6 +274,7 @@ test("MCP servers and skills are portable; workspaces and settings are not", asy
   );
   assert.deepEqual((await readJson<{ settings: unknown }>(h.settingsFile)).settings, {
     exaEnabled: true,
+    showLocalModelReasoning: false,
   });
 });
 
@@ -2004,6 +2005,7 @@ test("malformed known settings fields are dropped before type-assuming consumers
       settings: {
         profileName: { bad: true },
         exaEnabled: "yes",
+        showLocalModelReasoning: "yes",
         lastProviderId: 7,
         futureSetting: { retained: true },
       },
@@ -2014,6 +2016,25 @@ test("malformed known settings fields are dropped before type-assuming consumers
   assert.deepEqual(await h.store.getSettings(), {
     futureSetting: { retained: true },
   });
+});
+
+test("local reasoning visibility is a durable boolean presentation preference", async (t) => {
+  const h = await harness(t);
+
+  assert.equal((await h.store.getSettings()).showLocalModelReasoning, undefined);
+  assert.equal(
+    (await h.store.setSettings({ showLocalModelReasoning: false })).showLocalModelReasoning,
+    false,
+  );
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.equal((await next.getSettings()).showLocalModelReasoning, false);
 });
 
 test("future nested settings versions survive unrelated writes", async (t) => {

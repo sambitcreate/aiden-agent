@@ -138,10 +138,6 @@ test("model thinking preserves native normalization and honors generic Pi reason
     ),
     "off",
   );
-  assert.equal(shouldExposeReasoning("google"), true);
-  assert.equal(shouldExposeReasoning("ollama"), true);
-  assert.equal(shouldExposeReasoning("openai"), false);
-  assert.equal(shouldExposeReasoning("anthropic"), false);
 });
 
 test("clears transient agent state before bounded helper teardown", async () => {
@@ -643,14 +639,36 @@ test("uses final assistant text when a provider does not stream text deltas", ()
   );
 });
 
-test("exposes only deliberate provider reasoning and ignores redacted blocks", () => {
-  assert.equal(shouldExposeReasoning("google"), true);
-  assert.equal(shouldExposeReasoning("lmstudio"), true);
-  assert.equal(shouldExposeReasoning("ollama"), true);
-  assert.equal(shouldExposeReasoning("custom:lmstudio"), true);
-  assert.equal(shouldExposeReasoning("custom:ollama"), true);
-  assert.equal(shouldExposeReasoning("openai"), false);
-  assert.equal(shouldExposeReasoning("custom-local"), false);
+test("matches Pi reasoning display for hosted providers and the local visibility preference", () => {
+  for (const id of [
+    "anthropic",
+    "openai",
+    "openai-codex",
+    "azure-openai-responses",
+    "deepseek",
+    "google",
+    "google-vertex",
+    "amazon-bedrock",
+    "mistral",
+    "openrouter",
+  ]) {
+    assert.equal(
+      shouldExposeReasoning({ id, deployment: "hosted" }, false),
+      true,
+      `${id} should expose normalized Pi thinking`,
+    );
+  }
+  assert.equal(shouldExposeReasoning({ id: "lmstudio", deployment: "local" }, undefined), true);
+  assert.equal(shouldExposeReasoning({ id: "ollama", deployment: "local" }, true), true);
+  assert.equal(shouldExposeReasoning({ id: "custom:lmstudio", deployment: "local" }, false), false);
+  assert.equal(
+    shouldExposeReasoning({ id: "custom", baseUrl: "http://127.0.0.1:1234/v1" }, false),
+    false,
+  );
+  assert.equal(
+    shouldExposeReasoning({ id: "custom", baseUrl: "https://models.example.test/v1" }, false),
+    true,
+  );
 
   const message = {
     role: "assistant",
@@ -761,4 +779,38 @@ test("reconciles interleaved streamed blocks to Pi terminal content order", () =
     "Earlier reasoning.\n\nEarly thought.\n\nLate thought.",
   );
   assert.equal(projection.changed, true);
+});
+
+test("terminal reconciliation exposes only readable Pi thinking and honors local hiding", () => {
+  const message = {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "Readable first thought." },
+      { type: "thinking", thinking: "Opaque provider payload.", redacted: true },
+      { type: "text", text: "Final answer." },
+      { type: "thinking", thinking: "Readable second thought." },
+    ],
+  };
+
+  const visible = reconcileTerminalAssistantProjection(
+    { full: "streamed", reasoning: "partial private text" },
+    { full: 0, reasoning: 0 },
+    message,
+    true,
+  );
+  assert.equal(visible.full, "Final answer.");
+  assert.equal(
+    visible.reasoning,
+    "Readable first thought.\n\nReadable second thought.",
+  );
+  assert.equal(visible.reasoning.includes("Opaque provider payload."), false);
+
+  const hidden = reconcileTerminalAssistantProjection(
+    { full: "Earlier answer.streamed", reasoning: "Earlier reasoning.partial private text" },
+    { full: "Earlier answer.".length, reasoning: "Earlier reasoning.".length },
+    message,
+    false,
+  );
+  assert.equal(hidden.full, "Earlier answer.\n\nFinal answer.");
+  assert.equal(hidden.reasoning, "Earlier reasoning.");
 });
