@@ -30,5 +30,6 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Pi-native Compaction](completed/pi-native-compaction-plan.md)                                 | Complete | Pi `0.80.10` session checkpoints, retained-tail reconstruction, overflow recovery, private journals, child parity, and activity milestones ship.     |
 | [Pi Runtime Harness](completed/pi-runtime-harness-plan.md)                                     | Complete | One durable Pi-shaped runtime now owns foreground/child lifecycle, contributions, effect evidence, killable child inference, and safe startup retry. |
 | [Pi Compaction Compatibility](completed/compaction-reliability-plan.md)                         | Complete | Aiden's adapter now matches the audited Pi baseline 1:1 and persists only closed, privacy-safe provider-failure metadata for durable UI.             |
+| [Pi Thinking Disclosure](completed/pi-thinking-disclosure-plan.md)                              | Complete | Provider-neutral readable Pi thinking, a one-second inspectable preview, and a durable local presentation toggle now match the audited Pi contract.  |
 
 Move a plan to `completed/` only when its original delivery scope is complete. Keep the original plan as historical documentation; follow-on work belongs in a new active plan.
