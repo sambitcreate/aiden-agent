@@ -44,6 +44,7 @@ import {
   writeAidenChatExportForRenderer,
 } from "../services/chat-export.js";
 import { chatForRenderer } from "../services/visible-chat-projection.js";
+import { chatActivityRegistry } from "../services/chat-activity.js";
 
 function asString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -55,6 +56,7 @@ function asString(value: unknown, name: string): string {
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
+  ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
     chatStore.list(
       typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,

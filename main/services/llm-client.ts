@@ -113,6 +113,7 @@ import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
   subagentsAllowedForGeneration,
@@ -278,10 +279,12 @@ function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () 
 }
 
 function broadcastChatSettled(
+  streamId: string,
   chatId: string,
   workspaceId: string | undefined,
   fallbackWorkspaceId: string | undefined,
 ): void {
+  chatActivityRegistry.settle(streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
     return;
@@ -765,6 +768,7 @@ export const llmClient = {
             initialization.skillInvocation = skillInvocation;
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
+            chatActivityRegistry.begin(streamId, params.chatId);
           },
         );
     } catch (error) {
@@ -837,13 +841,13 @@ export const llmClient = {
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const {
@@ -1540,13 +1544,13 @@ export const llmClient = {
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const agent = candidate;
@@ -1555,7 +1559,7 @@ export const llmClient = {
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
@@ -1737,7 +1741,7 @@ export const llmClient = {
       releaseGenerationSkillReservation(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
       return false;
     }
 
@@ -1893,7 +1897,7 @@ export const llmClient = {
           releaseGenerationSkillReservation(activeGeneration);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
-          broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
         }
       }
     })();

@@ -66,6 +66,7 @@ import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
+import { useActiveChatIds } from "../lib/use-chat-activity";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 /** Must match aiden-app-update-banner-out in styles.css. */
@@ -303,6 +304,20 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
   );
 }
 
+function ChatActivityIndicator() {
+  return (
+    <span
+      role="img"
+      aria-label="Working"
+      title="Working"
+      className="inline-flex size-5 items-center justify-center text-accent"
+    >
+      {/* A static open ring communicates in-progress work without an animation clock. */}
+      <Loader2 className="size-4" aria-hidden="true" />
+    </span>
+  );
+}
+
 const MONTHS = [
   "January",
   "February",
@@ -361,6 +376,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
+  const activeChatIds = useActiveChatIds();
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useChats(activeId);
   const foundationModels = useFoundationModelsConnection();
@@ -873,6 +889,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                   const shortcutBinding = shortcutNumber
                     ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
                     : null;
+                  const working =
+                    activeChatIds.has(chat.id) ||
+                    (chat.id === activeChatId && environmentPanel.agentBusy);
                   return (
                     <ContextMenu key={chat.id}>
                       <ContextMenuTrigger asChild>
@@ -882,7 +901,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
                             ) : undefined
                           }
-                          aria-busy={renamingWithAppleId === chat.id}
+                          aria-busy={renamingWithAppleId === chat.id || working}
                           title={
                             titleReveal?.chatId === chat.id ? (
                               <GeneratedTitleReveal
@@ -895,13 +914,18 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                             )
                           }
                           trailing={
-                            chatShortcutsVisible && shortcutBinding ? (
-                              <kbd
-                                aria-hidden="true"
-                                className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                              >
-                                {prettyAccelerator(shortcutBinding)}
-                              </kbd>
+                            working || (chatShortcutsVisible && shortcutBinding) ? (
+                              <span className="flex items-center gap-1">
+                                {chatShortcutsVisible && shortcutBinding ? (
+                                  <kbd
+                                    aria-hidden="true"
+                                    className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                                  >
+                                    {prettyAccelerator(shortcutBinding)}
+                                  </kbd>
+                                ) : null}
+                                {working ? <ChatActivityIndicator /> : null}
+                              </span>
                             ) : undefined
                           }
                           aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
