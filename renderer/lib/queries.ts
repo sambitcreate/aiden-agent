@@ -23,6 +23,7 @@ import {
   settingsApi,
   shortcutApi,
   skillsApi,
+  telegramApi,
   titleProvidersApi,
   usageApi,
   workspacesApi,
@@ -58,6 +59,7 @@ export const queryKeys = {
   mcpServers: ["mcpServers"] as const,
   mcpPresets: ["mcpPresets"] as const,
   exa: ["exa"] as const,
+  telegram: ["telegram"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
@@ -456,6 +458,10 @@ export function useMcpPresets() {
 
 export function useExaConfig() {
   return useQuery({ queryKey: queryKeys.exa, queryFn: exaApi.get });
+}
+
+export function useTelegramSettings() {
+  return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
 }
 
 export function useEngineStatus(enabled = true) {

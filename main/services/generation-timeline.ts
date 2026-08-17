@@ -6,6 +6,7 @@ import {
   type AgentStepStatus,
   type AgentThinkingStep,
   type AgentToolStep,
+  type GenerationCancellationOrigin,
   type GenerationTimeline,
   type GenerationTimelineStatus,
 } from "../../renderer/shared/generation-timeline.js";
@@ -309,11 +310,17 @@ export class GenerationTimelineProjector {
     this.updateTool(toolCallId, status, true, resultDetails);
   }
 
-  finish(status: Exclude<GenerationTimelineStatus, "running">): GenerationTimeline {
+  finish(
+    status: Exclude<GenerationTimelineStatus, "running">,
+    cancellationOrigin?: GenerationCancellationOrigin,
+  ): GenerationTimeline {
     if (this.timeline.status === "running") {
       const timestamp = this.now();
       this.settleThinking(timestamp);
       this.timeline.status = status;
+      if (status === "cancelled" && cancellationOrigin) {
+        this.timeline.cancellationOrigin = cancellationOrigin;
+      }
       this.timeline.finishedAt = timestamp;
       for (const step of this.timeline.steps) {
         if (

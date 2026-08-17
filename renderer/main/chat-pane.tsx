@@ -288,6 +288,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const decidingApprovalRef = React.useRef<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
+  const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
@@ -307,14 +308,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   chatIdRef.current = chatId;
 
-  // Cancel any in-flight generation when leaving the chat.
+  // Detach only the generation owned by the departing chat. The main process
+  // keeps that operation alive and reconciles its durable terminal state.
   React.useEffect(() => {
+    const departingChatId = chatId;
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       generationIntentRef.current += 1;
-      generationRef.current?.cancel("lifecycle");
-      generationRef.current = null;
+      if (generationChatIdRef.current === departingChatId) {
+        generationRef.current?.cancel("lifecycle");
+        generationRef.current = null;
+        generationChatIdRef.current = null;
+      }
       if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltaRef.current = "";
@@ -616,6 +622,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
+            generationChatIdRef.current = null;
             setCanStopGeneration(false);
             if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
             deltaFrameRef.current = null;
@@ -654,6 +661,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
+              generationChatIdRef.current = null;
               setCanStopGeneration(false);
               if (deltaFrameRef.current !== null) {
                 window.cancelAnimationFrame(deltaFrameRef.current);
@@ -724,6 +732,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         messageTurnId,
       );
       generationRef.current = handle;
+      generationChatIdRef.current = chatId;
       return handle.started;
     },
     [
@@ -819,6 +828,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationIntentRef.current += 1;
     generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
+    generationChatIdRef.current = null;
     if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
     deltaFrameRef.current = null;
     pendingDeltaRef.current = "";

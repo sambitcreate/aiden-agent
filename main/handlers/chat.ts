@@ -3,7 +3,7 @@
 
 import { ipcMain, logger } from "../platform.js";
 import { startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
-import { isExplicitUserStop } from "../services/chat-cancel.js";
+import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
@@ -67,8 +67,21 @@ export function registerChatGenerationHandlers(): void {
     if (!isSafeSubagentIdentifier(streamId)) {
       throw new Error("Invalid chat stream identifier.");
     }
+    const parsedOrigin = parseChatCancelOrigin(origin);
+    if (!parsedOrigin) {
+      throw new Error("Invalid chat cancellation origin.");
+    }
     const owner = chatGenerationOwner(event);
-    if (llmClient.cancel(streamId, owner.documentId) && isExplicitUserStop(origin)) {
+    if (parsedOrigin === "lifecycle") {
+      if (llmClient.detachRenderer(streamId, owner.documentId)) {
+        logger.info("chat", JSON.stringify({ event: "renderer_lifecycle_detached", streamId }));
+      }
+      return;
+    }
+    if (
+      llmClient.cancel(streamId, "user_stop", owner.documentId) &&
+      isExplicitUserStop(parsedOrigin)
+    ) {
       // This structured lifecycle event is intentionally content-free. Besides
       // normal diagnostics, packaged acceptance accepts it only when the
       // renderer identifies the visible Stop control as the cancellation origin.

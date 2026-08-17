@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAssistantSystemPrompt } from "./system-prompt.js";
+import { buildAssistantSystemPrompt, withTelegramAgentContract } from "./system-prompt.js";
 
 const base = {
   settingsSections: ["providers", "appearance"],
@@ -108,6 +108,33 @@ test("adds the [SILENT] contract only for unattended runs", () => {
   const unattended = buildAssistantSystemPrompt({ ...base, unattended: true });
   assert.match(unattended, /\[SILENT\]/u);
   assert.match(unattended, /nothing else/u);
+});
+
+test("Telegram assistant prompts identify the interactive channel without the timer contract", () => {
+  const prompt = buildAssistantSystemPrompt({
+    ...base,
+    surface: "telegram",
+    unattended: false,
+  });
+  assert.match(prompt, /"channel":"telegram"/u);
+  assert.match(prompt, /"interaction":"direct"/u);
+  assert.match(prompt, /paired_owner/u);
+  assert.match(prompt, /not a timer or background notification/u);
+  assert.match(prompt, /\/workspace/u);
+  assert.match(prompt, /telegram_button/u);
+  assert.doesNotMatch(prompt, /Inside this dock/u);
+  assert.doesNotMatch(prompt, /line by itself and nothing else/u);
+});
+
+test("Telegram project prompts disclose file delivery only for a bound workspace", () => {
+  const project = withTelegramAgentContract("Project prompt", { workspaceBound: true });
+  assert.match(project, /folder workspace is selected/u);
+  assert.match(project, /telegram_attach/u);
+  assert.match(project, /regular files inside the selected workspace/u);
+
+  const assistant = withTelegramAgentContract("Assistant prompt", { workspaceBound: false });
+  assert.match(assistant, /No folder workspace is selected/u);
+  assert.match(assistant, /Do not emit telegram_attach directives/u);
 });
 
 test("describes the scoped, approval-gated project automation capability", () => {

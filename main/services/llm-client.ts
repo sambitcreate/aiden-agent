@@ -36,7 +36,11 @@ import {
 } from "./generation-runtime.js";
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { resolveModelRuntime } from "./model-runtime.js";
-import { assistantUsageRecord } from "./usage-accounting.js";
+import {
+  AssistantRequestUsageTracker,
+  assistantUsageRecord,
+  unreportedUsageRecord,
+} from "./usage-accounting.js";
 import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
@@ -77,6 +81,7 @@ import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
+import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -98,6 +103,7 @@ import { startLocalModelLoadMonitor, type LocalModelLoadMonitor } from "./local-
 import { isLocalProviderDeployment } from "../../renderer/shared/provider-deployment.js";
 import {
   buildAssistantSystemPrompt,
+  withTelegramAgentContract,
   withUnattendedAssistantContract,
 } from "./assistant/system-prompt.js";
 import { assistantMcpServerInventory } from "./assistant/mcp-tool.js";
@@ -113,6 +119,7 @@ import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-child-runner.js";
 import { SETTINGS_SECTIONS } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
+import { chatActivityRegistry } from "./chat-activity.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
   subagentsAllowedForGeneration,
@@ -216,6 +223,8 @@ export interface GenerationExecutionOptions {
   turnId?: string;
   /** Fires once the persisted turn has synchronously transferred to generation ownership. */
   onTurnAccepted?: () => void;
+  /** Main-owned interactive delivery surface; renderer starts cannot set this. */
+  interactionSurface?: "telegram";
 }
 
 interface LoadMonitorState {
@@ -230,6 +239,8 @@ interface ActiveGeneration {
   removeOwnerInvalidation: () => void;
   workspaceId?: string;
   cancelRequested: boolean;
+  cancellationOrigin?: GenerationCancellationOrigin;
+  rendererDetached: boolean;
   computerUse?: ComputerUseController;
   completion: Promise<void> | null;
   loadMonitor?: LoadMonitorState;
@@ -247,6 +258,8 @@ const initializing = new Map<
     removeOwnerInvalidation: () => void;
     workspaceId?: string;
     cancelRequested: boolean;
+    cancellationOrigin?: GenerationCancellationOrigin;
+    rendererDetached: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
     loadMonitor?: LoadMonitorState;
@@ -278,10 +291,12 @@ function releaseGenerationSkillReservation(entry: { releaseSkillReservation: () 
 }
 
 function broadcastChatSettled(
+  streamId: string,
   chatId: string,
   workspaceId: string | undefined,
   fallbackWorkspaceId: string | undefined,
 ): void {
+  chatActivityRegistry.settle(streamId);
   const normalizedWorkspaceId = persistedChatWorkspaceId(workspaceId ?? fallbackWorkspaceId);
   if (!isSafeSubagentIdentifier(chatId) || !isSafeSubagentIdentifier(normalizedWorkspaceId)) {
     return;
@@ -642,6 +657,9 @@ async function prepareGeneration(
         : assistantAutomationMode
           ? "assistant-automation"
           : undefined,
+      interactionSurface: options.interactionSurface,
+      allowTelegramDirect:
+        !assistantMode || attendedAssistant || options.interactionSurface === "telegram",
       assistantModelSelection: attendedAssistant ? assistantModelSelection : undefined,
       createSubagentTool: subagentSupervisor
         ? () =>
@@ -746,6 +764,8 @@ export const llmClient = {
       removeOwnerInvalidation: () => {},
       workspaceId: undefined as string | undefined,
       cancelRequested: false,
+      cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
+      rendererDetached: false,
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
       loadMonitor: undefined as LoadMonitorState | undefined,
@@ -766,6 +786,7 @@ export const llmClient = {
             initialization.skillInvocation = skillInvocation;
             initialization.releaseSkillReservation = releaseSkillReservation;
             initializing.set(streamId, initialization);
+            chatActivityRegistry.begin(streamId, params.chatId);
           },
         );
     } catch (error) {
@@ -777,7 +798,7 @@ export const llmClient = {
     }
     options.onTurnAccepted?.();
     initialization.removeOwnerInvalidation = owner.onInvalidated(() => {
-      this.cancel(streamId);
+      this.detachRenderer(streamId, owner.documentId);
     });
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
@@ -838,13 +859,15 @@ export const llmClient = {
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        approvals.releaseStream(streamId);
+        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      approvals.releaseStream(streamId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const {
@@ -923,6 +946,7 @@ export const llmClient = {
         !content.trim() &&
         !reasoning.trim() &&
         finalTimeline.steps.length === 0 &&
+        finalTimeline.status !== "cancelled" &&
         !subagents &&
         !providerFailure
       ) {
@@ -941,7 +965,10 @@ export const llmClient = {
             reasoning: reasoning.trim() ? reasoning : undefined,
             pi: lastAssistantMessage ? storedPiAssistantMessage(lastAssistantMessage) : undefined,
             providerFailure,
-            timeline: finalTimeline.steps.length ? finalTimeline : undefined,
+            timeline:
+              finalTimeline.steps.length || finalTimeline.status === "cancelled"
+                ? finalTimeline
+                : undefined,
             subagents,
           },
           {
@@ -969,6 +996,7 @@ export const llmClient = {
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0 };
+    const requestUsage = new AssistantRequestUsageTracker();
     let activeCompactionStepId: string | undefined;
     let piSession: Awaited<ReturnType<typeof piCompactionSessionStore.openChat>> | undefined;
     let candidate: PiAgentRuntimeHarness | null = null;
@@ -1000,6 +1028,7 @@ export const llmClient = {
               omittedInvalidIdentities: 0,
               truncated: false,
             };
+      const telegramInteractive = options.interactionSurface === "telegram";
       const baseSystemPrompt =
         authoritativeMode === "assistant" || authoritativeMode === "assistant-unattended"
           ? buildAssistantSystemPrompt({
@@ -1010,12 +1039,18 @@ export const llmClient = {
               mcpServerTotal: assistantMcpInventory.totalEnabledServers,
               mcpInventoryTruncated: assistantMcpInventory.truncated,
               mcpOmittedInvalidIdentities: assistantMcpInventory.omittedInvalidIdentities,
-              unattended: authoritativeMode === "assistant-unattended",
+              unattended: authoritativeMode === "assistant-unattended" && !telegramInteractive,
+              surface: telegramInteractive ? "telegram" : "desktop",
             })
           : authoritativeMode === "assistant-automation"
-            ? withUnattendedAssistantContract(
-                await buildSystemPrompt(folderPath, git.branch, permission, false, false),
-              )
+            ? telegramInteractive
+              ? withTelegramAgentContract(
+                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                  { workspaceBound: Boolean(folderPath) },
+                )
+              : withUnattendedAssistantContract(
+                  await buildSystemPrompt(folderPath, git.branch, permission, false, false),
+                )
             : await buildSystemPrompt(
                 folderPath,
                 git.branch,
@@ -1386,6 +1421,7 @@ export const llmClient = {
         switch (event.type) {
           case "message_start":
             if (event.message.role === "assistant") {
+              requestUsage.started();
               currentAssistantTurnHadVisibleText = false;
               currentAssistantTurnHadReasoningDelta = false;
               currentAssistantTurnStart = {
@@ -1433,6 +1469,7 @@ export const llmClient = {
           }
           case "message_end": {
             if (event.message.role === "assistant") {
+              requestUsage.ended();
               lastAssistantMessage = event.message;
               try {
                 await usageStore.record(
@@ -1542,13 +1579,15 @@ export const llmClient = {
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
-        broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+        approvals.releaseStream(streamId);
+        broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      approvals.releaseStream(streamId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
     }
     const agent = candidate;
@@ -1557,7 +1596,8 @@ export const llmClient = {
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, initialization.workspaceId, params.workspaceId);
+      approvals.releaseStream(streamId);
+      broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw new Error("Could not initialize the generation agent.");
     }
     const piJournal = piSession;
@@ -1711,7 +1751,9 @@ export const llmClient = {
       owner,
       removeOwnerInvalidation: initialization.removeOwnerInvalidation,
       workspaceId: initialization.workspaceId,
-      cancelRequested: false,
+      cancelRequested: initialization.cancelRequested,
+      cancellationOrigin: initialization.cancellationOrigin,
+      rendererDetached: initialization.rendererDetached,
       computerUse,
       completion: null,
       loadMonitor: initialization.loadMonitor,
@@ -1739,7 +1781,8 @@ export const llmClient = {
       releaseGenerationSkillReservation(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();
-      broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+      approvals.releaseStream(streamId);
+      broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
       return false;
     }
 
@@ -1789,6 +1832,27 @@ export const llmClient = {
         lastAssistantMessage = runtimeOutcome.finalMessage ?? lastAssistantMessage;
         const wasCancelled =
           runtimeOutcome.kind === "app_cancelled" || activeGeneration.cancelRequested;
+        if (wasCancelled && requestUsage.takeUnreportedCancellation()) {
+          try {
+            await usageStore.record(
+              unreportedUsageRecord({
+                source: options.usageSource ?? "chat",
+                providerId: runtime.provider.id,
+                providerLabel: runtime.provider.label,
+                modelId: model.id,
+                modelLabel: model.name,
+                local: isLocalProviderDeployment(runtime.provider),
+                status: "cancelled",
+              }),
+            );
+          } catch (error) {
+            logger.warn(
+              "usage",
+              `Could not record cancelled provider request for stream ${streamId}.`,
+              error,
+            );
+          }
+        }
         const finalError =
           runtimeOutcome.kind === "provider_failed"
             ? runtimeOutcome.reason === "output-limit"
@@ -1847,7 +1911,10 @@ export const llmClient = {
         } else {
           // Covers both normal completion and user abort (partial `full`).
           const finalTimeline = attachClaimCheck(
-            timeline.finish(wasCancelled ? "cancelled" : "completed"),
+            timeline.finish(
+              wasCancelled ? "cancelled" : "completed",
+              wasCancelled ? activeGeneration.cancellationOrigin : undefined,
+            ),
             full,
           );
           const persisted = await persistAssistant(full, reasoning, finalTimeline);
@@ -1895,7 +1962,8 @@ export const llmClient = {
           releaseGenerationSkillReservation(activeGeneration);
           active.delete(streamId);
           activeGeneration.removeOwnerInvalidation();
-          broadcastChatSettled(params.chatId, activeGeneration.workspaceId, params.workspaceId);
+          approvals.releaseStream(streamId);
+          broadcastChatSettled(streamId, params.chatId, activeGeneration.workspaceId, params.workspaceId);
         }
       }
     })();
@@ -1909,27 +1977,61 @@ export const llmClient = {
     return approvals.decide(approvalId, decision === "allow", ownerDocumentId);
   },
 
-  cancel(streamId: string, ownerDocumentId?: string): boolean {
+  /**
+   * Release renderer-owned interaction surfaces without stopping the
+   * main-owned model operation. Terminal chat state is reconciled by the
+   * detached-stream listener in the renderer shell.
+   */
+  detachRenderer(streamId: string, ownerDocumentId?: string): boolean {
     const initialization = initializing.get(streamId);
     const generation = active.get(streamId);
     const owner = initialization?.owner ?? generation?.owner;
     if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
+    if (initialization?.rendererDetached || generation?.rendererDetached) {
+      return false;
+    }
+    if (initialization) initialization.rendererDetached = true;
+    if (generation) generation.rendererDetached = true;
+    const runtimeOwner = generation ?? initialization;
+    if (!runtimeOwner) return false;
+    endLoadMonitor(runtimeOwner, streamId, false);
+    void runtimeOwner.computerUse?.close();
+    approvals.detachStream(streamId);
+    logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);
+    return true;
+  },
+
+  cancel(
+    streamId: string,
+    origin: GenerationCancellationOrigin,
+    ownerDocumentId?: string,
+  ): boolean {
+    const initialization = initializing.get(streamId);
+    const generation = active.get(streamId);
+    const owner = initialization?.owner ?? generation?.owner;
+    if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
+      return false;
+    }
+    if (initialization?.cancelRequested || generation?.cancelRequested) return false;
     if (initialization) {
       initialization.cancelRequested = true;
+      initialization.cancellationOrigin = origin;
       initialization.controller.abort(new Error("Chat initialization cancelled."));
       endLoadMonitor(initialization, streamId, false);
       void initialization.computerUse?.close();
     }
     if (generation) {
       generation.cancelRequested = true;
+      generation.cancellationOrigin = origin;
       generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       void generation.computerUse?.close();
     }
     subagentRuntimeRegistry.abortGeneration(streamId);
     approvals.cancelStream(streamId);
+    logger.info("pi", `Generation ${streamId} cancellation requested (${origin}).`);
     return true;
   },
 
@@ -1971,10 +2073,10 @@ export const llmClient = {
   /** Stop and drain foreground work before cross-store chat deletion begins. */
   async cancelChat(chatId: string): Promise<void> {
     for (const [streamId, entry] of [...initializing.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId);
+      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
     }
     for (const [streamId, entry] of [...active.entries()]) {
-      if (entry.chatId === chatId) this.cancel(streamId);
+      if (entry.chatId === chatId) this.cancel(streamId, "chat_deletion");
     }
     subagentRuntimeRegistry.abortChat(chatId);
     const deadline = Date.now() + CHAT_CANCEL_SETTLEMENT_GRACE_MS;
@@ -2061,7 +2163,7 @@ export const llmClient = {
       ...activatedComputerUseStreamIds(active),
     ]);
     for (const streamId of activated) {
-      this.cancel(streamId);
+      this.cancel(streamId, "computer_use_disabled");
     }
   },
 
@@ -2072,7 +2174,7 @@ export const llmClient = {
       initializations: () => initializing,
       active: () => active,
       cancel: (streamId) => {
-        this.cancel(streamId);
+        this.cancel(streamId, "workspace_authority_change");
       },
       abortChildren: (targetWorkspaceId) => {
         subagentRuntimeRegistry.abortWorkspace(targetWorkspaceId);
@@ -2087,8 +2189,8 @@ export const llmClient = {
 
   abortAll(): void {
     chatTurnAdmission.releaseAll();
-    for (const [streamId] of initializing) this.cancel(streamId);
-    for (const [streamId] of active) this.cancel(streamId);
+    for (const [streamId] of initializing) this.cancel(streamId, "application_shutdown");
+    for (const [streamId] of active) this.cancel(streamId, "application_shutdown");
     approvals.shutdown();
   },
 

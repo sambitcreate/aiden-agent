@@ -30,6 +30,7 @@ const featureAssetPaths = [
   "features/terminal.png",
   "features/themes-accessibility.png",
   "features/thinking-controls.png",
+  "features/telegram-remote-control.png",
   "features/usage-profile.png",
   "features/voice-dictation.png",
   "features/web-search.png",
@@ -265,16 +266,18 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     "Private Usage Profile",
     "Permissioned by Default",
     "Themes & Accessibility",
+    "Aiden in Telegram",
   ]) {
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 22);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 23);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 22);
+  assert.equal(featureAssetPaths.length, 23);
+  assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
   assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
   for (const assetPath of featureAssetPaths) {
     const illustration = readFileSync(

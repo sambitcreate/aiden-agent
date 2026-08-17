@@ -610,3 +610,11 @@ test("history flush falls back to one flush per active workspace", async () => {
   await service.flushHistory();
   assert.deepEqual(flushed.sort(), ["workspace-1", "workspace-2"]);
 });
+
+test("history flush is a no-op before a history store is installed", async () => {
+  const service = new TerminalService({
+    prepareSpawnHelper: async () => undefined,
+  });
+
+  await assert.doesNotReject(service.flushHistory());
+});
