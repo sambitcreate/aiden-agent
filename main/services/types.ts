@@ -249,6 +249,8 @@ export interface ChatMeta {
   title: string;
   /** Workspace this chat belongs to. */
   workspaceId?: string;
+  /** Main-owned reusable bot identity; absent for ordinary and Assistant chats. */
+  botId?: string;
   providerId?: string;
   model?: string;
   createdAt: number;
