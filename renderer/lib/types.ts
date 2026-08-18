@@ -11,6 +11,7 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
+export type { BotDefinition } from "../shared/bots";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -475,6 +476,7 @@ export interface ChatMeta {
   id: string;
   title: string;
   workspaceId?: string;
+  botId?: string;
   providerId?: string;
   model?: string;
   createdAt: number;
