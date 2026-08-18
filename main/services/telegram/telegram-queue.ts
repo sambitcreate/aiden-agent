@@ -17,6 +17,27 @@ export type QueueLane = "control" | "priority" | "default";
 
 import type { Attachment } from "../types.js";
 
+/**
+ * Immutable routing identity captured when a Telegram update is accepted.
+ *
+ * A binding is deliberately a transport concern rather than a renderer
+ * parameter.  The backing chat is supplied by the main-owned binding store so
+ * a later rebind cannot retarget a prompt that is already in this queue.
+ */
+export interface TelegramBotBinding {
+  readonly botId: string;
+  readonly profile: string;
+  readonly chatId: number;
+  readonly threadId?: number;
+  readonly ownerUserId: number;
+  readonly workspaceId: string;
+  readonly backingChatId: string;
+  readonly enabled?: boolean;
+}
+
+/** Alias that makes the snapshot semantics explicit at call sites. */
+export type TelegramBotBindingSnapshot = TelegramBotBinding;
+
 export interface QueuedTelegramTurn {
   /** Process-local opaque id used by Telegram queue controls. */
   readonly id?: number;
@@ -34,6 +55,8 @@ export interface QueuedTelegramTurn {
   /** Workspace selection captured when the prompt was accepted. */
   readonly workspaceId?: string;
   readonly hasVoiceInput?: boolean;
+  /** Exact Telegram-to-bot route captured before this prompt entered the queue. */
+  readonly binding?: TelegramBotBindingSnapshot;
 }
 
 export interface TelegramQueueDependencies {
@@ -108,11 +131,24 @@ export function createTelegramQueue(deps: TelegramQueueDependencies) {
     return list().find((turn) => turn.id === id);
   }
 
-  function findBySource(chatId: number, messageId: number, threadId?: number): QueuedTelegramTurn | undefined {
+  function findBySource(
+    chatId: number,
+    messageId: number,
+    threadId?: number,
+    binding?: TelegramBotBindingSnapshot,
+  ): QueuedTelegramTurn | undefined {
     return list().find((turn) =>
       turn.chatId === chatId &&
       turn.sourceMessageId === messageId &&
-      turn.threadId === threadId
+      turn.threadId === threadId &&
+      (binding === undefined
+        ? turn.binding === undefined
+        : turn.binding?.botId === binding.botId &&
+          turn.binding.profile === binding.profile &&
+          turn.binding.chatId === binding.chatId &&
+          turn.binding.threadId === binding.threadId &&
+          turn.binding.ownerUserId === binding.ownerUserId &&
+          turn.binding.backingChatId === binding.backingChatId)
     );
   }
 
@@ -156,7 +192,12 @@ export interface TelegramQueue {
   clear(): void;
   list(): readonly QueuedTelegramTurn[];
   find(id: number): QueuedTelegramTurn | undefined;
-  findBySource(chatId: number, messageId: number, threadId?: number): QueuedTelegramTurn | undefined;
+  findBySource(
+    chatId: number,
+    messageId: number,
+    threadId?: number,
+    binding?: TelegramBotBindingSnapshot,
+  ): QueuedTelegramTurn | undefined;
   remove(id: number): QueuedTelegramTurn | undefined;
   replace(id: number, replacement: QueuedTelegramTurn): boolean;
   setPriority(id: number, enabled: boolean): boolean;
