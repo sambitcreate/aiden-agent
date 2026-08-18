@@ -4,7 +4,11 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { markPiRuntimePrivateFailure, piRuntimePrivateFailure } from "../pi-runtime-failure.js";
+import {
+  markPiRuntimePrivateFailure,
+  piRuntimePrivateDiagnostic,
+  piRuntimePrivateFailure,
+} from "../pi-runtime-failure.js";
 import {
   type KillableInferenceProcess,
   SubagentInferenceProcessOwner,
@@ -121,6 +125,12 @@ class StubbornProcess extends FakeProcess {
   }
 }
 
+class DiagnosticProcess extends FakeProcess {
+  startupDiagnostic(): string {
+    return "AIDEN_SUBAGENT_BOOTSTRAP_FAILURE Error: missing runtime";
+  }
+}
+
 class AckThrowProcess extends FakeProcess {
   override postMessage(message: unknown): void {
     if ((message as { kind?: unknown }).kind === "terminal-ack") {
@@ -168,11 +178,78 @@ test("worker protocol rejects unknown fields and malformed sequences", () => {
     message: "failed",
   };
   assert.equal(isSubagentInferenceWorkerMessage(valid), true);
+  assert.equal(
+    isSubagentInferenceWorkerMessage({ ...valid, providerFailureCategory: "network" }),
+    false,
+  );
   assert.equal(isSubagentInferenceWorkerMessage({ ...valid, secret: "leak" }), false);
+  assert.equal(
+    isSubagentInferenceWorkerMessage({
+      kind: "event",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: "r",
+      sequence: 0,
+      event: { type: "error", reason: "error", error: assistantError() },
+      providerFailureCategory: "rate_limit",
+    }),
+    true,
+  );
+  assert.equal(
+    isSubagentInferenceWorkerMessage({
+      kind: "event",
+      version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+      requestId: "r",
+      sequence: 0,
+      event: { type: "error", reason: "error", error: assistantError() },
+      providerFailureCategory: "raw-provider-message",
+    }),
+    false,
+  );
   assert.equal(
     isSubagentInferenceWorkerMessage({ ...valid, kind: "event", sequence: -1, event: {} }),
     false,
   );
+});
+
+test("worker catch failures remain private host failures without provider classification", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  let providerFailureCategory: string | undefined;
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, {
+      model,
+      onTerminal: (_message, metadata) => {
+        providerFailureCategory = metadata.providerFailureCategory;
+      },
+    })) {
+      events.push(event);
+    }
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "failure",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    message: "The isolated provider request failed.",
+  });
+
+  const events = await eventsPromise;
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference",
+  );
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateDiagnostic(terminal.error)?.code : undefined,
+    "worker_fatal",
+  );
+  assert.equal(providerFailureCategory, undefined);
 });
 
 test("worker subprocess lockdown updates later ESM named imports", () => {
@@ -363,7 +440,7 @@ test("an unverified launch never receives provider request data", async () => {
 });
 
 test("only a nonzero zero-activity worker exit carries private startup provenance", async () => {
-  const child = new FakeProcess();
+  const child = new DiagnosticProcess();
   const owner = new SubagentInferenceProcessOwner(async () => child, {
     termGraceMs: 2,
     killGraceMs: 2,
@@ -384,6 +461,13 @@ test("only a nonzero zero-activity worker exit carries private startup provenanc
     "inference-startup",
   );
   assert.equal(JSON.stringify(terminal).includes("inference-startup"), false);
+  const diagnostic =
+    terminal?.type === "error" ? piRuntimePrivateDiagnostic(terminal.error) : undefined;
+  assert.equal(diagnostic?.stage, "bootstrap");
+  assert.equal(diagnostic?.code, "pre_ready_exit");
+  assert.equal(diagnostic?.exitCode, 9);
+  assert.equal(diagnostic?.detail, "AIDEN_SUBAGENT_BOOTSTRAP_FAILURE Error: missing runtime");
+  assert.equal(typeof diagnostic?.durationMs, "number");
 });
 
 test("a clean zero-activity worker exit is never retryable startup evidence", async () => {
@@ -501,7 +585,11 @@ test("protocol and main-owned hook faults carry closed host provenance", async (
 
 test("startup retry is bounded to four zero-activity launches and emits only the final error", async () => {
   let launches = 0;
-  const privateFailures: string[] = [];
+  const privateFailures: Array<{
+    failure: string;
+    attempts: number;
+    diagnostics: readonly unknown[];
+  }> = [];
   const stream = withZeroActivityStartupRetry(
     model,
     () => {
@@ -511,14 +599,16 @@ test("startup retry is bounded to four zero-activity launches and emits only the
     undefined,
     true,
     [0, 0, 0],
-    (failure) => privateFailures.push(failure),
+    (report) => privateFailures.push(report),
   );
   const events = [];
   for await (const event of stream) events.push(event);
   assert.equal(launches, 4);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.type, "error");
-  assert.deepEqual(privateFailures, ["inference-startup"]);
+  assert.deepEqual(privateFailures, [
+    { failure: "inference-startup", attempts: 4, diagnostics: [] },
+  ]);
 });
 
 test("startup retry never repeats after model activity", async () => {
@@ -574,6 +664,36 @@ test("cancellation owns startup retry backoff", async () => {
   const terminal = events[events.length - 1];
   assert.equal(terminal?.type, "error");
   if (terminal?.type === "error") assert.equal(terminal.reason, "aborted");
+});
+
+test("startup wrapper exceptions retain closed host diagnostics", async () => {
+  const reports: Array<{
+    failure: string;
+    attempts: number;
+    diagnostics: readonly { code: string; detail?: string }[];
+  }> = [];
+  const stream = withZeroActivityStartupRetry(
+    model,
+    () => {
+      throw new Error("private wrapper detail");
+    },
+    undefined,
+    true,
+    [0, 0, 0],
+    (report) => reports.push(report),
+  );
+  const events = [];
+  for await (const event of stream) events.push(event);
+  const terminal = events[events.length - 1];
+  assert.equal(terminal?.type, "error");
+  assert.equal(
+    terminal?.type === "error" ? piRuntimePrivateFailure(terminal.error) : undefined,
+    "inference",
+  );
+  assert.equal(JSON.stringify(events).includes("private wrapper detail"), false);
+  assert.equal(reports[0]?.attempts, 1);
+  assert.equal(reports[0]?.diagnostics[0]?.code, "unknown");
+  assert.equal(reports[0]?.diagnostics[0]?.detail, "private wrapper detail");
 });
 
 test("a provider terminal frame racing cancellation cannot become success", async () => {
@@ -662,13 +782,19 @@ test("indeterminate exit verification fails closed", async () => {
   assert.equal(cleanupFailures, 1);
 });
 
-test("terminal acknowledgement failures become a bounded provider error", async () => {
+test("terminal acknowledgement failures clear stale provider classification", async () => {
   const child = new AckThrowProcess();
   const owner = new SubagentInferenceProcessOwner(async () => child, {
     termGraceMs: 2,
     killGraceMs: 2,
   });
-  const stream = owner.stream(request, { model });
+  let providerFailureCategory: string | undefined;
+  const stream = owner.stream(request, {
+    model,
+    onTerminal: (_message, metadata) => {
+      providerFailureCategory = metadata.providerFailureCategory;
+    },
+  });
   const eventsPromise = (async () => {
     const seen = [];
     for await (const event of stream) seen.push(event);
@@ -680,6 +806,7 @@ test("terminal acknowledgement failures become a bounded provider error", async 
     version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
     requestId: request.requestId,
     sequence: 0,
+    providerFailureCategory: "rate_limit",
     event: {
       type: "done",
       reason: "stop",
@@ -705,6 +832,11 @@ test("terminal acknowledgement failures become a bounded provider error", async 
   const events = await eventsPromise;
   assert.equal(events.length, 1);
   assert.equal(events[0]?.type, "error");
+  assert.equal(
+    events[0]?.type === "error" ? piRuntimePrivateFailure(events[0].error) : undefined,
+    "inference",
+  );
+  assert.equal(providerFailureCategory, undefined);
 });
 
 test("terminal provider event is delivered only through an exited owned process", async () => {
@@ -771,6 +903,41 @@ test("terminal provider event is delivered only through an exited owned process"
   assert.equal(events[0]?.type, "done");
   assert.equal(child.terminations, 0);
   assert.equal(child.hardKills, 0);
+});
+
+test("closed provider failure categories reach only the main-owned terminal hook", async () => {
+  const child = new FakeProcess();
+  const owner = new SubagentInferenceProcessOwner(async () => child, {
+    termGraceMs: 2,
+    killGraceMs: 2,
+  });
+  let providerFailureCategory: string | undefined;
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of owner.stream(request, {
+      model,
+      onTerminal: (_message, metadata) => {
+        providerFailureCategory = metadata.providerFailureCategory;
+      },
+    })) {
+      events.push(event);
+    }
+    return events;
+  })();
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("message", {
+    kind: "event",
+    version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
+    requestId: request.requestId,
+    sequence: 0,
+    providerFailureCategory: "rate_limit",
+    event: { type: "error", reason: "error", error: assistantError() },
+  });
+
+  const events = await eventsPromise;
+  assert.equal(events[events.length - 1]?.type, "error");
+  assert.equal(providerFailureCategory, "rate_limit");
+  assert.doesNotMatch(JSON.stringify(events), /rate_limit/u);
 });
 
 test("a worker that lingers after terminal ACK is still terminated and verified", async () => {

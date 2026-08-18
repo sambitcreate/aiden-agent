@@ -19,7 +19,12 @@ import {
 import { OPENAI_CODEX_PROVIDER_ID } from "../codex-provider.js";
 import { writeDevLog } from "../dev-log.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
-import { piRuntimePrivateFailure, type PiRuntimePrivateFailure } from "../pi-runtime-failure.js";
+import {
+  markPiRuntimePrivateFailure,
+  piRuntimePrivateDiagnostic,
+  piRuntimePrivateFailure,
+  type PiRuntimePrivateFailure,
+} from "../pi-runtime-failure.js";
 import {
   type KillableInferenceProcess,
   SubagentInferenceProcessOwner,
@@ -33,6 +38,12 @@ import {
   SUBAGENT_STARTUP_RETRY_DELAYS_MS,
   waitForSubagentStartupRetry,
 } from "./subagent-startup-retry.js";
+import {
+  BoundedSubagentDiagnosticCapture,
+  createSubagentDiagnosticId,
+  type SubagentProcessDiagnostic,
+  writeSubagentRuntimeFailure,
+} from "./subagent-runtime-diagnostics.js";
 
 function mergeHeaders(
   base: ProviderHeaders | undefined,
@@ -72,17 +83,28 @@ export function withZeroActivityStartupRetry(
   signal: AbortSignal | undefined,
   enabled: boolean,
   retryDelays: readonly number[] = SUBAGENT_STARTUP_RETRY_DELAYS_MS,
-  onPrivateFailure?: (failure: PiRuntimePrivateFailure) => void,
+  onPrivateFailure?: (report: {
+    failure: PiRuntimePrivateFailure;
+    attempts: number;
+    diagnostics: readonly SubagentProcessDiagnostic[];
+  }) => void,
 ): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
+  const diagnostics: SubagentProcessDiagnostic[] = [];
+  let attempts = 0;
   void (async () => {
     for (let attempt = 0; ; attempt += 1) {
+      attempts = attempt + 1;
       let observedModelActivity = false;
       let retry = false;
       let sawTerminal = false;
       for await (const event of createAttempt()) {
         if (event.type === "done" || event.type === "error") {
           sawTerminal = true;
+          if (event.type === "error") {
+            const diagnostic = piRuntimePrivateDiagnostic(event.error);
+            if (diagnostic) diagnostics.push(diagnostic);
+          }
           retry =
             enabled &&
             event.type === "error" &&
@@ -94,7 +116,13 @@ export function withZeroActivityStartupRetry(
           if (!retry) {
             if (event.type === "error") {
               const privateFailure = piRuntimePrivateFailure(event.error);
-              if (privateFailure) onPrivateFailure?.(privateFailure);
+              if (privateFailure) {
+                onPrivateFailure?.({
+                  failure: privateFailure,
+                  attempts: attempt + 1,
+                  diagnostics,
+                });
+              }
             }
             output.push(event);
             return;
@@ -119,9 +147,23 @@ export function withZeroActivityStartupRetry(
         return;
       }
     }
-  })().catch(() => {
+  })().catch((caught: unknown) => {
     const reason = signal?.aborted ? "aborted" : "error";
     const error = closedInferenceError(model, reason);
+    if (reason === "error") {
+      const diagnostic: SubagentProcessDiagnostic = {
+        stage: "runtime",
+        code: "unknown",
+        detail: caught instanceof Error ? caught.message : undefined,
+      };
+      diagnostics.push(diagnostic);
+      markPiRuntimePrivateFailure(error, "inference", diagnostic);
+      onPrivateFailure?.({
+        failure: "inference",
+        attempts: Math.max(1, attempts),
+        diagnostics,
+      });
+    }
     output.push({ type: "error", reason, error });
   });
   return output;
@@ -131,6 +173,7 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
   private exited: boolean;
   private launchIdentity: string | undefined;
   private launchError: Error | undefined;
+  private readonly startupStderr = new BoundedSubagentDiagnosticCapture();
 
   constructor(
     private readonly child: UtilityProcess,
@@ -148,6 +191,15 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
         this.launchIdentity = identity.identity;
       }
     });
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      this.startupStderr.append(chunk);
+    });
+    // UtilityProcess pipes stdout and stderr together. Always drain stdout so
+    // a noisy provider dependency cannot fill the pipe and stall settlement.
+    child.stdout?.on("data", () => {});
+    // Continue draining stderr after readiness, but retain nothing that could
+    // be emitted during a provider request.
+    child.once("message", () => this.startupStderr.stop());
     child.once("exit", () => {
       this.exited = true;
     });
@@ -231,6 +283,10 @@ class ElectronInferenceProcess implements KillableInferenceProcess {
     this.child.on("error", handler);
     return () => this.child.off("error", handler);
   }
+
+  startupDiagnostic(): string | undefined {
+    return this.startupStderr.text() ?? this.launchError?.message;
+  }
 }
 
 type OwnedProcessIdentityResult =
@@ -275,7 +331,7 @@ async function launchElectronInferenceProcess(
   const launchNonce = randomUUID();
   const child = utilityProcess.fork(entry, [`--aiden-inference-owner=${launchNonce}`], {
     serviceName: "Aiden Subagent Inference",
-    stdio: "ignore",
+    stdio: "pipe",
     env: {
       NODE_ENV: process.env.NODE_ENV ?? "production",
       LANG: process.env.LANG ?? "en_US.UTF-8",
@@ -403,8 +459,17 @@ export function ambientProviderEnv(
 }
 
 export interface SubagentInferenceIsolation {
-  wrap(runtime: ResolvedModelRuntime): ResolvedModelRuntime;
+  wrap(
+    runtime: ResolvedModelRuntime,
+    context?: SubagentInferenceDiagnosticContext,
+  ): ResolvedModelRuntime;
   shutdown(): Promise<boolean>;
+}
+
+export interface SubagentInferenceDiagnosticContext {
+  runId: string;
+  generationId: string;
+  childId: string;
 }
 
 /**
@@ -424,7 +489,10 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
     },
   );
 
-  wrap(runtime: ResolvedModelRuntime): ResolvedModelRuntime {
+  wrap(
+    runtime: ResolvedModelRuntime,
+    diagnosticContext?: SubagentInferenceDiagnosticContext,
+  ): ResolvedModelRuntime {
     let firstIsolatedRequest = true;
     let pendingHostFailure: "inference" | "policy" | undefined;
     const isolatedStreamSimple = (
@@ -436,6 +504,7 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
       const startupRetryEnabled = firstIsolatedRequest;
       firstIsolatedRequest = false;
       return lazyStream(model, async () => {
+        const diagnosticId = createSubagentDiagnosticId();
         let requestModel: Model<Api>;
         let requestOptions: ModelsSimpleStreamOptions;
         let leaseSignal: AbortSignal | undefined;
@@ -448,10 +517,7 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
           }
           const lease = await runtime.prepareIsolatedStream(model, options);
           requestModel = lease.model;
-          const allowedEnv = ambientProviderEnv(
-            model.provider,
-            lease.options.env,
-          );
+          const allowedEnv = ambientProviderEnv(model.provider, lease.options.env);
           requestOptions = {
             ...lease.options,
             env: Object.keys(allowedEnv).length > 0 ? allowedEnv : undefined,
@@ -514,15 +580,67 @@ export class ElectronSubagentInferenceIsolation implements SubagentInferenceIsol
                 model: requestModel,
                 onPayload: requestOptions.onPayload,
                 onResponse: requestOptions.onResponse,
-                onTerminal: (message, metadata) => observeResult?.(message, metadata),
+                onTerminal: (message, metadata) => {
+                  try {
+                    observeResult?.(message, metadata);
+                  } finally {
+                    if (metadata.providerFailureCategory) {
+                      const record = {
+                        diagnosticId,
+                        ...diagnosticContext,
+                        providerId: requestModel.provider,
+                        modelId: requestModel.id,
+                        failure: "provider",
+                        attempts: 1,
+                        diagnostics: [
+                          {
+                            stage: "provider",
+                            code: "provider_failure",
+                            providerCategory: metadata.providerFailureCategory,
+                          },
+                        ],
+                      } as const;
+                      writeSubagentRuntimeFailure(record);
+                      writeDevLog("error", "subagents", [
+                        "Subagent provider request failed.",
+                        {
+                          diagnosticId,
+                          category: metadata.providerFailureCategory,
+                        },
+                      ]);
+                    }
+                  }
+                },
               },
               requestSignal,
             ),
           requestSignal,
           startupRetryEnabled,
           SUBAGENT_STARTUP_RETRY_DELAYS_MS,
-          (failure) => {
-            pendingHostFailure = failure === "policy" ? "policy" : "inference";
+          (report) => {
+            pendingHostFailure = report.failure === "policy" ? "policy" : "inference";
+            const record = {
+              diagnosticId,
+              ...diagnosticContext,
+              providerId: requestModel.provider,
+              modelId: requestModel.id,
+              failure: report.failure,
+              attempts: report.attempts,
+              diagnostics: report.diagnostics,
+            } as const;
+            writeSubagentRuntimeFailure(record);
+            const last = report.diagnostics[report.diagnostics.length - 1];
+            writeDevLog("error", "subagents", [
+              "Subagent inference failed.",
+              {
+                diagnosticId,
+                failure: report.failure,
+                attempts: report.attempts,
+                stage: last?.stage ?? "runtime",
+                code: last?.code ?? "unknown",
+                exitCode: last?.exitCode,
+              },
+            ]);
           },
         );
       });

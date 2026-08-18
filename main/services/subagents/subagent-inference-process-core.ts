@@ -9,6 +9,8 @@ import type {
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { markPiRuntimePrivateFailure } from "../pi-runtime-failure.js";
 import { MAX_SUBAGENT_STARTUP_FAILURE_DURATION_MS } from "./subagent-startup-retry.js";
+import type { SubagentProcessDiagnostic } from "./subagent-runtime-diagnostics.js";
+import type { ProviderFailureCategoryV1 } from "../../../renderer/shared/provider-failure.js";
 import type {
   SubagentInferenceStartMessage,
   SubagentInferenceWorkerMessage,
@@ -36,6 +38,8 @@ export interface KillableInferenceProcess {
   onMessage(listener: (message: unknown) => void): () => void;
   onExit(listener: (code: number | null) => void): () => void;
   onError(listener: (error: Error) => void): () => void;
+  /** Bounded, pre-ready process evidence; never exposed outside main. */
+  startupDiagnostic?(): string | undefined;
 }
 
 export type LaunchInferenceProcess = (
@@ -47,7 +51,13 @@ export interface SubagentInferenceHooks {
   model: Model<Api>;
   onPayload?: SimpleStreamOptions["onPayload"];
   onResponse?: SimpleStreamOptions["onResponse"];
-  onTerminal?: (message: AssistantMessage, metadata: { authenticationFailure: boolean }) => void;
+  onTerminal?: (
+    message: AssistantMessage,
+    metadata: {
+      authenticationFailure: boolean;
+      providerFailureCategory?: ProviderFailureCategoryV1;
+    },
+  ) => void;
 }
 
 function delay(ms: number): Promise<void> {
@@ -97,6 +107,7 @@ export class SubagentInferenceProcessOwner {
     let terminal = false;
     let terminalEvent: import("@earendil-works/pi-ai").AssistantMessageEvent | undefined;
     let terminalAuthenticationFailure = false;
+    let terminalProviderFailureCategory: ProviderFailureCategoryV1 | undefined;
     let expectedSequence = 0;
     let partialMessage: AssistantMessage | undefined;
     let wireBytes = 0;
@@ -145,6 +156,7 @@ export class SubagentInferenceProcessOwner {
       message: string,
       reason: "aborted" | "error",
       privateFailure?: "inference-startup" | "inference" | "policy",
+      diagnostic?: SubagentProcessDiagnostic,
     ) => {
       terminal = true;
       const error: AssistantMessage = {
@@ -168,15 +180,22 @@ export class SubagentInferenceProcessOwner {
       terminalEvent = {
         type: "error",
         reason,
-        error: privateFailure ? markPiRuntimePrivateFailure(error, privateFailure) : error,
+        error: privateFailure
+          ? markPiRuntimePrivateFailure(error, privateFailure, diagnostic)
+          : error,
       };
     };
-    const fail = (message: string, privateFailure?: "inference" | "policy") => {
+    const fail = (
+      message: string,
+      privateFailure?: "inference" | "policy",
+      diagnostic?: SubagentProcessDiagnostic,
+    ) => {
       if (terminal) return;
       setFailure(
         message,
         signal?.aborted ? "aborted" : "error",
         signal?.aborted ? undefined : privateFailure,
+        signal?.aborted ? undefined : diagnostic,
       );
     };
     let stopping: Promise<void> | undefined;
@@ -208,7 +227,12 @@ export class SubagentInferenceProcessOwner {
           finishExit();
         }),
         process.onError((error) => {
-          fail(error.message, "inference");
+          fail(error.message, "inference", {
+            stage: workerMessageObserved ? "runtime" : "bootstrap",
+            code: "worker_fatal",
+            durationMs: performance.now() - startedAt,
+            detail: process?.startupDiagnostic?.() ?? error.message,
+          });
           void stopOwnedProcess();
         }),
         process.onMessage((raw) => {
@@ -218,7 +242,11 @@ export class SubagentInferenceProcessOwner {
           if (signal?.aborted || terminal) return;
           workerMessageObserved = true;
           if (!isSubagentInferenceWorkerMessage(raw) || raw.requestId !== request.requestId) {
-            fail("The isolated subagent inference process sent an invalid message.", "inference");
+            fail("The isolated subagent inference process sent an invalid message.", "inference", {
+              stage: "protocol",
+              code: "invalid_message",
+              durationMs: performance.now() - startedAt,
+            });
             void stopOwnedProcess();
             return;
           }
@@ -230,7 +258,11 @@ export class SubagentInferenceProcessOwner {
             return;
           }
           if (wireBytes > MAX_SUBAGENT_INFERENCE_MESSAGE_BYTES) {
-            fail("The isolated subagent inference stream exceeded its IPC budget.", "inference");
+            fail("The isolated subagent inference stream exceeded its IPC budget.", "inference", {
+              stage: "protocol",
+              code: "ipc_budget_exceeded",
+              durationMs: performance.now() - startedAt,
+            });
             void stopOwnedProcess();
             return;
           }
@@ -245,13 +277,22 @@ export class SubagentInferenceProcessOwner {
               outboundBudget.consume(acknowledgement);
               process?.postMessage(acknowledgement);
             } catch {
-              fail("The isolated inference readiness acknowledgement failed.", "inference");
+              fail("The isolated inference readiness acknowledgement failed.", "inference", {
+                stage: "protocol",
+                code: "readiness_ack_failed",
+                durationMs: performance.now() - startedAt,
+              });
               void stopOwnedProcess();
             }
             return;
           }
           if (message.kind === "failure") {
-            fail(message.message);
+            terminalProviderFailureCategory = undefined;
+            fail(message.message, "inference", {
+              stage: "runtime",
+              code: "worker_fatal",
+              durationMs: performance.now() - startedAt,
+            });
             try {
               const acknowledgement = {
                 kind: "terminal-ack",
@@ -264,6 +305,11 @@ export class SubagentInferenceProcessOwner {
                 "The isolated inference terminal acknowledgement failed.",
                 "error",
                 "inference",
+                {
+                  stage: "protocol",
+                  code: "terminal_ack_failed",
+                  durationMs: performance.now() - startedAt,
+                },
               );
             }
             // A terminal frame is not process-settlement proof. Own the child
@@ -293,13 +339,21 @@ export class SubagentInferenceProcessOwner {
               outboundBudget.consume(reply);
               process?.postMessage(reply);
             })().catch(() => {
-              fail("A main-owned provider hook failed.", "policy");
+              fail("A main-owned provider hook failed.", "policy", {
+                stage: "provider_hook",
+                code: "provider_hook_failed",
+                durationMs: performance.now() - startedAt,
+              });
               void stopOwnedProcess();
             });
             return;
           }
           if (message.sequence !== expectedSequence++) {
-            fail("The isolated subagent inference stream was out of sequence.", "inference");
+            fail("The isolated subagent inference stream was out of sequence.", "inference", {
+              stage: "protocol",
+              code: "invalid_message",
+              durationMs: performance.now() - startedAt,
+            });
             void terminate();
             return;
           }
@@ -309,7 +363,11 @@ export class SubagentInferenceProcessOwner {
             event = expanded.event;
             partialMessage = expanded.partial;
           } catch {
-            fail("The isolated provider stream could not be reconstructed.", "inference");
+            fail("The isolated provider stream could not be reconstructed.", "inference", {
+              stage: "protocol",
+              code: "stream_reconstruction_failed",
+              durationMs: performance.now() - startedAt,
+            });
             void stopOwnedProcess();
             return;
           }
@@ -317,6 +375,7 @@ export class SubagentInferenceProcessOwner {
             terminal = true;
             terminalEvent = event;
             terminalAuthenticationFailure = message.authenticationFailure === true;
+            terminalProviderFailureCategory = message.providerFailureCategory;
             const acknowledgement = {
               kind: "terminal-ack",
               version: SUBAGENT_INFERENCE_PROTOCOL_VERSION,
@@ -326,10 +385,16 @@ export class SubagentInferenceProcessOwner {
               process?.postMessage(acknowledgement);
             } catch {
               terminalAuthenticationFailure = false;
+              terminalProviderFailureCategory = undefined;
               setFailure(
                 "The isolated inference terminal acknowledgement failed.",
                 "error",
                 "inference",
+                {
+                  stage: "protocol",
+                  code: "terminal_ack_failed",
+                  durationMs: performance.now() - startedAt,
+                },
               );
             }
             void stopOwnedProcess();
@@ -360,12 +425,28 @@ export class SubagentInferenceProcessOwner {
           "The isolated subagent inference process exited before completion.",
           signal?.aborted ? "aborted" : "error",
           signal?.aborted ? undefined : retryableStartupExit ? "inference-startup" : "inference",
+          signal?.aborted
+            ? undefined
+            : {
+                stage: workerMessageObserved ? "runtime" : "bootstrap",
+                code: retryableStartupExit ? "pre_ready_exit" : "worker_exit",
+                durationMs,
+                exitCode,
+                detail: process.startupDiagnostic?.(),
+              },
         );
       }
     } catch (error) {
       fail(
         error instanceof Error ? error.message : "Could not start isolated subagent inference.",
         "inference",
+        {
+          stage: "launch",
+          code: "launch_failed",
+          durationMs: performance.now() - startedAt,
+          detail:
+            process?.startupDiagnostic?.() ?? (error instanceof Error ? error.message : undefined),
+        },
       );
       await stopOwnedProcess();
     } finally {
@@ -374,6 +455,9 @@ export class SubagentInferenceProcessOwner {
           try {
             hooks.onTerminal?.(terminalEvent.message, {
               authenticationFailure: terminalAuthenticationFailure,
+              ...(terminalProviderFailureCategory
+                ? { providerFailureCategory: terminalProviderFailureCategory }
+                : {}),
             });
           } catch {
             // Result observation must not suppress Pi's terminal event.
@@ -383,6 +467,9 @@ export class SubagentInferenceProcessOwner {
           try {
             hooks.onTerminal?.(terminalEvent.error, {
               authenticationFailure: terminalAuthenticationFailure,
+              ...(terminalProviderFailureCategory
+                ? { providerFailureCategory: terminalProviderFailureCategory }
+                : {}),
             });
           } catch {
             // Result observation must not suppress Pi's terminal event.

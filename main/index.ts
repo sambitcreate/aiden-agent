@@ -81,6 +81,7 @@ import {
 import { subagentsEnabled } from "./services/subagents/feature-flag.js";
 import { piRuntimeEffectStore } from "./services/pi-runtime-effect-store.js";
 import { subagentRunStore } from "./services/subagents/subagent-run-store.js";
+import { flushSubagentRuntimeDiagnostics } from "./services/subagents/subagent-runtime-diagnostics.js";
 import { chatStore } from "./services/chat-store.js";
 import {
   gitDeleteManagedWorktree,
@@ -337,6 +338,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     );
     // Do not let later asynchronous cleanup give a timed-out receipt writer
     // time to publish evidence after its lifecycle has already failed closed.
+    await flushSubagentRuntimeDiagnostics();
     app.exit(1);
     return;
   }
@@ -360,6 +362,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  await flushSubagentRuntimeDiagnostics();
   forceAppQuit = true;
   if (installUpdateOnQuit) {
     installUpdateOnQuit = false;
