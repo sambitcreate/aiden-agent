@@ -59,6 +59,7 @@ import type {
   WorkspacePermission,
 } from "./types";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import type { BotCreateInput, BotDefinition, BotUpdateInput } from "../shared/bots";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -656,6 +657,31 @@ export const chatsApi = {
   ) => invokeChatMutation<Chat>("chats:appendMessage", id, message, meta),
   approve: (approvalId: string, decision: ApprovalDecision) =>
     invoke<void>("chat:approve", approvalId, decision),
+};
+
+export const botsApi = {
+  list: (includeArchived = false) =>
+    invoke<BotDefinition[]>("bots:list", includeArchived),
+  get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
+  create: (input: BotCreateInput) => invoke<BotDefinition>("bots:create", input),
+  update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
+  archive: (id: string) => invoke<BotDefinition>("bots:archive", id),
+  restore: (id: string) => invoke<BotDefinition>("bots:restore", id),
+  listChats: (id: string) => invoke<ChatMeta[]>("bots:listChats", id),
+  createChat: (input: {
+    botId: string;
+    workspaceId: string;
+    providerId?: string;
+    model?: string;
+  }) => invokeChatMutation<Chat>("bots:createChat", input),
+  getTelegramBinding: (id: string) =>
+    invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
+  listTelegramTargets: () =>
+    invoke<import("../shared/bots").TelegramBotTargetOption[]>("bots:listTelegramTargets"),
+  bindTelegram: (input: { botId: string; profile: string; threadId?: number }) =>
+    invoke<import("../shared/bots").TelegramBotBindingView>("bots:bindTelegram", input),
+  unbindTelegram: (id: string) =>
+    invoke<import("../shared/bots").TelegramBotBindingView>("bots:unbindTelegram", id),
 };
 
 export const subagentsApi = {
