@@ -11,6 +11,7 @@ import type { GenerationThinkingLevel } from "../../../renderer/shared/generatio
 import type { UsageRequestSource } from "../usage-store-core.js";
 import type { ChatGenerationOwner } from "../chat-generation-owner.js";
 import { scheduledProviderFingerprint } from "../schedule-provider-binding.js";
+import type { TelegramBotBindingSnapshot } from "./telegram-queue.js";
 
 /** Minimal llmClient surface the shim needs. */
 export interface TelegramLlmClient {
@@ -54,17 +55,18 @@ export interface TelegramChatStore {
     id: string;
     title: string;
     workspaceId?: string;
+    botId?: string;
     providerId?: string;
     model?: string;
-  }): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number }>;
+  }): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number }>;
   get(
     id: string,
-  ): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number } | null>;
+  ): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number } | null>;
   appendMessage(
     id: string,
     message: { role: "user" | "assistant"; content: string; attachments?: Attachment[] },
     meta?: { providerId?: string; model?: string },
-  ): Promise<{ id: string; workspaceId?: string; title: string; updatedAt: number }>;
+  ): Promise<{ id: string; workspaceId?: string; botId?: string; title: string; updatedAt: number }>;
 }
 
 export interface TelegramTurnDeps {
@@ -148,8 +150,14 @@ export function createTelegramBackgroundOwner(
 }
 
 /** Persistent chat id for a Telegram owner and optional project workspace. */
-export function telegramChatId(ownerUserId: number, workspaceId?: string): string {
-  return workspaceId ? `telegram-${ownerUserId}-${workspaceId}` : `telegram-${ownerUserId}`;
+export function telegramChatId(ownerUserId: number, workspaceId?: string, profile?: string): string {
+  // Keep the default profile's historical id so existing installations retain
+  // their transcript. Named profiles get an explicit namespace, preventing
+  // the same owner paired to two Telegram tokens from sharing Pi state.
+  const profilePrefix = profile && profile !== "default" ? `${profile}-` : "";
+  return workspaceId
+    ? `telegram-${profilePrefix}${ownerUserId}-${workspaceId}`
+    : `telegram-${profilePrefix}${ownerUserId}`;
 }
 
 /**
@@ -163,10 +171,19 @@ export async function ensureTelegramChat(
   providerId?: string,
   model?: string,
   workspaceId?: string,
+  profile?: string,
+  binding?: TelegramBotBindingSnapshot,
 ): Promise<string> {
-  const chatId = telegramChatId(ownerUserId, workspaceId);
+  const chatId = binding?.backingChatId ?? telegramChatId(ownerUserId, workspaceId, profile);
   const existing = await deps.chatStore.get(chatId);
   if (existing) {
+    if (binding && (
+      existing.botId !== binding.botId ||
+      existing.workspaceId !== binding.workspaceId ||
+      workspaceId !== binding.workspaceId
+    )) {
+      throw new Error("The Telegram backing chat belongs to a different bot or workspace binding.");
+    }
     deps.broadcastMetadata(existing);
     return chatId;
   }
@@ -175,6 +192,7 @@ export async function ensureTelegramChat(
     title,
     providerId,
     workspaceId,
+    ...(binding ? { botId: binding.botId } : {}),
     model,
   });
   deps.broadcastMetadata(chat);
@@ -205,6 +223,7 @@ export async function sendTelegramTurn(
   workspace?: TelegramWorkspaceResolution,
   attachments?: readonly Attachment[],
   observer?: (channel: NotificationChannel, payload: unknown) => void,
+  options?: { binding?: TelegramBotBindingSnapshot },
 ): Promise<TelegramTurnResult> {
   const resolvedWorkspace = workspace ?? (await deps.resolveWorkspace());
   if (resolvedWorkspace.kind === "stale") {
@@ -256,7 +275,11 @@ export async function sendTelegramTurn(
         workspaceId,
         providerId: provider.providerId,
         model: provider.model,
-        mode: workspaceId ? "assistant-automation" : "assistant-unattended",
+        // Bot-bound turns use the normal Pi mode. Unbound Telegram keeps the
+        // existing unattended/automation mode contract unchanged.
+        ...(options?.binding
+          ? {}
+          : { mode: workspaceId ? "assistant-automation" as const : "assistant-unattended" as const }),
         thinkingLevel,
         messages: [
           {
