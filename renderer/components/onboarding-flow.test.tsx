@@ -14,6 +14,7 @@ const agentsInstructions = readFileSync(new URL("../../AGENTS.md", import.meta.u
 const featureAssetPaths = [
   "aiden-workspace.png",
   "features/aiden-assistant.png",
+  "features/bots.png",
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
@@ -260,6 +261,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     "Reusable Skills",
     "MCP Connectors",
     "Aiden Assistant",
+    "Reusable Bots",
     "Scheduled Automations",
     "Voice & Dictation",
     "Command Palette",
@@ -271,13 +273,14 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 23);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 24);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 23);
+  assert.equal(featureAssetPaths.length, 24);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
+  assert.ok(featureAssetPaths.includes("features/bots.png"));
   assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
   for (const assetPath of featureAssetPaths) {
     const illustration = readFileSync(
