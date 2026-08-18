@@ -22,6 +22,7 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 
 | Plan                                                                                           | Status   | Completion note                                                                                                                                      |
 | ---------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Bots Mode](completed/bots-mode-plan.md)                                                       | Complete | Reusable Pi-backed bots now have first-class conversations, authoritative personas, soft archive, and exact one-to-one Telegram DM/topic control.    |
 | [Keyboard Command System](completed/keyboard-command-system-plan.md)                           | Complete | One command catalog now powers transactional global hotkeys, scoped app shortcuts, native menus, canonical settings, and the `Command-K` palette.    |
 | [Slash Commands and Skill Invocation](completed/slash-commands-and-skill-invocation-plan.md)   | Complete | Separate `/` command and `$` skill palettes dispatch canonical app actions and fresh workspace-bound one-turn skills with safe provenance.           |
 | [Aiden-Native Subagents](completed/aiden-native-subagents-plan.md)                             | Complete | All five phases passed focused/package gates, two final fresh reviews, and the default 100-cycle packaged lifecycle soak.                            |
@@ -36,4 +37,3 @@ This directory is the source of truth for Aiden's implementation plans. The engi
 | [Pi Thinking Disclosure](completed/pi-thinking-disclosure-plan.md)                              | Complete | Provider-neutral readable Pi thinking, a one-second inspectable preview, and a durable local presentation toggle now match the audited Pi contract.  |
 
 Move a plan to `completed/` only when its original delivery scope is complete. Keep the original plan as historical documentation; follow-on work belongs in a new active plan.
-
