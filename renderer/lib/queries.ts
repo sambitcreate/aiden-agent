@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import {
   assistantApi,
+  botsApi,
   chatsApi,
   artificialAnalysisApi,
   computerUseApi,
@@ -40,6 +41,11 @@ import type {
 export const queryKeys = {
   providers: ["providers"] as const,
   chats: ["chats"] as const,
+  bots: ["bots"] as const,
+  bot: (id: string | undefined) => ["bot", id ?? "none"] as const,
+  botChats: (id: string | undefined) => ["bot-chats", id ?? "none"] as const,
+  botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
+  botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
   settings: ["settings"] as const,
@@ -239,6 +245,45 @@ export function useChats(workspaceId?: string) {
     // sidebar renders whatever this resolves to, and `workspaceId` is briefly
     // undefined while workspaces load, so wait for a concrete id instead.
     enabled: Boolean(workspaceId),
+  });
+}
+
+export function useBots(includeArchived = false) {
+  return useQuery({
+    queryKey: [...queryKeys.bots, includeArchived ? "all" : "active"],
+    queryFn: () => botsApi.list(includeArchived),
+  });
+}
+
+export function useBot(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.bot(botId),
+    queryFn: () => botsApi.get(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotChats(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botChats(botId),
+    queryFn: () => botsApi.listChats(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotTelegramBinding(botId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.botTelegramBinding(botId),
+    queryFn: () => botsApi.getTelegramBinding(botId!),
+    enabled: Boolean(botId),
+  });
+}
+
+export function useBotTelegramTargets(enabled: boolean) {
+  return useQuery({
+    queryKey: queryKeys.botTelegramTargets,
+    queryFn: botsApi.listTelegramTargets,
+    enabled,
   });
 }
 
