@@ -49,6 +49,8 @@ import { createTelegramThreadStore } from "./telegram-thread-store.js";
 import { createTelegramOwnershipLease } from "./telegram-ownership.js";
 import { chunkForTelegram, chunkRichMarkdown, markdownToTelegramHtml } from "./telegram-markdown.js";
 import { registerTelegramDirectRuntime } from "./telegram-direct-runtime.js";
+import { botStore } from "../bot-store.js";
+import { telegramBotBindings } from "./telegram-bot-bindings.js";
 export const TELEGRAM_PROVIDER_ID = "telegram";
 
 let profileSettingsMutation = Promise.resolve();
@@ -238,6 +240,37 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
   });
   let threadProvisioning = Promise.resolve();
   const core = createTelegramServiceCore({
+    profile,
+    resolveBotBinding: async ({ profile: bindingProfile, chatId, threadId }) => {
+      if (bindingProfile !== profile) return undefined;
+      const binding = await telegramBotBindings.resolve(profile, chatId, threadId);
+      if (!binding) return undefined;
+      // Return the exact stored record and let service-core reject owner
+      // mismatches. Treating a mismatched record as "unbound" would silently
+      // fall back to the profile's ordinary Aiden conversation.
+      return binding;
+    },
+    validateBotBinding: async (binding) => {
+      const [bot, settings, activeBinding] = await Promise.all([
+        botStore.get(binding.botId),
+        getProfileSettings(profile),
+        telegramBotBindings.get(binding.botId),
+      ]);
+      if (!bot || bot.archivedAt !== undefined) return "This bot is unavailable or archived.";
+      if (
+        !activeBinding ||
+        activeBinding.profile !== binding.profile ||
+        activeBinding.chatId !== binding.chatId ||
+        activeBinding.threadId !== binding.threadId ||
+        activeBinding.ownerUserId !== binding.ownerUserId ||
+        activeBinding.workspaceId !== binding.workspaceId ||
+        activeBinding.backingChatId !== binding.backingChatId
+      ) return "This Telegram bot binding has changed or was disabled.";
+      if (settings.telegramAllowedUserId !== binding.ownerUserId) {
+        return "The Telegram profile owner no longer matches this bot binding.";
+      }
+      return true;
+    },
     api,
     acquireOwnership: ownership.acquire,
     releaseOwnership: ownership.release,
@@ -633,6 +666,7 @@ export function createTelegramProfileManager() {
       const service = services.get(profile);
       await service?.stopAndSettle();
       await service?.resetPairing();
+      await telegramBotBindings.unbindProfile(profile);
       services.delete(profile);
       await secrets.deleteKey(telegramProfileTokenKey(profile));
       const settings = await configStore.getSettings();
@@ -663,7 +697,10 @@ export function createTelegramProfileManager() {
     },
     connect: () => serviceFor(activeProfile).connect(),
     disconnect: () => serviceFor(activeProfile).disconnect(),
-    resetPairing: () => serviceFor(activeProfile).resetPairing(),
+    resetPairing: async () => {
+      await serviceFor(activeProfile).resetPairing();
+      await telegramBotBindings.unbindProfile(activeProfile);
+    },
     ensureActiveThreads: () => serviceFor(activeProfile).ensureThreads(),
     clearActiveThreads: () => serviceFor(activeProfile).clearThreads(),
     async listTargets(profileName?: string) {
