@@ -149,6 +149,12 @@ export function createChatStore(
       Number.isFinite(meta.updatedAt) &&
       (meta.workspaceId === undefined ||
         typeof meta.workspaceId === "string") &&
+      (meta.botId === undefined ||
+        (typeof meta.botId === "string" &&
+          meta.botId.length > 0 &&
+          meta.botId.length <= 160 &&
+          meta.botId.normalize("NFKC") === meta.botId &&
+          SAFE_CHAT_ID.test(meta.botId))) &&
       (meta.providerId === undefined || typeof meta.providerId === "string") &&
       (meta.model === undefined || typeof meta.model === "string")
     );
@@ -480,6 +486,7 @@ export function createChatStore(
       id: chat.id,
       title: chat.title,
       workspaceId: chat.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      ...(chat.botId ? { botId: chat.botId } : {}),
       providerId: chat.providerId,
       model: chat.model,
       createdAt: chat.createdAt,
@@ -592,6 +599,14 @@ export function createChatStore(
       });
     },
 
+    async listRegular(workspaceId?: string): Promise<ChatMeta[]> {
+      return (await this.list(workspaceId)).filter((chat) => chat.botId === undefined);
+    },
+
+    async listByBot(botId: string): Promise<ChatMeta[]> {
+      return (await this.list()).filter((chat) => chat.botId === botId);
+    },
+
     async get(id: string): Promise<Chat | null> {
       return serialized(() => readChat(id));
     },
@@ -600,6 +615,7 @@ export function createChatStore(
       id?: string;
       title?: string;
       workspaceId?: string;
+      botId?: string;
       providerId?: string;
       model?: string;
       assertCurrent?: () => void;
@@ -611,6 +627,7 @@ export function createChatStore(
           id: input.id ?? newId(),
           title: input.title?.trim() || DEFAULT_CHAT_TITLE,
           workspaceId: input.workspaceId ?? DEFAULT_WORKSPACE_ID,
+          ...(input.botId ? { botId: input.botId } : {}),
           providerId: await resolveProviderId(input.providerId),
           model: input.model,
           createdAt: now,
@@ -736,6 +753,7 @@ export function createChatStore(
             id: randomUUID(),
             title,
             workspaceId: metadata.workspaceId ?? DEFAULT_WORKSPACE_ID,
+            botId: source.botId,
             providerId: metadata.providerId,
             model: metadata.model,
             createdAt: now,
