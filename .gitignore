@@ -6,6 +6,16 @@ build/
 release/
 native/computer-use-broker/target/
 
+# Xcode user and build data
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.build/
+
+# App Store Connect CLI credentials (never commit repo-local API/web auth)
+.asc/config.json
+.asc/sessions/
+
 # Agent context (auto-generated, not worth versioning)
 .claude/
 .agents/
