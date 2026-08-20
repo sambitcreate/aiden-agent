@@ -12,6 +12,7 @@ import {
   chatsApi,
   artificialAnalysisApi,
   computerUseApi,
+  createImagesApi,
   exaApi,
   gitApi,
   localVoiceApi,
@@ -75,6 +76,15 @@ export const queryKeys = {
   skillCatalog: (workspaceId: string | undefined) =>
     ["skillCatalog", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
+  createImagesWorkflows: ["createImagesWorkflows"] as const,
+  createImagesWorkspace: ["createImagesWorkspace"] as const,
+  createImagesProviderStatus: ["createImagesProviderStatus", "gemini"] as const,
+  createImagesWorkflow: (workflowId: string | undefined) =>
+    ["createImagesWorkflow", workflowId ?? "none"] as const,
+  createImagesRuns: (workflowId: string | undefined) =>
+    ["createImagesRuns", workflowId ?? "none"] as const,
+  createImagesRun: (workflowId: string | undefined, runId: string | undefined) =>
+    ["createImagesRun", workflowId ?? "none", runId ?? "none"] as const,
 };
 
 async function cancelArtificialAnalysisReads(queryClient: QueryClient): Promise<void> {
@@ -126,6 +136,47 @@ export async function refreshArtificialAnalysisState(
 
 export function useProviders() {
   return useQuery({ queryKey: queryKeys.providers, queryFn: providersApi.list });
+}
+
+export function useCreateImagesWorkflows(enabled = true) {
+  const workspace = useCreateImagesWorkspace(enabled);
+  return useQuery({
+    queryKey: queryKeys.createImagesWorkflows,
+    queryFn: createImagesApi.list,
+    enabled: enabled && workspace.data?.status === "ready",
+    retry: false,
+  });
+}
+
+export function useCreateImagesWorkspace(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.createImagesWorkspace,
+    queryFn: createImagesApi.workspaceStatus,
+    enabled,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useCreateImagesProviderStatus(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.createImagesProviderStatus,
+    queryFn: createImagesApi.providerStatus,
+    enabled,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+}
+
+export function useCreateImagesWorkflow(workflowId: string, enabled = true) {
+  const workspace = useCreateImagesWorkspace(enabled);
+  return useQuery({
+    queryKey: queryKeys.createImagesWorkflow(workflowId),
+    queryFn: () => createImagesApi.get({ workflowId }),
+    enabled: enabled && workspace.data?.status === "ready",
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
 }
 
 export function useCodexProviderStatus() {

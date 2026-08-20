@@ -17,3 +17,8 @@ test("unmounting the settings page asks main to release recorder suspension", ()
     /React\.useEffect\(\s*\(\) => \(\) => \{\s*void shortcutApi\.setRecording\(false\)/u,
   );
 });
+
+test("feature-gated Create Images shortcuts stay out of Settings while disabled", () => {
+  assert.match(source, /const \{ createImages \} = useAppCapabilities\(\)/u);
+  assert.match(source, /command\.id !== "images\.open" \|\| createImages/u);
+});

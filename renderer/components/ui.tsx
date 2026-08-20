@@ -355,6 +355,10 @@ const SplitContext = React.createContext<{
   leadingAnchor: HTMLDivElement | null;
 } | null>(null);
 
+export function useSplitViewState() {
+  return React.useContext(SplitContext);
+}
+
 type SplitViewProps = React.PropsWithChildren<{
   sidebar: React.ReactNode;
   storageKey: string;

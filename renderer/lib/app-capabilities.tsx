@@ -2,22 +2,23 @@ import * as React from "react";
 
 export interface AppCapabilities {
   subagents: boolean;
+  createImages: boolean;
 }
 
 export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   subagents: false,
+  createImages: false,
 });
 
 export function parseAppCapabilities(value: unknown): AppCapabilities {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("subagents" in value) ||
-    value.subagents !== true
-  ) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return DISABLED_APP_CAPABILITIES;
   }
-  return { subagents: true };
+  const record = value as Record<string, unknown>;
+  return {
+    subagents: record.subagents === true,
+    createImages: record.createImages === true,
+  };
 }
 
 const AppCapabilitiesContext = React.createContext<AppCapabilities>(DISABLED_APP_CAPABILITIES);

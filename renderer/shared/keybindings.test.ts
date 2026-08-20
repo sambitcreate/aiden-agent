@@ -129,6 +129,14 @@ test("rejects conflicts and reserved bindings without mutating the prior value",
     () =>
       applyKeybindingMutation(current, {
         commandId: "chat.new",
+        binding: "Command+D",
+      }),
+    (error) => error instanceof KeybindingValidationError && error.code === "reserved",
+  );
+  assert.throws(
+    () =>
+      applyKeybindingMutation(current, {
+        commandId: "chat.new",
         binding: "Command+Shift+=",
       }),
     (error) => error instanceof KeybindingValidationError && error.code === "reserved",

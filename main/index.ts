@@ -8,7 +8,7 @@ import {
   registerNativeHandlers,
   shell,
 } from "./platform.js";
-import { Menu, nativeImage, nativeTheme } from "electron";
+import { Menu, nativeImage, nativeTheme, type MessageBoxSyncOptions } from "electron";
 import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
@@ -95,6 +95,16 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import { loadCreateImagesPackagedAcceptanceSession } from "./services/create-images/packaged-canvas-acceptance-core.js";
+import { createImagesEnabled } from "./services/create-images/feature-flag.js";
+import {
+  installCreateImagesAssetProtocol,
+  registerCreateImagesAssetScheme,
+} from "./services/create-images/asset-protocol.js";
+import { createImagesService } from "./services/create-images/create-images-service.js";
+import type { CreateImagesRunView } from "../renderer/shared/create-images/ipc.js";
+
+if (createImagesEnabled()) registerCreateImagesAssetScheme();
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -124,6 +134,13 @@ const disposeAppUpdateStateSubscription = appUpdateService.subscribe((snapshot) 
 
 const SUBAGENT_PACKAGED_SOAK_WAIT_MS = 30_000;
 const SUBAGENT_PACKAGED_SOAK_POLL_MS = 25;
+const CREATE_IMAGES_QUIT_SAFETY_TIMEOUT_MS = 6_000;
+
+const MAIN_WINDOW_SECURITY_PREFERENCES = Object.freeze({
+  contextIsolation: true,
+  nodeIntegration: false,
+  sandbox: true,
+});
 
 // These scripts are fixed at build time. The strict one-shot control record
 // selects only among their named actions; it never supplies a selector, route,
@@ -224,6 +241,98 @@ function confirmProtectedAction(window: BrowserWindow, action: "close" | "reload
   return response === 1;
 }
 
+function showQuitMessageBox(
+  window: BrowserWindow | undefined,
+  options: MessageBoxSyncOptions,
+): number {
+  return window && !window.isDestroyed()
+    ? dialog.showMessageBoxSync(window, options)
+    : dialog.showMessageBoxSync(options);
+}
+
+function showImageRunsCouldNotStop(window?: BrowserWindow): void {
+  showQuitMessageBox(window, {
+    type: "error",
+    title: "Image workflows could not stop safely",
+    message: "Aiden could not durably save cancellation for every active image workflow.",
+    detail:
+      "Aiden will stay open. Review Create Images, then try stopping the runs or quitting again.",
+    buttons: ["Keep Aiden Open"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+}
+
+async function activeImageRunsWithinQuitDeadline(): Promise<CreateImagesRunView[]> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      createImagesService().runs.activeRuns(),
+      new Promise<CreateImagesRunView[]>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Create Images quit inspection timed out.")),
+          CREATE_IMAGES_QUIT_SAFETY_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function confirmActiveImageRunsBeforeQuit(window?: BrowserWindow): Promise<boolean> {
+  if (!createImagesEnabled()) return true;
+  let activeRuns: CreateImagesRunView[];
+  try {
+    activeRuns = await activeImageRunsWithinQuitDeadline();
+  } catch (error) {
+    logger.error("main", "Could not inspect active Create Images runs before quit.", error);
+    if (!window || !window.isDestroyed()) {
+      showQuitMessageBox(window, {
+        type: "info",
+        title: "Image run status is unavailable",
+        message: "Aiden could not safely confirm whether a local image workflow is still running.",
+        detail: "Keep Aiden open, review Create Images, then try quitting again.",
+        buttons: ["Keep Aiden Open"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+    }
+    return false;
+  }
+  if (activeRuns.length === 0) return true;
+  const plural = activeRuns.length === 1 ? "workflow is" : "workflows are";
+  const stopLabel = activeRuns.length === 1 ? "Stop Run and Quit" : "Stop Runs and Quit";
+  const response = showQuitMessageBox(window, {
+    type: "warning",
+    title:
+      activeRuns.length === 1 ? "Image workflow still running" : "Image workflows still running",
+    message: `${activeRuns.length} local mock image ${plural} still running.`,
+    detail:
+      "Keep Aiden open to wait for completion, or stop the runs durably before quitting. Completed outputs stay on this device. These Phase 3 mock runs make no network requests and cost $0.",
+    buttons: ["Keep Aiden Open", stopLabel],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  if (response !== 1) return false;
+  try {
+    const stopped = await createImagesService().runs.stopAll("app-quit");
+    if (stopped.status === "safe-to-quit") return true;
+    logger.error(
+      "main",
+      `Create Images cancellation was not durable for ${stopped.failedRunIds.length} run(s); quit was cancelled.`,
+    );
+  } catch (error) {
+    logger.error("main", "Could not durably stop active Create Images runs before quit.", error);
+  }
+  createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+  showImageRunsCouldNotStop(window);
+  return false;
+}
+
 function cleanupApplication(): void {
   if (cleanupStarted) return;
   cleanupStarted = true;
@@ -239,6 +348,11 @@ function cleanupApplication(): void {
   void mcpManager.closeAll();
 }
 
+function resumeCreateImagesAfterCancelledShutdown(): void {
+  if (!createImagesEnabled()) return;
+  createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+}
+
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
@@ -248,7 +362,37 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     } catch (error) {
       shutdownStarted = false;
       computerUseSettings.resumeAfterCancelledShutdown();
+      resumeCreateImagesAfterCancelledShutdown();
       logger.error("main", "Computer Use state was not durable; Aiden will stay open.", error);
+      return;
+    }
+  }
+  if (createImagesEnabled()) {
+    try {
+      const stopped = await createImagesService().runs.stopAll("app-quit");
+      if (stopped.status === "blocked") {
+        shutdownStarted = false;
+        protectedAction = null;
+        computerUseSettings.resumeAfterCancelledShutdown();
+        createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+        logger.error(
+          "main",
+          `Create Images cancellation was not durable for ${stopped.failedRunIds.length} run(s); Aiden will stay open.`,
+        );
+        showImageRunsCouldNotStop(mainWindow ?? undefined);
+        return;
+      }
+    } catch (error) {
+      shutdownStarted = false;
+      protectedAction = null;
+      computerUseSettings.resumeAfterCancelledShutdown();
+      createImagesService().runs.resumeRunAdmissionsAfterCancelledShutdown();
+      logger.error(
+        "main",
+        "Create Images shutdown did not reach a durable cancellation boundary; Aiden will stay open.",
+        error,
+      );
+      showImageRunsCouldNotStop(mainWindow ?? undefined);
       return;
     }
   }
@@ -342,6 +486,13 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
 
 async function refreshCloseGuardFromRenderer(window: BrowserWindow): Promise<number | null> {
   try {
+    const createImagesFlushAllowed = await window.webContents.executeJavaScript(
+      "window.__aidenFlushCreateImagesForLifecycle?.() ?? true",
+      true,
+    );
+    if (createImagesFlushAllowed !== true) {
+      throw new Error("Create Images autosave did not authorize the protected action.");
+    }
     const latest = (await window.webContents.executeJavaScript(
       `({
         dirty: document.documentElement.dataset.aidenDirty === "1",
@@ -466,6 +617,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   lifecycleCheckInFlight = true;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
+    if (!(await confirmActiveImageRunsBeforeQuit(window))) return false;
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
@@ -494,6 +646,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     return shutdownStarted;
   } finally {
     lifecycleCheckInFlight = false;
+    if (!shutdownStarted) resumeCreateImagesAfterCancelledShutdown();
     if (!shutdownStarted && installUpdateOnQuit) {
       installUpdateOnQuit = false;
       appUpdateService.announceSnapshot();
@@ -775,9 +928,7 @@ async function createMainWindow(): Promise<void> {
     show: false,
     webPreferences: {
       preload: getPreloadPath(),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
+      ...MAIN_WINDOW_SECURITY_PREFERENCES,
     },
   });
   resetRendererReadiness();
@@ -976,7 +1127,9 @@ async function settlePackagedSubagentSoak(session: SubagentPackagedSoakSession):
  * automation endpoint.
  */
 async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Promise<void> {
-  await deliverMainWindowNotification("app:navigate", { path: SUBAGENT_PACKAGED_SOAK_CHAT_PATH });
+  await deliverMainWindowNotification("app:navigate", {
+    path: SUBAGENT_PACKAGED_SOAK_CHAT_PATH,
+  });
   await waitForPackagedSubagentSoak("composer readiness", () =>
     runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_SEND_SCRIPT),
   );
@@ -1007,7 +1160,9 @@ async function runPackagedSubagentSoak(session: SubagentPackagedSoakSession): Pr
       await settlePackagedSubagentSoak(session);
       return;
     case "main_navigate":
-      await deliverMainWindowNotification("app:navigate", { path: action.path });
+      await deliverMainWindowNotification("app:navigate", {
+        path: action.path,
+      });
       await waitForPackagedSubagentSoak("Settings navigation", () =>
         runPackagedSubagentSoakRendererScript(SUBAGENT_PACKAGED_SOAK_SETTINGS_VISIBLE_SCRIPT),
       );
@@ -1147,7 +1302,16 @@ if (!ownsSingleInstanceLock) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       void requestApplicationQuit(mainWindow);
     } else {
-      void shutdownAndQuit();
+      lifecycleCheckInFlight = true;
+      void (async () => {
+        try {
+          if (await confirmActiveImageRunsBeforeQuit()) {
+            await shutdownAndQuit();
+          }
+        } finally {
+          if (!shutdownStarted) lifecycleCheckInFlight = false;
+        }
+      })();
     }
   });
 
@@ -1190,12 +1354,24 @@ if (!ownsSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       const runtimeProfile = currentRuntimeProfile();
+      if (createImagesEnabled()) {
+        const images = createImagesService();
+        await installCreateImagesAssetProtocol(images.grants, {
+          response: (assetId) => images.assetResponse(assetId),
+        });
+      }
       if (runtimeProfile.id === "development" && process.platform === "darwin") {
         app.dock?.setBadge("DEV");
       }
       const packagedSubagentSoak = await loadSubagentPackagedSoakSession({
         isPackaged: isPackagedRuntime(),
       });
+      const packagedCreateImagesAcceptance = await loadCreateImagesPackagedAcceptanceSession({
+        isPackaged: isPackagedRuntime(),
+      });
+      if (packagedSubagentSoak && packagedCreateImagesAcceptance) {
+        throw new Error("Only one packaged acceptance session may run at a time.");
+      }
       if (packagedSubagentSoak && !subagentsEnabled()) {
         throw new Error("Packaged subagent soak requires the internal subagent opt-in.");
       }
@@ -1324,6 +1500,28 @@ if (!ownsSingleInstanceLock) {
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       await createMainWindow();
+      if (packagedCreateImagesAcceptance) {
+        const { runPackagedCreateImagesAcceptance } =
+          await import("./services/create-images/packaged-canvas-acceptance-runner.js");
+        const acceptanceWindow = mainWindow;
+        if (!acceptanceWindow || acceptanceWindow.isDestroyed()) {
+          throw new Error("Packaged Create Images acceptance requires a live main window.");
+        }
+        await runPackagedCreateImagesAcceptance(packagedCreateImagesAcceptance, {
+          window: acceptanceWindow,
+          runtimeProfile: currentRuntimeProfile(),
+          reloadRenderer: async () => {
+            resetRendererReadiness();
+            acceptanceWindow.webContents.reload();
+            await rendererReadiness.wait();
+          },
+          navigate: (path) => deliverMainWindowNotification("app:navigate", { path }),
+        });
+        forceAppQuit = true;
+        protectedAction = "quit";
+        app.quit();
+        return;
+      }
       if (packagedSubagentSoak) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;

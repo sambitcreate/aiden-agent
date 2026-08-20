@@ -27,6 +27,14 @@ function calleeName(expression: ts.LeftHandSideExpression): string | undefined {
   return undefined;
 }
 
+function isIpcHandle(expression: ts.LeftHandSideExpression): boolean {
+  if (!ts.isPropertyAccessExpression(expression) || expression.name.text !== "handle") return false;
+  return (
+    ts.isIdentifier(expression.expression) &&
+    (expression.expression.text === "ipcMain" || expression.expression.text === "electronIpcMain")
+  );
+}
+
 function literalValue(
   expression: ts.Expression | undefined,
   channelConstants: ReadonlyMap<string, string>,
@@ -68,7 +76,7 @@ function collectInventory(sourceFiles: readonly ts.SourceFile[]): IpcInventory {
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node)) {
         const name = calleeName(node.expression);
-        if (name === "handle") {
+        if (name === "handle" && isIpcHandle(node.expression)) {
           const channel = literalValue(node.arguments[0], channelConstants);
           if (channel) inventory.handlers.add(channel);
         } else if (name === "send" || name === "broadcast") {
@@ -151,6 +159,14 @@ test("dedicated native bridge channels exactly match the live native handlers", 
     sorted(liveNative),
     sorted(nativeChannels),
     "native preload methods and native main handlers drifted",
+  );
+});
+
+test("native dropped-file import cannot be invoked through the generic renderer bridge", () => {
+  const channel = NATIVE_INVOKE_CHANNELS.createImagesImportDroppedFiles;
+  assert.equal(
+    INVOKE_PREFIXES.some((prefix) => channel.startsWith(prefix)),
+    false,
   );
 });
 

@@ -1,5 +1,9 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { OpenDialogOptions, OpenDialogReturnValue } from "electron";
+import {
+  CREATE_IMAGES_MAX_DROPPED_FILES,
+  type CreateImagesDroppedAssetImportResult,
+} from "./shared/create-images/ipc.js";
 import {
   INVOKE_PREFIXES,
   NATIVE_INVOKE_CHANNELS,
@@ -48,6 +52,40 @@ const aidenAPI = {
         NATIVE_INVOKE_CHANNELS.dialogOpen,
         options,
       ) as Promise<OpenDialogReturnValue>,
+  },
+  createImages: {
+    importDroppedFiles: (
+      workflowId: string,
+      files: readonly File[],
+    ): Promise<CreateImagesDroppedAssetImportResult> => {
+      if (
+        !Array.isArray(files) ||
+        files.length < 1 ||
+        files.length > CREATE_IMAGES_MAX_DROPPED_FILES
+      ) {
+        return Promise.resolve({
+          status: "unavailable",
+          message: `Drop between 1 and ${CREATE_IMAGES_MAX_DROPPED_FILES} images at a time.`,
+        });
+      }
+      const filePaths: string[] = [];
+      try {
+        for (const file of files) {
+          const filePath = webUtils.getPathForFile(file);
+          if (!filePath) throw new Error("Dropped file has no native path.");
+          filePaths.push(filePath);
+        }
+      } catch {
+        return Promise.resolve({
+          status: "unavailable",
+          message: "Aiden could not access the dropped files.",
+        });
+      }
+      return ipcRenderer.invoke(NATIVE_INVOKE_CHANNELS.createImagesImportDroppedFiles, {
+        workflowId,
+        filePaths,
+      }) as Promise<CreateImagesDroppedAssetImportResult>;
+    },
   },
   nativeTheme: {
     getInfo: (): Promise<NativeThemeInfo> =>
