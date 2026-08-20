@@ -374,7 +374,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   }
 
   return {
-    async run(task: ScheduledTask): Promise<ScheduledRun> {
+    async run(task: ScheduledTask, runId?: string): Promise<ScheduledRun> {
       if (activeControllers.has(task.id)) {
         throw new Error("This scheduled task is already running.");
       }
@@ -415,6 +415,7 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       }
       try {
         const run = await store.recordRun({
+          id: runId,
           taskId: task.id,
           startedAt,
           finishedAt: Date.now(),

@@ -747,13 +747,19 @@ export function createChatStore(
       });
     },
 
-    async rename(id: string, title: string): Promise<void> {
+    async rename(
+      id: string,
+      title: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
         chat.title = title.trim() || chat.title;
         chat.updatedAt = Date.now();
         await writeChatAndMeta(chat);
+        return chat;
       });
     },
 
@@ -779,10 +785,12 @@ export function createChatStore(
     async moveEmptyChatToWorkspace(
       id: string,
       workspaceId: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
     ): Promise<Chat> {
       return serialized(async () => {
         const chat = await readChat(id);
         if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
         if (chat.messages.length > 0) {
           throw new Error("Only a new chat can change workspaces.");
         }
@@ -815,8 +823,13 @@ export function createChatStore(
       });
     },
 
-    async remove(id: string): Promise<void> {
+    async remove(
+      id: string,
+      assertCurrent?: (chat: Chat | null) => void | Promise<void>,
+    ): Promise<void> {
       return serialized(async () => {
+        const chat = await readChat(id);
+        if (assertCurrent) await assertCurrent(chat);
         const payload = await chatPath(id);
         await removeCrashLeftStages(path.dirname(payload));
         let removedPayload = false;

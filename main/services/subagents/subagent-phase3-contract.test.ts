@@ -77,15 +77,17 @@ test("historical inspector reads require a live document and matching chat owner
 });
 
 test("run-store failures keep filesystem details out of renderer-visible errors", async () => {
-  const [llm, historyHandler, chatHandler] = await Promise.all([
+  const [llm, historyHandler, chatHandler, chatApplicationService] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/subagents.ts"),
     source("main/handlers/chats.ts"),
+    source("main/services/chat-application-service.ts"),
   ]);
   assert.match(llm, /error: "local storage failed"/u);
   assert.match(historyHandler, /Aiden could not load subagent history/u);
+  assert.match(chatHandler, /chatApplicationService\.remove\(/u);
   assert.match(
-    chatHandler,
+    chatApplicationService,
     /Aiden could not delete this chat's subagent history/u,
   );
 });
@@ -127,29 +129,31 @@ test("private run-store I/O is descriptor-bound, generation-checked, and package
 });
 
 test("chat removal deletes private child history before the chat can disappear", async () => {
-  const [handler, llm] = await Promise.all([
+  const [handler, applicationService, llm] = await Promise.all([
     source("main/handlers/chats.ts"),
+    source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
-  const beginDeletion = handler.indexOf("llmClient.beginChatDeletion(chatId)");
-  const cancel = handler.indexOf("llmClient.cancelChat(chatId)");
-  const deleteRuns = handler.indexOf(
-    "await subagentRunStore.deleteChat(chatId)",
+  assert.match(handler, /chatApplicationService\.remove\(asString\(id, "id"\)\)/u);
+  const beginDeletion = applicationService.indexOf("deps.llmClient.beginChatDeletion(chatId)");
+  const cancel = applicationService.indexOf("deps.llmClient.cancelChat(chatId)");
+  const deleteRuns = applicationService.indexOf(
+    "await deps.subagentRunStore.deleteChat(chatId)",
     cancel,
   );
-  const deleteChat = handler.indexOf(
-    "await chatStore.remove(chatId)",
+  const deleteChat = applicationService.indexOf(
+    "await deps.chatStore.remove(chatId,",
     deleteRuns,
   );
-  const completeDeletion = handler.indexOf(
-    "await subagentRunStore.completeChatDeletion(chatId)",
+  const completeDeletion = applicationService.indexOf(
+    "await deps.subagentRunStore.completeChatDeletion(chatId)",
     deleteChat,
   );
-  const pendingDeletionCheck = handler.indexOf(
-    "await subagentRunStore.pendingChatDeletions()",
+  const pendingDeletionCheck = applicationService.indexOf(
+    "await deps.subagentRunStore.pendingChatDeletions()",
     completeDeletion,
   );
-  const releaseAdmission = handler.indexOf(
+  const releaseAdmission = applicationService.indexOf(
     "if (releaseAdmission) finishDeletion()",
     completeDeletion,
   );
@@ -176,15 +180,16 @@ test("chat removal deletes private child history before the chat can disappear",
   assert.ok(registerInitialization > admissionCheck);
   assert.ok(requireExistingChat > registerInitialization);
   assert.doesNotMatch(
-    handler.slice(beginDeletion, deleteRuns),
-    /if \(!\(await chatStore\.get/u,
+    applicationService.slice(beginDeletion, deleteRuns),
+    /if \(!\(await deps\.chatStore\.get/u,
   );
 });
 
 test("renderer invalidation detaches while authority changes and shutdown still cancel", async () => {
-  const [llm, workspaces, main] = await Promise.all([
+  const [llm, workspaces, workspaceApplicationService, main] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/workspaces.ts"),
+    source("main/services/workspace-application-service.ts"),
     source("main/index.ts"),
   ]);
   assert.match(
@@ -193,13 +198,15 @@ test("renderer invalidation detaches while authority changes and shutdown still 
   );
   assert.match(llm, /this\.cancel\(streamId, "workspace_authority_change"\)/u);
   assert.match(llm, /this\.cancel\(streamId, "application_shutdown"\)/u);
+  assert.match(workspaces, /workspaceApplicationService\.update\(/u);
+  assert.match(workspaces, /workspaceApplicationService\.remove\(/u);
   assert.match(
-    workspaces,
-    /await llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u,
+    workspaceApplicationService,
+    /await deps\.llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u,
   );
   assert.match(
-    workspaces,
-    /await llmClient\.cancelWorkspaceAndSettle\(workspaceId\)/u,
+    workspaceApplicationService,
+    /await deps\.llmClient\.cancelWorkspaceAndSettle\(id\)/u,
   );
   assert.match(llm, /subagentRuntimeRegistry\.abortGeneration\(streamId\)/u);
   assert.match(llm, /subagentRuntimeRegistry\.abortChat\(chatId\)/u);
@@ -217,8 +224,9 @@ test("renderer invalidation detaches while authority changes and shutdown still 
 });
 
 test("empty-chat workspace moves serialize against generation authority and terminal persistence", async () => {
-  const [handler, llm, chatStore] = await Promise.all([
+  const [handler, applicationService, llm, chatStore] = await Promise.all([
     source("main/handlers/chats.ts"),
+    source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
     source("main/services/chat-store-core.ts"),
   ]);
@@ -226,20 +234,23 @@ test("empty-chat workspace moves serialize against generation authority and term
   const moveHandler = handler.indexOf(
     'ipcMain.handle(\n    "chats:moveEmptyToWorkspace"',
   );
-  const beginMove = handler.indexOf(
-    "llmClient.beginChatWorkspaceChange(chatId)",
-    moveHandler,
+  assert.match(
+    handler.slice(moveHandler),
+    /chatApplicationService\.moveEmptyToWorkspace\(/u,
   );
-  const workspaceLookup = handler.indexOf(
-    "await configStore.getWorkspace(nextWorkspaceId)",
+  const beginMove = applicationService.indexOf(
+    "deps.llmClient.beginChatWorkspaceChange(chatId)",
+  );
+  const workspaceLookup = applicationService.indexOf(
+    "await deps.configStore.getWorkspace(workspaceId)",
     beginMove,
   );
-  const moveCommit = handler.indexOf(
-    "await chatStore.moveEmptyChatToWorkspace(",
+  const moveCommit = applicationService.indexOf(
+    "await deps.chatStore.moveEmptyChatToWorkspace(",
     workspaceLookup,
   );
   assert.ok(moveHandler >= 0);
-  assert.ok(beginMove > moveHandler);
+  assert.ok(beginMove >= 0);
   assert.ok(workspaceLookup > beginMove);
   assert.ok(moveCommit > workspaceLookup);
 
@@ -318,8 +329,10 @@ test("renderer message appends serialize against detached terminal persistence",
   );
   assert.match(
     handler,
-    /"chats:waitUntilIdle"[\s\S]{0,160}llmClient\.waitForChatIdle\(asString\(id, "id"\)\)/u,
+    /"chats:waitUntilIdle"[\s\S]{0,180}chatApplicationService\.waitUntilIdle\(asString\(id, "id"\)\)/u,
   );
+  const applicationService = await source("main/services/chat-application-service.ts");
+  assert.match(applicationService, /return deps\.llmClient\.waitForChatIdle\(chatId\)/u);
 });
 
 test("renderer turn tokens cross append and generation IPC without an admission gap", async () => {
@@ -371,24 +384,28 @@ test("main announces normalized settlement only after generation ownership exits
 });
 
 test("replacement chat reads mark bounded wait timeouts for retained renderer reconciliation", async () => {
-  const [handler, llm] = await Promise.all([
+  const [handler, applicationService, llm] = await Promise.all([
     source("main/handlers/chats.ts"),
+    source("main/services/chat-application-service.ts"),
     source("main/services/llm-client.ts"),
   ]);
   const getHandler = ipcHandlerStart(handler, "chats:get");
-  const inactiveCheck = handler.indexOf(
-    "llmClient.isChatOwnedByInactiveRenderer(chatId)",
-    getHandler,
+  assert.match(
+    handler.slice(getHandler),
+    /chatApplicationService\.get\(asString\(id, "id"\)\)/u,
   );
-  const idleWait = handler.indexOf(
-    "await llmClient.waitForChatIdle(chatId)",
+  const inactiveCheck = applicationService.indexOf(
+    "deps.llmClient.isChatOwnedByInactiveRenderer(chatId)",
+  );
+  const idleWait = applicationService.indexOf(
+    "await deps.llmClient.waitForChatIdle(chatId)",
     inactiveCheck,
   );
-  const read = handler.indexOf(
-    "const chat = await chatStore.get(chatId)",
+  const read = applicationService.indexOf(
+    "const chat = await deps.chatStore.get(chatId)",
     idleWait,
   );
-  const response = handler.indexOf(
+  const response = applicationService.indexOf(
     "reconciliation: reconciliationRequired",
     read,
   );
@@ -399,12 +416,12 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
   assert.ok(read > idleWait);
   assert.ok(response > read);
   assert.match(
-    handler,
-    /reconciliationRequired = !\(await llmClient\.waitForChatIdle\(chatId\)\)/u,
+    applicationService,
+    /reconciliationRequired = !\(await deps\.llmClient\.waitForChatIdle\(chatId\)\)/u,
   );
   assert.match(
-    handler,
-    /reconciliationRequired \|\|= llmClient\.isChatOwnedByInactiveRenderer\(chatId\)/u,
+    applicationService,
+    /reconciliationRequired \|\|= deps\.llmClient\.isChatOwnedByInactiveRenderer\(chatId\)/u,
   );
   const inactiveOwnerStart = llm.indexOf(
     "isChatOwnedByInactiveRenderer(chatId: string)",
@@ -458,9 +475,10 @@ test("application startup reconciles private runs and worktree deletions before 
 });
 
 test("persisted chat workspace ownership closes generation admission before setup", async () => {
-  const [llm, workspaces] = await Promise.all([
+  const [llm, workspaces, workspaceApplicationService] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/workspaces.ts"),
+    source("main/services/workspace-application-service.ts"),
   ]);
   const chatRead = llm.indexOf(
     "const chat = await chatStore.get(params.chatId)",
@@ -486,37 +504,41 @@ test("persisted chat workspace ownership closes generation admission before setu
   assert.ok(prepare > admissionCheck);
 
   const updateHandler = ipcHandlerStart(workspaces, "workspaces:update");
-  const beginMutation = workspaces.indexOf(
-    "workspaceMutationGate.begin(workspaceId)",
-    updateHandler,
+  assert.match(
+    workspaces.slice(updateHandler),
+    /workspaceApplicationService\.update\(asString\(id, "id"\), patch\)/u,
   );
-  const drainWorkspaceOperations = workspaces.indexOf(
-    "await workspaceOperationRegistry.cancelAndSettle(workspaceId)",
+  const beginMutation = workspaceApplicationService.indexOf(
+    "deps.workspaceMutationGate.begin(id)",
+  );
+  const drainWorkspaceOperations = workspaceApplicationService.indexOf(
+    "await deps.workspaceOperationRegistry.cancelAndSettle(id)",
     beginMutation,
   );
-  const cancelGeneration = workspaces.indexOf(
-    "await llmClient.cancelWorkspaceAndSettle(existing.id)",
+  const cancelGeneration = workspaceApplicationService.indexOf(
+    "await deps.llmClient.cancelWorkspaceAndSettle(existing.id)",
     beginMutation,
   );
-  const saveWorkspace = workspaces.indexOf(
-    "configStore.saveWorkspace(next)",
+  const saveWorkspace = workspaceApplicationService.indexOf(
+    "deps.configStore.saveWorkspace(next)",
     cancelGeneration,
   );
   assert.ok(updateHandler >= 0);
-  assert.ok(beginMutation > updateHandler);
+  assert.ok(beginMutation >= 0);
   assert.ok(drainWorkspaceOperations > beginMutation);
   assert.ok(cancelGeneration > beginMutation);
   assert.ok(cancelGeneration > drainWorkspaceOperations);
   assert.ok(saveWorkspace > cancelGeneration);
   assert.match(
-    workspaces.slice(updateHandler, saveWorkspace),
-    /await llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u,
+    workspaceApplicationService.slice(beginMutation, saveWorkspace),
+    /await deps\.llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u,
   );
 });
 
 test("managed worktree deletion and terminal creation share workspace mutation admission", async () => {
-  const [workspaces, terminal, terminalService, git] = await Promise.all([
+  const [workspaces, worktreeApplicationService, terminal, terminalService, git] = await Promise.all([
     source("main/handlers/workspaces.ts"),
+    source("main/services/workspace-worktree-application-service.ts"),
     source("main/handlers/terminal.ts"),
     source("main/services/terminal.ts"),
     source("main/services/git.ts"),
@@ -525,23 +547,26 @@ test("managed worktree deletion and terminal creation share workspace mutation a
     workspaces,
     "git:deleteManagedWorktree",
   );
-  const beginMutation = workspaces.indexOf(
-    "workspaceMutationGate.begin(id)",
-    deleteHandler,
+  const beginMutation = worktreeApplicationService.indexOf(
+    "dependencies.beginWorkspaceMutation(workspaceId)",
   );
-  const destructiveDelete = workspaces.indexOf(
-    "gitDeleteManagedWorktree(",
-    deleteHandler,
+  const destructiveDelete = worktreeApplicationService.indexOf(
+    "dependencies.deleteManagedWorktree(managed, signal)",
+    beginMutation,
   );
   assert.ok(deleteHandler >= 0);
-  assert.ok(beginMutation > deleteHandler);
+  assert.match(
+    workspaces.slice(deleteHandler),
+    /workspaceWorktreeApplicationService\.remove\(owner, id\)/u,
+  );
+  assert.ok(beginMutation >= 0);
   assert.ok(destructiveDelete > beginMutation);
   assert.match(
-    workspaces.slice(deleteHandler),
-    /withWorkspaceRecordOperation\([\s\S]+worktreeRegistered:[\s\S]+gitManagedWorktreeRegistered\([\s\S]+managed\.worktreeGitDir,[\s\S]+managed\.ownershipToken/u,
+    worktreeApplicationService,
+    /environment\.runRecord\([\s\S]+worktreeRegistered:[\s\S]+managedWorktreeRegistered\(managed\)/u,
   );
   assert.match(
-    workspaces.slice(deleteHandler),
+    worktreeApplicationService.slice(beginMutation),
     /reconciledResult: \(\) => \(\{ branchDeleted: false \}\)/u,
   );
   assert.match(
@@ -700,14 +725,16 @@ test("managed worktree cleanup is root-bound, resumable, and packaged as signed 
 });
 
 test("every workspace path capability is renderer-document owned and mutation admitted", async () => {
-  const [workspaces, operations, git] = await Promise.all([
+  const [workspaces, environment, operations, git] = await Promise.all([
     source("main/handlers/workspaces.ts"),
+    source("main/services/workspace-environment-application-service.ts"),
     source("main/services/workspace-operation-registry.ts"),
     source("main/services/git.ts"),
   ]);
 
   assert.match(workspaces, /rendererDocumentOwner\(\s*event,/u);
-  assert.match(workspaces, /admitRendererOwnedWorkspaceOperation\(/u);
+  assert.match(workspaces, /workspaceEnvironmentApplicationService\.run(?:Optional)?\(/u);
+  assert.match(environment, /admitOwnedWorkspaceOperation\(/u);
   assert.doesNotMatch(workspaces, /sender\.once\("destroyed"/u);
   assert.match(operations, /owner\.onInvalidated\(cancel\)/u);
 
@@ -748,11 +775,12 @@ test("every workspace path capability is renderer-document owned and mutation ad
 });
 
 test("managed worktree identity gates generation, terminal, scheduled, and workspace capabilities", async () => {
-  const [llm, terminal, scheduled, workspaces, admission] = await Promise.all([
+  const [llm, terminal, scheduled, workspaces, environment, admission] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/terminal.ts"),
     source("main/services/schedule-execution.ts"),
     source("main/handlers/workspaces.ts"),
+    source("main/services/workspace-environment-application-service.ts"),
     source("main/services/managed-worktree-admission.ts"),
   ]);
   assert.match(
@@ -776,8 +804,8 @@ test("managed worktree identity gates generation, terminal, scheduled, and works
     /executeLlm[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
   );
   assert.match(
-    workspaces,
-    /workspaceDirectory[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
+    environment,
+    /resolve[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u,
   );
   assert.match(
     workspaces,
@@ -790,9 +818,11 @@ test("managed worktree identity gates generation, terminal, scheduled, and works
 });
 
 test("terminal writes pause across workspace mutations and documents lose PTYs on reload", async () => {
-  const [terminal, workspaces, main] = await Promise.all([
+  const [terminal, workspaces, workspaceApplicationService, worktreeApplicationService, main] = await Promise.all([
     source("main/handlers/terminal.ts"),
     source("main/handlers/workspaces.ts"),
+    source("main/services/workspace-application-service.ts"),
+    source("main/services/workspace-worktree-application-service.ts"),
     source("main/index.ts"),
   ]);
   const accessCheck = terminal.indexOf("async function ensureSessionAccess");
@@ -825,41 +855,46 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   assert.ok(guardedWrite > writeHandler);
 
   const updateHandler = ipcHandlerStart(workspaces, "workspaces:update");
-  const permissionChange = workspaces.indexOf(
-    "if (next.permission !== existing.permission)",
-    updateHandler,
+  assert.match(
+    workspaces.slice(updateHandler),
+    /workspaceApplicationService\.update\(asString\(id, "id"\), patch\)/u,
   );
-  const updateTerminalClose = workspaces.indexOf(
-    "terminalService.closeForWorkspace(existing.id)",
+  const updateMethod = workspaceApplicationService.indexOf("async update(");
+  const permissionChange = workspaceApplicationService.indexOf(
+    "if (next.permission === existing.permission)",
+    updateMethod,
+  );
+  const updateTerminalClose = workspaceApplicationService.indexOf(
+    "deps.terminalService.closeForWorkspace(existing.id)",
     permissionChange,
   );
-  const updateScheduleRestoration = workspaces.lastIndexOf(
+  const updateScheduleRestoration = workspaceApplicationService.lastIndexOf(
     "withWorkspaceScheduleRestoration(",
     updateTerminalClose,
   );
-  const updateScheduleCancel = workspaces.indexOf(
-    "await scheduleService.cancelWorkspace(existing.id)",
+  const updateScheduleCancel = workspaceApplicationService.indexOf(
+    "await deps.scheduleService.cancelWorkspace(existing.id)",
     permissionChange,
   );
   assert.ok(updateTerminalClose > permissionChange);
   assert.ok(updateScheduleRestoration > permissionChange);
   assert.ok(updateTerminalClose > updateScheduleRestoration);
-  const updateGenerationDrain = workspaces.indexOf(
-    "await llmClient.cancelWorkspaceAndSettle(existing.id)",
+  const updateGenerationDrain = workspaceApplicationService.indexOf(
+    "await deps.llmClient.cancelWorkspaceAndSettle(existing.id)",
     permissionChange,
   );
   assert.ok(updateGenerationDrain > updateTerminalClose);
   assert.ok(updateScheduleCancel > updateTerminalClose);
-  const updateSave = workspaces.indexOf(
-    "await configStore.saveWorkspace(next)",
+  const updateSave = workspaceApplicationService.indexOf(
+    "await deps.configStore.saveWorkspace(next)",
     updateScheduleCancel,
   );
-  const armPostSaveResume = workspaces.indexOf(
+  const armPostSaveResume = workspaceApplicationService.indexOf(
     "ensureResumedOnExit()",
     updateSave,
   );
-  const firstPostSaveResume = workspaces.indexOf(
-    "await scheduleService.resumeWorkspace(saved.id)",
+  const firstPostSaveResume = workspaceApplicationService.indexOf(
+    "await deps.scheduleService.resumeWorkspace(saved.id)",
     armPostSaveResume,
   );
   assert.ok(updateSave > updateScheduleCancel);
@@ -867,38 +902,43 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   assert.ok(firstPostSaveResume > armPostSaveResume);
 
   const removeHandler = ipcHandlerStart(workspaces, "workspaces:remove");
-  const removeTerminalClose = workspaces.indexOf(
-    "terminalService.closeForWorkspace(workspaceId)",
-    removeHandler,
+  assert.match(
+    workspaces.slice(removeHandler),
+    /workspaceApplicationService\.remove\(asString\(id, "id"\)\)/u,
   );
-  const removeWorkspaceRead = workspaces.indexOf(
-    "await configStore.getWorkspace(workspaceId)",
-    removeHandler,
+  const removeMethod = workspaceApplicationService.indexOf("async remove(");
+  const removeTerminalClose = workspaceApplicationService.indexOf(
+    "deps.terminalService.closeForWorkspace(id)",
+    removeMethod,
   );
-  const managedRemovalGuard = workspaces.indexOf(
+  const removeWorkspaceRead = workspaceApplicationService.indexOf(
+    "await deps.configStore.getWorkspace(id)",
+    removeMethod,
+  );
+  const managedRemovalGuard = workspaceApplicationService.indexOf(
     "assertWorkspaceRecordRemovalAllowed(existing)",
     removeWorkspaceRead,
   );
-  const removeOperationDrain = workspaces.indexOf(
-    "await workspaceOperationRegistry.cancelAndSettle(workspaceId)",
-    removeHandler,
+  const removeOperationDrain = workspaceApplicationService.indexOf(
+    "await deps.workspaceOperationRegistry.cancelAndSettle(id)",
+    removeMethod,
   );
-  const removeScheduleRestoration = workspaces.indexOf(
+  const removeScheduleRestoration = workspaceApplicationService.indexOf(
     "withWorkspaceScheduleRestoration(",
     removeWorkspaceRead,
   );
-  assert.ok(removeTerminalClose > removeHandler);
-  assert.ok(removeOperationDrain > removeTerminalClose);
+  assert.ok(removeTerminalClose > removeMethod);
+  assert.ok(removeOperationDrain > removeMethod);
   assert.ok(removeWorkspaceRead > removeOperationDrain);
-  assert.ok(removeWorkspaceRead > removeTerminalClose);
-  assert.ok(managedRemovalGuard > removeWorkspaceRead);
+  assert.ok(removeTerminalClose > removeWorkspaceRead);
+  assert.ok(managedRemovalGuard > removeTerminalClose);
   assert.ok(removeScheduleRestoration > managedRemovalGuard);
-  const removeGenerationDrain = workspaces.indexOf(
-    "await llmClient.cancelWorkspaceAndSettle(workspaceId)",
+  const removeGenerationDrain = workspaceApplicationService.indexOf(
+    "await deps.llmClient.cancelWorkspaceAndSettle(id)",
     removeWorkspaceRead,
   );
-  const removeRecord = workspaces.indexOf(
-    "await configStore.removeWorkspace(workspaceId)",
+  const removeRecord = workspaceApplicationService.indexOf(
+    "await deps.configStore.removeWorkspace(id)",
     removeGenerationDrain,
   );
   assert.ok(removeGenerationDrain > removeWorkspaceRead);
@@ -909,63 +949,68 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
     workspaces,
     "git:deleteManagedWorktree",
   );
-  const managedTerminalClose = workspaces.indexOf(
-    "terminalService.closeForWorkspace(id)",
-    managedDelete,
+  assert.match(
+    workspaces.slice(managedDelete),
+    /workspaceWorktreeApplicationService\.remove\(owner, id\)/u,
   );
-  const managedScheduleCancel = workspaces.indexOf(
-    "await scheduleService.cancelWorkspace(id)",
-    managedDelete,
+  const managedRemove = worktreeApplicationService.indexOf("const remove = async (");
+  const managedTerminalClose = worktreeApplicationService.indexOf(
+    "dependencies.closeWorkspaceTerminals(workspaceId)",
+    managedRemove,
   );
-  const managedScheduleRestoration = workspaces.indexOf(
-    "withWorkspaceScheduleRestoration(",
-    managedDelete,
-  );
-  assert.ok(managedTerminalClose > managedDelete);
-  assert.ok(managedScheduleRestoration > managedDelete);
-  assert.ok(managedTerminalClose > managedScheduleRestoration);
-  const managedGenerationDrain = workspaces.indexOf(
-    "await llmClient.cancelWorkspaceAndSettle(id)",
+  const managedScheduleCancel = worktreeApplicationService.indexOf(
+    "await dependencies.cancelWorkspaceSchedules(workspaceId)",
     managedTerminalClose,
   );
-  const managedOperationDrain = workspaces.indexOf(
-    "await workspaceOperationRegistry.cancelAndSettle(id",
-    managedDelete,
+  const managedScheduleRestoration = worktreeApplicationService.indexOf(
+    "withWorkspaceScheduleRestoration(",
+    managedRemove,
   );
-  const managedWorktreeRemoval = workspaces.indexOf(
-    "const result = await removeManagedWorkspace",
+  assert.ok(managedTerminalClose > managedRemove);
+  assert.ok(managedScheduleRestoration > managedRemove);
+  assert.ok(managedTerminalClose > managedScheduleRestoration);
+  const managedGenerationDrain = worktreeApplicationService.indexOf(
+    "await dependencies.cancelWorkspaceGeneration(workspaceId)",
+    managedTerminalClose,
+  );
+  const managedOperationDrain = worktreeApplicationService.indexOf(
+    "await dependencies.cancelWorkspaceOperations(workspaceId, signal)",
+    managedRemove,
+  );
+  const managedWorktreeRemoval = worktreeApplicationService.indexOf(
+    "const deletion = await removeManagedWorkspace",
     managedGenerationDrain,
   );
-  const managedDeletionFinalize = workspaces.indexOf(
-    "await gitFinalizeManagedWorktreeDeletion",
+  const managedDeletionFinalize = worktreeApplicationService.indexOf(
+    "await dependencies.finalizeManagedWorktreeDeletion(managed)",
     managedWorktreeRemoval,
   );
-  const managedDeleteReturn = workspaces.indexOf(
-    "return result",
+  const managedDeleteReturn = worktreeApplicationService.indexOf(
+    "return deletion",
     managedDeletionFinalize,
   );
   assert.ok(managedGenerationDrain > managedTerminalClose);
-  assert.ok(managedOperationDrain > managedDelete);
+  assert.ok(managedOperationDrain > managedRemove);
   assert.ok(managedGenerationDrain > managedOperationDrain);
   assert.ok(managedWorktreeRemoval > managedGenerationDrain);
   assert.ok(managedDeletionFinalize > managedWorktreeRemoval);
   assert.ok(managedDeleteReturn > managedDeletionFinalize);
   assert.ok(managedScheduleCancel > managedTerminalClose);
   assert.match(
-    workspaces.slice(managedDelete),
+    worktreeApplicationService.slice(managedRemove),
     /destructiveMutationAttempted:[\s\S]+GitManagedWorktreeDeleteError[\s\S]+destructiveMutationAttempted/u,
   );
   assert.match(
-    workspaces.slice(managedDelete),
-    /worktreeUsable:[\s\S]+gitManagedWorktreeUsable\(/u,
+    worktreeApplicationService.slice(managedRemove),
+    /worktreeUsable:[\s\S]+managedWorktreeUsable\(managed\)/u,
   );
   assert.match(
-    workspaces.slice(managedDelete),
-    /deletionPending:[\s\S]+gitManagedWorktreeDeletionPending\(/u,
+    worktreeApplicationService.slice(managedRemove),
+    /deletionPending:[\s\S]+managedWorktreeDeletionPending\(managed\)/u,
   );
   assert.match(
-    workspaces,
-    /commitManagedWorktreeCreation\([\s\S]+removeWorkspaceRecord:[\s\S]+configStore\.removeWorkspace\(saved\.id\)[\s\S]+rollbackWorktree:/u,
+    worktreeApplicationService,
+    /commitManagedWorktreeCreation\([\s\S]+removeWorkspaceRecord:[\s\S]+removeWorkspace\(savedWorkspace\.id\)[\s\S]+rollbackWorktree:/u,
   );
 
   const didStartLoading = main.indexOf('webContents.on("did-start-loading"');

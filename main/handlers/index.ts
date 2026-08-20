@@ -24,6 +24,7 @@ import { registerAssistantHandlers } from "./assistant.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
 import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
+import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 
 import { ipcMain, logger } from "../platform.js";
 import { writeDevLog } from "../services/dev-log.js";
@@ -65,6 +66,7 @@ export function registerHandlers(): void {
   registerShortcutHandlers();
   registerTelegramHandlers();
   registerSubagentHandlers();
+  registerAidenRemoteHandlers();
 
   logger.info("handlers", "✓ IPC handlers registered");
 

@@ -101,6 +101,10 @@ import {
   reconcilePendingMcpCredentialCleanup,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
+import {
+  initializeAidenRemoteService,
+  stopAidenRemoteServiceAndSettle,
+} from "./services/aiden-remote-service-main.js";
 
 const ownsSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -339,6 +343,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     // time to publish evidence after its lifecycle has already failed closed.
     app.exit(1);
     return;
+  }
+  try {
+    await stopAidenRemoteServiceAndSettle();
+  } catch (error) {
+    logger.error("aiden-remote", "Remote Access did not stop cleanly.", error);
   }
   cleanupApplication();
   try {
@@ -1604,6 +1613,16 @@ if (!ownsSingleInstanceLock) {
         () => void portableConfigWatcher.refresh(),
       );
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
+
+      try {
+        await initializeAidenRemoteService();
+      } catch (error) {
+        logger.error(
+          "aiden-remote",
+          "Remote Access could not restore its saved listener state; the desktop app will remain available for repair.",
+          error,
+        );
+      }
 
       await createMainWindow();
       if (packagedSubagentSoak) {

@@ -1,6 +1,6 @@
 // Provider configuration + API key IPC handlers. Thin — logic lives in services.
 
-import { ipcMain, logger } from "../platform.js";
+import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { canUseStoredProviderKey } from "../services/provider-key-policy.js";
 import { secrets } from "../services/secrets.js";
@@ -23,7 +23,6 @@ import { parseAnthropicThinkingSelection } from "../services/anthropic-provider.
 import {
   assertMutableProviderId,
   forwardCodexProviderStatusChanges,
-  mergeCodexProvider,
 } from "../services/provider-list-core.js";
 import { AppearancePreviewState } from "../services/appearance-preview-core.js";
 import {
@@ -35,7 +34,7 @@ import {
   normalizeProviderCredentialInput,
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
-import { listProvidersWithLegacyPiCredentialMigration } from "../services/legacy-pi-credential-migration.js";
+import { listConfiguredProviders } from "../services/provider-list-main.js";
 import type {
   ProviderDeployment,
   ProviderKind,
@@ -196,17 +195,7 @@ async function saveProvider(
 }
 
 async function listProviders() {
-  const customProviders = await listProvidersWithLegacyPiCredentialMigration();
-  const providers = [
-    ...(await providerRegistry.listBuiltinProviders()),
-    ...customProviders.filter((provider) => !providerRegistry.isBuiltinProvider(provider.id)),
-  ];
-  try {
-    return mergeCodexProvider(providers, await providerRegistry.codex.snapshot());
-  } catch {
-    logger.warn("providers", "ChatGPT / Codex status was unavailable while listing providers.");
-    return mergeCodexProvider(providers, null);
-  }
+  return listConfiguredProviders();
 }
 
 export function registerProviderHandlers(): void {
