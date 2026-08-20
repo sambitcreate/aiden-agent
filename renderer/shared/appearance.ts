@@ -145,7 +145,7 @@ export const THEME_PRESETS: ReadonlyArray<ThemePreset> = [
       raised: "#2E2435",
       foreground: "#D5CFD6",
       secondary: "#A39AA6",
-      accent: "#22B69B",
+      accent: "#E8629F",
       success: "#32D1B2",
       warning: "#D9A441",
       danger: "#F0717A",

@@ -26,6 +26,7 @@ import {
   Send,
   ShieldCheck,
   SquareTerminal,
+  Smartphone,
   UserRound,
   UsersRound,
   Wand2,
@@ -86,6 +87,8 @@ const FEATURE_ILLUSTRATIONS = {
   permissions: new URL("../assets/onboarding/features/permissions.png", import.meta.url).href,
   themes: new URL("../assets/onboarding/features/themes-accessibility.png", import.meta.url).href,
   telegram: new URL("../assets/onboarding/features/telegram-remote-control.png", import.meta.url)
+    .href,
+  aidenOnTheGo: new URL("../assets/onboarding/features/aiden-on-the-go.png", import.meta.url)
     .href,
 } as const;
 
@@ -335,6 +338,15 @@ const featureBentos: FeatureBento[] = [
     description: "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
+    size: "standard",
+  },
+  {
+    id: "aidenOnTheGo",
+    group: "control",
+    title: "Aiden On The Go",
+    description: "Pair your iPhone or iPad over pinned local HTTPS or a private Tailscale route.",
+    icon: Smartphone,
+    imageUrl: FEATURE_ILLUSTRATIONS.aidenOnTheGo,
     size: "standard",
   },
   {
@@ -919,6 +931,9 @@ export function OnboardingFlow() {
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
                       Explore all {featureBentos.length} shipped features. Scroll, then hover or
                       focus a tile to learn more.
+                    </Text>
+                    <Text as="p" variant="small" color="tertiary" className="mt-1 block">
+                      Phone and iPad access starts off. After setup, opt in from Settings → Remote Access; Aiden must stay running, and Tailscale is optional.
                     </Text>
                   </div>
                 </div>

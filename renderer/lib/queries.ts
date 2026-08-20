@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import {
   assistantApi,
+  aidenRemoteApi,
   chatsApi,
   artificialAnalysisApi,
   computerUseApi,
@@ -60,6 +61,7 @@ export const queryKeys = {
   mcpPresets: ["mcpPresets"] as const,
   exa: ["exa"] as const,
   telegram: ["telegram"] as const,
+  aidenRemote: ["aidenRemote"] as const,
   engineStatus: ["engineStatus"] as const,
   localModels: ["localModels"] as const,
   workspaces: ["workspaces"] as const,
@@ -462,6 +464,16 @@ export function useExaConfig() {
 
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });
+}
+
+export function useAidenRemoteSettings() {
+  return useQuery({
+    queryKey: queryKeys.aidenRemote,
+    queryFn: aidenRemoteApi.get,
+    retry: false,
+    refetchOnWindowFocus: true,
+    refetchInterval: 10_000,
+  });
 }
 
 export function useEngineStatus(enabled = true) {

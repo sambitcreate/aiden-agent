@@ -181,6 +181,21 @@ function RootContent() {
     });
   }, [queryClient]);
 
+  React.useEffect(() => {
+    return onNotification("workspaces:changed", () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
+      ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("chats:changed", () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.chats });
+    });
+  }, [queryClient]);
+
   React.useEffect(
     () =>
       subscribeDetachedTerminalChats(

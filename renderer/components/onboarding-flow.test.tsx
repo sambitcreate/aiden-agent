@@ -31,6 +31,7 @@ const featureAssetPaths = [
   "features/themes-accessibility.png",
   "features/thinking-controls.png",
   "features/telegram-remote-control.png",
+  "features/aiden-on-the-go.png",
   "features/usage-profile.png",
   "features/voice-dictation.png",
   "features/web-search.png",
@@ -236,6 +237,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
   assert.match(source, /tabIndex=\{0\}/u);
+  assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings → Remote Access/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",
@@ -267,17 +269,19 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     "Permissioned by Default",
     "Themes & Accessibility",
     "Aiden in Telegram",
+    "Aiden On The Go",
   ]) {
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 23);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 24);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 23);
+  assert.equal(featureAssetPaths.length, 24);
   assert.ok(featureAssetPaths.includes("features/telegram-remote-control.png"));
+  assert.ok(featureAssetPaths.includes("features/aiden-on-the-go.png"));
   assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
   for (const assetPath of featureAssetPaths) {
     const illustration = readFileSync(

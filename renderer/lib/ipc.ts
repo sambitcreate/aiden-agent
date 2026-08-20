@@ -104,6 +104,11 @@ import {
   type SkillCatalogEntry,
 } from "../shared/slash-commands";
 import { rememberAppendReconciliationFailure } from "./append-reconciliation";
+import type {
+  AidenRemoteConnectionMode,
+  AidenRemotePairingBootstrapView,
+  AidenRemoteSettingsSnapshot,
+} from "../shared/aiden-remote";
 
 function bridge() {
   return window.aidenAPI.ipc;
@@ -383,6 +388,29 @@ export const telegramApi = {
   deleteProfile: (profile: string) => invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
   onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
     onNotification("telegram:model-selection-changed", handler),
+};
+
+export const aidenRemoteApi = {
+  get: () => invoke<AidenRemoteSettingsSnapshot>("remote:get"),
+  setEnabled: (enabled: boolean) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setEnabled", enabled),
+  setConnectionMode: (mode: AidenRemoteConnectionMode) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:setConnectionMode", mode),
+  connectTailscale: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleConnect"),
+  disconnectTailscale: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:tailscaleDisconnect"),
+  beginPairing: (transport: "lan" | "tailscale") =>
+    invoke<AidenRemotePairingBootstrapView>("remote:beginPairing", transport),
+  closePairing: () => invoke<{ closed: true }>("remote:closePairing"),
+  revokeDevice: (deviceId: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:revokeDevice", deviceId),
+  addApprovedRoot: () =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:addApprovedRoot"),
+  removeApprovedRoot: (rootId: string) =>
+    invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
+  onChanged: (handler: () => void) =>
+    onNotification("remote:changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
