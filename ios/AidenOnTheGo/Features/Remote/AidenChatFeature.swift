@@ -188,6 +188,24 @@ struct AidenTurnAttemptTracker {
     }
 }
 
+enum AidenTurnRequestBuilder {
+    static func make(
+        text: String,
+        providerId: String?,
+        modelId: String?,
+        thinkingLevel: String?,
+        attachments: [AidenAttachmentReference]
+    ) -> AidenTurnStart {
+        AidenTurnStart(
+            text: text,
+            providerId: providerId,
+            modelId: modelId,
+            thinkingLevel: thinkingLevel,
+            attachmentIds: attachments.isEmpty ? nil : attachments.map(\.id)
+        )
+    }
+}
+
 @MainActor
 @Observable
 final class AidenWorkspaceChatsModel {
@@ -395,6 +413,13 @@ final class AidenChatViewModel {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         let submittedAttachments = pendingAttachments
+        let request = AidenTurnRequestBuilder.make(
+            text: text,
+            providerId: selectedProviderId,
+            modelId: selectedModelId,
+            thinkingLevel: selectedThinkingLevel,
+            attachments: submittedAttachments
+        )
         let previousUpdatedAt = chat.updatedAt
         let optimisticID = "local-\(UUID().uuidString.lowercased())"
         let now = Date()
@@ -422,13 +447,6 @@ final class AidenChatViewModel {
         chat.messages.append(optimisticMessage)
         chat.updatedAt = now
         streamState = .queued
-        let request = AidenTurnStart(
-            text: text,
-            providerId: selectedProviderId,
-            modelId: selectedModelId,
-            thinkingLevel: selectedThinkingLevel,
-            attachmentIds: pendingAttachments.isEmpty ? nil : pendingAttachments.map(\.id)
-        )
         let idempotencyKey = turnAttempts.key(for: request)
         do {
             let response = try await coordinator.remoteClient().startTurn(
@@ -968,6 +986,22 @@ private struct AidenMessageView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .contextMenu {
+            if let copyText = AidenMessageActionContent.copyText(for: message) {
+                Button {
+                    UIPasteboard.general.string = copyText
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+        }
+        .accessibilityActions {
+            if let copyText = AidenMessageActionContent.copyText(for: message) {
+                Button("Copy response") {
+                    UIPasteboard.general.string = copyText
+                }
+            }
+        }
         .accessibilityElement(children: message.role == .assistant ? .contain : .combine)
         .accessibilityLabel(message.role == .user ? "You" : "Aiden")
     }
@@ -1009,6 +1043,13 @@ private struct AidenMessageView: View {
     }
 }
 
+enum AidenMessageActionContent {
+    static func copyText(for message: AidenChatMessage) -> String? {
+        guard message.role == .assistant, !message.text.isEmpty else { return nil }
+        return message.text
+    }
+}
+
 struct AidenMessageTextView: View {
     let role: AidenChatRole
     let content: String
@@ -1017,6 +1058,7 @@ struct AidenMessageTextView: View {
     var body: some View {
         if role == .assistant {
             AidenMarkdownView(content: content)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Text(verbatim: content)
                 .font(.body)
@@ -1076,10 +1118,12 @@ struct AidenMarkdownView: View {
             } else if AidenMarkdownRenderingPolicy.fallbackReason(for: content) != nil {
                 Text(verbatim: content)
                     .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 MarkdownUI.Markdown(content)
                     .markdownTheme(.aidenChat(colorScheme: colorScheme))
                     .markdownImageProvider(AidenMarkdownNoNetworkImageProvider())
+                    .markdownCodeSyntaxHighlighter(.plainText)
                     .markdownTextStyle {
                         ForegroundColor(.primary)
                         BackgroundColor(nil)
@@ -1097,8 +1141,6 @@ struct AidenMarkdownView: View {
                     }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
     }
 }
@@ -1173,30 +1215,138 @@ private struct AidenLiveResponseView: View {
             }
 
             if let approval = model.pendingApproval {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Approval needed", systemImage: "hand.raised")
-                        .font(.headline)
-                    Text(approval.summary).font(.callout)
-                    HStack {
-                        Button("Deny", role: .destructive) {
-                            Task { await model.respondToApproval(.deny) }
-                        }
-                        .buttonStyle(.bordered)
-                        Button("Allow") {
-                            Task { await model.respondToApproval(.allow) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-                .padding()
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                AidenApprovalCard(
+                    summary: approval.summary,
+                    onDeny: { Task { await model.respondToApproval(.deny) } },
+                    onAllow: { Task { await model.respondToApproval(.allow) } }
+                )
             }
 
             if !model.liveText.isEmpty {
                 AidenMarkdownView(content: model.liveText)
+                    .contextMenu {
+                        Button {
+                            UIPasteboard.general.string = model.liveText
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                        }
+                    }
+                    .accessibilityActions {
+                        Button("Copy response") {
+                            UIPasteboard.general.string = model.liveText
+                        }
+                    }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct AidenApprovalCard: View {
+    @Environment(\.aidenPalette) private var palette
+
+    let summary: String
+    let onDeny: () -> Void
+    let onAllow: () -> Void
+
+    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "shield")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(palette.warning)
+                    .frame(width: 32, height: 32)
+                    .background(palette.warning.opacity(0.12), in: Circle())
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Approval needed")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+
+                    Text("Review this one action before Aiden continues.")
+                        .font(.caption)
+                        .foregroundStyle(palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Text(summary)
+                .font(.caption.monospaced())
+                .foregroundStyle(palette.foreground)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+
+                Button(action: onDeny) {
+                    Text("Deny")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                        .padding(.horizontal, 13)
+                        .frame(height: 34)
+                        .aidenApprovalActionGlass()
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 5)
+
+                Button(action: onAllow) {
+                    Text("Allow once")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(palette.canvas)
+                        .padding(.horizontal, 13)
+                        .frame(height: 34)
+                        .aidenApprovalActionGlass(tint: palette.accent)
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 5)
+            }
+        }
+        .padding(12)
+        .background(palette.raised, in: shape)
+        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
+        .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct AidenApprovalActionGlassModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    let tint: Color?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            if let tint {
+                content.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
+            } else {
+                content.glassEffect(.regular.interactive(), in: Capsule())
+            }
+        } else if let tint {
+            content.background(tint, in: Capsule())
+        } else if reduceTransparency {
+            content
+                .background(palette.canvas, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
+        } else {
+            content
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+        }
+    }
+}
+
+private extension View {
+    func aidenApprovalActionGlass(tint: Color? = nil) -> some View {
+        modifier(AidenApprovalActionGlassModifier(tint: tint))
     }
 }
 
@@ -1312,6 +1462,7 @@ private struct AidenComposerView: View {
     @State private var voiceInput = ComposerVoiceInputController()
     @State private var didAutoStartVoice = false
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isPhotoPickerPresented = false
     @State private var isFileImporterPresented = false
 
     var body: some View {
@@ -1354,16 +1505,7 @@ private struct AidenComposerView: View {
                 }
 
             HStack(alignment: .center, spacing: 10) {
-                Menu {
-                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                        Label("Photo Library", systemImage: "photo.on.rectangle")
-                    }
-                    Button {
-                        isFileImporterPresented = true
-                    } label: {
-                        Label("Choose File", systemImage: "doc")
-                    }
-                } label: {
+                AidenUIKitMenuButton {
                     if model.isUploadingAttachment {
                         ProgressView().controlSize(.small).frame(width: 44, height: 44)
                     } else {
@@ -1371,15 +1513,22 @@ private struct AidenComposerView: View {
                             .font(.title3.weight(.medium))
                             .frame(width: 44, height: 44)
                     }
+                } menu: {
+                    attachmentMenu()
                 }
                 .disabled(!model.isConnected || model.isStreaming || model.isUploadingAttachment || model.pendingAttachments.count >= 10)
                 .accessibilityLabel("Add attachment")
                 .accessibilityHint("Attach an image or bounded text file")
+                .photosPicker(
+                    isPresented: $isPhotoPickerPresented,
+                    selection: $selectedPhoto,
+                    matching: .images
+                )
 
                 if let catalog = model.catalog, !catalog.providers.isEmpty {
                     Menu {
                         ForEach(catalog.providers) { provider in
-                            Section(provider.label) {
+                            Section {
                                 ForEach(provider.models) { candidate in
                                     if let levels = candidate.thinkingLevels, !levels.isEmpty {
                                         Menu {
@@ -1417,12 +1566,29 @@ private struct AidenComposerView: View {
                                         }
                                     }
                                 }
+                            } header: {
+                                Label {
+                                    Text(provider.label)
+                                } icon: {
+                                    AidenProviderIcon(
+                                        providerID: provider.id,
+                                        providerLabel: provider.label,
+                                        size: 16,
+                                        color: palette.secondary
+                                    )
+                                }
                             }
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            if model.selectedModel?.thinkingLevels?.isEmpty == false {
-                                AidenSidebarLogo(size: 15, color: palette.secondary)
+                            if let provider = model.selectedProvider {
+                                AidenProviderIcon(
+                                    providerID: provider.id,
+                                    providerLabel: provider.label,
+                                    modelID: model.selectedModel?.id,
+                                    size: 15,
+                                    color: palette.secondary
+                                )
                             }
                             Text(model.selectedModel?.label ?? "Model").lineLimit(1)
                             if let level = model.selectedThinkingLevel,
@@ -1548,6 +1714,29 @@ private struct AidenComposerView: View {
         .onDisappear { voiceInput.stopKeepingTranscript() }
     }
 
+    private func attachmentMenu() -> UIMenu {
+        UIMenu(children: [
+            UIAction(
+                title: String(localized: "Photo Library"),
+                image: UIImage(systemName: "photo.on.rectangle")
+            ) { _ in
+                Task { @MainActor in
+                    composerFocus.wrappedValue = false
+                    isPhotoPickerPresented = true
+                }
+            },
+            UIAction(
+                title: String(localized: "Choose File"),
+                image: UIImage(systemName: "doc")
+            ) { _ in
+                Task { @MainActor in
+                    composerFocus.wrappedValue = false
+                    isFileImporterPresented = true
+                }
+            },
+        ])
+    }
+
     private var sendButtonBackground: Color {
         if model.canSend { return palette.accent }
         return palette.foreground.opacity(colorScheme == .dark ? 0.18 : 0.12)
@@ -1580,6 +1769,102 @@ private struct AidenComposerView: View {
               model.selectedModelId == candidate.id
         else { return false }
         return thinkingLevel == nil || model.selectedThinkingLevel == thinkingLevel
+    }
+}
+
+private struct AidenUIKitMenuButton<Label: View>: View {
+    @Environment(\.isEnabled) private var isEnabled
+
+    private let menu: () -> UIMenu
+    private let label: Label
+
+    init(
+        @ViewBuilder label: () -> Label,
+        menu: @escaping () -> UIMenu
+    ) {
+        self.label = label()
+        self.menu = menu
+    }
+
+    var body: some View {
+        label
+            .opacity(isEnabled ? 1 : 0.62)
+            .overlay {
+                AidenUIKitMenuButtonBacker(menu: menu)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct AidenUIKitMenuButtonBacker: UIViewControllerRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
+    let menu: () -> UIMenu
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(menu: menu)
+    }
+
+    func makeUIViewController(context: Context) -> AidenMenuButtonHostController {
+        let controller = AidenMenuButtonHostController()
+        let button = controller.button
+        button.menu = UIMenu(children: [
+            UIDeferredMenuElement.uncached { completion in
+                completion(context.coordinator.menu().children)
+            },
+        ])
+        button.isEnabled = isEnabled
+        button.isAccessibilityElement = false
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AidenMenuButtonHostController, context: Context) {
+        context.coordinator.menu = menu
+        controller.button.isEnabled = isEnabled
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        uiViewController: AidenMenuButtonHostController,
+        context: Context
+    ) -> CGSize? {
+        CGSize(
+            width: proposal.width ?? UIView.noIntrinsicMetric,
+            height: proposal.height ?? UIView.noIntrinsicMetric
+        )
+    }
+
+    final class Coordinator {
+        var menu: () -> UIMenu
+
+        init(menu: @escaping () -> UIMenu) {
+            self.menu = menu
+        }
+    }
+}
+
+private final class AidenMenuButtonHostController: UIViewController {
+    let button = UIButton(type: .custom)
+
+    override func loadView() {
+        let container = UIView()
+        container.backgroundColor = .clear
+        container.isOpaque = false
+        view = container
+
+        button.showsMenuAsPrimaryAction = true
+        button.backgroundColor = .clear
+        button.setTitle(nil, for: .normal)
+        button.setImage(nil, for: .normal)
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            button.topAnchor.constraint(equalTo: container.topAnchor),
+            button.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
     }
 }
 

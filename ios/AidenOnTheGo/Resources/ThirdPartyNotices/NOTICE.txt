@@ -15,3 +15,5 @@ with the iOS app.
   See NetworkImage-LICENSE.txt.
 - swift-cmark 0.8.0 (transitive dependency of MarkdownUI)
   See swift-cmark-COPYING.txt.
+- Provider logos (vector marks shared with Aiden Agent for provider identity)
+  See ProviderLogos-NOTICE.md for sources and trademark ownership.

@@ -19,28 +19,35 @@ final class AidenRemoteCoordinator {
     private(set) var connectionState: AidenRemoteConnectionState
     private(set) var server: AidenServer?
     private(set) var workspaces: [AidenWorkspace] = []
+    private(set) var workspaceSnapshotRevision = 0
     private(set) var isMutating = false
     var presentedError: String?
+    let workspaceArchiveStore: AidenWorkspaceArchiveStore
     private var pendingManagedWorktreeDeletionKeys: [String: UUID] = [:]
+    private var connectionGeneration = 0
 
     init() {
         let installationStore = AidenInstallationStore()
         self.installationStore = installationStore
+        workspaceArchiveStore = AidenWorkspaceArchiveStore()
         clientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
         connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
     }
 
     init(
         installationStore: AidenInstallationStore,
+        workspaceArchiveStore: AidenWorkspaceArchiveStore? = nil,
         clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
     ) {
         self.installationStore = installationStore
+        self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
         self.clientFactory = clientFactory
         connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
     }
 
     func start() async {
         guard installationStore.activeInstallation != nil else {
+            connectionGeneration &+= 1
             connectionState = .needsPairing
             updateIntentCatalog(for: nil)
             return
@@ -71,7 +78,12 @@ final class AidenRemoteCoordinator {
                 trust: payload.trust,
                 name: temporaryName
             )
-            try await load(installation: installation, credential: exchange.credential)
+            connectionGeneration &+= 1
+            try await load(
+                installation: installation,
+                credential: exchange.credential,
+                generation: connectionGeneration
+            )
         } catch {
             connectionState = installationStore.activeInstallation == nil ? .needsPairing : .offline(message: error.localizedDescription)
             presentedError = error.localizedDescription
@@ -79,6 +91,8 @@ final class AidenRemoteCoordinator {
     }
 
     func connectActiveInstallation() async {
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         guard let installation = installationStore.activeInstallation else {
             connectionState = .needsPairing
             server = nil
@@ -93,13 +107,15 @@ final class AidenRemoteCoordinator {
                   !credential.isEmpty else {
                 throw AidenRemoteClientError.missingCredential
             }
-            try await load(installation: installation, credential: credential)
+            try await load(installation: installation, credential: credential, generation: generation)
         } catch {
+            guard isCurrentContext(installationId: installation.id, generation: generation) else { return }
             await handleConnectionError(error, installationId: installation.id)
         }
     }
 
     func switchInstallation(to installationId: String) async {
+        guard !isMutating else { return }
         do {
             try installationStore.setActive(installationId)
             server = nil
@@ -112,6 +128,7 @@ final class AidenRemoteCoordinator {
     }
 
     func removeInstallation(_ installationId: String) async {
+        guard !isMutating else { return }
         do {
             await AidenRemoteLiveActivityManager.shared.endAll(forInstanceID: installationId)
             try installationStore.remove(installationId)
@@ -125,16 +142,20 @@ final class AidenRemoteCoordinator {
     }
 
     func refreshWorkspaces() async {
-        guard let client = try? activeClient() else {
+        guard let installationId = activeInstanceId,
+              let client = try? activeClient() else {
             connectionState = .needsPairing
             return
         }
+        let generation = connectionGeneration
         do {
-            workspaces = try await client.workspaces()
+            let refreshed = try await client.workspaces()
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return }
+            applyWorkspaceSnapshot(refreshed, instanceId: installationId)
             connectionState = .connected
-            updateIntentCatalog(for: activeInstanceId)
         } catch {
-            await handleConnectionError(error, installationId: installationStore.activeInstallationId)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return }
+            await handleConnectionError(error, installationId: installationId)
         }
     }
 
@@ -152,22 +173,44 @@ final class AidenRemoteCoordinator {
         presentedError = nil
         defer { isMutating = false }
 
+        guard let installationId = activeInstanceId else { return nil }
+        let generation = connectionGeneration
+        let client: AidenRemoteClient
+        do {
+            client = try activeClient()
+        } catch {
+            await handleConnectionError(error, installationId: installationId)
+            return nil
+        }
+
         var optimistic = workspace
         if let name { optimistic.name = name }
         if let permission { optimistic.permission = permission }
         upsert(optimistic)
 
         do {
-            let updated = try await activeClient().updateWorkspace(
+            let updated = try await client.updateWorkspace(
                 id: workspace.id,
                 revision: workspace.revision,
                 patch: AidenWorkspacePatch(name: name, permission: permission)
             )
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
             upsert(updated)
             return updated
         } catch {
-            upsert(workspace)
-            await handleConnectionError(error, installationId: installationStore.activeInstallationId)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
+            if let canonical = try? await client.workspaces(),
+               isCurrentContext(installationId: installationId, generation: generation) {
+                applyWorkspaceSnapshot(canonical, instanceId: installationId)
+                if let reconciled = canonical.first(where: { $0.id == workspace.id }),
+                   (name == nil || reconciled.name == name),
+                   (permission == nil || reconciled.permission == permission) {
+                    return reconciled
+                }
+            } else {
+                upsert(workspace)
+            }
+            await handleConnectionError(error, installationId: installationId)
             return nil
         }
     }
@@ -177,15 +220,42 @@ final class AidenRemoteCoordinator {
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
-        workspaces.removeAll { $0.id == workspace.id }
-        updateIntentCatalog(for: activeInstanceId)
+
+        guard let installationId = activeInstanceId else { return false }
+        let generation = connectionGeneration
+        let client: AidenRemoteClient
         do {
-            let client = try activeClient()
+            client = try activeClient()
+        } catch {
+            await handleConnectionError(error, installationId: installationId)
+            return false
+        }
+        workspaces.removeAll { $0.id == workspace.id }
+        updateIntentCatalog(for: installationId)
+        do {
             try await client.removeWorkspace(id: workspace.id, revision: workspace.revision)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return false }
+            // The desktop guarantees at least one registry workspace and may
+            // seed a replacement when the last record is removed. Canonicalize
+            // after the confirmed delete without rolling the delete back if
+            // this follow-up read happens to fail.
+            if let canonicalWorkspaces = try? await client.workspaces() {
+                guard isCurrentContext(installationId: installationId, generation: generation) else { return false }
+                applyWorkspaceSnapshot(canonicalWorkspaces, instanceId: installationId)
+            }
             return true
         } catch {
-            upsert(workspace)
-            await handleConnectionError(error, installationId: installationStore.activeInstallationId)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return false }
+            if let canonical = try? await client.workspaces(),
+               isCurrentContext(installationId: installationId, generation: generation) {
+                applyWorkspaceSnapshot(canonical, instanceId: installationId)
+                if !canonical.contains(where: { $0.id == workspace.id }) {
+                    return true
+                }
+            } else {
+                upsert(workspace)
+            }
+            await handleConnectionError(error, installationId: installationId)
             return false
         }
     }
@@ -195,26 +265,46 @@ final class AidenRemoteCoordinator {
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
-        let scope = "\(installationStore.activeInstallationId ?? ""):\(workspace.id)"
+
+        guard let installationId = activeInstanceId else { return false }
+        let generation = connectionGeneration
+        let client: AidenRemoteClient
+        do {
+            client = try activeClient()
+        } catch {
+            await handleConnectionError(error, installationId: installationId)
+            return false
+        }
+        let scope = "\(installationId):\(workspace.id)"
         let key = pendingManagedWorktreeDeletionKeys[scope] ?? UUID()
         pendingManagedWorktreeDeletionKeys[scope] = key
         workspaces.removeAll { $0.id == workspace.id }
         updateIntentCatalog(for: activeInstanceId)
         do {
-            let client = try activeClient()
             _ = try await client.deleteManagedGitWorktree(
                 workspaceId: workspace.id,
                 revision: workspace.revision,
                 idempotencyKey: key
             )
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return false }
             pendingManagedWorktreeDeletionKeys[scope] = nil
             return true
         } catch {
-            upsert(workspace)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return false }
+            if let canonical = try? await client.workspaces(),
+               isCurrentContext(installationId: installationId, generation: generation) {
+                applyWorkspaceSnapshot(canonical, instanceId: installationId)
+                if !canonical.contains(where: { $0.id == workspace.id }) {
+                    pendingManagedWorktreeDeletionKeys[scope] = nil
+                    return true
+                }
+            } else {
+                upsert(workspace)
+            }
             if !Self.isAmbiguousMutationError(error) {
                 pendingManagedWorktreeDeletionKeys[scope] = nil
             }
-            await handleConnectionError(error, installationId: installationStore.activeInstallationId)
+            await handleConnectionError(error, installationId: installationId)
             return false
         }
     }
@@ -232,6 +322,8 @@ final class AidenRemoteCoordinator {
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
+        guard let installationId = activeInstanceId else { return nil }
+        let generation = connectionGeneration
         do {
             let client = try activeClient()
             let selection = try await client.createWorkspaceSelection(location: location)
@@ -241,10 +333,12 @@ final class AidenRemoteCoordinator {
             let workspace = try await client.createWorkspace(
                 .selectedFolder(selection: selection.selection, name: name)
             )
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
             upsert(workspace)
             return workspace
         } catch {
-            await handleConnectionError(error, installationId: installationStore.activeInstallationId)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
+            await handleConnectionError(error, installationId: installationId)
             return nil
         }
     }
@@ -253,11 +347,21 @@ final class AidenRemoteCoordinator {
         installationStore.activeInstallationId
     }
 
+    func setDeviceArchivedWorkspaceIDs(_ workspaceIDs: Set<String>, for instanceId: String?) {
+        guard let instanceId, !instanceId.isEmpty else { return }
+        _ = workspaceIDs
+        updateIntentCatalog(for: instanceId)
+    }
+
     func remoteClient() throws -> AidenRemoteClient {
         try activeClient()
     }
 
-    private func load(installation: AidenInstallation, credential: String) async throws {
+    private func load(
+        installation: AidenInstallation,
+        credential: String,
+        generation: Int
+    ) async throws {
         let client = try clientFactory(installation, credential)
         async let serverRequest = client.server()
         async let workspaceRequest = client.workspaces()
@@ -265,11 +369,11 @@ final class AidenRemoteCoordinator {
         guard server.instanceId == installation.instanceId else {
             throw AidenRemoteContractError.invalidPairingExchange
         }
+        guard isCurrentContext(installationId: installation.id, generation: generation) else { return }
         try installationStore.updateServer(server)
         self.server = server
-        self.workspaces = workspaces
+        applyWorkspaceSnapshot(workspaces, instanceId: installation.id)
         connectionState = .connected
-        updateIntentCatalog(for: installation.id)
     }
 
     private func activeClient() throws -> AidenRemoteClient {
@@ -290,14 +394,34 @@ final class AidenRemoteCoordinator {
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
+        guard let installationId = activeInstanceId else { return nil }
+        let generation = connectionGeneration
         do {
-            let workspace = try await operation(activeClient())
+            let client = try activeClient()
+            let workspace = try await operation(client)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
             upsert(workspace)
             return workspace
         } catch {
-            await handleConnectionError(error, installationId: installationStore.activeInstallationId)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
+            await handleConnectionError(error, installationId: installationId)
             return nil
         }
+    }
+
+    private func applyWorkspaceSnapshot(_ workspaces: [AidenWorkspace], instanceId: String) {
+        guard activeInstanceId == instanceId else { return }
+        self.workspaces = workspaces
+        workspaceArchiveStore.prune(
+            instanceID: instanceId,
+            validWorkspaceIDs: Set(workspaces.map(\.id))
+        )
+        workspaceSnapshotRevision &+= 1
+        updateIntentCatalog(for: instanceId)
+    }
+
+    private func isCurrentContext(installationId: String, generation: Int) -> Bool {
+        activeInstanceId == installationId && connectionGeneration == generation
     }
 
     private func upsert(_ workspace: AidenWorkspace) {
@@ -308,6 +432,7 @@ final class AidenRemoteCoordinator {
     }
 
     private func handleConnectionError(_ error: Error, installationId: String?) async {
+        guard installationId == nil || installationId == activeInstanceId else { return }
         if let clientError = error as? AidenRemoteClientError,
            clientError.isCredentialRevoked,
            let installationId {
@@ -324,7 +449,12 @@ final class AidenRemoteCoordinator {
             presentedError = revocationMessage
             return
         }
-        connectionState = .offline(message: error.localizedDescription)
+        if let clientError = error as? AidenRemoteClientError,
+           case .server = clientError {
+            connectionState = .connected
+        } else {
+            connectionState = .offline(message: error.localizedDescription)
+        }
         presentedError = error.localizedDescription
     }
 
@@ -334,7 +464,8 @@ final class AidenRemoteCoordinator {
         }
         let cachedWorkspaces: [AidenIntentWorkspaceRecord]
         if let instanceId, instanceId == activeInstanceId {
-            cachedWorkspaces = workspaces.map {
+            let archivedWorkspaceIDs = workspaceArchiveStore.archivedWorkspaceIDs(for: instanceId)
+            cachedWorkspaces = workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }.map {
                 AidenIntentWorkspaceRecord(id: $0.id, instanceId: instanceId, name: $0.name)
             }
         } else {

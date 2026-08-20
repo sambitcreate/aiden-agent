@@ -484,7 +484,8 @@ private struct AidenScheduledTaskEditor: View {
     }
 
     private var providers: [AidenProvider] { model.catalog?.providers ?? [] }
-    private var models: [AidenModel] { providers.first { $0.id == draft.providerId }?.models ?? [] }
+    private var selectedProvider: AidenProvider? { providers.first { $0.id == draft.providerId } }
+    private var models: [AidenModel] { selectedProvider?.models ?? [] }
 
     var body: some View {
         NavigationStack {
@@ -514,11 +515,36 @@ private struct AidenScheduledTaskEditor: View {
                         TextEditor(text: $draft.prompt).frame(minHeight: 120)
                         Picker("Provider", selection: $draft.providerId) {
                             Text("Default").tag(String?.none)
-                            ForEach(providers) { Text($0.label).tag(Optional($0.id)) }
+                            ForEach(providers) { provider in
+                                Label {
+                                    Text(provider.label)
+                                } icon: {
+                                    AidenProviderIcon(
+                                        providerID: provider.id,
+                                        providerLabel: provider.label,
+                                        size: 16
+                                    )
+                                }
+                                .tag(Optional(provider.id))
+                            }
                         }
                         Picker("Model", selection: $draft.modelId) {
                             Text("Default").tag(String?.none)
-                            ForEach(models) { Text($0.label).tag(Optional($0.id)) }
+                            ForEach(models) { candidate in
+                                Label {
+                                    Text(candidate.label)
+                                } icon: {
+                                    if let provider = selectedProvider {
+                                        AidenProviderIcon(
+                                            providerID: provider.id,
+                                            providerLabel: provider.label,
+                                            modelID: candidate.id,
+                                            size: 16
+                                        )
+                                    }
+                                }
+                                .tag(Optional(candidate.id))
+                            }
                         }
                     }
                     if !model.mcpServers.isEmpty {

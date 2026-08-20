@@ -64,6 +64,7 @@
 		A0E000000000000000000008 /* Strands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000018 /* Strands.swift */; };
 		A0E000000000000000000009 /* ThinkingOrb.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E000000000000000000019 /* ThinkingOrb.swift */; };
 		A0E00000000000000000000A /* Web.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E00000000000000000001A /* Web.swift */; };
+		A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F000000000000000000011 /* AidenProviderIcon.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -156,6 +157,7 @@
 		A0E000000000000000000018 /* Strands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Strands.swift; sourceTree = "<group>"; };
 		A0E000000000000000000019 /* ThinkingOrb.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThinkingOrb.swift; sourceTree = "<group>"; };
 		A0E00000000000000000001A /* Web.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Web.swift; sourceTree = "<group>"; };
+		A0F000000000000000000011 /* AidenProviderIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenProviderIcon.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -322,6 +324,7 @@
 		C09300000000000000000010 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				A0F000000000000000000011 /* AidenProviderIcon.swift */,
 				A0E000000000000000000020 /* ThinkingOrbsKit */,
 			);
 			path = Shared;
@@ -607,6 +610,7 @@
 				A0E000000000000000000008 /* Strands.swift in Sources */,
 				A0E000000000000000000009 /* ThinkingOrb.swift in Sources */,
 				A0E00000000000000000000A /* Web.swift in Sources */,
+				A0F000000000000000000001 /* AidenProviderIcon.swift in Sources */,
 				1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */,
 				A04500000000000000000001 /* AgentRunActivityAttributes.swift in Sources */,
 				A04500000000000000000002 /* AidenDeepLink.swift in Sources */,

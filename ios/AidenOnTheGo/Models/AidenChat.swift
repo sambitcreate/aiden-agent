@@ -160,11 +160,37 @@ struct AidenUsageTotals: Codable, Equatable, Sendable {
     let tokens: AidenUsageTokens
 }
 
+struct AidenUsageDay: Codable, Equatable, Sendable {
+    let date: String
+    let requests: Int
+    let reportedTokenRequests: Int
+    let unmeteredRequests: Int
+    let tokens: AidenUsageTokens
+    let hostedCostUsd: Double
+}
+
+struct AidenUsageModel: Codable, Equatable, Identifiable, Sendable {
+    let providerId: String
+    let providerLabel: String
+    let modelId: String
+    let modelLabel: String
+    let local: Bool
+    let requests: Int
+    let reportedTokenRequests: Int
+    let unmeteredRequests: Int
+    let tokens: AidenUsageTokens
+    let hostedCostUsd: Double
+
+    var id: String { "\(providerId):\(modelId):\(local)" }
+}
+
 struct AidenUsageSummary: Codable, Equatable, Sendable {
     let range: String
     let startDate: String
     let endDate: String
     let totals: AidenUsageTotals
+    let days: [AidenUsageDay]
+    let models: [AidenUsageModel]
 }
 
 struct AidenTurnStart: Encodable, Equatable, Sendable {

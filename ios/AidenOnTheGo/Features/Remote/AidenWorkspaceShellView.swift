@@ -40,9 +40,101 @@ private struct AidenLiquidGlassCapsuleModifier: ViewModifier {
     }
 }
 
+private struct AidenChromeGlassModifier<GlassShape: InsettableShape>: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    let isInteractive: Bool
+    let shape: GlassShape
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            if isInteractive {
+                content.glassEffect(.regular.interactive(), in: shape)
+            } else {
+                content.glassEffect(.regular, in: shape)
+            }
+        } else if reduceTransparency {
+            content
+                .background(palette.raised, in: shape)
+                .overlay(shape.stroke(palette.foreground.opacity(0.14), lineWidth: 0.5))
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+        }
+    }
+}
+
+private struct AidenProminentGlassButtonModifier: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.aidenPalette) private var palette
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *), !reduceTransparency {
+            content.buttonStyle(.glass)
+        } else if reduceTransparency {
+            content
+                .buttonStyle(.plain)
+                .background(palette.raised, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.16), lineWidth: 0.5))
+        } else {
+            content
+                .buttonStyle(.plain)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().stroke(palette.foreground.opacity(0.10), lineWidth: 0.5))
+        }
+    }
+}
+
 private extension View {
     func aidenLiquidGlassCapsule(tint: Color) -> some View {
         modifier(AidenLiquidGlassCapsuleModifier(tint: tint))
+    }
+
+    func aidenChromeGlass<GlassShape: InsettableShape>(
+        isInteractive: Bool = false,
+        in shape: GlassShape
+    ) -> some View {
+        modifier(AidenChromeGlassModifier(isInteractive: isInteractive, shape: shape))
+    }
+
+    func aidenProminentGlassButton() -> some View {
+        modifier(AidenProminentGlassButtonModifier())
+    }
+}
+
+enum AidenNewAgentChoice: String, CaseIterable, Identifiable {
+    case existingWorkspace
+    case newWorkspace
+    case scratchWorkspace
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .existingWorkspace: "Existing Workspace"
+        case .newWorkspace: "New Workspace"
+        case .scratchWorkspace: "Managed Scratch Workspace"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .existingWorkspace: "Start another chat without creating a folder."
+        case .newWorkspace: "Create a reusable workspace for ongoing work."
+        case .scratchWorkspace: "Use an isolated workspace Aiden can clean up later."
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .existingWorkspace: "folder"
+        case .newWorkspace: "folder.badge.plus"
+        case .scratchWorkspace: "hammer.fill"
+        }
     }
 }
 
@@ -108,6 +200,95 @@ enum AidenWorkspaceNavigation {
     }
 }
 
+@MainActor
+@Observable
+final class AidenWorkspaceArchiveStore {
+    private struct Snapshot: Codable {
+        var workspaceIDsByInstance: [String: [String]]
+    }
+
+    private static let snapshotKey = "aiden.deviceArchivedWorkspaces.v1"
+    private static let disclosureKey = "aiden.deviceArchivedWorkspaces.disclosureSeen.v1"
+
+    @ObservationIgnored private let defaults: UserDefaults
+    private var workspaceIDsByInstance: [String: Set<String>]
+    private(set) var hasAcknowledgedDeviceOnlyArchive: Bool
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        hasAcknowledgedDeviceOnlyArchive = defaults.bool(forKey: Self.disclosureKey)
+
+        if let data = defaults.data(forKey: Self.snapshotKey),
+           let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
+            workspaceIDsByInstance = snapshot.workspaceIDsByInstance.reduce(into: [:]) { result, entry in
+                result[entry.key] = Set(entry.value.filter { !$0.isEmpty })
+            }
+        } else {
+            workspaceIDsByInstance = [:]
+        }
+    }
+
+    func archivedWorkspaceIDs(for instanceID: String?) -> Set<String> {
+        guard let instanceID, !instanceID.isEmpty else { return [] }
+        return workspaceIDsByInstance[instanceID] ?? []
+    }
+
+    func isArchived(workspaceID: String, instanceID: String?) -> Bool {
+        archivedWorkspaceIDs(for: instanceID).contains(workspaceID)
+    }
+
+    func acknowledgeDeviceOnlyArchive() {
+        guard !hasAcknowledgedDeviceOnlyArchive else { return }
+        hasAcknowledgedDeviceOnlyArchive = true
+        defaults.set(true, forKey: Self.disclosureKey)
+    }
+
+    func archive(workspaceID: String, instanceID: String?) {
+        guard let instanceID, !instanceID.isEmpty, !workspaceID.isEmpty else { return }
+        var workspaceIDs = workspaceIDsByInstance[instanceID] ?? []
+        guard workspaceIDs.insert(workspaceID).inserted else { return }
+        workspaceIDsByInstance[instanceID] = workspaceIDs
+        persist()
+    }
+
+    func unarchive(workspaceID: String, instanceID: String?) {
+        guard let instanceID, !instanceID.isEmpty,
+              var workspaceIDs = workspaceIDsByInstance[instanceID],
+              workspaceIDs.remove(workspaceID) != nil else { return }
+        if workspaceIDs.isEmpty {
+            workspaceIDsByInstance.removeValue(forKey: instanceID)
+        } else {
+            workspaceIDsByInstance[instanceID] = workspaceIDs
+        }
+        persist()
+    }
+
+    func forget(workspaceID: String, instanceID: String?) {
+        unarchive(workspaceID: workspaceID, instanceID: instanceID)
+    }
+
+    func prune(instanceID: String?, validWorkspaceIDs: Set<String>) {
+        guard let instanceID, !instanceID.isEmpty,
+              let current = workspaceIDsByInstance[instanceID] else { return }
+        let pruned = current.intersection(validWorkspaceIDs)
+        guard pruned != current else { return }
+        if pruned.isEmpty {
+            workspaceIDsByInstance.removeValue(forKey: instanceID)
+        } else {
+            workspaceIDsByInstance[instanceID] = pruned
+        }
+        persist()
+    }
+
+    private func persist() {
+        let snapshot = Snapshot(
+            workspaceIDsByInstance: workspaceIDsByInstance.mapValues { $0.sorted() }
+        )
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        defaults.set(data, forKey: Self.snapshotKey)
+    }
+}
+
 struct AidenWorkspaceShellView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Binding private var navigationRequest: AidenNavigationRequest?
@@ -133,6 +314,7 @@ struct AidenWorkspaceShellView: View {
     @State private var isCreatingAgent = false
     @State private var agentCreationStatus = ""
     @FocusState private var searchFieldIsFocused: Bool
+    @Namespace private var newAgentTransition
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
     init(
@@ -145,6 +327,22 @@ struct AidenWorkspaceShellView: View {
 
     private var usesSplitNavigation: Bool {
         horizontalSizeClass == .regular
+    }
+
+    private var archivedWorkspaceIDs: Set<String> {
+        workspaceArchiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+    }
+
+    private var workspaceArchiveStore: AidenWorkspaceArchiveStore {
+        coordinator.workspaceArchiveStore
+    }
+
+    private var activeWorkspaces: [AidenWorkspace] {
+        coordinator.workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }
+    }
+
+    private var activeWorkspaceIDs: [String] {
+        activeWorkspaces.map(\.id)
     }
 
     var body: some View {
@@ -212,11 +410,13 @@ struct AidenWorkspaceShellView: View {
         .sheet(isPresented: $isShowingUsage) {
             if let usage = homeModel.usage {
                 AidenUsageView(usage: usage)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
         }
         .sheet(isPresented: $isShowingExistingWorkspacePicker) {
             NavigationStack {
-                List(coordinator.workspaces) { workspace in
+                List(activeWorkspaces) { workspace in
                     Button {
                         isShowingExistingWorkspacePicker = false
                         Task { await createNewAgent(in: workspace) }
@@ -271,38 +471,29 @@ struct AidenWorkspaceShellView: View {
         } message: {
             Text("Aiden will create a reusable workspace, then open a new chat in it.")
         }
-        .confirmationDialog(
-            "Where should this agent work?",
-            isPresented: $isShowingNewAgentChoices,
-            titleVisibility: .visible
-        ) {
-            Button("Existing Workspace") { isShowingExistingWorkspacePicker = true }
-                .disabled(coordinator.workspaces.isEmpty)
-            Button("New Workspace") { isShowingNewAgentWorkspacePrompt = true }
-            Button("Managed Scratch Workspace") {
-                Task { await createNewAgentInScratchWorkspace() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Reuse a workspace to avoid creating unnecessary folders, or choose an isolated scratch workspace for temporary work.")
+        .onChange(of: coordinator.workspaces.map(\.id)) { _, _ in
+            syncArchivedWorkspaceProjection()
+            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
         }
-        .onChange(of: coordinator.workspaces.map(\.id)) { _, ids in
-            selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
-                current: selectedWorkspaceId,
-                workspaceIDs: ids
-            )
-            compactWorkspacePath = AidenWorkspaceNavigation.reconciledCompactPath(
-                current: compactWorkspacePath,
-                workspaceIDs: ids
-            )
+        .onChange(of: coordinator.workspaceSnapshotRevision) { _, _ in
+            syncArchivedWorkspaceProjection()
+            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+        }
+        .onChange(of: archivedWorkspaceIDs) { _, _ in
+            syncArchivedWorkspaceProjection()
+            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
+        }
+        .onChange(of: coordinator.activeInstanceId) { _, _ in
+            syncArchivedWorkspaceProjection()
+            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
         }
         .onChange(of: compactWorkspacePath) { _, path in
             guard let workspaceID = path.last,
-                  coordinator.workspaces.contains(where: { $0.id == workspaceID }) else { return }
+                  activeWorkspaceIDs.contains(workspaceID) else { return }
             selectedWorkspaceId = workspaceID
         }
         .onChange(of: usesSplitNavigation) { wasSplit, isSplit in
-            let workspaceIDs = coordinator.workspaces.map(\.id)
+            let workspaceIDs = activeWorkspaceIDs
             if isSplit {
                 if let compactWorkspaceID = compactWorkspacePath.last,
                    workspaceIDs.contains(compactWorkspaceID) {
@@ -318,15 +509,8 @@ struct AidenWorkspaceShellView: View {
             }
         }
         .task {
-            let workspaceIDs = coordinator.workspaces.map(\.id)
-            selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
-                current: selectedWorkspaceId,
-                workspaceIDs: workspaceIDs
-            )
-            compactWorkspacePath = AidenWorkspaceNavigation.reconciledCompactPath(
-                current: compactWorkspacePath,
-                workspaceIDs: workspaceIDs
-            )
+            syncArchivedWorkspaceProjection()
+            reconcileNavigation(workspaceIDs: activeWorkspaceIDs)
         }
         .task(id: AidenNavigationResolutionID(
             request: navigationRequest,
@@ -345,8 +529,14 @@ struct AidenWorkspaceShellView: View {
                 Button { intentChat = chat } label: { homeChatRow(chat) }
                     .buttonStyle(.plain)
             }
-            newAgentButton.padding(.trailing, 24).padding(.bottom, 22)
+            if !isSearching {
+                newAgentButton
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 22)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.smooth(duration: 0.24, extraBounce: 0), value: isSearching)
     }
 
     private var compactWorkspaceSidebar: some View {
@@ -358,13 +548,21 @@ struct AidenWorkspaceShellView: View {
                     homeChatRow(chat)
                 }
             }
-            newAgentButton.padding(.trailing, 24).padding(.bottom, 22)
+            if !isSearching {
+                newAgentButton
+                    .padding(.trailing, 24)
+                    .padding(.bottom, 22)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        .animation(.smooth(duration: 0.24, extraBounce: 0), value: isSearching)
     }
 
     private var filteredChats: [AidenChat] {
-        guard !searchText.isEmpty else { return homeModel.chats }
-        return homeModel.chats.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        let activeWorkspaceIDSet = Set(activeWorkspaceIDs)
+        let visibleChats = homeModel.chats.filter { activeWorkspaceIDSet.contains($0.workspaceId) }
+        guard !searchText.isEmpty else { return visibleChats }
+        return visibleChats.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
     }
 
     private func homeList<ChatRow: View>(
@@ -416,11 +614,17 @@ struct AidenWorkspaceShellView: View {
                 }
             }
 
-            Color.clear.frame(height: 90).listRowSeparator(.hidden)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
-        .background(palette.canvas)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.canvas.ignoresSafeArea())
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: 92)
+                .background(palette.canvas)
+                .allowsHitTesting(false)
+        }
         .refreshable {
             await coordinator.refreshWorkspaces()
             await homeModel.load(coordinator: coordinator)
@@ -454,6 +658,7 @@ struct AidenWorkspaceShellView: View {
             } label: {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(isSearching ? palette.secondary : palette.foreground)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -481,6 +686,7 @@ struct AidenWorkspaceShellView: View {
                 Button { isShowingAppSettings = true } label: {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(palette.accent)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
@@ -490,7 +696,7 @@ struct AidenWorkspaceShellView: View {
         }
         .padding(.vertical, 2)
         .frame(maxWidth: isSearching ? .infinity : nil, alignment: .trailing)
-        .background(.thinMaterial, in: Capsule())
+        .aidenChromeGlass(isInteractive: true, in: Capsule())
         .clipShape(Capsule())
         .contentShape(Capsule())
     }
@@ -513,7 +719,10 @@ struct AidenWorkspaceShellView: View {
             .disabled(homeModel.usage == nil)
 
             NavigationLink {
-                AidenWorkspacesDirectoryView(coordinator: coordinator)
+                AidenWorkspacesDirectoryView(
+                    coordinator: coordinator,
+                    archiveStore: workspaceArchiveStore
+                )
             } label: {
                 homeNavigationRow(
                     title: "Workspaces",
@@ -610,16 +819,43 @@ struct AidenWorkspaceShellView: View {
 
     private var newAgentButton: some View {
         Button { isShowingNewAgentChoices = true } label: {
-            Label("New Agent", systemImage: "square.and.pencil")
-                .font(.headline.weight(.semibold))
-                .padding(.horizontal, 20)
-                .frame(height: 56)
-                .foregroundStyle(palette.canvas)
-                .aidenLiquidGlassCapsule(tint: palette.foreground)
-                .contentShape(Capsule())
+            Image(systemName: "square.and.pencil")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(palette.foreground)
+                .frame(width: 42, height: 50)
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .aidenProminentGlassButton()
         .disabled(coordinator.connectionState != .connected || coordinator.isMutating || isCreatingAgent)
+        .accessibilityLabel("New Agent")
+        .accessibilityHint("Choose where the new agent should work.")
+        .matchedTransitionSource(id: "AidenNewAgentOptions", in: newAgentTransition)
+        .popover(isPresented: $isShowingNewAgentChoices, arrowEdge: .bottom) {
+            AidenNewAgentPopover(
+                canUseExistingWorkspace: !activeWorkspaces.isEmpty,
+                onSelect: presentNewAgentChoice
+            )
+            .frame(width: 320)
+            .presentationCompactAdaptation(.popover)
+            .navigationTransition(.zoom(sourceID: "AidenNewAgentOptions", in: newAgentTransition))
+        }
+    }
+
+    @MainActor
+    private func presentNewAgentChoice(_ choice: AidenNewAgentChoice) {
+        isShowingNewAgentChoices = false
+        Task { @MainActor in
+            await Task.yield()
+            switch choice {
+            case .existingWorkspace:
+                isShowingExistingWorkspacePicker = true
+            case .newWorkspace:
+                newAgentWorkspaceName = ""
+                isShowingNewAgentWorkspacePrompt = true
+            case .scratchWorkspace:
+                await createNewAgentInScratchWorkspace()
+            }
+        }
     }
 
     @MainActor
@@ -698,6 +934,7 @@ struct AidenWorkspaceShellView: View {
     @ViewBuilder
     private func workspaceDetail(workspaceID: String?) -> some View {
         if let workspaceID,
+           !archivedWorkspaceIDs.contains(workspaceID),
            let workspace = coordinator.workspaces.first(where: { $0.id == workspaceID }) {
             AidenWorkspaceDetailView(
                 coordinator: coordinator,
@@ -715,7 +952,7 @@ struct AidenWorkspaceShellView: View {
     }
 
     private func navigate(to workspaceID: String) {
-        guard coordinator.workspaces.contains(where: { $0.id == workspaceID }) else { return }
+        guard activeWorkspaceIDs.contains(workspaceID) else { return }
         selectedWorkspaceId = workspaceID
         if !usesSplitNavigation {
             compactWorkspacePath = [workspaceID]
@@ -727,6 +964,24 @@ struct AidenWorkspaceShellView: View {
             selectedWorkspaceId = nil
         }
         compactWorkspacePath.removeAll { $0 == workspaceID }
+    }
+
+    private func reconcileNavigation(workspaceIDs: [String]) {
+        selectedWorkspaceId = AidenWorkspaceNavigation.reconciledSelection(
+            current: selectedWorkspaceId,
+            workspaceIDs: workspaceIDs
+        )
+        compactWorkspacePath = AidenWorkspaceNavigation.reconciledCompactPath(
+            current: compactWorkspacePath,
+            workspaceIDs: workspaceIDs
+        )
+    }
+
+    private func syncArchivedWorkspaceProjection() {
+        coordinator.setDeviceArchivedWorkspaceIDs(
+            archivedWorkspaceIDs,
+            for: coordinator.activeInstanceId
+        )
     }
 
     @MainActor
@@ -743,9 +998,14 @@ struct AidenWorkspaceShellView: View {
             let chat: AidenChat
             switch request.destination {
             case .newChat:
-                let workspaceId = request.workspaceId ?? selectedWorkspaceId ?? coordinator.workspaces.first?.id
+                let workspaceId = request.workspaceId ?? selectedWorkspaceId ?? activeWorkspaces.first?.id
                 guard let workspaceId,
-                      coordinator.workspaces.contains(where: { $0.id == workspaceId }) else {
+                      activeWorkspaceIDs.contains(workspaceId) else {
+                    if let requestedWorkspaceID = request.workspaceId,
+                       archivedWorkspaceIDs.contains(requestedWorkspaceID) {
+                        coordinator.presentedError = String(localized: "That workspace is archived on this device. Unarchive it from Workspaces to start a chat.")
+                        return
+                    }
                     coordinator.presentedError = String(localized: "The requested workspace is unavailable. Choose or add a workspace first.")
                     return
                 }
@@ -753,7 +1013,11 @@ struct AidenWorkspaceShellView: View {
                 chat = try await coordinator.remoteClient().createChat(workspaceId: workspaceId)
             case .chat(let chatId):
                 chat = try await coordinator.remoteClient().chat(id: chatId)
-                guard coordinator.workspaces.contains(where: { $0.id == chat.workspaceId }) else {
+                guard activeWorkspaceIDs.contains(chat.workspaceId) else {
+                    if archivedWorkspaceIDs.contains(chat.workspaceId) {
+                        coordinator.presentedError = String(localized: "That chat belongs to a workspace archived on this device. Unarchive it from Workspaces to open the chat.")
+                        return
+                    }
                     coordinator.presentedError = String(localized: "The chat's workspace is no longer available.")
                     return
                 }
@@ -767,18 +1031,115 @@ struct AidenWorkspaceShellView: View {
     }
 }
 
+private struct AidenNewAgentPopover: View {
+    @Environment(\.aidenPalette) private var palette
+
+    let canUseExistingWorkspace: Bool
+    let onSelect: (AidenNewAgentChoice) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("New Agent")
+                    .font(.title3.bold())
+                    .foregroundStyle(palette.foreground)
+
+                Text("Choose where Aiden should work.")
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 10)
+
+            ForEach(Array(AidenNewAgentChoice.allCases.enumerated()), id: \.element.id) { index, choice in
+                Button {
+                    onSelect(choice)
+                } label: {
+                    HStack(alignment: .center, spacing: 13) {
+                        Image(systemName: choice.symbol)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(palette.accent)
+                            .frame(width: 38, height: 38)
+                            .background(palette.accent.opacity(0.12), in: Circle())
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(choice.title)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(palette.foreground)
+                                .lineLimit(1)
+
+                            Text(detail(for: choice))
+                                .font(.caption)
+                                .foregroundStyle(palette.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 6)
+
+                        Image(systemName: "chevron.forward")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.secondary)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(choice == .existingWorkspace && !canUseExistingWorkspace)
+                .opacity(choice == .existingWorkspace && !canUseExistingWorkspace ? 0.45 : 1)
+                .accessibilityHint(detail(for: choice))
+
+                if index < AidenNewAgentChoice.allCases.count - 1 {
+                    Divider()
+                        .overlay(palette.secondary.opacity(0.18))
+                        .padding(.leading, 69)
+                }
+            }
+        }
+        .padding(.bottom, 8)
+        .background(palette.canvas.opacity(0.001))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func detail(for choice: AidenNewAgentChoice) -> String {
+        if choice == .existingWorkspace, !canUseExistingWorkspace {
+            return String(localized: "Add a workspace before using this option.")
+        }
+        return choice.detail
+    }
+}
+
 private struct AidenWorkspacesDirectoryView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
+    @Bindable var archiveStore: AidenWorkspaceArchiveStore
     @State private var searchText = ""
     @State private var isShowingFolderBrowser = false
     @State private var isShowingNewWorkspace = false
     @State private var isConfirmingScratch = false
     @State private var newWorkspaceName = ""
+    @State private var workspacePendingRename: AidenWorkspace?
+    @State private var workspacePendingFirstArchive: AidenWorkspace?
+    @State private var workspacePendingRemoval: AidenWorkspace?
+    @State private var renameText = ""
+    @State private var retainedRenameDraftWorkspaceID: String?
     @AppStorage("aiden.defaults.workspacePermission") private var defaultWorkspacePermissionRaw = AidenWorkspacePermission.ask.rawValue
 
+    private var archivedWorkspaceIDs: Set<String> {
+        archiveStore.archivedWorkspaceIDs(for: coordinator.activeInstanceId)
+    }
+
+    private var activeWorkspaces: [AidenWorkspace] {
+        coordinator.workspaces.filter { !archivedWorkspaceIDs.contains($0.id) }
+    }
+
+    private var archivedWorkspaces: [AidenWorkspace] {
+        coordinator.workspaces.filter { archivedWorkspaceIDs.contains($0.id) }
+    }
+
     private var filteredWorkspaces: [AidenWorkspace] {
-        guard !searchText.isEmpty else { return coordinator.workspaces }
-        return coordinator.workspaces.filter { workspace in
+        guard !searchText.isEmpty else { return activeWorkspaces }
+        return activeWorkspaces.filter { workspace in
             workspace.name.localizedCaseInsensitiveContains(searchText)
                 || workspace.repositoryName?.localizedCaseInsensitiveContains(searchText) == true
                 || workspace.branchName?.localizedCaseInsensitiveContains(searchText) == true
@@ -798,14 +1159,23 @@ private struct AidenWorkspacesDirectoryView: View {
                 .listRowBackground(Color.clear)
             } else {
                 ForEach(filteredWorkspaces) { workspace in
+                    interactiveRow(workspace, isArchived: false)
+                }
+            }
+
+            if searchText.isEmpty {
+                Section {
                     NavigationLink {
-                        AidenDirectoryWorkspaceDetail(
+                        AidenArchivedWorkspacesView(
                             coordinator: coordinator,
-                            workspace: workspace
+                            workspaces: archivedWorkspaces,
+                            row: interactiveRow
                         )
                     } label: {
-                        AidenWorkspaceRow(workspace: workspace)
+                        Label("Archived Workspaces", systemImage: "archivebox")
                     }
+                } footer: {
+                    Text("Archived workspaces and their chats are hidden only on this device.")
                 }
             }
         }
@@ -878,6 +1248,118 @@ private struct AidenWorkspacesDirectoryView: View {
         } message: {
             Text("Aiden Agent will create and manage the worktree on your Mac.")
         }
+        .alert(
+            "Rename Workspace",
+            isPresented: Binding(
+                get: { workspacePendingRename != nil },
+                set: { if !$0 { workspacePendingRename = nil } }
+            )
+        ) {
+            TextField("Workspace name", text: $renameText)
+            Button("Cancel", role: .cancel) {
+                retainedRenameDraftWorkspaceID = nil
+                workspacePendingRename = nil
+            }
+            Button("Rename") {
+                guard let workspace = workspacePendingRename else { return }
+                let trimmedName = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                Task {
+                    if await coordinator.updateWorkspace(workspace, name: trimmedName) != nil {
+                        retainedRenameDraftWorkspaceID = nil
+                    }
+                    workspacePendingRename = nil
+                }
+            }
+            .disabled(
+                renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || renameText.trimmingCharacters(in: .whitespacesAndNewlines) == workspacePendingRename?.name
+                    || coordinator.connectionState != .connected
+                    || coordinator.isMutating
+            )
+        } message: {
+            Text("This updates the workspace name in Aiden Agent on your Mac and paired clients. It does not rename the folder on disk.")
+        }
+        .alert(
+            "Archive on This Device?",
+            isPresented: Binding(
+                get: { workspacePendingFirstArchive != nil },
+                set: { if !$0 { workspacePendingFirstArchive = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { workspacePendingFirstArchive = nil }
+            Button("Archive on This Device") {
+                guard let workspace = workspacePendingFirstArchive else { return }
+                archiveStore.acknowledgeDeviceOnlyArchive()
+                archiveStore.archive(
+                    workspaceID: workspace.id,
+                    instanceID: coordinator.activeInstanceId
+                )
+                workspacePendingFirstArchive = nil
+            }
+        } message: {
+            Text("This hides the workspace and its chats only on this iPhone or iPad. It stays available in Aiden Agent on your Mac and on other devices.")
+        }
+        .alert(
+            "Remove from Aiden Agent?",
+            isPresented: Binding(
+                get: { workspacePendingRemoval != nil },
+                set: { if !$0 { workspacePendingRemoval = nil } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) { workspacePendingRemoval = nil }
+            Button("Remove from Aiden Agent", role: .destructive) {
+                guard let workspace = workspacePendingRemoval else { return }
+                workspacePendingRemoval = nil
+                Task {
+                    if await coordinator.removeWorkspace(workspace) {
+                        archiveStore.forget(
+                            workspaceID: workspace.id,
+                            instanceID: coordinator.activeInstanceId
+                        )
+                    }
+                }
+            }
+            .disabled(coordinator.connectionState != .connected || coordinator.isMutating)
+        } message: {
+            Text("This unregisters the workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your Mac, but its chats will no longer be listed. Delete the folder separately in Finder if you no longer need it.")
+        }
+    }
+
+    private func interactiveRow(_ workspace: AidenWorkspace, isArchived: Bool) -> some View {
+        AidenWorkspaceInteractiveRow(
+            coordinator: coordinator,
+            workspace: workspace,
+            isArchived: isArchived,
+            onRename: { requestRename(workspace) },
+            onToggleArchive: { toggleArchive(workspace, isArchived: isArchived) },
+            onRemove: workspace.isManagedWorktree || coordinator.workspaces.count <= 1
+                ? nil
+                : { workspacePendingRemoval = workspace }
+        )
+    }
+
+    private func requestRename(_ workspace: AidenWorkspace) {
+        if retainedRenameDraftWorkspaceID != workspace.id {
+            renameText = workspace.name
+        }
+        retainedRenameDraftWorkspaceID = workspace.id
+        workspacePendingRename = workspace
+    }
+
+    private func toggleArchive(_ workspace: AidenWorkspace, isArchived: Bool) {
+        if isArchived {
+            archiveStore.unarchive(
+                workspaceID: workspace.id,
+                instanceID: coordinator.activeInstanceId
+            )
+        } else if archiveStore.hasAcknowledgedDeviceOnlyArchive {
+            archiveStore.archive(
+                workspaceID: workspace.id,
+                instanceID: coordinator.activeInstanceId
+            )
+        } else {
+            workspacePendingFirstArchive = workspace
+        }
     }
 
     @MainActor
@@ -885,6 +1367,131 @@ private struct AidenWorkspacesDirectoryView: View {
         let permission = AidenWorkspacePermission(rawValue: defaultWorkspacePermissionRaw) ?? .ask
         guard permission != workspace.permission else { return workspace }
         return await coordinator.updateWorkspace(workspace, permission: permission) ?? workspace
+    }
+}
+
+private struct AidenArchivedWorkspacesView<Row: View>: View {
+    @Bindable var coordinator: AidenRemoteCoordinator
+    let workspaces: [AidenWorkspace]
+    @ViewBuilder let row: (AidenWorkspace, Bool) -> Row
+    @State private var searchText = ""
+
+    private var filteredWorkspaces: [AidenWorkspace] {
+        guard !searchText.isEmpty else { return workspaces }
+        return workspaces.filter { workspace in
+            workspace.name.localizedCaseInsensitiveContains(searchText)
+                || workspace.repositoryName?.localizedCaseInsensitiveContains(searchText) == true
+                || workspace.branchName?.localizedCaseInsensitiveContains(searchText) == true
+        }
+    }
+
+    var body: some View {
+        List {
+            if filteredWorkspaces.isEmpty {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No Archived Workspaces" : "No Matching Workspaces",
+                    systemImage: searchText.isEmpty ? "archivebox" : "magnifyingglass",
+                    description: Text(searchText.isEmpty
+                        ? "Workspaces archived on this device appear here."
+                        : "Try a different search term.")
+                )
+                .listRowBackground(Color.clear)
+            } else {
+                ForEach(filteredWorkspaces) { workspace in
+                    row(workspace, true)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle("Archived Workspaces")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "Search archived workspaces")
+        .refreshable { await coordinator.refreshWorkspaces() }
+    }
+}
+
+private struct AidenWorkspaceInteractiveRow: View {
+    @Environment(\.aidenPalette) private var palette
+    @Bindable var coordinator: AidenRemoteCoordinator
+    let workspace: AidenWorkspace
+    let isArchived: Bool
+    let onRename: () -> Void
+    let onToggleArchive: () -> Void
+    let onRemove: (() -> Void)?
+
+    private var serverMutationDisabled: Bool {
+        coordinator.connectionState != .connected || coordinator.isMutating
+    }
+
+    var body: some View {
+        Group {
+            if isArchived {
+                Button(action: onToggleArchive) {
+                    AidenWorkspaceRow(workspace: workspace)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Unarchives this workspace on this device.")
+            } else {
+                NavigationLink {
+                    AidenDirectoryWorkspaceDetail(
+                        coordinator: coordinator,
+                        workspace: workspace
+                    )
+                } label: {
+                    AidenWorkspaceRow(workspace: workspace)
+                }
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button(action: onRename) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(serverMutationDisabled)
+            .tint(palette.accent)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if let onRemove {
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove from Agent", systemImage: "minus.circle")
+                }
+                .disabled(serverMutationDisabled)
+                .tint(palette.danger)
+            }
+
+            Button(action: onToggleArchive) {
+                Label(
+                    isArchived ? "Unarchive" : "Archive",
+                    systemImage: isArchived ? "tray.and.arrow.up" : "archivebox"
+                )
+            }
+            .tint(palette.warning)
+        }
+        .contextMenu {
+            Button(action: onRename) {
+                Label("Rename", systemImage: "pencil")
+            }
+            .disabled(serverMutationDisabled)
+
+            Button(action: onToggleArchive) {
+                Label(
+                    isArchived ? "Unarchive on This Device" : "Archive on This Device",
+                    systemImage: isArchived ? "tray.and.arrow.up" : "archivebox"
+                )
+            }
+
+            if let onRemove {
+                Divider()
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove from Aiden Agent", systemImage: "minus.circle")
+                }
+                .disabled(serverMutationDisabled)
+            }
+        }
+        .accessibilityAction(named: Text("Rename workspace"), onRename)
+        .accessibilityAction(
+            named: Text(isArchived ? "Unarchive on this device" : "Archive on this device"),
+            onToggleArchive
+        )
     }
 }
 
@@ -998,13 +1605,17 @@ private struct AidenWorkspaceSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Workspace") {
+                Section {
                     TextField("Name", text: $name)
                     LabeledContent("Folder", value: workspace.hasFolder ? "Connected" : "None")
                     LabeledContent("Managed worktree", value: workspace.isManagedWorktree ? "Yes" : "No")
                     if let repository = workspace.repositoryName {
                         LabeledContent("Repository", value: repository)
                     }
+                } header: {
+                    Text("Workspace")
+                } footer: {
+                    Text("Renaming updates Aiden Agent and paired clients. It does not rename the folder on disk.")
                 }
 
                 Section {
@@ -1035,17 +1646,19 @@ private struct AidenWorkspaceSettingsView: View {
                     .disabled(!workspace.hasFolder)
                 }
 
-                Section {
-                    Button(
-                        workspace.isManagedWorktree ? "Delete Managed Worktree" : "Unregister Workspace",
-                        role: .destructive
-                    ) {
-                        isConfirmingRemoval = true
+                if workspace.isManagedWorktree || coordinator.workspaces.count > 1 {
+                    Section {
+                        Button(
+                            workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent",
+                            role: .destructive
+                        ) {
+                            isConfirmingRemoval = true
+                        }
+                    } footer: {
+                        Text(workspace.isManagedWorktree
+                             ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
+                             : "Removing unregisters this workspace from Aiden Agent and paired clients. Its folder, files, and chats stay on your Mac, but its chats will no longer be listed.")
                     }
-                } footer: {
-                    Text(workspace.isManagedWorktree
-                         ? "Deleting an Aiden-managed worktree removes its checkout and may remove its branch when safe."
-                         : "Unregistering removes this workspace from Aiden. It does not delete its folder.")
                 }
             }
             .navigationTitle("Workspace Settings")
@@ -1071,11 +1684,11 @@ private struct AidenWorkspaceSettingsView: View {
                 }
             }
             .confirmationDialog(
-                workspace.isManagedWorktree ? "Delete \(workspace.name)?" : "Unregister \(workspace.name)?",
+                workspace.isManagedWorktree ? "Delete \(workspace.name)?" : "Remove \(workspace.name) from Aiden Agent?",
                 isPresented: $isConfirmingRemoval,
                 titleVisibility: .visible
             ) {
-                Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Unregister Workspace", role: .destructive) {
+                Button(workspace.isManagedWorktree ? "Delete Managed Worktree" : "Remove from Aiden Agent", role: .destructive) {
                     Task {
                         let removed = workspace.isManagedWorktree
                             ? await coordinator.removeManagedWorktree(workspace)
@@ -1089,7 +1702,7 @@ private struct AidenWorkspaceSettingsView: View {
             } message: {
                 Text(workspace.isManagedWorktree
                      ? "This destructive Git operation is performed by Aiden Agent using its persisted worktree ownership record."
-                     : "The folder and its files remain untouched on your Mac.")
+                     : "The folder, its files, and chats remain on your Mac, but the chats will no longer be listed. Delete the folder separately in Finder if you no longer need it.")
             }
         }
     }
@@ -1097,36 +1710,48 @@ private struct AidenWorkspaceSettingsView: View {
 
 private struct AidenUsageView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.aidenPalette) private var palette
     let usage: AidenUsageSummary
+
+    private var heatmapDays: [AidenUsageHeatmapDay] {
+        AidenUsagePresentation.heatmapDays(for: usage)
+    }
+
+    private var maximumDailyTokens: Int {
+        max(heatmapDays.map(\.tokens).max() ?? 0, 1)
+    }
+
+    private var completionRate: Double {
+        AidenUsagePresentation.ratio(
+            usage.totals.completedRequests,
+            of: usage.totals.requests
+        )
+    }
+
+    private var localRequestShare: Double {
+        AidenUsagePresentation.ratio(
+            usage.totals.localRequests,
+            of: usage.totals.requests
+        )
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Last 30 days") {
-                    LabeledContent("Requests", value: usage.totals.requests.formatted())
-                    LabeledContent("Total tokens", value: usage.totals.tokens.total.formatted())
-                    LabeledContent("Input", value: usage.totals.tokens.input.formatted())
-                    LabeledContent("Output", value: usage.totals.tokens.output.formatted())
-                    LabeledContent("Reasoning", value: usage.totals.tokens.reasoning.formatted())
-                    LabeledContent("Cache read", value: usage.totals.tokens.cacheRead.formatted())
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 28) {
+                    usageHero
+                    overviewGrid
+                    tokenActivitySection
+                    activityInsightsSection
+                    modelSection
+                    privacyNote
                 }
-
-                Section("Activity") {
-                    LabeledContent("Active days", value: usage.totals.activeDays.formatted())
-                    LabeledContent("Current streak", value: "\(usage.totals.currentStreak) days")
-                    LabeledContent("Local requests", value: usage.totals.localRequests.formatted())
-                    LabeledContent(
-                        "Hosted cost",
-                        value: usage.totals.hostedCostUsd.formatted(.currency(code: "USD"))
-                    )
-                }
-
-                Section {
-                    Text("These are privacy-safe aggregates recorded by Aiden Agent on your Mac. Prompts, responses, chat IDs, workspace IDs, and file paths are not part of usage data.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                .padding(.bottom, 36)
             }
+            .scrollContentBackground(.hidden)
+            .background(palette.canvas.ignoresSafeArea())
             .navigationTitle("Usage")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1134,6 +1759,377 @@ private struct AidenUsageView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    private var usageHero: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                AidenSidebarLogo(size: 28, color: palette.accent)
+                Text("Aiden activity")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(palette.foreground)
+            }
+
+            Text(AidenUsagePresentation.dateRangeText(for: usage))
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var overviewGrid: some View {
+        LazyVGrid(
+            columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+            spacing: 12
+        ) {
+            metricCard(
+                value: usage.totals.requests.formatted(),
+                label: "Requests",
+                symbol: "bolt.fill"
+            )
+            metricCard(
+                value: usage.totals.activeDays.formatted(),
+                label: "Active days",
+                symbol: "calendar"
+            )
+            metricCard(
+                value: AidenUsagePresentation.dayCount(usage.totals.currentStreak),
+                label: "Current streak",
+                symbol: "flame"
+            )
+            metricCard(
+                value: AidenUsagePresentation.dayCount(usage.totals.longestStreak),
+                label: "Longest streak",
+                symbol: "trophy"
+            )
+
+            HStack(alignment: .center, spacing: 14) {
+                Image(systemName: "circle.hexagongrid.fill")
+                    .font(.title2)
+                    .foregroundStyle(palette.accent)
+                    .frame(width: 34, height: 34)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(usage.totals.tokens.total.formatted())
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(palette.foreground)
+                        .contentTransition(.numericText())
+                    Text("Total tokens")
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+            .gridCellColumns(2)
+            .aidenUsageCard(palette: palette)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func metricCard(value: String, label: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .frame(width: 30, height: 30)
+                .background(palette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(palette.foreground)
+                    .contentTransition(.numericText())
+                Text(label)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+        .aidenUsageCard(palette: palette)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var tokenActivitySection: some View {
+        usageSection(title: "Token activity") {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Text("Daily totals")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(palette.foreground)
+                    Spacer()
+                    Text("Last 30 days")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(palette.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(palette.sidebar, in: Capsule())
+                }
+
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 10),
+                    spacing: 6
+                ) {
+                    ForEach(heatmapDays) { day in
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(activityColor(tokens: day.tokens))
+                            .aspectRatio(1, contentMode: .fit)
+                            .accessibilityElement()
+                            .accessibilityLabel("\(day.date), \(day.tokens.formatted()) tokens")
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text("Less")
+                    ForEach(0..<5, id: \.self) { level in
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(activityColor(level: level))
+                            .frame(width: 14, height: 14)
+                    }
+                    Text("More")
+                }
+                .font(.caption2)
+                .foregroundStyle(palette.secondary)
+
+                Divider().overlay(palette.secondary.opacity(0.18))
+
+                tokenBreakdown
+            }
+            .padding(18)
+            .aidenUsageCard(palette: palette)
+        }
+    }
+
+    private var tokenBreakdown: some View {
+        VStack(spacing: 14) {
+            usageValueRow("Input", value: usage.totals.tokens.input.formatted(), color: palette.accent)
+            usageValueRow("Output", value: usage.totals.tokens.output.formatted(), color: palette.success)
+            usageValueRow("Reasoning", value: usage.totals.tokens.reasoning.formatted(), color: palette.warning)
+            usageValueRow("Cache read", value: usage.totals.tokens.cacheRead.formatted(), color: palette.secondary)
+        }
+    }
+
+    private var activityInsightsSection: some View {
+        usageSection(title: "Activity insights") {
+            VStack(spacing: 0) {
+                insightRow("Completed requests", value: completionRate.formatted(.percent.precision(.fractionLength(0))))
+                insightDivider
+                insightRow("Local model share", value: localRequestShare.formatted(.percent.precision(.fractionLength(0))))
+                insightDivider
+                insightRow("Failed requests", value: usage.totals.failedRequests.formatted())
+                insightDivider
+                insightRow(
+                    "Hosted cost",
+                    value: usage.totals.hostedCostUsd.formatted(.currency(code: "USD"))
+                )
+            }
+            .padding(.horizontal, 18)
+            .aidenUsageCard(palette: palette)
+        }
+    }
+
+    @ViewBuilder
+    private var modelSection: some View {
+        if !usage.models.isEmpty {
+            usageSection(title: "Most used models") {
+                VStack(spacing: 0) {
+                    ForEach(Array(usage.models.prefix(5).enumerated()), id: \.element.id) { index, model in
+                        HStack(spacing: 12) {
+                            AidenProviderIcon(
+                                providerID: model.providerId,
+                                providerLabel: model.providerLabel,
+                                modelID: model.modelId,
+                                size: 20,
+                                color: palette.accent
+                            )
+                                .frame(width: 34, height: 34)
+                                .background(palette.sidebar, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(model.modelLabel)
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(palette.foreground)
+                                    .lineLimit(1)
+                                Text(model.local ? "\(model.providerLabel) · Local" : model.providerLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(palette.secondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer(minLength: 8)
+
+                            Text("\(model.requests.formatted()) runs")
+                                .font(.subheadline)
+                                .foregroundStyle(palette.secondary)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .padding(.vertical, 14)
+
+                        if index < min(usage.models.count, 5) - 1 {
+                            insightDivider
+                        }
+                    }
+                }
+                .padding(.horizontal, 18)
+                .aidenUsageCard(palette: palette)
+            }
+        }
+    }
+
+    private var privacyNote: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "lock.shield")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.accent)
+                .frame(width: 28)
+
+            Text("Privacy-safe aggregates are recorded by Aiden Agent on your Mac. Prompts, responses, chat IDs, workspace IDs, and file paths are not included.")
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func usageSection<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(palette.secondary)
+                .padding(.leading, 4)
+            content()
+        }
+    }
+
+    private func usageValueRow(_ label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(label)
+                .foregroundStyle(palette.foreground)
+            Spacer()
+            Text(value)
+                .foregroundStyle(palette.secondary)
+                .monospacedDigit()
+        }
+        .font(.subheadline)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func insightRow(_ label: String, value: String) -> some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .foregroundStyle(palette.foreground)
+            Spacer(minLength: 12)
+            Text(value)
+                .foregroundStyle(palette.secondary)
+                .monospacedDigit()
+        }
+        .font(.body)
+        .padding(.vertical, 16)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var insightDivider: some View {
+        Divider().overlay(palette.secondary.opacity(0.18))
+    }
+
+    private func activityColor(tokens: Int) -> Color {
+        guard tokens > 0 else { return palette.sidebar }
+        let normalized = min(Double(tokens) / Double(maximumDailyTokens), 1)
+        return palette.accent.opacity(0.22 + (0.78 * normalized.squareRoot()))
+    }
+
+    private func activityColor(level: Int) -> Color {
+        guard level > 0 else { return palette.sidebar }
+        return palette.accent.opacity(0.18 + (Double(level) * 0.205))
+    }
+}
+
+struct AidenUsageHeatmapDay: Identifiable, Equatable {
+    let date: String
+    let tokens: Int
+
+    var id: String { date }
+}
+
+enum AidenUsagePresentation {
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private static let displayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = .current
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        return formatter
+    }()
+
+    static func ratio(_ value: Int, of total: Int) -> Double {
+        guard total > 0 else { return 0 }
+        return min(max(Double(value) / Double(total), 0), 1)
+    }
+
+    static func dayCount(_ value: Int) -> String {
+        value == 1 ? "1 day" : "\(value) days"
+    }
+
+    static func dateRangeText(for usage: AidenUsageSummary) -> String {
+        guard let start = dateFormatter.date(from: usage.startDate),
+              let end = dateFormatter.date(from: usage.endDate) else {
+            return String(localized: "Last 30 days")
+        }
+        return "\(displayFormatter.string(from: start))–\(displayFormatter.string(from: end))"
+    }
+
+    static func heatmapDays(for usage: AidenUsageSummary) -> [AidenUsageHeatmapDay] {
+        let totalsByDate = Dictionary(uniqueKeysWithValues: usage.days.map { ($0.date, $0.tokens.total) })
+        guard let start = dateFormatter.date(from: usage.startDate),
+              let end = dateFormatter.date(from: usage.endDate),
+              start <= end else {
+            return usage.days.map { AidenUsageHeatmapDay(date: $0.date, tokens: $0.tokens.total) }
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        var date = start
+        var result: [AidenUsageHeatmapDay] = []
+        while date <= end, result.count < 366 {
+            let key = dateFormatter.string(from: date)
+            result.append(AidenUsageHeatmapDay(date: key, tokens: totalsByDate[key] ?? 0))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: date) else { break }
+            date = next
+        }
+        return result
+    }
+}
+
+private extension View {
+    func aidenUsageCard(palette: AidenPalette) -> some View {
+        background(
+            palette.raised,
+            in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(palette.foreground.opacity(0.06), lineWidth: 0.5)
         }
     }
 }
@@ -1245,8 +2241,10 @@ private struct AidenInstallationsView: View {
                                 }
                             }
                         }
+                        .disabled(coordinator.isMutating || coordinator.connectionState == .connecting)
                         .swipeActions {
                             Button("Forget", role: .destructive) { installationToRemove = installation }
+                                .disabled(coordinator.isMutating)
                         }
                     }
                 }
