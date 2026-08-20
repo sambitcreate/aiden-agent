@@ -11,6 +11,7 @@ import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -40,6 +41,8 @@ export interface StoredProvider {
   id: string;
   kind: ProviderKind;
   label: string;
+  /** Optional normalized artwork for custom providers. Never contains a filesystem path. */
+  artwork?: ProviderArtwork;
   /** Base URL including the version segment, e.g. https://api.openai.com/v1 */
   baseUrl: string;
   /** Suggested / cached model ids for the picker. */
@@ -215,7 +218,11 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
+  | "local"
+  | "provider"
+  | "artificial-analysis"
+  | "models-dev"
+  | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
@@ -394,8 +401,7 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId =
-  "automatic" | "apple-foundation-models" | "chat-model";
+export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -458,6 +464,8 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
+  /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */
+  hiddenModelsByProvider?: Record<string, string[]>;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;

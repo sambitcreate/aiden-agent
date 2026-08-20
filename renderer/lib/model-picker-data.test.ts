@@ -11,9 +11,100 @@ import {
   parseModel,
   positionSavedModels,
   positionModels,
+  visibleModelEntries,
   type ModelEntry,
 } from "./model-picker-data";
 import type { Provider } from "./types";
+import {
+  firstVisibleModelForProvider,
+  isModelHidden,
+  normalizeHiddenModelsByProvider,
+  remapHiddenModelProvider,
+  withModelVisibility,
+  withoutProviderVisibility,
+} from "../shared/model-visibility";
+import { normalizeProviderArtwork } from "../shared/provider-artwork";
+
+test("provider artwork accepts only bounded normalized PNG payloads", () => {
+  const artwork = normalizeProviderArtwork({
+    mimeType: "image/png",
+    dataBase64:
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  });
+  assert.equal(artwork?.mimeType, "image/png");
+  assert.equal(normalizeProviderArtwork({ mimeType: "image/svg+xml", dataBase64: "PHN2Zz4=" }), undefined);
+  assert.equal(normalizeProviderArtwork({ mimeType: "image/png", dataBase64: "not base64" }), undefined);
+});
+
+test("new defaults skip hidden preferred models while explicit execution stays separate", () => {
+  assert.equal(
+    firstVisibleModelForProvider(
+      { google: ["gemini-pro"] },
+      "google",
+      ["gemini-pro", "gemini-flash"],
+      ["gemini-pro"],
+    ),
+    "gemini-flash",
+  );
+  assert.equal(
+    firstVisibleModelForProvider({ google: ["gemini-pro", "gemini-flash"] }, "google", [
+      "gemini-pro",
+      "gemini-flash",
+    ]),
+    undefined,
+  );
+});
+
+test("model visibility normalizes invalid, duplicate, and empty entries", () => {
+  assert.deepEqual(
+    normalizeHiddenModelsByProvider({
+      google: ["gemini-pro", "gemini-pro", " gemini-flash", 3],
+      empty: [],
+      "": ["model"],
+    }),
+    { google: ["gemini-pro"] },
+  );
+  assert.equal(normalizeHiddenModelsByProvider({}), undefined);
+});
+
+test("model visibility toggles one model without dropping other preferences", () => {
+  let hidden = withModelVisibility(undefined, "google", "gemini-pro", true);
+  hidden = withModelVisibility(hidden, "anthropic", "claude-sonnet", true);
+  hidden = withModelVisibility(hidden, "google", "gemini-flash", true);
+  hidden = withModelVisibility(hidden, "google", "gemini-pro", false);
+
+  assert.equal(isModelHidden(hidden, "google", "gemini-pro"), false);
+  assert.equal(isModelHidden(hidden, "google", "gemini-flash"), true);
+  assert.equal(isModelHidden(hidden, "anthropic", "claude-sonnet"), true);
+});
+
+test("provider removal and identity migration keep visibility scoped correctly", () => {
+  const hidden = { old: ["alpha", "beta"], target: ["beta", "gamma"], keep: ["delta"] };
+  assert.deepEqual(remapHiddenModelProvider(hidden, "old", "target"), {
+    keep: ["delta"],
+    target: ["alpha", "beta", "gamma"],
+  });
+  assert.deepEqual(withoutProviderVisibility(hidden, "old"), {
+    keep: ["delta"],
+    target: ["beta", "gamma"],
+  });
+});
+
+test("picker entries omit hidden models without mutating the full catalog", () => {
+  const entries = createModelEntries([
+    provider({ id: "google", label: "Google", models: ["gemini-pro", "gemini-flash"] }),
+  ]);
+  const visible = visibleModelEntries(entries, { google: ["gemini-pro"] });
+
+  assert.deepEqual(
+    visible.map((entry) => entry.model),
+    ["gemini-flash"],
+  );
+  assert.deepEqual(
+    entries.map((entry) => entry.model),
+    ["gemini-pro", "gemini-flash"],
+  );
+});
 
 function provider(overrides: Partial<Provider> & Pick<Provider, "id" | "label">): Provider {
   return {

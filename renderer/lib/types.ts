@@ -11,6 +11,7 @@ import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { SubagentMessageReferenceV1 } from "../shared/subagent-runs";
 import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
+import type { ProviderArtwork } from "../shared/provider-artwork";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -36,6 +37,7 @@ export interface Provider {
   id: string;
   kind: ProviderKind;
   label: string;
+  artwork?: ProviderArtwork;
   baseUrl: string;
   models: string[];
   modelMetadata?: Record<string, ProviderModelMetadata>;
@@ -698,6 +700,7 @@ export interface AssistantConfigSnapshot {
 export interface AppSettings {
   lastProviderId?: string;
   lastModel?: string;
+  hiddenModelsByProvider?: Record<string, string[]>;
   exaEnabled?: boolean;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;

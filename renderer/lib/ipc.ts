@@ -162,6 +162,8 @@ export const providersApi = {
   list: () => invoke<Provider[]>("providers:list"),
   save: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<Provider>("providers:save", provider, keyOverride),
+  normalizeArtwork: (input: { name: string; dataBase64: string }) =>
+    invoke<NonNullable<Provider["artwork"]>>("providers:normalizeArtwork", input),
   remove: (id: string) => invoke<void>("providers:remove", id),
   setKey: (id: string, key: string) =>
     invoke<{ hasKey: boolean; provider: Provider | null }>(
@@ -227,6 +229,10 @@ export const settingsApi = {
     invoke<AppSettings>("settings:setCodexThinking", modelId, level),
   setAnthropicThinking: (modelId: string, level: AnthropicThinkingLevel) =>
     invoke<AppSettings>("settings:setAnthropicThinking", modelId, level),
+  setModelVisibility: (providerId: string, modelId: string, hidden: boolean) =>
+    invoke<AppSettings>("settings:setModelVisibility", providerId, modelId, hidden),
+  showAllProviderModels: (providerId: string) =>
+    invoke<AppSettings>("settings:showAllProviderModels", providerId),
 };
 
 export const assistantApi = {

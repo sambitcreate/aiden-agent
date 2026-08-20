@@ -1,5 +1,9 @@
 import { resolveProviderIconSlug, type ProviderIconSlug } from "../lib/pi-provider-display";
 import { cn } from "../lib/ui-utils";
+import {
+  providerArtworkDataUrl,
+  type ProviderArtwork,
+} from "../shared/provider-artwork";
 
 const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
   "amazon-bedrock": new URL("../assets/provider-logos/amazon-bedrock.svg", import.meta.url).href,
@@ -80,13 +84,27 @@ export function ProviderIcon({
   providerId,
   providerLabel,
   modelId,
+  artwork,
   className,
 }: {
   providerId: string;
   providerLabel: string;
   modelId?: string;
+  artwork?: ProviderArtwork;
   className?: string;
 }) {
+  if (artwork) {
+    return (
+      <img
+        alt=""
+        aria-hidden="true"
+        data-provider-icon="custom"
+        draggable={false}
+        src={providerArtworkDataUrl(artwork)}
+        className={cn("shrink-0 object-contain", className)}
+      />
+    );
+  }
   const slug = resolveProviderIconSlug(providerId, modelId);
   const iconUrl = slug ? PROVIDER_ICON_URLS[slug] : undefined;
 

@@ -47,6 +47,8 @@ import {
   normalizeAppearanceConfig,
   parseAppearanceConfig,
 } from "../../renderer/shared/appearance.js";
+import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -134,6 +136,7 @@ function parseProvider(value: unknown): StoredProvider {
     id: asProviderId(p.id),
     kind,
     label: asString(p.label, "label"),
+    artwork: normalizeProviderArtwork(p.artwork),
     baseUrl,
     models,
     modelMetadata,
@@ -204,6 +207,10 @@ export function registerProviderHandlers(): void {
   );
 
   ipcMain.handle("providers:list", listProviders);
+
+  ipcMain.handle("providers:normalizeArtwork", (_event, input: unknown) =>
+    normalizeProviderArtworkInput(input),
+  );
 
   ipcMain.handle("providers:auth:status", async (_event, providerId: unknown) =>
     providerAuthFlow.status(parseProviderAuthProviderId(providerId)),
@@ -344,6 +351,20 @@ export function registerProviderHandlers(): void {
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
     },
   );
+  ipcMain.handle(
+    "settings:setModelVisibility",
+    async (_event, providerIdValue: unknown, modelIdValue: unknown, hiddenValue: unknown) => {
+      const providerId = asProviderId(providerIdValue);
+      const modelId = asString(modelIdValue, "modelId");
+      if (modelId.length > MAX_CONFIG_ID_LENGTH || typeof hiddenValue !== "boolean") {
+        throw new Error("Invalid model visibility request.");
+      }
+      return configStore.setModelVisibility(providerId, modelId, hiddenValue);
+    },
+  );
+  ipcMain.handle("settings:showAllProviderModels", async (_event, providerIdValue: unknown) => {
+    return configStore.showAllProviderModels(asProviderId(providerIdValue));
+  });
   ipcMain.handle("settings:set", async (_event, patch: unknown) => {
     if (typeof patch !== "object" || patch === null) throw new Error("Invalid settings patch.");
     const p = patch as Record<string, unknown>;

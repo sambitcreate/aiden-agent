@@ -46,7 +46,7 @@ import {
   useProviders,
   useSettings,
 } from "../lib/queries";
-import { useModelSelection } from "../lib/use-model-selection";
+import { resolveVisibleModelSelection, useModelSelection } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import { EnvironmentPanelToggle, useEnvironmentPanel } from "../components/environment-panel";
@@ -141,7 +141,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
-  const { providerId, model, select } = useModelSelection(providers.data);
+  const { providerId, model, select } = useModelSelection(
+    providers.data,
+    settings.data?.hiddenModelsByProvider,
+    settings.data !== undefined,
+  );
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
@@ -368,6 +372,18 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const hasMessages = messages.length > 0;
   const isGenerating = streamingText !== null && !hasUnpersistedResponse;
   const isNewChat = !chat.isLoading && !hasMessages && !isGenerating;
+
+  React.useEffect(() => {
+    if (!isNewChat || settings.data === undefined) return;
+    const next = resolveVisibleModelSelection(
+      { providerId, model },
+      providers.data,
+      settings.data?.hiddenModelsByProvider,
+    );
+    if (next && (next.providerId !== providerId || next.model !== model)) {
+      select(next.providerId, next.model);
+    }
+  }, [isNewChat, model, providerId, providers.data, select, settings.data]);
 
   const renameChat = React.useCallback(
     async (title: string) => {
@@ -714,10 +730,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setApprovals([]);
                 const persistedFailure =
-                  updatedChat?.messages[updatedChat.messages.length - 1]?.role ===
-                    "assistant" &&
-                  updatedChat.messages[updatedChat.messages.length - 1]
-                    ?.providerFailure;
+                  updatedChat?.messages[updatedChat.messages.length - 1]?.role === "assistant" &&
+                  updatedChat.messages[updatedChat.messages.length - 1]?.providerFailure;
                 setError(
                   persistedFailure
                     ? null
@@ -1051,13 +1065,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         setThinkingSaving(false);
       }
     },
-    [
-      isGenerating,
-      isStartingGeneration,
-      localReasoningVisibilitySupported,
-      qc,
-      thinkingSaving,
-    ],
+    [isGenerating, isStartingGeneration, localReasoningVisibilitySupported, qc, thinkingSaving],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -1558,12 +1566,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             modelPicker={
               <ModelPicker
-                providers={providers.data ?? []}
+                providers={settings.data ? providers.data ?? [] : []}
                 providerId={providerId}
                 model={model}
                 onChange={select}
                 disabled={isGenerating || thinkingSaving}
                 settingsBlockedReason={settingsBlockedReason}
+                hiddenModelsByProvider={settings.data?.hiddenModelsByProvider}
               />
             }
           />

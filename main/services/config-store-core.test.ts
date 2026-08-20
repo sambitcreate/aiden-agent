@@ -232,6 +232,63 @@ test("removing a provider clears its cache entry and its key", async (t) => {
   assert.equal(h.secrets.keys[provider.id], undefined);
 });
 
+test("model visibility updates are atomic and provider-scoped", async (t) => {
+  const h = await harness(t);
+  await Promise.all([
+    h.store.setModelVisibility("google", "gemini-pro", true),
+    h.store.setModelVisibility("anthropic", "claude-sonnet", true),
+    h.store.setModelVisibility("google", "gemini-flash", true),
+  ]);
+
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    anthropic: ["claude-sonnet"],
+    google: ["gemini-flash", "gemini-pro"],
+  });
+
+  await h.store.setModelVisibility("google", "gemini-pro", false);
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    anthropic: ["claude-sonnet"],
+    google: ["gemini-flash"],
+  });
+  await h.store.showAllProviderModels("google");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    anthropic: ["claude-sonnet"],
+  });
+});
+
+test("removing a provider clears its model visibility preferences", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setModelVisibility(provider.id, provider.models[0], true);
+  await h.store.setModelVisibility("other", "other-model", true);
+
+  await h.store.removeProvider(provider.id);
+
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    other: ["other-model"],
+  });
+});
+
+test("admitted provider removal finishes cache and visibility cleanup after renderer navigation", async (t) => {
+  const h = await harness(t);
+  await h.store.saveProvider(provider);
+  await h.store.setModelVisibility(provider.id, provider.models[0], true);
+  h.secrets.keys[provider.id] = "ciphertext";
+  let validityChecks = 0;
+
+  await h.store.removeProvider(provider.id, () => {
+    validityChecks += 1;
+    return validityChecks <= 5;
+  });
+
+  assert.equal(validityChecks, 5);
+  assert.deepEqual(await h.store.listProviders(), []);
+  assert.equal((await h.store.getSettings()).hiddenModelsByProvider?.[provider.id], undefined);
+  assert.equal(h.secrets.keys[provider.id], undefined);
+  const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
+  assert.equal(cache.byProvider[provider.id], undefined);
+});
+
 // ── Store placement ──────────────────────────────────────────────────────────
 
 test("MCP servers and skills are portable; workspaces and settings are not", async (t) => {
@@ -428,7 +485,10 @@ test("released onboarding local identity migration re-homes cache and remembered
         defaultModel: "qwen3-8b",
       },
     ],
-    settings: { lastProviderId: releasedId },
+    settings: {
+      lastProviderId: releasedId,
+      hiddenModelsByProvider: { [releasedId]: ["qwen3-8b"] },
+    },
     seeded: true,
   });
 
@@ -439,6 +499,9 @@ test("released onboarding local identity migration re-homes cache and remembered
   assert.deepEqual(listed.models, provider.models);
   assert.deepEqual(listed.modelMetadata, provider.modelMetadata);
   assert.equal((await h.store.getSettings()).lastProviderId, "custom:lmstudio");
+  assert.deepEqual((await h.store.getSettings()).hiddenModelsByProvider, {
+    "custom:lmstudio": ["qwen3-8b"],
+  });
   const cache = await readJson<{ byProvider: Record<string, unknown> }>(h.cacheFile);
   assert.equal(cache.byProvider[releasedId], undefined);
   assert.deepEqual(cache.byProvider["custom:lmstudio"], {

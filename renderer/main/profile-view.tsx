@@ -23,7 +23,7 @@ import { TokenMix } from "../components/usage/token-mix";
 import { profileApi } from "../lib/ipc";
 import { profileShareSvgToPng, USAGE_RANGE_LABELS } from "../lib/profile-share-data";
 import { formatTrackedUsd, profileInitials } from "../lib/usage-profile-data";
-import { queryKeys, useProfile, useUsageSummary } from "../lib/queries";
+import { queryKeys, useProfile, useProviders, useUsageSummary } from "../lib/queries";
 import type { UsageDateRange, UsageSummary } from "../lib/types";
 
 function compactNumber(value: number): string {
@@ -195,6 +195,7 @@ function SummaryMetric({
 }
 
 function UsageContent({ summary }: { summary: UsageSummary }) {
+  const providers = useProviders();
   const totals = summary.totals;
   const coverage = totals.requests > 0 ? (totals.reportedTokenRequests / totals.requests) * 100 : 0;
 
@@ -229,7 +230,7 @@ function UsageContent({ summary }: { summary: UsageSummary }) {
       <Separator />
       <div className="usage-profile-lower grid grid-cols-2 gap-0">
         <TokenMix tokens={totals.tokens} />
-        <ModelScoreboard models={summary.models} />
+        <ModelScoreboard models={summary.models} providers={providers.data} />
       </div>
       <Separator />
 

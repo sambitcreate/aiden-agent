@@ -8,6 +8,7 @@ import {
   type ProviderAuthSession,
 } from "../../lib/provider-auth-session";
 import type { Provider, ProviderAuthEvent, ProviderAuthPrompt } from "../../lib/types";
+import { ProviderModelVisibility } from "./provider-model-visibility";
 
 interface BuiltinProviderEditorProps {
   provider: Provider;
@@ -232,6 +233,7 @@ export function BuiltinProviderEditor({
           {provider.models.length} Pi model{provider.models.length === 1 ? "" : "s"} are currently
           available.
         </Text>
+        <ProviderModelVisibility provider={provider} />
       </div>
     </Dialog>
   );

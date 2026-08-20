@@ -47,6 +47,11 @@ import {
   type AnthropicThinkingLevel,
 } from "../../renderer/shared/anthropic-thinking.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
+import {
+  remapHiddenModelProvider,
+  withModelVisibility,
+  withoutProviderVisibility,
+} from "../../renderer/shared/model-visibility.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import type {
   AppSettings,
@@ -321,6 +326,7 @@ export function createConfigStore(
         const cacheBefore = (await modelCache.load()).byProvider;
         const currentSettings = runtimeSettingsFrom((await settingsStore.load()).settings);
         let lastProviderId = currentSettings.lastProviderId;
+        let hiddenModelsByProvider = currentSettings.hiddenModelsByProvider;
         let migrated: StoredProvider[] = [];
         let providersChanged = false;
         let aliasRoutesForMigration: Record<string, string> = {};
@@ -373,11 +379,6 @@ export function createConfigStore(
         if (!seeded) {
           await localStore.update((config) => void (config.seeded = true));
         }
-        if (lastProviderId !== currentSettings.lastProviderId) {
-          await settingsStore.update(
-            (config) => void (config.settings.lastProviderId = lastProviderId),
-          );
-        }
         const activeProviderIds = new Set(config.providers.map((provider) => provider.id));
         const cacheAliasEntries = providerAliasRoutes(aliasRoutesForMigration).filter(
           ([legacyId, targetId]) =>
@@ -386,6 +387,23 @@ export function createConfigStore(
             activeProviderIds.has(targetId),
         );
         secretMigrationAliases = cacheAliasEntries;
+        for (const [legacyId, targetId] of cacheAliasEntries) {
+          hiddenModelsByProvider = remapHiddenModelProvider(
+            hiddenModelsByProvider,
+            legacyId,
+            targetId,
+          );
+        }
+        if (
+          lastProviderId !== currentSettings.lastProviderId ||
+          JSON.stringify(hiddenModelsByProvider) !==
+            JSON.stringify(currentSettings.hiddenModelsByProvider)
+        ) {
+          await settingsStore.update((config) => {
+            config.settings.lastProviderId = lastProviderId;
+            config.settings.hiddenModelsByProvider = hiddenModelsByProvider;
+          });
+        }
         secretMigrationTargets = [
           ...new Map(
             cacheAliasEntries.flatMap(([, targetId]) => {
@@ -622,8 +640,17 @@ export function createConfigStore(
       await mutatePortable((config) => {
         config.providers = config.providers.filter((p) => p.id !== id);
       }, isCurrent);
-      await modelCache.update((draft) => void delete draft.byProvider[id], isCurrent);
-      await secrets.deleteKey(id, isCurrent);
+      // Once portable deletion commits, finish every dependent cleanup even if
+      // the requesting renderer navigates away. Otherwise recreating this ID
+      // can revive stale cache or visibility state.
+      await modelCache.update((draft) => void delete draft.byProvider[id]);
+      await mutateSettings((config) => {
+        config.settings.hiddenModelsByProvider = withoutProviderVisibility(
+          config.settings.hiddenModelsByProvider,
+          id,
+        );
+      });
+      await secrets.deleteKey(id);
     },
 
     /** Resolve a historical provider identity without ever falling through to a new Pi provider. */
@@ -663,6 +690,36 @@ export function createConfigStore(
         };
         return structuredClone(config.settings);
       }, isCurrent);
+      return runtimeSettingsFrom(saved);
+    },
+
+    /** Atomically update one presentation-only model visibility preference. */
+    async setModelVisibility(
+      providerId: string,
+      modelId: string,
+      hidden: boolean,
+    ): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.hiddenModelsByProvider = withModelVisibility(
+          config.settings.hiddenModelsByProvider,
+          providerId,
+          modelId,
+          hidden,
+        );
+        return structuredClone(config.settings);
+      });
+      return runtimeSettingsFrom(saved);
+    },
+
+    /** Atomically restore every model for one provider to picker visibility. */
+    async showAllProviderModels(providerId: string): Promise<AppSettings> {
+      const saved = await mutateSettings((config) => {
+        config.settings.hiddenModelsByProvider = withoutProviderVisibility(
+          config.settings.hiddenModelsByProvider,
+          providerId,
+        );
+        return structuredClone(config.settings);
+      });
       return runtimeSettingsFrom(saved);
     },
 

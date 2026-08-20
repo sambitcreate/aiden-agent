@@ -85,6 +85,7 @@ function BuiltinProviderRows({
           <ProviderIcon
             providerId={provider.id}
             providerLabel={provider.label}
+            artwork={provider.artwork}
             className="size-4.5"
           />
         </div>
@@ -438,7 +439,12 @@ export function ProvidersSettings() {
                 {i > 0 ? <Separator /> : null}
                 <div className="flex items-center gap-3 px-3.5 py-3">
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-control bg-well text-secondary">
-                    <ProviderIcon providerId={p.id} providerLabel={p.label} className="size-4.5" />
+                    <ProviderIcon
+                      providerId={p.id}
+                      providerLabel={p.label}
+                      artwork={p.artwork}
+                      className="size-4.5"
+                    />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">

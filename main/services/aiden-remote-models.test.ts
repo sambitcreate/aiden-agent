@@ -11,7 +11,12 @@ function provider(overrides: Partial<Provider> = {}): Provider {
     baseUrl: "https://secret-endpoint.example/v1",
     models: ["chat-model", "embedding-model"],
     modelMetadata: {
-      "chat-model": { source: "provider", name: "Chat Model", type: "llm", thinkingLevels: ["low", "high"] },
+      "chat-model": {
+        source: "provider",
+        name: "Chat Model",
+        type: "llm",
+        thinkingLevels: ["low", "high"],
+      },
       "embedding-model": { source: "provider", type: "embedding" },
     },
     needsKey: true,
@@ -29,14 +34,28 @@ test("model projection includes only configured chat models and no connection se
   const projection = await service.list();
   assert.deepEqual(projection.defaults, { providerId: "provider-1", modelId: "chat-model" });
   assert.equal(projection.providers.length, 1);
-  assert.deepEqual(projection.providers[0]?.models, [{
-    id: "chat-model",
-    label: "Chat Model",
-    thinkingLevels: ["low", "high"],
-  }]);
+  assert.deepEqual(projection.providers[0]?.models, [
+    {
+      id: "chat-model",
+      label: "Chat Model",
+      thinkingLevels: ["low", "high"],
+    },
+  ]);
   const serialized = JSON.stringify(projection);
   assert.equal(serialized.includes("secret-endpoint"), false);
   assert.equal(serialized.includes("authMethods"), false);
+});
+
+test("custom provider artwork crosses the remote catalog only as bounded normalized PNG data", async () => {
+  const artwork = {
+    mimeType: "image/png" as const,
+    dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  };
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({ artwork })],
+    getSettings: async () => ({}),
+  });
+  assert.deepEqual((await service.list()).providers[0]?.artwork, artwork);
 });
 
 test("model selection rejects missing providers and models", async () => {
@@ -53,4 +72,74 @@ test("model selection rejects missing providers and models", async () => {
     service.resolve("provider-1", "missing"),
     (error: unknown) => (error as { code?: string }).code === "invalid_request",
   );
+});
+
+test("hidden models are projected for clients, skipped by defaults, and remain resolvable", async () => {
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [
+      provider({
+        models: ["hidden-model", "visible-model"],
+        defaultModel: "hidden-model",
+        modelMetadata: {
+          "hidden-model": { source: "provider", name: "Hidden Model", type: "llm" },
+          "visible-model": { source: "provider", name: "Visible Model", type: "llm" },
+        },
+      }),
+    ],
+    getSettings: async () => ({
+      lastProviderId: "provider-1",
+      lastModel: "hidden-model",
+      hiddenModelsByProvider: { "provider-1": ["hidden-model"] },
+    }),
+  });
+
+  const projection = await service.list();
+  assert.deepEqual(projection.defaults, {
+    providerId: "provider-1",
+    modelId: "visible-model",
+  });
+  assert.deepEqual(projection.providers[0]?.models, [
+    { id: "hidden-model", label: "Hidden Model", hidden: true },
+    { id: "visible-model", label: "Visible Model" },
+  ]);
+  assert.deepEqual(await service.resolve("provider-1", "hidden-model"), {
+    providerId: "provider-1",
+    modelId: "hidden-model",
+    thinkingLevels: [],
+  });
+});
+
+test("a provider with every model hidden has no remote default", async () => {
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({ models: ["chat-model"] })],
+    getSettings: async () => ({
+      hiddenModelsByProvider: { "provider-1": ["chat-model"] },
+    }),
+  });
+
+  assert.deepEqual((await service.list()).defaults, {});
+});
+
+test("remote catalog omits oversized model identities instead of truncating or colliding", async () => {
+  const prefix = "x".repeat(256);
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({ models: [`${prefix}a`, `${prefix}b`, "safe"] })],
+    getSettings: async () => ({}),
+  });
+
+  assert.deepEqual((await service.list()).providers[0]?.models.map((model) => model.id), ["safe"]);
+});
+
+test("remote model projection remains below the generic iOS response ceiling", async () => {
+  const models = Array.from({ length: 20_000 }, (_, index) =>
+    `model-${index.toString().padStart(5, "0")}-${"x".repeat(120)}`,
+  );
+  const service = new AidenRemoteModelService({
+    listProviders: async () => [provider({ models })],
+    getSettings: async () => ({}),
+  });
+
+  const projection = await service.list();
+  assert.ok(projection.providers[0]!.models.length < models.length);
+  assert.ok(Buffer.byteLength(JSON.stringify(projection), "utf8") <= 900 * 1024);
 });

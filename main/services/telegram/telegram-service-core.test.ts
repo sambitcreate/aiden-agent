@@ -147,11 +147,24 @@ function createMockApi(opts: MockApiOptions) {
         text: p.text,
       };
     },
-    async sendRichMessage(p: { chatId: number; threadId?: number; markdown: string }): Promise<TelegramMessage> {
+    async sendRichMessage(p: {
+      chatId: number;
+      threadId?: number;
+      markdown: string;
+    }): Promise<TelegramMessage> {
       richMessages.push(p);
-      return { message_id: richMessages.length, chat: { id: p.chatId, type: "private" }, date: 0, text: p.markdown };
+      return {
+        message_id: richMessages.length,
+        chat: { id: p.chatId, type: "private" },
+        date: 0,
+        text: p.markdown,
+      };
     },
-    async sendVoice(p: { chatId: number; threadId?: number; bytes: Uint8Array }): Promise<TelegramMessage> {
+    async sendVoice(p: {
+      chatId: number;
+      threadId?: number;
+      bytes: Uint8Array;
+    }): Promise<TelegramMessage> {
       voiceMessages.push(p);
       return { message_id: voiceMessages.length, chat: { id: p.chatId, type: "private" }, date: 0 };
     },
@@ -279,7 +292,12 @@ function createMockTurn(opts: MockTurnOptions = {}) {
   const pendingStart = new EventEmitter();
   let pendingOwner: TurnOwner | undefined;
   const createdChats: Array<{ id: string; workspaceId?: string }> = [];
-  const startedParams: Array<{ chatId: string; workspaceId?: string; mode?: string; content?: string }> = [];
+  const startedParams: Array<{
+    chatId: string;
+    workspaceId?: string;
+    mode?: string;
+    content?: string;
+  }> = [];
   const llmClient = {
     beginChatTurn() {
       if (opts.busy) return null;
@@ -294,7 +312,12 @@ function createMockTurn(opts: MockTurnOptions = {}) {
     },
     async start(
       streamId: string,
-      _params: { chatId: string; workspaceId?: string; mode?: string; messages?: Array<{ content: string }> },
+      _params: {
+        chatId: string;
+        workspaceId?: string;
+        mode?: string;
+        messages?: Array<{ content: string }>;
+      },
       owner: TurnOwner,
       _options: unknown,
     ): Promise<boolean> {
@@ -441,7 +464,9 @@ interface HarnessOptions {
   resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
   clearThreadTargets?: () => Promise<void>;
   listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
-  applyModelSelection?: (choice: import("./telegram-controls.js").TelegramModelChoice) => Promise<void>;
+  applyModelSelection?: (
+    choice: import("./telegram-controls.js").TelegramModelChoice,
+  ) => Promise<void>;
   abortChat?: (chatId: string) => Promise<void>;
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
@@ -950,7 +975,11 @@ test("always voice mode intercepts automatic text and falls back only when synth
     telegramRendering: "rich",
     telegramVoiceMode: "always",
     batches: [[makeUpdate(1, makeMessage(10, owner, "Speak"))]],
-    synthesizeVoice: async () => ({ bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }),
+    synthesizeVoice: async () => ({
+      bytes: new Uint8Array([1]),
+      name: "voice.ogg",
+      mimeType: "audio/ogg",
+    }),
   });
   await voiced.service.start();
   await waitFor(() => voiced.api.voiceMessages.length === 1);
@@ -1039,13 +1068,20 @@ test("thumbs-down reaction removes the matching queued prompt", async () => {
     pendingTurn: true,
     delayAfterFirstBatch: true,
     batches: [
-      [makeUpdate(1, makeMessage(10, owner, "active")), makeUpdate(2, makeMessage(11, owner, "queued"))],
+      [
+        makeUpdate(1, makeMessage(10, owner, "active")),
+        makeUpdate(2, makeMessage(11, owner, "queued")),
+      ],
       [reaction],
     ],
     autoStop: false,
   });
   await service.start();
-  await waitFor(() => turnMock.startCalls() === 1 && api.sentMessages.some(({ text }) => text.includes("Queued prompt removed")));
+  await waitFor(
+    () =>
+      turnMock.startCalls() === 1 &&
+      api.sentMessages.some(({ text }) => text.includes("Queued prompt removed")),
+  );
   assert.equal(service.queueSize, 0);
   turnMock.completePendingTurn();
   service.stop();
@@ -1060,18 +1096,23 @@ test("reaction shortcut variants normalize variation selectors and promote queue
     autoStop: false,
     delayAfterFirstBatch: true,
     batches: [
-      [makeUpdate(1, makeMessage(10, owner, "active")), makeUpdate(2, makeMessage(11, owner, "waiting"))],
-      [{
-        update_id: 3,
-        message_reaction: {
-          chat: { id: 100, type: "private" },
-          message_id: 11,
-          user: owner,
-          old_reaction: [],
-          new_reaction: [{ type: "emoji", emoji: "❤️" }],
-          date: 0,
+      [
+        makeUpdate(1, makeMessage(10, owner, "active")),
+        makeUpdate(2, makeMessage(11, owner, "waiting")),
+      ],
+      [
+        {
+          update_id: 3,
+          message_reaction: {
+            chat: { id: 100, type: "private" },
+            message_id: 11,
+            user: owner,
+            old_reaction: [],
+            new_reaction: [{ type: "emoji", emoji: "❤️" }],
+            date: 0,
+          },
         },
-      }],
+      ],
     ],
   });
   await result.service.start();
@@ -1088,7 +1129,11 @@ test("thread provisioning reports the BotFather capability prerequisite", async 
   });
   await result.service.start();
   await assert.rejects(result.service.ensureThreads(), /BotFather/u);
-  assert.ok(result.service.getStatus().recentDiagnostics.some(({ message }) => message.includes("BotFather")));
+  assert.ok(
+    result.service
+      .getStatus()
+      .recentDiagnostics.some(({ message }) => message.includes("BotFather")),
+  );
 });
 
 test("reaction updates are offered to registered extension routing first", async () => {
@@ -1097,17 +1142,21 @@ test("reaction updates are offered to registered extension routing first", async
   const { service } = harness({
     enabled: true,
     allowedUserId: 42,
-    batches: [[{
-      update_id: 1,
-      message_reaction: {
-        chat: { id: 100, type: "private" },
-        message_id: 10,
-        user: owner,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "👍" }],
-        date: 0,
-      },
-    }]],
+    batches: [
+      [
+        {
+          update_id: 1,
+          message_reaction: {
+            chat: { id: 100, type: "private" },
+            message_id: 10,
+            user: owner,
+            old_reaction: [],
+            new_reaction: [{ type: "emoji", emoji: "👍" }],
+            date: 0,
+          },
+        },
+      ],
+    ],
     handleExtensionUpdate: async () => {
       extensionCalls += 1;
       return true;
@@ -1126,7 +1175,7 @@ test("thread messages capture their durable workspace and replies stay in the th
     allowedUserId: 42,
     telegramRendering: "rich",
     workspaces: [{ id: "project", name: "Project", folderPath: "/tmp/project" }],
-    resolveThreadWorkspace: async (threadId) => threadId === 77 ? "project" : undefined,
+    resolveThreadWorkspace: async (threadId) => (threadId === 77 ? "project" : undefined),
     batches: [[makeUpdate(1, message)]],
   });
   await service.start();
@@ -1140,7 +1189,9 @@ test("pairing reset clears queued work and durable thread bindings", async () =>
   const { service, config } = harness({
     enabled: true,
     allowedUserId: 42,
-    clearThreadTargets: async () => { cleared += 1; },
+    clearThreadTargets: async () => {
+      cleared += 1;
+    },
     batches: [],
     autoStop: false,
   });
@@ -1171,8 +1222,14 @@ test("offset persistence failure is diagnostic and polling remains live", async 
     await originalPersist(offset);
   };
   await service.start();
-  await waitFor(() => api.sentMessages.filter(({ text }) => text.includes("Aiden Telegram Agent")).length === 2);
-  assert.ok(service.getStatus().recentDiagnostics.some(({ message }) => message.includes("disk unavailable")));
+  await waitFor(
+    () => api.sentMessages.filter(({ text }) => text.includes("Aiden Telegram Agent")).length === 2,
+  );
+  assert.ok(
+    service
+      .getStatus()
+      .recentDiagnostics.some(({ message }) => message.includes("disk unavailable")),
+  );
 });
 
 test("active-run model switching persists first, aborts safely, and queues a continuation", async () => {
@@ -1195,13 +1252,22 @@ test("active-run model switching persists first, aborts safely, and queues a con
     autoStop: false,
     batches: [
       [makeUpdate(1, makeMessage(10, owner, "long task"))],
-      [{
-        update_id: 2,
-        callback_query: { id: "model", from: owner, message: controlMessage, data: "model:set:0" },
-      }],
+      [
+        {
+          update_id: 2,
+          callback_query: {
+            id: "model",
+            from: owner,
+            message: controlMessage,
+            data: "model:set:0",
+          },
+        },
+      ],
     ],
     listModels: async () => [choice],
-    applyModelSelection: async (selected) => { applied.push(selected); },
+    applyModelSelection: async (selected) => {
+      applied.push(selected);
+    },
     abortChat: async () => {
       aborts += 1;
       finishActive();
@@ -1211,6 +1277,39 @@ test("active-run model switching persists first, aborts safely, and queues a con
   await result.service.start();
   await waitFor(() => applied.length === 1 && aborts === 1 && result.turnMock.startCalls() === 2);
   assert.deepEqual(applied, [choice]);
-  assert.match(result.turnMock.startedParams()[1]?.content ?? "", /Continue the interrupted task using Next\/next-model/);
+  assert.match(
+    result.turnMock.startedParams()[1]?.content ?? "",
+    /Continue the interrupted task using Next\/next-model/,
+  );
+  result.service.stop();
+});
+
+test("a stale model callback cannot select a model omitted by the current visible catalog", async () => {
+  const owner = person(42);
+  const applied: unknown[] = [];
+  const result = harness({
+    enabled: true,
+    allowedUserId: 42,
+    batches: [
+      [
+        {
+          update_id: 1,
+          callback_query: {
+            id: "hidden-model",
+            from: owner,
+            message: makeMessage(20, BOT, "model menu"),
+            data: "model:set:0",
+          },
+        },
+      ],
+    ],
+    listModels: async () => [],
+    applyModelSelection: async (selected) => {
+      applied.push(selected);
+    },
+  });
+  await result.service.start();
+  await waitFor(() => result.api.answerCallbackQueryCalls() > 0);
+  assert.deepEqual(applied, []);
   result.service.stop();
 });
