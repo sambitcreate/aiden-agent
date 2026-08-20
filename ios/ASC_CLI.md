@@ -59,7 +59,8 @@ The earlier zero-record audit is retained above as historical evidence. The owne
 - Build `4` carries the Aiden-native shell refresh but was superseded after a cold-connect home-load edge was found locally.
 - Build `5` retries home loading on the connected-state transition; build `6` adds the final scratch/navigation/Live Activity branding repairs.
 - Build `7` adds Thinking Orbs, the existing/new/scratch New Agent choices, hopeful server-confirmed mutations, relative-time and landing cleanup, the theme-continuous Liquid Glass composer, explicit keyboard dismissal, and nested per-model thinking-level menus. It is the current `VALID` / `IN_BETA_TESTING` candidate and remains internal-only.
-- Current exact build resource ID: `717b6381-4dec-4cce-85d1-72b503c28590` (build `6`: `aa994233-1bf3-4482-86f5-b8b0356eee25`; build `5`: `6173d5e2-0e58-4d0a-92fa-fc804fc82c37`; build `4`: `ee5b7c23-14d6-44e7-a4ba-6a5003018758`; build `3`: `e5f0ae7e-35aa-451e-be87-bc039885b2de`; build `2`: `721aeb9d-2b33-4729-8d10-5bc1783abbef`).
+- Build `8` adds Mac-owned model visibility, sanitized custom provider artwork sync, corrected iOS thinking-model rows, waveform-only dictation status, and a true floating New Agent home action. It is `VALID`, `IN_BETA_TESTING` for `Internal Testers`, and externally `NOT_APPLICABLE`.
+- Current exact build resource ID: `b0d3c1c0-ab61-469f-9e4f-9dd250e1ff1a` (build `7`: `717b6381-4dec-4cce-85d1-72b503c28590`; build `6`: `aa994233-1bf3-4482-86f5-b8b0356eee25`; build `5`: `6173d5e2-0e58-4d0a-92fa-fc804fc82c37`; build `4`: `ee5b7c23-14d6-44e7-a4ba-6a5003018758`; build `3`: `e5f0ae7e-35aa-451e-be87-bc039885b2de`; build `2`: `721aeb9d-2b33-4729-8d10-5bc1783abbef`).
 
 The account holder is assigned to the internal group. The terminal valid state does not need a processing automation; future uploads may use the checked-in read-only monitor with the exact new build ID.
 
