@@ -144,6 +144,7 @@ private final class AidenHomeModel {
     var chats: [AidenChat] = []
     var scheduledTasks: [AidenScheduledTask] = []
     var usage: AidenUsageSummary?
+    var modelCatalog: AidenModelCatalog?
     var isLoading = false
     var errorMessage: String?
 
@@ -156,11 +157,13 @@ private final class AidenHomeModel {
             let client = try coordinator.remoteClient()
             async let chatsRequest = client.chats()
             async let tasksRequest = client.scheduledTasks()
-            let (chats, tasks) = try await (chatsRequest, tasksRequest)
+            async let catalogRequest: AidenModelCatalog? = try? await client.modelCatalog()
+            let (chats, tasks, catalog) = try await (chatsRequest, tasksRequest, catalogRequest)
             self.chats = chats.sorted { $0.updatedAt > $1.updatedAt }
             scheduledTasks = tasks.sorted {
                 ($0.nextRunAt ?? .distantFuture) < ($1.nextRunAt ?? .distantFuture)
             }
+            if let catalog { modelCatalog = catalog }
             usage = try? await client.usage()
         } catch {
             errorMessage = error.localizedDescription
@@ -409,7 +412,7 @@ struct AidenWorkspaceShellView: View {
         }
         .sheet(isPresented: $isShowingUsage) {
             if let usage = homeModel.usage {
-                AidenUsageView(usage: usage)
+                AidenUsageView(usage: usage, providers: homeModel.modelCatalog?.providers ?? [])
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
@@ -619,12 +622,7 @@ struct AidenWorkspaceShellView: View {
         .scrollContentBackground(.hidden)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(palette.canvas.ignoresSafeArea())
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            Color.clear
-                .frame(height: 92)
-                .background(palette.canvas)
-                .allowsHitTesting(false)
-        }
+        .contentMargins(.bottom, 104, for: .scrollContent)
         .refreshable {
             await coordinator.refreshWorkspaces()
             await homeModel.load(coordinator: coordinator)
@@ -1712,6 +1710,7 @@ private struct AidenUsageView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.aidenPalette) private var palette
     let usage: AidenUsageSummary
+    let providers: [AidenProvider]
 
     private var heatmapDays: [AidenUsageHeatmapDay] {
         AidenUsagePresentation.heatmapDays(for: usage)
@@ -1942,6 +1941,7 @@ private struct AidenUsageView: View {
                                 providerID: model.providerId,
                                 providerLabel: model.providerLabel,
                                 modelID: model.modelId,
+                                artwork: providers.first { $0.id == model.providerId }?.artwork,
                                 size: 20,
                                 color: palette.accent
                             )
