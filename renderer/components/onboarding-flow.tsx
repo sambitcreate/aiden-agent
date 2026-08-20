@@ -16,6 +16,7 @@ import {
   FolderGit2,
   GitBranch,
   Globe2,
+  Images,
   Lock,
   MessageSquare,
   Mic2,
@@ -62,6 +63,7 @@ const APP_ICON_URL = new URL("../../resources/app-icon.png", import.meta.url).hr
 
 const FEATURE_ILLUSTRATIONS = {
   workspace: new URL("../assets/onboarding/aiden-workspace.png", import.meta.url).href,
+  createImages: new URL("../assets/onboarding/features/create-images.png", import.meta.url).href,
   computerUse: new URL("../assets/onboarding/features/computer-use.png", import.meta.url).href,
   subagents: new URL("../assets/onboarding/features/native-subagents.png", import.meta.url).href,
   filesEditor: new URL("../assets/onboarding/features/files-editor.png", import.meta.url).href,
@@ -162,6 +164,16 @@ const featureBentos: FeatureBento[] = [
     icon: MessageSquare,
     imageUrl: FEATURE_ILLUSTRATIONS.workspace,
     size: "hero",
+  },
+  {
+    id: "createImages",
+    group: "create",
+    title: "Create Images",
+    description:
+      "Build visual image workflows, keep imported and generated images in a local workspace, and reveal it in Finder when you need it.",
+    icon: Images,
+    imageUrl: FEATURE_ILLUSTRATIONS.createImages,
+    size: "wide",
   },
   {
     id: "computerUse",

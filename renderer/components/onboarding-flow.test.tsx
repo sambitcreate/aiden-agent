@@ -10,6 +10,7 @@ const featureAssetPaths = [
   "features/attachments-vision.png",
   "features/command-palette.png",
   "features/computer-use.png",
+  "features/create-images.png",
   "features/files-editor.png",
   "features/git-workflows.png",
   "features/mcp-connectors.png",
@@ -114,6 +115,10 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     source,
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
+  assert.match(
+    featurePresentation,
+    /keep imported and generated images in a local workspace, and reveal it in Finder/u,
+  );
   assert.match(source, /tabIndex=\{0\}/u);
   for (const group of [
     "Build in your workspace",
@@ -124,6 +129,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
   }
   for (const title of [
     "Workspace Agent",
+    "Create Images",
     "Computer Use",
     "Native Subagents",
     "Files & Text Editor",
@@ -148,12 +154,12 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
   ]) {
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
-  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 22);
+  assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 23);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });
 
 test("every advertised feature has its own one-megapixel PNG with alpha", () => {
-  assert.equal(featureAssetPaths.length, 22);
+  assert.equal(featureAssetPaths.length, 23);
   assert.equal(new Set(featureAssetPaths).size, featureAssetPaths.length);
   for (const assetPath of featureAssetPaths) {
     const illustration = readFileSync(
