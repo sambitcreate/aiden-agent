@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="938" height="938" viewBox="0 0 938 938" role="img" aria-labelledby="title desc">
+  <title id="title">Concentrate</title>
+  <desc id="desc">An eight-by-eight field of dots that grow toward the upper right.</desc>
+  <g fill="#000000">
+    <circle cx="245" cy="270" r="2.4"/><circle cx="305" cy="270" r="8.4"/><circle cx="365" cy="270" r="12.8"/><circle cx="425" cy="270" r="16.3"/><circle cx="485" cy="270" r="19.4"/><circle cx="545" cy="270" r="22.2"/><circle cx="605" cy="270" r="24.6"/><circle cx="665" cy="270" r="27.2"/>
+    <circle cx="245" cy="330" r="2.4"/><circle cx="305" cy="330" r="7.8"/><circle cx="365" cy="330" r="11.8"/><circle cx="425" cy="330" r="15"/><circle cx="485" cy="330" r="17.8"/><circle cx="545" cy="330" r="20"/><circle cx="605" cy="330" r="22.5"/><circle cx="665" cy="330" r="24.5"/>
+    <circle cx="245" cy="390" r="2.4"/><circle cx="305" cy="390" r="7"/><circle cx="365" cy="390" r="10.5"/><circle cx="425" cy="390" r="13"/><circle cx="485" cy="390" r="16"/><circle cx="545" cy="390" r="18"/><circle cx="605" cy="390" r="20"/><circle cx="665" cy="390" r="22"/>
+    <circle cx="245" cy="450" r="2.4"/><circle cx="305" cy="450" r="6"/><circle cx="365" cy="450" r="9"/><circle cx="425" cy="450" r="11.5"/><circle cx="485" cy="450" r="14"/><circle cx="545" cy="450" r="16"/><circle cx="605" cy="450" r="17.8"/><circle cx="665" cy="450" r="19.25"/>
+    <circle cx="245" cy="510" r="2.4"/><circle cx="305" cy="510" r="5"/><circle cx="365" cy="510" r="7.75"/><circle cx="425" cy="510" r="10"/><circle cx="485" cy="510" r="11.75"/><circle cx="545" cy="510" r="13"/><circle cx="605" cy="510" r="15"/><circle cx="665" cy="510" r="16.5"/>
+    <circle cx="245" cy="570" r="2.4"/><circle cx="305" cy="570" r="4"/><circle cx="365" cy="570" r="6"/><circle cx="425" cy="570" r="7.75"/><circle cx="485" cy="570" r="9"/><circle cx="545" cy="570" r="10"/><circle cx="605" cy="570" r="11.75"/><circle cx="665" cy="570" r="13"/>
+    <circle cx="245" cy="630" r="2.4"/><circle cx="305" cy="630" r="2.4"/><circle cx="365" cy="630" r="3.75"/><circle cx="425" cy="630" r="4.75"/><circle cx="485" cy="630" r="5.75"/><circle cx="545" cy="630" r="6.75"/><circle cx="605" cy="630" r="7.75"/><circle cx="665" cy="630" r="8.5"/>
+    <circle cx="245" cy="690" r="2.4"/><circle cx="305" cy="690" r="2.4"/><circle cx="365" cy="690" r="2.4"/><circle cx="425" cy="690" r="2.4"/><circle cx="485" cy="690" r="2.4"/><circle cx="545" cy="690" r="2.4"/><circle cx="605" cy="690" r="2.4"/><circle cx="665" cy="690" r="2.4"/>
+  </g>
+</svg>
+

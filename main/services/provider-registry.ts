@@ -24,7 +24,10 @@ import {
   googleThinkingCanDisable,
   googleThinkingLevelsForModel,
 } from "../../renderer/shared/google-thinking.js";
+import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import type { ProviderAuthBackend, ProviderLogoutBackend } from "./provider-auth-flow-core.js";
+import { CONCENTRATE_PROVIDER_ID, registerAidenBuiltinProviders } from "./concentrate-provider.js";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -47,7 +50,12 @@ function metadataFor(providerId: string, model: Model<Api>): ProviderModelMetada
             thinkingLevels: googleThinkingLevelsForModel(model),
             thinkingCanDisable: googleThinkingCanDisable(model),
           }
-        : {};
+        : providerId === CONCENTRATE_PROVIDER_ID && model.reasoning
+          ? {
+              thinkingLevels: getSupportedThinkingLevels(model).filter(isGenerationThinkingLevel),
+              thinkingCanDisable: model.thinkingLevelMap?.off !== null,
+            }
+          : {};
   return {
     source: "provider",
     name: model.name,
@@ -346,6 +354,8 @@ export class ProviderRegistry {
 }
 
 export const providerRegistry = new ProviderRegistry(
-  builtinModels({ credentials: piCredentialStore, modelsStore: piModelsStore }),
+  registerAidenBuiltinProviders(
+    builtinModels({ credentials: piCredentialStore, modelsStore: piModelsStore }),
+  ),
   piCredentialStore,
 );

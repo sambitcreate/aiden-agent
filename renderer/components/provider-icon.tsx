@@ -1,9 +1,6 @@
 import { resolveProviderIconSlug, type ProviderIconSlug } from "../lib/pi-provider-display";
 import { cn } from "../lib/ui-utils";
-import {
-  providerArtworkDataUrl,
-  type ProviderArtwork,
-} from "../shared/provider-artwork";
+import { providerArtworkDataUrl, type ProviderArtwork } from "../shared/provider-artwork";
 
 const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
   "amazon-bedrock": new URL("../assets/provider-logos/amazon-bedrock.svg", import.meta.url).href,
@@ -27,6 +24,7 @@ const PROVIDER_ICON_URLS: Readonly<Record<ProviderIconSlug, string>> = {
     "../assets/provider-logos/cloudflare-workers-ai.svg",
     import.meta.url,
   ).href,
+  concentrate: new URL("../assets/provider-logos/concentrate.svg", import.meta.url).href,
   deepseek: new URL("../assets/provider-logos/deepseek.svg", import.meta.url).href,
   fireworks: new URL("../assets/provider-logos/fireworks.svg", import.meta.url).href,
   "github-copilot": new URL("../assets/provider-logos/github-copilot.svg", import.meta.url).href,
