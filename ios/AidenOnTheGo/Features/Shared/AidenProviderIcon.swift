@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum AidenProviderIconResolver {
     static let supportedSlugs: Set<String> = [
@@ -90,6 +91,7 @@ struct AidenProviderIcon: View {
     let providerID: String
     let providerLabel: String
     var modelID: String? = nil
+    var artwork: AidenProviderArtwork? = nil
     var size: CGFloat = 20
     var color: Color? = nil
 
@@ -99,7 +101,12 @@ struct AidenProviderIcon: View {
 
     var body: some View {
         Group {
-            if let slug {
+            if let customImage {
+                Image(uiImage: customImage)
+                    .resizable()
+                    .renderingMode(.original)
+                    .scaledToFit()
+            } else if let slug {
                 Image("ProviderLogo-\(slug)")
                     .resizable()
                     .renderingMode(
@@ -125,5 +132,10 @@ struct AidenProviderIcon: View {
     private var providerInitial: String {
         providerLabel.trimmingCharacters(in: .whitespacesAndNewlines).first
             .map { String($0).uppercased() } ?? "?"
+    }
+
+    private var customImage: UIImage? {
+        guard let data = artwork?.boundedPNGData else { return nil }
+        return UIImage(data: data)
     }
 }

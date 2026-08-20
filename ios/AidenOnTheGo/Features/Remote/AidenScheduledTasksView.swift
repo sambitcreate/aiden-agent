@@ -483,9 +483,35 @@ private struct AidenScheduledTaskEditor: View {
         _draft = State(initialValue: task.map(AidenScheduledTaskDraft.init(task:)) ?? AidenScheduledTaskDraft())
     }
 
-    private var providers: [AidenProvider] { model.catalog?.providers ?? [] }
-    private var selectedProvider: AidenProvider? { providers.first { $0.id == draft.providerId } }
-    private var models: [AidenModel] { selectedProvider?.models ?? [] }
+    private var allProviders: [AidenProvider] { model.catalog?.providers ?? [] }
+    private var providers: [AidenProvider] { model.catalog?.visibleProviders ?? [] }
+    private var selectedProvider: AidenProvider? { allProviders.first { $0.id == draft.providerId } }
+    private var models: [AidenModel] { selectedProvider?.visibleModels ?? [] }
+    private var currentHiddenModel: AidenModel? {
+        selectedProvider?.models.first { $0.id == draft.modelId && $0.isHidden }
+    }
+    private var currentHiddenProvider: AidenProvider? {
+        guard let selectedProvider, selectedProvider.visibleModels.isEmpty else { return nil }
+        return selectedProvider
+    }
+
+    private var providerPickerSelection: Binding<String?> {
+        Binding(
+            get: {
+                providers.contains { $0.id == draft.providerId } ? draft.providerId : nil
+            },
+            set: { draft.providerId = $0 }
+        )
+    }
+
+    private var modelPickerSelection: Binding<String?> {
+        Binding(
+            get: {
+                models.contains { $0.id == draft.modelId } ? draft.modelId : nil
+            },
+            set: { draft.modelId = $0 }
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -513,7 +539,10 @@ private struct AidenScheduledTaskEditor: View {
                 if draft.mode == .llm {
                     Section("Ask Aiden") {
                         TextEditor(text: $draft.prompt).frame(minHeight: 120)
-                        Picker("Provider", selection: $draft.providerId) {
+                        if let currentHiddenProvider {
+                            LabeledContent("Current provider", value: "\(currentHiddenProvider.label) · Hidden")
+                        }
+                        Picker("Provider", selection: providerPickerSelection) {
                             Text("Default").tag(String?.none)
                             ForEach(providers) { provider in
                                 Label {
@@ -522,28 +551,20 @@ private struct AidenScheduledTaskEditor: View {
                                     AidenProviderIcon(
                                         providerID: provider.id,
                                         providerLabel: provider.label,
+                                        artwork: provider.artwork,
                                         size: 16
                                     )
                                 }
                                 .tag(Optional(provider.id))
                             }
                         }
-                        Picker("Model", selection: $draft.modelId) {
+                        if let currentHiddenModel {
+                            LabeledContent("Current model", value: "\(currentHiddenModel.label) · Hidden")
+                        }
+                        Picker("Model", selection: modelPickerSelection) {
                             Text("Default").tag(String?.none)
                             ForEach(models) { candidate in
-                                Label {
-                                    Text(candidate.label)
-                                } icon: {
-                                    if let provider = selectedProvider {
-                                        AidenProviderIcon(
-                                            providerID: provider.id,
-                                            providerLabel: provider.label,
-                                            modelID: candidate.id,
-                                            size: 16
-                                        )
-                                    }
-                                }
-                                .tag(Optional(candidate.id))
+                                Text(candidate.label).tag(Optional(candidate.id))
                             }
                         }
                     }
@@ -590,16 +611,16 @@ private struct AidenScheduledTaskEditor: View {
             .onChange(of: draft.mode) { _, mode in
                 if mode == .script { draft.permission = .full; Task { await model.loadScripts(workspaceId: draft.workspaceId) } }
             }
-            .onChange(of: draft.providerId) { _, providerId in
-                guard let providerId,
-                      let provider = providers.first(where: { $0.id == providerId }) else {
-                    draft.modelId = nil
-                    return
+                .onChange(of: draft.providerId) { _, providerId in
+                    guard let providerId,
+                          let provider = providers.first(where: { $0.id == providerId }) else {
+                        draft.modelId = nil
+                        return
+                    }
+                    if !provider.visibleModels.contains(where: { $0.id == draft.modelId }) {
+                        draft.modelId = provider.visibleModels.first?.id
+                    }
                 }
-                if !provider.models.contains(where: { $0.id == draft.modelId }) {
-                    draft.modelId = provider.models.first?.id
-                }
-            }
             .onChange(of: draft.workspaceId) { _, workspaceId in
                 if draft.mode == .script { draft.scriptId = nil; Task { await model.loadScripts(workspaceId: workspaceId) } }
             }

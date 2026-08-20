@@ -377,6 +377,8 @@ final class AidenChatViewModel {
         selectedProvider?.models.first { $0.id == selectedModelId }
     }
 
+    var visibleProviders: [AidenProvider] { catalog?.visibleProviders ?? [] }
+
     func load() async {
         guard !instanceId.isEmpty, !isLoading else { return }
         isLoading = true
@@ -400,7 +402,7 @@ final class AidenChatViewModel {
 
     func selectProvider(_ providerId: String) {
         selectedProviderId = providerId
-        selectedModelId = catalog?.providers.first { $0.id == providerId }?.models.first?.id
+        selectedModelId = visibleProviders.first { $0.id == providerId }?.models.first?.id
         selectedThinkingLevel = selectedModel?.thinkingLevels?.first
     }
 
@@ -546,10 +548,10 @@ final class AidenChatViewModel {
     private func resolveModelSelection() {
         guard let catalog else { return }
         if selectedProviderId == nil || !catalog.providers.contains(where: { $0.id == selectedProviderId }) {
-            selectedProviderId = catalog.defaults["providerId"] ?? catalog.providers.first?.id
+            selectedProviderId = catalog.defaults["providerId"] ?? catalog.visibleProviders.first?.id
         }
         if selectedModelId == nil || selectedProvider?.models.contains(where: { $0.id == selectedModelId }) != true {
-            selectedModelId = catalog.defaults["modelId"] ?? selectedProvider?.models.first?.id
+            selectedModelId = catalog.defaults["modelId"] ?? selectedProvider?.visibleModels.first?.id
         }
         if selectedThinkingLevel == nil { selectedThinkingLevel = selectedModel?.thinkingLevels?.first }
     }
@@ -1456,6 +1458,7 @@ private struct AidenToolActivityCard: View {
 private struct AidenComposerView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var model: AidenChatViewModel
     let autoStartVoice: Bool
     let composerFocus: FocusState<Bool>.Binding
@@ -1525,9 +1528,9 @@ private struct AidenComposerView: View {
                     matching: .images
                 )
 
-                if let catalog = model.catalog, !catalog.providers.isEmpty {
+                if !model.visibleProviders.isEmpty {
                     Menu {
-                        ForEach(catalog.providers) { provider in
+                        ForEach(model.visibleProviders) { provider in
                             Section {
                                 ForEach(provider.models) { candidate in
                                     if let levels = candidate.thinkingLevels, !levels.isEmpty {
@@ -1547,13 +1550,7 @@ private struct AidenComposerView: View {
                                                     }
                                                 }
                                             }
-                                        } label: {
-                                            Label {
-                                                Text(candidate.label)
-                                            } icon: {
-                                                AidenSidebarLogo(size: 14, color: palette.secondary)
-                                            }
-                                        }
+                                        } label: { Text(candidate.label) }
                                     } else {
                                         Button {
                                             select(candidate, providerId: provider.id, thinkingLevel: nil)
@@ -1573,6 +1570,7 @@ private struct AidenComposerView: View {
                                     AidenProviderIcon(
                                         providerID: provider.id,
                                         providerLabel: provider.label,
+                                        artwork: provider.artwork,
                                         size: 16,
                                         color: palette.secondary
                                     )
@@ -1586,6 +1584,7 @@ private struct AidenComposerView: View {
                                     providerID: provider.id,
                                     providerLabel: provider.label,
                                     modelID: model.selectedModel?.id,
+                                    artwork: provider.artwork,
                                     size: 15,
                                     color: palette.secondary
                                 )
@@ -1606,6 +1605,20 @@ private struct AidenComposerView: View {
                     }
                     .accessibilityLabel("Model")
                     .accessibilityValue(selectedModelAccessibilityValue)
+                } else if let selectedModel = model.selectedModel {
+                    HStack(spacing: 4) {
+                        Text(selectedModel.label).lineLimit(1)
+                        Text("· Hidden")
+                            .lineLimit(1)
+                            .foregroundStyle(palette.secondary.opacity(0.8))
+                    }
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .frame(maxWidth: 180, alignment: .leading)
+                    .frame(minHeight: 44)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Model")
+                    .accessibilityValue("\(selectedModel.label), hidden from picker")
                 }
 
                 Spacer(minLength: 0)
@@ -1615,9 +1628,15 @@ private struct AidenComposerView: View {
                         await voiceInput.toggle(currentDraft: model.draft) { model.draft = $0 }
                     }
                 } label: {
-                    Image(systemName: voiceInput.isListening ? "waveform" : "mic")
-                        .font(.body.weight(.medium))
-                        .frame(width: 44, height: 44)
+                    Group {
+                        if voiceInput.isListening {
+                            AidenListeningWaveform(isAnimated: !reduceMotion)
+                        } else {
+                            Image(systemName: "mic")
+                                .font(.body.weight(.medium))
+                        }
+                    }
+                    .frame(width: 44, height: 44)
                 }
                 .disabled(model.isStreaming || voiceInput.isRequestingPermission)
                 .accessibilityLabel(voiceInput.isListening ? "Stop voice input" : "Start voice input")
@@ -1650,11 +1669,7 @@ private struct AidenComposerView: View {
                 }
             }
 
-            if voiceInput.isListening {
-                Label("Listening on this device", systemImage: "waveform")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if let error = voiceInput.errorMessage {
+            if let error = voiceInput.errorMessage, !voiceInput.isListening {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -1769,6 +1784,31 @@ private struct AidenComposerView: View {
               model.selectedModelId == candidate.id
         else { return false }
         return thinkingLevel == nil || model.selectedThinkingLevel == thinkingLevel
+    }
+}
+
+private struct AidenListeningWaveform: View {
+    let isAnimated: Bool
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 12, paused: !isAnimated)) { context in
+            let phase = isAnimated ? context.date.timeIntervalSinceReferenceDate * 7 : 0
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(0..<5, id: \.self) { index in
+                    let offset = Double(index) * 0.85
+                    let amplitude = isAnimated ? abs(sin(phase + offset)) : 0.45
+                    Capsule(style: .continuous)
+                        .frame(width: 2.5, height: 19)
+                        .scaleEffect(
+                            x: 1,
+                            y: (7 + (amplitude * 12)) / 19,
+                            anchor: .center
+                        )
+                }
+            }
+            .frame(width: 24, height: 22)
+        }
+        .accessibilityHidden(true)
     }
 }
 

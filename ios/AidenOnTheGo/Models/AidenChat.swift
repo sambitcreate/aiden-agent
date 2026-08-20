@@ -120,17 +120,79 @@ struct AidenModel: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let label: String
     let thinkingLevels: [String]?
+    let hidden: Bool?
+
+    var isHidden: Bool { hidden == true }
 }
 
 struct AidenProvider: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let label: String
+    let artwork: AidenProviderArtwork?
     let models: [AidenModel]
+
+    init(
+        id: String,
+        label: String,
+        artwork: AidenProviderArtwork? = nil,
+        models: [AidenModel]
+    ) {
+        self.id = id
+        self.label = label
+        self.artwork = artwork
+        self.models = models
+    }
+}
+
+struct AidenProviderArtwork: Codable, Equatable, Sendable {
+    let mimeType: String
+    let dataBase64: String
+
+    var boundedPNGData: Data? {
+        guard mimeType == "image/png",
+              dataBase64.count <= 44_000,
+              let data = Data(base64Encoded: dataBase64),
+              data.count <= 32 * 1024
+        else { return nil }
+        let header = [UInt8](data.prefix(24))
+        guard header.count == 24,
+              Array(header[0..<8]) == [137, 80, 78, 71, 13, 10, 26, 10],
+              Array(header[12..<16]) == [73, 72, 68, 82]
+        else { return nil }
+        let dimension: (Int) -> UInt32 = { offset in
+            (UInt32(header[offset]) << 24)
+                | (UInt32(header[offset + 1]) << 16)
+                | (UInt32(header[offset + 2]) << 8)
+                | UInt32(header[offset + 3])
+        }
+        let width = dimension(16)
+        let height = dimension(20)
+        guard width > 0, height > 0, width <= 64, height <= 64 else { return nil }
+        return data
+    }
+}
+
+extension AidenProvider {
+    var visibleModels: [AidenModel] { models.filter { !$0.isHidden } }
 }
 
 struct AidenModelCatalog: Codable, Equatable, Sendable {
     let providers: [AidenProvider]
     let defaults: [String: String]
+}
+
+extension AidenModelCatalog {
+    var visibleProviders: [AidenProvider] {
+        providers.compactMap { provider in
+            let models = provider.visibleModels
+            return models.isEmpty ? nil : AidenProvider(
+                id: provider.id,
+                label: provider.label,
+                artwork: provider.artwork,
+                models: models
+            )
+        }
+    }
 }
 
 struct AidenUsageTokens: Codable, Equatable, Sendable {

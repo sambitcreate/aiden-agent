@@ -5,6 +5,43 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testModelCatalogHidesPresentationOnlyModelsWithoutDroppingTheirIdentity() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-pro","label":"Gemini Pro","hidden":true},{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"all-hidden","label":"Hidden","models":[{"id":"legacy","label":"Legacy","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(catalog.providers.first?.models.map(\.id), ["gemini-pro", "gemini-flash"])
+        XCTAssertEqual(catalog.visibleProviders.map(\.id), ["google"])
+        XCTAssertEqual(catalog.visibleProviders.first?.models.map(\.id), ["gemini-flash"])
+    }
+
+    func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"custom:server","label":"Server","artwork":{"mimeType":"image/png","dataBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="},"models":[{"id":"chat","label":"Chat"}]}],"defaults":{}}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(catalog.visibleProviders.first?.artwork?.mimeType, "image/png")
+        XCTAssertNotNil(catalog.visibleProviders.first?.artwork?.boundedPNGData)
+
+        var oversizedHeader = Data(repeating: 0, count: 24)
+        oversizedHeader.replaceSubrange(0..<8, with: [137, 80, 78, 71, 13, 10, 26, 10])
+        oversizedHeader.replaceSubrange(12..<16, with: [73, 72, 68, 82])
+        oversizedHeader.replaceSubrange(16..<20, with: [0, 0, 0, 65])
+        oversizedHeader.replaceSubrange(20..<24, with: [0, 0, 0, 1])
+        XCTAssertNil(
+            AidenProviderArtwork(
+                mimeType: "image/png",
+                dataBase64: oversizedHeader.base64EncodedString()
+            ).boundedPNGData
+        )
+    }
+
     func testRelativeTimestampUsesProductSpecificBoundaries() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         XCTAssertEqual(AidenRelativeTimestamp.text(for: now, now: now), "just now")

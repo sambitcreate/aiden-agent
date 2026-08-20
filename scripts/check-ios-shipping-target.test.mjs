@@ -191,7 +191,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(shell, /aidenChromeGlass\(isInteractive: true, in: Capsule\(\)\)/u);
   assert.match(shell, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
-  assert.match(
+  assert.match(shell, /contentMargins\(\.bottom, 104, for: \.scrollContent\)/u);
+  assert.doesNotMatch(
     shell,
     /safeAreaInset\(edge: \.bottom, spacing: 0\)[\s\S]*?frame\(height: 92\)[\s\S]*?background\(palette\.canvas\)/u,
   );
@@ -253,7 +254,7 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(
     scheduledTasks,
-    /Picker\("Model"[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: candidate\.id/u,
+    /Picker\("Model"[\s\S]*?ForEach\(models\)[\s\S]*?Text\(candidate\.label\)\.tag/u,
   );
   assert.match(chat, /ThinkingOrb\(state: activity\.orb, size: \.px20\)/u);
   assert.match(
@@ -273,6 +274,18 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /@FocusState private var composerIsFocused: Bool[\s\S]*?scrollDismissesKeyboard\(\.interactively\)[\s\S]*?TapGesture\(\)\.onEnded[\s\S]*?composerIsFocused = false/u);
   assert.match(chat, /composerFocus: \$composerIsFocused[\s\S]*?\.focused\(composerFocus\)/u);
   assert.match(chat, /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u);
+  assert.match(chat, /ForEach\(model\.visibleProviders\)[\s\S]*?ForEach\(provider\.models\)/u);
+  assert.match(chat, /AidenReasoningCard[\s\S]*?AidenSidebarLogo/u);
+  assert.doesNotMatch(
+    chat,
+    /Menu \{[\s\S]{0,500}?ForEach\(levels[\s\S]{0,500}?label: \{[\s\S]{0,120}?AidenSidebarLogo/u,
+  );
+  assert.doesNotMatch(chat, /Listening on this device/u);
+  assert.match(
+    chat,
+    /AidenListeningWaveform[\s\S]*?TimelineView\(\.animation[\s\S]*?paused: !isAnimated/u,
+  );
+  assert.match(scheduledTasks, /visibleProviders[\s\S]*?selectedProvider\?\.visibleModels/u);
   assert.doesNotMatch(chat, /if let levels = model\.selectedModel\?\.thinkingLevels/u);
   assert.doesNotMatch(chat, /\.background\(\.bar\)/u);
   assert.match(widget, /status == \.starting \|\| status == \.thinking[\s\S]*?Image\("aiden-sidebar-logo"\)/u);
