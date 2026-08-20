@@ -114,6 +114,9 @@ struct AidenChat: Codable, Identifiable, Equatable, Sendable {
     let createdAt: Date
     var updatedAt: Date
     var revision: String
+    var titlePending: Bool? = nil
+
+    var isTitlePending: Bool { titlePending == true }
 }
 
 struct AidenModel: Codable, Identifiable, Equatable, Sendable {

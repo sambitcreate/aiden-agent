@@ -92,7 +92,7 @@ Forbidden: `folderPath`, repository/worktree/Git-admin paths, ownership token, d
 
 ### Chat/message
 
-Allowed: IDs, workspace ID, visible title/provider/model selections, visible user/assistant messages, bounded attachments, safe reasoning/tool/timeline milestones, timestamps, terminal provider-failure category.
+Allowed: IDs, workspace ID, visible title/provider/model selections, an optional `titlePending: true` hint while first-turn background naming is active, visible user/assistant messages, bounded attachments, safe reasoning/tool/timeline milestones, timestamps, terminal provider-failure category.
 
 Forbidden: Pi journals, raw diagnostics, raw tool arguments/results not already safe for renderer display, subagent private history, hidden prompts, credentials, filesystem internals.
 
@@ -159,6 +159,8 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `POST /approvals/{approvalId}/respond`: `allow` or `deny` only.
 
 Turn start returns `turnId`, `streamId`, accepted state, and canonical appended message. The generation owner is the authenticated device/stream, not a socket. Disconnect never resends the prompt or cancels the turn. Restart during an active remote turn records one explicit interrupted terminal state and never retries the provider call.
+
+First-turn title generation remains off the interactive response path. While it is active, chat list/get projections include optional `titlePending: true`; the field disappears only after the title job settles. Clients may use this hint for a bounded authoritative refresh and must not treat it as a revision or mutation precondition.
 
 ### Attachments
 

@@ -148,6 +148,12 @@ private final class AidenHomeModel {
     var isLoading = false
     var errorMessage: String?
 
+    func accept(_ chat: AidenChat) {
+        chats.removeAll { $0.id == chat.id }
+        chats.append(chat)
+        chats.sort { $0.updatedAt > $1.updatedAt }
+    }
+
     func load(coordinator: AidenRemoteCoordinator) async {
         guard coordinator.connectionState == .connected, !isLoading else { return }
         isLoading = true
@@ -442,7 +448,8 @@ struct AidenWorkspaceShellView: View {
                 AidenChatDetailView(
                     coordinator: coordinator,
                     chat: chat,
-                    autoStartVoice: intentStartsVoice
+                    autoStartVoice: intentStartsVoice,
+                    onChatUpdated: { homeModel.accept($0) }
                 )
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -546,7 +553,11 @@ struct AidenWorkspaceShellView: View {
         ZStack(alignment: .bottomTrailing) {
             homeList { chat in
                 NavigationLink {
-                    AidenChatDetailView(coordinator: coordinator, chat: chat)
+                    AidenChatDetailView(
+                        coordinator: coordinator,
+                        chat: chat,
+                        onChatUpdated: { homeModel.accept($0) }
+                    )
                 } label: {
                     homeChatRow(chat)
                 }
@@ -1763,12 +1774,9 @@ private struct AidenUsageView: View {
 
     private var usageHero: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                AidenSidebarLogo(size: 28, color: palette.accent)
-                Text("Aiden activity")
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(palette.foreground)
-            }
+            Text("Your Activity")
+                .font(.title2.weight(.bold))
+                .foregroundStyle(palette.foreground)
 
             Text(AidenUsagePresentation.dateRangeText(for: usage))
                 .font(.subheadline)
@@ -1778,30 +1786,32 @@ private struct AidenUsageView: View {
     }
 
     private var overviewGrid: some View {
-        LazyVGrid(
-            columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
-            spacing: 12
-        ) {
-            metricCard(
-                value: usage.totals.requests.formatted(),
-                label: "Requests",
-                symbol: "bolt.fill"
-            )
-            metricCard(
-                value: usage.totals.activeDays.formatted(),
-                label: "Active days",
-                symbol: "calendar"
-            )
-            metricCard(
-                value: AidenUsagePresentation.dayCount(usage.totals.currentStreak),
-                label: "Current streak",
-                symbol: "flame"
-            )
-            metricCard(
-                value: AidenUsagePresentation.dayCount(usage.totals.longestStreak),
-                label: "Longest streak",
-                symbol: "trophy"
-            )
+        VStack(spacing: 12) {
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
+                spacing: 12
+            ) {
+                metricCard(
+                    value: usage.totals.requests.formatted(),
+                    label: "Requests",
+                    symbol: "bolt.fill"
+                )
+                metricCard(
+                    value: usage.totals.activeDays.formatted(),
+                    label: "Active days",
+                    symbol: "calendar"
+                )
+                metricCard(
+                    value: AidenUsagePresentation.dayCount(usage.totals.currentStreak),
+                    label: "Current streak",
+                    symbol: "flame"
+                )
+                metricCard(
+                    value: AidenUsagePresentation.dayCount(usage.totals.longestStreak),
+                    label: "Longest streak",
+                    symbol: "trophy"
+                )
+            }
 
             HStack(alignment: .center, spacing: 14) {
                 Image(systemName: "circle.hexagongrid.fill")
@@ -1810,10 +1820,14 @@ private struct AidenUsageView: View {
                     .frame(width: 34, height: 34)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(usage.totals.tokens.total.formatted())
-                        .font(.title2.weight(.bold))
+                    Text(AidenUsagePresentation.tokenCount(usage.totals.tokens.total))
+                        .font(.title2.weight(.bold).monospacedDigit())
                         .foregroundStyle(palette.foreground)
                         .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                        .allowsTightening(true)
+                        .layoutPriority(1)
                     Text("Total tokens")
                         .font(.subheadline)
                         .foregroundStyle(palette.secondary)
@@ -1822,9 +1836,9 @@ private struct AidenUsageView: View {
             }
             .padding(18)
             .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
-            .gridCellColumns(2)
             .aidenUsageCard(palette: palette)
             .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(usage.totals.tokens.total.formatted()) total tokens")
         }
     }
 
@@ -2089,6 +2103,10 @@ enum AidenUsagePresentation {
 
     static func dayCount(_ value: Int) -> String {
         value == 1 ? "1 day" : "\(value) days"
+    }
+
+    static func tokenCount(_ value: Int, locale: Locale = .current) -> String {
+        value.formatted(.number.locale(locale).grouping(.automatic))
     }
 
     static func dateRangeText(for usage: AidenUsageSummary) -> String {

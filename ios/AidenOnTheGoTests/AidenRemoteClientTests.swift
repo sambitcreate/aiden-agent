@@ -141,6 +141,20 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(heatmap.last?.tokens, 67)
         XCTAssertEqual(AidenUsagePresentation.ratio(3, of: 12), 0.25)
         XCTAssertEqual(AidenUsagePresentation.ratio(1, of: 0), 0)
+        XCTAssertEqual(
+            AidenUsagePresentation.tokenCount(
+                1_234_567_890_123,
+                locale: Locale(identifier: "en_US")
+            ),
+            "1,234,567,890,123"
+        )
+        XCTAssertEqual(
+            AidenUsagePresentation.tokenCount(
+                Int.max,
+                locale: Locale(identifier: "en_US")
+            ),
+            "9,223,372,036,854,775,807"
+        )
     }
 
     func testWorkspaceCreateUpdateAndDeleteCarryMutationPreconditions() async throws {

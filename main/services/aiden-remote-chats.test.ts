@@ -28,7 +28,11 @@ function chat(overrides: Partial<Chat> = {}): Chat {
 
 function fixture(
   initial = chat(),
-  fixtureOptions: { startThrows?: boolean; attachments?: AidenRemoteAttachmentStore } = {},
+  fixtureOptions: {
+    startThrows?: boolean;
+    attachments?: AidenRemoteAttachmentStore;
+    isTitlePending?: (chatId: string) => boolean;
+  } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
   let creates = 0;
@@ -126,6 +130,7 @@ function fixture(
       resolve: async () => ({ providerId: "provider-1", modelId: "model-1", thinkingLevels: ["low", "high"] }),
     },
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
+    ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
   });
   return {
@@ -172,6 +177,20 @@ test("chat projection is path-free and excludes private Pi protocol and reasonin
   assert.equal(JSON.stringify(projection).includes("reasoning"), false);
   assert.equal(JSON.stringify(projection).includes("/Users/private"), false);
   assert.match(projection.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
+});
+
+test("chat reads expose an in-flight background title without changing the revision", async () => {
+  let pending = true;
+  const app = fixture(chat(), { isTitlePending: () => pending });
+
+  const whilePending = await app.service.get("chat-1");
+  assert.equal(whilePending.titlePending, true);
+  const revision = whilePending.revision;
+
+  pending = false;
+  const settled = await app.service.get("chat-1");
+  assert.equal("titlePending" in settled, false);
+  assert.equal(settled.revision, revision);
 });
 
 test("chat create is device-scoped idempotent and CRUD checks exact revisions", async () => {

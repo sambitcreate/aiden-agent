@@ -5,6 +5,24 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenChatTests: XCTestCase {
+    func testRemoteChatDecodesPendingBackgroundTitleAndUsesABoundedRetryWindow() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Tell me about this repo","messages":[],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1","titlePending":true}"#.utf8
+            )
+        )
+
+        XCTAssertTrue(chat.isTitlePending)
+        XCTAssertFalse(AidenChatTitleReconciliation.retryMilliseconds.isEmpty)
+        XCTAssertLessThanOrEqual(
+            AidenChatTitleReconciliation.retryMilliseconds.reduce(0, +),
+            15_000
+        )
+    }
+
     func testModelCatalogHidesPresentationOnlyModelsWithoutDroppingTheirIdentity() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
@@ -73,6 +91,7 @@ final class AidenChatTests: XCTestCase {
 
     func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "concentrate"), "concentrate")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "gemini"), "google")
         XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "moonshot"), "moonshotai")
         XCTAssertEqual(

@@ -242,6 +242,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
+            isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
           });
           activeChats = chats;
           const files = new AidenRemoteFileService({

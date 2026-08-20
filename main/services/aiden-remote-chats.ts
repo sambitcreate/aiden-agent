@@ -58,6 +58,7 @@ export interface AidenRemoteChatProjection {
   createdAt: string;
   updatedAt: string;
   revision: string;
+  titlePending?: true;
 }
 
 function ownRecord(value: unknown): Record<string, unknown> | null {
@@ -133,7 +134,10 @@ function chatRevision(chat: Chat): string {
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
 }
 
-export function projectAidenRemoteChat(chat: Chat): AidenRemoteChatProjection {
+export function projectAidenRemoteChat(
+  chat: Chat,
+  options: { titlePending?: boolean } = {},
+): AidenRemoteChatProjection {
   return {
     id: chat.id,
     workspaceId: persistedChatWorkspaceId(chat.workspaceId),
@@ -154,6 +158,7 @@ export function projectAidenRemoteChat(chat: Chat): AidenRemoteChatProjection {
     createdAt: new Date(chat.createdAt).toISOString(),
     updatedAt: new Date(chat.updatedAt).toISOString(),
     revision: chatRevision(chat),
+    ...(options.titlePending === true ? { titlePending: true as const } : {}),
   };
 }
 
@@ -320,6 +325,7 @@ export class AidenRemoteChatService {
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       notifyChanged?: (chatId?: string) => void;
+      isTitlePending?: (chatId: string) => boolean;
     },
   ) {
     this.idempotency = options.idempotency ?? new AidenIdempotencyLedger();
@@ -384,15 +390,21 @@ export class AidenRemoteChatService {
     return result.chat;
   }
 
+  private project(chat: Chat): AidenRemoteChatProjection {
+    return projectAidenRemoteChat(chat, {
+      titlePending: this.options.isTitlePending?.(chat.id) === true,
+    });
+  }
+
   async list(workspaceId?: string): Promise<{ chats: AidenRemoteChatProjection[] }> {
     if (workspaceId) safeId(workspaceId, "workspace");
     const metadata = await this.options.application.list(workspaceId);
     const chats = await Promise.all(metadata.map((entry) => this.chat(entry.id)));
-    return { chats: chats.map(projectAidenRemoteChat) };
+    return { chats: chats.map((chat) => this.project(chat)) };
   }
 
   async get(chatId: string): Promise<AidenRemoteChatProjection> {
-    return projectAidenRemoteChat(await this.chat(chatId));
+    return this.project(await this.chat(chatId));
   }
 
   async uploadAttachment(

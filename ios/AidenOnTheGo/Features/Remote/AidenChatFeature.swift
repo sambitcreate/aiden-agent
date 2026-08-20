@@ -206,6 +206,12 @@ enum AidenTurnRequestBuilder {
     }
 }
 
+enum AidenChatTitleReconciliation {
+    // Apple Foundation Models titles are deliberately generated off the critical
+    // chat path. Keep reconciliation bounded to the server's 15-second title window.
+    static let retryMilliseconds = [400, 800, 1_200, 2_000, 3_000, 3_500, 3_500]
+}
+
 @MainActor
 @Observable
 final class AidenWorkspaceChatsModel {
@@ -228,6 +234,11 @@ final class AidenWorkspaceChatsModel {
     }
 
     var isConnected: Bool { coordinator.connectionState == .connected }
+
+    func accept(_ chat: AidenChat) {
+        guard chat.workspaceId == workspaceId else { return }
+        upsert(chat)
+    }
 
     func load() async {
         guard let instanceId = coordinator.activeInstanceId else { return }
@@ -326,7 +337,9 @@ final class AidenChatViewModel {
     private let instanceId: String
     private let cache: AidenChatCache
     private let liveActivities: AidenRemoteLiveActivityManager
+    private let onChatUpdated: @MainActor (AidenChat) -> Void
     @ObservationIgnored private var streamTask: Task<Void, Never>?
+    @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
 
     private(set) var chat: AidenChat
@@ -351,13 +364,15 @@ final class AidenChatViewModel {
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
         cache: AidenChatCache = .shared,
-        liveActivities: AidenRemoteLiveActivityManager? = nil
+        liveActivities: AidenRemoteLiveActivityManager? = nil,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
     ) {
         self.coordinator = coordinator
         self.chat = chat
         instanceId = coordinator.activeInstanceId ?? ""
         self.cache = cache
         self.liveActivities = liveActivities ?? .shared
+        self.onChatUpdated = onChatUpdated
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
     }
@@ -390,10 +405,9 @@ final class AidenChatViewModel {
             async let chatRequest = coordinator.remoteClient().chat(id: chat.id)
             async let catalogRequest = coordinator.remoteClient().modelCatalog()
             let (remoteChat, remoteCatalog) = try await (chatRequest, catalogRequest)
-            chat = remoteChat
             catalog = remoteCatalog
+            await acceptRemoteChat(remoteChat)
             resolveModelSelection()
-            try await cache.saveChat(remoteChat, instanceId: instanceId)
         } catch {
             if chat.messages.isEmpty { presentedError = error.localizedDescription }
         }
@@ -713,10 +727,40 @@ final class AidenChatViewModel {
     private func reconcileChat() async {
         do {
             let remote = try await coordinator.remoteClient().chat(id: chat.id)
-            chat = remote
-            try await cache.saveChat(remote, instanceId: instanceId)
+            await acceptRemoteChat(remote)
         } catch {
             presentedError = error.localizedDescription
+        }
+    }
+
+    private func acceptRemoteChat(_ remote: AidenChat, scheduleTitleRefresh: Bool = true) async {
+        chat = remote
+        try? await cache.saveChat(remote, instanceId: instanceId)
+        onChatUpdated(remote)
+        if scheduleTitleRefresh, remote.isTitlePending {
+            schedulePendingTitleRefresh()
+        }
+    }
+
+    private func schedulePendingTitleRefresh() {
+        guard titleRefreshTask == nil else { return }
+        titleRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            defer { titleRefreshTask = nil }
+            for delay in AidenChatTitleReconciliation.retryMilliseconds {
+                do {
+                    try await Task.sleep(for: .milliseconds(delay))
+                    let remote = try await coordinator.remoteClient().chat(id: chat.id)
+                    await acceptRemoteChat(remote, scheduleTitleRefresh: false)
+                    if !remote.isTitlePending { return }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    // A transient local-network interruption should not surface after a
+                    // successful reply. The next normal refresh remains authoritative.
+                    continue
+                }
+            }
         }
     }
 
@@ -770,7 +814,11 @@ struct AidenWorkspaceChatsView: View {
                 } else {
                     ForEach(model.chats) { chat in
                         NavigationLink {
-                            AidenChatDetailView(coordinator: coordinator, chat: chat)
+                            AidenChatDetailView(
+                                coordinator: coordinator,
+                                chat: chat,
+                                onChatUpdated: { model.accept($0) }
+                            )
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(chat.title).lineLimit(1)
@@ -806,7 +854,11 @@ struct AidenWorkspaceChatsView: View {
             set: { if !$0 { createdChat = nil } }
         )) {
             if let createdChat {
-                AidenChatDetailView(coordinator: coordinator, chat: createdChat)
+                AidenChatDetailView(
+                    coordinator: coordinator,
+                    chat: createdChat,
+                    onChatUpdated: { model.accept($0) }
+                )
             }
         }
         .toolbar {
@@ -871,9 +923,18 @@ struct AidenChatDetailView: View {
     @Bindable private var coordinator: AidenRemoteCoordinator
     let autoStartVoice: Bool
 
-    init(coordinator: AidenRemoteCoordinator, chat: AidenChat, autoStartVoice: Bool = false) {
+    init(
+        coordinator: AidenRemoteCoordinator,
+        chat: AidenChat,
+        autoStartVoice: Bool = false,
+        onChatUpdated: @escaping @MainActor (AidenChat) -> Void = { _ in }
+    ) {
         self.coordinator = coordinator
-        _model = State(initialValue: AidenChatViewModel(coordinator: coordinator, chat: chat))
+        _model = State(initialValue: AidenChatViewModel(
+            coordinator: coordinator,
+            chat: chat,
+            onChatUpdated: onChatUpdated
+        ))
         self.autoStartVoice = autoStartVoice
     }
 
