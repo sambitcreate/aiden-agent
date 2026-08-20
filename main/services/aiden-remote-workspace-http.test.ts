@@ -18,6 +18,8 @@ test("HTTP client completes approved-folder selection and revision-checked works
   await fs.mkdir(approvedDirectory);
   const approvedPath = await fs.realpath(approvedDirectory);
   await fs.mkdir(path.join(approvedPath, "Selected"));
+  const selectedMarker = path.join(approvedPath, "Selected", "kept-after-unregister.txt");
+  await fs.writeFile(selectedMarker, "workspace files stay on disk");
   const approvedIdentity = await fs.stat(approvedPath, { bigint: true });
   let sequence = 0;
   let workspaces: Workspace[] = [{
@@ -172,6 +174,7 @@ test("HTTP client completes approved-folder selection and revision-checked works
     assert.equal(deleteResponse.status, 204);
     const listed = await (await fetch(`${base}/workspaces`, { headers })).json();
     assert.deepEqual(listed.workspaces.map((workspace: { id: string }) => workspace.id), ["default"]);
+    assert.equal(await fs.readFile(selectedMarker, "utf8"), "workspace files stay on disk");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await fs.rm(temporary, { recursive: true, force: true });

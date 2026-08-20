@@ -18,6 +18,68 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenRelativeTimestamp.text(for: now.addingTimeInterval(30), now: now), "just now")
     }
 
+    func testNewAgentPopoverKeepsTheThreeReviewedWorkspaceChoices() {
+        XCTAssertEqual(
+            AidenNewAgentChoice.allCases,
+            [.existingWorkspace, .newWorkspace, .scratchWorkspace]
+        )
+        XCTAssertEqual(
+            AidenNewAgentChoice.allCases.map(\.title),
+            ["Existing Workspace", "New Workspace", "Managed Scratch Workspace"]
+        )
+        XCTAssertEqual(
+            AidenNewAgentChoice.allCases.map(\.symbol),
+            ["folder", "folder.badge.plus", "hammer.fill"]
+        )
+        XCTAssertTrue(AidenNewAgentChoice.allCases.allSatisfy { !$0.detail.isEmpty })
+    }
+
+    func testProviderIconResolverMatchesDesktopAliasesAndFallbackRules() {
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "openai"), "openai")
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "gemini"), "google")
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "moonshot"), "moonshotai")
+        XCTAssertEqual(
+            AidenProviderIconResolver.slug(providerID: "anthropic", modelID: "claude-sonnet-4"),
+            "claude"
+        )
+        XCTAssertEqual(
+            AidenProviderIconResolver.slug(providerID: "xai", modelID: "grok-4-fast"),
+            "grok"
+        )
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "custom:lmstudio-2"), "lmstudio")
+        XCTAssertEqual(AidenProviderIconResolver.slug(providerID: "custom:ollama-42"), "ollama")
+        XCTAssertNil(AidenProviderIconResolver.slug(providerID: "custom:lmstudio-1"))
+        XCTAssertNil(AidenProviderIconResolver.slug(providerID: "future-provider"))
+    }
+
+    func testAgentReplyCopyKeepsOriginalMarkdownAndRejectsNonReplies() {
+        let assistant = AidenChatMessage(
+            id: "assistant-1",
+            role: .assistant,
+            text: "## Result\n\nUse `xcodebuild test`.",
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        let user = AidenChatMessage(
+            id: "user-1",
+            role: .user,
+            text: "Please test it",
+            createdAt: Date(timeIntervalSince1970: 2)
+        )
+        let emptyAssistant = AidenChatMessage(
+            id: "assistant-2",
+            role: .assistant,
+            text: "",
+            createdAt: Date(timeIntervalSince1970: 3)
+        )
+
+        XCTAssertEqual(
+            AidenMessageActionContent.copyText(for: assistant),
+            "## Result\n\nUse `xcodebuild test`."
+        )
+        XCTAssertNil(AidenMessageActionContent.copyText(for: user))
+        XCTAssertNil(AidenMessageActionContent.copyText(for: emptyAssistant))
+    }
+
     func testMarkdownDocumentParsesHeadingsListsAndInlineEmphasis() {
         let markdown = """
         I'll explore the repository to understand what it is.
@@ -92,6 +154,35 @@ final class AidenChatTests: XCTestCase {
 
         XCTAssertLessThan(userSize.width, 200)
         XCTAssertEqual(assistantSize.width, proposal.width, accuracy: 0.5)
+    }
+
+    @MainActor
+    func testAssistantMarkdownKeepsTheFirstGlyphInsideItsRenderedBounds() throws {
+        let renderer = ImageRenderer(content: AidenMessageTextView(
+            role: .assistant,
+            content: "Sounds good — the first letter must remain visible."
+        ).frame(width: 320, alignment: .leading))
+        renderer.scale = 3
+
+        let image = try XCTUnwrap(renderer.cgImage)
+        let width = image.width
+        let height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let firstPaintedColumn = (0..<width).first { x in
+            (0..<height).contains { y in pixels[((y * width + x) * 4) + 3] > 8 }
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(firstPaintedColumn), 0)
     }
 
     func testSSEParserAcceptsCanonicalFrameAndRejectsIdentityMismatches() throws {
@@ -298,6 +389,46 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNotEqual(tracker.key(for: AidenTurnStart(text: "Edited")), first)
         tracker.reset()
         XCTAssertNotEqual(tracker.key(for: request), first)
+    }
+
+    func testTurnRequestBuilderPreservesUploadedAttachmentReferences() {
+        let firstID = "att_\(String(repeating: "A", count: 43))"
+        let secondID = "att_\(String(repeating: "B", count: 43))"
+        let attachments = [
+            AidenAttachmentReference(
+                id: firstID,
+                name: "photo.jpg",
+                mimeType: "image/jpeg",
+                kind: .image,
+                size: 128,
+                expiresAt: Date(timeIntervalSince1970: 2_000_000_000)
+            ),
+            AidenAttachmentReference(
+                id: secondID,
+                name: "notes.md",
+                mimeType: "text/markdown",
+                kind: .text,
+                size: 64,
+                expiresAt: Date(timeIntervalSince1970: 2_000_000_000)
+            ),
+        ]
+
+        let request = AidenTurnRequestBuilder.make(
+            text: "Review these",
+            providerId: "provider",
+            modelId: "model",
+            thinkingLevel: "high",
+            attachments: attachments
+        )
+
+        XCTAssertEqual(request.attachmentIds, [firstID, secondID])
+        XCTAssertNil(AidenTurnRequestBuilder.make(
+            text: "No files",
+            providerId: nil,
+            modelId: nil,
+            thinkingLevel: nil,
+            attachments: []
+        ).attachmentIds)
     }
 
     private func eventJSON(sequence: Int, type: String, payload: String) -> String {
@@ -525,5 +656,52 @@ final class AidenAppearanceTests: XCTestCase {
             ),
             []
         )
+    }
+
+    @MainActor
+    func testWorkspaceArchivesAreDeviceLocalPersistentAndInstallationScoped() throws {
+        let suiteName = "AidenWorkspaceArchiveTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenWorkspaceArchiveStore(defaults: defaults)
+        XCTAssertFalse(store.hasAcknowledgedDeviceOnlyArchive)
+        XCTAssertEqual(store.archivedWorkspaceIDs(for: "mac-one"), [])
+
+        store.acknowledgeDeviceOnlyArchive()
+        store.archive(workspaceID: "workspace-a", instanceID: "mac-one")
+        store.archive(workspaceID: "workspace-b", instanceID: "mac-one")
+        store.archive(workspaceID: "workspace-a", instanceID: "mac-two")
+
+        let restored = AidenWorkspaceArchiveStore(defaults: defaults)
+        XCTAssertTrue(restored.hasAcknowledgedDeviceOnlyArchive)
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-one"), ["workspace-a", "workspace-b"])
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-two"), ["workspace-a"])
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: nil), [])
+
+        restored.unarchive(workspaceID: "workspace-a", instanceID: "mac-one")
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-one"), ["workspace-b"])
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-two"), ["workspace-a"])
+    }
+
+    @MainActor
+    func testWorkspaceArchivePruningOnlyDropsMissingServerRecordsForActiveInstallation() throws {
+        let suiteName = "AidenWorkspaceArchivePruneTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = AidenWorkspaceArchiveStore(defaults: defaults)
+        store.archive(workspaceID: "keep", instanceID: "mac-one")
+        store.archive(workspaceID: "removed", instanceID: "mac-one")
+        store.archive(workspaceID: "other-installation", instanceID: "mac-two")
+
+        store.prune(instanceID: "mac-one", validWorkspaceIDs: ["keep", "active"])
+
+        XCTAssertEqual(store.archivedWorkspaceIDs(for: "mac-one"), ["keep"])
+        XCTAssertEqual(store.archivedWorkspaceIDs(for: "mac-two"), ["other-installation"])
+
+        let restored = AidenWorkspaceArchiveStore(defaults: defaults)
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-one"), ["keep"])
+        XCTAssertEqual(restored.archivedWorkspaceIDs(for: "mac-two"), ["other-installation"])
     }
 }

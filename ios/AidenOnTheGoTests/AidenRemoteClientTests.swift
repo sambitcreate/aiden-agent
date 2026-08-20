@@ -106,7 +106,18 @@ final class AidenRemoteClientTests: XCTestCase {
                     "activeDays":4,"currentStreak":2,"longestStreak":3,
                     "tokens":{"input":100,"output":50,"cacheRead":10,"cacheWrite":2,"cacheWrite1h":1,"reasoning":8,"total":170}
                   },
-                  "days":[],"models":[]
+                  "days":[{
+                    "date":"2026-08-19","requests":4,"reportedTokenRequests":3,"unmeteredRequests":1,
+                    "tokens":{"input":40,"output":20,"cacheRead":4,"cacheWrite":1,"cacheWrite1h":0,"reasoning":3,"total":67},
+                    "hostedCostUsd":0.45
+                  }],
+                  "models":[{
+                    "providerId":"openai","providerLabel":"OpenAI","modelId":"gpt-5.6",
+                    "modelLabel":"GPT-5.6","local":false,"requests":8,"reportedTokenRequests":7,
+                    "unmeteredRequests":1,
+                    "tokens":{"input":80,"output":40,"cacheRead":8,"cacheWrite":2,"cacheWrite1h":1,"reasoning":6,"total":136},
+                    "hostedCostUsd":1.05
+                  }]
                 }
                 """
             )
@@ -117,6 +128,19 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(usage.totals.requests, 12)
         XCTAssertEqual(usage.totals.tokens.total, 170)
         XCTAssertEqual(usage.totals.hostedCostUsd, 1.25)
+        XCTAssertEqual(usage.days.first?.date, "2026-08-19")
+        XCTAssertEqual(usage.days.first?.tokens.total, 67)
+        XCTAssertEqual(usage.models.first?.modelLabel, "GPT-5.6")
+        XCTAssertEqual(usage.models.first?.requests, 8)
+
+        let heatmap = AidenUsagePresentation.heatmapDays(for: usage)
+        XCTAssertEqual(heatmap.count, 30)
+        XCTAssertEqual(heatmap.first?.date, "2026-07-21")
+        XCTAssertEqual(heatmap.first?.tokens, 0)
+        XCTAssertEqual(heatmap.last?.date, "2026-08-19")
+        XCTAssertEqual(heatmap.last?.tokens, 67)
+        XCTAssertEqual(AidenUsagePresentation.ratio(3, of: 12), 0.25)
+        XCTAssertEqual(AidenUsagePresentation.ratio(1, of: 0), 0)
     }
 
     func testWorkspaceCreateUpdateAndDeleteCarryMutationPreconditions() async throws {
@@ -853,6 +877,7 @@ final class AidenRemoteClientTests: XCTestCase {
         _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Unverified Mac")
 
         let session = makeSession()
+        var workspaceListRequests = 0
         AidenRemoteMockURLProtocol.handler = { request in
             switch (request.httpMethod, request.url?.path) {
             case ("GET", "/api/aiden/v1/server"):
@@ -866,6 +891,7 @@ final class AidenRemoteClientTests: XCTestCase {
                     """
                 )
             case ("GET", "/api/aiden/v1/workspaces"):
+                workspaceListRequests += 1
                 return Self.response(
                     for: request,
                     status: 200,
@@ -916,6 +942,188 @@ final class AidenRemoteClientTests: XCTestCase {
         let removed = await coordinator.removeWorkspace(updated)
         XCTAssertTrue(removed)
         XCTAssertFalse(coordinator.workspaces.contains(where: { $0.id == updated.id }))
+        XCTAssertEqual(workspaceListRequests, 2, "Confirmed removal should reload the canonical registry in case the Mac seeded a default workspace")
+    }
+
+    @MainActor
+    func testRejectedWorkspaceRemovalReconcilesWithoutLosingDeviceArchiveState() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-1", deviceId: "device-1", credential: "credential-one"),
+            trust: makeSystemTrust(),
+            name: "Home Mac"
+        )
+        let suiteName = "AidenRejectedRemovalArchiveTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let archiveStore = AidenWorkspaceArchiveStore(defaults: defaults)
+        archiveStore.archive(workspaceID: "workspace-a", instanceID: "instance-1")
+
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            switch (request.httpMethod, request.url?.path) {
+            case ("GET", "/api/aiden/v1/server"):
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"protocolVersion":1,"instanceId":"instance-1","name":"Home Mac",
+                    "appVersion":"1.0.0","capabilities":["server:read","workspace:read","workspace:manage"],
+                    "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                    """
+                )
+            case ("GET", "/api/aiden/v1/workspaces"):
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"workspaces":[
+                    {"id":"workspace-a","name":"Archive Me","permission":"ask","hasFolder":true,
+                    "isManagedWorktree":false,"createdAt":"2026-08-19T07:00:00.000Z",
+                    "updatedAt":"2026-08-19T07:01:00.000Z","revision":"rev-current"},
+                    {"id":"workspace-b","name":"Keep Me","permission":"ask","hasFolder":true,
+                    "isManagedWorktree":false,"createdAt":"2026-08-19T07:00:00.000Z",
+                    "updatedAt":"2026-08-19T07:01:00.000Z","revision":"rev-b"}]}
+                    """
+                )
+            case ("DELETE", "/api/aiden/v1/workspaces/workspace-a"):
+                return Self.response(
+                    for: request,
+                    status: 409,
+                    json: """
+                    {"error":{"code":"revision_conflict","message":"The workspace changed.",
+                    "requestId":"request-conflict","retryable":false}}
+                    """
+                )
+            default:
+                XCTFail("Unexpected rejected-removal request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            workspaceArchiveStore: archiveStore,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        let workspace = try XCTUnwrap(coordinator.workspaces.first(where: { $0.id == "workspace-a" }))
+
+        let removed = await coordinator.removeWorkspace(workspace)
+        XCTAssertFalse(removed)
+        XCTAssertTrue(coordinator.workspaces.contains(where: { $0.id == workspace.id }))
+        XCTAssertTrue(archiveStore.isArchived(workspaceID: workspace.id, instanceID: "instance-1"))
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertEqual(coordinator.workspaceSnapshotRevision, 2)
+        XCTAssertEqual(coordinator.presentedError, "The workspace changed.")
+    }
+
+    @MainActor
+    func testAuthoritativeEmptyWorkspaceSnapshotPrunesStaleDeviceArchives() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-empty", deviceId: "device-empty", credential: "credential-empty"),
+            trust: makeSystemTrust(),
+            name: "Empty Mac"
+        )
+        let suiteName = "AidenEmptySnapshotArchiveTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let archiveStore = AidenWorkspaceArchiveStore(defaults: defaults)
+        archiveStore.archive(workspaceID: "stale", instanceID: "instance-empty")
+
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            if request.url?.path == "/api/aiden/v1/server" {
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"protocolVersion":1,"instanceId":"instance-empty","name":"Empty Mac",
+                    "appVersion":"1.0.0","capabilities":["server:read","workspace:read"],
+                    "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                    """
+                )
+            }
+            return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            workspaceArchiveStore: archiveStore,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+
+        await coordinator.start()
+
+        XCTAssertEqual(coordinator.workspaceSnapshotRevision, 1)
+        XCTAssertEqual(archiveStore.archivedWorkspaceIDs(for: "instance-empty"), [])
+    }
+
+    @MainActor
+    func testSlowerPreviousInstallationLoadCannotOverwriteNewActiveMac() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-1", deviceId: "device-1", credential: "credential-one"),
+            trust: makeSystemTrust(),
+            name: "Slow Mac"
+        )
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-2", deviceId: "device-2", credential: "credential-two"),
+            trust: makeSystemTrust(),
+            name: "Fast Mac"
+        )
+        try store.setActive("instance-1")
+
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            let isSlowMac = request.value(forHTTPHeaderField: "Authorization") == "Bearer credential-one"
+            let instanceID = isSlowMac ? "instance-1" : "instance-2"
+            if request.url?.path == "/api/aiden/v1/server" {
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"protocolVersion":1,"instanceId":"\(instanceID)","name":"\(isSlowMac ? "Slow Mac" : "Fast Mac")",
+                    "appVersion":"1.0.0","capabilities":["server:read","workspace:read"],
+                    "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                    """
+                )
+            }
+            if isSlowMac { Thread.sleep(forTimeInterval: 0.2) }
+            return Self.response(
+                for: request,
+                status: 200,
+                json: """
+                {"workspaces":[{"id":"workspace-\(instanceID)","name":"Workspace \(instanceID)",
+                "permission":"ask","hasFolder":false,"isManagedWorktree":false,
+                "createdAt":"2026-08-19T07:00:00.000Z","updatedAt":"2026-08-19T07:00:00.000Z",
+                "revision":"rev-\(instanceID)"}]}
+                """
+            )
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+
+        let slowLoad = Task { await coordinator.connectActiveInstallation() }
+        try await Task.sleep(for: .milliseconds(25))
+        await coordinator.switchInstallation(to: "instance-2")
+        await slowLoad.value
+
+        XCTAssertEqual(coordinator.activeInstanceId, "instance-2")
+        XCTAssertEqual(coordinator.server?.instanceId, "instance-2")
+        XCTAssertEqual(coordinator.workspaces.map(\.id), ["workspace-instance-2"])
+        XCTAssertEqual(coordinator.connectionState, .connected)
     }
 
     @MainActor

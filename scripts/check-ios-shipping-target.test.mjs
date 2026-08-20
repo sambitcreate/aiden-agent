@@ -33,6 +33,12 @@ const sidebarLogoPath = fileURLToPath(
     import.meta.url,
   ),
 );
+const desktopProviderLogoDirectory = fileURLToPath(
+  new URL("../renderer/assets/provider-logos/", import.meta.url),
+);
+const iosAssetCatalogDirectory = fileURLToPath(
+  new URL("../ios/AidenOnTheGo/Resources/Assets.xcassets/", import.meta.url),
+);
 
 const appSourcePaths = [
   "AidenOnTheGo/AidenOnTheGoApp.swift",
@@ -48,6 +54,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift",
+  "AidenOnTheGo/Features/Shared/AidenProviderIcon.swift",
   "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Core.swift",
   "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Lattice.swift",
   "AidenOnTheGo/Features/Shared/ThinkingOrbsKit/Morph.swift",
@@ -131,11 +138,33 @@ test("the iOS tree contains no orphan imported Swift sources", async () => {
   );
 });
 
-test("the Aiden home, onboarding, composer, and activity retain the reviewed product shell", async () => {
-  const [shell, pairing, chat, widget, project, logoDefinition, logoArtwork] = await Promise.all([
+test("iOS bundles every reviewed Aiden provider logo", async () => {
+  const desktopLogos = (await readdir(desktopProviderLogoDirectory))
+    .filter((path) => path.endsWith(".svg"))
+    .map((path) => path.replace(/\.svg$/u, ""))
+    .sort();
+  const iosLogos = (await readdir(iosAssetCatalogDirectory))
+    .filter((path) => path.startsWith("ProviderLogo-") && path.endsWith(".imageset"))
+    .map((path) => path.replace(/^ProviderLogo-/u, "").replace(/\.imageset$/u, ""))
+    .sort();
+
+  assert.deepEqual(iosLogos, desktopLogos);
+  assert.equal(iosLogos.length, 40);
+  await Promise.all(iosLogos.map(async (slug) => {
+    const [desktopArtwork, iosArtwork] = await Promise.all([
+      readFile(`${desktopProviderLogoDirectory}${slug}.svg`),
+      readFile(`${iosAssetCatalogDirectory}ProviderLogo-${slug}.imageset/${slug}.svg`),
+    ]);
+    assert.deepEqual(iosArtwork, desktopArtwork, `${slug} artwork diverged from Aiden Agent`);
+  }));
+});
+
+test("the Aiden home, onboarding, composer, schedules, and activity retain the reviewed product shell", async () => {
+  const [shell, pairing, chat, scheduledTasks, widget, project, logoDefinition, logoArtwork] = await Promise.all([
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenWorkspaceShellView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenPairingView.swift`, "utf8"),
     readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenChatFeature.swift`, "utf8"),
+    readFile(`${iosRoot}AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift`, "utf8"),
     readFile(`${iosRoot}AidenLiveActivityWidget/AgentRunLiveActivityWidget.swift`, "utf8"),
     readFile(projectPath, "utf8"),
     readFile(`${sidebarLogoPath}Contents.json`, "utf8"),
@@ -153,12 +182,30 @@ test("the Aiden home, onboarding, composer, and activity retain the reviewed pro
   assert.match(shell, /Image\("AidenAppIcon"\)[\s\S]*?searchChrome/u);
   assert.match(shell, /Image\(systemName: "magnifyingglass"\)[\s\S]*?person\.crop\.circle\.fill/u);
   assert.match(shell, /AidenWorkspacesDirectoryView[\s\S]*?Label\("New Workspace"[\s\S]*?Label\("Add Mac Folder"/u);
-  assert.match(shell, /Label\("New Agent", systemImage: "square\.and\.pencil"\)/u);
+  assert.match(shell, /Image\(systemName: "square\.and\.pencil"\)[\s\S]*?aidenProminentGlassButton\(\)[\s\S]*?accessibilityLabel\("New Agent"\)/u);
+  assert.match(shell, /content\.buttonStyle\(\.glass\)/u);
   assert.match(shell, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
   assert.match(
     shell,
-    /Button\("Existing Workspace"\)[\s\S]*?Button\("New Workspace"\)[\s\S]*?Button\("Managed Scratch Workspace"\)/u,
+    /case \.existingWorkspace: "Existing Workspace"[\s\S]*?case \.newWorkspace: "New Workspace"[\s\S]*?case \.scratchWorkspace: "Managed Scratch Workspace"/u,
   );
+  assert.match(shell, /aidenChromeGlass\(isInteractive: true, in: Capsule\(\)\)/u);
+  assert.match(shell, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
+  assert.match(
+    shell,
+    /safeAreaInset\(edge: \.bottom, spacing: 0\)[\s\S]*?frame\(height: 92\)[\s\S]*?background\(palette\.canvas\)/u,
+  );
+  assert.doesNotMatch(shell, /Color\.clear\.frame\(height: 90\)\.listRowSeparator/u);
+  assert.match(
+    shell,
+    /AidenUsageView[\s\S]*?overviewGrid[\s\S]*?Token activity[\s\S]*?Activity insights[\s\S]*?Most used models/u,
+  );
+  assert.match(shell, /AidenUsagePresentation\.heatmapDays[\s\S]*?usage\.days/u);
+  assert.match(
+    shell,
+    /popover\(isPresented: \$isShowingNewAgentChoices, arrowEdge: \.bottom\)[\s\S]*?AidenNewAgentPopover[\s\S]*?presentationCompactAdaptation\(\.popover\)/u,
+  );
+  assert.doesNotMatch(shell, /confirmationDialog\([\s\S]{0,120}"Where should this agent work\?"/u);
   assert.doesNotMatch(shell, /messageLabel|chat\.messages\.count/u);
   assert.doesNotMatch(shell, /count: homeModel\.scheduledTasks\.count|count: coordinator\.workspaces\.count/u);
   assert.match(shell, /task\(id: coordinator\.connectionState\)[\s\S]*?homeModel\.load/u);
@@ -175,12 +222,51 @@ test("the Aiden home, onboarding, composer, and activity retain the reviewed pro
     /func createNewAgentInScratchWorkspace\(\)[\s\S]*?workspaceCreate: \.scratch[\s\S]*?func createNewAgent\([\s\S]*?createChat\(workspaceId: workspace\.id\)/u,
   );
   assert.match(shell, /Button\("Close"\) \{ intentChat = nil \}/u);
+  assert.match(shell, /final class AidenWorkspaceArchiveStore[\s\S]*?workspaceIDsByInstance/u);
+  assert.match(shell, /Archived Workspaces[\s\S]*?hidden only on this device/u);
+  assert.match(shell, /swipeActions\(edge: \.leading, allowsFullSwipe: false\)/u);
+  assert.match(shell, /swipeActions\(edge: \.trailing, allowsFullSwipe: false\)/u);
+  assert.match(shell, /Archive on This Device\?[\s\S]*?stays available in Aiden Agent on your Mac and on other devices/u);
+  assert.match(shell, /onRemove: workspace\.isManagedWorktree \|\| coordinator\.workspaces\.count <= 1/u);
+  assert.match(shell, /if isArchived \{[\s\S]*?Button\(action: onToggleArchive\)/u);
+  assert.match(shell, /activeWorkspaceIDSet[\s\S]*?visibleChats = homeModel\.chats\.filter/u);
+  assert.match(shell, /archivedWorkspaceIDs\.contains\(chat\.workspaceId\)[\s\S]*?Unarchive it from Workspaces/u);
   assert.match(pairing, /Aiden, wherever you are\./u);
   assert.match(pairing, /task\(id: step\)[\s\S]*?if step == 2[\s\S]*?discovery\.start\(\)/u);
-  assert.match(chat, /PhotosPicker/u);
+  assert.match(chat, /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u);
+  assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
   assert.match(chat, /\.fileImporter\(/u);
-  assert.match(chat, /AidenSidebarLogo\(size: 15/u);
+  assert.match(
+    chat,
+    /AidenTurnRequestBuilder\.make\([\s\S]*?attachments: submittedAttachments[\s\S]*?pendingAttachments = \[\]/u,
+  );
+  assert.match(
+    chat,
+    /if let provider = model\.selectedProvider[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: model\.selectedModel\?\.id/u,
+  );
+  assert.match(chat, /Section \{[\s\S]*?header: \{[\s\S]*?AidenProviderIcon/u);
+  assert.match(chat, /contextMenu[\s\S]*?Label\("Copy", systemImage: "doc\.on\.doc"\)/u);
+  assert.match(chat, /if !model\.liveText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = model\.liveText/u);
+  assert.match(
+    scheduledTasks,
+    /Picker\("Provider"[\s\S]*?AidenProviderIcon\([\s\S]*?providerID: provider\.id/u,
+  );
+  assert.match(
+    scheduledTasks,
+    /Picker\("Model"[\s\S]*?AidenProviderIcon\([\s\S]*?modelID: candidate\.id/u,
+  );
   assert.match(chat, /ThinkingOrb\(state: activity\.orb, size: \.px20\)/u);
+  assert.match(
+    chat,
+    /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\("Approval needed"\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
+  );
+  assert.match(chat, /Text\("Review this one action before Aiden continues\."\)[\s\S]*?font\(\.caption\)/u);
+  assert.match(chat, /Text\(summary\)[\s\S]*?font\(\.caption\.monospaced\(\)\)/u);
+  assert.match(chat, /Text\("Deny"\)[\s\S]*?Text\("Allow once"\)/u);
+  assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);
+  assert.match(chat, /glassEffect\(\.regular\.tint\(tint\)\.interactive\(\), in: Capsule\(\)\)/u);
+  assert.doesNotMatch(chat, /Label\("Approval needed", systemImage: "hand\.raised"\)/u);
+  assert.doesNotMatch(chat, /Button\("Deny", role: \.destructive\)/u);
   assert.match(chat, /ZStack\(alignment: \.bottom\)[\s\S]*?frame\(height: max\(96, composerHeight \+ 12\)\)[\s\S]*?AidenComposerView/u);
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: shape\)/u);
   assert.match(chat, /sendButtonBackground[\s\S]*?palette\.accent[\s\S]*?sendButtonForeground[\s\S]*?palette\.canvas/u);
@@ -208,7 +294,10 @@ test("shipping Swift literals contain only the Aiden API and no imported product
   const nonAidenAPI = /"\/api\/(?!aiden\/v1)[^"\n]*"/gu;
 
   for (const [path, source] of sources) {
-    assert.doesNotMatch(source, forbiddenIdentity, `${path} contains imported product copy`);
+    const identityPattern = path.endsWith("AidenProviderIcon.swift")
+      ? /"[^"\n]*(?:hermes|hermex|kanban|cloudflared)[^"\n]*"/giu
+      : forbiddenIdentity;
+    assert.doesNotMatch(source, identityPattern, `${path} contains imported product copy`);
     assert.doesNotMatch(source, nonAidenAPI, `${path} contains a non-Aiden API endpoint`);
   }
 });
@@ -250,6 +339,7 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
     "MarkdownUI-LICENSE.txt",
     "NOTICE.txt",
     "NetworkImage-LICENSE.txt",
+    "ProviderLogos-NOTICE.md",
     "ThinkingOrbs-LICENSE.txt",
     "swift-cmark-COPYING.txt",
   ]);
@@ -262,6 +352,7 @@ test("the Aiden MIT license, package graph, and bundled notices retain required 
   assert.match(notice, /NetworkImage 6\.0\.1/u);
   assert.match(notice, /swift-cmark 0\.8\.0/u);
   assert.match(notice, /Thinking Orbs 0\.3\.1/u);
+  assert.match(notice, /Provider logos/u);
   assert.doesNotMatch(notice, /swift-eventsource|Splash|Highlightr|SwiftMath|Lucide/u);
 });
 
