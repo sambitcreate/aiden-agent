@@ -149,7 +149,7 @@ test("iOS bundles every reviewed Aiden provider logo", async () => {
     .sort();
 
   assert.deepEqual(iosLogos, desktopLogos);
-  assert.equal(iosLogos.length, 40);
+  assert.equal(iosLogos.length, 41);
   await Promise.all(iosLogos.map(async (slug) => {
     const [desktopArtwork, iosArtwork] = await Promise.all([
       readFile(`${desktopProviderLogoDirectory}${slug}.svg`),
