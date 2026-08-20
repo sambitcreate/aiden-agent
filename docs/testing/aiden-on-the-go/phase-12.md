@@ -69,6 +69,46 @@ Both archives are signed with `Apple Development: Sambit Biswas (7EK65FX44E)` an
 - Canonical ASC `en-US` localization files now exist for the shipping `1.5` draft. The stable CLI's offline validator scans both files with zero errors and zero warnings; registered tests keep their name, subtitle, URLs, keywords, field limits, description, and intentionally omitted optional keys aligned with the reviewed metadata document. A separate mobile privacy/support patch is ready for owner/legal review and covers direct LAN/Tailscale pairing, Keychain/cache behavior, attachments/provider forwarding, Local Network/Camera/Photos/Files/on-device Speech permissions, App Intents, Live Activities, external media requests, and a visible support email. The website lives outside this repository, so publication remains an explicit external gate.
 - `xcrun devicectl` captured the shipping app's pairing screen from the physical iPhone 13 Pro at its native `1170 × 2532` resolution. An opaque JPEG conversion passed local `asc screenshots validate` for the matching display type. This proves the physical screenshot pipeline but is not retained as a final store asset because it is not the final distribution candidate and the required physical-iPad set remains unavailable.
 
+## Markdown and attachment correction — 2026-08-20
+
+Aiden already pins the same MarkdownUI 2.4.1 foundation used by Hermex, so no package change was needed. The renderer no longer applies its own root width/fixed-size pair; the assistant row supplies full transcript width, and a physical-device pixel regression proves the first painted glyph stays within its bounds. The `+` menu now follows Hermex's UIKit-menu/state-driven external presentation for Photos and Files instead of nesting `PhotosPicker` in `Menu`. Turn construction captures uploaded attachment IDs before hopeful composer clearing; a focused regression and registered source guard prevent those IDs from being silently dropped.
+
+Shipping source checks pass 6/6. The focused chat suite passes 16/16, and the complete physical iPhone 13 Pro suite reports 80 total, 75 passed, five expected live-environment skips, and zero failed. No simulator, archive, ASC mutation, or TestFlight upload was used.
+
+## Home glass navigation correction — 2026-08-20
+
+The provided CustomTB sample was used as an interaction reference for the prominent New Agent action: the button now owns an anchored popover that stays a popover on compact iPhone layouts and exposes the existing-workspace, reusable-workspace, and managed-scratch choices with concise explanations. The former confirmation dialog was removed, and presentation handoff yields after popover dismissal before opening a picker, alert, or starting scratch creation. Hermex's session-list chrome was used as the glass reference: the search/settings capsule now selects native interactive Liquid Glass on iOS 26+, ultra-thin material on older systems, and an opaque palette-raised fallback when Reduce Transparency is enabled.
+
+The registered shipping-source suite passes 6/6 and locks both native glass and compact-popover adaptation. The focused physical-iPhone chat suite passes 17/17. The iOS release suite passes 20 Ruby tests/42 assertions plus 23 Node tests, and the complete signed physical iPhone 13 Pro suite reports 81 total, 76 passed, five expected live-environment skips, and zero failed. No simulator, archive, App Store Connect mutation, or TestFlight upload was used.
+
+## Compact approval correction — 2026-08-20
+
+The iOS live approval card now follows the Aiden Agent Mac approval hierarchy: a 32-point warning badge contains the 15-point `shield` SF Symbol; the title uses small-semibold emphasis; helper and monospaced summary copy use caption sizing; and compact `Deny` / `Allow once` controls align to the trailing edge. Native iOS 26 interactive Liquid Glass renders both actions, with the allow action using the active Aiden accent; older systems and Reduce Transparency keep material or opaque themed fallbacks. Each visible capsule is 34 points tall with enough outer padding to retain a 44-point touch target.
+
+The registered shell checks pass 6/6 and reject the previous hand icon, destructive-role button, and oversized hierarchy. The iOS release suite passes 20 Ruby tests/42 assertions plus 23 Node tests. The complete signed physical iPhone 13 Pro suite remains green at 81 total: 76 passed, five expected live-environment skips, and zero failed. No simulator, archive, App Store Connect mutation, or TestFlight upload was used.
+
+## Device-only workspace archive — 2026-08-20
+
+Hermex's session interaction was re-read before implementation. Aiden workspace rows now use the same safe interaction shape: a context menu plus leading/trailing swipe actions with `allowsFullSwipe: false`. Rename and safe unregister continue through Aiden's revision-checked hopeful coordinator paths; unregister confirmation explicitly says the registry entry disappears from Aiden Agent and paired clients while the folder/files remain untouched on the Mac. Managed scratch records do not expose generic unregister because the desktop contract intentionally requires managed-worktree recovery authority.
+
+Archive is a phone/tablet-only projection keyed by paired installation. The first confirmed use displays the device-only scope; subsequent archive/unarchive actions are immediate. Archived workspaces have a searchable directory and are removed from home chats, New Agent's existing-workspace picker, adaptive selection/path state, cold/warm deep-link resolution, and the App Intent workspace cache. The archive store prunes only after a connected authoritative workspace refresh so temporary offline/empty states cannot erase local preferences.
+
+Fresh-memory iOS, persistence, and server reviews were completed after implementation. Their concrete findings were fixed: authoritative snapshots—not optimistic row changes—own pruning; empty registries prune correctly; loads and mutations are bound to the active installation generation; archived rows require unarchive before chat navigation; persisted archives filter App Intents before the shell mounts; the sole workspace cannot expose ineffective removal; and conflicts/ambiguous completions reconcile from the Mac without falsely marking a healthy server offline. Failed quick renames retain their draft.
+
+The signed iPhoneOS build-for-testing succeeds. Eleven focused tests pass on the physical iPhone 13 Pro, including first-use acknowledgement, relaunch persistence, installation isolation, unarchive, rejected-removal rollback, authoritative-empty pruning, reversed installation-load completion, and canonical CRUD reconciliation. The focused server suite passes 16/16, including a real-file assertion proving unregister leaves Mac content intact. No simulator or iPhone 16 Pro Max was addressed, and no archive, App Store Connect mutation, or TestFlight upload occurred.
+
+## Usage dashboard and home continuity — 2026-08-20
+
+The iOS usage DTO now retains the canonical daily and per-model aggregates returned by the privacy-safe Mac endpoint. The dashboard derives active days, current/longest activity streaks, a fixed 30-day heatmap, completion/local-use ratios, token categories, and top models from that data while retaining Aiden palette and accessibility semantics. Missing server capabilities are not represented with placeholder statistics.
+
+The home list's former transparent tail row was replaced with a palette-backed bottom safe-area inset, so the New Agent control keeps appropriate scroll clearance without producing a white band after the last chat. The registered shipping-source checks pass 6/6. A signed build-for-testing succeeds for the physical iPhone 13 Pro, and the focused usage test passes on that device. No simulator, iPhone 16 Pro Max, archive, ASC mutation, or TestFlight upload was used.
+
+## Provider identity and reply copying — 2026-08-20
+
+The iOS asset catalog contains the complete 40-logo provider inventory from Aiden Agent, and the shared resolver retains the desktop alias, model-specific, local-provider, multicolor, and fallback rules. Usage, chat model selection, and scheduled-task provider/model selection now show the same provider identity without adding network-backed artwork.
+
+Completed and in-flight assistant replies expose a long-press Copy action and accessibility action. In keeping with Hermex, the copied value is the original Markdown source. A requested GPT-5.6 Terra xhigh review found and closed missing scheduled-task icons, missing streaming Copy, and inaccurate desktop-only notice language. The signed iPhoneOS build-for-testing succeeds, the registered shipping/asset suite passes 7/7, and 23 focused chat, scheduled-task, and usage tests pass on the connected physical iPhone 13 Pro. No simulator, iPhone 16 Pro Max, archive, App Store Connect mutation, or TestFlight upload was used.
+
 ## Plan completion audit
 
 The current source, registered test commands, signed artifacts, and phase evidence were re-audited against every phase acceptance statement in `docs/plans/aiden-on-the-go-plan.md`:
