@@ -157,13 +157,15 @@ const PRODUCT_DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 const CREATE_IMAGES_PRODUCT_PREFIX = "user-data/create-images/";
 const ASSET_INDEX_PREDECESSOR_PATTERN =
   /^user-data\/create-images\/\.asset-index\.json\.([a-f0-9]{64})\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.previous$/u;
+const WORKSPACE_PREDECESSOR_PATTERN =
+  /^user-data\/create-images\/\.workspace\.json\.([a-f0-9]{64})\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.previous$/u;
 
 /**
- * Produce strict, sanitized Create Images storage evidence for a fresh acceptance profile.
- * Every Create Images durable file must be an expected publication or one of
- * the three protected asset-index predecessors retained until restart; journals,
- * quarantine records, unexpected thumbnails, orphan assets, and non-empty run
- * indexes fail closed. The empty derived run index is expected after Phase 3.
+ * Produce strict, sanitized Create Images storage evidence for a fresh configured
+ * acceptance profile. The baseline may contain only the empty asset index and the
+ * explicit workspace selection. Every later durable file must be an expected
+ * publication or a protected predecessor retained until restart; journals, quarantine
+ * records, unexpected thumbnails, orphan assets, and non-empty run indexes fail closed.
  */
 export function createImagesPhaseTwoProductFileEvidence(
   before: readonly ProductFileSnapshotEntry[],
@@ -176,7 +178,32 @@ export function createImagesPhaseTwoProductFileEvidence(
   if (!PRODUCT_DIGEST_PATTERN.test(identity.assetId)) {
     throw new Error("Packaged Create Images storage evidence has an invalid asset ID.");
   }
-  if (before.some((entry) => entry.path.startsWith(CREATE_IMAGES_PRODUCT_PREFIX))) {
+  const baselinePaths = before
+    .filter((entry) => entry.path.startsWith(CREATE_IMAGES_PRODUCT_PREFIX))
+    .map((entry) => entry.path)
+    .sort((left, right) => left.localeCompare(right));
+  const baselineWorkspacePredecessors = before.filter((entry) =>
+    WORKSPACE_PREDECESSOR_PATTERN.test(entry.path),
+  );
+  if (
+    baselineWorkspacePredecessors.length > 1 ||
+    baselineWorkspacePredecessors.some(
+      (entry) => WORKSPACE_PREDECESSOR_PATTERN.exec(entry.path)?.[1] !== entry.digest,
+    )
+  ) {
+    throw new Error("Packaged Create Images storage evidence has an invalid workspace baseline.");
+  }
+  const allowedBaselinePaths = new Set([
+    `${CREATE_IMAGES_PRODUCT_PREFIX}asset-index.json`,
+    `${CREATE_IMAGES_PRODUCT_PREFIX}index.json`,
+    `${CREATE_IMAGES_PRODUCT_PREFIX}run-index.json`,
+    `${CREATE_IMAGES_PRODUCT_PREFIX}workspace.json`,
+    ...baselineWorkspacePredecessors.map((entry) => entry.path),
+  ]);
+  if (
+    !baselinePaths.includes(`${CREATE_IMAGES_PRODUCT_PREFIX}workspace.json`) ||
+    baselinePaths.some((filePath) => !allowedBaselinePaths.has(filePath))
+  ) {
     throw new Error("Packaged Create Images storage evidence did not start from a fresh profile.");
   }
   const workflowRoot = `${CREATE_IMAGES_PRODUCT_PREFIX}workflows/${identity.workflowId}`;
@@ -186,6 +213,7 @@ export function createImagesPhaseTwoProductFileEvidence(
     `${CREATE_IMAGES_PRODUCT_PREFIX}index.json`,
     `${CREATE_IMAGES_PRODUCT_PREFIX}run-index.json`,
     `${CREATE_IMAGES_PRODUCT_PREFIX}thumbnails/${identity.assetId}/512.png`,
+    `${CREATE_IMAGES_PRODUCT_PREFIX}workspace.json`,
     `${workflowRoot}/workflow.json`,
     `${workflowRoot}/workflow.last-known-good.json`,
   ];
@@ -203,9 +231,26 @@ export function createImagesPhaseTwoProductFileEvidence(
       throw new Error("Packaged Create Images storage evidence has an invalid index predecessor.");
     }
   }
-  const expectedPaths = [...fixedExpectedPaths, ...predecessorPaths].sort((left, right) =>
-    left.localeCompare(right),
-  );
+  const workspacePredecessorPaths = after
+    .filter((entry) => WORKSPACE_PREDECESSOR_PATTERN.test(entry.path))
+    .map((entry) => entry.path);
+  if (workspacePredecessorPaths.length !== 1) {
+    throw new Error(
+      "Packaged Create Images storage evidence did not retain its protected workspace predecessor.",
+    );
+  }
+  const workspacePredecessorPath = workspacePredecessorPaths[0]!;
+  const workspacePredecessorDigest = WORKSPACE_PREDECESSOR_PATTERN.exec(
+    workspacePredecessorPath,
+  )?.[1];
+  if (after.find((entry) => entry.path === workspacePredecessorPath)?.digest !== workspacePredecessorDigest) {
+    throw new Error("Packaged Create Images storage evidence has an invalid workspace predecessor.");
+  }
+  const expectedPaths = [
+    ...fixedExpectedPaths,
+    ...predecessorPaths,
+    workspacePredecessorPath,
+  ].sort((left, right) => left.localeCompare(right));
   const previous = new Map(before.map((entry) => [entry.path, entry]));
   const currentSnapshot = new Map(after.map((entry) => [entry.path, entry]));
   const mutatedPaths = [...new Set([...previous.keys(), ...currentSnapshot.keys()])]
@@ -215,10 +260,13 @@ export function createImagesPhaseTwoProductFileEvidence(
       return !left || !right || left.bytes !== right.bytes || left.digest !== right.digest;
     })
     .sort((left, right) => left.localeCompare(right));
-  if (
-    mutatedPaths.length !== expectedPaths.length ||
-    mutatedPaths.some((filePath, index) => filePath !== expectedPaths[index])
-  ) {
+  const allowedMutationPaths = new Set([
+    ...expectedPaths,
+    ...baselineWorkspacePredecessors
+      .map((entry) => entry.path)
+      .filter((filePath) => !currentSnapshot.has(filePath)),
+  ]);
+  if (mutatedPaths.some((filePath) => !allowedMutationPaths.has(filePath))) {
     throw new Error("Packaged Create Images storage evidence found unexpected file mutations.");
   }
   const productFiles = after
