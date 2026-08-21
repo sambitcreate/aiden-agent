@@ -21,7 +21,7 @@ const COMMON_ASPECT_RATIOS = [
 
 /**
  * Release-pinned image catalog verified against Google's Interactions API on
- * 2026-08-11. Runtime execution accepts no arbitrary renderer model ID.
+ * 2026-08-20. Runtime execution accepts no arbitrary renderer model ID.
  */
 export const GEMINI_IMAGE_MODELS: readonly ImageProviderModelCapabilities[] = [
   {
@@ -70,7 +70,7 @@ export interface GeminiInteractionsRequestBody {
   >;
   response_format: {
     type: "image";
-    mime_type: "image/png" | "image/jpeg";
+    mime_type?: "image/jpeg";
     aspect_ratio: string;
     image_size: string;
   };
@@ -149,7 +149,11 @@ export function buildGeminiInteractionsRequest(
     ],
     response_format: {
       type: "image",
-      mime_type: validated.outputMime,
+      // Google's current Interactions schema only enumerates JPEG here. When
+      // PNG is selected we omit the field and let Gemini return its default
+      // inline image format, matching Google's image-generation examples and
+      // Node Banana's working transport behavior.
+      ...(validated.outputMime === "image/jpeg" ? { mime_type: "image/jpeg" as const } : {}),
       aspect_ratio: validated.aspectRatio,
       image_size: validated.imageSize,
     },
