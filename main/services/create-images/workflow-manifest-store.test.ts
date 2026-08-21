@@ -3,7 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { type TestContext } from "node:test";
-import { createStarterWorkflow } from "../../../renderer/shared/create-images/schema.js";
+import {
+  CREATE_IMAGES_SCHEMA_VERSION,
+  createStarterWorkflow,
+} from "../../../renderer/shared/create-images/schema.js";
 import {
   WorkflowManifestLoadError,
   WorkflowManifestStore,
@@ -420,7 +423,7 @@ test("future workflow and journal schemas are read-only and never quarantined im
   const first = workflow();
   await store.put(first, null);
   const workflowPath = path.join(directory, "workflows", first.id, "workflow.json");
-  const future = `${JSON.stringify({ ...first, schemaVersion: 2 })}\n`;
+  const future = `${JSON.stringify({ ...first, schemaVersion: CREATE_IMAGES_SCHEMA_VERSION + 1 })}\n`;
   await fs.writeFile(workflowPath, future, "utf8");
   const reopened = new WorkflowManifestStore(() => directory);
   const health = await reopened.inspect(first.id);
@@ -479,7 +482,7 @@ test("future last-known-good metadata is explicit and cannot be replaced by save
   const first = workflow();
   await store.put(first, null);
   const lastGoodPath = path.join(directory, "workflows", first.id, "workflow.last-known-good.json");
-  const future = `${JSON.stringify({ ...first, schemaVersion: 2 })}\n`;
+  const future = `${JSON.stringify({ ...first, schemaVersion: CREATE_IMAGES_SCHEMA_VERSION + 1 })}\n`;
   await fs.writeFile(lastGoodPath, future, "utf8");
   const reopened = new WorkflowManifestStore(() => directory);
   const health = await reopened.inspect(first.id);
