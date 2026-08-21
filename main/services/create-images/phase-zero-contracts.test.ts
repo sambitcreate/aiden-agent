@@ -208,7 +208,6 @@ test("Gemini contract uses the fixed Interactions origin and contains no credent
     ],
     response_format: {
       type: "image",
-      mime_type: "image/png",
       aspect_ratio: "16:9",
       image_size: "2K",
     },
@@ -216,6 +215,18 @@ test("Gemini contract uses the fixed Interactions origin and contains no credent
     background: false,
   });
   assert.doesNotMatch(JSON.stringify(request), /api.?key|authorization|credential/iu);
+
+  const jpegRequest = buildGeminiInteractionsRequest({
+    providerId: "gemini",
+    modelId: "gemini-3.1-flash-image",
+    prompt: "Draw a quiet harbor at dawn.",
+    aspectRatio: "16:9",
+    imageSize: "2K",
+    outputMime: "image/jpeg",
+    count: 1,
+    references: [],
+  });
+  assert.equal(jpegRequest.response_format.mime_type, "image/jpeg");
 });
 
 test("Gemini contract rejects arbitrary models, excess output count, and empty media", () => {
