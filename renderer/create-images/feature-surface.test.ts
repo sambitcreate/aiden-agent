@@ -164,12 +164,21 @@ test("the Phase 1 editor exposes five typed node kinds and non-spatial controls"
   assert.match(node, /data-create-images-image-node/u);
   assert.match(node, /className="block size-full object-contain"/u);
   assert.match(node, /create-images-run-output-preview[\s\S]{0,100}object-contain/u);
-  assert.doesNotMatch(node, /object-cover/u);
+  assert.match(node, /create-images-gallery-tile[\s\S]{0,900}object-cover/u);
   assert.match(view, /deferAssetPreviewLifecycleDisposal\(previewManager\)/u);
   assert.match(view, /deferAssetPreviewLifecycleDisposal\(runPreviewManager\)/u);
   assert.match(styles, /\.create-images-image-node\s*\{[\s\S]{0,120}background: transparent/u);
   assert.match(styles, /\.create-images-image-node-frame/u);
   assert.match(styles, /\.create-images-image-node-actions/u);
+  assert.match(
+    node,
+    /<div className="group\/image relative overflow-hidden rounded-card bg-well">/u,
+  );
+  assert.match(node, /className="nodrag nopan nowheel create-images-image-node-actions/u);
+  assert.doesNotMatch(
+    node,
+    /className="nodrag nopan nowheel group\/image relative overflow-hidden/u,
+  );
   assert.match(view, /aiden-create-images-recovery-diagnostics/u);
   assert.match(view, /Copy diagnostics/u);
   assert.doesNotMatch(node, /<article/u);
@@ -240,6 +249,36 @@ test("Create Images conflicts remain protected across workspace switches and app
     main,
     /if \(createImagesFlushAllowed !== true\) \{\s*throw new Error\(\s*"Create Images autosave did not authorize/u,
   );
+});
+
+test("advanced proposals and gallery presentation stay inert, bounded, and main-owned", () => {
+  const canvas = source("./workflow-canvas.tsx");
+  const runUi = source("./run-ui.tsx");
+  const rendererIpc = source("../lib/ipc.ts");
+  const handlers = source("../../main/handlers/create-images.ts");
+  const proposalService = source(
+    "../../main/services/create-images/workflow-proposal-service.ts",
+  );
+  const presentationStore = source(
+    "../../main/services/create-images/presentation-store.ts",
+  );
+
+  assert.match(canvas, /readModelSelection/u);
+  assert.match(canvas, /createImagesApi\.proposeWorkflow/u);
+  assert.match(canvas, /commitSnapshot\(\(\) => toCanvasSnapshot\(workflowProposal\.workflow\)\)/u);
+  assert.match(canvas, /applying does not contact Gemini or start a run/u);
+  assert.match(canvas, /createImagesApi\.getPresentation/u);
+  assert.match(canvas, /createImagesApi\s*\.setAssetHidden/u);
+  assert.match(runUi, /createImagesSafeRunDiagnosticSummary/u);
+  assert.match(runUi, /No prompts, paths, credentials, image bytes, or provider responses/u);
+  assert.match(rendererIpc, /imageWorkflows:proposeWorkflow/u);
+  assert.match(rendererIpc, /imageWorkflows:getPresentation/u);
+  assert.match(rendererIpc, /imageWorkflows:setAssetHidden/u);
+  assert.match(handlers, /service\.runs\.isRunAssetReferenced/u);
+  assert.match(proposalService, /maxRetries: 0/u);
+  assert.doesNotMatch(proposalService, /tools:/u);
+  assert.match(presentationStore, /Device-local presentation state/u);
+  assert.doesNotMatch(presentationStore, /imageBytes|providerResponse|promptText/u);
 });
 
 test("Phase 2 storage stays main-owned, CAS-safe, and path-free across IPC", () => {
@@ -338,8 +377,18 @@ test("Phase 5 native archives are main-owned, explicit, and available from the w
   assert.match(handlers, /dialog\.showSaveDialog\(parent,[\s\S]*aiden-images/u);
   assert.match(handlers, /shell\.showItemInFolder/u);
   assert.match(handlers, /imageWorkflows:downloadRunAsset/u);
+  assert.match(handlers, /imageWorkflows:downloadWorkflowAsset/u);
+  assert.match(handlers, /imageWorkflows:listRecentOutputs/u);
+  assert.match(handlers, /service\.runs\.listRecentOutputs\(input\.limit\)/u);
+  assert.match(
+    handlers,
+    /service\.references\.isWorkflowAssetReferenced\(input\.workflowId, input\.assetId\)/u,
+  );
   assert.match(handlers, /service\.assets\.exportAssetToFile/u);
   assert.match(view, /downloadRunAsset/u);
+  assert.match(view, /downloadWorkflowAsset/u);
+  assert.match(view, /listRecentOutputs/u);
+  assert.match(view, /recentOutputs=/u);
   assert.match(handlers, /CREATE_IMAGES_ASSET_CLEANUP_GRACE_MS/u);
   assert.match(handlers, /planGarbageCollection/u);
   assert.match(handlers, /applyGarbageCollection/u);
@@ -384,9 +433,13 @@ test("Phase 3 renderer runs are consented, resubscribed, revision-safe, and run-
   }
   assert.match(rendererIpc, /imageWorkflows:run-changed/u);
   assert.match(channels, /"imageWorkflows:run-changed"/u);
+  assert.match(view, /runSubscriptionRef\.current\?\.retryNow\(\)/u);
+  assert.match(view, /setInterval\(\(\) => runSubscriptionRef\.current\?\.retryNow\(\), 10_000\)/u);
+  assert.match(view, /createImagesApi\.getRun\(\{[\s\S]{0,140}runId: visibleRunId/u);
+  assert.match(view, /setInterval\(\(\) => void refreshVisibleRun\(\), 5_000\)/u);
   assert.match(
     view,
-    /controller\.update\(draft\);[\s\S]{0,200}const flushed = await controller\.flush\(\);[\s\S]{0,1200}createImagesApi\.prepareRun/u,
+    /controller\.update\(draft\);[\s\S]{0,200}const flushed = await controller\.saveNow\(\);[\s\S]{0,1200}createImagesApi\.prepareRun/u,
   );
   assert.match(view, /enumerateWorkflowDownstreamPaths\(document, startNodeId\)/u);
   assert.match(view, /scope: undefined,[\s\S]{0,180}downstreamPathChoiceViews/u);
@@ -486,4 +539,24 @@ test("Phase 3 renderer runs are consented, resubscribed, revision-safe, and run-
   assert.match(view, /storageHealth\.runIndex\.status !== "healthy"/u);
   assert.match(view, /Run history index recovered/u);
   assert.match(node, /key=\{`\$\{assetId\}:\$\{index\}`\}/u);
+});
+
+test("Create Images settings expose bounded autosave and canvas preferences", () => {
+  const settings = source("../components/settings/create-images-settings.tsx");
+  const settingsView = source("../main/settings-view.tsx");
+  const settingsSections = source("../shared/settings-section.ts");
+  const canvas = source("./workflow-canvas.tsx");
+  const view = source("./create-images-view.tsx");
+
+  assert.match(settingsSections, /id: "createImages"[\s\S]{0,100}title: "Create Images"/u);
+  assert.match(settingsView, /createImages: CreateImagesSettings/u);
+  assert.match(settings, /Autosave workflows/u);
+  assert.match(settings, /Manual save is on/u);
+  assert.match(settings, /Power features/u);
+  assert.match(settings, /Canvas navigation/u);
+  assert.match(view, /autosaveEnabled=\{autosaveEnabled\}/u);
+  assert.match(view, /onSaveWorkflow=\{\(\) => void saveWorkflow\(\)\}/u);
+  assert.match(canvas, /if \(!canvasEditInProgress\) onDocumentChange\?\.\(currentDocument\)/u);
+  assert.match(canvas, /nodeEditStartSnapshot\.current\?\.nodeId !== nodeId/u);
+  assert.match(canvas, /setCanvasEditInProgress\(true\)/u);
 });
