@@ -80,6 +80,14 @@ test("Phase 2 product evidence is exact, content-addressed, and rejects recovery
   const firstPredecessorDigest = "1".repeat(64);
   const secondPredecessorDigest = "2".repeat(64);
   const thirdPredecessorDigest = "3".repeat(64);
+  const workspacePredecessorDigest = "4".repeat(64);
+  const workspacePredecessorPath = `${base}/.workspace.json.${workspacePredecessorDigest}.44444444-4444-4444-8444-444444444444.previous`;
+  const baseline = [
+    { path: `${base}/asset-index.json`, bytes: 80, digest: firstPredecessorDigest },
+    { path: `${base}/index.json`, bytes: 80, digest: "7".repeat(64) },
+    { path: `${base}/run-index.json`, bytes: 72, digest: "9".repeat(64) },
+    { path: `${base}/workspace.json`, bytes: 240, digest: workspacePredecessorDigest },
+  ];
   const files = [
     {
       path: `${base}/.asset-index.json.${firstPredecessorDigest}.11111111-1111-4111-8111-111111111111.previous`,
@@ -96,6 +104,7 @@ test("Phase 2 product evidence is exact, content-addressed, and rejects recovery
       bytes: 560,
       digest: thirdPredecessorDigest,
     },
+    { path: workspacePredecessorPath, bytes: 240, digest: workspacePredecessorDigest },
     { path: `${base}/asset-index.json`, bytes: 600, digest: "c".repeat(64) },
     {
       path: `${base}/assets/sha256/aa/${assetId}.png`,
@@ -105,6 +114,7 @@ test("Phase 2 product evidence is exact, content-addressed, and rejects recovery
     { path: `${base}/index.json`, bytes: 240, digest: "d".repeat(64) },
     { path: `${base}/run-index.json`, bytes: 72, digest: "9".repeat(64) },
     { path: `${base}/thumbnails/${assetId}/512.png`, bytes: 1200, digest: "e".repeat(64) },
+    { path: `${base}/workspace.json`, bytes: 620, digest: "8".repeat(64) },
     {
       path: `${base}/workflows/${workflowId}/workflow.json`,
       bytes: 900,
@@ -117,7 +127,7 @@ test("Phase 2 product evidence is exact, content-addressed, and rejects recovery
     },
   ];
   assert.deepEqual(
-    createImagesPhaseTwoProductFileEvidence([], files, {
+    createImagesPhaseTwoProductFileEvidence(baseline, files, {
       workflowId,
       assetId,
       assetExtension: "png",
@@ -127,7 +137,7 @@ test("Phase 2 product evidence is exact, content-addressed, and rejects recovery
   assert.throws(
     () =>
       createImagesPhaseTwoProductFileEvidence(
-        [],
+        baseline,
         [
           ...files,
           {
@@ -143,7 +153,7 @@ test("Phase 2 product evidence is exact, content-addressed, and rejects recovery
   assert.throws(
     () =>
       createImagesPhaseTwoProductFileEvidence(
-        [],
+        baseline,
         files.map((entry) =>
           entry.path.endsWith("workflow.last-known-good.json")
             ? { ...entry, digest: "f".repeat(64) }
