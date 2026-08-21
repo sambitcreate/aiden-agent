@@ -117,7 +117,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
   );
   assert.match(
     featurePresentation,
-    /keep imported and generated images in a local workspace, and reveal it in Finder/u,
+    /compare, annotate, and reuse visual workflows in a local image workspace/u,
   );
   assert.match(source, /tabIndex=\{0\}/u);
   for (const group of [
