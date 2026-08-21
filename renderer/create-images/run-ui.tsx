@@ -6,6 +6,7 @@ import {
   CircleCheck,
   CircleStop,
   Clock3,
+  ClipboardCopy,
   Cloud,
   Cpu,
   Download,
@@ -20,7 +21,7 @@ import {
   Trash2,
   Workflow,
 } from "lucide-react";
-import { Button } from "../components/ui";
+import { Button, toast } from "../components/ui";
 import type {
   CreateImagesAssetGrantView,
   CreateImagesDegradedRunDiscardPlanResult,
@@ -28,8 +29,10 @@ import type {
   CreateImagesRunRecoveryView,
   CreateImagesRunView,
 } from "../shared/create-images/ipc";
+import { createImagesAdaptiveAssetGrantUrl } from "../shared/create-images/ipc";
 import {
   CREATE_IMAGES_RUN_STATUS_LABELS,
+  createImagesSafeRunDiagnosticSummary,
   createImagesRunErrorViewModel,
   createImagesTerminalRunHistoryViews,
   summarizeCreateImagesRunProgress,
@@ -503,6 +506,7 @@ const RUN_STATUS_PRESENTATION = {
   "awaiting-consent": { label: "Waiting for confirmation", Icon: ShieldCheck },
   queued: { label: "Queued", Icon: Clock3 },
   running: { label: "Running", Icon: LoaderCircle },
+  paused: { label: "Paused", Icon: CircleStop },
   stopping: { label: "Stopping", Icon: Square },
   retry: { label: "Retry needs review", Icon: RotateCcw },
   failed: { label: "Failed", Icon: OctagonX },
@@ -612,6 +616,11 @@ export function CreateImagesRunErrorCard({
   );
 }
 
+function runNodeTitle(label: string): string {
+  const separator = label.indexOf(" · ");
+  return separator > 0 ? label.slice(0, separator) : label;
+}
+
 function NodeProgressRow({
   node,
   onRetry,
@@ -636,10 +645,7 @@ function NodeProgressRow({
           <ImageIcon />
         </span>
         <span className="create-images-run-node-copy">
-          <strong>{node.label}</strong>
-          <span>
-            {node.nodeId} · attempt {node.attempt}
-          </span>
+          <strong>{runNodeTitle(node.label)}</strong>
         </span>
         <CreateImagesNodeRunStatusBadge status={node.status} retryMode={node.retryMode} />
       </div>
@@ -657,7 +663,7 @@ function NodeProgressRow({
       ) : null}
       {node.status === "blocked" ? (
         <p className="create-images-run-node-note">
-          A required upstream node did not succeed. No work was submitted for this node.
+          Skipped because a required earlier step did not finish. No request was sent.
         </p>
       ) : null}
       {node.status === "retry" && node.retryMode === "automatic-mock" ? (
@@ -708,6 +714,7 @@ export function CreateImagesRunProgressPanel({
   announcement,
   stopping = false,
   onStop,
+  onResume,
   onOpenHistory,
   onRetryNode,
   onNodeErrorAction,
@@ -718,6 +725,7 @@ export function CreateImagesRunProgressPanel({
   announcement: string;
   stopping?: boolean;
   onStop?(trigger: HTMLButtonElement): void;
+  onResume?(trigger: HTMLButtonElement): void;
   onOpenHistory?(): void;
   onRetryNode?(
     nodeId: string,
@@ -732,7 +740,8 @@ export function CreateImagesRunProgressPanel({
 }) {
   const titleId = React.useId();
   const summary = summarizeCreateImagesRunProgress(nodes);
-  const canStop = status === "queued" || status === "running" || status === "stopping";
+  const canStop =
+    status === "queued" || status === "running" || status === "paused" || status === "stopping";
   return (
     <section className="create-images-run-panel" aria-labelledby={titleId} data-status={status}>
       <header className="create-images-run-panel-header">
@@ -775,6 +784,11 @@ export function CreateImagesRunProgressPanel({
             <History /> Run history
           </Button>
         ) : null}
+        {status === "paused" && onResume ? (
+          <Button size="small" variant="accent" onClick={(event) => onResume(event.currentTarget)}>
+            <Play /> Resume
+          </Button>
+        ) : null}
         {canStop && onStop ? (
           <Button
             size="small"
@@ -807,6 +821,7 @@ const RUN_VIEW_UI_STATUS: Readonly<Record<CreateImagesRunView["status"], CreateI
   {
     queued: "queued",
     running: "running",
+    paused: "paused",
     cancel_requested: "stopping",
     needs_attention: "retry",
     succeeded: "succeeded",
@@ -839,7 +854,7 @@ function RunHistoryOutput({
   return preview ? (
     <figure className="create-images-run-history-output">
       <img
-        src={preview.url}
+        src={createImagesAdaptiveAssetGrantUrl(preview.token, 256)}
         alt={label}
         draggable={false}
         onLoad={() => onLoad?.(assetId, preview.token)}
@@ -1023,6 +1038,23 @@ function RunHistoryDetail({
         </div>
         <CreateImagesRunStatusBadge status={RUN_VIEW_UI_STATUS[run.status]} />
       </header>
+      <div className="create-images-run-diagnostic-action">
+        <Button
+          size="small"
+          variant="transparent"
+          onClick={() => {
+            void navigator.clipboard
+              .writeText(createImagesSafeRunDiagnosticSummary(run))
+              .then(
+                () => toast.success("Safe run diagnostic copied."),
+                () => toast.error("Run diagnostic could not be copied."),
+              );
+          }}
+        >
+          <ClipboardCopy /> Copy diagnostic summary
+        </Button>
+        <span>No prompts, paths, credentials, image bytes, or provider responses.</span>
+      </div>
       {unresolvedAmbiguity ? (
         <section className="create-images-run-ambiguity-record" role="alert">
           <CircleAlert aria-hidden="true" />
@@ -1248,6 +1280,7 @@ export function CreateImagesRunControls({
   onRunAll,
   onRunFromHere,
   onStop,
+  onResume,
   onOpenHistory,
   historyOpen = false,
 }: {
@@ -1258,12 +1291,14 @@ export function CreateImagesRunControls({
   onRunAll(trigger: HTMLButtonElement): void;
   onRunFromHere?(trigger: HTMLButtonElement): void;
   onStop?(trigger: HTMLButtonElement): void;
+  onResume?(trigger: HTMLButtonElement): void;
   onOpenHistory(): void;
   historyOpen?: boolean;
 }) {
   const runAllReasonId = React.useId();
   const runFromHereReasonId = React.useId();
-  const active = status === "queued" || status === "running" || status === "stopping";
+  const active =
+    status === "queued" || status === "running" || status === "paused" || status === "stopping";
   const runFromHereReason =
     runFromHereDisabledReason ??
     (!selectedNodeLabel
@@ -1274,15 +1309,22 @@ export function CreateImagesRunControls({
   return (
     <div className="create-images-run-controls" role="group" aria-label="Workflow run controls">
       {active && onStop ? (
-        <Button
-          size="small"
-          variant="filled"
-          disabled={status === "stopping"}
-          aria-label={status === "stopping" ? "Stopping workflow run" : "Stop workflow run"}
-          onClick={(event) => onStop(event.currentTarget)}
-        >
-          <Square /> <span>{status === "stopping" ? "Stopping…" : "Stop"}</span>
-        </Button>
+        <>
+          {status === "paused" && onResume ? (
+            <Button size="small" variant="accent" onClick={(event) => onResume(event.currentTarget)}>
+              <Play /> <span>Resume</span>
+            </Button>
+          ) : null}
+          <Button
+            size="small"
+            variant="filled"
+            disabled={status === "stopping"}
+            aria-label={status === "stopping" ? "Stopping workflow run" : "Stop workflow run"}
+            onClick={(event) => onStop(event.currentTarget)}
+          >
+            <Square /> <span>{status === "stopping" ? "Stopping…" : "Stop"}</span>
+          </Button>
+        </>
       ) : (
         <>
           <Button
