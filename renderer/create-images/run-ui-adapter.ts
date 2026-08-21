@@ -45,6 +45,7 @@ const EMPTY_RUN_STATE: CreateImagesRendererRunState = Object.freeze({
 const RUN_STATUS: Readonly<Record<CreateImagesRunView["status"], CreateImagesRunUiStatus>> = {
   queued: "queued",
   running: "running",
+  paused: "paused",
   cancel_requested: "stopping",
   needs_attention: "retry",
   succeeded: "succeeded",
@@ -96,12 +97,15 @@ export function createImagesSelectedRunSnapshotTransition(
 }
 
 const SAFE_ERROR_CODES: Readonly<Record<string, CreateImagesSafeRunErrorCode>> = {
+  "authentication-required": "authentication_required",
   offline: "offline",
+  "permission-denied": "permission_denied",
   "rate-limited": "rate_limited",
+  "request-rejected": "request_rejected",
   "provider-refused": "provider_refused",
   "provider-unavailable": "provider_unavailable",
   "output-invalid": "output_invalid",
-  "output-publication-failed": "output_invalid",
+  "output-publication-failed": "output_save_failed",
   "quota-full": "quota_full",
   interrupted: "interrupted",
   "submission-ambiguous": "submission_ambiguous",
@@ -140,6 +144,7 @@ export function createImagesRunProjectionFromView(
     workflowId: run.workflowId,
     workflowRevision: run.workflowRevision,
     runId: run.runId,
+    journalRevision: run.journalRevision,
     ...(run.executionMode ? { executionMode: run.executionMode } : {}),
     status: RUN_STATUS[run.status],
     lastSequence: run.lastSequence,
@@ -179,7 +184,7 @@ export function createImagesTerminalHistoryFromViews(
     completedNodeCount: run.completedNodeCount,
     totalNodeCount: run.totalNodeCount,
     outputCount: run.outputCount,
-    costLabel: run.costLabel ?? "$0.00 mock",
+    costLabel: run.costLabel ?? "$0.00 mock actual",
     ...(run.ambiguityResolution ? { ambiguityAcknowledged: true as const } : {}),
   }));
 }
@@ -195,7 +200,12 @@ export function createImagesRunAssetOwners(
 }
 
 function activeUiStatus(status: CreateImagesRunUiStatus): boolean {
-  return status === "queued" || status === "running" || status === "stopping";
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "paused" ||
+    status === "stopping"
+  );
 }
 
 function addRunTombstones(
