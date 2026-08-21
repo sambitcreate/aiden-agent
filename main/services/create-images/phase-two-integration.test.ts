@@ -210,6 +210,11 @@ test("asset protocol falls back to the validated source when thumbnail generatio
   assert.equal(response?.status, 200);
   assert.equal(response?.headers.get("content-type"), "image/png");
   assert.deepEqual(new Uint8Array(await response!.arrayBuffer()), source);
+
+  const originalResponse = await service.assetResponse(imported.asset.assetId, "original");
+  assert.equal(originalResponse?.status, 200);
+  assert.equal(originalResponse?.headers.get("content-type"), "image/png");
+  assert.deepEqual(new Uint8Array(await originalResponse!.arrayBuffer()), source);
 });
 
 test("durable journal references survive renderer loss, lease expiry, GC, and recovery", async (t) => {
