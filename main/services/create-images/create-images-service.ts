@@ -28,6 +28,8 @@ import { resolveCreateImagesGeminiApiKeyAuth } from "./gemini-provider-status-co
 import { CreateImagesNativeArchiveService } from "./native-archive-service.js";
 import { CreateImagesNodeBananaImportService } from "./node-banana-import-service.js";
 import { CreateImagesWorkspaceStore, type CreateImagesWorkspaceStatus } from "./workspace-store.js";
+import { CreateImagesWorkflowProposalService } from "./workflow-proposal-service.js";
+import { CreateImagesPresentationStore } from "./presentation-store.js";
 
 const defaultAssetDeepValidator: AssetDeepValidator = {
   async validate(input) {
@@ -272,7 +274,7 @@ export interface CreateImagesServiceOptions {
   };
   runService?: Pick<
     ConstructorParameters<typeof CreateImagesRunService>[0],
-    "resolveGeminiAuth" | "createGeminiProvider"
+    "resolveGeminiAuth" | "createGeminiProvider" | "annotationRasterizer"
   >;
 }
 
@@ -287,6 +289,8 @@ export class CreateImagesService {
   readonly archives: CreateImagesNativeArchiveService;
   readonly nodeBananaImports: CreateImagesNodeBananaImportService;
   readonly workspace: CreateImagesWorkspaceStore;
+  readonly proposals = new CreateImagesWorkflowProposalService();
+  readonly presentation: CreateImagesPresentationStore;
   readonly grants = new AssetDeliveryGrantRegistry();
   readonly assets: ContentAddressedAssetStore;
   readonly references = new CreateImagesReferenceAuthority();
@@ -304,6 +308,7 @@ export class CreateImagesService {
   constructor(rootDirectory: string, options: CreateImagesServiceOptions = {}) {
     this.workspaceRequired = options.workspaceRequired ?? false;
     this.workflows = new WorkflowManifestStore(() => rootDirectory, options.workflowDurability);
+    this.presentation = new CreateImagesPresentationStore(rootDirectory);
     let workspaceStore: CreateImagesWorkspaceStore | undefined;
     this.assets = new ContentAddressedAssetStore(rootDirectory, this.references, {
       deepValidator: options.assetStore?.deepValidator ?? defaultAssetDeepValidator,
@@ -327,6 +332,12 @@ export class CreateImagesService {
         this.workspace.status(),
       workspaceRequired: options.workspaceRequired ?? false,
       ...options.runService,
+      annotationRasterizer: options.runService?.annotationRasterizer ?? {
+        async rasterize(input) {
+          const { electronAnnotationRasterizer } = await import("./electron-asset-images.js");
+          return electronAnnotationRasterizer.rasterize(input);
+        },
+      },
     });
     this.archives = new CreateImagesNativeArchiveService({
       rootDirectory,
@@ -487,30 +498,18 @@ export class CreateImagesService {
     this.missingAssetIds.add(assetId);
   }
 
-  async assetResponse(assetId: string): Promise<Response | undefined> {
+  async assetResponse(
+    assetId: string,
+    rendition: "preview" | "preview-128" | "preview-256" | "preview-512" | "original" = "preview",
+  ): Promise<Response | undefined> {
     await this.initialize();
     let preview: {
       bytes: Uint8Array;
       byteLength: number;
       mediaType: "image/jpeg" | "image/png";
     };
-    try {
-      preview = await this.assets.getThumbnail(assetId, 512);
-    } catch (error) {
-      if (error instanceof AssetStoreError && error.code === "asset_source_missing") {
-        this.noteAssetMissing(assetId);
-        return undefined;
-      }
-      if (!(error instanceof AssetStoreError) || error.code !== "thumbnail_unavailable") {
-        throw error;
-      }
-
-      // A derived thumbnail is an optimization, not the authority for whether
-      // an otherwise-valid reference can be shown. When the isolated thumbnail
-      // worker is temporarily unavailable, stream the already-validated
-      // canonical PNG/JPEG through the same opaque protocol grant instead of
-      // leaving the canvas with a permanent blank preview.
-      const ownerId = "asset-protocol-fallback";
+    if (rendition === "original") {
+      const ownerId = "asset-protocol-original";
       let lease: AssetPreviewLeaseDto | undefined;
       try {
         lease = await this.assets.acquirePreviewLease(assetId, ownerId, 1_000);
@@ -531,6 +530,48 @@ export class CreateImagesService {
         throw fallbackError;
       } finally {
         if (lease) await this.assets.releasePreviewLease(lease.token, ownerId).catch(() => false);
+      }
+    } else {
+      try {
+        const size =
+          rendition === "preview-128" ? 128 : rendition === "preview-256" ? 256 : 512;
+        preview = await this.assets.getThumbnail(assetId, size);
+      } catch (error) {
+        if (error instanceof AssetStoreError && error.code === "asset_source_missing") {
+          this.noteAssetMissing(assetId);
+          return undefined;
+        }
+        if (!(error instanceof AssetStoreError) || error.code !== "thumbnail_unavailable") {
+          throw error;
+        }
+
+        // A derived thumbnail is an optimization, not the authority for whether
+        // an otherwise-valid reference can be shown. When the isolated thumbnail
+        // worker is temporarily unavailable, stream the already-validated
+        // canonical PNG/JPEG through the same opaque protocol grant instead of
+        // leaving the canvas with a permanent blank preview.
+        const ownerId = "asset-protocol-fallback";
+        let lease: AssetPreviewLeaseDto | undefined;
+        try {
+          lease = await this.assets.acquirePreviewLease(assetId, ownerId, 1_000);
+          const original = await this.assets.readPreview(lease.token, ownerId);
+          preview = {
+            bytes: original.bytes,
+            byteLength: original.bytes.byteLength,
+            mediaType: original.asset.mediaType,
+          };
+        } catch (fallbackError) {
+          if (
+            fallbackError instanceof AssetStoreError &&
+            fallbackError.code === "asset_source_missing"
+          ) {
+            this.noteAssetMissing(assetId);
+            return undefined;
+          }
+          throw fallbackError;
+        } finally {
+          if (lease) await this.assets.releasePreviewLease(lease.token, ownerId).catch(() => false);
+        }
       }
     }
     const body = new Uint8Array(preview.bytes.byteLength);
