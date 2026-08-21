@@ -32,21 +32,25 @@ export type CoordinatorNodeStatus =
 export type CoordinatorRunStatus =
   | "pending"
   | "running"
+  | "paused"
   | "succeeded"
   | "failed"
   | "cancelled"
   | "needs_attention";
 
 export type CoordinatorErrorCode =
+  | "authentication-required"
   | "cancelled"
   | "dependency-unschedulable"
   | "execution-failed"
   | "interrupted"
   | "output-invalid"
   | "output-publication-failed"
+  | "permission-denied"
   | "provider-refused"
   | "provider-unavailable"
   | "rate-limited"
+  | "request-rejected"
   | "submission-ambiguous"
   | "upstream-blocked";
 
@@ -220,6 +224,12 @@ export interface RunWorkflowCoordinatorOptions {
   durability: CoordinatorDurability;
   signal?: AbortSignal;
   executeNode(context: CoordinatorNodeExecutionContext): Promise<CoordinatorAttemptResult>;
+  initialSucceededOutputs?: ReadonlyMap<string, unknown>;
+  resuming?: boolean;
+  pauseBeforeNode?(input: {
+    nodeId: string;
+    dependencyNodeIds: readonly string[];
+  }): Promise<boolean>;
   cancelRemoteJob?(record: CoordinatorRemoteJobRecord): Promise<void>;
   onEvent?(event: CoordinatorEvent): void;
 }
@@ -419,6 +429,7 @@ export async function runWorkflowCoordinator(
   let totalRetryDelayMs = 0;
   let acceptSettlements = true;
   let admissionStopped = false;
+  let pauseRequestedNodeId: string | undefined;
   let cancelRequested = false;
   let planPersisted = false;
   let cancelPersisted = false;
@@ -506,10 +517,15 @@ export async function runWorkflowCoordinator(
     );
     planPersisted = true;
     if (cancelRequested) beginCancel();
-    await emit({ kind: "run", status: "running" });
+    if (!options.resuming) await emit({ kind: "run", status: "running" });
     for (const nodeId of plan.orderedNodeIds) {
-      statuses.set(nodeId, "queued");
-      await emit({ kind: "node", nodeId, status: "queued", attempt: 0 });
+      if (options.initialSucceededOutputs?.has(nodeId)) {
+        statuses.set(nodeId, "succeeded");
+        outputs.set(nodeId, options.initialSucceededOutputs.get(nodeId));
+      } else {
+        statuses.set(nodeId, "queued");
+        await emit({ kind: "node", nodeId, status: "queued", attempt: 0 });
+      }
     }
 
     const execute = async (
@@ -722,6 +738,21 @@ export async function runWorkflowCoordinator(
         }
       }
 
+      if (!admissionStopped && options.pauseBeforeNode) {
+        for (const nodeId of plan.orderedNodeIds) {
+          if (statuses.get(nodeId) !== "queued") continue;
+          const dependencies = plan.dependencies[nodeId] ?? [];
+          if (!dependencies.every((dependency) => statuses.get(dependency) === "succeeded")) {
+            continue;
+          }
+          if (await options.pauseBeforeNode({ nodeId, dependencyNodeIds: dependencies })) {
+            admissionStopped = true;
+            pauseRequestedNodeId = nodeId;
+            break;
+          }
+        }
+      }
+
       if (!admissionStopped) {
         for (const nodeId of plan.orderedNodeIds) {
           if (statuses.get(nodeId) !== "queued") continue;
@@ -754,6 +785,18 @@ export async function runWorkflowCoordinator(
       }
 
       if (active.size === 0) {
+        if (pauseRequestedNodeId) {
+          await emit({ kind: "run", status: "paused" });
+          await eventQueue;
+          return deepFreeze({
+            ...identity,
+            status: "paused" as const,
+            nodeStatuses: Object.fromEntries(statuses),
+            outputs,
+            events,
+            retryDelayMs: totalRetryDelayMs,
+          });
+        }
         if (admissionStopped && cancelTask) {
           await cancelWake;
           continue;
