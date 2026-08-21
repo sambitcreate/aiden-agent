@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CREATE_IMAGES_MAX_ZOOM,
+  CREATE_IMAGES_SCHEMA_VERSION,
   CREATE_IMAGES_MAX_NODES,
   CREATE_IMAGES_MIN_ZOOM,
   createStarterWorkflow,
@@ -60,7 +61,7 @@ test("schema rejects unknown credential fields and inline image data", () => {
 
 test("schema fails closed on future versions, unknown fields, and duplicate IDs", () => {
   const workflow = starter() as unknown as Record<string, unknown>;
-  workflow.schemaVersion = 2;
+  workflow.schemaVersion = CREATE_IMAGES_SCHEMA_VERSION + 1;
   workflow.credentials = { apiKey: "secret" };
   const nodes = workflow.nodes as Array<Record<string, unknown>>;
   nodes.push(structuredClone(nodes[0]));
@@ -70,6 +71,106 @@ test("schema fails closed on future versions, unknown fields, and duplicate IDs"
   assert.ok(result.issues.some((issue) => issue.path === "$.schemaVersion"));
   assert.ok(result.issues.some((issue) => issue.path === "$.credentials"));
   assert.ok(result.issues.some((issue) => issue.code === "duplicate"));
+});
+
+test("schema migrates version 1 and 2 documents and validates version 3 presentation fields", () => {
+  const legacy = structuredClone(starter()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 1;
+  const migrated = parseWorkflowDocument(legacy);
+  assert.equal(migrated.success, true);
+  if (!migrated.success) return;
+  assert.equal(migrated.value.schemaVersion, CREATE_IMAGES_SCHEMA_VERSION);
+  const versionTwo = structuredClone(migrated.value);
+  versionTwo.schemaVersion = 2;
+  assert.equal(parseWorkflowDocument(versionTwo).success, true);
+  migrated.value.nodes[0] = {
+    ...migrated.value.nodes[0]!,
+    title: "Creative brief",
+    dimensions: { width: 360, height: 280 },
+    comment: { text: "Try a warmer composition.", unread: true },
+  };
+  assert.equal(parseWorkflowDocument(migrated.value).success, true);
+  const hostile = structuredClone(migrated.value) as unknown as {
+    nodes: Array<Record<string, unknown>>;
+  };
+  hostile.nodes[0]!.dimensions = { width: 10, height: 20, path: "/tmp" };
+  assert.equal(parseWorkflowDocument(hostile).success, false);
+});
+
+test("prompt variables and groups enforce stable unique identities", () => {
+  const workflow = starter();
+  const prompt = workflow.nodes.find((node) => node.type === "prompt");
+  if (!prompt || prompt.type !== "prompt") return;
+  prompt.data.variables = [{ id: "subject-id", name: "subject", required: true }];
+  workflow.nodes.push({
+    id: "group-1",
+    type: "group",
+    position: { x: 10, y: 10 },
+    dimensions: { width: 500, height: 300 },
+    data: { memberNodeIds: [prompt.id], color: "purple", locked: true },
+  });
+  assert.equal(parseWorkflowDocument(workflow).success, true);
+  const duplicate = structuredClone(workflow);
+  const duplicatePrompt = duplicate.nodes.find((node) => node.type === "prompt");
+  if (duplicatePrompt?.type !== "prompt") return;
+  duplicatePrompt.data.variables = [
+    { id: "subject-id", name: "subject", required: true },
+    { id: "other-id", name: "subject", required: false },
+  ];
+  assert.equal(parseWorkflowDocument(duplicate).success, false);
+  const missingMember = structuredClone(workflow);
+  const group = missingMember.nodes.find((node) => node.type === "group");
+  if (group?.type !== "group") return;
+  group.data.memberNodeIds = ["missing-node"];
+  assert.equal(parseWorkflowDocument(missingMember).success, false);
+});
+
+test("annotation shapes are bounded, path-free, and use semantic colors", () => {
+  const workflow = starter();
+  workflow.nodes.push({
+    id: "annotation-1",
+    type: "annotation",
+    position: { x: 500, y: 500 },
+    data: {
+      shapes: [
+        {
+          id: "shape-1",
+          type: "rectangle",
+          x: 0.1,
+          y: 0.2,
+          width: 0.3,
+          height: 0.4,
+          stroke: "accent",
+          strokeWidth: 4,
+        },
+      ],
+    },
+  });
+  assert.equal(parseWorkflowDocument(workflow).success, true);
+  const hostile = structuredClone(workflow);
+  const annotation = hostile.nodes[hostile.nodes.length - 1];
+  if (annotation?.type !== "annotation") return;
+  annotation.data.shapes[0] = {
+    ...annotation.data.shapes[0]!,
+    filePath: "/tmp/source.png",
+  } as never;
+  assert.equal(parseWorkflowDocument(hostile).success, false);
+});
+
+test("image compare requires a bounded divider and exactly two typed image inputs", () => {
+  const workflow = starter();
+  workflow.nodes.push({
+    id: "compare-1",
+    type: "image-compare",
+    position: { x: 960, y: 180 },
+    data: { divider: 0.5 },
+  });
+  assert.equal(parseWorkflowDocument(workflow).success, true);
+  const parsed = parseWorkflowDocument(workflow);
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const issues = validateWorkflowGraph(parsed.value, { forRun: true });
+  assert.equal(issues.filter((issue) => issue.code === "missing_required_input").length, 2);
 });
 
 test("graph validation reports broken ports without repairing them", () => {
