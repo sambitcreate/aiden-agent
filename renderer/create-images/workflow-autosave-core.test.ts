@@ -34,7 +34,10 @@ test("autosave does not republish an unchanged saved canvas snapshot", () => {
 });
 
 test("autosave serializes edits that arrive while an earlier revision is in flight", async () => {
-  const requests: Array<{ expectedRevision: number; workflow: ReturnType<typeof workflow> }> = [];
+  const requests: Array<{
+    expectedRevision: number;
+    workflow: ReturnType<typeof workflow>;
+  }> = [];
   let releaseFirst: (() => void) | undefined;
   const firstGate = new Promise<void>((resolve) => {
     releaseFirst = resolve;
@@ -77,7 +80,8 @@ test("development effect replay cancels deferred disposal without disabling auto
     },
   });
 
-  const cancelReplayCleanup = deferWorkflowAutosaveControllerDisposal(controller);
+  const cancelReplayCleanup =
+    deferWorkflowAutosaveControllerDisposal(controller);
   cancelReplayCleanup();
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -91,7 +95,8 @@ test("development effect replay cancels deferred disposal without disabling auto
   assert.equal(status.state, "saved");
   assert.equal(requests.length, 1);
   assert.equal(
-    requests[0]?.workflow.nodes.find((node) => node.type === "prompt")?.data.text,
+    requests[0]?.workflow.nodes.find((node) => node.type === "prompt")?.data
+      .text,
     "make this yellow please",
   );
 });
@@ -112,12 +117,19 @@ test("autosave stops on CAS conflict and preserves the renderer draft", async ()
   const status = await controller.flush();
   assert.equal(status.state, "conflict");
   assert.equal(status.workflow.title, "My draft");
-  assert.equal(status.state === "conflict" ? status.current.title : "", "Other writer");
+  assert.equal(
+    status.state === "conflict" ? status.current.title : "",
+    "Other writer",
+  );
 });
 
 test("a mounted controller keeps its original CAS baseline across a remote query refresh", async () => {
   const initial = workflow();
-  const remote = { ...structuredClone(initial), revision: 2, title: "Remote query refresh" };
+  const remote = {
+    ...structuredClone(initial),
+    revision: 2,
+    title: "Remote query refresh",
+  };
   let observedExpectedRevision: number | undefined;
   const controller = new WorkflowAutosaveController(initial, {
     delayMs: 60_000,
@@ -134,18 +146,28 @@ test("a mounted controller keeps its original CAS baseline across a remote query
 
   // A query refresh may observe `remote`, but the still-mounted canvas must not
   // replace its controller or adopt that revision as the local draft's baseline.
-  controller.update({ ...structuredClone(initial), title: "Preserved local draft" });
+  controller.update({
+    ...structuredClone(initial),
+    title: "Preserved local draft",
+  });
   const result = await controller.flush();
   assert.equal(observedExpectedRevision, 1);
   assert.equal(result.state, "conflict");
   assert.equal(result.workflow.title, "Preserved local draft");
-  assert.equal(result.state === "conflict" ? result.current.title : "", remote.title);
+  assert.equal(
+    result.state === "conflict" ? result.current.title : "",
+    remote.title,
+  );
 });
 
 test("edits made after a conflict remain in the preserved draft and retry candidate", async () => {
   const initial = workflow();
   const local = (title: string) => ({ ...structuredClone(initial), title });
-  const remote = { ...structuredClone(initial), title: "Remote change", revision: 2 };
+  const remote = {
+    ...structuredClone(initial),
+    title: "Remote change",
+    revision: 2,
+  };
   const requests: Array<{
     expectedRevision: number;
     workflow: ReturnType<typeof workflow>;
@@ -181,4 +203,51 @@ test("edits made after a conflict remain in the preserved draft and retry candid
   const lastRequest = requests[requests.length - 1];
   assert.equal(lastRequest?.workflow.title, "Newest local edit");
   assert.equal(lastRequest?.expectedRevision, initial.revision);
+});
+
+test("manual-save mode keeps edits dirty until Save is explicitly requested", async () => {
+  const requests: Array<{ workflow: ReturnType<typeof workflow> }> = [];
+  const controller = new WorkflowAutosaveController(workflow(), {
+    autosaveEnabled: false,
+    delayMs: 0,
+    save: async (request) => {
+      requests.push(structuredClone(request));
+      return { status: "saved", workflow: request.workflow };
+    },
+  });
+  const edited = workflow();
+  edited.title = "Manual edit";
+  controller.update(edited);
+
+  await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  assert.equal(requests.length, 0);
+  assert.equal((await controller.flush()).state, "dirty");
+  assert.equal(requests.length, 0);
+
+  assert.equal((await controller.saveNow()).state, "saved");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]?.workflow.title, "Manual edit");
+});
+
+test("turning autosave off cancels a pending timer and turning it on reschedules the draft", async () => {
+  let saves = 0;
+  const controller = new WorkflowAutosaveController(workflow(), {
+    delayMs: 10,
+    save: async (request) => {
+      saves += 1;
+      return { status: "saved", workflow: request.workflow };
+    },
+  });
+  const edited = workflow();
+  edited.title = "Pending edit";
+  controller.update(edited);
+  controller.setAutosaveEnabled(false);
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  assert.equal(saves, 0);
+  assert.equal(controller.status().state, "dirty");
+
+  controller.setAutosaveEnabled(true);
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  assert.equal(saves, 1);
+  assert.equal(controller.status().state, "saved");
 });
