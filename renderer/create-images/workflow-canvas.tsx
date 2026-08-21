@@ -182,6 +182,7 @@ const EMPTY_MISSING_ASSET_IDS: readonly string[] = Object.freeze([]);
 const EMPTY_ASSET_PREVIEW_RETAINER = (): (() => void) => () => undefined;
 const EMPTY_RUN_HISTORY: readonly CreateImagesTerminalRunHistoryItem[] = Object.freeze([]);
 const EMPTY_RUN_RECOVERIES: readonly CreateImagesRunRecoveryView[] = Object.freeze([]);
+const EMPTY_RECENT_OUTPUTS: readonly CreateImagesRecentOutputView[] = Object.freeze([]);
 const EMPTY_PROVIDER_STATUS = Object.freeze(disconnectedCreateImagesProviderStatus());
 const NOOP_OPEN_PROVIDER_SETTINGS = () => undefined;
 const EMPTY_RUN_HISTORY_DETAIL: CreateImagesRunHistoryDetailState = Object.freeze({
@@ -367,7 +368,13 @@ function newWorkflowNode(
   if (type === "image-compare") return { id, type, position, data: { divider: 0.5 } };
   if (type === "annotation") return { id, type, position, data: { shapes: [] } };
   if (type === "group") {
-    return { id, type, position, dimensions: { width: 520, height: 360 }, data: { memberNodeIds: [], color: "gray", locked: false } };
+    return {
+      id,
+      type,
+      position,
+      dimensions: { width: 520, height: 360 },
+      data: { memberNodeIds: [], color: "gray", locked: false },
+    };
   }
   return { id, type, position, data: {} };
 }
@@ -467,7 +474,11 @@ function SelectionInspector({
   React.useEffect(() => {
     setTitleDraft(selectedNode?.data.workflowNode.title ?? "");
     setCommentDraft(selectedNode?.data.workflowNode.comment?.text ?? "");
-  }, [selectedNode?.id, selectedNode?.data.workflowNode.comment?.text, selectedNode?.data.workflowNode.title]);
+  }, [
+    selectedNode?.id,
+    selectedNode?.data.workflowNode.comment?.text,
+    selectedNode?.data.workflowNode.title,
+  ]);
   const sourceOptions = React.useMemo(() => {
     const options: Array<{
       value: string;
@@ -846,10 +857,7 @@ function RecentImagePreview({
       onError={() => onError?.(item.assetId, preview.token)}
     />
   ) : (
-    <span
-      className={`${className} grid place-items-center bg-well text-quaternary`}
-      style={style}
-    >
+    <span className={`${className} grid place-items-center bg-well text-quaternary`} style={style}>
       <ImageIcon className="size-4" aria-hidden="true" />
     </span>
   );
@@ -1010,7 +1018,8 @@ function RecentImagesShelf({
             })}
             {visibleItems.length === 0 ? (
               <p className="col-span-full px-3 py-8 text-center text-small text-secondary">
-                Recent history is hidden on this device. Restore it above; no run or image was deleted.
+                Recent history is hidden on this device. Restore it above; no run or image was
+                deleted.
               </p>
             ) : null}
           </div>
@@ -1060,7 +1069,7 @@ export function WorkflowCanvas({
   onRunAssetPreviewLoad,
   onRunAssetPreviewError,
   onRunAssetPreviewMount,
-  recentOutputs = [],
+  recentOutputs = EMPTY_RECENT_OUTPUTS,
   recentOutputPreviews = EMPTY_ASSET_PREVIEWS,
   onRecentOutputPreviewMount,
   onRecentOutputPreviewLoad,
@@ -1155,8 +1164,7 @@ export function WorkflowCanvas({
   const [proposalOpen, setProposalOpen] = React.useState(false);
   const [proposalRequest, setProposalRequest] = React.useState("");
   const [proposalBusy, setProposalBusy] = React.useState(false);
-  const [workflowProposal, setWorkflowProposal] =
-    React.useState<CreateImagesWorkflowProposal>();
+  const [workflowProposal, setWorkflowProposal] = React.useState<CreateImagesWorkflowProposal>();
   const [hiddenRunAssetIds, setHiddenRunAssetIds] = React.useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -1370,7 +1378,9 @@ export function WorkflowCanvas({
   const applyWorkflowProposal = React.useCallback(() => {
     if (!workflowProposal) return;
     if (workflowProposal.workflow.revision !== currentDocument.revision + 1) {
-      toast.error("The proposal no longer matches this workflow revision. Request a fresh proposal.");
+      toast.error(
+        "The proposal no longer matches this workflow revision. Request a fresh proposal.",
+      );
       setWorkflowProposal(undefined);
       return;
     }
@@ -1622,8 +1632,7 @@ export function WorkflowCanvas({
           };
         }),
         edges: current.edges.filter(
-          (edge) =>
-            !(edge.target === nodeId && edge.targetHandle === `variable-${variableId}`),
+          (edge) => !(edge.target === nodeId && edge.targetHandle === `variable-${variableId}`),
         ),
       }));
       announce("Removed the prompt variable and its connection.");
@@ -1772,8 +1781,12 @@ export function WorkflowCanvas({
       const currentZoom = bounds?.zoom ?? 1;
       const workbenchBounds = workbenchRef.current?.getBoundingClientRect();
       const point = screenPoint ?? {
-        x: workbenchBounds ? workbenchBounds.left + workbenchBounds.width / 2 : window.innerWidth / 2,
-        y: workbenchBounds ? workbenchBounds.top + workbenchBounds.height / 2 : window.innerHeight / 2,
+        x: workbenchBounds
+          ? workbenchBounds.left + workbenchBounds.width / 2
+          : window.innerWidth / 2,
+        y: workbenchBounds
+          ? workbenchBounds.top + workbenchBounds.height / 2
+          : window.innerHeight / 2,
       };
       return boundedCanvasPosition(
         instanceRef.current
@@ -2096,14 +2109,19 @@ export function WorkflowCanvas({
     }
     const left = Math.min(...members.map((node) => node.position.x)) - 36;
     const top = Math.min(...members.map((node) => node.position.y)) - 64;
-    const right = Math.max(
-      ...members.map((node) => node.position.x + (node.measured?.width ?? CREATE_IMAGES_NODE_WIDTH)),
-    ) + 36;
-    const bottom = Math.max(
-      ...members.map(
-        (node) => node.position.y + (node.measured?.height ?? CREATE_IMAGES_NODE_ESTIMATED_HEIGHT),
-      ),
-    ) + 36;
+    const right =
+      Math.max(
+        ...members.map(
+          (node) => node.position.x + (node.measured?.width ?? CREATE_IMAGES_NODE_WIDTH),
+        ),
+      ) + 36;
+    const bottom =
+      Math.max(
+        ...members.map(
+          (node) =>
+            node.position.y + (node.measured?.height ?? CREATE_IMAGES_NODE_ESTIMATED_HEIGHT),
+        ),
+      ) + 36;
     const id = `group-${Date.now()}-${++idSequence.current}`;
     const workflowNode: WorkflowNodeV1 = {
       id,
@@ -2164,8 +2182,7 @@ export function WorkflowCanvas({
       if (
         Array.from(event.dataTransfer.types).some(
           (type) =>
-            type === CREATE_IMAGES_NODE_DRAG_MIME ||
-            type === CREATE_IMAGES_RECENT_OUTPUT_DRAG_MIME,
+            type === CREATE_IMAGES_NODE_DRAG_MIME || type === CREATE_IMAGES_RECENT_OUTPUT_DRAG_MIME,
         )
       ) {
         event.preventDefault();
@@ -2188,8 +2205,7 @@ export function WorkflowCanvas({
       if (
         Array.from(event.dataTransfer.types).some(
           (type) =>
-            type === CREATE_IMAGES_NODE_DRAG_MIME ||
-            type === CREATE_IMAGES_RECENT_OUTPUT_DRAG_MIME,
+            type === CREATE_IMAGES_NODE_DRAG_MIME || type === CREATE_IMAGES_RECENT_OUTPUT_DRAG_MIME,
         )
       ) {
         event.preventDefault();
@@ -2432,9 +2448,7 @@ export function WorkflowCanvas({
       event.preventDefault();
       event.clipboardData.setData(CREATE_IMAGES_GRAPH_FRAGMENT_MIME, serialized);
       event.clipboardData.setData("text/plain", serialized);
-      announce(
-        `Copied ${fragment.nodes.length} node${fragment.nodes.length === 1 ? "" : "s"}.`,
-      );
+      announce(`Copied ${fragment.nodes.length} node${fragment.nodes.length === 1 ? "" : "s"}.`);
       return true;
     },
     [currentDocument, snapshot.nodes],
@@ -2491,9 +2505,7 @@ export function WorkflowCanvas({
         ],
         edges: [...current.edges.map((edge) => ({ ...edge, selected: false })), ...pastedEdges],
       }));
-      announce(
-        `Pasted ${pastedNodes.length} node${pastedNodes.length === 1 ? "" : "s"}.`,
-      );
+      announce(`Pasted ${pastedNodes.length} node${pastedNodes.length === 1 ? "" : "s"}.`);
       requestAnimationFrame(() => {
         const firstId = pastedNodes[0]?.id;
         if (!firstId) return;
@@ -2658,8 +2670,10 @@ export function WorkflowCanvas({
       !shortcutsOpen &&
       event.target instanceof Node &&
       Boolean(workbenchRef.current?.contains(event.target)) &&
-      !(event.target instanceof Element &&
-        Boolean(event.target.closest("#create-images-validation-issues"))) &&
+      !(
+        event.target instanceof Element &&
+        Boolean(event.target.closest("#create-images-validation-issues"))
+      ) &&
       !isEditableTarget(event.target);
     const onCopy = (event: ClipboardEvent) => {
       if (!acceptsClipboardEvent(event)) return;
@@ -2756,14 +2770,21 @@ export function WorkflowCanvas({
           portId: undefined,
           portLabel: undefined,
         }))
-  ).filter((option) => powerFeatures || !["annotation", "group", "prompt-list"].includes(option.type) || currentDocument.nodes.some((node) => node.type === option.type)).filter((option) => {
-    const query = paletteSearch.trim().toLowerCase();
-    return (
-      query.length === 0 ||
-      CREATE_IMAGES_NODE_DEFINITIONS[option.type].title.toLowerCase().includes(query) ||
-      option.portLabel?.toLowerCase().includes(query)
-    );
-  });
+  )
+    .filter(
+      (option) =>
+        powerFeatures ||
+        !["annotation", "group", "prompt-list"].includes(option.type) ||
+        currentDocument.nodes.some((node) => node.type === option.type),
+    )
+    .filter((option) => {
+      const query = paletteSearch.trim().toLowerCase();
+      return (
+        query.length === 0 ||
+        CREATE_IMAGES_NODE_DEFINITIONS[option.type].title.toLowerCase().includes(query) ||
+        option.portLabel?.toLowerCase().includes(query)
+      );
+    });
   const selectedEdge =
     snapshot.edges.filter((edge) => edge.selected).length === 1
       ? snapshot.edges.find((edge) => edge.selected)
@@ -2845,10 +2866,7 @@ export function WorkflowCanvas({
         } satisfies CreateImagesCanvasNode;
       });
       commitSnapshot((current) => ({
-        nodes: [
-          ...current.nodes.map((node) => ({ ...node, selected: false })),
-          ...extracted,
-        ],
+        nodes: [...current.nodes.map((node) => ({ ...node, selected: false })), ...extracted],
         edges: current.edges.map((edge) => ({ ...edge, selected: false })),
       }));
       announce(
@@ -2861,8 +2879,8 @@ export function WorkflowCanvas({
     ? inspectedAsset.source === "recent"
       ? recentOutputPreviews[inspectedAsset.assetId]
       : inspectedAsset.source === "run"
-      ? runAssetPreviews[inspectedAsset.assetId]
-      : assetPreviews[inspectedAsset.assetId]
+        ? runAssetPreviews[inspectedAsset.assetId]
+        : assetPreviews[inspectedAsset.assetId]
     : undefined;
 
   React.useEffect(() => {
@@ -2888,7 +2906,9 @@ export function WorkflowCanvas({
       nodeLayoutLocked: (nodeId: string) =>
         snapshot.nodes.some((candidate) => {
           const node = candidate.data.workflowNode;
-          return node.type === "group" && node.data.locked && node.data.memberNodeIds.includes(nodeId);
+          return (
+            node.type === "group" && node.data.locked && node.data.memberNodeIds.includes(nodeId)
+          );
         }),
       chooseImage: (nodeId: string) => void chooseImage(nodeId),
       fitImageToMedia,
@@ -2913,7 +2933,8 @@ export function WorkflowCanvas({
           (candidate) => candidate.target === nodeId && candidate.targetHandle === portId,
         );
         if (!edge) return undefined;
-        const source = snapshot.nodes.find((candidate) => candidate.id === edge.source)?.data.workflowNode;
+        const source = snapshot.nodes.find((candidate) => candidate.id === edge.source)?.data
+          .workflowNode;
         if (source?.type === "image-input" && source.data.assetId) {
           return { source: "workflow" as const, assetIds: [source.data.assetId] };
         }
@@ -2930,8 +2951,7 @@ export function WorkflowCanvas({
         recentOutputs.filter(
           (item) => item.workflowId === currentDocument.id && item.nodeId === nodeId,
         ),
-      retainRecentAssetPreview:
-        onRecentOutputPreviewMount ?? EMPTY_ASSET_PREVIEW_RETAINER,
+      retainRecentAssetPreview: onRecentOutputPreviewMount ?? EMPTY_ASSET_PREVIEW_RETAINER,
       recentAssetPreview: (assetId: string) => recentOutputPreviews[assetId],
       recentAssetPreviewLoaded: (assetId: string, token: string) =>
         onRecentOutputPreviewLoad?.(assetId, token),
@@ -3304,8 +3324,8 @@ export function WorkflowCanvas({
                       title="Pause after upstream work is durable and before the downstream node"
                       onClick={() => {
                         const enabled =
-                          (selectedEdge.data as { breakpoint?: boolean } | undefined)?.breakpoint !==
-                          true;
+                          (selectedEdge.data as { breakpoint?: boolean } | undefined)
+                            ?.breakpoint !== true;
                         commitSnapshot((current) => ({
                           ...current,
                           edges: current.edges.map((edge) =>
@@ -3314,7 +3334,9 @@ export function WorkflowCanvas({
                               : edge,
                           ),
                         }));
-                        announce(enabled ? "Pause checkpoint enabled." : "Pause checkpoint removed.");
+                        announce(
+                          enabled ? "Pause checkpoint enabled." : "Pause checkpoint removed.",
+                        );
                       }}
                     >
                       {((selectedEdge.data as { breakpoint?: boolean } | undefined)?.breakpoint ??
@@ -3530,7 +3552,8 @@ export function WorkflowCanvas({
                       const currentIndex = unreadCommentNodes.findIndex(
                         (node) => node.id === selectedNode?.id,
                       );
-                      const next = unreadCommentNodes[(currentIndex + 1) % unreadCommentNodes.length];
+                      const next =
+                        unreadCommentNodes[(currentIndex + 1) % unreadCommentNodes.length];
                       if (!next) return;
                       selectNode(next.id);
                       setInspectorOpen(true);
@@ -3666,7 +3689,9 @@ export function WorkflowCanvas({
                   className="mt-2"
                 />
                 <div className="mt-2 flex items-center justify-between gap-3 text-mini text-tertiary">
-                  <span>No files, image bytes, credentials, tools, or provider requests are shared.</span>
+                  <span>
+                    No files, image bytes, credentials, tools, or provider requests are shared.
+                  </span>
                   <span className="shrink-0 tabular-nums">{proposalRequest.length}/4,000</span>
                 </div>
                 {workflowProposal ? (
@@ -3678,15 +3703,13 @@ export function WorkflowCanvas({
                     <div className="mt-2 grid grid-cols-2 gap-2 text-small text-secondary">
                       <span>Nodes</span>
                       <span className="text-right tabular-nums">
-                        +{workflowProposal.diff.nodesAdded} · −
-                        {workflowProposal.diff.nodesRemoved} · {workflowProposal.diff.nodesChanged}{" "}
-                        changed
+                        +{workflowProposal.diff.nodesAdded} · −{workflowProposal.diff.nodesRemoved}{" "}
+                        · {workflowProposal.diff.nodesChanged} changed
                       </span>
                       <span>Connections</span>
                       <span className="text-right tabular-nums">
-                        +{workflowProposal.diff.edgesAdded} · −
-                        {workflowProposal.diff.edgesRemoved} · {workflowProposal.diff.edgesChanged}{" "}
-                        changed
+                        +{workflowProposal.diff.edgesAdded} · −{workflowProposal.diff.edgesRemoved}{" "}
+                        · {workflowProposal.diff.edgesChanged} changed
                       </span>
                       <span>Maximum image requests</span>
                       <span className="text-right tabular-nums">
@@ -3893,7 +3916,11 @@ export function WorkflowCanvas({
                       key={`${option.type}-${option.portId ?? "add"}`}
                       draggable={!paletteConnection}
                       className="flex items-center gap-2.5 rounded-control px-2.5 py-2 text-left outline-none hover:bg-list-hover focus-visible:bg-list-selection"
-                      title={paletteConnection ? `Connect ${definition.title}` : "Click to add or drag to place"}
+                      title={
+                        paletteConnection
+                          ? `Connect ${definition.title}`
+                          : "Click to add or drag to place"
+                      }
                       onDragStart={(event) => {
                         if (paletteConnection) {
                           event.preventDefault();
@@ -3917,7 +3944,9 @@ export function WorkflowCanvas({
                           {definition.title}
                         </span>
                         <span className="block text-mini text-tertiary">
-                          {option.portLabel ? `Connect to ${option.portLabel}` : definition.category}
+                          {option.portLabel
+                            ? `Connect to ${option.portLabel}`
+                            : definition.category}
                         </span>
                       </span>
                     </button>
@@ -4105,10 +4134,7 @@ export function WorkflowCanvas({
           onSave={
             inspectedAsset
               ? () => {
-                  if (
-                    inspectedAsset.source === "run" ||
-                    inspectedAsset.source === "recent"
-                  ) {
+                  if (inspectedAsset.source === "run" || inspectedAsset.source === "recent") {
                     if (inspectedAsset.runId) {
                       onDownloadRunAsset?.(inspectedAsset.runId, inspectedAsset.assetId);
                     }
