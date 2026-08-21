@@ -16,7 +16,7 @@ export type ProviderKind = "openai" | "anthropic";
 
 export type ProviderDeployment = "local" | "hosted";
 
-export type ProviderModelType = "llm" | "embedding";
+export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 /** Metadata reported by the configured provider during explicit model discovery. */
 export interface ProviderModelMetadata {
@@ -229,6 +229,7 @@ export interface ModelInfo {
   reasoning?: boolean;
   /** Open-weight / open-source model. */
   openWeights?: boolean;
+  /** Normalized capability classification; every value except `llm` is non-chat. */
   modelType?: ProviderModelType;
   parameterCount?: string;
   format?: string;
