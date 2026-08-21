@@ -16,6 +16,7 @@ export type CreateImagesAutosaveStatus =
 
 interface WorkflowAutosaveOptions {
   delayMs?: number;
+  autosaveEnabled?: boolean;
   now?: () => string;
   save(request: {
     expectedRevision: number;
@@ -36,10 +37,13 @@ export class WorkflowAutosaveController {
   private flushing: Promise<CreateImagesAutosaveStatus> | undefined;
   private blocked = false;
   private disposed = false;
-  private readonly listeners = new Set<(status: CreateImagesAutosaveStatus) => void>();
+  private readonly listeners = new Set<
+    (status: CreateImagesAutosaveStatus) => void
+  >();
   private statusValue: CreateImagesAutosaveStatus;
   private readonly delayMs: number;
   private readonly now: () => string;
+  private autosaveEnabled: boolean;
 
   constructor(
     initial: WorkflowDocumentV1,
@@ -50,8 +54,13 @@ export class WorkflowAutosaveController {
     this.persistedFingerprint = contentFingerprint(initial);
     this.statusValue = { state: "saved", workflow: structuredClone(initial) };
     this.delayMs = options.delayMs ?? 900;
+    this.autosaveEnabled = options.autosaveEnabled ?? true;
     this.now = options.now ?? (() => new Date().toISOString());
-    if (!Number.isFinite(this.delayMs) || this.delayMs < 0 || this.delayMs > 60_000) {
+    if (
+      !Number.isFinite(this.delayMs) ||
+      this.delayMs < 0 ||
+      this.delayMs > 60_000
+    ) {
       throw new Error("Invalid Create Images autosave delay.");
     }
   }
@@ -60,7 +69,9 @@ export class WorkflowAutosaveController {
     return this.statusValue;
   }
 
-  subscribe(listener: (status: CreateImagesAutosaveStatus) => void): () => void {
+  subscribe(
+    listener: (status: CreateImagesAutosaveStatus) => void,
+  ): () => void {
     this.listeners.add(listener);
     listener(this.statusValue);
     return () => this.listeners.delete(listener);
@@ -69,6 +80,30 @@ export class WorkflowAutosaveController {
   private publish(status: CreateImagesAutosaveStatus): void {
     this.statusValue = status;
     for (const listener of this.listeners) listener(status);
+  }
+
+  setAutosaveEnabled(enabled: boolean): void {
+    if (this.disposed || this.autosaveEnabled === enabled) return;
+    this.autosaveEnabled = enabled;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (
+      enabled &&
+      !this.blocked &&
+      !this.flushing &&
+      contentFingerprint(this.draft) !== this.persistedFingerprint
+    ) {
+      this.scheduleAutosave();
+    }
+  }
+
+  private scheduleAutosave(): void {
+    if (!this.autosaveEnabled || this.disposed || this.blocked) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.flush();
+    }, this.delayMs);
   }
 
   update(next: WorkflowDocumentV1): void {
@@ -92,23 +127,37 @@ export class WorkflowAutosaveController {
       if (this.timer) clearTimeout(this.timer);
       this.timer = undefined;
       if (this.statusValue.state !== "saved") {
-        this.publish({ state: "saved", workflow: structuredClone(this.persisted) });
+        this.publish({
+          state: "saved",
+          workflow: structuredClone(this.persisted),
+        });
       }
       return;
     }
     this.publish({ state: "dirty", workflow: structuredClone(this.draft) });
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      void this.flush();
-    }, this.delayMs);
+    this.scheduleAutosave();
   }
 
   flush(): Promise<CreateImagesAutosaveStatus> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     if (this.flushing) return this.flushing;
-    if (this.blocked || contentFingerprint(this.draft) === this.persistedFingerprint) {
+    if (!this.autosaveEnabled) return Promise.resolve(this.statusValue);
+    return this.startFlush();
+  }
+
+  saveNow(): Promise<CreateImagesAutosaveStatus> {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (this.flushing) return this.flushing;
+    return this.startFlush();
+  }
+
+  private startFlush(): Promise<CreateImagesAutosaveStatus> {
+    if (
+      this.blocked ||
+      contentFingerprint(this.draft) === this.persistedFingerprint
+    ) {
       return Promise.resolve(this.statusValue);
     }
     this.flushing = this.flushUntilCurrent().finally(() => {
@@ -118,7 +167,10 @@ export class WorkflowAutosaveController {
   }
 
   private async flushUntilCurrent(): Promise<CreateImagesAutosaveStatus> {
-    while (!this.blocked && contentFingerprint(this.draft) !== this.persistedFingerprint) {
+    while (
+      !this.blocked &&
+      contentFingerprint(this.draft) !== this.persistedFingerprint
+    ) {
       const savingDraft = structuredClone(this.draft);
       const expectedRevision = this.persisted.revision;
       const candidate: WorkflowDocumentV1 = {
@@ -130,13 +182,16 @@ export class WorkflowAutosaveController {
       this.publish({ state: "saving", workflow: structuredClone(candidate) });
       let result: CreateImagesWorkflowMutationResult;
       try {
-        result = await this.options.save({ expectedRevision, workflow: candidate });
+        result = await this.options.save({
+          expectedRevision,
+          workflow: candidate,
+        });
       } catch {
         this.blocked = true;
         this.publish({
           state: "error",
           workflow: structuredClone(this.draft),
-          message: "Autosave could not reach the device-local workflow store.",
+          message: "Aiden could not reach the device-local workflow store.",
         });
         break;
       }
@@ -147,7 +202,10 @@ export class WorkflowAutosaveController {
           if (this.timer) clearTimeout(this.timer);
           this.timer = undefined;
           this.draft = structuredClone(result.workflow);
-          this.publish({ state: "saved", workflow: structuredClone(result.workflow) });
+          this.publish({
+            state: "saved",
+            workflow: structuredClone(result.workflow),
+          });
         }
         continue;
       }
@@ -171,7 +229,7 @@ export class WorkflowAutosaveController {
             ? "This workflow no longer exists."
             : result.status === "unavailable"
               ? result.message
-              : "Autosave returned an unexpected result.",
+              : "The workflow store returned an unexpected result.",
       });
       break;
     }
@@ -179,7 +237,8 @@ export class WorkflowAutosaveController {
   }
 
   replacePersisted(workflow: WorkflowDocumentV1): void {
-    if (workflow.id !== this.persisted.id) throw new Error("Cannot replace a different workflow.");
+    if (workflow.id !== this.persisted.id)
+      throw new Error("Cannot replace a different workflow.");
     this.blocked = false;
     this.persisted = structuredClone(workflow);
     this.draft = structuredClone(workflow);
@@ -190,7 +249,7 @@ export class WorkflowAutosaveController {
   retry(): Promise<CreateImagesAutosaveStatus> {
     this.blocked = false;
     this.publish({ state: "dirty", workflow: structuredClone(this.draft) });
-    return this.flush();
+    return this.saveNow();
   }
 
   async dispose(): Promise<CreateImagesAutosaveStatus> {
