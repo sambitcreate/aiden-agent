@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createStarterWorkflow } from "../shared/create-images/schema.js";
 import {
-  boundedPromptText,
+  arrangeCreateImagesSelection,
   boundedCanvasPosition,
+  boundedPromptText,
   commitEditorHistory,
+  compatibleCreateImagesNodeOptions,
   createEditorHistory,
   decideCanvasMutationCapacity,
   decideCanvasConnection,
@@ -193,6 +195,10 @@ test("graph shortcuts reject modifier supersets and the global dictation binding
     });
 
   assert.equal(shortcut("d"), "duplicate");
+  assert.equal(shortcut("c"), "copy");
+  assert.equal(shortcut("v"), "paste");
+  assert.equal(shortcut("k", { shiftKey: true }), "open-search");
+  assert.equal(shortcut("/", { shiftKey: true }), "shortcuts");
   assert.equal(shortcut("z"), "undo");
   assert.equal(shortcut("z", { shiftKey: true }), "redo");
   assert.equal(shortcut("d", { shiftKey: true }), null);
@@ -201,6 +207,53 @@ test("graph shortcuts reject modifier supersets and the global dictation binding
   assert.equal(shortcut("z", { altKey: true }), null);
   assert.equal(shortcut("z", { ctrlKey: true }), null);
   assert.equal(shortcut("z", { metaKey: false }), null);
+});
+
+test("dangling connection menus list only compatible node ports", () => {
+  const document = workflow();
+  assert.deepEqual(
+    compatibleCreateImagesNodeOptions(document, {
+      nodeId: "prompt-1",
+      portId: "text",
+      direction: "source",
+    }),
+    [{ type: "generate-image", portId: "prompt", portLabel: "Prompt" }],
+  );
+  assert.deepEqual(
+    compatibleCreateImagesNodeOptions(document, {
+      nodeId: "generate-1",
+      portId: "references",
+      direction: "target",
+    }),
+    [
+      { type: "image-input", portId: "image", portLabel: "Image" },
+      { type: "generate-image", portId: "images", portLabel: "Images" },
+      { type: "annotation", portId: "image", portLabel: "Annotated image" },
+    ],
+  );
+});
+
+test("multi-selection arrangement is deterministic and dimension aware", () => {
+  const items = [
+    { id: "c", position: { x: 300, y: 200 }, width: 200, height: 100 },
+    { id: "a", position: { x: 20, y: 40 }, width: 100, height: 80 },
+    { id: "b", position: { x: 120, y: 40 }, width: 140, height: 120 },
+  ];
+  assert.deepEqual(arrangeCreateImagesSelection(items, "horizontal"), [
+    { id: "a", position: { x: 20, y: 40 } },
+    { id: "b", position: { x: 144, y: 40 } },
+    { id: "c", position: { x: 308, y: 40 } },
+  ]);
+  assert.deepEqual(arrangeCreateImagesSelection(items, "vertical"), [
+    { id: "a", position: { x: 20, y: 40 } },
+    { id: "b", position: { x: 20, y: 144 } },
+    { id: "c", position: { x: 20, y: 288 } },
+  ]);
+  assert.deepEqual(arrangeCreateImagesSelection(items, "grid"), [
+    { id: "a", position: { x: 20, y: 40 } },
+    { id: "b", position: { x: 332, y: 40 } },
+    { id: "c", position: { x: 20, y: 364 } },
+  ]);
 });
 
 test("image drops accept image MIME types and extension-only native file drags", () => {
