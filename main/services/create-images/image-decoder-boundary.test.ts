@@ -25,7 +25,9 @@ test("untrusted image codecs run in a disposable sandboxed renderer", () => {
   assert.match(preload, /operation === "normalize"/u);
   assert.match(preload, /bitmap\.width \* bitmap\.height > request\.maxPixels/u);
   assert.match(preload, /convertToBlob\(\{ type: "image\/png" \}\)/u);
-  assert.match(decoder, /operation: "normalize" \| "thumbnail" \| "validate"/u);
+  assert.match(decoder, /operation: "normalize" \| "thumbnail" \| "validate" \| "annotate"/u);
+  assert.match(preload, /request\.operation === "annotate"/u);
+  assert.match(preload, /request\.shapes\.length <= 256/u);
   assert.match(decoder, /maxPixels/u);
   assert.match(build, /preload-create-images-image-decoder\.ts/u);
   assert.equal(DEFAULT_ASSET_STORE_LIMITS.maxPixels, 16_000_000);
