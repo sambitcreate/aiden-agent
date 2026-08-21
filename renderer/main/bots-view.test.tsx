@@ -11,7 +11,10 @@ test("bots have dedicated roster, detail, and Pi chat routes", () => {
   const guard = source("./bot-chat-route.tsx");
   assert.match(router, /path: "\/bots"[\s\S]*component: BotsView/u);
   assert.match(router, /path: "\/bots\/\$botId"[\s\S]*component: BotsView/u);
-  assert.match(router, /path: "\/bots\/\$botId\/chat\/\$chatId"[\s\S]*<BotChatRouteView botId=\{botId\} chatId=\{chatId\}/u);
+  assert.match(
+    router,
+    /path: "\/bots\/\$botId\/chat\/\$chatId"[\s\S]*<BotChatRouteView botId=\{botId\} chatId=\{chatId\}/u,
+  );
   assert.match(guard, /<ChatPane chatId=\{chatId\}/u);
   assert.match(guard, /actualBotId === botId/u);
   assert.match(guard, /Opening the correct conversation/u);
@@ -43,18 +46,63 @@ test("bots UI edits definitions and creates conversations through dedicated IPC"
   assert.match(view, /maxLength=\{32_000\}/u);
 });
 
-test("bot avatars use Aiden face badges while preserving durable avatar ids", () => {
+test("bot avatars migrate durable ids into layered mouthless face recipes", () => {
   const avatar = source("../components/bot-avatar.tsx");
   const contract = source("../shared/bots.ts");
+  const styles = source("../styles.css");
   assert.match(contract, /\["spark", "orbit", "leaf", "prism", "wave", "ember"\]/u);
-  assert.match(contract, /spark: "Wisp"[\s\S]*orbit: "Orb"[\s\S]*prism: "Hex"/u);
-  assert.match(avatar, /spark:[\s\S]*orbit:[\s\S]*leaf:[\s\S]*prism:[\s\S]*wave:[\s\S]*ember:/u);
-  assert.match(avatar, /<ellipse cx="15\.3"[\s\S]*<ellipse cx="24\.7"/u);
-  assert.match(avatar, /fill="var\(--bot-avatar-face\)"/u);
-  assert.match(avatar, /fill="var\(--bot-avatar-marker\)" stroke="var\(--bot-avatar-eye-highlight\)"/u);
+  assert.match(contract, /LEGACY_BOT_AVATAR_APPEARANCES/u);
+  assert.match(contract, /shape: "squircle"|"squircle"/u);
+  assert.match(contract, /isBotAvatarAppearance/u);
+  assert.match(avatar, /const avatarBodies: Record<BotAvatarShape/u);
+  assert.match(avatar, /function EyePair/u);
+  assert.match(avatar, /resolveBotAvatar\(avatar\)/u);
+  assert.match(avatar, /var\(--bot-avatar-face\)/u);
   assert.match(avatar, /BotSidebarIcon[\s\S]*className="size-5"/u);
-  assert.doesNotMatch(avatar, /body\.eyeY \+ 5/u);
+  assert.doesNotMatch(avatar, /Mouth|mouth/u);
   assert.doesNotMatch(avatar, /lucide-react/u);
+  assert.equal(styles.match(/--bot-avatar-face: #292735/gu)?.length, 2);
+  for (const color of ["lilac", "sky", "mint", "sun", "periwinkle", "coral", "peach", "aqua"]) {
+    assert.equal(styles.match(new RegExp(`--bot-avatar-${color}:`, "gu"))?.length, 2, color);
+  }
+});
+
+test("bot editor provides live manual controls and configured Pi model design", () => {
+  const view = source("./bots-view.tsx");
+  const studio = source("../components/bot-face-studio.tsx");
+  assert.match(view, /<BotFaceStudio/u);
+  assert.match(view, /editorOpen \? <BotEditor/u);
+  assert.match(studio, /Bot face/u);
+  assert.match(studio, /BOT_AVATAR_SHAPES\.map/u);
+  assert.match(studio, /BOT_AVATAR_COLORS\.map/u);
+  assert.match(studio, /BOT_AVATAR_EYES\.map/u);
+  assert.match(studio, /BOT_AVATAR_DETAILS\.map/u);
+  assert.match(studio, /botsApi\.suggestAvatar/u);
+  assert.match(studio, /botsApi\.cancelAvatarSuggestion/u);
+  assert.match(studio, /globalThis\.crypto\.randomUUID\(\)/u);
+  assert.match(studio, /createChatModelProviders/u);
+  assert.match(studio, /useProvidersModelInfo/u);
+  assert.match(studio, /resolveExplicitModelSelection/u);
+  assert.match(studio, /useProviders\(\)/u);
+  assert.match(studio, /Bot face provider/u);
+  assert.match(studio, /Bot face model/u);
+  assert.match(studio, /No Gemini key or avatar\s+image\s+upload/u);
+  assert.doesNotMatch(studio, /gemini_api_key|Google Gemini API Key/u);
+});
+
+test("bot editor fences in-flight saves and exposes keyboard-operable face tabs", () => {
+  const view = source("./bots-view.tsx");
+  const studio = source("../components/bot-face-studio.tsx");
+  assert.match(view, /if \(savingRef\.current\) return;/u);
+  assert.match(view, /<BotFaceStudio[\s\S]*disabled=\{saving\}/u);
+  assert.match(view, /value=\{draft\.name\}[\s\S]{0,100}disabled=\{saving\}/u);
+  assert.match(view, /value=\{draft\.instructions\}[\s\S]{0,100}disabled=\{saving\}/u);
+  assert.match(studio, /role="tablist"/u);
+  assert.match(studio, /role="tab"/u);
+  assert.match(studio, /role="tabpanel"/u);
+  assert.match(studio, /event\.key === "ArrowRight"/u);
+  assert.match(studio, /event\.key === "ArrowLeft"/u);
+  assert.match(studio, /aria-selected=\{state\.tab === value\}/u);
 });
 
 test("bot chats show authoritative bot identity and fence archived conversations", () => {
