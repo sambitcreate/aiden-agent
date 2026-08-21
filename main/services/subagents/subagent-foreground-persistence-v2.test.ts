@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createModels } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import type { Workspace } from "../types.js";
 import { SubagentEventProjector } from "./subagent-event-projector.js";
@@ -12,6 +13,7 @@ import { subagentMcpEffectProfileFingerprintV2 } from "./authority-v2.js";
 
 function runtime(): ResolvedModelRuntime {
   return {
+    models: createModels(),
     provider: {
       id: "provider-one",
       kind: "openai",
@@ -80,9 +82,7 @@ function input(productionStore: ProductionSubagentRunStore) {
 
 test("V2 authority is synchronously prepared before the first durable projector write", async () => {
   const writes: Array<{ snapshot: unknown; manifest: unknown }> = [];
-  const persistence = createForegroundSubagentPersistenceV2(
-    input(store("v2", writes)),
-  );
+  const persistence = createForegroundSubagentPersistenceV2(input(store("v2", writes)));
   const projector = new SubagentEventProjector({
     generationId: "generation-one",
     chatId: "chat-one",
@@ -149,10 +149,7 @@ test("V2 authority is synchronously prepared before the first durable projector 
     delegation: false,
     mcp: [],
   });
-  assert.equal(
-    persistence.rendererSnapshot(projector.snapshot()[0]!).version,
-    2,
-  );
+  assert.equal(persistence.rendererSnapshot(projector.snapshot()[0]!).version, 2);
   assert.equal(
     (
       persistence.rendererSnapshot(projector.snapshot()[0]!) as {
@@ -165,9 +162,7 @@ test("V2 authority is synchronously prepared before the first durable projector 
 
 test("V2 rejects projection and persistence when launch preflight did not resolve authority", async () => {
   const writes: Array<{ snapshot: unknown; manifest: unknown }> = [];
-  const persistence = createForegroundSubagentPersistenceV2(
-    input(store("v2", writes)),
-  );
+  const persistence = createForegroundSubagentPersistenceV2(input(store("v2", writes)));
   const snapshot: SubagentRunSnapshotV1 = {
     version: 1,
     runId: "run-one",
@@ -191,22 +186,14 @@ test("V2 rejects projection and persistence when launch preflight did not resolv
     warnings: [],
   };
 
-  await assert.rejects(
-    persistence.upsert(snapshot),
-    /not resolved before launch/u,
-  );
-  assert.throws(
-    () => persistence.prepare(snapshot),
-    /not resolved before projection/u,
-  );
+  await assert.rejects(persistence.upsert(snapshot), /not resolved before launch/u);
+  assert.throws(() => persistence.prepare(snapshot), /not resolved before projection/u);
   assert.equal(writes.length, 0);
 });
 
 test("V1 rollback writes the exact legacy projection without constructing V2 authority", async () => {
   const writes: Array<{ snapshot: unknown; manifest: unknown }> = [];
-  const persistence = createForegroundSubagentPersistenceV2(
-    input(store("v1", writes)),
-  );
+  const persistence = createForegroundSubagentPersistenceV2(input(store("v1", writes)));
   const projector = new SubagentEventProjector({
     generationId: "generation-one",
     chatId: "chat-one",
@@ -414,10 +401,7 @@ test("MCP mutation requests require V2, the independent rollout, approval, and a
       requestApproval: async () => true,
     }),
   ]) {
-    await assert.rejects(
-      candidate.prepareRun(request),
-      /MCP mutation capability is unavailable/u,
-    );
+    await assert.rejects(candidate.prepareRun(request), /MCP mutation capability is unavailable/u);
   }
   await assert.rejects(
     createForegroundSubagentPersistenceV2({
@@ -440,10 +424,7 @@ test("MCP mutation requests require V2, the independent rollout, approval, and a
     },
     requestApproval: async () => true,
   }).prepareRun(request);
-  assert.equal(
-    prepared.authority?.capabilities.mcp[0]?.tools[0]?.effect,
-    "mutating",
-  );
+  assert.equal(prepared.authority?.capabilities.mcp[0]?.tools[0]?.effect, "mutating");
   assert.equal(typeof prepared.prepareMcpMutationApproval, "function");
 });
 
@@ -550,9 +531,7 @@ test("shell requests require V2, rollout, helper, permission, and approval witho
 
 test("control snapshots reuse immutable authority and settle canonical persistence before acknowledgement", async () => {
   const writes: Array<{ snapshot: unknown; manifest: unknown }> = [];
-  const persistence = createForegroundSubagentPersistenceV2(
-    input(store("v2", writes)),
-  );
+  const persistence = createForegroundSubagentPersistenceV2(input(store("v2", writes)));
   const identity = {
     runId: "run-one",
     groupId: "group-one",
@@ -602,8 +581,7 @@ test("control snapshots reuse immutable authority and settle canonical persisten
     (writes[1]!.manifest as { authority: unknown }).authority,
   );
   assert.equal(
-    (writes[1]!.manifest as { authority: { context: string } }).authority
-      .context,
+    (writes[1]!.manifest as { authority: { context: string } }).authority.context,
     "fork",
   );
 });
@@ -617,8 +595,7 @@ test("production registration makes stop durable, renderer-safe, and immune to l
   const persistence = createForegroundSubagentPersistenceV2({
     ...input(store("v2", writes)),
     control: controls,
-    applyControlSnapshot: (snapshot) =>
-      projector.applyControlSnapshot(snapshot),
+    applyControlSnapshot: (snapshot) => projector.applyControlSnapshot(snapshot),
     settleControlSnapshots: () => projector.flush(),
     onControlSnapshot: (snapshot) => delivered.push(snapshot),
   });
@@ -687,10 +664,7 @@ test("production registration makes stop durable, renderer-safe, and immune to l
 
   assert.equal(projector.snapshot()[0]!.state, "interrupted");
   assert.equal(delivered[delivered.length - 1]?.state, "interrupted");
-  assert.equal(
-    (writes[writes.length - 1]!.snapshot as { state: string }).state,
-    "stopped",
-  );
+  assert.equal((writes[writes.length - 1]!.snapshot as { state: string }).state, "stopped");
 });
 
 test("Phase 6B mints one fresh depth-2 authority from an exact live parent and persists lineage", async () => {
@@ -766,29 +740,25 @@ test("Phase 6B mints one fresh depth-2 authority from an exact live parent and p
     { role: "scout", label: "Check", task: "Check one narrow fact." },
   );
   await projector.flush();
+  assert.equal((writes[0]!.snapshot as { parentRunId?: string }).parentRunId, "run-parent");
   assert.equal(
-    (writes[0]!.snapshot as { parentRunId?: string }).parentRunId,
-    "run-parent",
-  );
-  assert.equal(
-    (writes[0]!.manifest as { authority: { parentRunId?: string } }).authority
-      .parentRunId,
+    (writes[0]!.manifest as { authority: { parentRunId?: string } }).authority.parentRunId,
     "run-parent",
   );
 
   const nestedFork = await persistence.prepareRun({
-      identity: {
-        runId: "run-fork",
-        groupId: "group-tree",
-        childId: "child-fork",
-      },
-      task: { role: "scout", label: "Fork", task: "Attempt a nested fork." },
-      contextMode: "fork",
-      contextRevision: "3".repeat(64),
-      deadlineMs: 4_000,
-      parentAuthority: parent.authority,
-      stop: () => {},
-    });
+    identity: {
+      runId: "run-fork",
+      groupId: "group-tree",
+      childId: "child-fork",
+    },
+    task: { role: "scout", label: "Fork", task: "Attempt a nested fork." },
+    contextMode: "fork",
+    contextRevision: "3".repeat(64),
+    deadlineMs: 4_000,
+    parentAuthority: parent.authority,
+    stop: () => {},
+  });
   assert.equal(nestedFork.authority?.context, "fork");
   assert.equal(nestedFork.authority?.contextRevision, "3".repeat(64));
   assert.equal(nestedFork.authority?.parentRunId, parent.authority?.runId);

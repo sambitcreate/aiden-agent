@@ -369,6 +369,8 @@ export function registerProviderHandlers(): void {
     if (typeof p.shortcutEnabled === "boolean") next.shortcutEnabled = p.shortcutEnabled;
     if (typeof p.shortcutAccelerator === "string") next.shortcutAccelerator = p.shortcutAccelerator;
     if (typeof p.dictationEnabled === "boolean") next.dictationEnabled = p.dictationEnabled;
+    if (typeof p.showLocalModelReasoning === "boolean")
+      next.showLocalModelReasoning = p.showLocalModelReasoning;
     if (typeof p.dictationAccelerator === "string")
       next.dictationAccelerator = p.dictationAccelerator;
     if (

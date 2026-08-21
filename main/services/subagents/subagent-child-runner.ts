@@ -9,11 +9,13 @@ import type {
 } from "@earendil-works/pi-agent-core";
 import { performance } from "node:perf_hooks";
 import {
-  terminalAssistantTextFallback,
+  terminalAssistantText,
   terminalGenerationError,
+  terminalGenerationLengthError,
   terminalGenerationWasAborted,
 } from "../generation-runtime.js";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
+import { piRuntimePrivateFailure } from "../pi-runtime-failure.js";
 import type { WorkspacePermission } from "../types.js";
 import {
   MAX_SUBAGENT_SUMMARY_CHARS,
@@ -21,10 +23,7 @@ import {
   type SubagentTaskRequest,
   type SubagentTaskResult,
 } from "./contracts.js";
-import {
-  subagentRoleSystemPrompt,
-  subagentTaskPrompt,
-} from "./role-catalog.js";
+import { subagentRoleSystemPrompt, subagentTaskPrompt } from "./role-catalog.js";
 import {
   subagentRuntimeRegistry,
   type SubagentRuntimeAuthority,
@@ -54,10 +53,7 @@ import type {
   SubagentMcpMutationBindingV2,
   SubagentMcpMutationGateV2,
 } from "./subagent-mcp-mutation.js";
-import type {
-  SubagentShellGateV2,
-  SubagentShellToolBindingV2,
-} from "./subagent-shell.js";
+import type { SubagentShellGateV2, SubagentShellToolBindingV2 } from "./subagent-shell.js";
 
 export const DEFAULT_SUBAGENT_CHILD_DEADLINE_MS = 10 * 60_000;
 export const DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS = 5_000;
@@ -65,6 +61,8 @@ export const MAX_SUBAGENT_CHILD_TURNS = 24;
 export const MAX_SUBAGENT_CHILD_TOOL_CALLS = 64;
 export const MAX_SUBAGENT_CHILD_EVENTS = 512;
 export const MAX_SUBAGENT_CHILD_OUTPUT_CHARS = 120_000;
+export const MAX_SUBAGENT_CHILD_PROTOCOL_CHARS = 512_000;
+const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 
 export interface SubagentChildRunnerPolicy {
   deadlineMs?: number;
@@ -73,11 +71,13 @@ export interface SubagentChildRunnerPolicy {
   maxToolCalls?: number;
   maxEvents?: number;
   maxOutputChars?: number;
+  maxProtocolChars?: number;
 }
 
 export interface SubagentChildRunnerDependencies {
   createChild?: (input: {
     authority: SubagentRuntimeAuthority;
+    runId?: string;
     groupId: string;
     childId?: string;
     runtime: ResolvedModelRuntime;
@@ -101,10 +101,7 @@ export interface SubagentChildRunnerDependencies {
     consumeNetworkOperation?: (authority: SubagentAuthorityV2) => boolean;
     signal?: AbortSignal;
   }) => Promise<AgentTool[] | SubagentChildToolAssembly>;
-  recordUsage?: (
-    message: AssistantMessage,
-    runtime: ResolvedModelRuntime,
-  ) => Promise<void>;
+  recordUsage?: (message: AssistantMessage, runtime: ResolvedModelRuntime) => Promise<void>;
 }
 
 export interface SubagentChildToolAssembly {
@@ -169,6 +166,11 @@ export interface RunSubagentChildInput {
     turnStarted(): void;
     toolStarted(toolName: string): void;
     textDelta(delta: string): void;
+    /** Exact terminal text not already observed through text deltas. */
+    textReconciled(additionalChars: number): void;
+    /** Hidden thinking/tool-call protocol charged to the shared tree ceiling. */
+    protocolDelta?(additionalChars: number): void;
+    protocolReconciled?(additionalChars: number): void;
     usage(message: AssistantMessage): void;
   };
 }
@@ -195,11 +197,45 @@ function safeFailure(
   };
 }
 
+function assistantProtocolChars(message: AssistantMessage): number {
+  let total = 0;
+  for (const block of message.content) {
+    if (block.type === "text") total += block.text.length;
+    else if (block.type === "thinking") total += block.thinking.length;
+    else {
+      total += block.id.length + block.name.length;
+      try {
+        total += JSON.stringify(block.arguments).length;
+      } catch {
+        return Number.MAX_SAFE_INTEGER;
+      }
+    }
+    if (!Number.isSafeInteger(total)) return Number.MAX_SAFE_INTEGER;
+  }
+  return total;
+}
+
+function assistantHiddenProtocolChars(message: AssistantMessage): number {
+  let total = 0;
+  for (const block of message.content) {
+    if (block.type === "text") continue;
+    if (block.type === "thinking") total += block.thinking.length;
+    else {
+      total += block.id.length + block.name.length;
+      try {
+        total += JSON.stringify(block.arguments).length;
+      } catch {
+        return Number.MAX_SAFE_INTEGER;
+      }
+    }
+    if (!Number.isSafeInteger(total)) return Number.MAX_SAFE_INTEGER;
+  }
+  return total;
+}
+
 function throwIfParentAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
-  throw signal.reason instanceof Error
-    ? signal.reason
-    : new Error("Parent generation cancelled.");
+  throw signal.reason instanceof Error ? signal.reason : new Error("Parent generation cancelled.");
 }
 
 function timedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
@@ -215,10 +251,7 @@ function timedOutResult(request: SubagentTaskRequest): SubagentTaskResult {
   };
 }
 
-async function boundedDrain(
-  promise: Promise<unknown>,
-  graceMs: number,
-): Promise<boolean> {
+async function boundedDrain(promise: Promise<unknown>, graceMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -253,22 +286,19 @@ function assistantMessage(event: AgentEvent): AssistantMessage | null {
   return null;
 }
 
-export async function runSubagentChild(
-  input: RunSubagentChildInput,
-): Promise<SubagentTaskResult> {
+export async function runSubagentChild(input: RunSubagentChildInput): Promise<SubagentTaskResult> {
   throwIfParentAborted(input.signal);
   const now = input.now ?? (() => performance.now());
   const startedAt = now();
   const policy = {
     deadlineMs: input.policy?.deadlineMs ?? DEFAULT_SUBAGENT_CHILD_DEADLINE_MS,
     cancellationGraceMs:
-      input.policy?.cancellationGraceMs ??
-      DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
+      input.policy?.cancellationGraceMs ?? DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS,
     maxTurns: input.policy?.maxTurns ?? MAX_SUBAGENT_CHILD_TURNS,
     maxToolCalls: input.policy?.maxToolCalls ?? MAX_SUBAGENT_CHILD_TOOL_CALLS,
     maxEvents: input.policy?.maxEvents ?? MAX_SUBAGENT_CHILD_EVENTS,
-    maxOutputChars:
-      input.policy?.maxOutputChars ?? MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
+    maxOutputChars: input.policy?.maxOutputChars ?? MAX_SUBAGENT_CHILD_OUTPUT_CHARS,
+    maxProtocolChars: input.policy?.maxProtocolChars ?? MAX_SUBAGENT_CHILD_PROTOCOL_CHARS,
   };
   if (
     !Number.isFinite(policy.deadlineMs) ||
@@ -283,7 +313,9 @@ export async function runSubagentChild(
     !Number.isInteger(policy.maxEvents) ||
     policy.maxEvents <= 0 ||
     !Number.isInteger(policy.maxOutputChars) ||
-    policy.maxOutputChars <= 0
+    policy.maxOutputChars <= 0 ||
+    !Number.isInteger(policy.maxProtocolChars) ||
+    policy.maxProtocolChars <= 0
   ) {
     throw new Error("Invalid subagent child resource policy.");
   }
@@ -296,9 +328,12 @@ export async function runSubagentChild(
   }
 
   const buildTools = input.dependencies?.buildTools;
-  if (!buildTools)
-    throw new Error("Subagent child tool construction is unavailable.");
+  if (!buildTools) throw new Error("Subagent child tool construction is unavailable.");
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const constructionCancellation = new AbortController();
+  const constructionSignal = input.signal
+    ? AbortSignal.any([input.signal, constructionCancellation.signal])
+    : constructionCancellation.signal;
   let removeParentAbort = () => {};
   let unsubscribe = () => {};
   let workspaceWriteApproval: SubagentWorkspaceWriteApprovalGateV2 | undefined;
@@ -306,18 +341,25 @@ export async function runSubagentChild(
   let shellApproval: SubagentShellGateV2 | undefined;
   const deadline = new Promise<{ kind: "timed_out" }>((resolve) => {
     deadlineTimer = setTimeout(
-      () => resolve({ kind: "timed_out" }),
+      () => {
+        constructionCancellation.abort(new Error("Subagent child construction deadline exceeded."));
+        resolve({ kind: "timed_out" });
+      },
       Math.max(0, deadlineAt - now()),
     );
   });
   const parentAbort = new Promise<{ kind: "parent_aborted" }>((resolve) => {
     if (!input.signal) return;
-    const abort = () => resolve({ kind: "parent_aborted" });
+    const abort = () => {
+      constructionCancellation.abort(
+        input.signal?.reason ?? new Error("Parent generation cancelled."),
+      );
+      resolve({ kind: "parent_aborted" });
+    };
     if (input.signal.aborted) abort();
     else {
       input.signal.addEventListener("abort", abort, { once: true });
-      removeParentAbort = () =>
-        input.signal?.removeEventListener("abort", abort);
+      removeParentAbort = () => input.signal?.removeEventListener("abort", abort);
     }
   });
   const deadlineElapsed = () => {
@@ -336,18 +378,14 @@ export async function runSubagentChild(
           authority: input.v2Authority,
           currentAuthority: input.currentV2Authority,
           consumeNetworkOperation: input.consumeNetworkOperation,
-          signal: input.signal,
+          signal: constructionSignal,
         }),
       )
       .then(
         (tools) => ({ kind: "tools" as const, tools }),
         (error: unknown) => ({ kind: "failed" as const, error }),
       );
-    const constructionOutcome = await Promise.race([
-      toolConstruction,
-      deadline,
-      parentAbort,
-    ]);
+    const constructionOutcome = await Promise.race([toolConstruction, deadline, parentAbort]);
     if (constructionOutcome.kind === "parent_aborted") {
       if (!(await boundedDrain(toolConstruction, policy.cancellationGraceMs))) {
         reportCleanupFailure(input);
@@ -368,8 +406,7 @@ export async function runSubagentChild(
 
     throwIfParentAborted(input.signal);
     const createChild =
-      input.dependencies?.createChild ??
-      ((spec) => subagentRuntimeRegistry.create(spec));
+      input.dependencies?.createChild ?? ((spec) => subagentRuntimeRegistry.create(spec));
     const assembly = Array.isArray(constructionOutcome.tools)
       ? {
           tools: constructionOutcome.tools,
@@ -393,31 +430,19 @@ export async function runSubagentChild(
             input.signal,
           )
         : undefined;
-    if (
-      assembly.workspaceWriteApprovalBindings.length > 0 &&
-      !workspaceWriteApproval
-    ) {
+    if (assembly.workspaceWriteApprovalBindings.length > 0 && !workspaceWriteApproval) {
       throw new Error("Subagent workspace-write approval is unavailable.");
     }
     mcpMutationApproval =
       assembly.mcpMutationApprovalBindings.length > 0
-        ? input.prepareMcpMutationApproval?.(
-            assembly.mcpMutationApprovalBindings,
-            input.signal,
-          )
+        ? input.prepareMcpMutationApproval?.(assembly.mcpMutationApprovalBindings, input.signal)
         : undefined;
-    if (
-      assembly.mcpMutationApprovalBindings.length > 0 &&
-      !mcpMutationApproval
-    ) {
+    if (assembly.mcpMutationApprovalBindings.length > 0 && !mcpMutationApproval) {
       throw new Error("Subagent MCP mutation approval is unavailable.");
     }
     shellApproval =
       assembly.shellApprovalBindings.length > 0
-        ? input.prepareShellApproval?.(
-            assembly.shellApprovalBindings,
-            input.signal,
-          )
+        ? input.prepareShellApproval?.(assembly.shellApprovalBindings, input.signal)
         : undefined;
     if (assembly.shellApprovalBindings.length > 0 && !shellApproval) {
       throw new Error("Subagent shell approval is unavailable.");
@@ -429,17 +454,14 @@ export async function runSubagentChild(
       assembly.workspaceWriteApprovalBindings.map(({ toolName }) => toolName),
     );
     const mutationToolNames = new Set(
-      assembly.mcpMutationApprovalBindings.map(
-        ({ childAgentToolName }) => childAgentToolName,
-      ),
+      assembly.mcpMutationApprovalBindings.map(({ childAgentToolName }) => childAgentToolName),
     );
     const shellToolNames = new Set<string>(
       assembly.shellApprovalBindings.map(({ toolName }) => toolName),
     );
     if (
       [...workspaceWriteToolNames].some(
-        (toolName) =>
-          outboundToolNames.has(toolName) || mutationToolNames.has(toolName),
+        (toolName) => outboundToolNames.has(toolName) || mutationToolNames.has(toolName),
       ) ||
       [...mutationToolNames].some((toolName) => outboundToolNames.has(toolName))
     ) {
@@ -514,9 +536,7 @@ export async function runSubagentChild(
               const request = parseSubagentToolRequest(params);
               const yieldInference = child?.withoutInferenceLease;
               if (!yieldInference) {
-                throw new Error(
-                  "Nested delegation cannot release parent inference capacity.",
-                );
+                throw new Error("Nested delegation cannot release parent inference capacity.");
               }
               const forkContext =
                 request.context === "fork"
@@ -526,20 +546,15 @@ export async function runSubagentChild(
                       // This is the sole live-state read. Capture completes
                       // synchronously before the inference lease is yielded.
                       messages: child!.agent.state.messages,
-                      descendantContextWindow:
-                        input.runtime.model.contextWindow ?? 1_000_000,
+                      descendantContextWindow: input.runtime.model.contextWindow ?? 1_000_000,
                     })
                   : undefined;
-              return yieldInference(() =>
-                input.executeNested!(params, signal, forkContext),
-              );
+              return yieldInference(() => input.executeNested!(params, signal, forkContext));
             },
           } as SubagentSupervisor,
           projectRequestableSubagentMcpInventoryV2(authority.capabilities.mcp),
           authority.capabilities.workspaceWrite,
-          projectRequestableSubagentMcpMutationInventoryV2(
-            authority.capabilities.mcp,
-          ),
+          projectRequestableSubagentMcpMutationInventoryV2(authority.capabilities.mcp),
           authority.capabilities.shell,
           false,
         ),
@@ -547,6 +562,7 @@ export async function runSubagentChild(
     }
     child = createChild({
       authority: input.authority,
+      runId: input.runId ?? input.childId ?? input.groupId,
       groupId: input.groupId,
       childId: input.childId,
       runtime: input.runtime,
@@ -570,23 +586,13 @@ export async function runSubagentChild(
       }),
       tools: childTools,
       beforeToolCall:
-        outboundApproval ||
-        workspaceWriteApproval ||
-        mcpMutationApproval ||
-        shellApproval
+        outboundApproval || workspaceWriteApproval || mcpMutationApproval || shellApproval
           ? async (context, signal) => {
-              const workspaceResult =
-                await workspaceWriteApproval?.beforeToolCall(context, signal);
+              const workspaceResult = await workspaceWriteApproval?.beforeToolCall(context, signal);
               if (workspaceResult !== undefined) return workspaceResult;
-              const mutationResult = await mcpMutationApproval?.beforeToolCall(
-                context,
-                signal,
-              );
+              const mutationResult = await mcpMutationApproval?.beforeToolCall(context, signal);
               if (mutationResult !== undefined) return mutationResult;
-              const shellResult = await shellApproval?.beforeToolCall(
-                context,
-                signal,
-              );
+              const shellResult = await shellApproval?.beforeToolCall(context, signal);
               if (shellResult !== undefined) return shellResult;
               return outboundApproval?.beforeToolCall(context, signal);
             }
@@ -611,6 +617,11 @@ export async function runSubagentChild(
     let currentTurnOutput = "";
     let terminalOutput = "";
     let observedOutputChars = 0;
+    let observedProtocolChars = 0;
+    let currentTurnTextDeltaChars = 0;
+    let currentTurnProtocolDeltaChars = 0;
+    let currentTurnHiddenProtocolDeltaChars = 0;
+    let observedTerminalAssistant = false;
     let turns = 0;
     let toolCalls = 0;
     let lifecycleEvents = 0;
@@ -632,30 +643,41 @@ export async function runSubagentChild(
           return;
         }
       }
-      if (
-        event.type === "message_start" &&
-        event.message.role === "assistant"
-      ) {
+      if (event.type === "message_start" && event.message.role === "assistant") {
         currentTurnHadTextDelta = false;
+        currentTurnTextDeltaChars = 0;
+        currentTurnProtocolDeltaChars = 0;
+        currentTurnHiddenProtocolDeltaChars = 0;
         currentTurnOutput = "";
+        terminalError = null;
+        terminalAborted = false;
       } else if (event.type === "message_update") {
         const update = event.assistantMessageEvent;
         if (update.type === "text_delta") {
           input.telemetry?.textDelta(update.delta);
           currentTurnHadTextDelta = true;
+          currentTurnTextDeltaChars += update.delta.length;
+          currentTurnProtocolDeltaChars += update.delta.length;
+          observedProtocolChars += update.delta.length;
           observedOutputChars += update.delta.length;
           const remaining = policy.maxOutputChars - currentTurnOutput.length;
-          if (remaining > 0)
-            currentTurnOutput += update.delta.slice(0, remaining);
-          if (
-            observedOutputChars > policy.maxOutputChars ||
-            update.delta.length > remaining
-          ) {
+          if (remaining > 0) currentTurnOutput += update.delta.slice(0, remaining);
+          if (observedOutputChars > policy.maxOutputChars || update.delta.length > remaining) {
             stopForLimit("The child reached its output limit.");
           }
+          if (observedProtocolChars > policy.maxProtocolChars) {
+            stopForLimit("The child reached its protocol limit.");
+          }
+        } else if (update.type === "thinking_delta" || update.type === "toolcall_delta") {
+          currentTurnProtocolDeltaChars += update.delta.length;
+          currentTurnHiddenProtocolDeltaChars += update.delta.length;
+          observedProtocolChars += update.delta.length;
+          input.telemetry?.protocolDelta?.(update.delta.length);
+          if (observedProtocolChars > policy.maxProtocolChars) {
+            stopForLimit("The child reached its protocol limit.");
+          }
         } else if (update.type === "error" && update.reason === "error") {
-          terminalError =
-            update.error.errorMessage?.trim() || "The child model failed.";
+          terminalError = SAFE_CHILD_PROVIDER_FAILURE;
         }
       } else if (event.type === "turn_start") {
         if (turns >= policy.maxTurns) {
@@ -673,33 +695,47 @@ export async function runSubagentChild(
         }
         toolCalls += 1;
         input.telemetry?.toolStarted(event.toolName);
-      } else if (
-        event.type === "message_end" &&
-        event.message.role === "assistant"
-      ) {
+      } else if (event.type === "message_end" && event.message.role === "assistant") {
         const message = assistantMessage(event);
         if (message) {
-          input.telemetry?.usage(message);
-          await recordUsage(message, input.runtime);
-          const error = terminalGenerationError(message);
-          if (error) terminalError = error;
-          if (terminalGenerationWasAborted(message)) terminalAborted = true;
-          const fallback = terminalAssistantTextFallback(
-            message,
-            currentTurnHadTextDelta,
-          );
-          if (fallback) {
-            observedOutputChars += fallback.length;
-            const remaining = policy.maxOutputChars - currentTurnOutput.length;
-            currentTurnOutput += fallback.slice(0, Math.max(0, remaining));
-            if (
-              observedOutputChars > policy.maxOutputChars ||
-              fallback.length > remaining
-            ) {
-              stopForLimit("The child reached its output limit.");
-            }
+          // Host-owned synthetic failures carry no provider request usage and
+          // never belong in provider success/failure aggregates.
+          if (!piRuntimePrivateFailure(message)) {
+            input.telemetry?.usage(message);
+            await recordUsage(message, input.runtime);
           }
-          terminalOutput = currentTurnOutput;
+          const error = terminalGenerationError(message) ?? terminalGenerationLengthError(message);
+          if (error) {
+            terminalError = message.stopReason === "error" ? SAFE_CHILD_PROVIDER_FAILURE : error;
+          }
+          if (terminalGenerationWasAborted(message)) terminalAborted = true;
+          const exactOutput = terminalAssistantText(message);
+          const additionalObserved = currentTurnHadTextDelta
+            ? Math.max(0, exactOutput.length - currentTurnTextDeltaChars)
+            : exactOutput.length;
+          observedOutputChars += additionalObserved;
+          input.telemetry?.textReconciled(additionalObserved);
+          const exactProtocolChars = assistantProtocolChars(message);
+          observedProtocolChars += Math.max(0, exactProtocolChars - currentTurnProtocolDeltaChars);
+          const additionalHiddenProtocolChars = Math.max(
+            0,
+            assistantHiddenProtocolChars(message) - currentTurnHiddenProtocolDeltaChars,
+          );
+          input.telemetry?.protocolReconciled?.(additionalHiddenProtocolChars);
+          currentTurnOutput = exactOutput.slice(0, policy.maxOutputChars);
+          if (
+            observedOutputChars > policy.maxOutputChars ||
+            exactOutput.length > policy.maxOutputChars
+          ) {
+            stopForLimit("The child reached its output limit.");
+          }
+          if (observedProtocolChars > policy.maxProtocolChars) {
+            stopForLimit("The child reached its protocol limit.");
+          }
+          if (message.stopReason !== "toolUse") {
+            observedTerminalAssistant = true;
+            terminalOutput = currentTurnOutput;
+          }
         }
       }
     });
@@ -707,7 +743,7 @@ export async function runSubagentChild(
     const prompt = Promise.resolve()
       .then(() => child.prompt(subagentTaskPrompt(input.request.task)))
       .then(
-        () => ({ kind: "settled" as const }),
+        (runtimeOutcome) => ({ kind: "settled" as const, runtimeOutcome }),
         (error: unknown) => ({ kind: "failed" as const, error }),
       );
     const outcome = await Promise.race([prompt, deadline, parentAbort]);
@@ -718,6 +754,7 @@ export async function runSubagentChild(
           : new Error("Parent generation cancelled."),
       );
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
+        child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
       throwIfParentAborted(input.signal);
@@ -726,6 +763,7 @@ export async function runSubagentChild(
     if (outcome.kind === "timed_out" || deadlineElapsed()) {
       child.cancel(new Error("Subagent child deadline exceeded."));
       if (!(await boundedDrain(prompt, policy.cancellationGraceMs))) {
+        child.markCleanupPending?.();
         reportCleanupFailure(input);
       }
       return timedOutResult(input.request);
@@ -735,7 +773,27 @@ export async function runSubagentChild(
     if (outcome.kind === "failed") {
       return safeFailure(input.request);
     }
-    if (terminalError) return safeFailure(input.request);
+    if (outcome.runtimeOutcome.kind === "host_failed") {
+      return safeFailure(input.request);
+    }
+    if (outcome.runtimeOutcome.kind === "provider_failed") {
+      return safeFailure(
+        input.request,
+        outcome.runtimeOutcome.reason === "output-limit"
+          ? "The child reached its output limit."
+          : SAFE_CHILD_PROVIDER_FAILURE,
+      );
+    }
+    if (outcome.runtimeOutcome.kind === "app_cancelled") {
+      return {
+        role: input.request.role,
+        label: input.request.label,
+        status: "interrupted",
+        summary: "",
+        warning: "The child was interrupted before completion.",
+      };
+    }
+    if (terminalError) return safeFailure(input.request, terminalError);
     if (terminalAborted) {
       return {
         role: input.request.role,
@@ -744,6 +802,9 @@ export async function runSubagentChild(
         summary: "",
         warning: "The child was interrupted before completion.",
       };
+    }
+    if (!observedTerminalAssistant || !terminalOutput.trim()) {
+      return safeFailure(input.request, "The child completed without a textual assistant result.");
     }
     return {
       role: input.request.role,
@@ -762,10 +823,7 @@ export async function runSubagentChild(
         .catch(() => {
           shutdownFailed = true;
         });
-      if (
-        !(await boundedDrain(shutdown, policy.cancellationGraceMs)) ||
-        shutdownFailed
-      ) {
+      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
         reportCleanupFailure(input);
       }
     }
@@ -776,10 +834,7 @@ export async function runSubagentChild(
         .catch(() => {
           shutdownFailed = true;
         });
-      if (
-        !(await boundedDrain(shutdown, policy.cancellationGraceMs)) ||
-        shutdownFailed
-      ) {
+      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
         reportCleanupFailure(input);
       }
     }
@@ -790,10 +845,7 @@ export async function runSubagentChild(
         .catch(() => {
           shutdownFailed = true;
         });
-      if (
-        !(await boundedDrain(shutdown, policy.cancellationGraceMs)) ||
-        shutdownFailed
-      ) {
+      if (!(await boundedDrain(shutdown, policy.cancellationGraceMs)) || shutdownFailed) {
         reportCleanupFailure(input);
       }
     }

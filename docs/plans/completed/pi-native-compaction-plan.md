@@ -41,6 +41,35 @@ The Pi journal lives below Electron `userData`, is keyed by chat ID, and is neve
 
 All four delivery phases and their verification gates completed on 2026-08-06.
 
+## Reliability hardening — 2026-08-14
+
+A follow-up audit closed lifecycle gaps around the shipped boundary:
+
+- the exact enriched slash-skill user turn is now journaled before provider I/O;
+- pre-prompt pressure includes the current user turn and zero-usage rehydrated history;
+- deterministic emergency reduction forces a durable semantic checkpoint afterward;
+- failed overflow attempts, including silent `length` overflows, are moved off the active journal branch before retry;
+- journal message/marker batches roll back atomically on partial append failure;
+- child prompts are journaled once and receive the same pre-prompt pressure check;
+- empty summaries are rejected, small context windows receive bounded reserve/tail settings, and semantic checkpoints survive emergency pruning;
+- overflow retries reset streamed renderer text, and terminal chat snapshots reach cache before animation handoff.
+
+The focused `test:compaction` gate now covers the core coordinator, emergency projection, child runtime, renderer stream reset, and terminal cache handoff.
+
+## Completeness hardening — 2026-08-15
+
+A full Pi core/SDK integration audit closed the remaining correctness and durability gaps inside Aiden's shipped architecture:
+
+- foreground effectful tools now execute sequentially, cancellation reaches network and schedule mutations, and transient provider failures retry once from a durably abandoned attempt;
+- long tool loops compact between provider turns, output-limit overflows recover safely, and terminal Pi content replaces incomplete stream projections exactly;
+- journals use crash-recoverable transaction envelopes, validate and quarantine malformed duplicates, delete corrupt indexed data, reconcile generic orphans, and clean Pi session resources with chat deletion;
+- historical images remain model-neutral in the journal and are projected per request, while compaction replaces binary payloads with continuity markers;
+- oversized summarizer input uses bounded map-reduce, structurally malformed summaries cannot become checkpoints, and summary calls are included in usage accounting;
+- canonical assistant protocol payloads preserve provider/API/model, reasoning/tool blocks, signatures, response identity, and usage across restart or provider switches without exposing that private payload to the renderer;
+- custom endpoints now use Pi provider composition, generic Pi reasoning levels are honored, and one-hour cache-write usage is retained.
+
+Pi `AgentHarness` remains an architectural reference rather than Aiden's top-level runtime: Aiden intentionally owns Electron chat persistence, workspace authority, approval UI, renderer streaming, and child-agent supervision. Harness-only branch-tree UI, interactive foreground steer/follow-up UX, and image-generation surfaces remain deliberate product features, not hidden parity claims.
+
 ## Phases
 
 ### Phase 1 — Native session and compaction controller

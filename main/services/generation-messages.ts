@@ -1,4 +1,10 @@
-import type { Api, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  ImageContent,
+  Message,
+  Model,
+  TextContent,
+} from "@earendil-works/pi-ai";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import type { ChatMessage, ChatStartParams } from "./types.js";
 
@@ -22,19 +28,30 @@ function userMessage(
   if (!attachments?.length) return { role: "user", content, timestamp };
   const parts: (TextContent | ImageContent)[] = [];
   const textFiles = includeTextAttachments
-    ? attachments.filter((attachment) => attachment.kind === "text" && attachment.text)
+    ? attachments.filter(
+        (attachment) => attachment.kind === "text" && attachment.text,
+      )
     : [];
   const textPrefix = textFiles
-    .map((attachment) => `Attached file: ${attachment.name}\n\`\`\`\n${attachment.text}\n\`\`\``)
+    .map(
+      (attachment) =>
+        `Attached file: ${attachment.name}\n\`\`\`\n${attachment.text}\n\`\`\``,
+    )
     .join("\n\n");
-  const combinedText = (contentFirst ? [content, textPrefix] : [textPrefix, content])
+  const combinedText = (
+    contentFirst ? [content, textPrefix] : [textPrefix, content]
+  )
     .filter(Boolean)
     .join("\n\n");
   if (combinedText) parts.push({ type: "text", text: combinedText });
   if (supportsImages) {
     for (const attachment of attachments) {
       if (attachment.kind === "image" && attachment.data) {
-        parts.push({ type: "image", data: attachment.data, mimeType: attachment.mimeType });
+        parts.push({
+          type: "image",
+          data: attachment.data,
+          mimeType: attachment.mimeType,
+        });
       }
     }
   }
@@ -94,7 +111,12 @@ export function toPiMessages(
       };
     }
 
-    return userMessage(message.content, message.attachments, supportsImages, now);
+    return userMessage(
+      message.content,
+      message.attachments,
+      supportsImages,
+      now,
+    );
   });
 }
 
@@ -119,6 +141,9 @@ export function chatMessageToPiMessage(
       true,
       false,
     );
+  }
+  if (message.role === "assistant" && message.pi) {
+    return structuredClone(message.pi);
   }
   const params: ChatStartParams = {
     chatId: "journal-rehydration",

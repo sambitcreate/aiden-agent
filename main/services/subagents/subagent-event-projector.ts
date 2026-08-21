@@ -54,13 +54,27 @@ function normalizeProjectedText(value: string): string {
 }
 
 function bounded(value: string, maximum: number, marker = "…"): string {
-  const safe = normalizeProjectedText(value).trim();
+  let safe = normalizeProjectedText(value).trim();
+  const safeMarker = normalizeProjectedText(marker);
+  for (let attempt = 0; attempt < 8 && safe.length > maximum; attempt += 1) {
+    let end = Math.max(0, maximum - safeMarker.length);
+    // Do not leave an unpaired high surrogate at the truncation boundary.
+    if (end > 0 && /[\uD800-\uDBFF]/u.test(safe[end - 1]!)) end -= 1;
+    // Truncation can create a new credential-like suffix even when the full
+    // value was safe. Re-run the privacy projection after every cut rather
+    // than sending that unstable prefix to the strict snapshot parser.
+    safe = normalizeProjectedText(`${safe.slice(0, end)}${safeMarker}`).trim();
+  }
   if (safe.length <= maximum) return safe;
-  return `${safe.slice(0, Math.max(0, maximum - marker.length))}${marker}`;
+  return safeMarker.slice(0, maximum);
 }
 
 function boundedSingleLine(value: string, maximum: number): string {
   return bounded(normalizeProjectedText(value).replace(/\s+/gu, " "), maximum);
+}
+
+function boundedRequiredSingleLine(value: string, maximum: number, fallback: string): string {
+  return boundedSingleLine(value, maximum) || fallback;
 }
 
 function safeToolMilestone(toolName: string): {
@@ -71,13 +85,45 @@ function safeToolMilestone(toolName: string): {
     case "read_file":
       return { activity: "Reading a workspace file", milestone: "reading" };
     case "list_dir":
-      return { activity: "Listing a workspace directory", milestone: "listing" };
+      return {
+        activity: "Listing a workspace directory",
+        milestone: "listing",
+      };
     case "glob":
-      return { activity: "Matching workspace file names", milestone: "matching" };
+      return {
+        activity: "Matching workspace file names",
+        milestone: "matching",
+      };
     case "grep":
       return { activity: "Searching workspace text", milestone: "searching" };
+    case "write_file":
+    case "edit_file":
+      return {
+        activity: "Preparing a workspace update",
+        milestone: "inspecting",
+      };
+    case "run_command":
+      return {
+        activity: "Preparing a command",
+        milestone: "inspecting",
+      };
+    case "web_search":
+      return {
+        activity: "Using public-web access",
+        milestone: "inspecting",
+      };
+    case "subagent":
+      return {
+        activity: "Preparing a delegation",
+        milestone: "inspecting",
+      };
     default:
-      return { activity: "Using a bounded read-only tool", milestone: "inspecting" };
+      return /__.*_[a-f0-9]{12}$/u.test(toolName)
+        ? {
+            activity: "Preparing connector access",
+            milestone: "inspecting",
+          }
+        : { activity: "Preparing a tool", milestone: "inspecting" };
   }
 }
 
@@ -125,13 +171,17 @@ export class SubagentEventProjector {
       workspaceId: this.input.workspaceId,
       revision: 1,
       role: request.role,
-      label: boundedSingleLine(request.label, 120),
-      taskPreview: boundedSingleLine(request.task, MAX_SUBAGENT_TASK_PREVIEW_CHARS),
+      label: boundedRequiredSingleLine(request.label, 120, "Subagent task"),
+      taskPreview: boundedRequiredSingleLine(
+        request.task,
+        MAX_SUBAGENT_TASK_PREVIEW_CHARS,
+        "Private task details redacted.",
+      ),
       state: "queued",
       activity: "Waiting for an execution slot",
       startedAt: now,
       updatedAt: now,
-      modelId: boundedSingleLine(this.input.modelId, 160),
+      modelId: boundedRequiredSingleLine(this.input.modelId, 160, "Unknown model"),
       turns: 0,
       tools: 0,
       tokens: 0,
@@ -212,7 +262,7 @@ export class SubagentEventProjector {
   finish(runId: string, result: SubagentTaskResult): void {
     const now = this.now();
     const projectedWarning = result.warning
-      ? bounded(result.warning, MAX_SUBAGENT_WARNING_CHARS)
+      ? boundedSingleLine(result.warning, MAX_SUBAGENT_WARNING_CHARS)
       : "";
     const warning = projectedWarning || undefined;
     const terminalMarkdown =
@@ -224,7 +274,7 @@ export class SubagentEventProjector {
     const latestText =
       bounded(result.summary || result.warning || "", MAX_SUBAGENT_LATEST_TEXT_CHARS) || undefined;
     const error =
-      bounded(
+      boundedSingleLine(
         result.warning || "The child could not complete this task.",
         MAX_SUBAGENT_ERROR_CHARS,
       ) || "The child could not complete this task.";
@@ -278,7 +328,9 @@ export class SubagentEventProjector {
       control.tools < current.tools ||
       control.tokens < current.tokens
     ) {
-      throw new Error("Subagent control snapshot changed immutable run identity or moved backward.");
+      throw new Error(
+        "Subagent control snapshot changed immutable run identity or moved backward.",
+      );
     }
     const projected = adaptSubagentRunSnapshotV2ToV1(control);
     if (!projected || projected.finishedAt === undefined) {

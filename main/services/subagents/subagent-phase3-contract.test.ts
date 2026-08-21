@@ -181,7 +181,7 @@ test("chat removal deletes private child history before the chat can disappear",
   );
 });
 
-test("the cancellation tree covers renderer invalidation, workspace changes, and shutdown", async () => {
+test("renderer invalidation detaches while authority changes and shutdown still cancel", async () => {
   const [llm, workspaces, main] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/handlers/workspaces.ts"),
@@ -189,8 +189,10 @@ test("the cancellation tree covers renderer invalidation, workspace changes, and
   ]);
   assert.match(
     llm,
-    /owner\.onInvalidated\(\(\) => \{\s+this\.cancel\(streamId\);/u,
+    /owner\.onInvalidated\(\(\) => \{\s+this\.detachRenderer\(streamId, owner\.documentId\);/u,
   );
+  assert.match(llm, /this\.cancel\(streamId, "workspace_authority_change"\)/u);
+  assert.match(llm, /this\.cancel\(streamId, "application_shutdown"\)/u);
   assert.match(
     workspaces,
     /await llmClient\.cancelWorkspaceAndSettle\(existing\.id\)/u,
@@ -256,7 +258,7 @@ test("empty-chat workspace moves serialize against generation authority and term
   );
   assert.match(
     llm,
-    /chatStore\.appendMessage\([\s\S]{0,500}expectedWorkspaceId: initialization\.workspaceId/u,
+    /chatStore\.appendMessage\([\s\S]{0,900}expectedWorkspaceId: initialization\.workspaceId/u,
   );
   assert.match(
     chatStore,
@@ -351,9 +353,9 @@ test("renderer turn tokens cross append and generation IPC without an admission 
 test("main announces normalized settlement only after generation ownership exits", async () => {
   const llm = await source("main/services/llm-client.ts");
   const initializingExit =
-    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*broadcastChatSettled\(/gu;
+    /initializing\.delete\(streamId\);\s*initialization\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
   const activeExit =
-    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*broadcastChatSettled\(/gu;
+    /active\.delete\(streamId\);\s*activeGeneration\.removeOwnerInvalidation\(\);\s*approvals\.releaseStream\(streamId\);\s*broadcastChatSettled\(/gu;
 
   assert.equal([...llm.matchAll(initializingExit)].length, 5);
   assert.equal([...llm.matchAll(activeExit)].length, 2);
@@ -560,10 +562,7 @@ test("managed worktree deletion and terminal creation share workspace mutation a
     "if (ownerInvalidated())",
     revalidate,
   );
-  const spawn = terminalService.indexOf(
-    "const pty = (this.options.spawnPty ?? spawn)(",
-    finalAbortCheck,
-  );
+  const spawn = terminalService.indexOf("const { pty,", finalAbortCheck);
   const postSpawnCheck = terminalService.indexOf(
     "if (ownerInvalidated())",
     spawn,

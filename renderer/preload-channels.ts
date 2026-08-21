@@ -27,6 +27,7 @@ export const INVOKE_PREFIXES = [
   "settings:",
   "shortcut:",
   "skills:",
+  "telegram:",
   "subagents:",
   "terminal:",
   "titleProviders:",
@@ -39,6 +40,8 @@ export const NATIVE_INVOKE_CHANNELS = {
   accessibilityRequest: "aiden:accessibility:request",
   accessibilityStatus: "aiden:accessibility:status",
   createImagesImportDroppedFiles: "aiden:create-images:import-dropped-files",
+  attachmentDroppedRead: "aiden:attachments:dropped-read",
+  attachmentClipboardRead: "aiden:attachments:clipboard-read",
   dialogOpen: "aiden:dialog:open",
   themeGet: "aiden:theme:get",
   themeSet: "aiden:theme:set",
@@ -60,6 +63,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:subagents",
   "chat:timeline",
   "chat:tool",
+  "chats:activity-changed",
   "chats:metadata-updated",
   "chats:settled",
   "dictation:state",
@@ -75,6 +79,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "shortcut:changed",
   "terminal:data",
   "terminal:exit",
+  "telegram:model-selection-changed",
   "aiden:theme:changed",
 ] as const;
 

@@ -9,6 +9,8 @@ import type { GoogleThinkingLevel } from "../../renderer/shared/google-thinking.
 import type { KeybindingOverridesV1 } from "../../renderer/shared/keybindings.js";
 import type { SubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import type { SkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 export type ProviderKind = "openai" | "anthropic";
 
@@ -188,6 +190,10 @@ export interface ChatMessage {
   model?: string;
   /** Deliberately exposed provider reasoning retained on an assistant message. */
   reasoning?: string;
+  /** Canonical Pi assistant protocol payload; raw errors and diagnostics are excluded. */
+  pi?: Omit<AssistantMessage, "diagnostics" | "errorMessage">;
+  /** Closed, renderer-safe terminal provider outcome. */
+  providerFailure?: ProviderFailureV1;
   /** Files attached to a user message. */
   attachments?: Attachment[];
   /** Safe display-only provenance for an explicitly invoked skill. */
@@ -209,11 +215,7 @@ export interface ModelRanking {
 }
 
 export type ModelMetadataSource =
-  | "local"
-  | "provider"
-  | "artificial-analysis"
-  | "models-dev"
-  | "fallback";
+  "local" | "provider" | "artificial-analysis" | "models-dev" | "fallback";
 
 /** Normalized model metadata after applying local and bundled-source precedence. */
 export interface ModelInfo {
@@ -392,7 +394,8 @@ export interface DiscoveredSkill {
 
 export type VoiceProvider = "openai" | "gemini" | "local";
 
-export type ChatTitleProviderId = "automatic" | "apple-foundation-models" | "chat-model";
+export type ChatTitleProviderId =
+  "automatic" | "apple-foundation-models" | "chat-model";
 
 export type FoundationModelsConnectionState =
   | "ready"
@@ -477,6 +480,8 @@ export interface AppSettings {
   codexThinkingByModel?: Record<string, CodexThinkingLevel>;
   /** Last explicit Anthropic/Claude thinking effort, keyed by exact model id. */
   anthropicThinkingByModel?: Record<string, AnthropicThinkingLevel>;
+  /** Presentation-only Pi thinking visibility for models running on a local deployment. */
+  showLocalModelReasoning?: boolean;
   /** Global opt-in for the external cua-driver Computer Use beta. */
   computerUseEnabled?: boolean;
   /** Global scheduler gate. Turning it off pauses jobs without deleting them. */
@@ -490,6 +495,49 @@ export interface AppSettings {
   assistant?: AssistantConfig;
   /** Device-local display name used by the private usage profile. */
   profileName?: string;
+  /** Telegram remote-control enable flag; gates long-poll polling. */
+  telegramEnabled?: boolean;
+  /** Paired Telegram owner chat id; undefined until first /start pairs. */
+  telegramAllowedUserId?: number;
+  /** Provider for Telegram turns; falls back to lastProviderId when unset. */
+  telegramProviderId?: string;
+  /** Model for Telegram turns; falls back to provider default when unset. */
+  telegramModel?: string;
+  /** Explicit reasoning effort for Telegram-originated turns. */
+  telegramThinkingLevel?: GenerationThinkingLevel;
+  /** Stream bounded answer previews into one edited Telegram message. */
+  telegramDraftPreviews?: boolean;
+  /** Technical activity projected into Telegram during a turn. */
+  telegramActivity?: "quiet" | "thinking" | "tools" | "verbose";
+  /** Native Rich Markdown or legacy HTML assistant answer delivery. */
+  telegramRendering?: "rich" | "html";
+  /** Automatic voice reply policy; explicit telegram_voice actions remain available. */
+  telegramVoiceMode?: "hidden" | "mirror" | "always";
+  /**
+   * Explicit folder workspace authorized for Telegram project automation.
+   * Omitted keeps Telegram turns assistant-only.
+   */
+  telegramWorkspaceId?: string;
+  /** Named Telegram bot profiles; the legacy root fields remain profiles.default. */
+  telegramProfiles?: Record<string, TelegramProfileSettings>;
+  /** Profile currently edited by Settings and used as the default direct-delivery target. */
+  telegramActiveProfile?: string;
+  /** Provision and route private-chat topics to explicit Aiden workspace targets. */
+  telegramThreadedMode?: boolean;
+}
+
+export interface TelegramProfileSettings {
+  enabled?: boolean;
+  allowedUserId?: number;
+  providerId?: string;
+  model?: string;
+  thinkingLevel?: GenerationThinkingLevel;
+  draftPreviews?: boolean;
+  activity?: "quiet" | "thinking" | "tools" | "verbose";
+  rendering?: "rich" | "html";
+  voiceMode?: "hidden" | "mirror" | "always";
+  workspaceId?: string;
+  threadedMode?: boolean;
 }
 
 export type ComputerUseStatusState =
@@ -531,6 +579,8 @@ export interface UsageTokenBreakdown {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Anthropic's one-hour cache writes, already included in cacheWrite. */
+  cacheWrite1h?: number;
   reasoning: number;
   total: number;
 }

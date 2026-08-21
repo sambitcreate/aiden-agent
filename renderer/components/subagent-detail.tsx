@@ -36,7 +36,7 @@ const SUBAGENT_MILESTONE_LABELS: Record<SubagentMilestoneKind, string> = {
   listing: "Listed a workspace directory",
   matching: "Matched workspace file names",
   searching: "Searched workspace text",
-  inspecting: "Used a bounded read-only tool",
+  inspecting: "Tool activity",
   composing: "Composed the bounded report",
 };
 

@@ -56,6 +56,8 @@ interface OllamaShowResponse {
 export interface DiscoveredModels {
   models: string[];
   modelMetadata: Record<string, ProviderModelMetadata>;
+  /** Ephemeral runtime hint; never persisted as model metadata. */
+  recommendedModel?: string;
 }
 
 export interface ConnectionTestResult extends DiscoveredModels {
@@ -125,17 +127,25 @@ function providerEndpoint(provider: StoredProvider, pathname: string): string {
 async function fetchJson(
   url: string,
   headers: Record<string, string>,
-  init: { method?: "GET" | "POST"; body?: string; redirect?: RequestRedirect } = {},
+  init: {
+    method?: "GET" | "POST";
+    body?: string;
+    redirect?: RequestRedirect;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
 ): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MODEL_DISCOVERY_TIMEOUT_MS);
+  const controller = init.signal ? null : new AbortController();
+  const signal = init.signal ?? controller!.signal;
+  const timeoutMs = init.timeoutMs ?? MODEL_DISCOVERY_TIMEOUT_MS;
+  const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
     const response = await fetch(url, {
       method: init.method ?? "GET",
       body: init.body,
       headers: init.body ? { ...headers, "content-type": "application/json" } : headers,
       redirect: init.redirect,
-      signal: controller.signal,
+      signal,
     });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
@@ -146,12 +156,12 @@ async function fetchJson(
     }
     return response.json() as Promise<unknown>;
   } catch (error) {
-    if (controller.signal.aborted) {
-      throw new Error(`Connection timed out after ${MODEL_DISCOVERY_TIMEOUT_MS / 1000} seconds.`);
+    if (signal.aborted) {
+      throw new Error(`Connection timed out after ${timeoutMs / 1000} seconds.`);
     }
     throw error;
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -222,6 +232,7 @@ function capabilityFlags(value: unknown): {
   toolCall?: boolean;
   reasoning?: boolean;
   embedding?: boolean;
+  completion?: boolean;
 } {
   if (Array.isArray(value)) {
     const capabilities = new Set(
@@ -234,6 +245,7 @@ function capabilityFlags(value: unknown): {
       toolCall: capabilities.has("tools") || capabilities.has("tool_use"),
       reasoning: capabilities.has("reasoning") || capabilities.has("thinking"),
       embedding: capabilities.has("embedding") || capabilities.has("embeddings"),
+      completion: capabilities.has("completion"),
     };
   }
   const capabilities = object(value);
@@ -307,6 +319,7 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
     .map((value) => object(value))
     .filter((value): value is Record<string, unknown> => Boolean(value));
   const metadataEntries: Array<[string, ProviderModelMetadata]> = [];
+  let recommendedModel: string | undefined;
   for (const entry of entries) {
     const key = typeof entry.key === "string" ? entry.key : undefined;
     if (!key) continue;
@@ -314,6 +327,14 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
     const type =
       entry.type === "embedding" ? "embedding" : entry.type === "llm" ? "llm" : undefined;
     const quantization = object(entry.quantization);
+    const loadedInstances = entry.loaded_instances;
+    if (
+      !recommendedModel &&
+      type !== "embedding" &&
+      ((Array.isArray(loadedInstances) && loadedInstances.length > 0) || entry.state === "loaded")
+    ) {
+      recommendedModel = key;
+    }
     metadataEntries.push([
       key,
       {
@@ -338,7 +359,11 @@ function parseLmStudioResponse(value: unknown): DiscoveredModels | null {
   const models = Object.keys(modelMetadata)
     .filter((id) => modelMetadata[id]?.type !== "embedding")
     .sort();
-  return { models, modelMetadata };
+  return {
+    models,
+    modelMetadata,
+    ...(recommendedModel && models.includes(recommendedModel) ? { recommendedModel } : {}),
+  };
 }
 
 function ollamaContextLength(modelInfo: Record<string, unknown> | undefined): number | undefined {
@@ -371,53 +396,75 @@ async function mapWithConcurrency<T, R>(
   return output;
 }
 
-async function discoverOllama(
+export async function discoverOllamaModels(
   provider: StoredProvider,
   headers: Record<string, string>,
+  timeoutMs = MODEL_DISCOVERY_TIMEOUT_MS,
 ): Promise<DiscoveredModels | null> {
-  const tagsValue = await fetchJson(providerEndpoint(provider, "/api/tags"), headers);
-  const tagsResponse = object(tagsValue);
-  if (!tagsResponse || !Array.isArray(tagsResponse.models)) return null;
-  const tags = tagsResponse.models
-    .map((value) => object(value) as OllamaTag | null)
-    .filter((value): value is OllamaTag => Boolean(value?.model ?? value?.name));
+  const boundedTimeoutMs =
+    Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : MODEL_DISCOVERY_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), boundedTimeoutMs);
+  try {
+    const tagsValue = await fetchJson(providerEndpoint(provider, "/api/tags"), headers, {
+      signal: controller.signal,
+      timeoutMs: boundedTimeoutMs,
+    });
+    const tagsResponse = object(tagsValue);
+    if (!tagsResponse || !Array.isArray(tagsResponse.models)) return null;
+    const tags = tagsResponse.models
+      .map((value) => object(value) as OllamaTag | null)
+      .filter((value): value is OllamaTag => Boolean(value?.model ?? value?.name));
 
-  const rows = await mapWithConcurrency(tags, 4, async (tag) => {
-    const id = tag.model ?? tag.name!;
-    let detail: OllamaShowResponse = {};
-    try {
-      detail = (await fetchJson(providerEndpoint(provider, "/api/show"), headers, {
-        method: "POST",
-        body: JSON.stringify({ model: id, verbose: false }),
-      })) as OllamaShowResponse;
-    } catch {
-      // One damaged model entry must not hide the rest of an otherwise healthy local catalog.
-    }
-    const capabilities = capabilityFlags(detail.capabilities);
-    const type = capabilities.embedding ? "embedding" : "llm";
-    const details = detail.details ?? tag.details;
-    return {
-      id,
-      metadata: {
-        source: "ollama",
-        name: tag.name ?? tag.model,
-        type,
-        vision: capabilities.vision,
-        toolCall: capabilities.toolCall,
-        reasoning: capabilities.reasoning,
-        contextLength: ollamaContextLength(detail.model_info),
-        parameterCount: details?.parameter_size,
-        format: details?.quantization_level ?? details?.format,
-      } satisfies ProviderModelMetadata,
-    };
-  });
+    const rows = await mapWithConcurrency(tags, 4, async (tag) => {
+      const id = tag.model ?? tag.name!;
+      let detail: OllamaShowResponse = {};
+      if (!controller.signal.aborted) {
+        try {
+          const value = await fetchJson(providerEndpoint(provider, "/api/show"), headers, {
+            method: "POST",
+            body: JSON.stringify({ model: id, verbose: false }),
+            signal: controller.signal,
+            timeoutMs: boundedTimeoutMs,
+          });
+          detail = (object(value) ?? {}) as OllamaShowResponse;
+        } catch {
+          // A damaged or deadline-aborted detail entry must not hide the safe
+          // tag metadata from the rest of an otherwise healthy local catalog.
+        }
+      }
+      const capabilities = capabilityFlags(detail.capabilities);
+      const type = capabilities.embedding
+        ? "embedding"
+        : capabilities.completion
+          ? "llm"
+          : undefined;
+      const details = detail.details ?? tag.details;
+      return {
+        id,
+        metadata: {
+          source: "ollama",
+          name: tag.name ?? tag.model,
+          type,
+          vision: capabilities.vision,
+          toolCall: capabilities.toolCall,
+          reasoning: capabilities.reasoning,
+          contextLength: ollamaContextLength(detail.model_info),
+          parameterCount: details?.parameter_size,
+          format: details?.quantization_level ?? details?.format,
+        } satisfies ProviderModelMetadata,
+      };
+    });
 
-  const modelMetadata = Object.fromEntries(rows.map((row) => [row.id, row.metadata]));
-  const models = rows
-    .filter((row) => row.metadata.type !== "embedding")
-    .map((row) => row.id)
-    .sort();
-  return { models, modelMetadata };
+    const modelMetadata = Object.fromEntries(rows.map((row) => [row.id, row.metadata]));
+    const models = rows
+      .filter((row) => row.metadata.type === "llm")
+      .map((row) => row.id)
+      .sort();
+    return { models, modelMetadata };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function canFallBackFromNative(error: unknown): boolean {
@@ -442,7 +489,7 @@ export async function discoverModels(
   }
   if (isOllamaProviderId(provider.id)) {
     try {
-      const native = await discoverOllama(provider, headers);
+      const native = await discoverOllamaModels(provider, headers);
       if (native) return native;
     } catch (error) {
       if (!canFallBackFromNative(error)) throw error;

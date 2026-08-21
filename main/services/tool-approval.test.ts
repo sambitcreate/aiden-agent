@@ -125,3 +125,39 @@ test("only the renderer document that received a prompt can decide it", async ()
   assert.equal(approvals.decide(prompts[0].approvalId, true, "document-one"), true);
   assert.equal(await pending, true);
 });
+
+test("detaching a renderer denies pending and future approvals without aborting the stream", async () => {
+  const prompts: Array<{ approvalId: string }> = [];
+  const approvals = new ToolApprovalCoordinator((prompt) => prompts.push(prompt));
+  const pending = approvals.request({
+    streamId: "detached",
+    toolCallId: "call-pending",
+    toolName: "write_file",
+    summary: "write",
+  });
+
+  approvals.detachStream("detached");
+  assert.equal(await pending, false);
+  assert.equal(approvals.pendingCount, 0);
+  assert.equal(
+    await approvals.request({
+      streamId: "detached",
+      toolCallId: "call-future",
+      toolName: "run_command",
+      summary: "run",
+    }),
+    false,
+  );
+  assert.equal(prompts.length, 1);
+
+  approvals.releaseStream("detached");
+  const resumed = approvals.request({
+    streamId: "detached",
+    toolCallId: "call-released",
+    toolName: "edit_file",
+    summary: "edit",
+  });
+  assert.equal(prompts.length, 2);
+  approvals.decide(prompts[1]!.approvalId, true);
+  assert.equal(await resumed, true);
+});

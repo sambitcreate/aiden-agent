@@ -4,6 +4,7 @@ export const SETTINGS_SECTIONS = [
   "skills",
   "mcp",
   "websearch",
+  "telegram",
   "computerUse",
   "createImages",
   "scheduledTasks",
@@ -62,17 +63,16 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     keywords: ["internet", "exa"],
   },
   {
+    id: "telegram",
+    title: "Telegram",
+    group: "Agent",
+    keywords: ["remote", "bot", "phone", "control"],
+  },
+  {
     id: "scheduledTasks",
     title: "Scheduled tasks",
     group: "Agent",
-    keywords: [
-      "automation",
-      "cron",
-      "recurring",
-      "background",
-      "scripts",
-      "notifications",
-    ],
+    keywords: ["automation", "cron", "recurring", "background", "scripts", "notifications"],
   },
   {
     id: "assistant",
@@ -93,26 +93,13 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     id: "computerUse",
     title: "Computer Use",
     group: "Agent",
-    keywords: [
-      "desktop",
-      "native apps",
-      "accessibility",
-      "screen recording",
-      "beta",
-    ],
+    keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta"],
   },
   {
     id: "createImages",
     title: "Create Images",
     group: "Agent",
-    keywords: [
-      "image",
-      "workflow",
-      "canvas",
-      "autosave",
-      "manual save",
-      "power features",
-    ],
+    keywords: ["image", "workflow", "canvas", "autosave", "manual save", "power features"],
   },
   {
     id: "voice",
@@ -140,11 +127,8 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   },
 ];
 
-export function parseSettingsSection(
-  value: unknown,
-): SettingsSection | undefined {
-  return typeof value === "string" &&
-    SETTINGS_SECTIONS.some((section) => section === value)
+export function parseSettingsSection(value: unknown): SettingsSection | undefined {
+  return typeof value === "string" && SETTINGS_SECTIONS.some((section) => section === value)
     ? (value as SettingsSection)
     : undefined;
 }

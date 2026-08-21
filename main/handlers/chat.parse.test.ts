@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parseParams } from "./chat-params.js";
+import { parseChatCancelOrigin } from "../services/chat-cancel.js";
 import {
   MAX_CHAT_ID_CHARS,
   MAX_MODEL_ID_CHARS,
@@ -10,6 +11,40 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 
 const base = { chatId: "c1", providerId: "p", model: "m" };
+
+test("chat cancellation accepts only explicit lifecycle detach or user Stop origins", () => {
+  assert.equal(parseChatCancelOrigin("lifecycle"), "lifecycle");
+  assert.equal(parseChatCancelOrigin("user_stop"), "user_stop");
+  for (const value of [undefined, null, "", "navigation", "renderer_user_stop", 1]) {
+    assert.equal(parseChatCancelOrigin(value), null);
+  }
+});
+
+test("chat lifecycle handling detaches the renderer instead of aborting inference", () => {
+  const handler = readFileSync(new URL("./chat.ts", import.meta.url), "utf8");
+  const lifecycleStart = handler.indexOf('if (parsedOrigin === "lifecycle")');
+  const lifecycleBranch = handler.slice(
+    lifecycleStart,
+    handler.indexOf("llmClient.cancel", lifecycleStart),
+  );
+  assert.match(lifecycleBranch, /llmClient\.detachRenderer/u);
+  assert.doesNotMatch(lifecycleBranch, /llmClient\.cancel/u);
+
+  const runtime = readFileSync(new URL("../services/llm-client.ts", import.meta.url), "utf8");
+  const invalidationStart = runtime.indexOf(
+    "initialization.removeOwnerInvalidation = owner.onInvalidated",
+  );
+  const invalidation = runtime.slice(
+    invalidationStart,
+    runtime.indexOf("let setup:", invalidationStart),
+  );
+  assert.match(invalidation, /this\.detachRenderer/u);
+  assert.doesNotMatch(invalidation, /this\.cancel/u);
+  assert.match(
+    runtime,
+    /if \(initialization\?\.rendererDetached \|\| generation\?\.rendererDetached\)/u,
+  );
+});
 
 test("parseParams accepts only the attended Assistant mode", () => {
   assert.equal(parseParams({ ...base, mode: "assistant" }).mode, "assistant");

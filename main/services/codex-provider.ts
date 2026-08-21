@@ -3,14 +3,17 @@ import type {
   Api,
   AuthResult,
   AuthInteraction,
+  AssistantMessage,
   Credential,
   CredentialStore,
   Model,
   Models,
+  ModelsSimpleStreamOptions,
   OAuthCredential,
   ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import { cleanupSessionResources, lazyStream } from "@earendil-works/pi-ai";
+import { isCodexAuthenticationFailure } from "./codex-auth-failure.js";
 import {
   codexThinkingLevelsForModel,
   isCodexThinkingLevel,
@@ -61,6 +64,14 @@ export interface CodexProviderSnapshot {
   /** Set only after request-time auth resolution proves the stored sign-in needs repair. */
   needsAttention: boolean;
   models: CodexModelSummary[];
+}
+
+export interface PreparedCodexIsolatedStream {
+  model: Model<Api>;
+  options: ModelsSimpleStreamOptions;
+  /** Aborts immediately when login/logout supersedes the credential generation. */
+  signal: AbortSignal;
+  observeResult(result: AssistantMessage, metadata?: { authenticationFailure?: boolean }): void;
 }
 
 interface CodexAuthAttempt {
@@ -202,25 +213,6 @@ function errorMessages(error: unknown): string {
     }
   }
   return messages.join("\n");
-}
-
-function isCodexAuthenticationFailure(errorMessage: string | undefined): boolean {
-  if (!errorMessage) return false;
-  return (
-    /\b401\b/u.test(errorMessage) ||
-    /\bunauthori[sz]ed\b/iu.test(errorMessage) ||
-    /\b(?:invalid|expired|revoked)[ _-](?:access[ _-])?(?:auth(?:entication)?|token|api[ _-]?key)\b/iu.test(
-      errorMessage,
-    ) ||
-    /\b(?:access |authentication )?token (?:is |has )?(?:invalid|expired|revoked)\b/iu.test(
-      errorMessage,
-    ) ||
-    /\bauthentication (?:error|failed|required)\b/iu.test(errorMessage) ||
-    /\bnot authenticated\b/iu.test(errorMessage) ||
-    /\binvalid_grant\b/iu.test(errorMessage) ||
-    /\btoken refresh failed \((?:400|401|403)\)(?=\s|:|$)/iu.test(errorMessage) ||
-    /\bfailed to extract accountId from token\b/iu.test(errorMessage)
-  );
 }
 
 function summarizeModel(model: Model<Api>): CodexModelSummary {
@@ -703,48 +695,46 @@ export class CodexProviderService {
     return this.models.getAvailable(OPENAI_CODEX_PROVIDER_ID);
   }
 
-  /** Re-check OAuth on every Agent turn and observe backend rejection before it reaches the UI. */
-  streamSimple: Models["streamSimple"] = (model, context, options) =>
-    lazyStream(model, async () => {
-      for (let supersededRetries = 0; ; supersededRetries += 1) {
-        try {
-          const { attempt, auth } = await this.prepareRuntimeAuth(model, options?.signal);
-          const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
-          if (!provider) throw new Error("OpenAI Codex provider is unavailable.");
-
-          let headers = mergeProviderHeaders(auth.auth.headers, options?.headers);
-          if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
-          const env =
-            auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined;
-          const requestModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
-          const { transformHeaders: _transformHeaders, ...providerOptions } = options ?? {};
-
-          // This is the dispatch barrier. A login/logout may complete while an
-          // async header transform is running; re-read once, then synchronously
-          // validate and create the provider stream in the same microtask.
-          const current = credentialIdentity(
-            await waitForAbort(this.credentials.read(OPENAI_CODEX_PROVIDER_ID), [
-              options?.signal,
-              attempt.generationSignal,
-            ]),
-          );
-          this.observeCredential(current);
-          if (!current || current.access !== auth.auth.apiKey) {
-            throw new CodexCredentialSupersededError("Codex credential changed.");
-          }
-          this.bindAttemptToCurrentCredential(attempt);
-          this.assertAttemptCurrent(attempt);
-
-          const requestSignal = options?.signal
-            ? AbortSignal.any([options.signal, attempt.generationSignal])
-            : attempt.generationSignal;
-          const source = provider.streamSimple(requestModel, context, {
+  /**
+   * Main-owned dispatch lease for a killable provider worker. Credentials are
+   * refreshed and re-read behind the same generation barrier as streamSimple;
+   * only the prepared one-request auth is handed to the child process.
+   */
+  async prepareIsolatedStream(
+    model: Model<Api>,
+    options?: ModelsSimpleStreamOptions,
+  ): Promise<PreparedCodexIsolatedStream> {
+    for (let supersededRetries = 0; ; supersededRetries += 1) {
+      try {
+        const { attempt, auth } = await this.prepareRuntimeAuth(model, options?.signal);
+        let headers = mergeProviderHeaders(auth.auth.headers, options?.headers);
+        if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
+        const env =
+          auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined;
+        const requestModel = auth.auth.baseUrl ? { ...model, baseUrl: auth.auth.baseUrl } : model;
+        const { transformHeaders: _transformHeaders, ...providerOptions } = options ?? {};
+        const current = credentialIdentity(
+          await waitForAbort(this.credentials.read(OPENAI_CODEX_PROVIDER_ID), [
+            options?.signal,
+            attempt.generationSignal,
+          ]),
+        );
+        this.observeCredential(current);
+        if (!current || current.access !== auth.auth.apiKey) {
+          throw new CodexCredentialSupersededError("Codex credential changed.");
+        }
+        this.bindAttemptToCurrentCredential(attempt);
+        this.assertAttemptCurrent(attempt);
+        const signal = options?.signal
+          ? AbortSignal.any([options.signal, attempt.generationSignal])
+          : attempt.generationSignal;
+        return {
+          model: requestModel,
+          signal,
+          options: {
             ...providerOptions,
-            // Pi 0.80.10's lazy WebSocket path constructs its handshake before
-            // checking an already-aborted signal. SSE checks cancellation before
-            // fetch, preserving the no-old-token-after-account-change boundary.
             transport: "sse",
-            signal: requestSignal,
+            signal,
             apiKey: options?.apiKey ?? auth.auth.apiKey,
             headers,
             env,
@@ -755,30 +745,44 @@ export class CodexProviderService {
               }
               await options?.onResponse?.(response, responseModel);
             },
-          });
-          void source
-            .result()
-            .then((result) => {
-              if (result.stopReason === "error") {
-                if (isCodexAuthenticationFailure(result.errorMessage)) {
-                  this.updateRemoteAttention(attempt, true);
-                }
-              } else if (result.stopReason !== "aborted") {
-                this.updateRemoteAttention(attempt, false);
+          },
+          observeResult: (result, metadata) => {
+            if (result.stopReason === "error") {
+              if (
+                metadata?.authenticationFailure === true ||
+                isCodexAuthenticationFailure(result.errorMessage)
+              ) {
+                this.updateRemoteAttention(attempt, true);
               }
-            })
-            .catch(() => undefined);
-          return source;
-        } catch (error) {
-          if (
-            error instanceof CodexCredentialSupersededError &&
-            supersededRetries < MAX_SUPERSEDED_AUTH_RETRIES &&
-            !options?.signal?.aborted
-          ) {
-            continue;
-          }
-          throw error;
+            } else if (result.stopReason !== "aborted") {
+              this.updateRemoteAttention(attempt, false);
+            }
+          },
+        };
+      } catch (error) {
+        if (
+          error instanceof CodexCredentialSupersededError &&
+          supersededRetries < MAX_SUPERSEDED_AUTH_RETRIES &&
+          !options?.signal?.aborted
+        ) {
+          continue;
         }
+        throw error;
       }
+    }
+  }
+
+  /** Re-check OAuth on every Agent turn and observe backend rejection before it reaches the UI. */
+  streamSimple: Models["streamSimple"] = (model, context, options) =>
+    lazyStream(model, async () => {
+      const provider = this.models.getProvider(OPENAI_CODEX_PROVIDER_ID);
+      if (!provider) throw new Error("OpenAI Codex provider is unavailable.");
+      const prepared = await this.prepareIsolatedStream(model, options);
+      const source = provider.streamSimple(prepared.model, context, prepared.options);
+      void source
+        .result()
+        .then(prepared.observeResult)
+        .catch(() => undefined);
+      return source;
     });
 }

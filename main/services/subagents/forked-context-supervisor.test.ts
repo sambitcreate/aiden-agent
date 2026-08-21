@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createModels } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "../model-runtime-core.js";
 import { SUBAGENT_READ_TOOL_NAMES } from "./capability-profile.js";
 import type { SubagentTaskResult } from "./contracts.js";
@@ -8,6 +9,7 @@ import { SubagentSupervisor, type PreparedSubagentRun } from "./subagent-supervi
 
 function runtime(): ResolvedModelRuntime {
   return {
+    models: createModels(),
     provider: {
       id: "fork-provider",
       kind: "openai",
@@ -260,10 +262,7 @@ test("synchronous projection failure releases only runs not admitted to projecti
       supervisor.execute({ tasks: [task("One"), task("Two")] }),
       new RegExp(`reject ${failureLabel}`, "u"),
     );
-    assert.deepEqual(
-      aborted.sort(),
-      failureLabel === "One" ? ["One", "Two"] : ["Two"],
-    );
+    assert.deepEqual(aborted.sort(), failureLabel === "One" ? ["One", "Two"] : ["Two"]);
   }
 });
 

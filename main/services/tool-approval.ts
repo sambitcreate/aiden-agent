@@ -22,6 +22,7 @@ interface PendingApproval {
  */
 export class ToolApprovalCoordinator {
   private readonly pending = new Map<string, PendingApproval>();
+  private readonly detachedStreams = new Set<string>();
 
   constructor(private readonly publish: (prompt: ToolApprovalPrompt) => void) {}
 
@@ -30,7 +31,9 @@ export class ToolApprovalCoordinator {
     signal?: AbortSignal,
     ownerDocumentId?: string,
   ): Promise<boolean> {
-    if (signal?.aborted) return Promise.resolve(false);
+    if (signal?.aborted || this.detachedStreams.has(descriptor.streamId)) {
+      return Promise.resolve(false);
+    }
     const approvalId = `a-${randomUUID()}`;
     return new Promise<boolean>((resolve) => {
       let settled = false;
@@ -48,7 +51,7 @@ export class ToolApprovalCoordinator {
         settle: finish,
       });
       signal?.addEventListener("abort", aborted, { once: true });
-      if (signal?.aborted) {
+      if (signal?.aborted || this.detachedStreams.has(descriptor.streamId)) {
         aborted();
         return;
       }
@@ -73,8 +76,21 @@ export class ToolApprovalCoordinator {
     }
   }
 
+  /** A detached renderer cannot attend pending or future approval prompts. */
+  detachStream(streamId: string): void {
+    this.detachedStreams.add(streamId);
+    this.cancelStream(streamId);
+  }
+
+  /** Release bounded per-stream state after the owning generation settles. */
+  releaseStream(streamId: string): void {
+    this.cancelStream(streamId);
+    this.detachedStreams.delete(streamId);
+  }
+
   shutdown(): void {
     for (const entry of [...this.pending.values()]) entry.settle(false);
+    this.detachedStreams.clear();
   }
 
   get pendingCount(): number {

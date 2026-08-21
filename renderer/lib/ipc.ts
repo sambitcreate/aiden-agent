@@ -314,6 +314,7 @@ export const providersApi = {
       modelCount: number;
       models: string[];
       modelMetadata: Record<string, ProviderModelMetadata>;
+      recommendedModel?: string;
     }>("providers:test", provider, keyOverride),
   listModels: (provider: Omit<Provider, "hasKey">, keyOverride?: string) =>
     invoke<string[]>("providers:listModels", provider, keyOverride),
@@ -449,6 +450,58 @@ export const exaApi = {
   setEnabled: (enabled: boolean) => invoke<AppSettings>("exa:setEnabled", enabled),
 };
 
+// ── Telegram remote control ──────────────────────────────────────────
+export interface TelegramStatus {
+  enabled: boolean;
+  hasToken: boolean;
+  allowedUserId?: number;
+  providerId?: string;
+  model?: string;
+  workspaceId?: string;
+  polling: boolean;
+  queuedCount: number;
+  thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
+  draftPreviews: boolean;
+  activity: "quiet" | "thinking" | "tools" | "verbose";
+  lastError?: string;
+  rendering: "rich" | "html";
+  voiceMode: "hidden" | "mirror" | "always";
+  threadedMode: boolean;
+  activeProfile: string;
+  profiles: Array<{
+    name: string;
+    hasToken: boolean;
+    settings: { enabled?: boolean; allowedUserId?: number };
+    status: { status: string; queuedCount: number; lastError?: string };
+  }>;
+  recentDiagnostics: Array<{ at: number; level: "info" | "warning" | "error" | "recovery"; message: string }>;
+}
+export const telegramApi = {
+  get: () => invoke<TelegramStatus>("telegram:get"),
+  setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
+  setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
+  connect: () => invoke<{ connected: boolean }>("telegram:connect"),
+  disconnect: () => invoke<{ connected: boolean }>("telegram:disconnect"),
+  resetPairing: () => invoke<{ reset: boolean }>("telegram:resetPairing"),
+  setProvider: (providerId: string, model: string) =>
+    invoke<{ providerId: string; model: string }>("telegram:setProvider", providerId, model),
+  setWorkspace: (workspaceId?: string) =>
+    invoke<{ workspaceId?: string }>("telegram:setWorkspace", workspaceId),
+  setExperience: (input: {
+    thinkingLevel?: import("../shared/generation-thinking").GenerationThinkingLevel;
+    draftPreviews: boolean;
+    activity: "quiet" | "thinking" | "tools" | "verbose";
+    rendering: "rich" | "html";
+    voiceMode: "hidden" | "mirror" | "always";
+    threadedMode: boolean;
+  }) => invoke("telegram:setExperience", input),
+  selectProfile: (profile: string) => invoke<{ profile: string }>("telegram:selectProfile", profile),
+  createProfile: (profile: string) => invoke<{ profile: string }>("telegram:createProfile", profile),
+  deleteProfile: (profile: string) => invoke<{ deleted: boolean }>("telegram:deleteProfile", profile),
+  onModelSelectionChanged: (handler: (selection: { providerId: string; model: string }) => void) =>
+    onNotification("telegram:model-selection-changed", handler),
+};
+
 // ── Voice + shortcut ──────────────────────────────────────────────────
 export const voiceApi = {
   transcribe: (audioBase64: string, mimeType: string) =>
@@ -514,6 +567,28 @@ export const attachmentsApi = {
       includeImages,
       remainingInlineBytes,
     ),
+  readDroppedFiles: (
+    files: readonly File[],
+    remainingSlots: number,
+    includeImages: boolean,
+    remainingInlineBytes: number,
+  ) =>
+    window.aidenAPI.attachments.readDroppedFiles(
+      files,
+      remainingSlots,
+      includeImages,
+      remainingInlineBytes,
+    ),
+  readClipboardImages: (
+    images: Array<{ mimeType: string; bytes: Uint8Array }>,
+    remainingSlots: number,
+    remainingInlineBytes: number,
+  ) =>
+    window.aidenAPI.attachments.readClipboardImages(
+      images,
+      remainingSlots,
+      remainingInlineBytes,
+    ),
 };
 
 export const modelsApi = {
@@ -556,6 +631,10 @@ export interface TerminalSession {
   id: string;
   workspaceId: string;
   cwd: string;
+  /** The shell that actually launched this session (e.g. `/bin/zsh`). */
+  resolvedShell: string;
+  /** True when the preferred shell was skipped and a fallback launched it. */
+  preferredShellSkipped: boolean;
 }
 
 export interface TerminalSnapshot {
@@ -609,6 +688,7 @@ async function invokeChatMutation<T>(channel: string, ...args: unknown[]): Promi
 }
 
 export const chatsApi = {
+  activitySnapshot: () => invoke<unknown>("chats:activitySnapshot"),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
     const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));
@@ -699,6 +779,8 @@ export const subagentsApi = {
 interface ChatDelta {
   streamId: string;
   delta: string;
+  /** Discard deltas from a failed overflow attempt before its retry starts. */
+  reset?: boolean;
 }
 interface ChatReasoningDelta {
   streamId: string;
@@ -757,6 +839,7 @@ export type GenerationStartResult = { ok: true } | { ok: false; error: Error };
 
 export interface StreamCallbacks {
   onDelta: (delta: string) => void;
+  onReset?: () => void;
   onReasoningDelta?: (delta: string) => void;
   onDone: (
     fullContent: string,
@@ -801,7 +884,9 @@ export function startGeneration(
 
   unsubs.push(
     onNotification<ChatDelta>("chat:delta", (p) => {
-      if (p.streamId === streamId) callbacks.onDelta(p.delta);
+      if (p.streamId !== streamId) return;
+      if (p.reset) callbacks.onReset?.();
+      else callbacks.onDelta(p.delta);
     }),
   );
   unsubs.push(
@@ -894,17 +979,29 @@ export function startGeneration(
     },
   );
 
+  let lifecycleDetached = false;
+  let userStopRequested = false;
+
   return {
     streamId,
     started,
     cancel: (origin) => {
       if (origin === "lifecycle") {
+        if (lifecycleDetached) return;
+        lifecycleDetached = true;
         rememberDetachedLifecycleStream({
           streamId,
           chatId: params.chatId,
           workspaceId: params.workspaceId ?? "default",
         });
         dispose();
+        // Renderer lifecycle only releases this document's subscriptions. The
+        // main-owned operation continues and the shell reconciles its durable
+        // terminal snapshot. Authority-changing main operations still cancel
+        // and drain the generation explicitly.
+      } else {
+        if (userStopRequested) return;
+        userStopRequested = true;
       }
       void invoke("chat:cancel", streamId, origin).catch((error: unknown) => {
         if (origin === "user_stop") {

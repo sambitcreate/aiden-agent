@@ -1,10 +1,19 @@
 import { anthropicMessagesApi, openAICompletionsApi } from "@earendil-works/pi-ai/compat";
-import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  createProvider,
+  type Api,
+  type Model,
+  type Models,
+  type ProviderHeaders,
+  type ProviderStreams,
+} from "@earendil-works/pi-ai";
 import {
   OPENAI_CODEX_BASE_URL,
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_LABEL,
 } from "./codex-provider.js";
+import type { PreparedCodexIsolatedStream } from "./codex-provider.js";
 import {
   resolveRuntimeApiKey,
   resolveRuntimeBaseUrl,
@@ -62,9 +71,18 @@ function buildModel(
 export interface ResolvedModelRuntime {
   provider: StoredProvider;
   model: Model<Api>;
+  /** Owning Pi collection for auth, streaming, and future native Harness operations. */
+  models: Models;
   apiKey: string | undefined;
   headers: ProviderHeaders | undefined;
   streams: Pick<ProviderStreams, "streamSimple">;
+  /** Main-owned guarded credential handoff for isolated provider dispatch. */
+  prepareIsolatedStream?: (
+    model: Model<Api>,
+    options?: Parameters<ProviderStreams["streamSimple"]>[2],
+  ) => Promise<PreparedCodexIsolatedStream>;
+  /** One-shot host provenance from the most recently settled isolated request. */
+  consumeIsolatedHostFailure?: () => "inference" | "policy" | undefined;
 }
 
 export interface ModelRuntimeDependencies {
@@ -72,10 +90,13 @@ export interface ModelRuntimeDependencies {
   getApiKey(provider: StoredProvider): Promise<string | null>;
   resolveRuntimeLimits(provider: StoredProvider, modelId: string): Promise<RuntimeModelLimits>;
   codex: {
+    models: Models;
     prepareRuntimeModel(modelId: string, signal?: AbortSignal): Promise<Model<Api>>;
     streamSimple: ProviderStreams["streamSimple"];
+    prepareIsolatedStream?: ResolvedModelRuntime["prepareIsolatedStream"];
   };
   native: {
+    models: Models;
     getProvider(providerId: string): StoredProvider | undefined;
     getModel(providerId: string, modelId: string): Model<Api> | undefined;
     streamSimple: ProviderStreams["streamSimple"];
@@ -94,9 +115,11 @@ export async function resolveModelRuntimeWith(
     return {
       provider: codexRuntimeProvider,
       model,
+      models: dependencies.codex.models,
       apiKey: undefined,
       headers: undefined,
       streams: { streamSimple: dependencies.codex.streamSimple },
+      prepareIsolatedStream: dependencies.codex.prepareIsolatedStream,
     };
   }
 
@@ -114,6 +137,7 @@ export async function resolveModelRuntimeWith(
     return {
       provider: nativeProvider,
       model,
+      models: dependencies.native.models,
       apiKey: undefined,
       headers: undefined,
       streams: { streamSimple: dependencies.native.streamSimple },
@@ -136,11 +160,35 @@ export async function resolveModelRuntimeWith(
 
   const limits = await dependencies.resolveRuntimeLimits(provider, modelId);
   const model = buildModel(provider, modelId, limits);
+  const headers = resolveRuntimeHeaders(provider);
+  const models = createModels();
+  models.setProvider(
+    createProvider<Api>({
+      id: provider.id,
+      name: provider.label,
+      baseUrl: model.baseUrl,
+      headers,
+      models: [model],
+      auth: {
+        apiKey: {
+          name: `${provider.label} runtime key`,
+          resolve: async () => ({
+            auth: { apiKey, headers },
+            source: "Aiden custom provider",
+          }),
+        },
+      },
+      api: streamsFor(model.api),
+    }),
+  );
   return {
     provider,
     model,
+    models,
     apiKey,
-    headers: resolveRuntimeHeaders(provider),
-    streams: streamsFor(model.api),
+    headers,
+    // Custom endpoints now use the same Pi provider/auth/model composition as
+    // built-ins; the compat adapter is only the provider's API implementation.
+    streams: { streamSimple: models.streamSimple.bind(models) },
   };
 }

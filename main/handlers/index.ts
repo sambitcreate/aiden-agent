@@ -22,6 +22,7 @@ import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
 import { registerShortcutHandlers } from "./shortcuts.js";
+import { registerTelegramHandlers } from "./telegram.js";
 import { registerSubagentHandlers } from "./subagents.js";
 import { registerCreateImagesHandlers } from "./create-images.js";
 
@@ -63,6 +64,7 @@ export function registerHandlers(): void {
   registerScheduledTaskHandlers();
   registerAssistantHandlers();
   registerShortcutHandlers();
+  registerTelegramHandlers();
   registerSubagentHandlers();
   registerCreateImagesHandlers();
 

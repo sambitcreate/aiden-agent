@@ -15,6 +15,7 @@ import { OpenInEditorPicker } from "../components/open-in-editor-picker";
 import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { ariaKeyShortcut } from "../shared/keybindings";
 import { ThinkingControl } from "../components/thinking-control";
+import { ReasoningVisibilityControl } from "../components/reasoning-visibility-control";
 import {
   SubagentWorkspaceWriteApproval,
   subagentWorkspaceWriteOperationLabel,
@@ -94,6 +95,7 @@ import {
 } from "../shared/assistant";
 import { isAppendReconciliationRequired } from "../shared/chat-message-contract";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { isLocalProviderDeployment } from "../shared/provider-deployment";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -250,6 +252,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     anthropicThinkingLevels,
     storedAnthropicThinkingLevel,
   );
+  const localReasoningVisibilitySupported = Boolean(
+    selectedProvider && isLocalProviderDeployment(selectedProvider),
+  );
+  const showLocalModelReasoning = settings.data?.showLocalModelReasoning !== false;
 
   React.useEffect(() => {
     if (chat.data && effectiveWorkspaceId && effectiveWorkspaceId !== activeId) {
@@ -282,6 +288,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const [decidingApprovalId, setDecidingApprovalId] = React.useState<string | null>(null);
   const decidingApprovalRef = React.useRef<string | null>(null);
   const generationRef = React.useRef<GenerationHandle | null>(null);
+  const generationChatIdRef = React.useRef<string | null>(null);
   const generationIntentRef = React.useRef(0);
   const mountedRef = React.useRef(true);
   const chatIdRef = React.useRef(chatId);
@@ -301,14 +308,19 @@ export function ChatPane({ chatId }: { chatId: string }) {
 
   chatIdRef.current = chatId;
 
-  // Cancel any in-flight generation when leaving the chat.
+  // Detach only the generation owned by the departing chat. The main process
+  // keeps that operation alive and reconciles its durable terminal state.
   React.useEffect(() => {
+    const departingChatId = chatId;
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       generationIntentRef.current += 1;
-      generationRef.current?.cancel("lifecycle");
-      generationRef.current = null;
+      if (generationChatIdRef.current === departingChatId) {
+        generationRef.current?.cancel("lifecycle");
+        generationRef.current = null;
+        generationChatIdRef.current = null;
+      }
       if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
       deltaFrameRef.current = null;
       pendingDeltaRef.current = "";
@@ -549,6 +561,20 @@ export function ChatPane({ chatId }: { chatId: string }) {
               scheduleStreamFlush();
             }
           },
+          onReset: () => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            if (deltaFrameRef.current !== null) {
+              window.cancelAnimationFrame(deltaFrameRef.current);
+            }
+            deltaFrameRef.current = null;
+            pendingDeltaRef.current = "";
+            pendingReasoningDeltaRef.current = "";
+            streamedTextRef.current = "";
+            streamedReasoningRef.current = "";
+            setStreamingText("");
+            setStreamingReasoning(null);
+            setStreamComplete(false);
+          },
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
@@ -596,6 +622,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onDone: async (full, finalTimeline, updatedChat, finalReasoning) => {
             if (generationIntentRef.current !== generationIntent) return;
             generationRef.current = null;
+            generationChatIdRef.current = null;
             setCanStopGeneration(false);
             if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
             deltaFrameRef.current = null;
@@ -610,12 +637,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
               generationTimelineRef.current = finalTimeline;
               setGenerationTimeline(finalTimeline);
             }
-            await waitForStreamHandoff(Boolean(full.trim()));
-            if (generationIntentRef.current !== generationIntent) return;
             if (updatedChat) {
               qc.setQueryData(queryKeys.chat(chatId), updatedChat);
               void qc.invalidateQueries({ queryKey: queryKeys.chats });
             }
+            await waitForStreamHandoff(Boolean(full.trim()));
+            if (generationIntentRef.current !== generationIntent) return;
             if (mountedRef.current) {
               setLiveSubagents([]);
               setStreamingText(null);
@@ -634,6 +661,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             void (async () => {
               if (generationIntentRef.current !== generationIntent) return;
               generationRef.current = null;
+              generationChatIdRef.current = null;
               setCanStopGeneration(false);
               if (deltaFrameRef.current !== null) {
                 window.cancelAnimationFrame(deltaFrameRef.current);
@@ -658,15 +686,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 void refreshCodexProviderState(qc);
               }
               const partial = resolvedPartialContent.trim();
+              if (updatedChat) {
+                qc.setQueryData(queryKeys.chat(chatId), updatedChat);
+                void qc.invalidateQueries({ queryKey: queryKeys.chats });
+              }
               if (partial) {
                 setStreamingText(resolvedPartialContent);
                 setStreamComplete(true);
                 await waitForStreamHandoff(true);
                 if (generationIntentRef.current !== generationIntent) return;
-              }
-              if (updatedChat) {
-                qc.setQueryData(queryKeys.chat(chatId), updatedChat);
-                void qc.invalidateQueries({ queryKey: queryKeys.chats });
               }
               if (mountedRef.current) {
                 if (updatedChat || !partial) setLiveSubagents([]);
@@ -685,8 +713,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   generationTimelineRef.current = null;
                 }
                 setApprovals([]);
+                const persistedFailure =
+                  updatedChat?.messages[updatedChat.messages.length - 1]?.role ===
+                    "assistant" &&
+                  updatedChat.messages[updatedChat.messages.length - 1]
+                    ?.providerFailure;
                 setError(
-                  partial ? `Generation stopped after a partial response: ${message}` : message,
+                  persistedFailure
+                    ? null
+                    : partial
+                      ? `Generation stopped after a partial response: ${message}`
+                      : message,
                 );
               }
             })();
@@ -695,6 +732,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         messageTurnId,
       );
       generationRef.current = handle;
+      generationChatIdRef.current = chatId;
       return handle.started;
     },
     [
@@ -734,7 +772,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
               content: text,
               attachments: attachments.length ? attachments : undefined,
             },
-            { providerId, model, autoTitle: true, turnId: messageTurnId, skillInvocation },
+            {
+              providerId,
+              model,
+              autoTitle: true,
+              turnId: messageTurnId,
+              skillInvocation,
+            },
           );
         } catch (appendError) {
           if (isAppendReconciliationRequired(appendError)) {
@@ -784,6 +828,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     generationIntentRef.current += 1;
     generationRef.current?.cancel("lifecycle");
     generationRef.current = null;
+    generationChatIdRef.current = null;
     if (deltaFrameRef.current !== null) window.cancelAnimationFrame(deltaFrameRef.current);
     deltaFrameRef.current = null;
     pendingDeltaRef.current = "";
@@ -862,7 +907,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
       await workspacesApi.update(effectiveWorkspace.id, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
-        qc.invalidateQueries({ queryKey: queryKeys.skillCatalog(effectiveWorkspace.id) }),
+        qc.invalidateQueries({
+          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+        }),
       ]);
     },
     [
@@ -978,6 +1025,39 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
     },
     [anthropicThinkingSupported, isGenerating, isStartingGeneration, model, qc, thinkingSaving],
+  );
+
+  const changeLocalReasoningVisibility = React.useCallback(
+    async (visible: boolean) => {
+      if (
+        !localReasoningVisibilitySupported ||
+        thinkingSaving ||
+        isStartingGeneration ||
+        isGenerating
+      ) {
+        return;
+      }
+      setThinkingSaving(true);
+      try {
+        const updated = await settingsApi.set({ showLocalModelReasoning: visible });
+        qc.setQueryData(queryKeys.settings, updated);
+      } catch (changeError) {
+        toast.error(
+          changeError instanceof Error
+            ? changeError.message
+            : "Couldn't save the local reasoning visibility.",
+        );
+      } finally {
+        setThinkingSaving(false);
+      }
+    },
+    [
+      isGenerating,
+      isStartingGeneration,
+      localReasoningVisibilitySupported,
+      qc,
+      thinkingSaving,
+    ],
   );
 
   const moveNewChatToWorkspace = React.useCallback(
@@ -1467,6 +1547,12 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   canDisable={thinkingMetadata?.thinkingCanDisable !== false}
                   disabled={thinkingSaving || isStartingGeneration || isGenerating}
                   onChange={(level) => void changeAnthropicThinking(level)}
+                />
+              ) : localReasoningVisibilitySupported ? (
+                <ReasoningVisibilityControl
+                  visible={showLocalModelReasoning}
+                  disabled={thinkingSaving || isStartingGeneration || isGenerating}
+                  onChange={(visible) => void changeLocalReasoningVisibility(visible)}
                 />
               ) : undefined
             }

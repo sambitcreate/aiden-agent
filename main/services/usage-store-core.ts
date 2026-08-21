@@ -11,7 +11,9 @@ export type UsageRequestSource =
   | "workflow-proposal"
   | "voice-transcription"
   | "scheduled"
-  | "subagent";
+  | "subagent"
+  | "telegram"
+  | "compaction";
 export type UsageRequestStatus = "completed" | "failed" | "cancelled";
 export type UsageCostStatus = "reported" | "unavailable" | "not-applicable";
 
@@ -76,10 +78,20 @@ const REQUEST_SOURCES = new Set<UsageRequestSource>([
   "voice-transcription",
   "scheduled",
   "subagent",
+  "telegram",
+  "compaction",
 ]);
 
 export function emptyUsageTokens(): UsageTokenBreakdown {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0 };
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cacheWrite1h: 0,
+    reasoning: 0,
+    total: 0,
+  };
 }
 
 export function createEmptyUsageDatabase(): UsageDatabase {
@@ -87,7 +99,9 @@ export function createEmptyUsageDatabase(): UsageDatabase {
 }
 
 function nonNegative(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : 0;
 }
 
 function nonNegativeInteger(value: unknown): number {
@@ -95,30 +109,41 @@ function nonNegativeInteger(value: unknown): number {
 }
 
 function normalizeTokens(value: unknown): UsageTokenBreakdown {
-  const tokens = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const tokens =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
   return {
     input: nonNegativeInteger(tokens.input),
     output: nonNegativeInteger(tokens.output),
     cacheRead: nonNegativeInteger(tokens.cacheRead),
     cacheWrite: nonNegativeInteger(tokens.cacheWrite),
+    cacheWrite1h: nonNegativeInteger(tokens.cacheWrite1h),
     reasoning: nonNegativeInteger(tokens.reasoning),
     total: nonNegativeInteger(tokens.total),
   };
 }
 
-function addTokens(target: UsageTokenBreakdown, value: UsageTokenBreakdown): void {
+function addTokens(
+  target: UsageTokenBreakdown,
+  value: UsageTokenBreakdown,
+): void {
   target.input += value.input;
   target.output += value.output;
   target.cacheRead += value.cacheRead;
   target.cacheWrite += value.cacheWrite;
+  target.cacheWrite1h = (target.cacheWrite1h ?? 0) + (value.cacheWrite1h ?? 0);
   target.reasoning += value.reasoning;
   target.total += value.total;
 }
 
 function isDateKey(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value))
+    return false;
   const date = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  return (
+    Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+  );
 }
 
 function stringOr(value: unknown, fallback: string): string {
@@ -128,7 +153,10 @@ function stringOr(value: unknown, fallback: string): string {
 function normalizeBucket(value: unknown): DailyUsageBucket | null {
   if (!value || typeof value !== "object") return null;
   const bucket = value as Record<string, unknown>;
-  if (!isDateKey(bucket.date) || !REQUEST_SOURCES.has(bucket.source as UsageRequestSource)) {
+  if (
+    !isDateKey(bucket.date) ||
+    !REQUEST_SOURCES.has(bucket.source as UsageRequestSource)
+  ) {
     return null;
   }
   const local = bucket.local === true;
@@ -136,9 +164,15 @@ function normalizeBucket(value: unknown): DailyUsageBucket | null {
     date: bucket.date,
     source: bucket.source as UsageRequestSource,
     providerId: stringOr(bucket.providerId, "unknown"),
-    providerLabel: stringOr(bucket.providerLabel, stringOr(bucket.providerId, "Unknown")),
+    providerLabel: stringOr(
+      bucket.providerLabel,
+      stringOr(bucket.providerId, "Unknown"),
+    ),
     modelId: stringOr(bucket.modelId, "unknown"),
-    modelLabel: stringOr(bucket.modelLabel, stringOr(bucket.modelId, "Unknown model")),
+    modelLabel: stringOr(
+      bucket.modelLabel,
+      stringOr(bucket.modelId, "Unknown model"),
+    ),
     local,
     requests: nonNegativeInteger(bucket.requests),
     completedRequests: nonNegativeInteger(bucket.completedRequests),
@@ -147,7 +181,9 @@ function normalizeBucket(value: unknown): DailyUsageBucket | null {
     reportedTokenRequests: nonNegativeInteger(bucket.reportedTokenRequests),
     unmeteredRequests: nonNegativeInteger(bucket.unmeteredRequests),
     costedRequests: local ? 0 : nonNegativeInteger(bucket.costedRequests),
-    unpricedHostedRequests: local ? 0 : nonNegativeInteger(bucket.unpricedHostedRequests),
+    unpricedHostedRequests: local
+      ? 0
+      : nonNegativeInteger(bucket.unpricedHostedRequests),
     tokens: normalizeTokens(bucket.tokens),
     hostedCostUsd: local ? 0 : nonNegative(bucket.hostedCostUsd),
   };
@@ -186,7 +222,10 @@ function dateOrdinal(value: string): number {
 }
 
 function bucketKey(
-  bucket: Pick<DailyUsageBucket, "date" | "source" | "providerId" | "modelId" | "local">,
+  bucket: Pick<
+    DailyUsageBucket,
+    "date" | "source" | "providerId" | "modelId" | "local"
+  >,
 ): string {
   return JSON.stringify([
     bucket.date,
@@ -197,18 +236,28 @@ function bucketKey(
   ]);
 }
 
-function modelKey(bucket: Pick<DailyUsageBucket, "providerId" | "modelId" | "local">): string {
-  return JSON.stringify([bucket.providerId, bucket.modelId, bucket.local ? "local" : "hosted"]);
+function modelKey(
+  bucket: Pick<DailyUsageBucket, "providerId" | "modelId" | "local">,
+): string {
+  return JSON.stringify([
+    bucket.providerId,
+    bucket.modelId,
+    bucket.local ? "local" : "hosted",
+  ]);
 }
 
-function streaks(activeDates: string[], endDate: string): { current: number; longest: number } {
+function streaks(
+  activeDates: string[],
+  endDate: string,
+): { current: number; longest: number } {
   const ordered = [...new Set(activeDates)].sort();
   if (ordered.length === 0) return { current: 0, longest: 0 };
 
   let longest = 1;
   let run = 1;
   for (let index = 1; index < ordered.length; index += 1) {
-    if (dateOrdinal(ordered[index]!) - dateOrdinal(ordered[index - 1]!) === 1) run += 1;
+    if (dateOrdinal(ordered[index]!) - dateOrdinal(ordered[index - 1]!) === 1)
+      run += 1;
     else run = 1;
     longest = Math.max(longest, run);
   }
@@ -234,11 +283,14 @@ function summaryFromDatabase(
 ): UsageSummary {
   const endDate = localDateKey(now);
   const earliest = database.buckets.reduce<string | null>(
-    (value, bucket) => (value === null || bucket.date < value ? bucket.date : value),
+    (value, bucket) =>
+      value === null || bucket.date < value ? bucket.date : value,
     null,
   );
   const startDate =
-    range === "all" ? (earliest ?? endDate) : shiftDateKey(endDate, -(RANGE_DAYS[range] - 1));
+    range === "all"
+      ? (earliest ?? endDate)
+      : shiftDateKey(endDate, -(RANGE_DAYS[range] - 1));
   const buckets = database.buckets.filter(
     (bucket) => bucket.date >= startDate && bucket.date <= endDate,
   );
@@ -313,7 +365,9 @@ function summaryFromDatabase(
     models.set(key, model);
   }
 
-  const days = [...dayMap.values()].sort((left, right) => left.date.localeCompare(right.date));
+  const days = [...dayMap.values()].sort((left, right) =>
+    left.date.localeCompare(right.date),
+  );
   const streak = streaks(
     days.filter((day) => day.requests > 0).map((day) => day.date),
     endDate,
@@ -362,20 +416,29 @@ export function createUsageStore(
       const task = mutationQueue.then(async () => {
         const database = await loadDatabase();
         const timestamp =
-          typeof record.timestamp === "number" && Number.isFinite(record.timestamp)
+          typeof record.timestamp === "number" &&
+          Number.isFinite(record.timestamp)
             ? record.timestamp
             : now();
         const descriptor = {
           date: localDateKey(timestamp),
           source: record.source,
           providerId: stringOr(record.providerId, "unknown"),
-          providerLabel: stringOr(record.providerLabel, stringOr(record.providerId, "Unknown")),
+          providerLabel: stringOr(
+            record.providerLabel,
+            stringOr(record.providerId, "Unknown"),
+          ),
           modelId: stringOr(record.modelId, "unknown"),
-          modelLabel: stringOr(record.modelLabel, stringOr(record.modelId, "Unknown model")),
+          modelLabel: stringOr(
+            record.modelLabel,
+            stringOr(record.modelId, "Unknown model"),
+          ),
           local: record.local,
         };
         const key = bucketKey(descriptor);
-        let bucket = database.buckets.find((candidate) => bucketKey(candidate) === key);
+        let bucket = database.buckets.find(
+          (candidate) => bucketKey(candidate) === key,
+        );
         if (!bucket) {
           bucket = {
             ...descriptor,
@@ -424,3 +487,4 @@ export function createUsageStore(
     },
   };
 }
+

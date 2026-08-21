@@ -4,6 +4,7 @@
 // Logging must never break the app: writes are serialized on a queue and all
 // failures are swallowed. Kept Electron-free so it stays unit-testable.
 
+import { appendFileSync, mkdirSync, renameSync, statSync } from "node:fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 
@@ -18,18 +19,23 @@ let queue: Promise<unknown> = Promise.resolve();
 /** Start writing to `targetPath`, rotating an oversized previous log aside. */
 export function initDevLog(targetPath: string): void {
   filePath = targetPath;
-  queue = queue.then(async () => {
+  try {
+    mkdirSync(path.dirname(targetPath), { recursive: true });
     try {
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      const stat = await fs.stat(targetPath).catch(() => null);
-      if (stat && stat.size > MAX_BYTES) {
-        await fs.rename(targetPath, targetPath.replace(/\.log$/, ".prev.log")).catch(() => {});
+      if (statSync(targetPath).size > MAX_BYTES) {
+        renameSync(targetPath, targetPath.replace(/\.log$/, ".prev.log"));
       }
-      await fs.appendFile(targetPath, `\n── session ${new Date().toISOString()} ──\n`, "utf8");
     } catch {
-      // Logging must never crash the app.
+      // A missing log or failed best-effort rotation is safe to ignore.
     }
-  });
+    appendFileSync(
+      targetPath,
+      `\n── session ${new Date().toISOString()} pid=${process.pid} ppid=${process.ppid} ──\n`,
+      "utf8",
+    );
+  } catch {
+    // Logging must never crash the app.
+  }
 }
 
 export function devLogPath(): string | null {
@@ -60,9 +66,39 @@ export function redactDevLogSecrets(value: string): string {
 export function writeDevLog(level: "debug" | "info" | "warn" | "error", scope: string, values: unknown[]): void {
   if (!filePath) return;
   const target = filePath;
-  const rendered = redactDevLogSecrets(values.map(format).join(" "));
-  const line = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${scope}] ${rendered}`.slice(0, MAX_LINE) + "\n";
+  const line = devLogLine(level, scope, values);
   queue = queue.then(() => fs.appendFile(target, line, "utf8")).catch(() => {});
+}
+
+function devLogLine(
+  level: "debug" | "info" | "warn" | "error",
+  scope: string,
+  values: unknown[],
+): string {
+  const rendered = redactDevLogSecrets(values.map(format).join(" "));
+  return (
+    `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${scope}] ${rendered}`.slice(
+      0,
+      MAX_LINE,
+    ) + "\n"
+  );
+}
+
+/**
+ * Append immediately for fatal errors, process signals, and exit handlers.
+ * Async work is not guaranteed to run once Node or Electron begins exiting.
+ */
+export function writeDevLogSync(
+  level: "debug" | "info" | "warn" | "error",
+  scope: string,
+  values: unknown[],
+): void {
+  if (!filePath) return;
+  try {
+    appendFileSync(filePath, devLogLine(level, scope, values), "utf8");
+  } catch {
+    // Diagnostics must never replace the original failure.
+  }
 }
 
 /** Resolve once every queued write has landed. Used by tests. */

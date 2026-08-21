@@ -9,6 +9,20 @@ import {
 } from "../../renderer/shared/chat-message-contract.js";
 
 const source = fs.readFileSync(new URL("./chats.ts", import.meta.url), "utf8");
+const projectionSource = fs.readFileSync(
+  new URL("../services/visible-chat-projection.ts", import.meta.url),
+  "utf8",
+);
+
+test("private canonical Pi protocol never crosses the renderer chat boundary", () => {
+  assert.match(
+    projectionSource,
+    /const \{ pi: _privatePiProtocol, \.\.\.visible \} = message/u,
+  );
+  assert.match(source, /chat: chatForRenderer\(chat\)/u);
+  assert.match(source, /return chatForRenderer\(chat\)/u);
+  assert.match(source, /return chatForRenderer\(copied\)/u);
+});
 
 test("indeterminate appends fence create and append for the renderer document", () => {
   const create = source.slice(
@@ -163,7 +177,9 @@ test("append envelopes reject many extra properties without materializing Object
 });
 
 test("append admission charges encoded image representation and metadata", () => {
-  const data = Buffer.alloc(3).toString("base64");
+  const data =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const size = Buffer.byteLength(data, "base64");
   const parsed = parseChatAppend(
     "chat-1",
     {
@@ -175,7 +191,7 @@ test("append admission charges encoded image representation and metadata", () =>
           name: "a.png",
           mimeType: "image/png",
           kind: "image",
-          size: 3,
+          size,
           data,
         },
       ],

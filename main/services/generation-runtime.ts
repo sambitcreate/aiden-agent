@@ -2,7 +2,12 @@
 // keyless-provider and terminal-error contracts have fast, deterministic tests.
 
 import type { AgentOptions } from "@earendil-works/pi-agent-core";
-import type { Api, Model, ProviderHeaders, ProviderStreams } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  Model,
+  ProviderHeaders,
+  ProviderStreams,
+} from "@earendil-works/pi-ai";
 import {
   googleThinkingLevelsForModel,
   isGoogleThinkingLevel,
@@ -21,7 +26,10 @@ import {
 import { ANTHROPIC_PROVIDER_ID } from "./anthropic-provider.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
-import { isLmStudioProviderId, isOllamaProviderId } from "./custom-provider-id.js";
+import {
+  isLocalProviderDeployment,
+  type ProviderDeploymentFields,
+} from "../../renderer/shared/provider-deployment.js";
 
 /**
  * Pi's current compatibility transports require a non-empty constructor value
@@ -31,16 +39,19 @@ import { isLmStudioProviderId, isOllamaProviderId } from "./custom-provider-id.j
  */
 export const PI_AUTH_COMPATIBILITY_TOKEN = "aiden-local-no-auth";
 
-/** Expose only provider-authored reasoning that Aiden deliberately supports in the transcript. */
-export function shouldExposeReasoning(providerId: string): boolean {
-  return (
-    providerId === GOOGLE_PROVIDER_ID ||
-    isLmStudioProviderId(providerId) ||
-    isOllamaProviderId(providerId)
-  );
+/**
+ * Match Pi's provider-neutral display contract for readable thinking blocks.
+ * Local visibility is a presentation preference only; the canonical Pi message
+ * remains private and complete regardless of this decision.
+ */
+export function shouldExposeReasoning(
+  provider: ProviderDeploymentFields,
+  showLocalModelReasoning: boolean | undefined,
+): boolean {
+  return !isLocalProviderDeployment(provider) || showLocalModelReasoning !== false;
 }
 
-/** Fail closed outside Aiden's native, reasoning-capable provider contracts. */
+/** Preserve provider-specific normalization while honoring every Pi reasoning model. */
 export function resolveGenerationThinkingLevel(
   providerId: string,
   model: Pick<Model<Api>, "reasoning" | "thinkingLevelMap">,
@@ -66,11 +77,21 @@ export function resolveGenerationThinkingLevel(
       ? requested
       : normalizeAnthropicThinkingLevel(levels, undefined);
   }
-  return "off";
+  if (!model.reasoning || !requested || requested === "off") return "off";
+  if (
+    model.thinkingLevelMap &&
+    (!(requested in model.thinkingLevelMap) ||
+      model.thinkingLevelMap[requested] === null)
+  ) {
+    return "off";
+  }
+  return requested;
 }
 
 /** The connection-bound runtime model is the sole request-time image authority. */
-export function runtimeSupportsImages(model: Pick<Model<Api>, "input">): boolean {
+export function runtimeSupportsImages(
+  model: Pick<Model<Api>, "input">,
+): boolean {
   return model.input.includes("image");
 }
 
@@ -84,7 +105,9 @@ export function resolveRuntimeBaseUrl(provider: {
   baseUrl: string;
 }): string {
   const baseUrl = provider.baseUrl.replace(/\/+$/u, "");
-  return provider.kind === "anthropic" ? baseUrl.replace(/\/v1$/iu, "") : baseUrl;
+  return provider.kind === "anthropic"
+    ? baseUrl.replace(/\/v1$/iu, "")
+    : baseUrl;
 }
 
 export function resolveRuntimeApiKey(
@@ -179,9 +202,12 @@ export async function waitForGenerationStateClear(
     const remaining = deadline - Date.now();
     if (remaining <= 0) return false;
     const pending = completions().filter(
-      (completion): completion is Promise<unknown> => completion !== null && completion !== undefined,
+      (completion): completion is Promise<unknown> =>
+        completion !== null && completion !== undefined,
     );
-    const pause = new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    const pause = new Promise<void>((resolve) =>
+      setTimeout(resolve, Math.min(25, remaining)),
+    );
     await Promise.race(
       pending.length > 0
         ? [pause, Promise.allSettled(pending).then(() => undefined)]
@@ -189,6 +215,25 @@ export async function waitForGenerationStateClear(
     );
   }
   return true;
+}
+
+/** Wait without making Stop advisory during a bounded retry backoff. */
+export async function waitForAbortableDelay(
+  ms: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (ms <= 0) return;
+  if (signal?.aborted)
+    throw signal.reason ?? new Error("Generation was cancelled.");
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new Error("Generation was cancelled."));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    timer.unref?.();
+  });
 }
 
 /** Keep the chat identity and provider transport attached to every Pi Agent turn. */
@@ -205,7 +250,9 @@ export function buildAgentRuntimeOptions(
         apiKey: options?.apiKey ?? runtime.apiKey,
         // Runtime headers are last so a keyless provider cannot inherit an
         // Authorization header from Pi's default client setup.
-        headers: runtime.headers ? { ...options?.headers, ...runtime.headers } : options?.headers,
+        headers: runtime.headers
+          ? { ...options?.headers, ...runtime.headers }
+          : options?.headers,
       }),
   };
 }
@@ -217,13 +264,29 @@ type TerminalAssistantMessage = {
 };
 
 /** Extract a Pi protocol-level terminal error from an Agent message. */
-export function terminalGenerationError(message: TerminalAssistantMessage): string | null {
-  if (message.role !== "assistant" || message.stopReason !== "error") return null;
-  return message.errorMessage?.trim() || "The model couldn't complete this response.";
+export function terminalGenerationError(
+  message: TerminalAssistantMessage,
+): string | null {
+  if (message.role !== "assistant" || message.stopReason !== "error")
+    return null;
+  return (
+    message.errorMessage?.trim() || "The model couldn't complete this response."
+  );
+}
+
+/** A length stop is a usable partial response, but never a successful completion. */
+export function terminalGenerationLengthError(
+  message: TerminalAssistantMessage,
+): string | null {
+  return message.role === "assistant" && message.stopReason === "length"
+    ? "The model reached its output limit. The partial response was saved; ask it to continue."
+    : null;
 }
 
 /** Pi reports user-initiated stops as a terminal assistant message as well. */
-export function terminalGenerationWasAborted(message: TerminalAssistantMessage): boolean {
+export function terminalGenerationWasAborted(
+  message: TerminalAssistantMessage,
+): boolean {
   return message.role === "assistant" && message.stopReason === "aborted";
 }
 
@@ -238,8 +301,12 @@ export function terminalGenerationInterruptionError(
 }
 
 /** Return final text when a provider completes without emitting text deltas. */
-export function terminalAssistantText(message: { role?: string; content?: unknown }): string {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+export function terminalAssistantText(message: {
+  role?: string;
+  content?: unknown;
+}): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content))
+    return "";
   return message.content
     .filter(
       (part): part is { type: "text"; text: string } =>
@@ -260,12 +327,35 @@ export function terminalAssistantTextFallback(
   return receivedTextDelta ? "" : terminalAssistantText(message);
 }
 
+/**
+ * Separate visible prose emitted by distinct Pi assistant turns. Providers do
+ * not guarantee boundary whitespace around tool calls, but Aiden presents the
+ * turns as one Markdown response, so preserve at least one paragraph break.
+ */
+export function assistantTurnTextSeparator(
+  previous: string,
+  next: string,
+): string {
+  if (!previous.trim() || !next.trim()) return "";
+  const trailingNewlines = previous.match(/\n*$/u)?.[0].length ?? 0;
+  const leadingNewlines = next.match(/^\n*/u)?.[0].length ?? 0;
+  return "\n".repeat(
+    Math.max(0, 2 - trailingNewlines - leadingNewlines),
+  );
+}
+
 /** Return visible, non-redacted thinking blocks from a terminal Pi assistant message. */
-export function terminalAssistantReasoning(message: { role?: string; content?: unknown }): string {
-  if (message.role !== "assistant" || !Array.isArray(message.content)) return "";
+export function terminalAssistantReasoning(message: {
+  role?: string;
+  content?: unknown;
+}): string {
+  if (message.role !== "assistant" || !Array.isArray(message.content))
+    return "";
   return message.content
     .filter(
-      (part): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
+      (
+        part,
+      ): part is { type: "thinking"; thinking: string; redacted?: boolean } =>
         typeof part === "object" &&
         part !== null &&
         (part as { type?: unknown }).type === "thinking" &&
@@ -282,4 +372,41 @@ export function terminalAssistantReasoningFallback(
   receivedReasoningDelta: boolean,
 ): string {
   return receivedReasoningDelta ? "" : terminalAssistantReasoning(message);
+}
+
+export interface TerminalAssistantProjection {
+  full: string;
+  reasoning: string;
+  changed: boolean;
+}
+
+/**
+ * Provider delta events can arrive in block/event order that differs from the
+ * canonical Pi message content order. Replace only the current assistant turn
+ * with Pi's terminal projection so persistence and the renderer stay exact.
+ */
+export function reconcileTerminalAssistantProjection(
+  accumulated: { full: string; reasoning: string },
+  turnStart: { full: number; reasoning: number },
+  message: { role?: string; content?: unknown },
+  exposeReasoning: boolean,
+): TerminalAssistantProjection {
+  if (message.role !== "assistant") {
+    return { ...accumulated, changed: false };
+  }
+  const fullPrefix = accumulated.full.slice(0, turnStart.full);
+  const terminalText = terminalAssistantText(message);
+  const full = `${fullPrefix}${assistantTurnTextSeparator(fullPrefix, terminalText)}${terminalText}`;
+  const terminalReasoning = exposeReasoning
+    ? terminalAssistantReasoning(message)
+    : "";
+  const reasoningPrefix = accumulated.reasoning.slice(0, turnStart.reasoning);
+  const reasoning = terminalReasoning
+    ? `${reasoningPrefix}${reasoningPrefix.trim() ? "\n\n" : ""}${terminalReasoning}`
+    : reasoningPrefix;
+  return {
+    full,
+    reasoning,
+    changed: full !== accumulated.full || reasoning !== accumulated.reasoning,
+  };
 }

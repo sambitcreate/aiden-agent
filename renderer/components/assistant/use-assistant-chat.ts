@@ -519,6 +519,19 @@ export function useAssistantChat(): AssistantChat {
         if (!isCurrent()) return;
         const callbacks: StreamCallbacks = {
           onDelta: appendDelta,
+          onReset: () => {
+            if (!isCurrent() || stoppingTurnRef.current === turn) return;
+            clearPendingDelta();
+            setMessages((existing) => {
+              const next = [...existing];
+              const last = next[next.length - 1];
+              if (last?.role === "assistant") {
+                next[next.length - 1] = { role: "assistant", content: "" };
+              }
+              return next;
+            });
+            setStreamComplete(false);
+          },
           onDone: (fullContent) => {
             if (!isCurrent()) return;
             clearPendingDelta();

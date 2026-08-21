@@ -68,6 +68,20 @@ jobs:
       - name: Run Apple Foundation Models tests
         run: npm run test:native
 
+      - name: Run deterministic Electron E2E gate
+        run: npm run test:e2e
+
+      - name: Upload Playwright failure artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: playwright-e2e-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/e2e
+            playwright-report/e2e
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Prepare App Store Connect key
         shell: bash
         env:
@@ -99,31 +113,4 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          test -n "$GH_TOKEN"
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release or draft $RELEASE_TAG already exists; refusing to replace update assets." >&2
-            exit 1
-          fi
-          cd release/distribution
-          dmg_assets=( *.dmg )
-          if [[ "${#dmg_assets[@]}" -ne 1 || ! -f "${dmg_assets[0]}" ]]; then
-            echo "Expected exactly one verified versioned DMG before publishing." >&2
-            exit 1
-          fi
-          website_dmg="$RUNNER_TEMP/Aiden-Agent-Beta-arm64.dmg"
-          cp -- "${dmg_assets[0]}" "$website_dmg"
-          shasum -a 256 -- *.dmg *.zip latest-mac.yml > SHA256SUMS
-          website_sha256="$(shasum -a 256 -- "$website_dmg" | awk '{ print $1 }')"
-          printf '%s  %s\n' "$website_sha256" "$(basename "$website_dmg")" >> SHA256SUMS
-          gh release create "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Aiden Agent $RELEASE_VERSION" \
-            --notes "Aiden Agent beta release. Changes since the previous release:" \
-            --generate-notes \
-            --draft \
-            -- *.dmg *.zip latest-mac.yml SHA256SUMS "$website_dmg"
-          gh release edit "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false \
-            --latest
+          bash scripts/publish-github-release.sh release/distribution

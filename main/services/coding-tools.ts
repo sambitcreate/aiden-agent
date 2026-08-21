@@ -19,6 +19,7 @@ import * as path from "path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { RE2 as RE2Matcher } from "re2-wasm";
+import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { containsHighConfidenceSecretIncludingEncodings } from "./subagents/safe-text.js";
 
 const MAX_READ_BYTES = 200_000;
@@ -42,6 +43,126 @@ export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_comm
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
+}
+
+interface FileMutationDetailsV1 {
+  kind: "file_line_changes";
+  version: 1;
+  additions: number;
+  deletions: number;
+}
+
+const MAX_EXACT_LINE_DIFF_DISTANCE = 2_048;
+const MAX_EXACT_LINE_DIFF_LINES = 200_000;
+
+function textLines(text: string): string[] {
+  if (!text) return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/** Count a shortest line edit script without exposing file contents in tool details. */
+function lineChangeCounts(before: string, after: string): Pick<
+  FileMutationDetailsV1,
+  "additions" | "deletions"
+> {
+  const beforeLines = textLines(before);
+  const afterLines = textLines(after);
+  let prefix = 0;
+  while (
+    prefix < beforeLines.length &&
+    prefix < afterLines.length &&
+    beforeLines[prefix] === afterLines[prefix]
+  ) {
+    prefix += 1;
+  }
+  let beforeEnd = beforeLines.length;
+  let afterEnd = afterLines.length;
+  while (
+    beforeEnd > prefix &&
+    afterEnd > prefix &&
+    beforeLines[beforeEnd - 1] === afterLines[afterEnd - 1]
+  ) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+
+  const oldLines = beforeLines.slice(prefix, beforeEnd);
+  const newLines = afterLines.slice(prefix, afterEnd);
+  const oldCount = oldLines.length;
+  const newCount = newLines.length;
+  if (oldCount === 0 || newCount === 0) {
+    return { additions: newCount, deletions: oldCount };
+  }
+
+  // Myers' shortest-edit-path algorithm gives D = additions + deletions.
+  // Local edits normally finish in a handful of passes. Bound pathological
+  // full-file rewrites, then conservatively count the unmatched middle.
+  const maxDistance = oldCount + newCount;
+  if (maxDistance > MAX_EXACT_LINE_DIFF_LINES) {
+    return { additions: newCount, deletions: oldCount };
+  }
+  const offset = maxDistance;
+  const furthest = new Int32Array(maxDistance * 2 + 1);
+  for (let distance = 0; distance <= Math.min(maxDistance, MAX_EXACT_LINE_DIFF_DISTANCE); distance += 1) {
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const index = offset + diagonal;
+      let oldIndex: number;
+      if (
+        diagonal === -distance ||
+        (diagonal !== distance && furthest[index - 1]! < furthest[index + 1]!)
+      ) {
+        oldIndex = furthest[index + 1]!;
+      } else {
+        oldIndex = furthest[index - 1]! + 1;
+      }
+      let newIndex = oldIndex - diagonal;
+      while (
+        oldIndex < oldCount &&
+        newIndex < newCount &&
+        oldLines[oldIndex] === newLines[newIndex]
+      ) {
+        oldIndex += 1;
+        newIndex += 1;
+      }
+      furthest[index] = oldIndex;
+      if (oldIndex >= oldCount && newIndex >= newCount) {
+        return {
+          additions: (distance - oldCount + newCount) / 2,
+          deletions: (distance + oldCount - newCount) / 2,
+        };
+      }
+    }
+  }
+  return { additions: newCount, deletions: oldCount };
+}
+
+function fileMutationDetails(
+  before: string,
+  after: string,
+): FileMutationDetailsV1 {
+  const changes = lineChangeCounts(before, after);
+  return { kind: "file_line_changes", version: 1, ...changes };
+}
+
+function fileMutationResult(
+  text: string,
+  details: FileMutationDetailsV1,
+): AgentToolResult<FileMutationDetailsV1> {
+  return {
+    content: [{ type: "text", text }],
+    details,
+  };
+}
+
+async function readExistingText(filePath: string): Promise<string> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
 }
 
 function throwIfAborted(signal: AbortSignal | undefined, fallback: string): void {
@@ -780,12 +901,15 @@ function makeWriteFile(workspace: WorkspaceRootGuard): AgentTool {
       path: Type.String({ description: "File path relative to the workspace folder." }),
       content: Type.String({ description: "Full file content to write." }),
     }),
-    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
+    execute: async (_id, params, signal): Promise<AgentToolResult<FileMutationDetailsV1>> => {
       const { path: p, content } = params as { path: string; content: string };
       const full = await resolveWritableInRoot(workspace, p, signal);
+      const before = await readExistingText(full);
+      throwIfAborted(signal, "File write cancelled.");
+      const details = fileMutationDetails(before, content);
       throwIfAborted(signal, "File write cancelled.");
       await fs.writeFile(full, content, "utf-8");
-      return textResult(`Wrote ${content.length} chars to ${p}.`);
+      return fileMutationResult(`Wrote ${content.length} chars to ${p}.`, details);
     },
   };
 }
@@ -803,7 +927,7 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
       }),
       new_string: Type.String({ description: "Replacement text." }),
     }),
-    execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
+    execute: async (_id, params, signal): Promise<AgentToolResult<FileMutationDetailsV1>> => {
       const {
         path: p,
         old_string,
@@ -822,8 +946,11 @@ function makeEditFile(workspace: WorkspaceRootGuard): AgentTool {
         throw new Error(`old_string is not unique in ${p} (${count} matches). Add more context.`);
       await workspace.testObserver?.beforeWriteCommit?.(full);
       throwIfAborted(signal, "File edit cancelled.");
-      await fs.writeFile(full, original.replace(old_string, new_string), "utf-8");
-      return textResult(`Edited ${p}.`);
+      const updated = original.replace(old_string, new_string);
+      const details = fileMutationDetails(original, updated);
+      throwIfAborted(signal, "File edit cancelled.");
+      await fs.writeFile(full, updated, "utf-8");
+      return fileMutationResult(`Edited ${p}.`, details);
     },
   };
 }
@@ -1558,13 +1685,13 @@ export function buildCodingTools(
 ): AgentTool[] {
   const workspace = createParentWorkspaceRoot(root, testObserver);
   return [
-    makeParentReadFile(workspace),
-    makeParentListDir(workspace),
-    makeParentGlob(workspace),
-    makeParentGrep(workspace),
-    makeEditFile(workspace),
-    makeWriteFile(workspace),
-    makeRunCommand(workspace),
+    declarePiRuntimeReplay(makeParentReadFile(workspace), "safe"),
+    declarePiRuntimeReplay(makeParentListDir(workspace), "safe"),
+    declarePiRuntimeReplay(makeParentGlob(workspace), "safe"),
+    declarePiRuntimeReplay(makeParentGrep(workspace), "safe"),
+    declarePiRuntimeReplay(makeEditFile(workspace), "never"),
+    declarePiRuntimeReplay(makeWriteFile(workspace), "never"),
+    declarePiRuntimeReplay(makeRunCommand(workspace), "never"),
   ];
 }
 
@@ -1587,7 +1714,7 @@ export function buildSubagentCodingTools(
   if (permitted.has("grep")) tools.push(makeSubagentGrep(workspace));
   return tools.map((tool) => {
     const execute = tool.execute.bind(tool);
-    return {
+    return declarePiRuntimeReplay({
       ...tool,
       execute: async (toolCallId, params, signal, onUpdate) => {
         try {
@@ -1609,6 +1736,6 @@ export function buildSubagentCodingTools(
           throw error;
         }
       },
-    };
+    }, "safe");
   });
 }

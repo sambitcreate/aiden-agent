@@ -1,7 +1,7 @@
 /* global Buffer */
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,12 +20,17 @@ import {
   assertMacOSArchitectureMinimum,
   assertMatchingHostCodeHashes,
   assertPackagedModelCatalogEntries,
+  assertPackagedSubagentInferenceWorkerEntries,
+  assertPackagedNodePtyHelperEntries,
+  assertNodePtySpawnHelperMode,
   assertSamePackagedArtifactIdentity,
   assertHardenedRuntime,
   assertRegularFile,
   requiresReleaseVerification,
   verifyExactComputerUseHelperTree,
   verifyPackagedModelCatalogResources,
+  verifyPackagedSubagentInferenceWorker,
+  verifyPackagedNodePtyResources,
   verifyReviewedComputerUseInfoPlist,
 } from "./verify-macos-package.mjs";
 
@@ -146,6 +151,61 @@ test("package verifier requires models.dev and rejects a bundled Artificial Anal
   }
 });
 
+test("package verifier requires a bounded packed subagent inference worker", async () => {
+  assert.doesNotThrow(() =>
+    assertPackagedSubagentInferenceWorkerEntries([
+      "/build/main/subagent-inference-worker.js",
+      "/build/main/subagent-inference-worker-runtime.js",
+    ]),
+  );
+  assert.throws(
+    () => assertPackagedSubagentInferenceWorkerEntries([]),
+    /missing the subagent inference worker/u,
+  );
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-inference-worker-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const workerDirectory = path.join(source, "build", "main");
+  try {
+    await mkdir(workerDirectory, { recursive: true });
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'import { syncBuiltinESMExports } from "node:module";\nthrow new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
+    );
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker-runtime.js"),
+      "export {};\n",
+    );
+    const packedAsar = path.join(root, "packed.asar");
+    await createPackage(source, packedAsar);
+    await assert.doesNotReject(verifyPackagedSubagentInferenceWorker(packedAsar));
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'const names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nawait import("./subagent-inference-worker-runtime.js");\nsyncBuiltinESMExports();\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nthrow new Error("Provider credential subprocesses are disabled");\n',
+    );
+    const wrongOrderAsar = path.join(root, "wrong-order.asar");
+    await createPackage(source, wrongOrderAsar);
+    await assert.rejects(
+      verifyPackagedSubagentInferenceWorker(wrongOrderAsar),
+      /disable subprocesses before loading providers/u,
+    );
+    await writeFile(
+      path.join(workerDirectory, "subagent-inference-worker.js"),
+      'throw new Error("Provider credential subprocesses are disabled");\nconst names = ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"];\nObject.defineProperty(childProcess, name, { configurable: false, writable: false });\nObject.defineProperty(childProcess, "promises", { value: Object.freeze({ exec, execFile, fork, spawn }), configurable: false, writable: false });\nsyncBuiltinESMExports();\nawait import("./subagent-inference-worker-runtime.js");\n',
+    );
+    const unpackedAsar = path.join(root, "unpacked.asar");
+    await createPackageWithOptions(source, unpackedAsar, {
+      unpack: "**/subagent-inference-worker-runtime.js",
+    });
+    await assert.rejects(
+      verifyPackagedSubagentInferenceWorker(unpackedAsar),
+      /bounded packed regular file/u,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test("package verifier rejects directory, symlink, and unpacked catalog entries", async () => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-model-catalog-entry-"));
   const root = await realpath(temporaryRoot);
@@ -176,6 +236,78 @@ test("package verifier rejects directory, symlink, and unpacked catalog entries"
       unpack: "**/model-capabilities.json",
     });
     await assert.rejects(verifyPackagedModelCatalogResources(unpackedAsar), /packed regular file/u);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("package verifier requires unpacked executable node-pty helpers for both macOS architectures", async () => {
+  const expectedEntries = [
+    "/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+    "/node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
+  ];
+  assert.doesNotThrow(() => assertPackagedNodePtyHelperEntries(expectedEntries));
+  assert.throws(
+    () => assertPackagedNodePtyHelperEntries(expectedEntries.slice(0, 1)),
+    /missing node-pty spawn-helper entries.*darwin-x64/u,
+  );
+  assert.doesNotThrow(() => assertNodePtySpawnHelperMode(0o100755, "spawn-helper"));
+  assert.throws(
+    () => assertNodePtySpawnHelperMode(0o100644, "spawn-helper"),
+    /spawn-helper mode 0755/u,
+  );
+
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "aiden-node-pty-asar-"));
+  const root = await realpath(temporaryRoot);
+  const source = path.join(root, "source");
+  const armHelper = path.join(
+    source,
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "darwin-arm64",
+    "spawn-helper",
+  );
+  const x64Helper = path.join(
+    source,
+    "node_modules",
+    "node-pty",
+    "prebuilds",
+    "darwin-x64",
+    "spawn-helper",
+  );
+  const unpackedAsar = path.join(root, "unpacked.asar");
+  const packedAsar = path.join(root, "packed.asar");
+  try {
+    await Promise.all([
+      mkdir(path.dirname(armHelper), { recursive: true }),
+      mkdir(path.dirname(x64Helper), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(armHelper, "arm helper", { mode: 0o755 }),
+      writeFile(x64Helper, "x64 helper", { mode: 0o755 }),
+    ]);
+    await createPackageWithOptions(source, unpackedAsar, {
+      unpack: "**/node-pty/prebuilds/**/spawn-helper",
+    });
+    await assert.doesNotReject(verifyPackagedNodePtyResources(unpackedAsar));
+
+    const packagedX64Helper = path.join(
+      `${unpackedAsar}.unpacked`,
+      "node_modules",
+      "node-pty",
+      "prebuilds",
+      "darwin-x64",
+      "spawn-helper",
+    );
+    await chmod(packagedX64Helper, 0o644);
+    await assert.rejects(verifyPackagedNodePtyResources(unpackedAsar), /spawn-helper mode 0755/u);
+
+    await createPackage(source, packedAsar);
+    await assert.rejects(
+      verifyPackagedNodePtyResources(packedAsar),
+      /must be an unpacked regular file/u,
+    );
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
@@ -350,21 +482,11 @@ test("package verifier checks each architecture deployment floor independently",
         ),
       );
       assert.throws(
-        () =>
-          assertMacOSArchitectureMinimum(
-            "platform IOS\nminos 14.4\n",
-            target,
-            architecture,
-          ),
+        () => assertMacOSArchitectureMinimum("platform IOS\nminos 14.4\n", target, architecture),
         new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
       );
       assert.throws(
-        () =>
-          assertMacOSArchitectureMinimum(
-            "platform MACOS\nminos 13.0\n",
-            target,
-            architecture,
-          ),
+        () => assertMacOSArchitectureMinimum("platform MACOS\nminos 13.0\n", target, architecture),
         new RegExp(`${architecture} slice is not pinned to macOS 14\\.4`, "u"),
       );
       assert.throws(

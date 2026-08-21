@@ -8,6 +8,10 @@ import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
+import {
+  activityTimelineFragment,
+  assistantPresentationRows,
+} from "../lib/assistant-message-presentation";
 import type { ChatMessage } from "../lib/types";
 import type { AgentActivity } from "../lib/agent-activity";
 import {
@@ -16,8 +20,12 @@ import {
   retainSubagentChipFocusAfterPointerDown,
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
-import type { GenerationTimeline } from "../shared/generation-timeline";
+import { isToolStep, type GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
+import {
+  providerFailurePresentation,
+  type ProviderFailureV1,
+} from "../shared/provider-failure";
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -34,6 +42,124 @@ interface MessageListProps {
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
   error: string | null;
+}
+
+interface AssistantResponseProps {
+  content: string;
+  timeline: GenerationTimeline | null | undefined;
+  reasoning?: string | null;
+  subagentChips?: React.ReactNode;
+  streaming?: boolean;
+  streamComplete?: boolean;
+  onStreamHandoffComplete?: () => void;
+}
+
+function AssistantResponse({
+  content,
+  timeline,
+  reasoning,
+  subagentChips,
+  streaming = false,
+  streamComplete,
+  onStreamHandoffComplete,
+}: AssistantResponseProps) {
+  const rows = assistantPresentationRows(content, timeline);
+  if (!rows || !timeline) {
+    return (
+      <>
+        <ActivityFeed timeline={timeline ?? null} animate={streaming} />
+        {subagentChips}
+        {reasoning ? (
+          <ReasoningBlock
+            content={reasoning}
+            streaming={streaming && !streamComplete}
+            active={streaming && !streamComplete && !content}
+          />
+        ) : null}
+        {content ? (
+          <SafeMessageBubble
+            role="assistant"
+            content={content}
+            streaming={streaming}
+            streamComplete={streamComplete}
+            onStreamHandoffComplete={onStreamHandoffComplete}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  let lastTextIndex = -1;
+  rows.forEach((row, index) => {
+    if (row.kind === "text") lastTextIndex = index;
+  });
+  const subagentActivityKey = rows.find(
+    (row) =>
+      row.kind === "activity" &&
+      row.steps.some((step) => isToolStep(step) && step.toolName === "subagent"),
+  )?.key;
+
+  return (
+    <>
+      {reasoning ? (
+        <ReasoningBlock
+          content={reasoning}
+          streaming={streaming && !streamComplete}
+          active={streaming && !streamComplete && !content}
+        />
+      ) : null}
+      {subagentChips && !subagentActivityKey ? subagentChips : null}
+      {rows.map((row, index) => {
+        if (row.kind === "activity") {
+          return (
+            <React.Fragment key={row.key}>
+              <ActivityFeed
+                timeline={activityTimelineFragment(timeline, row.steps)}
+                animate={streaming}
+              />
+              {subagentActivityKey === row.key ? subagentChips : null}
+            </React.Fragment>
+          );
+        }
+        const isLastText = index === lastTextIndex;
+        return (
+          <SafeMessageBubble
+            key={row.key}
+            role="assistant"
+            content={row.content}
+            streaming={streaming && isLastText}
+            streamComplete={isLastText ? streamComplete : undefined}
+            onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
+            showCopy={isLastText}
+            copyText={content}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+export function ProviderFailureCallout({
+  failure,
+}: {
+  failure: ProviderFailureV1;
+}) {
+  const presentation = providerFailurePresentation(failure);
+  return (
+    <Callout
+      color="red"
+      role="alert"
+      aria-atomic="true"
+      data-provider-failure={failure.category}
+    >
+      <Text variant="small-strong" color="red">
+        {presentation.title}
+      </Text>
+      <Text variant="small" color="secondary" className="mt-0.5 block">
+        {presentation.description}
+      </Text>
+    </Callout>
+  );
 }
 
 export function MessageList({
@@ -113,44 +239,48 @@ export function MessageList({
     >
       {messages.map((m) => (
         <div key={m.id} className="flex min-w-0 flex-col gap-3">
-          {m.role === "assistant" && m.timeline?.steps.length ? (
-            <ActivityFeed timeline={m.timeline} animate={false} />
-          ) : null}
-          {subagentsEnabled && m.role === "assistant" && m.subagents ? (
-            <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
-          ) : null}
-          {m.role === "assistant" && m.reasoning ? <ReasoningBlock content={m.reasoning} /> : null}
-          <SafeMessageBubble
-            role={m.role}
-            content={m.content}
-            attachments={m.attachments}
-            skill={m.skill}
-          />
+          {m.role === "assistant" ? (
+            <>
+              <AssistantResponse
+                content={m.content}
+                timeline={m.timeline}
+                reasoning={m.reasoning}
+                subagentChips={
+                  subagentsEnabled && m.subagents ? (
+                    <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
+                  ) : undefined
+                }
+              />
+              {m.providerFailure ? (
+                <ProviderFailureCallout failure={m.providerFailure} />
+              ) : null}
+            </>
+          ) : (
+            <SafeMessageBubble
+              role={m.role}
+              content={m.content}
+              attachments={m.attachments}
+              skill={m.skill}
+            />
+          )}
         </div>
       ))}
 
       {timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (
         <div className="flex min-w-0 flex-col gap-3">
-          <ActivityFeed timeline={timeline} />
-          {subagentsEnabled && liveSubagents.length > 0 ? (
-            <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
-          ) : null}
-          {streamingReasoning ? (
-            <ReasoningBlock
-              content={streamingReasoning}
-              streaming={!streamComplete}
-              active={!streamComplete && !streamingText}
-            />
-          ) : null}
-          {streamingText ? (
-            <SafeMessageBubble
-              role="assistant"
-              content={streamingText}
-              streaming
-              streamComplete={streamComplete}
-              onStreamHandoffComplete={onStreamHandoffComplete}
-            />
-          ) : null}
+          <AssistantResponse
+            content={streamingText ?? ""}
+            timeline={timeline}
+            reasoning={streamingReasoning}
+            subagentChips={
+              subagentsEnabled && liveSubagents.length > 0 ? (
+                <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
+              ) : undefined
+            }
+            streaming
+            streamComplete={streamComplete}
+            onStreamHandoffComplete={onStreamHandoffComplete}
+          />
         </div>
       ) : null}
 

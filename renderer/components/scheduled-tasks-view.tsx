@@ -338,9 +338,8 @@ export function ScheduledTasksView() {
                   radius="rounded"
                   variant={tab === value ? "filled" : "transparent"}
                   onClick={() => setTab(value)}
-                  className="capitalize"
                 >
-                  {value}
+                  {value === "all" ? "All" : value === "active" ? "Active" : "Paused"}
                 </Button>
               ))}
             </div>

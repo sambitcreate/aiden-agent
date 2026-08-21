@@ -1,7 +1,7 @@
-export const GENERATION_TIMELINE_VERSION = 2 as const;
+export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
-const REPLAYABLE_VERSIONS = new Set([1, GENERATION_TIMELINE_VERSION]);
+const REPLAYABLE_VERSIONS = new Set([1, 2, GENERATION_TIMELINE_VERSION]);
 
 export type AgentStepStatus =
   | "pending"
@@ -23,6 +23,13 @@ export interface AgentToolStep {
   startedAt: number;
   updatedAt: number;
   finishedAt?: number;
+  /** UTF-16 offset into the visible assistant text when this activity began. */
+  contentOffset?: number;
+  /** Renderer-safe line totals reported by a completed first-party file mutation. */
+  lineChanges?: {
+    additions: number;
+    deletions: number;
+  };
   /** A workspace-relative file or directory. Never raw file contents or commands. */
   target?: string;
   /**
@@ -41,6 +48,8 @@ export interface AgentThinkingStep {
   startedAt: number;
   updatedAt: number;
   finishedAt?: number;
+  /** UTF-16 offset into the visible assistant text when this activity began. */
+  contentOffset?: number;
   /** Wall-clock reasoning time measured by the host; pi reports no duration. */
   durationMs?: number;
 }
@@ -49,6 +58,17 @@ export type AgentStep = AgentToolStep | AgentThinkingStep;
 
 export type GenerationTimelineStatus = "running" | "completed" | "failed" | "cancelled";
 
+export const GENERATION_CANCELLATION_ORIGINS = [
+  "user_stop",
+  "chat_deletion",
+  "workspace_authority_change",
+  "computer_use_disabled",
+  "scheduled_task_cancel",
+  "application_shutdown",
+] as const;
+
+export type GenerationCancellationOrigin = (typeof GENERATION_CANCELLATION_ORIGINS)[number];
+
 export interface GenerationClaimCheck {
   kind: "unverified_success";
   /** Renderer-safe local step IDs whose outcomes conflict with the response. */
@@ -56,12 +76,15 @@ export interface GenerationClaimCheck {
 }
 
 export interface GenerationTimeline {
-  version: typeof GENERATION_TIMELINE_VERSION;
+  /** Preserve legacy versions on replay; only newly projected timelines use v3. */
+  version: 1 | 2 | typeof GENERATION_TIMELINE_VERSION;
   generationId: string;
   status: GenerationTimelineStatus;
   startedAt: number;
   finishedAt?: number;
   steps: AgentStep[];
+  /** Content-free first-writer-wins provenance for an actual app cancellation. */
+  cancellationOrigin?: GenerationCancellationOrigin;
   /** Append-only post-turn outcome. The assistant's prose is never rewritten. */
   claimCheck?: GenerationClaimCheck;
 }
@@ -86,9 +109,13 @@ const TIMELINE_STATUSES = new Set<GenerationTimelineStatus>([
   "failed",
   "cancelled",
 ]);
+const CANCELLATION_ORIGINS = new Set<GenerationCancellationOrigin>(
+  GENERATION_CANCELLATION_ORIGINS,
+);
 const SAFE_ID = /^[a-z0-9._:-]+$/iu;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const MAX_DETAIL_LENGTH = 120;
+const MAX_LINE_CHANGE_COUNT = 100_000_000;
 
 export function isToolStep(step: AgentStep): step is AgentToolStep {
   return step.kind === "tool";
@@ -125,7 +152,17 @@ function safeStoredDetail(value: unknown): value is string {
   );
 }
 
-function parseToolStep(step: Record<string, unknown>, index: number): AgentToolStep | undefined {
+function parseToolStep(
+  step: Record<string, unknown>,
+  index: number,
+  contentOffset?: number,
+  allowLineChanges = false,
+): AgentToolStep | undefined {
+  const rawLineChanges = step.lineChanges;
+  const lineChanges =
+    rawLineChanges && typeof rawLineChanges === "object"
+      ? (rawLineChanges as Record<string, unknown>)
+      : undefined;
   if (
     typeof step.id !== "string" ||
     !/^tool-[1-9]\d*$/u.test(step.id) ||
@@ -140,7 +177,18 @@ function parseToolStep(step: Record<string, unknown>, index: number): AgentToolS
     typeof step.status !== "string" ||
     !STEP_STATUSES.has(step.status as AgentStepStatus) ||
     (step.target !== undefined && !safeStoredTarget(step.target)) ||
-    (step.detail !== undefined && !safeStoredDetail(step.detail))
+    (step.detail !== undefined && !safeStoredDetail(step.detail)) ||
+    (rawLineChanges !== undefined &&
+      (!allowLineChanges ||
+        !lineChanges ||
+        (step.toolName !== "write_file" && step.toolName !== "edit_file") ||
+        step.status !== "completed" ||
+        !Number.isSafeInteger(lineChanges.additions) ||
+        (lineChanges.additions as number) < 0 ||
+        (lineChanges.additions as number) > MAX_LINE_CHANGE_COUNT ||
+        !Number.isSafeInteger(lineChanges.deletions) ||
+        (lineChanges.deletions as number) < 0 ||
+        (lineChanges.deletions as number) > MAX_LINE_CHANGE_COUNT))
   ) {
     return undefined;
   }
@@ -155,14 +203,24 @@ function parseToolStep(step: Record<string, unknown>, index: number): AgentToolS
     startedAt: step.startedAt as number,
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
+    ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.target === undefined ? {} : { target: step.target as string }),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
+    ...(lineChanges === undefined
+      ? {}
+      : {
+          lineChanges: {
+            additions: lineChanges.additions as number,
+            deletions: lineChanges.deletions as number,
+          },
+        }),
   };
 }
 
 function parseThinkingStep(
   step: Record<string, unknown>,
   index: number,
+  contentOffset?: number,
 ): AgentThinkingStep | undefined {
   if (
     typeof step.id !== "string" ||
@@ -178,12 +236,16 @@ function parseThinkingStep(
     startedAt: step.startedAt as number,
     updatedAt: step.updatedAt as number,
     ...(step.finishedAt === undefined ? {} : { finishedAt: step.finishedAt as number }),
+    ...(contentOffset === undefined ? {} : { contentOffset }),
     ...(step.durationMs === undefined ? {} : { durationMs: step.durationMs as number }),
   };
 }
 
 /** Validate the renderer-safe subset before replaying a timeline from local chat storage. */
-export function parseGenerationTimeline(value: unknown): GenerationTimeline | undefined {
+export function parseGenerationTimeline(
+  value: unknown,
+  contentLength?: number,
+): GenerationTimeline | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
   if (
@@ -202,8 +264,17 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
   ) {
     return undefined;
   }
+  if (
+    candidate.cancellationOrigin !== undefined &&
+    (candidate.status !== "cancelled" ||
+      typeof candidate.cancellationOrigin !== "string" ||
+      !CANCELLATION_ORIGINS.has(candidate.cancellationOrigin as GenerationCancellationOrigin))
+  ) {
+    return undefined;
+  }
 
   const steps: AgentStep[] = [];
+  let previousContentOffset = 0;
   for (const [index, rawStep] of candidate.steps.entries()) {
     if (!rawStep || typeof rawStep !== "object") return undefined;
     const step = rawStep as Record<string, unknown>;
@@ -215,12 +286,28 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
     ) {
       return undefined;
     }
-    // Version 1 predates reasoning steps, so it may only contain tool steps.
+    const contentOffset =
+      candidate.version === GENERATION_TIMELINE_VERSION ? step.contentOffset : undefined;
+    if (
+      candidate.version === GENERATION_TIMELINE_VERSION &&
+      (!Number.isSafeInteger(contentOffset) ||
+        (contentOffset as number) < previousContentOffset ||
+        (contentLength !== undefined && (contentOffset as number) > contentLength))
+    ) {
+      return undefined;
+    }
+    if (contentOffset !== undefined) previousContentOffset = contentOffset as number;
+    // Version 1 predates reasoning steps. Version 2 predates text offsets.
     const parsed =
       step.kind === "tool"
-        ? parseToolStep(step, index)
-        : step.kind === "thinking" && candidate.version === GENERATION_TIMELINE_VERSION
-          ? parseThinkingStep(step, index)
+        ? parseToolStep(
+            step,
+            index,
+            contentOffset as number | undefined,
+            candidate.version === GENERATION_TIMELINE_VERSION,
+          )
+        : step.kind === "thinking" && candidate.version !== 1
+          ? parseThinkingStep(step, index, contentOffset as number | undefined)
           : undefined;
     if (!parsed) return undefined;
     steps.push(parsed);
@@ -259,12 +346,15 @@ export function parseGenerationTimeline(value: unknown): GenerationTimeline | un
   }
 
   return {
-    version: GENERATION_TIMELINE_VERSION,
+    version: candidate.version as GenerationTimeline["version"],
     generationId: candidate.generationId,
     status: candidate.status as GenerationTimelineStatus,
     startedAt: candidate.startedAt,
     ...(candidate.finishedAt === undefined ? {} : { finishedAt: candidate.finishedAt }),
     steps,
+    ...(candidate.cancellationOrigin === undefined
+      ? {}
+      : { cancellationOrigin: candidate.cancellationOrigin as GenerationCancellationOrigin }),
     ...(claimCheck ? { claimCheck } : {}),
   };
 }

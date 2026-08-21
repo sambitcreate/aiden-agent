@@ -85,6 +85,17 @@ test("resolves provider logos without branding unknown custom or future provider
   assert.equal(resolveProviderIconSlug("future-pi-provider"), undefined);
 });
 
+test("numeric local-provider collision siblings retain their product logos", () => {
+  assert.equal(resolveProviderIconSlug("custom:lmstudio-2"), "lmstudio");
+  assert.equal(resolveProviderIconSlug("custom:lmstudio-10"), "lmstudio");
+  assert.equal(resolveProviderIconSlug("custom:ollama-2"), "ollama");
+  assert.equal(resolveProviderIconSlug("custom:ollama-42"), "ollama");
+
+  assert.equal(resolveProviderIconSlug("custom:lmstudio-1"), undefined);
+  assert.equal(resolveProviderIconSlug("custom:lmstudio-02"), undefined);
+  assert.equal(resolveProviderIconSlug("custom:ollama-copy"), undefined);
+});
+
 test("uses product marks for Claude and Grok models while keeping provider marks elsewhere", () => {
   assert.equal(resolveProviderIconSlug("anthropic"), "anthropic");
   assert.equal(resolveProviderIconSlug("anthropic", "claude-sonnet-4"), "claude");

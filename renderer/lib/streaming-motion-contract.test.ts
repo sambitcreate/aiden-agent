@@ -55,7 +55,7 @@ test("streaming and persisted messages reserve the same action and timeline shel
     "{timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (",
     "<AgentActivityTransition",
   );
-  assert.match(transientShell, /<ActivityFeed timeline=\{timeline\} \/>/u);
+  assert.match(transientShell, /<AssistantResponse[\s\S]*timeline=\{timeline\}/u);
   assert.match(
     transientShell,
     /<SubagentChips runs=\{liveSubagents\} onOpen=\{onOpenSubagent\} \/>/u,
@@ -80,6 +80,16 @@ test("reasoning keeps its status and disclosure without a brain glyph", () => {
   assert.match(reasoning, /active \? "Thinking…" : "Thinking"/u);
   assert.match(reasoning, /<ChevronRight/u);
   assert.match(reasoning, /aria-expanded=\{expanded\}/u);
+});
+
+test("local deployments receive a presentation-only reasoning switch", () => {
+  const pane = source("../main/chat-pane.tsx");
+  const control = source("../components/reasoning-visibility-control.tsx");
+  assert.match(pane, /isLocalProviderDeployment\(selectedProvider\)/u);
+  assert.match(pane, /settingsApi\.set\(\{ showLocalModelReasoning: visible \}\)/u);
+  assert.match(pane, /<ReasoningVisibilityControl/u);
+  assert.match(control, /role="switch"/u);
+  assert.match(control, /This changes presentation only/u);
 });
 
 test("a persistence error retains the only rendered partial response", () => {

@@ -454,6 +454,28 @@ function normalizeLegacySkills(value: unknown): Skill[] {
   return valid.filter((skill) => counts.get(skill.id) === 1);
 }
 
+function normalizeTelegramProfiles(value: unknown): AppSettings["telegramProfiles"] {
+  if (!isRecord(value)) return undefined;
+  const result: NonNullable<AppSettings["telegramProfiles"]> = {};
+  for (const [name, raw] of Object.entries(value).slice(0, 16)) {
+    if (!/^[a-z0-9]{1,32}$/u.test(name) || ["default", "main", "active"].includes(name) || !isRecord(raw)) continue;
+    const profile: NonNullable<AppSettings["telegramProfiles"]>[string] = {};
+    if (typeof raw.enabled === "boolean") profile.enabled = raw.enabled;
+    if (Number.isSafeInteger(raw.allowedUserId)) profile.allowedUserId = raw.allowedUserId as number;
+    if (typeof raw.providerId === "string" && raw.providerId.length <= 256) profile.providerId = raw.providerId;
+    if (typeof raw.model === "string" && raw.model.length <= 256) profile.model = raw.model;
+    if (isGenerationThinkingLevel(raw.thinkingLevel)) profile.thinkingLevel = raw.thinkingLevel;
+    if (typeof raw.draftPreviews === "boolean") profile.draftPreviews = raw.draftPreviews;
+    if (["quiet", "thinking", "tools", "verbose"].includes(String(raw.activity))) profile.activity = raw.activity as NonNullable<typeof profile.activity>;
+    if (raw.rendering === "rich" || raw.rendering === "html") profile.rendering = raw.rendering;
+    if (["hidden", "mirror", "always"].includes(String(raw.voiceMode))) profile.voiceMode = raw.voiceMode as NonNullable<typeof profile.voiceMode>;
+    if (typeof raw.workspaceId === "string" && raw.workspaceId.length <= 256) profile.workspaceId = raw.workspaceId;
+    if (typeof raw.threadedMode === "boolean") profile.threadedMode = raw.threadedMode;
+    result[name] = profile;
+  }
+  return result;
+}
+
 function normalizeSettingsShape(value: unknown): SettingsShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { settings, ...rest } = root;
@@ -475,20 +497,36 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationAccelerator",
     "scheduledDefaultTimezone",
     "profileName",
+    "telegramProviderId",
+    "telegramModel",
+    "telegramWorkspaceId",
+    "telegramActiveProfile",
   ] as const) {
     keepString(key);
   }
   for (const key of [
     "exaEnabled",
+    "telegramEnabled",
     "shortcutEnabled",
     "dictationEnabled",
+    "showLocalModelReasoning",
     "computerUseEnabled",
     "scheduledTasksEnabled",
     "scheduledDefaultMcpEnabled",
     "scheduledDefaultNotify",
+    "telegramDraftPreviews",
+    "telegramThreadedMode",
   ] as const) {
     keepBoolean(key);
   }
+  if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete normalized.telegramAllowedUserId;
+  if (!isGenerationThinkingLevel(settings.telegramThinkingLevel)) delete normalized.telegramThinkingLevel;
+  if (!["quiet", "thinking", "tools", "verbose"].includes(String(settings.telegramActivity))) delete normalized.telegramActivity;
+  if (settings.telegramRendering !== "rich" && settings.telegramRendering !== "html") delete normalized.telegramRendering;
+  if (!["hidden", "mirror", "always"].includes(String(settings.telegramVoiceMode))) delete normalized.telegramVoiceMode;
+  const telegramProfiles = normalizeTelegramProfiles(settings.telegramProfiles);
+  if (telegramProfiles) normalized.telegramProfiles = telegramProfiles;
+  else delete normalized.telegramProfiles;
   for (const key of [
     "voiceProvider",
     "chatTitleProviderId",
@@ -532,6 +570,14 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   retainKnownValue("chatTitleProviderId", ["automatic", "apple-foundation-models", "chat-model"]);
   retainKnownValue("scheduledDefaultMode", ["llm", "script"]);
   retainKnownValue("scheduledDefaultPermission", ["read-only", "full"]);
+  retainKnownValue("telegramActivity", ["quiet", "thinking", "tools", "verbose"]);
+  retainKnownValue("telegramRendering", ["rich", "html"]);
+  retainKnownValue("telegramVoiceMode", ["hidden", "mirror", "always"]);
+  if (!Number.isSafeInteger(settings.telegramAllowedUserId)) delete runtime.telegramAllowedUserId;
+  if (!isGenerationThinkingLevel(settings.telegramThinkingLevel)) delete runtime.telegramThinkingLevel;
+  const telegramProfiles = normalizeTelegramProfiles(settings.telegramProfiles);
+  if (telegramProfiles) runtime.telegramProfiles = telegramProfiles;
+  else delete runtime.telegramProfiles;
   if (settings.assistant !== undefined) {
     runtime.assistant = runtimeAssistantSettings(settings);
   }

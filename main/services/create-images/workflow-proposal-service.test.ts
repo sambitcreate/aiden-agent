@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Api, AssistantMessage, Model, ProviderStreams } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  type Api,
+  type AssistantMessage,
+  type Model,
+  type ProviderStreams,
+} from "@earendil-works/pi-ai";
 import { createImagesFixture } from "../../../renderer/create-images/fixtures.js";
 import type { ResolvedModelRuntime } from "../model-runtime.js";
 import { CreateImagesWorkflowProposalService } from "./workflow-proposal-service.js";
@@ -78,6 +84,7 @@ test("workflow proposal generation uses one tool-free, no-retry selected-chat-mo
       contextWindow: 32_000,
       maxTokens: 8_000,
     } as Model<Api>,
+    models: createModels(),
     apiKey: undefined,
     headers: undefined,
     streams: { streamSimple },
@@ -108,12 +115,35 @@ test("workflow proposal generation leaves the graph unchanged on hostile model o
   const service = new CreateImagesWorkflowProposalService({
     resolveRuntime: async () =>
       ({
-        provider: { id: "test", kind: "openai", label: "Test", baseUrl: "http://127.0.0.1", models: ["m"], needsKey: false, isPreset: true },
-        model: { id: "m", name: "m", api: "openai-completions", provider: "test", baseUrl: "http://127.0.0.1", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32_000, maxTokens: 8_000 } as Model<Api>,
+        provider: {
+          id: "test",
+          kind: "openai",
+          label: "Test",
+          baseUrl: "http://127.0.0.1",
+          models: ["m"],
+          needsKey: false,
+          isPreset: true,
+        },
+        model: {
+          id: "m",
+          name: "m",
+          api: "openai-completions",
+          provider: "test",
+          baseUrl: "http://127.0.0.1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32_000,
+          maxTokens: 8_000,
+        } as Model<Api>,
+        models: createModels(),
         apiKey: undefined,
         headers: undefined,
         streams: {
-          streamSimple: (() => ({ result: async () => response('{"version":1,"nodes":[],"edges":[],"credential":"secret"}') })) as unknown as ProviderStreams["streamSimple"],
+          streamSimple: (() => ({
+            result: async () =>
+              response('{"version":1,"nodes":[],"edges":[],"credential":"secret"}'),
+          })) as unknown as ProviderStreams["streamSimple"],
         },
       }) satisfies ResolvedModelRuntime,
     recordUsage: async () => undefined,

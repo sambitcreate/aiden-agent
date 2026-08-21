@@ -11,7 +11,7 @@ import {
   resolveProviderRuntimeLimits,
   resolveRuntimeLimits,
 } from "./models-catalog-core.js";
-import { normalizeProviderBaseUrl, testConnection } from "./models.js";
+import { discoverOllamaModels, normalizeProviderBaseUrl, testConnection } from "./models.js";
 import { canonicalGoogleProvider } from "./google-provider.js";
 
 const lmStudioProvider = {
@@ -110,6 +110,7 @@ test("LM Studio custom connections use native metadata and exclude embeddings", 
             params_string: "4B-A2B",
             max_context_length: 131_072,
             format: "mlx",
+            loaded_instances: [{ id: "gemma-loaded" }],
             capabilities: {
               vision: true,
               trained_for_tool_use: true,
@@ -131,6 +132,7 @@ test("LM Studio custom connections use native metadata and exclude embeddings", 
   const result = await testConnection({ ...lmStudioProvider, id: "custom:lmstudio" }, null);
   assert.deepEqual(result.models, ["google/gemma-4-e2b"]);
   assert.equal(result.modelCount, 1);
+  assert.equal(result.recommendedModel, "google/gemma-4-e2b");
   assert.deepEqual(result.modelMetadata["google/gemma-4-e2b"], {
     source: "lmstudio",
     name: "Gemma 4 E2B",
@@ -225,6 +227,139 @@ test("Ollama custom connections enrich chat models with show metadata and filter
     format: "Q4_K_M",
   });
   assert.equal(result.modelMetadata["nomic-embed:latest"]?.type, "embedding");
+});
+
+test("Ollama detail enrichment shares one deadline and keeps safe partial tag metadata", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const signals = new Set<AbortSignal | null | undefined>();
+  const tags = Array.from({ length: 20 }, (_, index) => ({
+    model: `model-${index}`,
+    details: { parameter_size: `${index + 1}B`, quantization_level: "Q4_K_M" },
+  }));
+  globalThis.fetch = (async (input, init) => {
+    signals.add(init?.signal);
+    if (String(input).endsWith("/api/tags")) {
+      return new Response(JSON.stringify({ models: tags }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { model: string };
+    if (body.model === "model-0") {
+      return new Response(
+        JSON.stringify({
+          capabilities: ["completion", "vision"],
+          model_info: { "llama.context_length": 16_384 },
+        }),
+        { status: 200 },
+      );
+    }
+    const signal = init?.signal;
+    return await new Promise<Response>((_resolve, reject) => {
+      const abort = () => reject(new DOMException("Aborted", "AbortError"));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  }) as typeof fetch;
+
+  const startedAt = Date.now();
+  const result = await discoverOllamaModels(
+    {
+      ...lmStudioProvider,
+      id: "custom:ollama",
+      label: "Ollama (local)",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    },
+    {},
+    80,
+  );
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.ok(result);
+  assert.ok(
+    elapsedMs < 300,
+    `one 80ms deadline should not multiply by model count (${elapsedMs}ms)`,
+  );
+  assert.equal(signals.size, 1, "tags and every detail request share one AbortSignal");
+  assert.deepEqual(result.models, ["model-0"]);
+  assert.deepEqual(result.modelMetadata["model-0"], {
+    source: "ollama",
+    name: "model-0",
+    type: "llm",
+    vision: true,
+    toolCall: false,
+    reasoning: false,
+    contextLength: 16_384,
+    parameterCount: "1B",
+    format: "Q4_K_M",
+  });
+  assert.deepEqual(result.modelMetadata["model-19"], {
+    source: "ollama",
+    name: "model-19",
+    type: undefined,
+    vision: undefined,
+    toolCall: undefined,
+    reasoning: undefined,
+    contextLength: undefined,
+    parameterCount: "20B",
+    format: "Q4_K_M",
+  });
+});
+
+test("Ollama does not expose an embedding model as chat-capable when show times out", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/tags")) {
+      return new Response(
+        JSON.stringify({
+          models: [
+            {
+              model: "nomic-embed-text:latest",
+              details: { parameter_size: "137M", quantization_level: "F16" },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    const signal = init?.signal;
+    return await new Promise<Response>((_resolve, reject) => {
+      const abort = () => reject(new DOMException("Aborted", "AbortError"));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  }) as typeof fetch;
+
+  const startedAt = Date.now();
+  const result = await discoverOllamaModels(
+    {
+      ...lmStudioProvider,
+      id: "custom:ollama",
+      label: "Ollama (local)",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    },
+    {},
+    80,
+  );
+  const elapsedMs = Date.now() - startedAt;
+
+  assert.ok(result);
+  assert.ok(elapsedMs < 300, `one 80ms deadline should bound the detail request (${elapsedMs}ms)`);
+  assert.deepEqual(result.models, []);
+  assert.deepEqual(result.modelMetadata["nomic-embed-text:latest"], {
+    source: "ollama",
+    name: "nomic-embed-text:latest",
+    type: undefined,
+    vision: undefined,
+    toolCall: undefined,
+    reasoning: undefined,
+    contextLength: undefined,
+    parameterCount: "137M",
+    format: "F16",
+  });
 });
 
 test("keyless Anthropic discovery omits x-api-key while retaining its protocol version", async (t) => {

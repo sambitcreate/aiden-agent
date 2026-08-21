@@ -283,3 +283,18 @@ test("toasts use elevation without a colored border or outline", () => {
   );
   assert.doesNotMatch(styles, /--elevation-toast: 0 0 0/u);
 });
+
+test("working chats receive an accessible zero-animation sidebar indicator", () => {
+  const sidebar = source("./chat-sidebar.tsx");
+  const indicator = between(sidebar, "function ChatActivityIndicator", "\n}\n\nconst MONTHS");
+
+  assert.match(sidebar, /useActiveChatIds\(\)/u);
+  assert.match(
+    sidebar,
+    /activeChatIds\.has\(chat\.id\)[\s\S]{0,140}chat\.id === activeChatId && environmentPanel\.agentBusy/u,
+  );
+  assert.match(sidebar, /aria-busy=\{renamingWithAppleId === chat\.id \|\| working\}/u);
+  assert.match(indicator, /aria-label="Working"/u);
+  assert.match(indicator, /<Loader2 className="size-4" aria-hidden="true" \/>/u);
+  assert.doesNotMatch(indicator, /animate-|animation:/u);
+});

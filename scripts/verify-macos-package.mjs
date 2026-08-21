@@ -48,6 +48,13 @@ const reviewedHelperInfoPlistPath = path.join(
   "Info.plist",
 );
 const PACKAGED_MODELS_DEV_ENTRY = "resources/model-capabilities.json";
+const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-worker.js";
+const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
+const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
+const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
+  "node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper",
+  "node_modules/node-pty/prebuilds/darwin-x64/spawn-helper",
+]);
 const EXPECTED_COMPUTER_USE_HELPER_TREE = Object.freeze(
   [
     ["Contents", "directory"],
@@ -135,6 +142,129 @@ export async function verifyPackagedModelCatalogResources(appAsar) {
     throw new Error("Packaged models.dev capability snapshot is not valid JSON.");
   }
   validateModelsDevSnapshot(snapshot);
+}
+
+export function assertPackagedSubagentInferenceWorkerEntries(entries) {
+  const normalized = new Set(entries.map((entry) => entry.replaceAll("\\", "/")));
+  if (
+    !normalized.has(`/${PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY}`) ||
+    !normalized.has(`/${PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY}`)
+  ) {
+    throw new Error("Packaged app.asar is missing the subagent inference worker.");
+  }
+}
+
+export async function verifyPackagedSubagentInferenceWorker(appAsar) {
+  await assertRegularFile(appAsar);
+  assertPackagedSubagentInferenceWorkerEntries(listPackage(appAsar, { isPack: false }));
+  for (const workerEntry of [
+    PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY,
+    PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY,
+  ]) {
+    const entry = statFile(appAsar, workerEntry, false);
+    if (
+      !entry ||
+      entry.unpacked === true ||
+      typeof entry.size !== "number" ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size <= 0 ||
+      entry.size > MAX_SUBAGENT_INFERENCE_WORKER_BYTES ||
+      typeof entry.offset !== "string" ||
+      "files" in entry ||
+      "link" in entry
+    ) {
+      throw new Error("Packaged subagent inference worker must be a bounded packed regular file.");
+    }
+  }
+  const bootstrap = extractFile(appAsar, PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY, false).toString(
+    "utf8",
+  );
+  const lockdownIndex = bootstrap.indexOf("Object.defineProperty(childProcess");
+  const promiseLockdownIndex = bootstrap.indexOf(
+    'Object.defineProperty(childProcess, "promises"',
+  );
+  // The emitted ESM bootstrap names this symbol in its import before any
+  // lockdown code. Match the invocation, not the import declaration.
+  const syncIndex = bootstrap.indexOf("syncBuiltinESMExports();", promiseLockdownIndex);
+  const runtimeImportIndex = bootstrap.indexOf("subagent-inference-worker-runtime.js");
+  const requiredSubprocessNames = [
+    '"exec"',
+    '"execFile"',
+    '"execFileSync"',
+    '"execSync"',
+    '"fork"',
+    '"spawn"',
+    '"spawnSync"',
+  ];
+  if (
+    !bootstrap.includes("Provider credential subprocesses are disabled") ||
+    lockdownIndex < 0 ||
+    promiseLockdownIndex <= lockdownIndex ||
+    promiseLockdownIndex >= syncIndex ||
+    syncIndex <= lockdownIndex ||
+    runtimeImportIndex <= syncIndex ||
+    requiredSubprocessNames.some((name) => {
+      const index = bootstrap.indexOf(name);
+      return index < 0 || index >= lockdownIndex;
+    }) ||
+    !bootstrap.slice(lockdownIndex, syncIndex).includes("configurable: false") ||
+    !bootstrap.slice(lockdownIndex, syncIndex).includes("writable: false") ||
+    !bootstrap.slice(promiseLockdownIndex, syncIndex).includes("Object.freeze") ||
+    bootstrap.includes("@earendil-works/pi-ai/providers/all")
+  ) {
+    throw new Error(
+      "Packaged subagent inference bootstrap must disable subprocesses before loading providers.",
+    );
+  }
+}
+
+export function assertPackagedNodePtyHelperEntries(entries) {
+  const normalized = new Set(
+    entries.map((entry) => entry.replaceAll("\\", "/").replace(/^\//u, "")),
+  );
+  const missing = REQUIRED_NODE_PTY_HELPER_ENTRIES.filter((entry) => !normalized.has(entry));
+  if (missing.length > 0) {
+    throw new Error(
+      `Packaged app.asar is missing node-pty spawn-helper entries: ${missing.join(", ")}`,
+    );
+  }
+}
+
+export function assertNodePtySpawnHelperMode(mode, file) {
+  const permissions = mode & 0o777;
+  if (permissions !== 0o755) {
+    throw new Error(
+      `Expected node-pty spawn-helper mode 0755 for ${file}, received 0${permissions.toString(8)}`,
+    );
+  }
+}
+
+/**
+ * Verify the exact packaged runtime contract used by TerminalService: both
+ * macOS helpers are ASAR-unpacked regular files with executable permissions.
+ */
+export async function verifyPackagedNodePtyResources(appAsar) {
+  await assertRegularFile(appAsar);
+  const packageEntries = listPackage(appAsar, { isPack: false });
+  assertPackagedNodePtyHelperEntries(packageEntries);
+  for (const entryPath of REQUIRED_NODE_PTY_HELPER_ENTRIES) {
+    const entry = statFile(appAsar, entryPath, false);
+    if (
+      !entry ||
+      entry.unpacked !== true ||
+      typeof entry.size !== "number" ||
+      entry.size <= 0 ||
+      "files" in entry ||
+      "link" in entry
+    ) {
+      throw new Error(
+        `Packaged node-pty spawn-helper must be an unpacked regular file: ${entryPath}`,
+      );
+    }
+    const helper = path.join(`${appAsar}.unpacked`, entryPath);
+    const info = await assertRegularFile(helper);
+    assertNodePtySpawnHelperMode(info.mode, helper);
+  }
 }
 
 export function assertComputerUseExecutableMode(mode, file) {
@@ -324,9 +454,7 @@ export function assertMinimalComputerUseEntitlements(entitlements) {
 
 function assertExactTrueEntitlements(entitlements, expectedKeys, description) {
   const expected = [...expectedKeys].sort();
-  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)]
-    .map((match) => match[1])
-    .sort();
+  const actual = [...entitlements.matchAll(/<key>([^<]+)<\/key>/g)].map((match) => match[1]).sort();
   const enabled = [...entitlements.matchAll(/<key>([^<]+)<\/key>\s*<true\s*\/>/g)]
     .map((match) => match[1])
     .sort();
@@ -478,6 +606,8 @@ export async function verifyMacPackage(appPath) {
     await assertRegularFile(file);
   }
   await verifyPackagedModelCatalogResources(appAsar);
+  await verifyPackagedSubagentInferenceWorker(appAsar);
+  await verifyPackagedNodePtyResources(appAsar);
   await verifyExactComputerUseHelperTree(paths.helperApp);
   assertComputerUseExecutableMode((await lstat(paths.broker)).mode, paths.broker);
   assertComputerUseExecutableMode((await lstat(paths.driver)).mode, paths.driver);
