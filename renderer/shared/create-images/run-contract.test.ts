@@ -163,6 +163,91 @@ function startGenerateNode(journal: CreateImagesRunJournalV1): CreateImagesRunJo
   return append(next, "node-started", { nodeId: "generate-1" });
 }
 
+test("paused checkpoints are recoverable and resume the same immutable run", () => {
+  let journal = initial();
+  journal = append(journal, "run-started", {});
+  journal = append(journal, "node-started", { nodeId: "prompt-1" });
+  journal = append(journal, "node-output-published", {
+    nodeId: "prompt-1",
+    outputAssetIds: [],
+  });
+  journal = append(journal, "node-succeeded", { nodeId: "prompt-1", outputAssetIds: [] });
+  journal = append(journal, "run-paused", {
+    checkpointId: "checkpoint-1",
+    beforeNodeId: "generate-1",
+    edgeIds: ["edge-prompt"],
+  });
+  const paused = projectCreateImagesRun(journal);
+  assert.equal(paused.status, "paused");
+  assert.equal(paused.pause?.beforeNodeId, "generate-1");
+  assert.equal(paused.nodes["generate-1"]?.status, "queued");
+
+  journal = append(journal, "run-resumed", { checkpointId: "checkpoint-1" });
+  journal = append(journal, "node-started", { nodeId: "generate-1" });
+  const resumed = projectCreateImagesRun(journal);
+  assert.equal(resumed.status, "running");
+  assert.equal(resumed.pause?.resumedAt, LATER);
+  assert.equal(resumed.nodes["prompt-1"]?.status, "succeeded");
+  assert.equal(resumed.nodes["generate-1"]?.status, "running");
+});
+
+test("batch items journal ordered submission, output, usage, and unknown cost independently", () => {
+  let journal = append(initial(), "run-started", {});
+  journal = startGenerateNode(journal);
+  journal = append(journal, "node-submission-prepared", {
+    nodeId: "generate-1",
+    attempt: 1,
+    idempotencyKey: "aiden-batch-idempotency-0001",
+    providerId: "gemini",
+    modelId: "gemini-3.1-flash-image",
+  });
+  journal = append(journal, "batch-item-state", {
+    nodeId: "generate-1",
+    itemId: "batch-item-1",
+    itemIndex: 0,
+    state: "queued",
+  });
+  journal = append(journal, "batch-item-state", {
+    nodeId: "generate-1",
+    itemId: "batch-item-1",
+    itemIndex: 0,
+    state: "submission_prepared",
+  });
+  journal = append(journal, "batch-item-state", {
+    nodeId: "generate-1",
+    itemId: "batch-item-1",
+    itemIndex: 0,
+    state: "submitted",
+  });
+  journal = append(journal, "batch-item-state", {
+    nodeId: "generate-1",
+    itemId: "batch-item-1",
+    itemIndex: 0,
+    state: "succeeded",
+    outputAssetIds: [ASSET_ID],
+    usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
+    cost: { kind: "unknown" },
+  });
+  journal = append(journal, "node-submission-accepted", {
+    nodeId: "generate-1",
+    attempt: 1,
+    providerJobId: "gemini-batch-job-1",
+  });
+  journal = append(journal, "node-output-published", {
+    nodeId: "generate-1",
+    outputAssetIds: [ASSET_ID],
+  });
+  journal = append(journal, "node-succeeded", {
+    nodeId: "generate-1",
+    outputAssetIds: [ASSET_ID],
+  });
+  const item = projectCreateImagesRun(journal).nodes["generate-1"]?.batchItems?.["batch-item-1"];
+  assert.equal(item?.state, "succeeded");
+  assert.deepEqual(item?.outputAssetIds, [ASSET_ID]);
+  assert.deepEqual(item?.usage, { inputTokens: 10, outputTokens: 20, totalTokens: 30 });
+  assert.deepEqual(item?.cost, { kind: "unknown" });
+});
+
 function startedGenerateJournal(): CreateImagesRunJournalV1 {
   return startGenerateNode(append(initial(), "run-started", {}));
 }
