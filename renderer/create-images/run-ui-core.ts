@@ -5,7 +5,44 @@ import {
 import type {
   CreateImagesDegradedRunDiscardPlanResult,
   CreateImagesDiscardDegradedRunRequest,
+  CreateImagesRunView,
 } from "../shared/create-images/ipc";
+
+export function createImagesSafeRunDiagnosticSummary(run: CreateImagesRunView): string {
+  const summary = {
+    format: "aiden-create-images-run-diagnostic",
+    version: 1,
+    runId: run.runId,
+    workflowId: run.workflowId,
+    workflowRevision: run.workflowRevision,
+    journalRevision: run.journalRevision,
+    status: run.status,
+    executionMode: run.executionMode ?? "unknown",
+    sequence: run.lastSequence,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    scope: run.scope,
+    ...(run.pause
+      ? {
+          pause: {
+            checkpointId: run.pause.checkpointId,
+            beforeNodeId: run.pause.beforeNodeId,
+            edgeIds: [...run.pause.edgeIds],
+            pausedAt: run.pause.pausedAt,
+          },
+        }
+      : {}),
+    nodes: run.nodes.map((node) => ({
+      nodeId: node.nodeId,
+      status: node.status,
+      attempt: node.attempt,
+      outputCount: node.outputAssetIds.length,
+      ...(node.errorCode ? { errorCode: node.errorCode } : {}),
+      ...(node.retrySafety ? { retrySafety: node.retrySafety } : {}),
+    })),
+  };
+  return `${JSON.stringify(summary, null, 2)}\n`;
+}
 
 export function createImagesDegradedRunDiscardRequest(
   plan: Extract<CreateImagesDegradedRunDiscardPlanResult, { status: "ready" }>,
@@ -38,6 +75,7 @@ export type CreateImagesRunUiStatus =
   | "awaiting-consent"
   | "queued"
   | "running"
+  | "paused"
   | "stopping"
   | "retry"
   | "failed"
@@ -275,11 +313,15 @@ export function createImagesRunConfirmationViewModel(
 }
 
 export type CreateImagesSafeRunErrorCode =
+  | "authentication_required"
   | "offline"
+  | "permission_denied"
   | "rate_limited"
+  | "request_rejected"
   | "provider_refused"
   | "provider_unavailable"
   | "output_invalid"
+  | "output_save_failed"
   | "quota_full"
   | "interrupted"
   | "submission_ambiguous"
@@ -319,6 +361,12 @@ const SAFE_ERROR_COPY: Readonly<
     Pick<CreateImagesRunErrorViewModel, "title" | "description" | "nextStep" | "actions">
   >
 > = {
+  authentication_required: {
+    title: "Gemini API key rejected",
+    description: "Google did not accept the configured API credential.",
+    nextStep: "Replace or reconnect the API key in provider settings before starting a new run.",
+    actions: ["open-provider-settings"],
+  },
   offline: {
     title: "No network connection",
     description: "Aiden could not reach the configured image provider.",
@@ -343,10 +391,29 @@ const SAFE_ERROR_COPY: Readonly<
     nextStep: "Check the provider connection and model configuration before retrying.",
     actions: ["open-provider-settings", "review-retry"],
   },
+  permission_denied: {
+    title: "Gemini model access denied",
+    description: "The configured credential cannot use this image model.",
+    nextStep: "Check the key's project, API restrictions, billing, and model access.",
+    actions: ["open-provider-settings"],
+  },
+  request_rejected: {
+    title: "Gemini rejected the request",
+    description: "Google returned a request validation error before producing an image.",
+    nextStep: "Review the model and request settings before starting a new run.",
+    actions: ["view-history", "open-provider-settings"],
+  },
   output_invalid: {
-    title: "Provider output could not be saved",
-    description: "Aiden rejected the returned file because it did not pass image validation.",
-    nextStep: "Review the run record. A new provider request requires an explicit retry.",
+    title: "Gemini returned an unusable image",
+    description:
+      "Aiden did not save the response because its image data was incomplete or invalid.",
+    nextStep: "Start a new run only if you want to make another provider request.",
+    actions: ["view-history", "review-retry"],
+  },
+  output_save_failed: {
+    title: "Generated image could not be saved",
+    description: "Gemini returned an image, but Aiden could not publish it to local storage.",
+    nextStep: "Check local storage, then explicitly review the run before retrying.",
     actions: ["view-history", "review-retry"],
   },
   quota_full: {
@@ -401,6 +468,7 @@ export interface CreateImagesRunUiIdentity {
   workflowId: string;
   workflowRevision: number;
   runId: string;
+  journalRevision?: number;
 }
 
 export interface CreateImagesNodeRunUiState {
@@ -475,7 +543,8 @@ const RUN_TRANSITIONS: Readonly<
 > = {
   "awaiting-consent": ["queued", "cancelled"],
   queued: ["running", "failed", "cancelled", "interrupted"],
-  running: ["stopping", "retry", "failed", "cancelled", "succeeded", "interrupted"],
+  running: ["paused", "stopping", "retry", "failed", "cancelled", "succeeded", "interrupted"],
+  paused: ["running", "stopping", "cancelled"],
   stopping: ["failed", "cancelled", "succeeded", "interrupted"],
   retry: [],
   failed: ["retry"],
@@ -498,6 +567,7 @@ export const CREATE_IMAGES_RUN_STATUS_LABELS: Readonly<Record<CreateImagesRunUiS
   "awaiting-consent": "Waiting for confirmation",
   queued: "Queued",
   running: "Running",
+  paused: "Paused",
   stopping: "Stopping",
   retry: "Retry needs review",
   failed: "Failed",
@@ -533,9 +603,9 @@ export function createImagesRunUiProjection(
     if (!Number.isSafeInteger(node.attempt) || node.attempt < 0) {
       throw new Error("Node attempt must be a non-negative safe integer.");
     }
-    if (node.attempt === 0 && !["queued", "blocked", "cancelled"].includes(node.status)) {
-      throw new Error("Only nodes that have not started may use attempt zero.");
-    }
+    // `attempt` counts remote-provider submissions, not generic node starts.
+    // Prompt, Image Input, Output, and interrupted local nodes can therefore
+    // become running or terminal without ever opening provider attempt 1.
     nodes[node.nodeId] = { ...node, sequence: snapshot.lastSequence };
   }
   return {
