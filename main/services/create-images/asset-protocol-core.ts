@@ -1,6 +1,13 @@
 const GRANT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/u;
 
-export function parseCreateImagesAssetProtocolToken(value: string): string | undefined {
+export interface CreateImagesAssetProtocolRequest {
+  token: string;
+  rendition: "preview" | "preview-128" | "preview-256" | "preview-512" | "original";
+}
+
+export function parseCreateImagesAssetProtocolRequest(
+  value: string,
+): CreateImagesAssetProtocolRequest | undefined {
   try {
     const url = new URL(value);
     if (
@@ -14,11 +21,28 @@ export function parseCreateImagesAssetProtocolToken(value: string): string | und
     ) {
       return undefined;
     }
-    const match = /^\/([A-Za-z0-9_-]{32,128})$/u.exec(url.pathname);
-    return match?.[1] && GRANT_TOKEN_PATTERN.test(match[1]) ? match[1] : undefined;
+    const match = /^\/([A-Za-z0-9_-]{32,128})(?:\/(original|preview-(?:128|256|512)))?$/u.exec(
+      url.pathname,
+    );
+    const token = match?.[1];
+    if (!token || !GRANT_TOKEN_PATTERN.test(token)) return undefined;
+    return {
+      token,
+      rendition:
+        match[2] === "original" ||
+        match[2] === "preview-128" ||
+        match[2] === "preview-256" ||
+        match[2] === "preview-512"
+          ? match[2]
+          : "preview",
+    };
   } catch {
     return undefined;
   }
+}
+
+export function parseCreateImagesAssetProtocolToken(value: string): string | undefined {
+  return parseCreateImagesAssetProtocolRequest(value)?.token;
 }
 
 export function createImagesProtocolDocumentId(frame: {
@@ -58,9 +82,7 @@ export function authorizeCreateImagesAssetRequest(
   authorize: (token: string, webContentsId: number, documentId: string) => boolean,
 ): boolean {
   const token = parseCreateImagesAssetProtocolToken(details.url);
-  const documentId = details.frame
-    ? createImagesProtocolDocumentId(details.frame)
-    : undefined;
+  const documentId = details.frame ? createImagesProtocolDocumentId(details.frame) : undefined;
   return (
     details.method === "GET" &&
     details.resourceType === "image" &&
