@@ -32,6 +32,7 @@ import {
   evaluateCreateImagesWorkflowDeletion,
   type CreateImagesRunReferenceAuthority,
   type CreateImagesRunReferenceReservation,
+  type CreateImagesAnnotationRasterizer,
 } from "./run-service.js";
 import { WorkflowManifestStore } from "./workflow-manifest-store.js";
 import { GeminiImageProvider } from "./providers/gemini-image-provider-core.js";
@@ -165,6 +166,38 @@ function workflow(outputCount: 1 | 2 | 3 | 4 = 1): WorkflowDocumentV1 {
   };
 }
 
+function pausedWorkflow(): WorkflowDocumentV1 {
+  const document = workflow();
+  return {
+    ...document,
+    schemaVersion: 5,
+    edges: document.edges.map((edge) =>
+      edge.id === "edge-prompt" ? { ...edge, breakpoint: true } : edge,
+    ),
+  };
+}
+
+function promptListWorkflow(source = "red car\nblue car\ngreen car"): WorkflowDocumentV1 {
+  const document = workflow();
+  return {
+    ...document,
+    schemaVersion: 5,
+    nodes: document.nodes.map((node) =>
+      node.id === "prompt-1"
+        ? {
+            id: node.id,
+            type: "prompt-list" as const,
+            position: node.position,
+            data: { source, format: "lines" as const },
+          }
+        : node,
+    ),
+    edges: document.edges.map((edge) =>
+      edge.id === "edge-prompt" ? { ...edge, sourcePort: "items" } : edge,
+    ),
+  };
+}
+
 class FakeAssets {
   readonly available = new Map<string, AssetMetadataDto>();
   readonly bytesById = new Map<string, Uint8Array>();
@@ -224,6 +257,25 @@ class FakeAssets {
 
   async getAvailable(assetId: string): Promise<AssetMetadataDto | undefined> {
     return this.available.get(assetId);
+  }
+
+  async withAssetFile<Result>(
+    assetId: string,
+    callback: (input: {
+      filePath: string;
+      asset: AssetMetadataDto;
+      byteLength: number;
+      mediaType: "image/png" | "image/jpeg";
+    }) => Promise<Result>,
+  ): Promise<Result> {
+    const asset = this.available.get(assetId);
+    if (!asset) throw new Error("asset unavailable");
+    return callback({
+      filePath: `/main-only/${assetId}.png`,
+      asset,
+      byteLength: asset.byteLength,
+      mediaType: asset.mediaType,
+    });
   }
 
   async acquirePreviewLease(assetId: string, ownerId: string) {
@@ -333,6 +385,7 @@ async function harness(
     createGeminiProvider?: () => GeminiImageProvider;
     workspaceStatus?: () => Promise<{ configured: boolean; state: CreateImagesWorkspaceState }>;
     workspaceRequired?: boolean;
+    annotationRasterizer?: CreateImagesAnnotationRasterizer;
   } = {},
 ): Promise<Harness> {
   const root = await temporaryRoot(t);
@@ -352,6 +405,7 @@ async function harness(
     createGeminiProvider: options.createGeminiProvider,
     workspaceStatus: options.workspaceStatus,
     workspaceRequired: options.workspaceRequired,
+    annotationRasterizer: options.annotationRasterizer,
     now: options.now ?? (() => now++),
     createRunId: options.createRunId ?? (() => "run-1"),
     shutdownTimeoutMs: options.shutdownTimeoutMs,
@@ -565,6 +619,109 @@ test("successful runs publish assets before journal success and commit durable r
     acceptedIndex >= 0 && publishedIndex > acceptedIndex && succeededIndex > publishedIndex,
   );
   assert.ok(context.references.reconcileCount >= 2);
+  const recent = await context.service.listRecentOutputs(50);
+  assert.deepEqual(recent, [
+    {
+      assetId,
+      runId: journal.runId,
+      workflowId: "workflow-1",
+      nodeId: "generate-1",
+      prompt: "A tiny durable image",
+      modelLabel: "gemini-3.1-flash-image",
+      createdAt: journal.updatedAt,
+      width: 8,
+      height: 8,
+      mediaType: "image/png",
+    },
+  ]);
+  await assert.rejects(() => context.service.listRecentOutputs(51), /recent output limit/u);
+});
+
+test("paused runs survive service restart and resume the same run without repeating upstream work", async (t) => {
+  const context = await harness(t, {
+    document: pausedWorkflow(),
+    createRunId: () => "paused-restart-run",
+  });
+  const started = await context.service.start(
+    { workflowId: "workflow-1", expectedRevision: 1, scope: { kind: "all" } },
+    () => true,
+  );
+  assert.equal(started.status, "started");
+  if (started.status !== "started") return;
+  const paused = await waitForJournal(
+    context.journals,
+    started.run.runId,
+    (journal) => projectCreateImagesRun(journal).status === "paused",
+  );
+  const pausedProjection = projectCreateImagesRun(paused);
+  assert.equal(pausedProjection.nodes["prompt-1"]?.status, "succeeded");
+  assert.equal(pausedProjection.nodes["generate-1"]?.status, "queued");
+
+  const restarted = new CreateImagesRunService({
+    rootResolver: () => context.root,
+    workflows: context.workflows,
+    assets: context.assets as unknown as ContentAddressedAssetStore,
+    references: context.references,
+    journalStore: context.journals,
+    createRunId: () => "unused-after-restart",
+  });
+  await restarted.initialize();
+  const resumed = await restarted.resume({
+    workflowId: "workflow-1",
+    runId: paused.runId,
+    expectedJournalRevision: paused.journalRevision,
+  });
+  assert.equal(resumed.status, "resumed");
+  const terminal = await waitForTerminal(context.journals, paused.runId);
+  const projection = projectCreateImagesRun(terminal);
+  assert.equal(projection.status, "succeeded");
+  assert.equal(terminal.runId, paused.runId);
+  assert.equal(
+    terminal.events.filter(
+      (event) => event.type === "node-started" && event.nodeId === "prompt-1",
+    ).length,
+    1,
+  );
+  assert.equal(terminal.events.filter((event) => event.type === "run-started").length, 1);
+  assert.equal(terminal.events.filter((event) => event.type === "run-resumed").length, 1);
+});
+
+test("local Prompt List batches preserve order and journal every item without provider cost", async (t) => {
+  const context = await harness(t, {
+    document: promptListWorkflow(),
+    createRunId: () => "prompt-list-run",
+  });
+  const started = await context.service.start(
+    { workflowId: "workflow-1", expectedRevision: 1, scope: { kind: "all" } },
+    () => true,
+  );
+  assert.equal(started.status, "started");
+  if (started.status !== "started") return;
+  const journal = await waitForTerminal(context.journals, started.run.runId);
+  const projection = projectCreateImagesRun(journal);
+  assert.equal(projection.status, "succeeded");
+  assert.equal(projection.nodes["generate-1"]?.outputAssetIds.length, 3);
+  const items = Object.values(projection.nodes["generate-1"]?.batchItems ?? {}).sort(
+    (left, right) => left.itemIndex - right.itemIndex,
+  );
+  assert.deepEqual(
+    items.map((item) => ({ index: item.itemIndex, status: item.state, cost: item.cost })),
+    [
+      { index: 0, status: "succeeded", cost: { kind: "actual", amountMicros: 0, currency: "USD" } },
+      { index: 1, status: "succeeded", cost: { kind: "actual", amountMicros: 0, currency: "USD" } },
+      { index: 2, status: "succeeded", cost: { kind: "actual", amountMicros: 0, currency: "USD" } },
+    ],
+  );
+  assert.deepEqual(
+    items.flatMap((item) => item.outputAssetIds),
+    projection.nodes["generate-1"]?.outputAssetIds,
+  );
+  assert.equal(context.assets.publicationOrder.length, 3);
+  const listed = await context.service.list("workflow-1");
+  assert.equal(listed.status, "ready");
+  if (listed.status === "ready") {
+    assert.equal(listed.history[0]?.costLabel, "$0.00 mock actual");
+  }
 });
 
 test("stop durably journals cancellation before terminal node cancellation", async (t) => {
@@ -2580,6 +2737,11 @@ test("Gemini launch requires one-shot main consent and durably binds provider au
     "gemini",
   );
   await waitForAsync(async () => (await context.service.activeRuns()).length === 0);
+  const listed = await context.service.list("workflow-1");
+  assert.equal(listed.status, "ready");
+  if (listed.status === "ready") {
+    assert.equal(listed.history[0]?.costLabel, "Actual cost unknown");
+  }
 
   const replay = await context.service.start(
     {
@@ -2739,4 +2901,101 @@ test("Gemini credential drift after durable preparation fails before transport",
     journal.events.some((event) => event.type === "node-submission-accepted"),
     false,
   );
+});
+
+test("annotation rasterization remains main-owned and publishes one immutable PNG", async (t) => {
+  const document: WorkflowDocumentV1 = {
+    schemaVersion: 3,
+    id: "workflow-annotation",
+    title: "Annotation workflow",
+    revision: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    nodes: [
+      {
+        id: "input-1",
+        type: "image-input",
+        position: { x: 0, y: 0 },
+        data: { assetId: DURABLE_ASSET_ID },
+      },
+      {
+        id: "annotation-1",
+        type: "annotation",
+        position: { x: 300, y: 0 },
+        data: {
+          shapes: [
+            {
+              id: "shape-1",
+              type: "rectangle",
+              x: 0.1,
+              y: 0.1,
+              width: 0.4,
+              height: 0.3,
+              stroke: "accent",
+              strokeWidth: 4,
+            },
+          ],
+        },
+      },
+      { id: "output-1", type: "output", position: { x: 600, y: 0 }, data: {} },
+    ],
+    edges: [
+      {
+        id: "edge-input",
+        source: "input-1",
+        sourcePort: "image",
+        target: "annotation-1",
+        targetPort: "image",
+      },
+      {
+        id: "edge-output",
+        source: "annotation-1",
+        sourcePort: "image",
+        target: "output-1",
+        targetPort: "images",
+      },
+    ],
+    assetRefs: [DURABLE_ASSET_ID],
+    settings: { concurrency: 1 },
+  };
+  let rasterizedPath = "";
+  const outputBytes = new Uint8Array(40).fill(7);
+  const context = await harness(t, {
+    document,
+    createRunId: () => "annotation-run",
+    annotationRasterizer: {
+      async rasterize(input) {
+        rasterizedPath = input.sourcePath;
+        assert.equal(input.shapes.length, 1);
+        return { bytes: outputBytes, width: 800, height: 600 };
+      },
+    },
+  });
+  context.assets.available.set(DURABLE_ASSET_ID, {
+    assetId: DURABLE_ASSET_ID,
+    mediaType: "image/png",
+    byteLength: 40,
+    width: 800,
+    height: 600,
+    createdAt: NOW,
+    origin: { kind: "import" },
+    referenceCount: 1,
+    thumbnailSizes: [],
+  });
+  const started = await context.service.start(
+    { workflowId: document.id, expectedRevision: 1, scope: { kind: "all" } },
+    () => true,
+  );
+  assert.equal(started.status, "started");
+  if (started.status !== "started") return;
+  const journal = await waitForTerminal(context.journals, started.run.runId);
+  const projection = projectCreateImagesRun(journal);
+  const outputAssetId = createHash("sha256").update(outputBytes).digest("hex");
+  assert.equal(projection.terminal?.status, "succeeded");
+  assert.deepEqual(projection.nodes["annotation-1"]?.outputAssetIds, [outputAssetId]);
+  assert.match(rasterizedPath, /^\/main-only\//u);
+  assert.deepEqual(context.assets.available.get(outputAssetId)?.origin, {
+    kind: "annotation",
+    sourceAssetId: DURABLE_ASSET_ID,
+  });
 });
