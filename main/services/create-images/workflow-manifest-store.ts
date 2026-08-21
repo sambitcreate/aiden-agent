@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { WorkflowDocumentV1 } from "../../../renderer/shared/create-images/schema.js";
 import {
   CREATE_IMAGES_MAX_WORKFLOW_BYTES,
+  CREATE_IMAGES_SCHEMA_VERSION,
   parseWorkflowDocument,
 } from "../../../renderer/shared/create-images/schema.js";
 import { decodeUtf8, readRegularFile } from "../regular-file-read.js";
@@ -203,7 +204,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isFutureVersion(value: unknown, field: "schemaVersion" | "version"): boolean {
-  return isRecord(value) && typeof value[field] === "number" && value[field] > 1;
+  return (
+    isRecord(value) &&
+    typeof value[field] === "number" &&
+    value[field] > (field === "schemaVersion" ? CREATE_IMAGES_SCHEMA_VERSION : 1)
+  );
 }
 
 function parseJournal(value: unknown): AutosaveJournalV1 | undefined {
