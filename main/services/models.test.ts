@@ -171,6 +171,66 @@ test("LM Studio falls back to the OpenAI-compatible list only when its native ro
   assert.equal(result.modelMetadata["a-model"]?.source, "provider");
 });
 
+test("generic discovery preserves and excludes provider-declared non-chat model types", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = (async (input) => {
+    assert.equal(String(input), "https://models.example.test/v1/models");
+    return new Response(
+      JSON.stringify({
+        data: [
+          { id: "chat-v1", type: "llm" },
+          { id: "opaque-score-v1", type: "reranker" },
+          { id: "opaque-capability-score", capabilities: ["reranking"] },
+          { id: "opaque-pixels-v1", type: "image" },
+          { id: "opaque-sound-v1", type: "audio" },
+          { id: "opaque-motion-v1", type: "video" },
+          {
+            id: "conflicting-pixels-array",
+            type: "text-generation",
+            capabilities: ["image_generation"],
+          },
+          {
+            id: "conflicting-motion-object",
+            type: "llm",
+            capabilities: { video_generation: true },
+          },
+          {
+            id: "conflicting-sound-object",
+            type: "chat",
+            capabilities: { audio_generation: true },
+          },
+        ],
+      }),
+      { status: 200 },
+    );
+  }) as typeof fetch;
+
+  const result = await testConnection(
+    {
+      id: "custom:openai",
+      kind: "openai",
+      label: "Custom",
+      baseUrl: "https://models.example.test/v1",
+      models: [],
+      needsKey: false,
+    },
+    null,
+  );
+  assert.deepEqual(result.models, ["chat-v1"]);
+  assert.equal(result.modelCount, 1);
+  assert.equal(result.modelMetadata["opaque-score-v1"]?.type, "reranker");
+  assert.equal(result.modelMetadata["opaque-capability-score"]?.type, "reranker");
+  assert.equal(result.modelMetadata["opaque-pixels-v1"]?.type, "image");
+  assert.equal(result.modelMetadata["opaque-sound-v1"]?.type, "audio");
+  assert.equal(result.modelMetadata["opaque-motion-v1"]?.type, "video");
+  assert.equal(result.modelMetadata["conflicting-pixels-array"]?.type, "image");
+  assert.equal(result.modelMetadata["conflicting-motion-object"]?.type, "video");
+  assert.equal(result.modelMetadata["conflicting-sound-object"]?.type, "audio");
+});
+
 test("Ollama custom connections enrich chat models with show metadata and filter embeddings", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
@@ -454,6 +514,55 @@ test("models.dev lookups retain unknown flags for unmatched model ids", () => {
   });
 });
 
+test("models.dev preserves authoritative non-chat families and descriptions", () => {
+  const catalog = parseModelCatalog({
+    local: {
+      models: {
+        "all-mini-lm-l6-v2": {
+          name: "All-MiniLM-L6-v2",
+          family: "text-embedding",
+        },
+        "nvidia--llama-3.2-nv-embedqa-1b": {
+          name: "NV EmbedQA",
+          description: "Embedding model for semantic search and retrieval",
+        },
+        "ordinary-chat": {
+          name: "Ordinary Chat",
+          description: "Chat model that can discuss embedding models",
+        },
+        "voyage/rerank-2.5-lite": {
+          name: "Voyage Rerank 2.5 Lite",
+          description: "Reranking model for improving retrieval quality",
+        },
+        "black-forest-labs/flux.1-dev": {
+          name: "FLUX.1 Dev",
+          modalities: { input: ["text"], output: ["image"] },
+        },
+      },
+    },
+  });
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "all-mini-lm-l6-v2").modelType,
+    "embedding",
+  );
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "nvidia--llama-3.2-nv-embedqa-1b").modelType,
+    "embedding",
+  );
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "ordinary-chat").modelType,
+    undefined,
+  );
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "voyage/rerank-2.5-lite").modelType,
+    "reranker",
+  );
+  assert.equal(
+    lookupCatalogModelInfo(catalog, "lmstudio", "black-forest-labs/flux.1-dev").modelType,
+    "image",
+  );
+});
+
 test("runtime limits use provider-scoped bundled metadata with conservative partial fallbacks", () => {
   const catalog = parseModelCatalog({
     google: {
@@ -729,6 +838,40 @@ test("local discovery metadata takes precedence over catalog metadata", () => {
   assert.equal(info.outputLimit, 8_192);
   assert.equal(info.openWeights, true);
   assert.equal(info.ranking, undefined);
+});
+
+test("catalog non-chat types survive a local provider's generic LLM classification", () => {
+  const catalog = parseModelCatalog({
+    local: {
+      models: {
+        "opaque-embedding": {
+          name: "Opaque Embedding",
+          family: "text-embedding",
+        },
+        "voyage/rerank-2.5-lite": {
+          name: "Voyage Rerank 2.5 Lite",
+          description: "Reranking model for improving retrieval quality",
+        },
+      },
+    },
+  });
+  const provider = {
+    id: "lmstudio",
+    baseUrl: "http://localhost:1234/v1",
+    modelMetadata: {
+      "opaque-embedding": { source: "lmstudio" as const, type: "llm" as const },
+      "voyage/rerank-2.5-lite": { source: "lmstudio" as const, type: "llm" as const },
+    },
+  };
+
+  assert.equal(
+    resolveModelInfo(catalog, snapshot([]), provider, "opaque-embedding").modelType,
+    "embedding",
+  );
+  assert.equal(
+    resolveModelInfo(catalog, snapshot([]), provider, "voyage/rerank-2.5-lite").modelType,
+    "reranker",
+  );
 });
 
 test("Artificial Analysis takes precedence for hosted models and models.dev fills gaps", () => {
