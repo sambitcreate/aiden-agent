@@ -1,6 +1,7 @@
 import {
   BOT_LIMITS,
   isBotAvatar,
+  type BotAvatarSuggestionInput,
   type BotCreateInput,
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
@@ -8,9 +9,17 @@ import {
 const CREATE_KEYS = new Set(["avatar", "description", "instructions", "name"]);
 const UPDATE_KEYS = new Set([...CREATE_KEYS, "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
+const AVATAR_SUGGESTION_KEYS = new Set([
+  "currentAvatar",
+  "model",
+  "prompt",
+  "providerId",
+  "requestId",
+]);
 
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${label}.`);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error(`Invalid ${label}.`);
   const record = value as Record<string, unknown>;
   let count = 0;
   for (const key in record) {
@@ -59,4 +68,20 @@ export function parseBotChatCreate(value: unknown) {
     providerId: text(record.providerId, "provider id", 256, true),
     model: text(record.model, "model id", 512, true),
   };
+}
+
+export function parseBotAvatarSuggestionInput(value: unknown): BotAvatarSuggestionInput {
+  const record = exact(value, AVATAR_SUGGESTION_KEYS, "bot avatar suggestion fields");
+  if (!isBotAvatar(record.currentAvatar)) throw new Error("Invalid current bot avatar.");
+  return {
+    requestId: text(record.requestId, "bot avatar request id", BOT_LIMITS.avatarRequestIdChars)!,
+    prompt: text(record.prompt, "bot avatar prompt", BOT_LIMITS.avatarPromptChars)!,
+    providerId: text(record.providerId, "provider id", 256)!,
+    model: text(record.model, "model id", 512)!,
+    currentAvatar: record.currentAvatar,
+  };
+}
+
+export function parseBotAvatarRequestId(value: unknown): string {
+  return text(value, "bot avatar request id", BOT_LIMITS.avatarRequestIdChars)!;
 }
