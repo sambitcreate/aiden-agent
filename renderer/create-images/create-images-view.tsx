@@ -22,6 +22,8 @@ import {
   Check,
   ChevronDown,
   Cloud,
+  BookOpen,
+  Search,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -54,6 +56,7 @@ import type {
   CreateImagesDegradedRunDiscardResult,
   CreateImagesRunHistoryPrunePlanResult,
   CreateImagesProviderConsentPlanView,
+  CreateImagesRecentOutputView,
   CreateImagesRunRecoveryView,
   CreateImagesRunListResult,
   CreateImagesRunView,
@@ -73,9 +76,11 @@ import {
   type WorkflowRunScope,
 } from "../shared/create-images/execution";
 import { CREATE_IMAGES_NODE_DEFINITIONS } from "../shared/create-images/ports";
+import { parseCreateImagesPromptList } from "../shared/create-images/prompt-list";
 import type { WorkflowDocumentV1 } from "../shared/create-images/schema";
 import {
   CREATE_IMAGES_WORKFLOW_TEMPLATES,
+  filterCreateImagesWorkflowTemplates,
   type CreateImagesWorkflowTemplateId,
 } from "../shared/create-images/templates";
 import {
@@ -94,6 +99,10 @@ import {
   deferAssetPreviewLifecycleDisposal,
 } from "./asset-preview-lifecycle-core";
 import {
+  CREATE_IMAGES_AUTOSAVE_PREFERENCE_EVENT,
+  readCreateImagesAutosaveEnabled,
+} from "./autosave-preferences-core";
+import {
   deferWorkflowAutosaveControllerDisposal,
   WorkflowAutosaveController,
   type CreateImagesAutosaveStatus,
@@ -111,6 +120,7 @@ import {
   reconcileCreateImagesRunState,
   removeCreateImagesRunRecord,
   type CreateImagesRendererRunState,
+  type CreateImagesRunSubscriptionController,
 } from "./run-ui-adapter";
 import {
   createImagesRunConfirmationViewModel,
@@ -162,6 +172,158 @@ type ReadyCreateImagesWorkspace = Extract<CreateImagesWorkspaceStatus, { status:
 
 function workspaceLastSyncedLabel(value?: string): string {
   return value ? `Last synced ${updatedLabel(value)}` : "Not synced yet";
+}
+
+const CREATE_IMAGES_TUTORIAL_STEPS = [
+  ["Add", "Open node search and add a Prompt, Generate Image, and Output node."],
+  ["Connect", "Drag compatible ports together. Aiden prevents incompatible and cyclic links."],
+  ["Run", "Choose Local mock, review the zero-cost confirmation, then run the workflow."],
+  ["Inspect", "Open the generated preview in the full-resolution lightbox and use keyboard zoom."],
+  ["Extract", "Turn a gallery result into a durable Image Input without contacting a provider."],
+  ["Save", "Use Save image or ZIP export. Native dialogs keep file paths outside the canvas."],
+] as const;
+
+function CreateImagesTemplateExplorer({
+  busy,
+  onCreate,
+}: {
+  busy: boolean;
+  onCreate(template: CreateImagesWorkflowTemplateId): void;
+}) {
+  const [search, setSearch] = React.useState("");
+  const [category, setCategory] = React.useState("All");
+  const [tutorialOpen, setTutorialOpen] = React.useState(false);
+  const [tutorialStep, setTutorialStep] = React.useState(0);
+  const categories = [
+    "All",
+    ...new Set(CREATE_IMAGES_WORKFLOW_TEMPLATES.map((template) => template.category)),
+  ];
+  const templates = filterCreateImagesWorkflowTemplates({ search, category });
+  const tutorial = CREATE_IMAGES_TUTORIAL_STEPS[tutorialStep]!;
+  return (
+    <section className="mt-8" aria-labelledby="create-images-template-explorer-title">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 id="create-images-template-explorer-title" className="text-strong font-medium text-primary">
+            Start from a template
+          </h2>
+          <p className="mt-1 text-small text-secondary">Local previews and search work fully offline.</p>
+        </div>
+        <Button
+          size="small"
+          variant="transparent"
+          onClick={() => {
+            setTutorialStep(0);
+            setTutorialOpen(true);
+          }}
+        >
+          <BookOpen /> Guided tutorial
+        </Button>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <label className="relative min-w-56 flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-tertiary" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search templates"
+            aria-label="Search Create Images templates"
+            className="pl-8"
+          />
+        </label>
+        <div className="flex flex-wrap gap-1" aria-label="Template categories">
+          {categories.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className="rounded-pill border border-field px-2.5 py-1.5 text-mini text-secondary outline-none hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-focus-ring data-[selected=true]:border-accent/40 data-[selected=true]:bg-accent/10 data-[selected=true]:text-accent"
+              data-selected={category === value}
+              aria-pressed={category === value}
+              onClick={() => setCategory(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-3 max-[800px]:grid-cols-1" role="list">
+        {templates.map((template) => (
+          <button
+            key={template.id}
+            type="button"
+            role="listitem"
+            disabled={busy}
+            className="group rounded-card border border-field bg-popover/65 p-3 text-left shadow-control outline-none transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-field-strong hover:shadow-popover focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transform-none disabled:opacity-60"
+            onClick={() => onCreate(template.id)}
+          >
+            <span
+              className="create-images-template-preview relative block h-28 overflow-hidden rounded-control border border-separator bg-well"
+              data-preview={template.preview}
+              aria-hidden="true"
+            >
+              <span className="absolute left-3 top-9 h-10 w-16 rounded-[7px] border border-field bg-popover shadow-control" />
+              <span className="absolute left-1/2 top-5 h-16 w-20 -translate-x-1/2 rounded-[7px] border border-accent/30 bg-popover shadow-control" />
+              <span className="absolute right-3 top-9 h-10 w-16 rounded-[7px] border border-field bg-popover shadow-control" />
+              <span className="absolute inset-x-12 top-1/2 h-px bg-accent/45" />
+            </span>
+            <span className="mt-3 block text-small-strong font-medium text-primary">{template.title}</span>
+            <span className="mt-1 block text-mini leading-relaxed text-secondary">{template.description}</span>
+            <span className="mt-2 block text-mini text-tertiary">{template.category} · {template.tags.join(" · ")}</span>
+          </button>
+        ))}
+        {templates.length === 0 ? (
+          <p className="col-span-full rounded-card border border-dashed border-field px-4 py-8 text-center text-small text-secondary">
+            No local template matches this search.
+          </p>
+        ) : null}
+      </div>
+      <Dialog
+        open={tutorialOpen}
+        onOpenChange={setTutorialOpen}
+        title="Create Images tutorial"
+        description="A disposable local-mock walkthrough. It never bills or changes your workflow library."
+        confirmLabel={tutorialStep === CREATE_IMAGES_TUTORIAL_STEPS.length - 1 ? "Finish" : "Next"}
+        onConfirm={() => {
+          if (tutorialStep === CREATE_IMAGES_TUTORIAL_STEPS.length - 1) setTutorialOpen(false);
+          else setTutorialStep((value) => value + 1);
+        }}
+      >
+        <div className="rounded-card border border-field bg-well p-4">
+          <div className="flex items-center justify-between gap-3 text-mini text-tertiary">
+            <span>Local mock · $0.00</span>
+            <span>{tutorialStep + 1} / {CREATE_IMAGES_TUTORIAL_STEPS.length}</span>
+          </div>
+          <div className="mt-3 h-1 overflow-hidden rounded-pill bg-control">
+            <div
+              className="h-full rounded-pill bg-accent transition-[width] motion-reduce:transition-none"
+              style={{ width: `${((tutorialStep + 1) / CREATE_IMAGES_TUTORIAL_STEPS.length) * 100}%` }}
+            />
+          </div>
+          <h3 className="mt-5 text-heading2 font-semibold text-primary">{tutorial[0]}</h3>
+          <p className="mt-2 text-regular leading-relaxed text-secondary">{tutorial[1]}</p>
+          <div className="mt-5 grid h-40 place-items-center rounded-control border border-separator bg-background">
+            <div className="flex items-center gap-3" aria-hidden="true">
+              <span className="h-14 w-20 rounded-[8px] border border-field bg-popover shadow-control" />
+              <span className="h-px w-8 bg-accent/60" />
+              <span className="grid size-20 place-items-center rounded-[10px] border border-accent/40 bg-popover text-mini text-accent shadow-control">
+                {tutorial[0]}
+              </span>
+              <span className="h-px w-8 bg-accent/60" />
+              <span className="h-14 w-20 rounded-[8px] border border-field bg-popover shadow-control" />
+            </div>
+          </div>
+          {tutorialStep === CREATE_IMAGES_TUTORIAL_STEPS.length - 1 ? (
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-control bg-popover px-3 py-2.5">
+              <p className="text-small text-secondary">Want a real local workflow after the tutorial?</p>
+              <Button size="small" variant="filled" onClick={() => onCreate("starter")}>
+                Keep as workflow
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </Dialog>
+    </section>
+  );
 }
 
 function CreateImagesWorkspaceSetup({
@@ -534,7 +696,20 @@ function prepareLocalMockRun(workflow: WorkflowDocumentV1, scope: WorkflowRunSco
   const nodes = plan.snapshot.nodes.filter((node) => included.has(node.id));
   const generationNodes = nodes.filter((node) => node.type === "generate-image");
   const sizes = [...new Set(generationNodes.map((node) => node.data.imageSize))];
-  const outputCount = generationNodes.reduce((total, node) => total + node.data.count, 0);
+  const batchSize = (generationNodeId: string) => {
+    const edge = plan.snapshot.edges.find(
+      (candidate) => candidate.target === generationNodeId && candidate.targetPort === "prompt",
+    );
+    const source = edge ? plan.snapshot.nodes.find((candidate) => candidate.id === edge.source) : undefined;
+    if (source?.type !== "prompt-list") return 1;
+    const parsed = parseCreateImagesPromptList(source.data.source, source.data.format);
+    return parsed.status === "ready" ? parsed.items.length : 1;
+  };
+  const requestCount = generationNodes.reduce((total, node) => total + batchSize(node.id), 0);
+  const outputCount = generationNodes.reduce(
+    (total, node) => total + batchSize(node.id) * node.data.count,
+    0,
+  );
   return {
     scope,
     workflowId: workflow.id,
@@ -549,7 +724,7 @@ function prepareLocalMockRun(workflow: WorkflowDocumentV1, scope: WorkflowRunSco
       executionMode: "local-mock",
       providerLabel: "Aiden local mock",
       modelLabel: "Deterministic Phase 3",
-      remoteRequestCount: generationNodes.length,
+      remoteRequestCount: requestCount,
       outputCount,
       imageSizeLabel:
         sizes.length === 1 ? sizes[0]! : sizes.length > 1 ? "Mixed sizes" : "No image output",
@@ -557,7 +732,7 @@ function prepareLocalMockRun(workflow: WorkflowDocumentV1, scope: WorkflowRunSco
       referenceImageCount: nodes.filter(
         (node) => node.type === "image-input" && Boolean(node.data.assetId),
       ).length,
-      sendsPrompt: nodes.some((node) => node.type === "prompt"),
+      sendsPrompt: nodes.some((node) => node.type === "prompt" || node.type === "prompt-list"),
       estimate: {
         kind: "mock",
         amount: 0,
@@ -1043,6 +1218,11 @@ export function CreateImagesIndexView() {
             </div>
           </div>
 
+          <CreateImagesTemplateExplorer
+            busy={Boolean(busy)}
+            onCreate={(template) => void createWorkflow(template)}
+          />
+
           {storageHealth && storageHealth.runIndex.status !== "healthy" ? (
             <div
               className="mt-7 flex max-w-2xl items-start gap-3 rounded-card border border-support-warning/25 bg-support-warning/[0.07] px-4 py-3"
@@ -1310,25 +1490,6 @@ export function CreateImagesIndexView() {
                 title="No image workflows yet"
                 description="Choose a focused starter, import a portable archive, or begin with a blank canvas."
               />
-              <div
-                className="mx-auto grid max-w-3xl grid-cols-3 gap-2 px-5 pb-4 max-[700px]:grid-cols-1"
-                aria-label="Create Images starter templates"
-              >
-                {CREATE_IMAGES_WORKFLOW_TEMPLATES.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    disabled={Boolean(busy)}
-                    className="rounded-control border border-field bg-well px-3 py-3 text-left outline-none transition-colors hover:bg-control focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-60"
-                    onClick={() => void createWorkflow(template.id)}
-                  >
-                    <span className="block text-small-strong text-primary">{template.title}</span>
-                    <span className="mt-1 block text-mini leading-relaxed text-secondary">
-                      {template.description}
-                    </span>
-                  </button>
-                ))}
-              </div>
               <div className="flex justify-center gap-2 pb-6">
                 <Button size="small" variant="filled" onClick={() => void createWorkflow("blank")}>
                   <Boxes /> Blank canvas
@@ -1761,11 +1922,13 @@ function RecoveryWorkflow({
 
 function SaveStatusBanner({
   status,
+  autosaveEnabled,
   onReload,
   onRetry,
   onSaveCopy,
 }: {
   status: CreateImagesAutosaveStatus;
+  autosaveEnabled: boolean;
   onReload(): void;
   onRetry(): void;
   onSaveCopy(): void;
@@ -1779,7 +1942,11 @@ function SaveStatusBanner({
       <AlertTriangle className="size-5 shrink-0 text-yellow" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <p className="text-small-strong font-medium text-primary">
-          {status.state === "conflict" ? "This workflow changed elsewhere" : "Autosave paused"}
+          {status.state === "conflict"
+            ? "This workflow changed elsewhere"
+            : autosaveEnabled
+              ? "Autosave paused"
+              : "Save paused"}
         </p>
         <p className="mt-0.5 text-mini text-secondary">
           {status.state === "conflict"
@@ -1840,15 +2007,20 @@ function PersistentWorkflowCanvas({
   const [missingAssetIds, setMissingAssetIds] =
     React.useState<readonly string[]>(initialMissingAssetIds);
   const [initialAssetRefs] = React.useState<readonly string[]>(() => initial.assetRefs);
+  const [autosaveEnabled, setAutosaveEnabled] = React.useState(() =>
+    readCreateImagesAutosaveEnabled(window.localStorage),
+  );
   const [controller] = React.useState(
     () =>
       new WorkflowAutosaveController(initial, {
+        autosaveEnabled,
         save: createImagesApi.save,
       }),
   );
   const cancelPendingControllerDisposalRef = React.useRef<() => void>(() => undefined);
   const cancelPendingPreviewDisposalRef = React.useRef<() => void>(() => undefined);
   const cancelPendingRunPreviewDisposalRef = React.useRef<() => void>(() => undefined);
+  const cancelPendingRecentPreviewDisposalRef = React.useRef<() => void>(() => undefined);
   const previewManager = React.useMemo(
     () =>
       new AssetPreviewLifecycleManager({
@@ -1917,6 +2089,9 @@ function PersistentWorkflowCanvas({
   const [runHistoryPruneBusy, setRunHistoryPruneBusy] = React.useState(false);
   const runHistoryPruneReturnFocusRef = React.useRef<HTMLButtonElement | null>(null);
   const runStateRef = React.useRef<CreateImagesRendererRunState | undefined>(initialRunState);
+  const runSubscriptionRef = React.useRef<CreateImagesRunSubscriptionController | undefined>(
+    undefined,
+  );
   const runAssetOwnersRef = React.useRef<Readonly<Record<string, string>>>(
     initialRunState?.runAssetOwners ?? {},
   );
@@ -1948,9 +2123,48 @@ function PersistentWorkflowCanvas({
       }),
     [initial.id],
   );
+  const [recentOutputs, setRecentOutputs] = React.useState<readonly CreateImagesRecentOutputView[]>(
+    [],
+  );
+  const recentOutputOwnersRef = React.useRef<
+    Readonly<Record<string, { workflowId: string; runId: string }>>
+  >({});
+  const recentPreviewManager = React.useMemo(
+    () =>
+      new AssetPreviewLifecycleManager({
+        load: async (assetId) => {
+          const owner = recentOutputOwnersRef.current[assetId];
+          if (!owner) {
+            throw new AssetPreviewLoadError("This recent output is no longer retained.", false);
+          }
+          const result = await createImagesApi.grantRunAsset({
+            workflowId: owner.workflowId,
+            runId: owner.runId,
+            assetId,
+          });
+          if (result.status === "ready") return result.grant;
+          throw new AssetPreviewLoadError(
+            result.status === "unavailable"
+              ? result.message
+              : "This recent output is no longer available.",
+            result.status === "unavailable",
+          );
+        },
+        revoke: (token) => createImagesApi.revokeAssetGrant({ token }),
+      }),
+    [],
+  );
   const [runAssetPreviews, setRunAssetPreviews] = React.useState<
     Readonly<Record<string, CreateImagesAssetGrantView>>
   >(() => runPreviewManager.snapshot());
+  const [recentOutputPreviews, setRecentOutputPreviews] = React.useState<
+    Readonly<Record<string, CreateImagesAssetGrantView>>
+  >(() => recentPreviewManager.snapshot());
+  const recentOutputRefreshKey =
+    runState?.projection &&
+    ["succeeded", "failed", "cancelled", "interrupted"].includes(runState.projection.status)
+      ? `${runState.projection.runId}:${runState.projection.status}`
+      : "initial";
   const [preparedRun, setPreparedRun] = React.useState<PreparedRun>();
   const [reviewedRun, setReviewedRun] = React.useState(false);
   const [runPreparing, setRunPreparing] = React.useState(false);
@@ -1972,6 +2186,23 @@ function PersistentWorkflowCanvas({
     },
     [controller, previewManager],
   );
+  const saveWorkflow = React.useCallback(async () => {
+    const result =
+      controller.status().state === "error" ? await controller.retry() : await controller.saveNow();
+    if (result.state === "saved") toast.success("Workflow saved on this device.");
+  }, [controller]);
+
+  React.useEffect(() => {
+    const handlePreferenceChange = (event: Event) => {
+      const enabled = (event as CustomEvent<boolean>).detail;
+      if (typeof enabled !== "boolean") return;
+      setAutosaveEnabled(enabled);
+      controller.setAutosaveEnabled(enabled);
+    };
+    window.addEventListener(CREATE_IMAGES_AUTOSAVE_PREFERENCE_EVENT, handlePreferenceChange);
+    return () =>
+      window.removeEventListener(CREATE_IMAGES_AUTOSAVE_PREFERENCE_EVENT, handlePreferenceChange);
+  }, [controller]);
   const retainAssetPreview = React.useCallback(
     (assetId: string) => previewManager.retain(assetId),
     [previewManager],
@@ -1983,6 +2214,10 @@ function PersistentWorkflowCanvas({
   const retainRunAssetPreview = React.useCallback(
     (assetId: string) => runPreviewManager.retain(assetId),
     [runPreviewManager],
+  );
+  const retainRecentOutputPreview = React.useCallback(
+    (assetId: string) => recentPreviewManager.retain(assetId),
+    [recentPreviewManager],
   );
   const syncRunPreviewAuthority = React.useCallback(
     (
@@ -2102,12 +2337,12 @@ function PersistentWorkflowCanvas({
       setRunPreparing(true);
       try {
         controller.update(draft);
-        const flushed = await controller.flush();
+        const flushed = await controller.saveNow();
         if (flushed.state !== "saved") {
           toast.error(
             flushed.state === "conflict"
               ? "Resolve the workflow save conflict before starting a run."
-              : "Autosave must finish before Aiden can prepare this run.",
+              : "The workflow must be saved before Aiden can prepare this run.",
           );
           runRequestActiveRef.current = false;
           return;
@@ -2249,6 +2484,10 @@ function PersistentWorkflowCanvas({
       });
       if (result.status === "started" || result.status === "already-running") {
         applyRunMutation(result.run);
+        // A run may start while the initial history subscription is under
+        // bounded queue pressure. Open a fresh retry window immediately so an
+        // optimistic queued view cannot outlive main's terminal result.
+        runSubscriptionRef.current?.retryNow();
         setPreparedRun(undefined);
         setReviewedRun(false);
         runRequestActiveRef.current = false;
@@ -2278,6 +2517,29 @@ function PersistentWorkflowCanvas({
     stopReturnFocusRef.current = trigger;
     setStopDialogOpen(true);
   }, []);
+  const resumeRun = React.useCallback(async () => {
+    const active = runStateRef.current?.projection;
+    if (!active || active.status !== "paused" || !active.journalRevision || runSubmitting) return;
+    setRunSubmitting(true);
+    try {
+      const result = await createImagesApi.resumeRun({
+        workflowId: active.workflowId,
+        runId: active.runId,
+        expectedJournalRevision: active.journalRevision,
+      });
+      if (result.status === "resumed" || result.status === "already-running") {
+        applyRunMutation(result.run);
+        runSubscriptionRef.current?.retryNow();
+        toast.success("Run resumed from its durable checkpoint.");
+      } else {
+        toast.error("message" in result ? result.message : "The paused run could not resume.");
+      }
+    } catch {
+      toast.error("Aiden could not resume the durable checkpoint.");
+    } finally {
+      setRunSubmitting(false);
+    }
+  }, [applyRunMutation, runSubmitting]);
   const stopRun = React.useCallback(async () => {
     const active = runStateRef.current?.projection;
     if (!active || stopSubmitting) return;
@@ -2727,7 +2989,9 @@ function PersistentWorkflowCanvas({
             message:
               result.state === "conflict"
                 ? "Resolve the workflow save conflict before leaving."
-                : "Wait for autosave to finish or retry it before leaving.",
+                : autosaveEnabled
+                  ? "Wait for autosave to finish or retry it before leaving."
+                  : "Save your workflow before leaving.",
           };
     });
     const flushWhenHidden = () => {
@@ -2745,7 +3009,7 @@ function PersistentWorkflowCanvas({
         },
       );
     };
-  }, [controller]);
+  }, [autosaveEnabled, controller]);
 
   React.useEffect(() => {
     cancelPendingPreviewDisposalRef.current();
@@ -2779,6 +3043,44 @@ function PersistentWorkflowCanvas({
   }, [initialRunState, runPreviewManager]);
 
   React.useEffect(() => {
+    cancelPendingRecentPreviewDisposalRef.current();
+    const unsubscribe = recentPreviewManager.subscribe(setRecentOutputPreviews);
+    const refreshWhenVisible = () => {
+      if (window.document.visibilityState === "visible") recentPreviewManager.refresh();
+    };
+    window.document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.document.removeEventListener("visibilitychange", refreshWhenVisible);
+      unsubscribe();
+      cancelPendingRecentPreviewDisposalRef.current =
+        deferAssetPreviewLifecycleDisposal(recentPreviewManager);
+    };
+  }, [recentPreviewManager]);
+
+  React.useEffect(() => {
+    let active = true;
+    void createImagesApi
+      .listRecentOutputs({ limit: 50 })
+      .then((result) => {
+        if (!active || result.status !== "ready") return;
+        recentOutputOwnersRef.current = Object.freeze(
+          Object.fromEntries(
+            result.items.map((item) => [
+              item.assetId,
+              { workflowId: item.workflowId, runId: item.runId },
+            ]),
+          ),
+        );
+        recentPreviewManager.setAssets(result.items.map((item) => item.assetId));
+        setRecentOutputs(result.items);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [recentOutputRefreshKey, recentPreviewManager]);
+
+  React.useEffect(() => {
     const runSubscription = createImagesRunSubscriptionController({
       workflowId: initial.id,
       subscribe: createImagesApi.subscribeRuns,
@@ -2786,6 +3088,7 @@ function PersistentWorkflowCanvas({
       onChanged: createImagesApi.onRunsChanged,
       apply: applyRunList,
     });
+    runSubscriptionRef.current = runSubscription;
     const retryWhenFocused = () => runSubscription.retryNow();
     const retryWhenVisible = () => {
       if (window.document.visibilityState === "visible") runSubscription.retryNow();
@@ -2797,19 +3100,62 @@ function PersistentWorkflowCanvas({
       window.removeEventListener("focus", retryWhenFocused);
       window.document.removeEventListener("visibilitychange", retryWhenVisible);
       runSubscription.dispose();
+      if (runSubscriptionRef.current === runSubscription) runSubscriptionRef.current = undefined;
     };
   }, [applyRunList, initial.id]);
+
+  const runUpdateError = runState?.errorMessage;
+  const visibleRunId = runState?.projection?.runId;
+  React.useEffect(() => {
+    if (!runUpdateError || !visibleRunId) return;
+    // Keep recovery low-frequency and single-flight while an optimistic run
+    // is visible. The interval stays below the main read budget and stops as
+    // soon as an authoritative snapshot clears the error or seals the run.
+    const retry = window.setInterval(() => runSubscriptionRef.current?.retryNow(), 10_000);
+    return () => window.clearInterval(retry);
+  }, [runUpdateError, visibleRunId]);
+
+  React.useEffect(() => {
+    if (!runUpdateError || !visibleRunId) return;
+    let disposed = false;
+    let inFlight = false;
+    const refreshVisibleRun = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        const result = await createImagesApi.getRun({
+          workflowId: initial.id,
+          runId: visibleRunId,
+        });
+        if (!disposed && result.status === "ready") applyRunMutation(result.run);
+      } catch {
+        // The subscription controller owns user-facing availability state.
+      } finally {
+        inFlight = false;
+      }
+    };
+    void refreshVisibleRun();
+    const retry = window.setInterval(() => void refreshVisibleRun(), 5_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(retry);
+    };
+  }, [applyRunMutation, initial.id, runUpdateError, visibleRunId]);
 
   const statusLabel =
     status.state === "saved"
       ? "Saved on this device"
       : status.state === "dirty"
-        ? "Autosave pending"
+        ? autosaveEnabled
+          ? "Autosave pending"
+          : "Unsaved changes"
         : status.state === "saving"
           ? "Saving…"
           : status.state === "conflict"
             ? "Save conflict"
-            : "Autosave paused";
+            : autosaveEnabled
+              ? "Autosave paused"
+              : "Save paused";
 
   const reloadConflict = () => {
     if (status.state !== "conflict") return;
@@ -2879,6 +3225,34 @@ function PersistentWorkflowCanvas({
         onRunAssetPreviewError={(assetId, token) =>
           runPreviewManager.reportLoadError(assetId, token)
         }
+        recentOutputs={recentOutputs}
+        recentOutputPreviews={recentOutputPreviews}
+        onRecentOutputPreviewMount={retainRecentOutputPreview}
+        onRecentOutputPreviewLoad={(assetId, token) =>
+          recentPreviewManager.reportLoadSuccess(assetId, token)
+        }
+        onRecentOutputPreviewError={(assetId, token) =>
+          recentPreviewManager.reportLoadError(assetId, token)
+        }
+        onDownloadWorkflowAsset={(assetId) => {
+          void createImagesApi
+            .downloadWorkflowAsset({
+              workflowId: documentRef.current.id,
+              assetId,
+            })
+            .then((result) => {
+              if (result.status === "canceled") return;
+              if (result.status === "saved") {
+                toast.success(`Saved ${result.fileName} and revealed it in Finder.`);
+                return;
+              }
+              if (result.status === "forbidden")
+                toast.error("This workflow no longer authorizes that image.");
+              else if (result.status === "not-found") toast.error("The image file is missing.");
+              else if ("message" in result) toast.error(result.message);
+            })
+            .catch(() => toast.error("Aiden could not save this workflow image."));
+        }}
         onDownloadRunAsset={(runId, assetId) => {
           void createImagesApi
             .downloadRunAsset({
@@ -2900,7 +3274,31 @@ function PersistentWorkflowCanvas({
             })
             .catch(() => toast.error("Aiden could not save this retained image."));
         }}
+        onDownloadRunAssetsZip={(runId, assetIds) => {
+          void createImagesApi
+            .downloadRunAssetsZip({
+              workflowId: documentRef.current.id,
+              runId,
+              assetIds: [...assetIds],
+            })
+            .then((result) => {
+              if (result.status === "canceled") return;
+              if (result.status === "saved") {
+                toast.success(`Saved ${result.fileName} and revealed it in Finder.`);
+                return;
+              }
+              if (result.status === "forbidden")
+                toast.error("This run record no longer authorizes one or more selected images.");
+              else if (result.status === "not-found")
+                toast.error("One or more retained image files are missing.");
+              else if ("message" in result) toast.error(result.message);
+            })
+            .catch(() => toast.error("Aiden could not save the selected images."));
+        }}
         statusLabel={`${statusLabel}${missingAssetIds.length > 0 ? ` · ${missingAssetIds.length} image file${missingAssetIds.length === 1 ? "" : "s"} missing` : ""}${runState?.errorMessage ? " · Run updates unavailable" : ""}`}
+        autosaveEnabled={autosaveEnabled}
+        saveState={status.state}
+        onSaveWorkflow={() => void saveWorkflow()}
         providerStatus={providerStatus}
         executionMode={executionMode}
         onExecutionModeChange={setExecutionMode}
@@ -2910,6 +3308,7 @@ function PersistentWorkflowCanvas({
         onDocumentChange={handleDocumentChange}
         onRunRequest={(scope, draft, trigger) => void requestRun(scope, draft, trigger)}
         onStopRun={requestStop}
+        onResumeRun={() => void resumeRun()}
         onRunErrorAction={handleRunErrorAction}
         onSelectHistoryRun={(runId, trigger) => void selectHistoryRun(runId, trigger)}
         onRecoverRun={(recovery, trigger) => void recoverHistoryRun(recovery, trigger)}
@@ -2983,6 +3382,7 @@ function PersistentWorkflowCanvas({
       />
       <SaveStatusBanner
         status={status}
+        autosaveEnabled={autosaveEnabled}
         onReload={reloadConflict}
         onRetry={() => void controller.retry()}
         onSaveCopy={() => void saveConflictCopy()}
