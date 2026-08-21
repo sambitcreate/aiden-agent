@@ -127,9 +127,18 @@ function parseTerminalChatNotification(payload: unknown): TerminalChatNotificati
 export function parseChatReadResponse(payload: unknown): ChatReadResponse | null {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
   const candidate = payload as Record<string, unknown>;
-  if (candidate.chat !== null && !isChatSnapshot(candidate.chat)) return null;
+  if (
+    (candidate.chat !== null && !isChatSnapshot(candidate.chat)) ||
+    typeof candidate.imageArtifactRecoveryPending !== "boolean"
+  ) {
+    return null;
+  }
   if (candidate.reconciliation === null) {
-    return { chat: candidate.chat as Chat | null, reconciliation: null };
+    return {
+      chat: candidate.chat as Chat | null,
+      imageArtifactRecoveryPending: candidate.imageArtifactRecoveryPending,
+      reconciliation: null,
+    };
   }
   if (
     typeof candidate.reconciliation !== "object" ||
@@ -148,6 +157,7 @@ export function parseChatReadResponse(payload: unknown): ChatReadResponse | null
   }
   return {
     chat: candidate.chat as Chat | null,
+    imageArtifactRecoveryPending: candidate.imageArtifactRecoveryPending,
     reconciliation: {
       chatId: reconciliation.chatId,
       workspaceId: persistedChatWorkspaceId(reconciliation.workspaceId),
