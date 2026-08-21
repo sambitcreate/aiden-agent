@@ -366,6 +366,11 @@ test("run progress and terminal history retain accessible semantics", () => {
   assert.match(component, /aria-live="polite"/u);
   assert.match(component, /aria-atomic="true"/u);
   assert.match(component, /aria-label="Node run progress"/u);
+  assert.match(component, /runNodeTitle\(node\.label\)/u);
+  assert.doesNotMatch(component, /run\.\{status\}|attempt=|error=\{node\.error/u);
+  assert.doesNotMatch(component, /blocked_upstream/u);
+  assert.match(component, /Skipped because a required earlier step did not finish/u);
+  assert.match(component, /CreateImagesNodeRunStatusBadge/u);
   assert.match(component, /Terminal run history/u);
   assert.match(component, /Durable summaries only\. History never repeats a request\./u);
   assert.match(component, /<time dateTime=\{item\.finishedAt\}/u);
