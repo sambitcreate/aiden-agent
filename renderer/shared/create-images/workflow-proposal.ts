@@ -24,7 +24,6 @@ export interface CreateImagesWorkflowProposalDiff {
   maximumImageRequests: number;
   cost: { kind: "unknown" };
 }
-
 export interface CreateImagesWorkflowProposal {
   version: typeof CREATE_IMAGES_WORKFLOW_PROPOSAL_VERSION;
   workflow: WorkflowDocumentV1;
@@ -215,4 +214,3 @@ export function parseCreateImagesWorkflowProposal(
     },
   };
 }
-
