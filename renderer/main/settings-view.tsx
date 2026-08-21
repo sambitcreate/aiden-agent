@@ -19,6 +19,7 @@ import {
   Info,
   Clock3,
   Sparkles,
+  Images,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -32,7 +33,11 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
-import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
+import { CreateImagesSettings } from "../components/settings/create-images-settings";
+import {
+  SETTINGS_DESTINATIONS,
+  type SettingsSection,
+} from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
 
@@ -53,6 +58,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   scheduledTasks: <Clock3 className="size-5" />,
   assistant: <Sparkles className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
+  createImages: <Images className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
@@ -74,6 +80,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
+  createImages: CreateImagesSettings,
   scheduledTasks: ScheduledTasksSettings,
   assistant: AssistantSettings,
   voice: VoiceSettings,
@@ -82,7 +89,11 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   about: AboutSettings,
 };
 
-export function SettingsView({ initialSection }: { initialSection?: SettingsSection }) {
+export function SettingsView({
+  initialSection,
+}: {
+  initialSection?: SettingsSection;
+}) {
   const router = useRouter();
   const navigate = useNavigate();
   const section = initialSection ?? "providers";
@@ -90,7 +101,9 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
 
   const query = search.trim().toLocaleLowerCase();
   const filteredNav = query
-    ? NAV.filter((item) => `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query))
+    ? NAV.filter((item) =>
+        `${item.title} ${item.keywords}`.toLocaleLowerCase().includes(query),
+      )
     : NAV;
   const ActiveSection = CONTENT[section];
 
@@ -137,12 +150,16 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
 
             <nav aria-label="Settings" className="space-y-5">
               {NAV_GROUPS.map((group) => {
-                const items = filteredNav.filter((item) => item.group === group);
+                const items = filteredNav.filter(
+                  (item) => item.group === group,
+                );
                 if (items.length === 0) return null;
 
                 return (
                   <div key={group}>
-                    <div className="mb-2 px-3 text-[13px] font-medium text-tertiary">{group}</div>
+                    <div className="mb-2 px-3 text-[13px] font-medium text-tertiary">
+                      {group}
+                    </div>
                     <div className="space-y-0.5">
                       {items.map((item) => {
                         const selected = section === item.id;
@@ -164,8 +181,12 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
                                 : "text-primary"
                             }`}
                           >
-                            <span className="shrink-0 text-secondary">{item.icon}</span>
-                            <span className="min-w-0 truncate">{item.title}</span>
+                            <span className="shrink-0 text-secondary">
+                              {item.icon}
+                            </span>
+                            <span className="min-w-0 truncate">
+                              {item.title}
+                            </span>
                           </button>
                         );
                       })}
@@ -175,7 +196,10 @@ export function SettingsView({ initialSection }: { initialSection?: SettingsSect
               })}
 
               {filteredNav.length === 0 ? (
-                <p role="status" className="px-3 py-2 text-[13px] leading-relaxed text-tertiary">
+                <p
+                  role="status"
+                  className="px-3 py-2 text-[13px] leading-relaxed text-tertiary"
+                >
                   No settings match “{search.trim()}”.
                 </p>
               ) : null}
