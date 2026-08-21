@@ -179,8 +179,8 @@ function assertAcceptance(receipt) {
     throw new Error("Packaged Create Images did not persist its 16 MP, 20 MB fixture.");
   }
   const productFiles = receipt.phaseTwoProductFiles;
-  if (!Array.isArray(productFiles) || productFiles.length !== 10) {
-    throw new Error("Packaged Create Images did not report its ten exact durable files.");
+  if (!Array.isArray(productFiles) || productFiles.length !== 12) {
+    throw new Error("Packaged Create Images did not report its twelve exact durable files.");
   }
   const assetPathPattern =
     /^user-data\/create-images\/assets\/sha256\/([a-f0-9]{2})\/([a-f0-9]{64})\.(png|jpg)$/u;
@@ -196,6 +196,8 @@ function assertAcceptance(receipt) {
   const workflowRoot = "user-data/create-images/workflows/packaged-phase-two";
   const predecessorPattern =
     /^user-data\/create-images\/\.asset-index\.json\.([a-f0-9]{64})\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.previous$/u;
+  const workspacePredecessorPattern =
+    /^user-data\/create-images\/\.workspace\.json\.([a-f0-9]{64})\.[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.previous$/u;
   const predecessors = productFiles.filter((entry) => predecessorPattern.test(entry?.path));
   if (
     predecessors.length !== 3 ||
@@ -203,15 +205,28 @@ function assertAcceptance(receipt) {
   ) {
     throw new Error("Packaged Create Images durable evidence has invalid index predecessors.");
   }
+  const workspacePredecessors = productFiles.filter((entry) =>
+    workspacePredecessorPattern.test(entry?.path),
+  );
+  if (
+    workspacePredecessors.length !== 1 ||
+    workspacePredecessors.some(
+      (entry) => workspacePredecessorPattern.exec(entry.path)?.[1] !== entry.digest,
+    )
+  ) {
+    throw new Error("Packaged Create Images durable evidence has an invalid workspace predecessor.");
+  }
   const expectedPaths = [
     "user-data/create-images/asset-index.json",
     assetEntry.path,
     "user-data/create-images/index.json",
     "user-data/create-images/run-index.json",
     `user-data/create-images/thumbnails/${assetId}/512.png`,
+    "user-data/create-images/workspace.json",
     `${workflowRoot}/workflow.json`,
     `${workflowRoot}/workflow.last-known-good.json`,
     ...predecessors.map((entry) => entry.path),
+    ...workspacePredecessors.map((entry) => entry.path),
   ].sort((left, right) => left.localeCompare(right));
   const actualPaths = productFiles.map((entry) => entry?.path).sort();
   if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
@@ -246,7 +261,8 @@ function assertAcceptance(receipt) {
   }
   if (
     !Number.isSafeInteger(receipt.phaseTwoProductFileMutations) ||
-    receipt.phaseTwoProductFileMutations !== productFiles.length
+    receipt.phaseTwoProductFileMutations !==
+      productFiles.filter((entry) => entry.path !== "user-data/create-images/run-index.json").length
   ) {
     throw new Error("Packaged Create Images reported unexpected durable Phase 2 mutations.");
   }
