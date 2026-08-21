@@ -708,6 +708,26 @@ export async function runPackagedCreateImagesAcceptance(
     configDir: runtimeProfile.configDir,
     userDataDir: runtimeProfile.userDataPath,
   };
+  // Production requires an explicitly selected, writable Finder-facing workspace. The
+  // one-shot packaged acceptance profile has no onboarding choice to persist, so give it
+  // a private directory inside the disposable acceptance root and exercise the same
+  // main-owned configuration path used by the real picker. Keep it outside config/userData
+  // so product-persistence evidence does not mistake user-selected workspace mirrors for
+  // app-owned records.
+  const service = createImagesService();
+  const acceptanceWorkspace = path.join(
+    path.dirname(runtimeProfile.userDataPath),
+    "create-images-workspace",
+  );
+  await fs.mkdir(acceptanceWorkspace, { recursive: false, mode: 0o700 });
+  await fs.chmod(acceptanceWorkspace, 0o700);
+  const workspaceStatus = await service.workspace.configureChosenDirectory(acceptanceWorkspace);
+  if (!workspaceStatus.configured || workspaceStatus.state !== "ready") {
+    throw new Error("Packaged Create Images acceptance could not configure its private workspace.");
+  }
+  // Materialize the empty authoritative indexes before the mutation baseline. Opening the
+  // stress canvas may read them, but must not be credited with product writes of its own.
+  await service.initialize();
   // A fresh acceptance profile creates ordinary app bootstrap records asynchronously. Establish
   // the baseline only after those writes settle, before navigating to the side-effect-free canvas.
   const filesBefore = await waitForCreateImagesProductFilesToSettle(persistenceInput);
@@ -1176,7 +1196,6 @@ export async function runPackagedCreateImagesAcceptance(
     ).getLastWebPreferences();
     const productFileMutations = countCreateImagesProductFileMutations(filesBefore, filesAfter);
 
-    const service = createImagesService();
     const sourceBytes = createImagesAcceptanceLargePng();
     async function* sourceChunks(): AsyncGenerator<Uint8Array> {
       const chunkSize = 64 * 1024;
