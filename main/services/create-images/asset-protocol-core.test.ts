@@ -3,16 +3,33 @@ import test from "node:test";
 import {
   authorizeCreateImagesAssetRequest,
   createImagesProtocolDocumentId,
+  parseCreateImagesAssetProtocolRequest,
   parseCreateImagesAssetProtocolToken,
 } from "./asset-protocol-core.js";
 
 test("asset protocol accepts only the canonical opaque grant URL", () => {
   const token = "A".repeat(43);
   assert.equal(parseCreateImagesAssetProtocolToken(`aiden-asset://asset/${token}`), token);
+  assert.deepEqual(parseCreateImagesAssetProtocolRequest(`aiden-asset://asset/${token}/original`), {
+    token,
+    rendition: "original",
+  });
+  assert.deepEqual(parseCreateImagesAssetProtocolRequest(`aiden-asset://asset/${token}`), {
+    token,
+    rendition: "preview",
+  });
+  assert.deepEqual(parseCreateImagesAssetProtocolRequest(`aiden-asset://asset/${token}/preview-128`), {
+    token,
+    rendition: "preview-128",
+  });
+  assert.deepEqual(parseCreateImagesAssetProtocolRequest(`aiden-asset://asset/${token}/preview-256`), {
+    token,
+    rendition: "preview-256",
+  });
   for (const url of [
     `aiden-asset://other/${token}`,
     `aiden-asset://asset/${token}?path=/tmp/private`,
-    `aiden-asset://asset/${token}/extra`,
+    `aiden-asset://asset/${token}/original/extra`,
     "aiden-asset://asset/../../etc/passwd",
     "file:///tmp/private",
   ]) {
@@ -21,7 +38,13 @@ test("asset protocol accepts only the canonical opaque grant URL", () => {
 });
 
 test("asset protocol document identity accepts only a live main frame", () => {
-  const frame = { processId: 12, routingId: 34, frameToken: "frame", parent: null, detached: false };
+  const frame = {
+    processId: 12,
+    routingId: 34,
+    frameToken: "frame",
+    parent: null,
+    detached: false,
+  };
   assert.equal(createImagesProtocolDocumentId(frame), "12:34:frame");
   assert.equal(createImagesProtocolDocumentId({ ...frame, parent: {} }), undefined);
   assert.equal(createImagesProtocolDocumentId({ ...frame, detached: true }), undefined);
