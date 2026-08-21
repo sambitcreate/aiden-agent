@@ -4,6 +4,7 @@ import {
   createImagesRunConfirmationViewModel,
   createImagesDegradedRunDiscardRequest,
   createImagesRunErrorViewModel,
+  createImagesSafeRunDiagnosticSummary,
   createImagesRunUiProjection,
   createImagesTerminalRunHistoryViews,
   formatCreateImagesEstimate,
@@ -107,6 +108,24 @@ test("local mock confirmation states $0 and no network or billable work", () => 
   assert.match(model.consentStatement, /reviewed this mock run plan/u);
 });
 
+test("authoritative snapshots accept terminal local nodes without a provider attempt", () => {
+  const projection = createImagesRunUiProjection(
+    snapshot({
+      status: "failed",
+      lastSequence: 8,
+      nodes: [
+        { nodeId: "prompt-1", label: "Prompt", status: "succeeded", attempt: 0 },
+        { nodeId: "image-1", label: "Image Input", status: "succeeded", attempt: 0 },
+        { nodeId: "generate-1", label: "Generate Image", status: "failed", attempt: 1 },
+        { nodeId: "output-1", label: "Output", status: "blocked", attempt: 0 },
+      ],
+    }),
+  );
+  assert.equal(projection.status, "failed");
+  assert.equal(projection.nodes["prompt-1"]?.attempt, 0);
+  assert.equal(projection.nodes["image-1"]?.status, "succeeded");
+});
+
 test("degraded-run discard echoes only the reviewed plan's CAS revisions and token", () => {
   const plan = {
     status: "ready" as const,
@@ -168,6 +187,30 @@ function terminalRunView(
     ...overrides,
   };
 }
+
+test("safe run diagnostics include states and codes without content or assets", () => {
+  const diagnostic = createImagesSafeRunDiagnosticSummary(
+    runView({
+      status: "needs_attention",
+      executionMode: "gemini",
+      nodes: [
+        {
+          nodeId: "generate-1",
+          label: "Secret prompt label",
+          status: "failed",
+          attempt: 1,
+          outputAssetIds: ["a".repeat(64)],
+          errorCode: "request_rejected",
+        },
+      ],
+    }),
+  );
+  assert.match(diagnostic, /"errorCode": "request_rejected"/u);
+  assert.match(diagnostic, /"outputCount": 1/u);
+  assert.doesNotMatch(diagnostic, /Secret prompt label/u);
+  assert.doesNotMatch(diagnostic, new RegExp("a{64}", "u"));
+  assert.doesNotMatch(diagnostic, /prompt|credential|providerResponse|path/u);
+});
 
 test("shared run snapshots map retries, ambiguity, safe errors, and output IDs", () => {
   const assetId = "a".repeat(64);
@@ -2389,6 +2432,27 @@ test("safe error presentation never enables ambiguous or automatic retry", () =>
   });
   assert.match(interrupted.description, /could not safely continue/u);
   assert.doesNotMatch(interrupted.description, /restart/iu);
+
+  const rejected = createImagesRunErrorViewModel({
+    code: "request_rejected",
+    retryKind: "none",
+  });
+  assert.match(rejected.title, /rejected the request/u);
+  assert.deepEqual(rejected.actions, ["view-history", "open-provider-settings"]);
+
+  const invalidOutput = createImagesRunErrorViewModel({
+    code: "output_invalid",
+    retryKind: "remote",
+  });
+  assert.match(invalidOutput.title, /unusable image/u);
+  assert.doesNotMatch(invalidOutput.title, /saved/u);
+
+  const saveFailure = createImagesRunErrorViewModel({
+    code: "output_save_failed",
+    retryKind: "remote",
+  });
+  assert.match(saveFailure.title, /could not be saved/u);
+  assert.match(saveFailure.description, /local storage/u);
 });
 
 test("progress summary counts every visible terminal outcome without using color", () => {
@@ -2456,7 +2520,7 @@ test("terminal history is newest first, durable, and does not mutate its input",
       completedNodeCount: 4,
       totalNodeCount: 4,
       outputCount: 1,
-      costLabel: "$0.00 mock",
+      costLabel: "$0.00 mock actual",
     },
     {
       runId: "newer",
@@ -2471,7 +2535,7 @@ test("terminal history is newest first, durable, and does not mutate its input",
       completedNodeCount: 1,
       totalNodeCount: 3,
       outputCount: 0,
-      costLabel: "$0.00 mock",
+      costLabel: "$0.00 mock actual",
     },
   ];
   const views = createImagesTerminalRunHistoryViews(input);
