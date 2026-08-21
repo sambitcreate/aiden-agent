@@ -16,18 +16,44 @@ export const CREATE_IMAGES_WORKFLOW_TEMPLATES = Object.freeze([
     id: "starter" as const,
     title: "Prompt to image",
     description: "A prompt, one Gemini generation node, and a durable output.",
+    category: "Essentials" as const,
+    tags: ["prompt", "generate", "output"] as const,
+    preview: "linear" as const,
   },
   {
     id: "reference-edit" as const,
     title: "Reference edit",
     description: "Combine an imported reference image with a transformation prompt.",
+    category: "Editing" as const,
+    tags: ["reference", "image", "edit"] as const,
+    preview: "reference" as const,
   },
   {
     id: "variant-set" as const,
     title: "Variant set",
     description: "Generate four variants into a durable output gallery.",
+    category: "Exploration" as const,
+    tags: ["variants", "gallery", "batch"] as const,
+    preview: "gallery" as const,
   },
 ] as const);
+
+export function filterCreateImagesWorkflowTemplates(input: {
+  search?: string;
+  category?: string;
+}) {
+  const search = input.search?.trim().toLocaleLowerCase() ?? "";
+  return CREATE_IMAGES_WORKFLOW_TEMPLATES.filter((template) => {
+    if (input.category && input.category !== "All" && template.category !== input.category) {
+      return false;
+    }
+    if (!search) return true;
+    return [template.title, template.description, template.category, ...template.tags]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(search);
+  });
+}
 
 export function createImagesWorkflowFromTemplate(input: {
   template: CreateImagesWorkflowTemplateId;
