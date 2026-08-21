@@ -168,7 +168,7 @@ export type ChatRole = "user" | "assistant" | "system";
 
 export type AttachmentKind = "image" | "text";
 
-/** A file attached to a user message. Images carry base64 `data`; text files carry inlined `text`. */
+/** A file attached to a chat message. Images carry base64 `data`; text files carry inlined `text`. */
 export interface Attachment {
   id: string;
   name: string;
@@ -194,7 +194,7 @@ export interface ChatMessage {
   pi?: Omit<AssistantMessage, "diagnostics" | "errorMessage">;
   /** Closed, renderer-safe terminal provider outcome. */
   providerFailure?: ProviderFailureV1;
-  /** Files attached to a user message. */
+  /** Files presented with this user or assistant message. */
   attachments?: Attachment[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
