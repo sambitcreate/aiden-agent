@@ -4,8 +4,9 @@ import type {
   WorkflowEdgeV1,
   WorkflowNodeV1,
 } from "./schema.js";
+import { parseCreateImagesPromptList } from "./prompt-list.js";
 
-export type CreateImagesPortKind = "text" | "image" | "image-list" | "metadata";
+export type CreateImagesPortKind = "text" | "text-list" | "image" | "image-list" | "metadata";
 
 export interface CreateImagesPortDefinition {
   id: string;
@@ -43,6 +44,14 @@ export const CREATE_IMAGES_NODE_DEFINITIONS: Readonly<
     outputs: [{ id: "text", kind: "text", label: "Prompt" }],
     execution: "local",
   },
+  "prompt-list": {
+    type: "prompt-list",
+    title: "Prompt List",
+    category: "prompt",
+    inputs: [],
+    outputs: [{ id: "items", kind: "text-list", label: "Prompt items" }],
+    execution: "local",
+  },
   "generate-image": {
     type: "generate-image",
     title: "Generate Image",
@@ -77,7 +86,52 @@ export const CREATE_IMAGES_NODE_DEFINITIONS: Readonly<
     outputs: [],
     execution: "local",
   },
+  "image-compare": {
+    type: "image-compare",
+    title: "Image Compare",
+    category: "output",
+    inputs: [
+      { id: "left", kind: "image-list", label: "Image A", required: true, maxConnections: 1 },
+      { id: "right", kind: "image-list", label: "Image B", required: true, maxConnections: 1 },
+    ],
+    outputs: [],
+    execution: "local",
+  },
+  annotation: {
+    type: "annotation",
+    title: "Annotation",
+    category: "generation",
+    inputs: [
+      { id: "image", kind: "image-list", label: "Image", required: true, maxConnections: 1 },
+    ],
+    outputs: [{ id: "image", kind: "image-list", label: "Annotated image" }],
+    execution: "local",
+  },
+  group: {
+    type: "group",
+    title: "Group",
+    category: "output",
+    inputs: [],
+    outputs: [],
+    execution: "local",
+  },
 });
+
+export function createImagesNodePorts(
+  node: WorkflowNodeV1,
+  direction: "inputs" | "outputs",
+): readonly CreateImagesPortDefinition[] {
+  if (node.type === "prompt" && direction === "inputs") {
+    return (node.data.variables ?? []).map((variable) => ({
+      id: `variable-${variable.id}`,
+      kind: "text" as const,
+      label: variable.name,
+      required: variable.required,
+      maxConnections: 1,
+    }));
+  }
+  return CREATE_IMAGES_NODE_DEFINITIONS[node.type][direction];
+}
 
 export type WorkflowGraphIssueCode =
   | "unknown_node"
@@ -112,7 +166,7 @@ function port(
   direction: "inputs" | "outputs",
   portId: string,
 ): CreateImagesPortDefinition | undefined {
-  return CREATE_IMAGES_NODE_DEFINITIONS[node.type][direction].find(
+  return createImagesNodePorts(node, direction).find(
     (candidate) => candidate.id === portId,
   );
 }
@@ -121,7 +175,11 @@ export function isCreateImagesPortCompatible(
   source: CreateImagesPortKind,
   target: CreateImagesPortKind,
 ): boolean {
-  return source === target || (source === "image" && target === "image-list");
+  return (
+    source === target ||
+    (source === "image" && target === "image-list") ||
+    (source === "text-list" && target === "text")
+  );
 }
 
 function connectionKey(edge: WorkflowEdgeV1): string {
@@ -277,7 +335,7 @@ export function validateWorkflowGraph(
   const incoming = new Set(validEdges.map((edge) => `${edge.target}\u0000${edge.targetPort}`));
   for (const node of document.nodes) {
     const definition = CREATE_IMAGES_NODE_DEFINITIONS[node.type];
-    for (const input of definition.inputs) {
+    for (const input of createImagesNodePorts(node, "inputs")) {
       if (input.required && !incoming.has(`${node.id}\u0000${input.id}`)) {
         issues.push({
           code: "missing_required_input",
@@ -299,6 +357,15 @@ export function validateWorkflowGraph(
         nodeId: node.id,
         message: "Enter a prompt before running this node.",
       });
+    } else if (node.type === "prompt-list") {
+      const parsed = parseCreateImagesPromptList(node.data.source, node.data.format);
+      if (parsed.status === "invalid") {
+        issues.push({
+          code: "missing_prompt",
+          nodeId: node.id,
+          message: parsed.message,
+        });
+      }
     } else if (node.type === "generate-image") {
       if (!node.data.providerId) {
         issues.push({
