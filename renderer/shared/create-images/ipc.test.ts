@@ -3,23 +3,30 @@ import test from "node:test";
 import { createStarterWorkflow, parseWorkflowDocument } from "./schema.js";
 import {
   CREATE_IMAGES_MAX_DROPPED_FILES,
+  CREATE_IMAGES_MAX_RECENT_OUTPUTS,
   createImagesAssetGrantUrl,
   parseCreateImagesCreateWorkflowRequest,
   parseCreateImagesApplyAssetCleanupRequest,
   parseCreateImagesDeleteWorkflowRequest,
   parseCreateImagesDiscardDegradedRunRequest,
   parseCreateImagesDroppedAssetImportRequest,
+  parseCreateImagesDownloadWorkflowAssetRequest,
   parseCreateImagesDownloadRunAssetRequest,
+  parseCreateImagesDownloadRunAssetsZipRequest,
   parseCreateImagesExportArchiveRequest,
   parseCreateImagesGrantAssetRequest,
   parseCreateImagesGrantRunAssetRequest,
   parseCreateImagesGetRunRequest,
   parseCreateImagesImportArchiveRequest,
   parseCreateImagesImportNodeBananaRequest,
+  parseCreateImagesListRecentOutputsRequest,
+  parseCreateImagesGetPresentationRequest,
+  parseCreateImagesSetAssetHiddenRequest,
   parseCreateImagesPlanRunHistoryPruneRequest,
   parseCreateImagesPlanAssetCleanupRequest,
   parseCreateImagesPasteImageRequest,
   parseCreateImagesPrepareRunRequest,
+  parseCreateImagesProposeWorkflowRequest,
   parseCreateImagesPlanDegradedRunDiscardRequest,
   parseCreateImagesPruneRunHistoryRequest,
   parseCreateImagesRecoverRunRequest,
@@ -56,6 +63,31 @@ test("workflow save requests require strict CAS revision advancement", () => {
       workflow,
       future: true,
     }),
+  );
+});
+
+test("workflow proposal IPC binds the exact current draft and selected chat model", () => {
+  const workflow = starter();
+  const request = {
+    workflowId: workflow.id,
+    expectedRevision: workflow.revision,
+    workflow,
+    providerId: "openai-codex",
+    model: "gpt-5.6",
+    request: "  Build a portrait workflow.  ",
+  };
+  assert.deepEqual(parseCreateImagesProposeWorkflowRequest(request), {
+    ...request,
+    request: "Build a portrait workflow.",
+  });
+  assert.throws(() =>
+    parseCreateImagesProposeWorkflowRequest({ ...request, expectedRevision: 2 }),
+  );
+  assert.throws(() =>
+    parseCreateImagesProposeWorkflowRequest({ ...request, path: "/private/workflow.json" }),
+  );
+  assert.throws(() =>
+    parseCreateImagesProposeWorkflowRequest({ ...request, request: "x".repeat(4_001) }),
   );
 });
 
@@ -223,9 +255,97 @@ test("retained image download identifies only an authorized run asset and never 
   assert.throws(() => parseCreateImagesDownloadRunAssetRequest({ ...request, assetId: "bad" }));
 });
 
+test("multi-image ZIP export is opaque, unique, and bounded", () => {
+  const request = {
+    workflowId: "workflow-1",
+    runId: "run-1",
+    assetIds: ["a".repeat(64), "b".repeat(64)],
+  };
+  assert.deepEqual(parseCreateImagesDownloadRunAssetsZipRequest(request), request);
+  assert.throws(() => parseCreateImagesDownloadRunAssetsZipRequest({ ...request, path: "/tmp" }));
+  assert.throws(() =>
+    parseCreateImagesDownloadRunAssetsZipRequest({ ...request, assetIds: ["a".repeat(64), "a".repeat(64)] }),
+  );
+  assert.throws(() =>
+    parseCreateImagesDownloadRunAssetsZipRequest({
+      ...request,
+      assetIds: Array.from({ length: 51 }, (_, index) => index.toString(16).padStart(64, "0")),
+    }),
+  );
+});
+
+test("workflow image download identifies only an authorized opaque asset and never a path", () => {
+  const request = {
+    workflowId: "workflow-1",
+    assetId: "a".repeat(64),
+  };
+  assert.deepEqual(parseCreateImagesDownloadWorkflowAssetRequest(request), request);
+  assert.throws(() =>
+    parseCreateImagesDownloadWorkflowAssetRequest({
+      ...request,
+      destination: "/tmp/output.png",
+    }),
+  );
+  assert.throws(() =>
+    parseCreateImagesDownloadWorkflowAssetRequest({ ...request, assetId: "bad" }),
+  );
+});
+
+test("recent output queries are exact and capped to the retained presentation contract", () => {
+  assert.deepEqual(parseCreateImagesListRecentOutputsRequest({ limit: 50 }), { limit: 50 });
+  assert.deepEqual(
+    parseCreateImagesListRecentOutputsRequest({ limit: CREATE_IMAGES_MAX_RECENT_OUTPUTS }),
+    { limit: 50 },
+  );
+  assert.throws(() => parseCreateImagesListRecentOutputsRequest({ limit: 0 }));
+  assert.throws(() => parseCreateImagesListRecentOutputsRequest({ limit: 51 }));
+  assert.throws(() => parseCreateImagesListRecentOutputsRequest({ limit: 5, path: "/tmp" }));
+});
+
+test("presentation IPC is document scoped, opaque, and exact", () => {
+  const assetId = "a".repeat(64);
+  assert.deepEqual(parseCreateImagesGetPresentationRequest({ workflowId: "workflow-1" }), {
+    workflowId: "workflow-1",
+  });
+  assert.deepEqual(
+    parseCreateImagesSetAssetHiddenRequest({
+      workflowId: "workflow-1",
+      runId: "run-1",
+      assetId,
+      hidden: true,
+    }),
+    { workflowId: "workflow-1", runId: "run-1", assetId, hidden: true },
+  );
+  assert.throws(() =>
+    parseCreateImagesSetAssetHiddenRequest({
+      workflowId: "workflow-1",
+      runId: "run-1",
+      assetId,
+      hidden: true,
+      path: "/private/output.png",
+    }),
+  );
+  assert.throws(() =>
+    parseCreateImagesSetAssetHiddenRequest({
+      workflowId: "workflow-1",
+      runId: "run-1",
+      assetId: "not-an-asset",
+      hidden: false,
+    }),
+  );
+});
+
 test("asset delivery URLs contain only opaque grant tokens", () => {
   const token = "A".repeat(43);
   assert.equal(createImagesAssetGrantUrl(token), `aiden-asset://asset/${token}`);
+  assert.equal(
+    createImagesAssetGrantUrl(token, "preview-128"),
+    `aiden-asset://asset/${token}/preview-128`,
+  );
+  assert.equal(
+    createImagesAssetGrantUrl(token, "original"),
+    `aiden-asset://asset/${token}/original`,
+  );
   assert.throws(() => createImagesAssetGrantUrl("../../etc/passwd"));
 });
 
