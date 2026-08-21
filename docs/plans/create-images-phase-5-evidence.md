@@ -27,6 +27,7 @@ Feature gate: `AIDEN_CREATE_IMAGES_ENABLED=1`
 - Native canvas drop and chooser import accept bounded static raster inputs even when macOS supplies an empty or generic MIME type. Canonical PNG/JPEG remain byte-exact. Static WebP, AVIF, BMP, ICO, TIFF/HEIF-family inputs, and single-frame GIF normalize to a canonical PNG when they are supported by either Electron's disposable sandboxed decoder or the bounded macOS ImageIO fallback. The fallback copies bounded bytes into a private temporary directory, invokes fixed `/usr/bin/sips` arguments without a shell, enforces a 20-second timeout and output limit, then fully revalidates PNG dimensions and pixels before ingest. Animated GIF/WebP/HEIF, SVG/vector, malformed, oversized, over-dimension, and magic/extension-mismatched inputs still fail closed.
 - Preview delivery remains opaque and main-authorized. A missing/unsupported thumbnail may fall back to a freshly validated canonical source under a short internal lease; grant requests have a bounded timeout/retry path, late tokens are revoked, and image delivery only resets backoff after the exact `<img>` reports success.
 - Preview-manager disposal is deferred by one task and cancelled when React development Strict Mode replays effect cleanup/setup. This fixes the live-only state where import succeeded durably but the reused manager stayed permanently disposed and the node remained on “Loading preview…”. Actual unmount still disposes and revokes.
+- Generated images, retained Output images, and imported references now open in one full-screen inspector modeled on Node Banana's direct click-to-expand behavior but completed to Aiden's interaction and security standards. The Radix surface starts at a useful fitted size and adds bounded 5%–800% zoom, pointer-anchored wheel zoom, drag/arrow-key pan, Fit/1:1 controls, Escape dismissal, reduced motion, forced colors, and exact trigger-focus restoration. Canvas cards continue loading bounded 512px thumbnails; the inspector asks for the fully validated source through an exact `/original` rendition of the same opaque, expiring, document-bound asset grant. Live isolated Electron QA confirmed the retained Gemini result had a 1024 × 1024 natural source, not the 512px thumbnail.
 
 ## Dependency and provenance evidence
 
@@ -37,30 +38,30 @@ Feature gate: `AIDEN_CREATE_IMAGES_ENABLED=1`
 
 ## Source and product verification
 
-- `npm run test:create-images`: pass after the workspace/clipboard/import polish — 9 pretests, 437 functional assertions, 2 durability/performance tests, and 15 Node/script checks.
+- `npm run test:create-images`: pass after the workspace/clipboard/import/lightbox polish — 9 pretests, 443 functional assertions, 2 durability/performance tests, and 15 Node/script checks.
 - Phase 5 coverage includes native round-trip, duplicate-manifest and invalid-ZIP refusal before publication, exact private asset export, four template graphs, supported/unsupported Node Banana conversion and real inline-image externalization, path/credential/base64 stripping, two-step cleanup IPC, retained-output authorization, and exact notice closure.
-- 500-node successful journal: 1,502 durable events, 635,757-byte current log, 114.15 s append, 200 ms cold replay.
-- 1,000 output-rich terminal journals × 250 asset IDs: 4.96 s restart, 4.92 s authoritative admission audit, 22.61 s modeled product path, 80 ms retention lookup, 355,073-byte derived index, bounded caches.
+- 500-node successful journal: 1,502 durable events, 635,757-byte current log, 111.87 s append, 196 ms cold replay.
+- 1,000 output-rich terminal journals × 250 asset IDs: 4.83 s restart, 4.68 s authoritative admission audit, 21.63 s modeled product path, 78 ms retention lookup, 355,073-byte derived index, bounded caches.
 - `npm run test:onboarding`: pass — 14/14, including the 23-tile gallery and one-megapixel alpha-PNG contract. The Create Images tile was regenerated against the existing `aiden-assistant.png` and `attachments-vision.png` illustrations, then verified as a 1024 × 1024 RGBA PNG with genuine transparency.
 - `npm run test:create-images:canvas-product`: pass after updating the stress-row spacing for the full capability-driven Generate Image card. Both 100- and 250-node cases reported zero visible overlaps, exact 1000 × 650 hosts, visible-node culling, bounded prompt editors, edit/announcement correctness, and 8,674,258-byte heap growth. Average viewport operations were 1.245 ms and 1.248 ms.
 - `npm run type-check`: pass.
 - `npm run lint`: pass.
 - `git diff --check`: pass.
-- `npm run build`: pass after the workspace/clipboard/import polish. The lazy Create Images route is 389.43 kB JS / 113.51 kB gzip and 57.37 kB CSS / 8.64 kB gzip; the lazy-boundary verifier passed. Electron's main build keeps the macOS converter in a separate on-demand chunk, so ordinary PNG/JPEG and browser-decodable imports do not load it.
-- React Doctor was run after the React work. Because the Create Images tree remains untracked in this worktree, it fell back to its full-repository baseline scan (54/100); no new Phase 5 component, accessibility, or security diagnostic remained after the scoped fixes.
+- `npm run build`: pass after the workspace/clipboard/import/lightbox polish. The lazy Create Images route is 399.38 kB JS / 116.48 kB gzip and 62.77 kB CSS / 9.29 kB gzip; the lazy-boundary verifier passed. Electron's main build keeps the macOS converter in a separate on-demand chunk, so ordinary PNG/JPEG and browser-decodable imports do not load it.
+- React Doctor was run after the React work. Its current changed-branch scan covered 154 files (63/100, 127 broad existing diagnostics); it reported no lightbox-specific component, accessibility, or security diagnostic.
 
 ## Development-signed packaged acceptance
 
-The values in this section bind the earlier Phase 5 acceptance snapshot. The post-acceptance import/preview changes above intentionally make that artifact source-stale; none of these identifiers is claimed for the current working tree.
+The acceptance was refreshed on 2026-08-21 after the Node Banana follow-on implementation and is bound to the exact current package inputs. Project evidence files are excluded from the source fingerprint, so recording these results does not stale the artifact.
 
 - `npm run package`, `npm run package:verify`, and `npm run package:fingerprint:verify`: pass.
-- Exact source fingerprint: `ce7a9bbcbf946d682439a4c96ddb96a5620cef23a7bf85a5c8cf34851240f49c`.
-- App identity: bundle `com.sambitcreate.aiden-agent`, version `0.28.0`, Team ID `5WP229CBB8`, Developer ID signature CDHash `39828c2c3f4f9cc540ba37cadb4bfc1cb5dc7333`.
-- ASAR SHA-256: `8d1463da4f3e00bf935e9fd36515aecd090bc29c3d2da50ad4e276dcf9ca0646`.
-- `npm run test:create-images:packaged`: pass in an isolated private profile in 13,917.405875 ms.
+- Exact source fingerprint: `eee98a151e1836eb7ca6158bccdf54aff5e9ed36c89ddc410d5c44cbb6252d44`.
+- App identity: bundle `com.sambitcreate.aiden-agent`, version `0.28.0`, Developer ID signature CDHash `a9fc3b6a6259137ee2200ce274769b5b26d9dbf5`.
+- ASAR SHA-256: `76ef235d071c6a63e848d7da16ede469ddc616d4e0c6896d2f1e300b0594479f`.
+- `npm run test:create-images:packaged`: pass in an isolated private profile in 14,440.26425 ms.
 - The packaged receipt records 39 keyboard actions, 38 live-region mutations, narrow validation/add placement, reduced motion, focus restoration, spatial/keyboard connection editing, durable reload, one blocked egress probe, 0 remote requests, 0 renderer errors, sandboxing, context isolation, and `nodeIntegration: false`.
 - Asset delivery recorded one opaque grant, two image requests, and two exact authorizations from a live main frame.
-- Durable evidence is an exact ten-file set: current/LKG workflow, workflow index, empty version-1 run index, asset index, three protected asset-index predecessors, one 21,033,819-byte 4000 × 4000 content-addressed PNG, and its 512px thumbnail. No autosave journal, run journal, quarantine file, unrelated asset, or arbitrary product mutation was present.
+- Acceptance configures a private disposable external image workspace through the real main-owned picker result path before service initialization. Durable evidence is an exact 12-file set: workspace record and validated predecessor, current/LKG workflow, workflow index, unchanged empty run index, asset index, three protected asset-index predecessors, one 21,033,819-byte 4000 × 4000 content-addressed PNG, and its 512px thumbnail. No autosave journal, run journal, quarantine file, unrelated asset, or arbitrary product mutation was present.
 - Durable attestation: `build/create-images-packaged-acceptance/attestation.json` (mode and identity are revalidated by the acceptance script).
 
 ## Deliberately open release gates
