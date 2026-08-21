@@ -170,7 +170,7 @@ const featureBentos: FeatureBento[] = [
     group: "create",
     title: "Create Images",
     description:
-      "Build visual image workflows, keep imported and generated images in a local workspace, and reveal it in Finder when you need it.",
+      "Build, compare, annotate, and reuse visual workflows in a local image workspace—with explicit consent before any cloud generation.",
     icon: Images,
     imageUrl: FEATURE_ILLUSTRATIONS.createImages,
     size: "wide",
