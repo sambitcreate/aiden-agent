@@ -1,4 +1,5 @@
 import type { AuthResult } from "@earendil-works/pi-ai";
+import { writeDevLog } from "../../dev-log.js";
 import { AssetImageValidationError, validateImageBytes } from "../asset-image-validation-core.js";
 import type { CoordinatorRetrySafety } from "../scheduler-core.js";
 import type { ValidatedImageGenerationRequest } from "../provider-contract.js";
@@ -19,10 +20,21 @@ const MAX_RESPONSE_STEPS = 128;
 const MAX_CONTENT_BLOCKS_PER_STEP = 32;
 const MAX_INTERACTION_ID_LENGTH = 256;
 const MAX_TOKEN_COUNT = 1_000_000_000;
+const MAX_PROVIDER_ERROR_BYTES = 64 * 1024;
 const API_KEY_PATTERN = /^[\x21-\x7e]{1,512}$/u;
 const INTERACTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
 const JSON_CONTENT_TYPE = /^application\/json(?:\s*;|$)/iu;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+
+function logGemini(
+  level: "info" | "warn",
+  message: string,
+  metadata: Readonly<Record<string, unknown>>,
+): void {
+  const method = level === "info" ? console.info : console.warn;
+  method(`[create-images] ${message}`, metadata);
+  writeDevLog(level, "create-images", [message, metadata]);
+}
 
 export type GeminiImageProviderErrorCode =
   | "authentication-required"
@@ -117,7 +129,7 @@ function failure(
   providerErrorCode: GeminiImageProviderErrorCode,
   error: string,
   retrySafety: CoordinatorRetrySafety = "never",
-): GeminiImageProviderAttemptResult {
+): Extract<GeminiImageProviderAttemptResult, { kind: "failure" }> {
   return { kind: "failure", providerErrorCode, error, retrySafety };
 }
 
@@ -331,8 +343,65 @@ function containsRefusalMarker(steps: readonly unknown[]): boolean {
 
 type ParsedCompletedResponse =
   | { kind: "success"; output: GeminiImageProviderOutput }
-  | { kind: "failure"; code: GeminiImageProviderErrorCode; message: string }
+  | {
+      kind: "failure";
+      code: GeminiImageProviderErrorCode;
+      message: string;
+      diagnostic: string;
+    }
   | { kind: "ambiguous" };
+
+function completedFailure(
+  code: GeminiImageProviderErrorCode,
+  message: string,
+  diagnostic: string,
+): Extract<ParsedCompletedResponse, { kind: "failure" }> {
+  return { kind: "failure", code, message, diagnostic };
+}
+
+function safeResponseShape(value: unknown): Readonly<Record<string, unknown>> {
+  const response = plainRecord(value);
+  const steps = Array.isArray(response?.steps) ? response.steps : [];
+  let modelOutputStepCount = 0;
+  let imageBlockCount = 0;
+  let finalImageMime: "image/png" | "image/jpeg" | "missing" | "unsupported" = "missing";
+  for (const stepValue of steps.slice(0, MAX_RESPONSE_STEPS)) {
+    const step = plainRecord(stepValue);
+    if (step?.type !== "model_output" || !Array.isArray(step.content)) continue;
+    modelOutputStepCount += 1;
+    for (const blockValue of step.content.slice(0, MAX_CONTENT_BLOCKS_PER_STEP)) {
+      const block = plainRecord(blockValue);
+      if (block?.type !== "image") continue;
+      imageBlockCount += 1;
+      finalImageMime =
+        block.mime_type === "image/png" || block.mime_type === "image/jpeg"
+          ? block.mime_type
+          : block.mime_type === undefined
+            ? "missing"
+            : "unsupported";
+    }
+  }
+  const status = response?.status;
+  return Object.freeze({
+    responseStatus:
+      typeof status === "string" &&
+      [
+        "completed",
+        "failed",
+        "cancelled",
+        "incomplete",
+        "in_progress",
+        "queued",
+        "requires_action",
+      ].includes(status)
+        ? status
+        : "invalid",
+    stepCount: steps.length,
+    modelOutputStepCount,
+    imageBlockCount,
+    finalImageMime,
+  });
+}
 
 function parseCompletedResponse(
   value: unknown,
@@ -341,38 +410,38 @@ function parseCompletedResponse(
 ): ParsedCompletedResponse {
   const response = plainRecord(value);
   if (!response) {
-    return {
-      kind: "failure",
-      code: "response-malformed",
-      message: "Gemini returned an invalid response.",
-    };
+    return completedFailure(
+      "response-malformed",
+      "Gemini returned an invalid response.",
+      "invalid-response-root",
+    );
   }
   const steps = response.steps;
   if (!Array.isArray(steps) || steps.length > MAX_RESPONSE_STEPS) {
-    return {
-      kind: "failure",
-      code: "response-malformed",
-      message: "Gemini returned an invalid response timeline.",
-    };
+    return completedFailure(
+      "response-malformed",
+      "Gemini returned an invalid response timeline.",
+      "invalid-response-timeline",
+    );
   }
   const status = response.status;
   if (typeof status !== "string") {
-    return {
-      kind: "failure",
-      code: "response-malformed",
-      message: "Gemini returned an invalid response status.",
-    };
+    return completedFailure(
+      "response-malformed",
+      "Gemini returned an invalid response status.",
+      "invalid-response-status",
+    );
   }
   if (["in_progress", "queued", "requires_action"].includes(status)) {
     return { kind: "ambiguous" };
   }
   if (status !== "completed") {
     if (containsRefusalMarker(steps)) {
-      return {
-        kind: "failure",
-        code: "refused",
-        message: "Gemini declined this image request under its content policy.",
-      };
+      return completedFailure(
+        "refused",
+        "Gemini declined this image request under its content policy.",
+        "provider-refusal",
+      );
     }
     const statusError: Record<string, [GeminiImageProviderErrorCode, string]> = {
       failed: ["provider-failed", "Gemini could not complete this image request."],
@@ -381,80 +450,87 @@ function parseCompletedResponse(
     };
     const normalized = statusError[status];
     return normalized
-      ? { kind: "failure", code: normalized[0], message: normalized[1] }
-      : {
-          kind: "failure",
-          code: "response-malformed",
-          message: "Gemini returned an unsupported response status.",
-        };
+      ? completedFailure(normalized[0], normalized[1], `provider-status-${status}`)
+      : completedFailure(
+          "response-malformed",
+          "Gemini returned an unsupported response status.",
+          "unsupported-response-status",
+        );
   }
 
-  const images: Array<{ data: unknown; mimeType: unknown }> = [];
+  let finalImage: { data: unknown; mimeType: unknown; remote: boolean } | undefined;
   for (const stepValue of steps) {
     const step = plainRecord(stepValue);
     if (!step || typeof step.type !== "string") {
-      return {
-        kind: "failure",
-        code: "response-malformed",
-        message: "Gemini returned an invalid response step.",
-      };
+      return completedFailure(
+        "response-malformed",
+        "Gemini returned an invalid response step.",
+        "invalid-response-step",
+      );
     }
     if (step.type !== "model_output") continue;
     if (!Array.isArray(step.content) || step.content.length > MAX_CONTENT_BLOCKS_PER_STEP) {
-      return {
-        kind: "failure",
-        code: "response-malformed",
-        message: "Gemini returned invalid model output.",
-      };
+      return completedFailure(
+        "response-malformed",
+        "Gemini returned invalid model output.",
+        "invalid-model-output",
+      );
     }
     for (const blockValue of step.content) {
       const block = plainRecord(blockValue);
       if (!block || typeof block.type !== "string") {
-        return {
-          kind: "failure",
-          code: "response-malformed",
-          message: "Gemini returned an invalid output block.",
-        };
+        return completedFailure(
+          "response-malformed",
+          "Gemini returned an invalid output block.",
+          "invalid-output-block",
+        );
       }
       if (block.type === "image") {
-        if (block.uri !== undefined) {
-          return {
-            kind: "failure",
-            code: "response-malformed",
-            message: "Gemini returned a remote image instead of bounded inline bytes.",
-          };
-        }
-        images.push({ data: block.data, mimeType: block.mime_type });
+        // Google's `interaction.output_image` convenience property selects the
+        // last generated image block. Gemini 3 may expose earlier thought
+        // images in the timeline, so mirror that exact final-output behavior.
+        finalImage = {
+          data: block.data,
+          mimeType: block.mime_type,
+          remote: block.uri !== undefined,
+        };
       }
     }
   }
-  if (images.length === 0) {
+  if (!finalImage) {
     return containsRefusalMarker(steps)
-      ? {
-          kind: "failure",
-          code: "refused",
-          message: "Gemini declined this image request under its content policy.",
-        }
-      : { kind: "failure", code: "response-malformed", message: "Gemini returned no final image." };
+      ? completedFailure(
+          "refused",
+          "Gemini declined this image request under its content policy.",
+          "provider-refusal",
+        )
+      : completedFailure(
+          "response-malformed",
+          "Gemini returned no final image.",
+          "missing-final-image",
+        );
   }
-  if (images.length !== request.count) {
-    return {
-      kind: "failure",
-      code: "response-malformed",
-      message: "Gemini returned an unexpected number of final images.",
-    };
+  if (finalImage.remote) {
+    return completedFailure(
+      "response-malformed",
+      "Gemini returned a remote image instead of bounded inline bytes.",
+      "remote-final-image",
+    );
   }
-  const image = images[0]!;
-  if (image.mimeType !== request.outputMime) {
-    return {
-      kind: "failure",
-      code: "response-mime-mismatch",
-      message: "Gemini returned an image with the wrong media type.",
-    };
+  if (
+    finalImage.mimeType !== undefined &&
+    finalImage.mimeType !== "image/png" &&
+    finalImage.mimeType !== "image/jpeg"
+  ) {
+    return completedFailure(
+      "response-mime-mismatch",
+      "Gemini returned an unsupported image media type.",
+      "unsupported-final-image-mime",
+    );
   }
   try {
-    const bytes = strictBase64(image.data, maxOutputBytes);
-    const descriptor = validateImageBytes(bytes, request.outputMime, undefined, {
+    const bytes = strictBase64(finalImage.data, maxOutputBytes);
+    const descriptor = validateImageBytes(bytes, finalImage.mimeType, undefined, {
       maxWidth: 32_768,
       maxHeight: 32_768,
       maxPixels: 16_000_000,
@@ -489,14 +565,21 @@ function parseCompletedResponse(
       error instanceof AssetImageValidationError && error.code === "mime_mismatch"
         ? "response-mime-mismatch"
         : "response-malformed";
-    return {
-      kind: "failure",
+    const diagnostic =
+      error instanceof AssetImageValidationError
+        ? error.code === "mime_mismatch"
+          ? "declared-mime-does-not-match-bytes"
+          : `invalid-image-${error.code}`
+        : error instanceof Error && ["base64", "interaction-id", "usage"].includes(error.message)
+          ? `invalid-${error.message}`
+          : "invalid-image-data";
+    return completedFailure(
       code,
-      message:
-        code === "response-mime-mismatch"
-          ? "Gemini returned bytes that do not match the declared media type."
-          : "Gemini returned invalid image data.",
-    };
+      code === "response-mime-mismatch"
+        ? "Gemini returned bytes that do not match the declared media type."
+        : "Gemini returned invalid image data.",
+      diagnostic,
+    );
   }
 }
 
@@ -517,12 +600,17 @@ function retryAfterMs(value: string | null, now: number): number | undefined {
 function statusResult(
   response: Response,
   now: number,
-): GeminiImageProviderAttemptResult | undefined {
+  metadata: SafeProviderFailureMetadata = {},
+): Extract<GeminiImageProviderAttemptResult, { kind: "failure" | "rate-limited" }> | undefined {
   if (response.status >= 200 && response.status < 300) return undefined;
-  if (response.status === 401) {
+  if (
+    response.status === 401 ||
+    metadata.providerStatus === "UNAUTHENTICATED" ||
+    metadata.providerReason === "API_KEY_INVALID"
+  ) {
     return failure("authentication-required", "Gemini rejected the configured API key.");
   }
-  if (response.status === 403) {
+  if (response.status === 403 || metadata.providerStatus === "PERMISSION_DENIED") {
     return failure(
       "permission-denied",
       "The configured Gemini account cannot use this image model.",
@@ -545,6 +633,55 @@ function statusResult(
     return failure("redirect-rejected", "Gemini returned a redirect that Aiden will not follow.");
   }
   return failure("request-rejected", "Gemini rejected this image request.");
+}
+
+const SAFE_PROVIDER_MARKER = /^[A-Z][A-Z0-9_]{0,95}$/u;
+const SAFE_PROVIDER_FIELD = /^[A-Za-z][A-Za-z0-9_.[\]-]{0,127}$/u;
+
+interface SafeProviderFailureMetadata {
+  providerStatus?: string;
+  providerReason?: string;
+  providerFields?: readonly string[];
+}
+
+async function readSafeProviderFailureMetadata(
+  response: Response,
+  signal: AbortSignal,
+): Promise<SafeProviderFailureMetadata> {
+  try {
+    const bytes = await readBoundedResponse(response, signal, MAX_PROVIDER_ERROR_BYTES);
+    const root = plainRecord(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+    const error = plainRecord(root?.error);
+    const providerStatus =
+      typeof error?.status === "string" && SAFE_PROVIDER_MARKER.test(error.status)
+        ? error.status
+        : undefined;
+    const details = Array.isArray(error?.details) ? error.details : [];
+    const providerReason = details
+      .map((detail) => plainRecord(detail)?.reason)
+      .find(
+        (reason): reason is string =>
+          typeof reason === "string" && SAFE_PROVIDER_MARKER.test(reason),
+      );
+    const providerFields = details
+      .flatMap((detail) => {
+        const fieldViolations = plainRecord(detail)?.fieldViolations;
+        return Array.isArray(fieldViolations) ? fieldViolations : [];
+      })
+      .map((violation) => plainRecord(violation)?.field)
+      .filter(
+        (field): field is string => typeof field === "string" && SAFE_PROVIDER_FIELD.test(field),
+      )
+      .slice(0, 16);
+    return {
+      ...(providerStatus ? { providerStatus } : {}),
+      ...(providerReason ? { providerReason } : {}),
+      ...(providerFields.length > 0 ? { providerFields: Object.freeze(providerFields) } : {}),
+    };
+  } catch {
+    response.body?.cancel().catch(() => undefined);
+    return {};
+  }
 }
 
 /**
@@ -610,10 +747,7 @@ export class GeminiImageProvider {
     try {
       validated = this.validate(request);
       const serialized = buildGeminiInteractionsRequest(validated);
-      body = JSON.stringify({
-        ...serialized,
-        response_format: { ...serialized.response_format, delivery: "inline" },
-      });
+      body = JSON.stringify(serialized);
       if (Buffer.byteLength(body, "utf8") > GEMINI_IMAGE_MAX_REQUEST_BYTES) {
         return failure(
           "invalid-request",
@@ -636,6 +770,18 @@ export class GeminiImageProvider {
       };
     }
 
+    const requestStartedAt = this.#now();
+    logGemini("info", "Sending Gemini image request.", {
+      runId: context.runId,
+      nodeId: context.nodeId,
+      modelId: validated.modelId,
+      referenceCount: validated.references.length,
+      outputCount: validated.count,
+      aspectRatio: validated.aspectRatio,
+      imageSize: validated.imageSize,
+      outputMime: validated.outputMime,
+      requestBytes: Buffer.byteLength(body, "utf8"),
+    });
     const combined = createCombinedSignal(context.signal, this.#timeoutMs);
     const done = <Result extends GeminiImageProviderAttemptResult>(result: Result): Result => {
       combined.dispose();
@@ -689,9 +835,17 @@ export class GeminiImageProvider {
       response.body?.cancel().catch(() => undefined);
       return done(failure("response-malformed", "Gemini returned an unexpected response type."));
     }
-    const normalizedStatus = statusResult(response, this.#now());
+    const providerFailureMetadata =
+      response.status >= 200 && response.status < 300
+        ? {}
+        : await readSafeProviderFailureMetadata(response, combined.signal);
+    const normalizedStatus = statusResult(response, this.#now(), providerFailureMetadata);
     if (normalizedStatus) {
-      response.body?.cancel().catch(() => undefined);
+      logGemini("warn", "Gemini request ended with a safe provider failure.", {
+        status: response.status,
+        providerErrorCode: normalizedStatus.providerErrorCode,
+        ...providerFailureMetadata,
+      });
       return done(normalizedStatus);
     }
     if (response.status !== 200) {
@@ -732,7 +886,20 @@ export class GeminiImageProvider {
       return done(failure("response-malformed", "Gemini returned invalid JSON."));
     }
     const parsed = parseCompletedResponse(decoded, validated, this.#maxOutputBytes);
-    if (parsed.kind === "success") return done(parsed);
+    if (parsed.kind === "success") {
+      logGemini("info", "Gemini image request completed.", {
+        runId: context.runId,
+        nodeId: context.nodeId,
+        modelId: validated.modelId,
+        durationMs: Math.max(0, this.#now() - requestStartedAt),
+        outputCount: parsed.output.images.length,
+        outputBytes: parsed.output.metadata.totalByteLength,
+        outputMime: parsed.output.images[0].metadata.mimeType,
+        width: parsed.output.images[0].metadata.width,
+        height: parsed.output.images[0].metadata.height,
+      });
+      return done(parsed);
+    }
     if (parsed.kind === "ambiguous") {
       return done(
         ambiguous(
@@ -741,6 +908,15 @@ export class GeminiImageProvider {
         ),
       );
     }
+    logGemini("warn", "Gemini image response failed safe validation.", {
+      runId: context.runId,
+      nodeId: context.nodeId,
+      modelId: validated.modelId,
+      durationMs: Math.max(0, this.#now() - requestStartedAt),
+      providerErrorCode: parsed.code,
+      validationReason: parsed.diagnostic,
+      ...safeResponseShape(decoded),
+    });
     return done(failure(parsed.code, parsed.message));
   }
 }
