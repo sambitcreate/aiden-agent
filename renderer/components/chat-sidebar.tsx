@@ -37,12 +37,13 @@ import {
   Clock3,
   Folder,
   FolderGit2,
+  ImagePlus,
   Loader2,
   Settings,
   SquarePen,
   UserRound,
 } from "lucide-react";
-import { appUpdatesApi, chatsApi, gitApi, workspacesApi } from "../lib/ipc";
+import { appUpdatesApi, chatsApi, createImagesApi, gitApi, workspacesApi } from "../lib/ipc";
 import { truncatePathMiddle } from "../lib/truncate-path";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import {
@@ -56,7 +57,12 @@ import {
   createSidebarChatShortcutAssignments,
   sidebarChatNavigationTargets,
 } from "../lib/sidebar-chat-shortcuts";
-import { queryKeys, useChats, useFoundationModelsConnection } from "../lib/queries";
+import {
+  queryKeys,
+  useChats,
+  useCreateImagesWorkflows,
+  useFoundationModelsConnection,
+} from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
@@ -66,6 +72,8 @@ import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
 import { useAppUpdateSnapshot } from "../lib/use-app-update-snapshot";
 import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-update";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { requestCreateImagesNavigation } from "../create-images/navigation-guard";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
@@ -312,7 +320,6 @@ function ChatActivityIndicator() {
       title="Working"
       className="inline-flex size-5 items-center justify-center text-accent"
     >
-      {/* A static open ring communicates in-progress work without an animation clock. */}
       <Loader2 className="size-4" aria-hidden="true" />
     </span>
   );
@@ -373,6 +380,9 @@ function groupChats(chats: ChatMeta[]): { label: string; chats: ChatMeta[] }[] {
 export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const createImagesMode = pathname.startsWith("/create-images");
+  const selectedWorkflowId = createImagesMode ? pathname.split("/")[2] : undefined;
+  const appCapabilities = useAppCapabilities();
   const qc = useQueryClient();
   const { workspaces, active, activeId, select } = useActiveWorkspace();
   const environmentPanel = useEnvironmentPanel();
@@ -380,6 +390,12 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const appendReconciliationRequired = useAppendReconciliationRequired();
   const chats = useChats(activeId);
   const foundationModels = useFoundationModelsConnection();
+  const durableImageWorkflows = useCreateImagesWorkflows(
+    appCapabilities.createImages &&
+      createImagesMode &&
+      selectedWorkflowId !== "stress-100" &&
+      selectedWorkflowId !== "stress-250",
+  );
   const [search, setSearch] = React.useState("");
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
@@ -392,6 +408,14 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const [chatShortcutsVisible, setChatShortcutsVisible] = React.useState(false);
   const shortcutRevealTimerRef = React.useRef<number | null>(null);
   const heldCommandKeysRef = React.useRef(new Set<string>());
+  const imageWorkflows = React.useMemo(() => {
+    const query = search.trim().toLowerCase();
+    const workflows =
+      durableImageWorkflows.data?.status === "ready" ? durableImageWorkflows.data.workflows : [];
+    return workflows.filter((workflow) => !query || workflow.title.toLowerCase().includes(query));
+  }, [durableImageWorkflows.data, search]);
+
+  React.useEffect(() => setSearch(""), [createImagesMode]);
 
   const orderedGroups = React.useMemo(() => groupChats(chats.data ?? []), [chats.data]);
   const groups = React.useMemo(() => {
@@ -456,8 +480,72 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     },
     [navigate, settingsBlockedReason],
   );
+  const openCreateImages = React.useCallback(
+    async (workflowId?: string) => {
+      if (settingsBlockedReason) {
+        toast.info(settingsBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
+      if (workflowId) {
+        await navigate({ to: "/create-images/$workflowId", params: { workflowId } });
+      } else {
+        await navigate({ to: "/create-images" });
+      }
+    },
+    [navigate, settingsBlockedReason],
+  );
+
+  const newImageWorkflow = React.useCallback(async () => {
+    const decision = await requestCreateImagesNavigation();
+    if (!decision.allowed) {
+      toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+      return;
+    }
+    try {
+      const result = await createImagesApi.create({ template: "blank" });
+      if (result.status !== "saved") {
+        toast.error(
+          result.status === "unavailable" ? result.message : "Aiden could not create the workflow.",
+        );
+        return;
+      }
+      await qc.invalidateQueries({ queryKey: queryKeys.createImagesWorkflows });
+      await navigate({
+        to: "/create-images/$workflowId",
+        params: { workflowId: result.workflow.id },
+      });
+    } catch {
+      toast.error("Aiden could not create the workflow.");
+    }
+  }, [navigate, qc]);
+
+  const navigateOutsideCreateImages = React.useCallback(
+    async (navigateAway: () => void | Promise<void>) => {
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
+      await navigateAway();
+    },
+    [],
+  );
 
   React.useEffect(() => {
+    if (createImagesMode) {
+      heldCommandKeysRef.current.clear();
+      if (shortcutRevealTimerRef.current !== null) {
+        window.clearTimeout(shortcutRevealTimerRef.current);
+        shortcutRevealTimerRef.current = null;
+      }
+      setChatShortcutsVisible(false);
+      return;
+    }
     const clearRevealTimer = () => {
       if (shortcutRevealTimerRef.current === null) return;
       window.clearTimeout(shortcutRevealTimerRef.current);
@@ -525,9 +613,10 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       heldCommandKeysRef.current.clear();
       clearRevealTimer();
     };
-  }, [revealModifierSignature]);
+  }, [createImagesMode, revealModifierSignature]);
 
   React.useEffect(() => {
+    if (createImagesMode) return;
     const unregister = shortcutAssignments.map(({ chat, number }) =>
       registerCommand(`chat.jump.${number}` as CommandId, () => {
         openChat(chat.id);
@@ -548,7 +637,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       );
     }
     return () => unregister.forEach((dispose) => dispose());
-  }, [chatNavigationTargets, openChat, registerCommand, shortcutAssignments]);
+  }, [chatNavigationTargets, createImagesMode, openChat, registerCommand, shortcutAssignments]);
 
   // Move to a workspace and land on one of its chats (creating one if empty).
   const enterWorkspace = React.useCallback(
@@ -564,6 +653,15 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
       if (environmentPanel.editorState.dirty && !allowDirtyDiscard) {
         toast.info("Save or discard the open file's edits before switching workspaces.");
         return false;
+      }
+      if (createImagesMode) {
+        const decision = await requestCreateImagesNavigation();
+        if (!decision.allowed) {
+          toast.error(
+            decision.message ?? "Resolve the workflow save issue before switching workspaces.",
+          );
+          return false;
+        }
       }
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
       const list = await chatsApi.list(id);
@@ -586,6 +684,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     [
       activeId,
       appendReconciliationRequired,
+      createImagesMode,
       environmentPanel.agentBusy,
       environmentPanel.cancelAgent,
       environmentPanel.editorState.dirty,
@@ -601,7 +700,9 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     (id: string) => {
       if (id !== activeId) {
         void enterWorkspace(id).catch((error: unknown) => {
-          toast.error(error instanceof Error ? error.message : "Aiden could not switch workspaces.");
+          toast.error(
+            error instanceof Error ? error.message : "Aiden could not switch workspaces.",
+          );
         });
       }
     },
@@ -742,6 +843,11 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
   const newAgent = React.useCallback(async () => {
     if (!activeId || appendReconciliationRequired) return;
     try {
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
       const created = await chatsApi.create({ workspaceId: activeId });
       await qc.invalidateQueries({ queryKey: queryKeys.chats });
       void navigate({ to: "/chat/$chatId", params: { chatId: created.id } });
@@ -754,7 +860,7 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
     <>
       <Sidebar
         searchable
-        searchPlaceholder="Search chats…"
+        searchPlaceholder={createImagesMode ? "Search workflows…" : "Search chats…"}
         searchValue={search}
         onSearchChange={setSearch}
         actions={<SplitView.SidebarToggle />}
@@ -767,14 +873,16 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
                 title="Profile"
                 selected={pathname === "/profile"}
                 disabled={Boolean(settingsBlockedReason)}
-                onClick={() => navigate({ to: "/profile" })}
+                onClick={() => void navigateOutsideCreateImages(() => navigate({ to: "/profile" }))}
               />
               <SidebarListItem
                 icon={<Settings />}
                 title="Settings"
                 selected={pathname === "/settings"}
                 disabled={Boolean(settingsBlockedReason)}
-                onClick={() => navigate({ to: "/settings" })}
+                onClick={() =>
+                  void navigateOutsideCreateImages(() => navigate({ to: "/settings" }))
+                }
               />
             </div>
           </SidebarFooter>
@@ -787,206 +895,252 @@ export function ChatSidebar({ activeChatId, titleReveal }: ChatSidebarProps) {
             disabled={!activeId || appendReconciliationRequired}
             onClick={() => void newAgent()}
           />
+          {appCapabilities.createImages ? (
+            <SidebarListItem
+              icon={<ImagePlus />}
+              title="Create Images"
+              selected={createImagesMode}
+              disabled={Boolean(settingsBlockedReason)}
+              onClick={() => openCreateImages()}
+            />
+          ) : null}
           <SidebarListItem
             icon={<Clock3 />}
             title="Scheduled"
             selected={pathname === "/scheduled"}
-            onClick={() => navigate({ to: "/scheduled" })}
+            onClick={() => void navigateOutsideCreateImages(() => navigate({ to: "/scheduled" }))}
           />
         </div>
 
-        {/* Workspace switcher — change the folder Pi works in. */}
-        <div className="px-2.5 pb-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="transparent"
-                className="h-10 w-full justify-between px-2.5 text-[14px] font-normal"
-              >
-                <span className="flex min-w-0 items-center gap-2.5">
-                  {active?.folderPath ? (
-                    <FolderGit2 className="size-4 shrink-0 text-secondary" />
-                  ) : (
-                    <Folder className="size-4 shrink-0 text-secondary" />
-                  )}
-                  <span className="truncate font-medium">{active?.name ?? "Workspace"}</span>
-                </span>
-                <ChevronsUpDown className="size-4 shrink-0 text-tertiary" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-80 max-w-[calc(100vw-2rem)]">
-              <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
-              {workspaces.map((w) => (
-                <DropdownMenuCheckboxItem
-                  key={w.id}
-                  checked={w.id === activeId}
-                  disabled={workspaceSwitchBlocked}
-                  sublabel={w.folderPath ? truncatePathMiddle(w.folderPath) : undefined}
-                  title={w.folderPath ?? undefined}
-                  onCheckedChange={() => switchWorkspace(w.id)}
-                >
-                  {w.name}
-                </DropdownMenuCheckboxItem>
+        {createImagesMode ? (
+          <SidebarList>
+            <SidebarListGroup title="Image workflows">
+              <SidebarListItem
+                icon={<SquarePen />}
+                title="New workflow"
+                disabled={Boolean(settingsBlockedReason)}
+                onClick={() => void newImageWorkflow()}
+              />
+              {imageWorkflows.map((workflow) => (
+                <SidebarListItem
+                  key={workflow.id}
+                  icon={<ImagePlus />}
+                  title={workflow.title}
+                  trailing={
+                    <span className="text-mini tabular-nums text-tertiary">
+                      {workflow.nodeCount}
+                    </span>
+                  }
+                  selected={selectedWorkflowId === workflow.id}
+                  disabled={Boolean(settingsBlockedReason)}
+                  onClick={() => openCreateImages(workflow.id)}
+                />
               ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={workspaceSwitchBlocked || appendReconciliationRequired}
-                onSelect={openFolderWorkspace}
-              >
-                Open folder as workspace…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={workspaceSwitchBlocked || appendReconciliationRequired}
-                onSelect={newEmptyWorkspace}
-              >
-                New empty workspace
-              </DropdownMenuItem>
-              {active && workspaces.length > 1 ? (
-                <>
-                  <DropdownMenuSeparator />
-                  {active.managedWorktree ? (
-                    <DropdownMenuItem
-                      disabled={workspaceActionBlocked}
-                      icon="trash"
-                      color="red"
-                      onSelect={() => setDeletingWorktree(active)}
-                    >
-                      Delete worktree…
-                    </DropdownMenuItem>
-                  ) : null}
-                  {!active.managedWorktree ? (
-                    <DropdownMenuItem
-                      disabled={workspaceActionBlocked}
-                      icon="trash"
-                      color="red"
-                      onSelect={() => setRemovingWorkspace(active)}
-                    >
-                      Remove “{active.name}”
-                    </DropdownMenuItem>
-                  ) : null}
-                </>
+              {imageWorkflows.length === 0 ? (
+                <EmptyState
+                  placement="inline"
+                  title="No workflows found"
+                  description="Try a different search."
+                />
               ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-
-        <SidebarList>
-          {groups.length === 0 ? (
-            <EmptyState
-              placement="inline"
-              title={search.trim() ? "No matches" : "No chats yet"}
-              description={
-                search.trim()
-                  ? "Try a different search."
-                  : "Start a new conversation to see it here."
-              }
-            />
-          ) : (
-            groups.map((group) => (
-              <SidebarListGroup key={group.label} title={group.label}>
-                {group.chats.map((chat) => {
-                  const shortcutNumber = shortcutNumberByChatId.get(chat.id);
-                  const shortcutBinding = shortcutNumber
-                    ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
-                    : null;
-                  const working =
-                    activeChatIds.has(chat.id) ||
-                    (chat.id === activeChatId && environmentPanel.agentBusy);
-                  return (
-                    <ContextMenu key={chat.id}>
-                      <ContextMenuTrigger asChild>
-                        <SidebarListItem
-                          icon={
-                            renamingWithAppleId === chat.id ? (
-                              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                            ) : undefined
-                          }
-                          aria-busy={renamingWithAppleId === chat.id || working}
-                          title={
-                            titleReveal?.chatId === chat.id ? (
-                              <GeneratedTitleReveal
-                                key={`${chat.id}-${titleReveal.version}`}
-                                previousTitle={titleReveal.previousTitle}
-                                title={chat.title}
-                              />
-                            ) : (
-                              chat.title
-                            )
-                          }
-                          trailing={
-                            working || (chatShortcutsVisible && shortcutBinding) ? (
-                              <span className="flex items-center gap-1">
-                                {chatShortcutsVisible && shortcutBinding ? (
-                                  <kbd
-                                    aria-hidden="true"
-                                    className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                                  >
-                                    {prettyAccelerator(shortcutBinding)}
-                                  </kbd>
-                                ) : null}
-                                {working ? <ChatActivityIndicator /> : null}
-                              </span>
-                            ) : undefined
-                          }
-                          aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-                          selected={chat.id === activeChatId}
-                          onPointerEnter={() => prefetchChat(chat.id)}
-                          onFocus={() => prefetchChat(chat.id)}
-                          onClick={() => openChat(chat.id)}
-                        />
-                      </ContextMenuTrigger>
-                      <ContextMenuContent>
-                        <ContextMenuItem
-                          icon="pencil"
-                          disabled={renamingWithAppleId === chat.id}
-                          onSelect={() => {
-                            setRenameValue(chat.title);
-                            setRenaming(chat);
-                          }}
-                        >
-                          Rename
-                        </ContextMenuItem>
-                        {foundationModels.data !== null ? (
-                          <ContextMenuItem
-                            disabled={!appleRenameReady || renamingWithAppleId !== null}
-                            aria-label={
-                              renamingWithAppleId === chat.id
-                                ? "Renaming with Apple"
-                                : appleRenameReady
-                                  ? "Rename with Apple"
-                                  : `Rename with Apple. ${appleRenameDetail}`
-                            }
-                            onSelect={() => void renameWithApple(chat)}
-                          >
-                            <span className="min-w-0 flex-1">
-                              {renamingWithAppleId === chat.id
-                                ? "Renaming with Apple…"
-                                : "Rename with Apple"}
-                            </span>
-                            {!appleRenameReady ? (
-                              <span className="text-small text-tertiary">
-                                {foundationModels.isLoading ? "Checking…" : "Unavailable"}
-                              </span>
-                            ) : null}
-                          </ContextMenuItem>
-                        ) : null}
-                        <ContextMenuSeparator />
-                        <ContextMenuItem
+            </SidebarListGroup>
+          </SidebarList>
+        ) : (
+          <>
+            {/* Workspace switcher — change the folder Aiden works in. */}
+            <div className="px-2.5 pb-3">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="transparent"
+                    className="h-10 w-full justify-between px-2.5 text-[14px] font-normal"
+                  >
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      {active?.folderPath ? (
+                        <FolderGit2 className="size-4 shrink-0 text-secondary" />
+                      ) : (
+                        <Folder className="size-4 shrink-0 text-secondary" />
+                      )}
+                      <span className="truncate font-medium">{active?.name ?? "Workspace"}</span>
+                    </span>
+                    <ChevronsUpDown className="size-4 shrink-0 text-tertiary" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-80 max-w-[calc(100vw-2rem)]">
+                  <DropdownMenuLabel>Workspaces</DropdownMenuLabel>
+                  {workspaces.map((w) => (
+                    <DropdownMenuCheckboxItem
+                      key={w.id}
+                      checked={w.id === activeId}
+                      disabled={workspaceSwitchBlocked}
+                      sublabel={w.folderPath ? truncatePathMiddle(w.folderPath) : undefined}
+                      title={w.folderPath ?? undefined}
+                      onCheckedChange={() => switchWorkspace(w.id)}
+                    >
+                      {w.name}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={workspaceSwitchBlocked || appendReconciliationRequired}
+                    onSelect={openFolderWorkspace}
+                  >
+                    Open folder as workspace…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={workspaceSwitchBlocked || appendReconciliationRequired}
+                    onSelect={newEmptyWorkspace}
+                  >
+                    New empty workspace
+                  </DropdownMenuItem>
+                  {active && workspaces.length > 1 ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      {active.managedWorktree ? (
+                        <DropdownMenuItem
+                          disabled={workspaceActionBlocked}
                           icon="trash"
                           color="red"
-                          disabled={renamingWithAppleId === chat.id}
-                          onSelect={() => setDeleting(chat)}
+                          onSelect={() => setDeletingWorktree(active)}
                         >
-                          Delete
-                        </ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
-                  );
-                })}
-              </SidebarListGroup>
-            ))
-          )}
-        </SidebarList>
+                          Delete worktree…
+                        </DropdownMenuItem>
+                      ) : null}
+                      {!active.managedWorktree ? (
+                        <DropdownMenuItem
+                          disabled={workspaceActionBlocked}
+                          icon="trash"
+                          color="red"
+                          onSelect={() => setRemovingWorkspace(active)}
+                        >
+                          Remove “{active.name}”
+                        </DropdownMenuItem>
+                      ) : null}
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            <SidebarList>
+              {groups.length === 0 ? (
+                <EmptyState
+                  placement="inline"
+                  title={search.trim() ? "No matches" : "No chats yet"}
+                  description={
+                    search.trim()
+                      ? "Try a different search."
+                      : "Start a new conversation to see it here."
+                  }
+                />
+              ) : (
+                groups.map((group) => (
+                  <SidebarListGroup key={group.label} title={group.label}>
+                    {group.chats.map((chat) => {
+                      const shortcutNumber = shortcutNumberByChatId.get(chat.id);
+                      const shortcutBinding = shortcutNumber
+                        ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
+                        : null;
+                      const working =
+                        activeChatIds.has(chat.id) ||
+                        (chat.id === activeChatId && environmentPanel.agentBusy);
+                      return (
+                        <ContextMenu key={chat.id}>
+                          <ContextMenuTrigger asChild>
+                            <SidebarListItem
+                              icon={
+                                renamingWithAppleId === chat.id ? (
+                                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                                ) : undefined
+                              }
+                              aria-busy={renamingWithAppleId === chat.id || working}
+                              title={
+                                titleReveal?.chatId === chat.id ? (
+                                  <GeneratedTitleReveal
+                                    key={`${chat.id}-${titleReveal.version}`}
+                                    previousTitle={titleReveal.previousTitle}
+                                    title={chat.title}
+                                  />
+                                ) : (
+                                  chat.title
+                                )
+                              }
+                              trailing={
+                                working || (chatShortcutsVisible && shortcutBinding) ? (
+                                  <span className="flex items-center gap-1">
+                                    {chatShortcutsVisible && shortcutBinding ? (
+                                      <kbd
+                                        aria-hidden="true"
+                                        className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                                      >
+                                        {prettyAccelerator(shortcutBinding)}
+                                      </kbd>
+                                    ) : null}
+                                    {working ? <ChatActivityIndicator /> : null}
+                                  </span>
+                                ) : undefined
+                              }
+                              aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+                              selected={chat.id === activeChatId}
+                              onPointerEnter={() => prefetchChat(chat.id)}
+                              onFocus={() => prefetchChat(chat.id)}
+                              onClick={() => openChat(chat.id)}
+                            />
+                          </ContextMenuTrigger>
+                          <ContextMenuContent>
+                            <ContextMenuItem
+                              icon="pencil"
+                              disabled={renamingWithAppleId === chat.id}
+                              onSelect={() => {
+                                setRenameValue(chat.title);
+                                setRenaming(chat);
+                              }}
+                            >
+                              Rename
+                            </ContextMenuItem>
+                            {foundationModels.data !== null ? (
+                              <ContextMenuItem
+                                disabled={!appleRenameReady || renamingWithAppleId !== null}
+                                aria-label={
+                                  renamingWithAppleId === chat.id
+                                    ? "Renaming with Apple"
+                                    : appleRenameReady
+                                      ? "Rename with Apple"
+                                      : `Rename with Apple. ${appleRenameDetail}`
+                                }
+                                onSelect={() => void renameWithApple(chat)}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  {renamingWithAppleId === chat.id
+                                    ? "Renaming with Apple…"
+                                    : "Rename with Apple"}
+                                </span>
+                                {!appleRenameReady ? (
+                                  <span className="text-small text-tertiary">
+                                    {foundationModels.isLoading ? "Checking…" : "Unavailable"}
+                                  </span>
+                                ) : null}
+                              </ContextMenuItem>
+                            ) : null}
+                            <ContextMenuSeparator />
+                            <ContextMenuItem
+                              icon="trash"
+                              color="red"
+                              disabled={renamingWithAppleId === chat.id}
+                              onSelect={() => setDeleting(chat)}
+                            >
+                              Delete
+                            </ContextMenuItem>
+                          </ContextMenuContent>
+                        </ContextMenu>
+                      );
+                    })}
+                  </SidebarListGroup>
+                ))
+              )}
+            </SidebarList>
+          </>
+        )}
       </Sidebar>
 
       <Dialog

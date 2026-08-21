@@ -17,7 +17,7 @@ import {
   Text,
 } from "./ui";
 import { cn } from "../lib/ui-utils";
-import { setRendererLifecycleGuard } from "../lib/lifecycle-guard";
+import { clearRendererLifecycleGuard, setRendererLifecycleGuard } from "../lib/lifecycle-guard";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import {
   FilesPanel,
@@ -562,13 +562,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   ]);
 
   React.useEffect(() => {
-    setRendererLifecycleGuard({ dirty: false, saving: false });
+    setRendererLifecycleGuard("environment", { dirty: false, saving: false });
     setEditorState({ ...EMPTY_EDITOR_STATE, workspaceId: activeId });
   }, [activeId]);
 
   const reportEditorState = React.useCallback(
     (next: FilesEditorState, options?: FilesEditorStateChangeOptions) => {
       setRendererLifecycleGuard(
+        "environment",
         { dirty: next.dirty, saving: next.saving },
         { touch: options?.touch },
       );
@@ -587,18 +588,14 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const setGitOperationBusy = React.useCallback((busy: boolean) => {
     gitBusyCountRef.current = Math.max(0, gitBusyCountRef.current + (busy ? 1 : -1));
     const nextBusy = gitBusyCountRef.current > 0;
-    setRendererLifecycleGuard({ gitBusy: nextBusy });
+    setRendererLifecycleGuard("environment", { gitBusy: nextBusy });
     setGitOperationBusyState(nextBusy);
   }, []);
 
   React.useEffect(
     () => () => {
       gitBusyCountRef.current = 0;
-      setRendererLifecycleGuard({
-        dirty: false,
-        gitBusy: false,
-        saving: false,
-      });
+      clearRendererLifecycleGuard("environment");
     },
     [],
   );

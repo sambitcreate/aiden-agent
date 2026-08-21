@@ -27,6 +27,8 @@ import {
 import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
+import { useAppCapabilities } from "../lib/app-capabilities";
+import { requestCreateImagesNavigation } from "../create-images/navigation-guard";
 
 export function RootView() {
   useTheme();
@@ -57,6 +59,7 @@ function RootContent() {
   const terminal = useWorkspaceTerminal();
   const { activeId } = useActiveWorkspace();
   const appendReconciliationRequired = useAppendReconciliationRequired();
+  const appCapabilities = useAppCapabilities();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const workspaceCommands = workspaceCommandVisibility(pathname);
   const navigationBlockedReason = environmentPanel.gitOperationBusy
@@ -118,19 +121,45 @@ function RootContent() {
     },
     workspaceCommands.environment,
   );
-  useCommandHandler("settings.open", () => {
+  useCommandHandler("settings.open", async () => {
     if (navigationBlockedReason) {
       toast.info(navigationBlockedReason);
       return;
     }
-    void navigate({ to: "/settings" });
+    const decision = await requestCreateImagesNavigation();
+    if (!decision.allowed) {
+      toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+      return;
+    }
+    await navigate({ to: "/settings" });
   });
+  useCommandHandler(
+    "images.open",
+    async () => {
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
+        return;
+      }
+      await navigate({ to: "/create-images" });
+    },
+    appCapabilities.createImages,
+  );
   useCommandHandler(
     "chat.new",
     async () => {
       if (!activeId) return;
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
+        return;
+      }
+      const decision = await requestCreateImagesNavigation();
+      if (!decision.allowed) {
+        toast.error(decision.message ?? "Resolve the workflow save issue before leaving.");
         return;
       }
       const chat = await chatsApi.create({ workspaceId: activeId });
@@ -261,7 +290,11 @@ function RootContent() {
     <div data-app-focus-root tabIndex={-1} className="relative h-full outline-none">
       <Outlet />
       <OnboardingFlow />
-      <AssistantDock interactionBlocked={environmentPanel.compactModalOpen} />
+      <AssistantDock
+        interactionBlocked={
+          environmentPanel.compactModalOpen || pathname.startsWith("/create-images")
+        }
+      />
       <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
     </div>
   );

@@ -16,6 +16,7 @@ export const INVOKE_PREFIXES = [
   "dictation:",
   "exa:",
   "git:",
+  "imageWorkflows:",
   "localModels:",
   "localVoice:",
   "mcp:",
@@ -38,6 +39,7 @@ export const INVOKE_PREFIXES = [
 export const NATIVE_INVOKE_CHANNELS = {
   accessibilityRequest: "aiden:accessibility:request",
   accessibilityStatus: "aiden:accessibility:status",
+  createImagesImportDroppedFiles: "aiden:create-images:import-dropped-files",
   attachmentDroppedRead: "aiden:attachments:dropped-read",
   attachmentClipboardRead: "aiden:attachments:clipboard-read",
   dialogOpen: "aiden:dialog:open",
@@ -66,6 +68,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:settled",
   "dictation:state",
   "localModels:progress",
+  "imageWorkflows:run-changed",
   "providers:auth:done",
   "providers:auth:error",
   "providers:auth:event",

@@ -14,16 +14,20 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("sidebar places New Agent above Scheduled beneath search", () => {
+test("sidebar places gated Create Images between New Agent and Scheduled", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const sidebarBody = between(sidebar, "<Sidebar", "</Sidebar>");
   const newAgentIndex = sidebarBody.indexOf("New Agent");
+  const createImagesIndex = sidebarBody.indexOf('title="Create Images"');
   const scheduledIndex = sidebarBody.indexOf('title="Scheduled"');
   const workspaceIndex = sidebarBody.indexOf("Workspace switcher");
 
   assert.notEqual(newAgentIndex, -1);
+  assert.notEqual(createImagesIndex, -1);
   assert.notEqual(scheduledIndex, -1);
-  assert.ok(newAgentIndex < scheduledIndex, "New Agent should appear before Scheduled");
+  assert.ok(newAgentIndex < createImagesIndex, "New Agent should appear before Create Images");
+  assert.ok(createImagesIndex < scheduledIndex, "Create Images should appear before Scheduled");
+  assert.match(sidebarBody, /appCapabilities\.createImages/u);
   assert.ok(
     scheduledIndex < workspaceIndex,
     "Scheduled should stay above the workspace switcher and chat list",

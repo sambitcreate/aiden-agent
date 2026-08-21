@@ -18,7 +18,9 @@ test("the Electron build enters through the profile bootstrap", () => {
     new URL("../scripts/build-electron.mjs", import.meta.url),
     "utf8",
   );
-  assert.match(buildScript, /entryPoints: \["main\/bootstrap\.ts"\]/u);
+  assert.match(buildScript, /entryPoints: \{ index: "main\/bootstrap\.ts" \}/u);
+  assert.match(buildScript, /outdir: "build\/main"/u);
+  assert.match(buildScript, /splitting: true/u);
 });
 
 test("development shortcut registration is gated without removing in-app menu accelerators", () => {

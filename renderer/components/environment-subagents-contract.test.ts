@@ -29,17 +29,24 @@ function between(value: string, start: string, end: string): string {
   return value.slice(startIndex, endIndex);
 }
 
-test("fresh renderer capabilities fail closed until main explicitly enables subagents", () => {
-  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false });
-  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false });
+test("fresh renderer capabilities fail closed until main explicitly enables them", () => {
+  assert.deepEqual(DISABLED_APP_CAPABILITIES, { subagents: false, createImages: false });
+  assert.deepEqual(parseAppCapabilities(undefined), { subagents: false, createImages: false });
   assert.deepEqual(parseAppCapabilities({ subagents: false }), {
     subagents: false,
+    createImages: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: "1" }), {
     subagents: false,
+    createImages: false,
   });
   assert.deepEqual(parseAppCapabilities({ subagents: true }), {
     subagents: true,
+    createImages: false,
+  });
+  assert.deepEqual(parseAppCapabilities({ createImages: true }), {
+    subagents: false,
+    createImages: true,
   });
   assert.deepEqual(availableEnvironmentPanelTabs(false), ["review", "files"]);
   assert.deepEqual(availableEnvironmentPanelTabs(true), ["review", "subagents", "files"]);
@@ -193,9 +200,12 @@ test("compact Environment modality blocks every app-level interaction seam and c
   assert.match(root, /<CommandSystemProvider applicationModal=\{compactModalOpen\}>/u);
   assert.match(
     root,
-    /<AssistantDock interactionBlocked=\{environmentPanel\.compactModalOpen\} \/>/u,
+    /<AssistantDock[\s\S]*?interactionBlocked=\{[\s\S]*?environmentPanel\.compactModalOpen \|\| pathname\.startsWith\("\/create-images"\)[\s\S]*?\}/u,
   );
-  assert.match(layout, /contentModalOpen=\{environmentPanel\.compactModalOpen\}/u);
+  assert.match(
+    layout,
+    /contentModalOpen=\{!createImagesMode && environmentPanel\.compactModalOpen\}/u,
+  );
   assert.match(splitView, /inert=\{collapsed \|\| contentModalOpen \? true : undefined\}/u);
   assert.match(splitView, /tabIndex=\{collapsed \|\| compact \|\| contentModalOpen \? -1 : 0\}/u);
   assert.match(splitView, /useCommandHandler\("sidebar\.toggle", toggle, !contentModalOpen\)/u);
@@ -284,7 +294,10 @@ test("main-derived capabilities gate every renderer entry and repair disabled na
   const messages = source("./message-list.tsx");
   const pane = source("../main/chat-pane.tsx");
 
-  assert.match(appHandler, /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*\}/u);
+  assert.match(
+    appHandler,
+    /capabilities:\s*\{\s*subagents: subagentsEnabled\(\),\s*createImages: createImagesEnabled\(\),\s*\}/u,
+  );
   assert.match(bootstrap, /let appCapabilities = DISABLED_APP_CAPABILITIES/u);
   assert.match(bootstrap, /appCapabilities = parseAppCapabilities\(appInfo\.capabilities\)/u);
   assert.match(bootstrap, /capabilities=\{appCapabilities\}/u);

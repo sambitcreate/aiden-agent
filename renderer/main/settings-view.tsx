@@ -19,6 +19,7 @@ import {
   Info,
   Clock3,
   Sparkles,
+  Images,
   Send,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
@@ -34,6 +35,7 @@ import { ModelDataSettings } from "../components/settings/model-data-settings";
 import { AboutSettings } from "../components/settings/about-settings";
 import { ScheduledTasksSettings } from "../components/settings/scheduled-tasks-settings";
 import { AssistantSettings } from "../components/settings/assistant-settings";
+import { CreateImagesSettings } from "../components/settings/create-images-settings";
 import { SETTINGS_DESTINATIONS, type SettingsSection } from "../lib/settings-section";
 
 type NavGroup = "Agent" | "App";
@@ -56,6 +58,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   scheduledTasks: <Clock3 className="size-5" />,
   assistant: <Sparkles className="size-5" />,
   computerUse: <MousePointer2 className="size-5" />,
+  createImages: <Images className="size-5" />,
   voice: <Mic className="size-5" />,
   shortcut: <Keyboard className="size-5" />,
   appearance: <Palette className="size-5" />,
@@ -78,6 +81,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   mcp: McpSettings,
   websearch: WebSearchSettings,
   computerUse: ComputerUseSettings,
+  createImages: CreateImagesSettings,
   scheduledTasks: ScheduledTasksSettings,
   assistant: AssistantSettings,
   voice: VoiceSettings,

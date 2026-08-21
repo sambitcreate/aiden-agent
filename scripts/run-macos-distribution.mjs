@@ -247,8 +247,10 @@ export async function runMacDistribution() {
       await npm("release:preflight");
       await npm("release:update-model-capabilities");
       await npm("computer-use:vendor");
+      await npm("package:fingerprint");
       await npm("build:native");
       await npm("build");
+      await npm("package:fingerprint:verify");
       await runCommand(
         path.join(repositoryRoot, "node_modules", ".bin", "electron-builder"),
         distributionElectronBuilderArguments(staging, { enableAutoUpdates }),

@@ -6,6 +6,7 @@ export const SETTINGS_SECTIONS = [
   "websearch",
   "telegram",
   "computerUse",
+  "createImages",
   "scheduledTasks",
   "assistant",
   "voice",
@@ -22,7 +23,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
   group: "Agent" | "App";
   keywords: string[];
 }> = [
-  { id: "providers", title: "Providers", group: "Agent", keywords: ["models", "api", "keys"] },
+  {
+    id: "providers",
+    title: "Providers",
+    group: "Agent",
+    keywords: ["models", "api", "keys"],
+  },
   {
     id: "modelData",
     title: "Model Pad",
@@ -38,10 +44,30 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
       "artificial analysis",
     ],
   },
-  { id: "skills", title: "Skills", group: "Agent", keywords: ["instructions", "tools"] },
-  { id: "mcp", title: "MCP Servers", group: "Agent", keywords: ["connections", "protocol"] },
-  { id: "websearch", title: "Web Search", group: "Agent", keywords: ["internet", "exa"] },
-  { id: "telegram", title: "Telegram", group: "Agent", keywords: ["remote", "bot", "phone", "control"] },
+  {
+    id: "skills",
+    title: "Skills",
+    group: "Agent",
+    keywords: ["instructions", "tools"],
+  },
+  {
+    id: "mcp",
+    title: "MCP Servers",
+    group: "Agent",
+    keywords: ["connections", "protocol"],
+  },
+  {
+    id: "websearch",
+    title: "Web Search",
+    group: "Agent",
+    keywords: ["internet", "exa"],
+  },
+  {
+    id: "telegram",
+    title: "Telegram",
+    group: "Agent",
+    keywords: ["remote", "bot", "phone", "control"],
+  },
   {
     id: "scheduledTasks",
     title: "Scheduled tasks",
@@ -68,6 +94,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Computer Use",
     group: "Agent",
     keywords: ["desktop", "native apps", "accessibility", "screen recording", "beta"],
+  },
+  {
+    id: "createImages",
+    title: "Create Images",
+    group: "Agent",
+    keywords: ["image", "workflow", "canvas", "autosave", "manual save", "power features"],
   },
   {
     id: "voice",

@@ -16,16 +16,14 @@ import {
 import { queryKeys, useChats } from "../lib/queries";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { TerminalDrawer } from "../components/terminal-drawer";
-import {
-  EnvironmentWorkbench,
-  useEnvironmentPanel,
-} from "../components/environment-panel";
+import { EnvironmentWorkbench, useEnvironmentPanel } from "../components/environment-panel";
 import type { Chat, ChatMetadataUpdated, ChatMeta } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 
 export function ChatLayout() {
   const params = useParams({ strict: false }) as { chatId?: string };
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const createImagesMode = pathname.startsWith("/create-images");
   const qc = useQueryClient();
   const environmentPanel = useEnvironmentPanel();
   const [titleReveal, setTitleReveal] = React.useState<ChatTitleRevealEvent | null>(null);
@@ -75,16 +73,22 @@ export function ChatLayout() {
       storageKey="aiden-agent"
       sidebar={<ChatSidebar activeChatId={params.chatId} titleReveal={titleReveal} />}
       sidebarSize={{ default: 272, min: 236, max: 340 }}
-      contentModalOpen={environmentPanel.compactModalOpen}
+      contentModalOpen={!createImagesMode && environmentPanel.compactModalOpen}
     >
-      <EnvironmentWorkbench>
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="min-h-0 flex-1 overflow-hidden">
-            <Outlet />
-          </div>
-          {pathname === "/profile" || pathname === "/scheduled" ? null : <TerminalDrawer />}
+      {createImagesMode ? (
+        <div className="h-full min-h-0 overflow-hidden bg-background">
+          <Outlet />
         </div>
-      </EnvironmentWorkbench>
+      ) : (
+        <EnvironmentWorkbench>
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <Outlet />
+            </div>
+            {pathname === "/profile" || pathname === "/scheduled" ? null : <TerminalDrawer />}
+          </div>
+        </EnvironmentWorkbench>
+      )}
     </SplitView>
   );
 }
@@ -126,7 +130,15 @@ export function ChatIndex() {
           toast.error(error instanceof Error ? error.message : "Aiden could not create a chat.");
         });
     }
-  }, [appendReconciliationRequired, isLoading, activeId, chats.isLoading, chats.data, navigate, chats]);
+  }, [
+    appendReconciliationRequired,
+    isLoading,
+    activeId,
+    chats.isLoading,
+    chats.data,
+    navigate,
+    chats,
+  ]);
 
   return appendReconciliationRequired ? (
     <div className="flex h-full items-center justify-center p-6" role="status">

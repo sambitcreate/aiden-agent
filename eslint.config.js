@@ -5,7 +5,7 @@ import globals from "globals";
 
 export default [
   {
-    ignores: ["build/**", "release/**", "node_modules/**", ".memory/**", ".papercuts/**"],
+    ignores: ["build/**", "release/**", "node_modules/**", "tmp/**", ".memory/**", ".papercuts/**"],
   },
   js.configs.recommended,
   {
@@ -18,8 +18,11 @@ export default [
     plugins: { "@typescript-eslint": tsPlugin },
     rules: {
       "no-unused-vars": "off",
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-undef": "off"
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+      "no-undef": "off",
     },
   },
 ];

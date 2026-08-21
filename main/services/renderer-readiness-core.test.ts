@@ -36,6 +36,6 @@ test("main invalidates readiness and reloads after the renderer process exits", 
   );
   assert.match(
     main,
-    /const recovery = mainWindowLoads\.replace\(createdWindow\.loadURL\(mainWindowUrl\)\)/u,
+    /const recovery = mainWindowLoads\.replace\(\s*createdWindow\.loadURL\(mainWindowUrl\),?\s*\)/u,
   );
 });

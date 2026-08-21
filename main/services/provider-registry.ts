@@ -166,6 +166,18 @@ export class ProviderRegistry {
   }
 
   /**
+   * Main-process-only, non-secret credential metadata for capabilities that
+   * must distinguish a stored API key from OAuth before resolving request
+   * auth. This never exposes the credential value.
+   */
+  async getBuiltinCredentialKind(
+    providerId: string,
+  ): Promise<"api_key" | "oauth" | undefined> {
+    await this.ensureBuiltinCatalogs();
+    return (await this.credentials.list()).find((entry) => entry.providerId === providerId)?.type;
+  }
+
+  /**
    * Pi's provider-owned setup flows return full credentials (including
    * provider-specific fields such as Cloudflare account/gateway IDs). Keep
    * those values inside the main process and commit them only after the UI
