@@ -1,8 +1,8 @@
 # Create Images — Node Banana Learnings Roadmap
 
-Status: Active — implementation complete through Phase 6; release operations remain  
-Started: 2026-08-21  
-Aiden baseline: `107712a29c44902659aecab430d1fd17f421e008` plus the preserved working-tree Gemini/lightbox fixes  
+Status: Active — implementation complete through Phase 6; release operations remain
+Started: 2026-08-21
+Aiden baseline: `107712a29c44902659aecab430d1fd17f421e008` plus the preserved working-tree Gemini/lightbox fixes
 Node Banana research revision: `5c0e0ae6150f29a6de819f8d6f1dedba15151f7c` (`master`, clean checkout)
 
 ## Purpose
