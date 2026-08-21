@@ -555,6 +555,7 @@ test("main, preload, and renderer sources keep the exact run lifecycle and autho
   assert.deepEqual(runHandlerChannels, [
     "imageWorkflows:discardDegradedRun",
     "imageWorkflows:downloadRunAsset",
+    "imageWorkflows:downloadRunAssetsZip",
     "imageWorkflows:getRun",
     "imageWorkflows:grantRunAsset",
     "imageWorkflows:listRuns",
@@ -564,6 +565,7 @@ test("main, preload, and renderer sources keep the exact run lifecycle and autho
     "imageWorkflows:pruneRunHistory",
     "imageWorkflows:recoverRun",
     "imageWorkflows:resolveRunAmbiguity",
+    "imageWorkflows:resumeRun",
     "imageWorkflows:startRun",
     "imageWorkflows:stopRun",
     "imageWorkflows:subscribeRuns",
