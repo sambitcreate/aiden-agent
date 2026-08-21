@@ -224,6 +224,47 @@ test("coordinator uses stable plan order with independent local and remote gates
   assert.equal(cursor.runStatus, "succeeded");
 });
 
+test("durable checkpoints pause before downstream admission and resume without rerunning upstream", async () => {
+  const document = documentWith(
+    [prompt("prompt-a"), generate("generate-a")],
+    [edge("edge-a", "prompt-a", "text", "generate-a", "prompt")],
+  );
+  const plan = createWorkflowCoordinatorPlan(document, { kind: "all" });
+  const firstHarness = harness();
+  const executed: string[] = [];
+  const paused = await runWorkflowCoordinator(plan, {
+    ...options(firstHarness.durability),
+    pauseBeforeNode: async ({ nodeId }) => nodeId === "generate-a",
+    executeNode: async ({ node }) => {
+      executed.push(node.id);
+      return { kind: "success", output: node.id };
+    },
+  });
+  assert.equal(paused.status, "paused");
+  assert.deepEqual(executed, ["prompt-a"]);
+  assert.equal(paused.nodeStatuses["prompt-a"], "succeeded");
+  assert.equal(paused.nodeStatuses["generate-a"], "queued");
+
+  const resumedHarness = harness();
+  const resumed = await runWorkflowCoordinator(plan, {
+    ...options(resumedHarness.durability),
+    resuming: true,
+    initialSucceededOutputs: new Map([["prompt-a", "prompt-a"]]),
+    pauseBeforeNode: async () => false,
+    executeNode: async ({ node, recordRemoteJobId }) => {
+      executed.push(node.id);
+      await recordRemoteJobId("job-resumed");
+      return { kind: "success", output: node.id };
+    },
+  });
+  assert.equal(resumed.status, "succeeded");
+  assert.deepEqual(executed, ["prompt-a", "generate-a"]);
+  assert.equal(
+    resumedHarness.events.some((candidate) => candidate.kind === "run" && candidate.status === "running"),
+    false,
+  );
+});
+
 test("coordinator snapshots plan inputs and publishes output before durable success", async () => {
   const document = documentWith([prompt("prompt-a")]);
   const plan = createWorkflowCoordinatorPlan(document, { kind: "all" });
