@@ -17,7 +17,7 @@ export type ProviderKind = "openai" | "anthropic";
 
 export type ProviderDeployment = "local" | "hosted";
 
-export type ProviderModelType = "llm" | "embedding";
+export type ProviderModelType = "llm" | "embedding" | "reranker" | "image" | "audio" | "video";
 
 export interface ProviderModelMetadata {
   source: "lmstudio" | "ollama" | "provider";
@@ -416,6 +416,7 @@ export interface ModelInfo {
   toolCall?: boolean;
   reasoning?: boolean;
   openWeights?: boolean;
+  /** Normalized capability classification; every value except `llm` is non-chat. */
   modelType?: ProviderModelType;
   parameterCount?: string;
   format?: string;
