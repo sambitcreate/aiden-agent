@@ -2,13 +2,14 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { app, BrowserWindow, MessageChannelMain } from "electron";
 import { readRegularFile } from "../regular-file-read.js";
+import type { CreateImagesAnnotationShape } from "../../../renderer/shared/create-images/schema.js";
 
 const IMAGE_UTILITY_TIMEOUT_MS = 20_000;
 const IMAGE_UTILITY_MAX_INPUT_BYTES = 64 * 1024 * 1024;
 const DECODER_CHANNEL = "create-images:image-decoder-port";
 
 interface ImageUtilityRequest {
-  operation: "normalize" | "thumbnail" | "validate";
+  operation: "normalize" | "thumbnail" | "validate" | "annotate";
   filePath: string;
   maxInputBytes?: number;
   maxDimension?: number;
@@ -16,6 +17,7 @@ interface ImageUtilityRequest {
   maxHeight?: number;
   maxPixels?: number;
   maxOutputBytes?: number;
+  shapes?: readonly CreateImagesAnnotationShape[];
 }
 
 interface ImageUtilitySuccess {
@@ -116,6 +118,7 @@ export async function runImageUtility(request: ImageUtilityRequest): Promise<Ima
         ...(request.maxHeight ? { maxHeight: request.maxHeight } : {}),
         ...(request.maxPixels ? { maxPixels: request.maxPixels } : {}),
         ...(request.maxOutputBytes ? { maxOutputBytes: request.maxOutputBytes } : {}),
+        ...(request.shapes ? { shapes: structuredClone(request.shapes) } : {}),
       });
       window.webContents.once("render-process-gone", () =>
         finish(new Error("The sandboxed image decoder crashed.")),
