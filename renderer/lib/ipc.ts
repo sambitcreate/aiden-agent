@@ -106,7 +106,9 @@ import type {
   CreateImagesDegradedRunDiscardResult,
   CreateImagesDiscardDegradedRunRequest,
   CreateImagesDiscardAutosaveRequest,
+  CreateImagesDownloadWorkflowAssetRequest,
   CreateImagesDownloadRunAssetRequest,
+  CreateImagesDownloadRunAssetsZipRequest,
   CreateImagesDownloadRunAssetResult,
   CreateImagesDuplicateWorkflowRequest,
   CreateImagesExportArchiveRequest,
@@ -118,9 +120,16 @@ import type {
   CreateImagesListRunsRequest,
   CreateImagesImportArchiveResult,
   CreateImagesImportNodeBananaResult,
+  CreateImagesListRecentOutputsRequest,
+  CreateImagesRecentOutputListResult,
+  CreateImagesGetPresentationRequest,
+  CreateImagesSetAssetHiddenRequest,
+  CreateImagesPresentationResult,
   CreateImagesPlanRunHistoryPruneRequest,
   CreateImagesPrepareRunRequest,
   CreateImagesPrepareRunResult,
+  CreateImagesProposeWorkflowRequest,
+  CreateImagesProposeWorkflowResult,
   CreateImagesPlanDegradedRunDiscardRequest,
   CreateImagesPruneRunHistoryRequest,
   CreateImagesRenameWorkflowRequest,
@@ -141,6 +150,7 @@ import type {
   CreateImagesSaveWorkflowRequest,
   CreateImagesStartRunRequest,
   CreateImagesStopRunRequest,
+  CreateImagesResumeRunRequest,
   CreateImagesStorageHealthView,
   CreateImagesSubscribeRunsRequest,
   CreateImagesUnsubscribeRunsRequest,
@@ -244,6 +254,10 @@ export const createImagesApi = {
     invoke<CreateImagesRunMutationResult>("imageWorkflows:startRun", request),
   stopRun: (request: CreateImagesStopRunRequest) =>
     invoke<CreateImagesRunMutationResult>("imageWorkflows:stopRun", request),
+  resumeRun: (request: CreateImagesResumeRunRequest) =>
+    invoke<CreateImagesRunMutationResult>("imageWorkflows:resumeRun", request),
+  proposeWorkflow: (request: CreateImagesProposeWorkflowRequest) =>
+    invoke<CreateImagesProposeWorkflowResult>("imageWorkflows:proposeWorkflow", request),
   listRuns: (request: CreateImagesListRunsRequest) =>
     invoke<CreateImagesRunListResult>("imageWorkflows:listRuns", request),
   planRunHistoryPrune: (request: CreateImagesPlanRunHistoryPruneRequest) =>
@@ -269,8 +283,18 @@ export const createImagesApi = {
     invoke<boolean>("imageWorkflows:unsubscribeRuns", request),
   grantRunAsset: (request: CreateImagesGrantRunAssetRequest) =>
     invoke<CreateImagesAssetGrantResult>("imageWorkflows:grantRunAsset", request),
+  listRecentOutputs: (request: CreateImagesListRecentOutputsRequest) =>
+    invoke<CreateImagesRecentOutputListResult>("imageWorkflows:listRecentOutputs", request),
+  getPresentation: (request: CreateImagesGetPresentationRequest) =>
+    invoke<CreateImagesPresentationResult>("imageWorkflows:getPresentation", request),
+  setAssetHidden: (request: CreateImagesSetAssetHiddenRequest) =>
+    invoke<CreateImagesPresentationResult>("imageWorkflows:setAssetHidden", request),
+  downloadWorkflowAsset: (request: CreateImagesDownloadWorkflowAssetRequest) =>
+    invoke<CreateImagesDownloadRunAssetResult>("imageWorkflows:downloadWorkflowAsset", request),
   downloadRunAsset: (request: CreateImagesDownloadRunAssetRequest) =>
     invoke<CreateImagesDownloadRunAssetResult>("imageWorkflows:downloadRunAsset", request),
+  downloadRunAssetsZip: (request: CreateImagesDownloadRunAssetsZipRequest) =>
+    invoke<CreateImagesDownloadRunAssetResult>("imageWorkflows:downloadRunAssetsZip", request),
   onRunsChanged: (handler: (notification: CreateImagesRunChangedNotification) => void) =>
     onNotification<CreateImagesRunChangedNotification>("imageWorkflows:run-changed", handler),
 };
