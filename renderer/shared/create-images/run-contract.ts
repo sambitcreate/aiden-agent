@@ -23,6 +23,7 @@ const TIMESTAMP_MAX_LENGTH = 64;
 export type CreateImagesRunStatus =
   | "queued"
   | "running"
+  | "paused"
   | "cancel_requested"
   | "needs_attention"
   | "succeeded"
@@ -56,6 +57,16 @@ interface RunEventBaseV1<TType extends string> {
 }
 
 export type CreateImagesRunStartedEventV1 = RunEventBaseV1<"run-started">;
+
+export type CreateImagesRunPausedEventV1 = RunEventBaseV1<"run-paused"> & {
+  checkpointId: string;
+  beforeNodeId: string;
+  edgeIds: string[];
+};
+
+export type CreateImagesRunResumedEventV1 = RunEventBaseV1<"run-resumed"> & {
+  checkpointId: string;
+};
 
 export type CreateImagesNodeStartedEventV1 = RunEventBaseV1<"node-started"> & {
   nodeId: string;
@@ -129,6 +140,26 @@ export type CreateImagesNodeBlockedEventV1 = RunEventBaseV1<"node-blocked"> & {
   upstreamNodeIds: string[];
 };
 
+export type CreateImagesBatchItemState =
+  | "queued"
+  | "submission_prepared"
+  | "submitted"
+  | "succeeded"
+  | "failed"
+  | "blocked"
+  | "cancelled";
+
+export type CreateImagesBatchItemStateEventV1 = RunEventBaseV1<"batch-item-state"> & {
+  nodeId: string;
+  itemId: string;
+  itemIndex: number;
+  state: CreateImagesBatchItemState;
+  outputAssetIds?: string[];
+  errorCode?: string;
+  usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+  cost?: { kind: "unknown" } | { kind: "actual"; amountMicros: number; currency: string };
+};
+
 export type CreateImagesRunCancelRequestedEventV1 = RunEventBaseV1<"run-cancel-requested"> & {
   reason: CreateImagesCancellationReason;
 };
@@ -144,6 +175,8 @@ export type CreateImagesRunAmbiguityAcknowledgedEventV1 =
 
 export type CreateImagesRunEventV1 =
   | CreateImagesRunStartedEventV1
+  | CreateImagesRunPausedEventV1
+  | CreateImagesRunResumedEventV1
   | CreateImagesNodeStartedEventV1
   | CreateImagesNodeSubmissionPreparedEventV1
   | CreateImagesNodeSubmissionAcceptedEventV1
@@ -156,6 +189,7 @@ export type CreateImagesRunEventV1 =
   | CreateImagesNodeFailedEventV1
   | CreateImagesNodeCancelledEventV1
   | CreateImagesNodeBlockedEventV1
+  | CreateImagesBatchItemStateEventV1
   | CreateImagesRunCancelRequestedEventV1
   | CreateImagesRunTerminalEventV1
   | CreateImagesRunAmbiguityAcknowledgedEventV1;
@@ -242,6 +276,18 @@ export interface CreateImagesNodeRunProjection {
   outputAssetIds: string[];
   errorCode?: string;
   terminalAt?: string;
+  batchItems?: Record<
+    string,
+    {
+      itemId: string;
+      itemIndex: number;
+      state: CreateImagesBatchItemState;
+      outputAssetIds: string[];
+      errorCode?: string;
+      usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+      cost?: { kind: "unknown" } | { kind: "actual"; amountMicros: number; currency: string };
+    }
+  >;
 }
 
 export interface CreateImagesRunProjection {
@@ -250,6 +296,13 @@ export interface CreateImagesRunProjection {
   cancellation?: {
     reason: CreateImagesCancellationReason;
     requestedAt: string;
+  };
+  pause?: {
+    checkpointId: string;
+    beforeNodeId: string;
+    edgeIds: string[];
+    pausedAt: string;
+    resumedAt?: string;
   };
   terminal?: { status: CreateImagesRunTerminalStatus; at: string };
   ambiguityResolution?: {
@@ -577,6 +630,8 @@ function parseEvent(
   const type = value.type;
   const extraFields: Record<string, readonly string[]> = {
     "run-started": [],
+    "run-paused": ["checkpointId", "beforeNodeId", "edgeIds"],
+    "run-resumed": ["checkpointId"],
     "node-started": ["nodeId"],
     "node-submission-prepared": ["nodeId", "attempt", "idempotencyKey", "providerId", "modelId"],
     "node-submission-accepted": ["nodeId", "attempt", "providerJobId"],
@@ -589,6 +644,16 @@ function parseEvent(
     "node-failed": ["nodeId", "errorCode"],
     "node-cancelled": ["nodeId"],
     "node-blocked": ["nodeId", "upstreamNodeIds"],
+    "batch-item-state": [
+      "nodeId",
+      "itemId",
+      "itemIndex",
+      "state",
+      "outputAssetIds",
+      "errorCode",
+      "usage",
+      "cost",
+    ],
     "run-cancel-requested": ["reason"],
     "run-terminal": ["status"],
     "run-ambiguity-acknowledged": ["expectedNeedsAttentionJournalRevision"],
@@ -627,6 +692,28 @@ function parseEvent(
   if (!workflowId || !runId || !workflowRevision || !sequence || !at) return undefined;
   const base = { type, workflowId, workflowRevision, runId, sequence, at };
   if (type === "run-started") return base as CreateImagesRunStartedEventV1;
+  if (type === "run-paused") {
+    const checkpointId = opaqueId(value.checkpointId, `${path}.checkpointId`, issues);
+    const beforeNodeId = opaqueId(value.beforeNodeId, `${path}.beforeNodeId`, issues);
+    if (!Array.isArray(value.edgeIds) || value.edgeIds.length < 1 || value.edgeIds.length > 500) {
+      issue(issues, `${path}.edgeIds`, "invalid_value", "Expected a bounded checkpoint edge list.");
+      return undefined;
+    }
+    const edgeIds = value.edgeIds.flatMap((candidate, edgeIndex) => {
+      const edgeId = opaqueId(candidate, `${path}.edgeIds[${edgeIndex}]`, issues);
+      return edgeId ? [edgeId] : [];
+    });
+    if (new Set(edgeIds).size !== edgeIds.length) {
+      issue(issues, `${path}.edgeIds`, "duplicate", "Checkpoint edge IDs must be unique.");
+    }
+    return checkpointId && beforeNodeId && edgeIds.length === value.edgeIds.length
+      ? { ...base, type, checkpointId, beforeNodeId, edgeIds }
+      : undefined;
+  }
+  if (type === "run-resumed") {
+    const checkpointId = opaqueId(value.checkpointId, `${path}.checkpointId`, issues);
+    return checkpointId ? { ...base, type, checkpointId } : undefined;
+  }
   if (type === "run-cancel-requested") {
     if (
       !(["user", "renderer-disconnected", "app-quit"] as const).includes(
@@ -670,6 +757,110 @@ function parseEvent(
   }
   const nodeId = opaqueId(value.nodeId, `${path}.nodeId`, issues);
   if (!nodeId) return undefined;
+  if (type === "batch-item-state") {
+    const itemId = opaqueId(value.itemId, `${path}.itemId`, issues);
+    const itemIndex = nonnegativeInteger(value.itemIndex, `${path}.itemIndex`, issues, 7);
+    const states: readonly CreateImagesBatchItemState[] = [
+      "queued",
+      "submission_prepared",
+      "submitted",
+      "succeeded",
+      "failed",
+      "blocked",
+      "cancelled",
+    ];
+    const state = states.includes(value.state as CreateImagesBatchItemState)
+      ? (value.state as CreateImagesBatchItemState)
+      : undefined;
+    if (!state) issue(issues, `${path}.state`, "invalid_value", "Unknown batch item state.");
+    let outputAssetIds: string[] | undefined;
+    if (value.outputAssetIds !== undefined) {
+      if (!Array.isArray(value.outputAssetIds) || value.outputAssetIds.length > 4) {
+        issue(issues, `${path}.outputAssetIds`, "invalid_type", "Expected a bounded asset ID array.");
+      } else {
+        outputAssetIds = value.outputAssetIds.flatMap((candidate, assetIndex) => {
+          const assetId = boundedString(
+            candidate,
+            `${path}.outputAssetIds[${assetIndex}]`,
+            issues,
+            CREATE_IMAGES_ASSET_ID_PATTERN,
+            64,
+          );
+          return assetId ? [assetId] : [];
+        });
+      }
+    }
+    const errorCode =
+      value.errorCode === undefined
+        ? undefined
+        : boundedString(
+            value.errorCode,
+            `${path}.errorCode`,
+            issues,
+            ERROR_CODE_PATTERN,
+            CREATE_IMAGES_MAX_RUN_ERROR_CODE_LENGTH,
+          );
+    let usage: CreateImagesBatchItemStateEventV1["usage"];
+    if (value.usage !== undefined) {
+      if (!isRecord(value.usage)) issue(issues, `${path}.usage`, "invalid_type", "Expected usage data.");
+      else {
+        rejectUnknown(value.usage, ["inputTokens", "outputTokens", "totalTokens"], `${path}.usage`, issues);
+        const read = (field: string) =>
+          value.usage && isRecord(value.usage) && value.usage[field] !== undefined
+            ? nonnegativeInteger(value.usage[field], `${path}.usage.${field}`, issues, 1_000_000_000)
+            : undefined;
+        usage = {
+          ...(read("inputTokens") !== undefined ? { inputTokens: read("inputTokens") } : {}),
+          ...(read("outputTokens") !== undefined ? { outputTokens: read("outputTokens") } : {}),
+          ...(read("totalTokens") !== undefined ? { totalTokens: read("totalTokens") } : {}),
+        };
+      }
+    }
+    let cost: CreateImagesBatchItemStateEventV1["cost"];
+    if (value.cost !== undefined) {
+      if (!isRecord(value.cost)) issue(issues, `${path}.cost`, "invalid_type", "Expected cost data.");
+      else if (value.cost.kind === "unknown") {
+        rejectUnknown(value.cost, ["kind"], `${path}.cost`, issues);
+        cost = { kind: "unknown" };
+      } else if (value.cost.kind === "actual") {
+        rejectUnknown(value.cost, ["kind", "amountMicros", "currency"], `${path}.cost`, issues);
+        const amountMicros = nonnegativeInteger(
+          value.cost.amountMicros,
+          `${path}.cost.amountMicros`,
+          issues,
+          Number.MAX_SAFE_INTEGER,
+        );
+        const currency = boundedString(
+          value.cost.currency,
+          `${path}.cost.currency`,
+          issues,
+          /^[A-Z]{3}$/u,
+          3,
+        );
+        if (amountMicros !== undefined && currency) cost = { kind: "actual", amountMicros, currency };
+      } else issue(issues, `${path}.cost.kind`, "invalid_value", "Unknown cost state.");
+    }
+    if (state === "succeeded" && outputAssetIds === undefined) {
+      issue(issues, `${path}.outputAssetIds`, "invalid_value", "Succeeded batch items require outputs.");
+    }
+    if (state === "failed" && !errorCode) {
+      issue(issues, `${path}.errorCode`, "invalid_value", "Failed batch items require an error code.");
+    }
+    return itemId && itemIndex !== undefined && state
+      ? {
+          ...base,
+          type,
+          nodeId,
+          itemId,
+          itemIndex,
+          state,
+          ...(outputAssetIds ? { outputAssetIds } : {}),
+          ...(errorCode ? { errorCode } : {}),
+          ...(usage ? { usage } : {}),
+          ...(cost ? { cost } : {}),
+        }
+      : undefined;
+  }
   if (type === "node-started" || type === "node-cancelled") return { ...base, type, nodeId };
   if (type === "node-submission-prepared") {
     const attempt = positiveInteger(
@@ -939,6 +1130,33 @@ function applyEvent(
   } else if (event.type === "run-started") {
     if (projection.status !== "queued") invalidTransition(path, "Run can only start once.");
     projection.status = "running";
+  } else if (event.type === "run-paused") {
+    if (projection.status !== "running") invalidTransition(path, "Only a running run can pause.");
+    const node = projection.nodes[event.beforeNodeId];
+    if (!node || node.status !== "queued") {
+      invalidTransition(`${path}.beforeNodeId`, "A checkpoint must pause before a queued node.");
+    }
+    const dependencies = plan.dependencies[event.beforeNodeId] ?? [];
+    if (dependencies.some((dependency) => projection.nodes[dependency]?.status !== "succeeded")) {
+      invalidTransition(path, "Checkpoint dependencies must be durable before pausing.");
+    }
+    projection.status = "paused";
+    projection.pause = {
+      checkpointId: event.checkpointId,
+      beforeNodeId: event.beforeNodeId,
+      edgeIds: [...event.edgeIds],
+      pausedAt: event.at,
+    };
+  } else if (event.type === "run-resumed") {
+    if (
+      projection.status !== "paused" ||
+      !projection.pause ||
+      projection.pause.checkpointId !== event.checkpointId
+    ) {
+      invalidTransition(path, "Only the current durable checkpoint can resume.");
+    }
+    projection.status = "running";
+    projection.pause = { ...projection.pause, resumedAt: event.at };
   } else if (event.type === "run-cancel-requested") {
     if (projection.cancellation) invalidTransition(path, "Cancellation intent is immutable.");
     projection.cancellation = { reason: event.reason, requestedAt: event.at };
@@ -972,7 +1190,42 @@ function applyEvent(
     const node = projection.nodes[event.nodeId];
     if (!node)
       invalidTransition(`${path}.nodeId`, "Event references a node outside the immutable plan.");
-    if (event.type === "node-started") {
+    if (event.type === "batch-item-state") {
+      if (projection.status !== "running" || node.status !== "running") {
+        invalidTransition(path, "Batch items can change only while their generation node runs.");
+      }
+      node.batchItems ??= {};
+      const current = node.batchItems[event.itemId];
+      const allowed: Readonly<Record<CreateImagesBatchItemState, readonly CreateImagesBatchItemState[]>> = {
+        queued: ["submission_prepared", "cancelled", "blocked"],
+        submission_prepared: ["submitted", "failed", "cancelled"],
+        submitted: ["succeeded", "failed"],
+        succeeded: [],
+        failed: [],
+        blocked: [],
+        cancelled: [],
+      };
+      if (!current && event.state !== "queued") {
+        invalidTransition(path, "A batch item must enter the durable queue before it changes state.");
+      }
+      if (current) {
+        if (current.itemIndex !== event.itemIndex) {
+          invalidTransition(`${path}.itemIndex`, "A batch item index is immutable.");
+        }
+        if (!allowed[current.state].includes(event.state)) {
+          invalidTransition(path, `Batch item cannot transition from ${current.state} to ${event.state}.`);
+        }
+      }
+      node.batchItems[event.itemId] = {
+        itemId: event.itemId,
+        itemIndex: event.itemIndex,
+        state: event.state,
+        outputAssetIds: [...(event.outputAssetIds ?? current?.outputAssetIds ?? [])],
+        ...(event.errorCode ? { errorCode: event.errorCode } : {}),
+        ...(event.usage ? { usage: { ...event.usage } } : {}),
+        ...(event.cost ? { cost: { ...event.cost } } : {}),
+      };
+    } else if (event.type === "node-started") {
       if (projection.status !== "running" || node.status !== "queued") {
         invalidTransition(path, "Only a queued node in a running, non-cancelled run can start.");
       }
@@ -1044,6 +1297,12 @@ function applyEvent(
       node.durableOutputAssetIds = [...event.outputAssetIds];
     } else if (event.type === "node-succeeded") {
       if (node.status !== "running") invalidTransition(path, "Only a running node can succeed.");
+      if (
+        node.batchItems &&
+        Object.values(node.batchItems).some((item) => item.state !== "succeeded")
+      ) {
+        invalidTransition(path, "A successful batch node requires every item to succeed.");
+      }
       if (node.attempts[node.attempts.length - 1]?.submission === "ambiguous") {
         invalidTransition(path, "An ambiguous submission must be reconciled before success.");
       }
@@ -1078,6 +1337,14 @@ function applyEvent(
           path,
           "An ambiguous submission must be reconciled or terminalized as ambiguous.",
         );
+      }
+      if (
+        node.batchItems &&
+        Object.values(node.batchItems).some((item) =>
+          ["queued", "submission_prepared", "submitted"].includes(item.state),
+        )
+      ) {
+        invalidTransition(path, "A failed batch node requires every item to be terminal.");
       }
       node.status = "failed";
       node.errorCode = event.errorCode;
