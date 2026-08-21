@@ -5,6 +5,7 @@ import { parseWorkflowDocument } from "./schema.js";
 import {
   CREATE_IMAGES_WORKFLOW_TEMPLATES,
   createImagesWorkflowFromTemplate,
+  filterCreateImagesWorkflowTemplates,
   type CreateImagesWorkflowTemplateId,
 } from "./templates.js";
 
@@ -52,4 +53,16 @@ test("all shipped Create Images templates are valid, deterministic, and runnable
     4,
   );
   assert.ok(variants.nodes.some((node) => node.type === "output-gallery"));
+});
+
+test("offline template search covers titles, categories, and tags", () => {
+  assert.deepEqual(
+    filterCreateImagesWorkflowTemplates({ search: "reference" }).map((item) => item.id),
+    ["reference-edit"],
+  );
+  assert.deepEqual(
+    filterCreateImagesWorkflowTemplates({ category: "Exploration" }).map((item) => item.id),
+    ["variant-set"],
+  );
+  assert.deepEqual(filterCreateImagesWorkflowTemplates({ search: "network" }), []);
 });
