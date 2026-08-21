@@ -379,7 +379,13 @@ function isProviderModelMetadata(value: unknown): value is ProviderModelMetadata
   return (
     (value.source === "lmstudio" || value.source === "ollama" || value.source === "provider") &&
     (value.name === undefined || typeof value.name === "string") &&
-    (value.type === undefined || value.type === "llm" || value.type === "embedding") &&
+    (value.type === undefined ||
+      value.type === "llm" ||
+      value.type === "embedding" ||
+      value.type === "reranker" ||
+      value.type === "image" ||
+      value.type === "audio" ||
+      value.type === "video") &&
     (value.vision === undefined || typeof value.vision === "boolean") &&
     (value.toolCall === undefined || typeof value.toolCall === "boolean") &&
     (value.reasoning === undefined || typeof value.reasoning === "boolean") &&
