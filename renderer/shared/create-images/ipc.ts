@@ -4,6 +4,10 @@ import type { WorkflowDocumentV1 } from "./schema";
 import type { CreateImagesWorkflowTemplateId } from "./templates";
 import type { CreateImagesNodeBananaImportReport } from "./node-banana-import";
 import {
+  normalizeCreateImagesWorkflowProposalRequest,
+  type CreateImagesWorkflowProposal,
+} from "./workflow-proposal";
+import {
   CREATE_IMAGES_MAX_WORKFLOW_BYTES,
   createImagesWorkflowSerializedBytes,
   parseWorkflowDocument,
@@ -19,6 +23,7 @@ const GRANT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/u;
 const SUBSCRIPTION_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/u;
 const RETENTION_TOKEN_PATTERN = /^[a-f0-9]{64}$/u;
 const CONSENT_FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/u;
+const MODEL_SELECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,191}$/u;
 
 export interface CreateImagesWorkflowSummary {
   id: string;
@@ -219,15 +224,67 @@ export type CreateImagesAssetGrantResult =
   | { status: "not-found" | "forbidden" }
   | { status: "unavailable"; message: string };
 
+export interface CreateImagesDownloadWorkflowAssetRequest {
+  workflowId: string;
+  assetId: string;
+}
+
 export interface CreateImagesDownloadRunAssetRequest {
   workflowId: string;
   runId: string;
   assetId: string;
 }
 
+export const CREATE_IMAGES_MAX_ZIP_ASSETS = 50;
+
+export interface CreateImagesDownloadRunAssetsZipRequest {
+  workflowId: string;
+  runId: string;
+  assetIds: string[];
+}
+
 export type CreateImagesDownloadRunAssetResult =
   | { status: "canceled" }
   | { status: "saved"; fileName: string }
+  | { status: "not-found" | "forbidden" }
+  | { status: "unavailable"; message: string };
+
+export const CREATE_IMAGES_MAX_RECENT_OUTPUTS = 50;
+
+export interface CreateImagesRecentOutputView {
+  assetId: string;
+  runId: string;
+  workflowId: string;
+  nodeId: string;
+  prompt: string;
+  modelLabel: string;
+  createdAt: string;
+  width: number;
+  height: number;
+  mediaType: "image/png" | "image/jpeg";
+}
+
+export interface CreateImagesListRecentOutputsRequest {
+  limit: number;
+}
+
+export type CreateImagesRecentOutputListResult =
+  | { status: "ready"; items: CreateImagesRecentOutputView[] }
+  | { status: "unavailable"; message: string };
+
+export interface CreateImagesGetPresentationRequest {
+  workflowId: string;
+}
+
+export interface CreateImagesSetAssetHiddenRequest {
+  workflowId: string;
+  runId: string;
+  assetId: string;
+  hidden: boolean;
+}
+
+export type CreateImagesPresentationResult =
+  | { status: "ready"; hiddenAssetIds: string[] }
   | { status: "not-found" | "forbidden" }
   | { status: "unavailable"; message: string };
 
@@ -301,6 +358,12 @@ export interface CreateImagesRunView {
   createdAt: string;
   updatedAt: string;
   executionMode?: "local-mock" | "gemini";
+  pause?: {
+    checkpointId: string;
+    beforeNodeId: string;
+    edgeIds: string[];
+    pausedAt: string;
+  };
   ambiguityResolution?: CreateImagesRunAmbiguityResolutionView;
   nodes: CreateImagesRunNodeView[];
 }
@@ -418,7 +481,7 @@ export type CreateImagesRunAmbiguityResolutionResult =
   | { status: "unavailable"; message: string; retryAfterMs?: number };
 
 export type CreateImagesRunMutationResult =
-  | { status: "started" | "stopping"; run: CreateImagesRunView }
+  | { status: "started" | "resumed" | "stopping"; run: CreateImagesRunView }
   | { status: "already-running"; run: CreateImagesRunView }
   | { status: "conflict"; expectedRevision: number; currentRevision: number }
   | { status: "invalid" | "not-found" | "unavailable"; message: string };
@@ -641,6 +704,31 @@ export interface CreateImagesStopRunRequest {
   runId: string;
 }
 
+export interface CreateImagesResumeRunRequest {
+  workflowId: string;
+  runId: string;
+  expectedJournalRevision: number;
+}
+
+export interface CreateImagesProposeWorkflowRequest {
+  workflowId: string;
+  expectedRevision: number;
+  workflow: WorkflowDocumentV1;
+  providerId: string;
+  model: string;
+  request: string;
+}
+
+export type CreateImagesProposeWorkflowResult =
+  | {
+      status: "ready";
+      proposal: CreateImagesWorkflowProposal;
+      providerId: string;
+      model: string;
+    }
+  | { status: "conflict"; currentRevision: number }
+  | { status: "unavailable"; message: string };
+
 export interface CreateImagesListRunsRequest {
   workflowId: string;
 }
@@ -730,6 +818,10 @@ function title(value: unknown): string | undefined {
 
 function revision(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : undefined;
+}
+
+function modelSelectionId(value: unknown): string | undefined {
+  return typeof value === "string" && MODEL_SELECTION_ID_PATTERN.test(value) ? value : undefined;
 }
 
 function runScope(value: unknown): WorkflowRunScope | undefined {
@@ -933,6 +1025,78 @@ export function parseCreateImagesGrantAssetRequest(value: unknown): CreateImages
   return { workflowId, assetId };
 }
 
+export function parseCreateImagesDownloadWorkflowAssetRequest(
+  value: unknown,
+): CreateImagesDownloadWorkflowAssetRequest {
+  if (!isRecord(value) || !exactKeys(value, ["workflowId", "assetId"])) invalidRequest();
+  const workflowId = opaqueId(value.workflowId);
+  const assetId =
+    typeof value.assetId === "string" && ASSET_ID_PATTERN.test(value.assetId)
+      ? value.assetId
+      : undefined;
+  if (!workflowId || !assetId) invalidRequest();
+  return { workflowId, assetId };
+}
+
+export function parseCreateImagesDownloadRunAssetsZipRequest(
+  value: unknown,
+): CreateImagesDownloadRunAssetsZipRequest {
+  if (!isRecord(value) || !exactKeys(value, ["workflowId", "runId", "assetIds"])) invalidRequest();
+  const workflowId = opaqueId(value.workflowId);
+  const runId = opaqueId(value.runId);
+  if (
+    !workflowId ||
+    !runId ||
+    !Array.isArray(value.assetIds) ||
+    value.assetIds.length < 1 ||
+    value.assetIds.length > CREATE_IMAGES_MAX_ZIP_ASSETS ||
+    !value.assetIds.every((assetId) => typeof assetId === "string" && ASSET_ID_PATTERN.test(assetId)) ||
+    new Set(value.assetIds).size !== value.assetIds.length
+  ) {
+    invalidRequest();
+  }
+  return { workflowId, runId, assetIds: [...value.assetIds] };
+}
+
+export function parseCreateImagesListRecentOutputsRequest(
+  value: unknown,
+): CreateImagesListRecentOutputsRequest {
+  if (!isRecord(value) || !exactKeys(value, ["limit"])) invalidRequest();
+  if (
+    !Number.isSafeInteger(value.limit) ||
+    (value.limit as number) < 1 ||
+    (value.limit as number) > CREATE_IMAGES_MAX_RECENT_OUTPUTS
+  ) {
+    invalidRequest();
+  }
+  return { limit: value.limit as number };
+}
+
+export function parseCreateImagesGetPresentationRequest(
+  value: unknown,
+): CreateImagesGetPresentationRequest {
+  if (!isRecord(value) || !exactKeys(value, ["workflowId"])) invalidRequest();
+  const workflowId = opaqueId(value.workflowId);
+  if (!workflowId) invalidRequest();
+  return { workflowId };
+}
+
+export function parseCreateImagesSetAssetHiddenRequest(
+  value: unknown,
+): CreateImagesSetAssetHiddenRequest {
+  if (!isRecord(value) || !exactKeys(value, ["workflowId", "runId", "assetId", "hidden"])) {
+    invalidRequest();
+  }
+  const workflowId = opaqueId(value.workflowId);
+  const runId = opaqueId(value.runId);
+  const assetId =
+    typeof value.assetId === "string" && ASSET_ID_PATTERN.test(value.assetId)
+      ? value.assetId
+      : undefined;
+  if (!workflowId || !runId || !assetId || typeof value.hidden !== "boolean") invalidRequest();
+  return { workflowId, runId, assetId, hidden: value.hidden };
+}
+
 export function parseCreateImagesDownloadRunAssetRequest(
   value: unknown,
 ): CreateImagesDownloadRunAssetRequest {
@@ -1086,6 +1250,53 @@ export function parseCreateImagesStopRunRequest(value: unknown): CreateImagesSto
   const runId = opaqueId(value.runId);
   if (!workflowId || !runId) invalidRequest();
   return { workflowId, runId };
+}
+
+export function parseCreateImagesResumeRunRequest(value: unknown): CreateImagesResumeRunRequest {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["workflowId", "runId", "expectedJournalRevision"])
+  ) {
+    invalidRequest();
+  }
+  const workflowId = opaqueId(value.workflowId);
+  const runId = opaqueId(value.runId);
+  const expectedJournalRevision = revision(value.expectedJournalRevision);
+  if (!workflowId || !runId || !expectedJournalRevision) invalidRequest();
+  return { workflowId, runId, expectedJournalRevision };
+}
+
+export function parseCreateImagesProposeWorkflowRequest(
+  value: unknown,
+): CreateImagesProposeWorkflowRequest {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ["workflowId", "expectedRevision", "workflow", "providerId", "model", "request"])
+  ) {
+    invalidRequest();
+  }
+  const workflowId = opaqueId(value.workflowId);
+  const expectedRevision = revision(value.expectedRevision);
+  const providerId = modelSelectionId(value.providerId);
+  const model = modelSelectionId(value.model);
+  const request = normalizeCreateImagesWorkflowProposalRequest(value.request);
+  const serializedBytes = createImagesWorkflowSerializedBytes(value.workflow);
+  const workflow = parseWorkflowDocument(value.workflow);
+  if (
+    !workflowId ||
+    !expectedRevision ||
+    !providerId ||
+    !model ||
+    !request ||
+    serializedBytes === undefined ||
+    serializedBytes > CREATE_IMAGES_MAX_IPC_DOCUMENT_BYTES ||
+    !workflow.success ||
+    workflow.value.id !== workflowId ||
+    workflow.value.revision !== expectedRevision
+  ) {
+    invalidRequest();
+  }
+  return { workflowId, expectedRevision, workflow: workflow.value, providerId, model, request };
 }
 
 export function parseCreateImagesGetRunRequest(value: unknown): CreateImagesGetRunRequest {
@@ -1267,7 +1478,23 @@ export function parseCreateImagesGrantRunAssetRequest(
   return { workflowId, runId, assetId };
 }
 
-export function createImagesAssetGrantUrl(token: string): string {
+export function createImagesAssetGrantUrl(
+  token: string,
+  rendition: "preview" | "preview-128" | "preview-256" | "preview-512" | "original" = "preview",
+): string {
   if (!GRANT_TOKEN_PATTERN.test(token)) throw new Error("Invalid Create Images asset grant.");
-  return `${CREATE_IMAGES_ASSET_PROTOCOL}//asset/${token}`;
+  return `${CREATE_IMAGES_ASSET_PROTOCOL}//asset/${token}${rendition === "preview" ? "" : `/${rendition}`}`;
+}
+
+export function createImagesAdaptiveAssetGrantUrl(token: string, renderedPixels: number): string {
+  if (!Number.isFinite(renderedPixels) || renderedPixels < 0) {
+    throw new Error("Invalid Create Images rendition size.");
+  }
+  const rendition =
+    renderedPixels <= 128
+      ? "preview-128"
+      : renderedPixels <= 256
+        ? "preview-256"
+        : "preview-512";
+  return createImagesAssetGrantUrl(token, rendition);
 }
