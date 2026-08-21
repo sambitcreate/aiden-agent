@@ -1357,7 +1357,7 @@ if (!ownsSingleInstanceLock) {
       if (createImagesEnabled()) {
         const images = createImagesService();
         await installCreateImagesAssetProtocol(images.grants, {
-          response: (assetId) => images.assetResponse(assetId),
+          response: (assetId, rendition) => images.assetResponse(assetId, rendition),
         });
       }
       if (runtimeProfile.id === "development" && process.platform === "darwin") {
