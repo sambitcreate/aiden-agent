@@ -1,4 +1,8 @@
-export const CREATE_IMAGES_SCHEMA_VERSION = 1 as const;
+export const CREATE_IMAGES_SCHEMA_VERSION = 5 as const;
+export const CREATE_IMAGES_LEGACY_SCHEMA_VERSION = 1 as const;
+export const CREATE_IMAGES_PRESENTATION_SCHEMA_VERSION = 2 as const;
+export const CREATE_IMAGES_ANNOTATION_SCHEMA_VERSION = 3 as const;
+export const CREATE_IMAGES_POWER_SCHEMA_VERSION = 4 as const;
 export const CREATE_IMAGES_MAX_NODES = 500;
 export const CREATE_IMAGES_MAX_EDGES = 2_000;
 export const CREATE_IMAGES_MAX_ASSET_REFS = 2_000;
@@ -17,9 +21,13 @@ export const CREATE_IMAGES_POSITION_LIMIT = 1_000_000;
 export const CREATE_IMAGES_NODE_TYPES = [
   "image-input",
   "prompt",
+  "prompt-list",
   "generate-image",
   "output",
   "output-gallery",
+  "image-compare",
+  "annotation",
+  "group",
 ] as const;
 
 export type CreateImagesNodeType = (typeof CREATE_IMAGES_NODE_TYPES)[number];
@@ -36,10 +44,74 @@ export type CreateImagesAspectRatio =
   | "21:9";
 export type CreateImagesImageSize = "1K" | "2K" | "4K";
 export type CreateImagesOutputMime = "image/png" | "image/jpeg";
+export const CREATE_IMAGES_MAX_ANNOTATION_SHAPES = 256;
+export const CREATE_IMAGES_MAX_ANNOTATION_POINTS = 2_048;
+export const CREATE_IMAGES_ANNOTATION_COLORS = [
+  "accent",
+  "red",
+  "green",
+  "yellow",
+  "white",
+  "black",
+] as const;
+export type CreateImagesAnnotationColor = (typeof CREATE_IMAGES_ANNOTATION_COLORS)[number];
+export const CREATE_IMAGES_MAX_PROMPT_VARIABLES = 32;
+export const CREATE_IMAGES_PROMPT_VARIABLE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,31}$/u;
+
+export interface CreateImagesPromptVariable {
+  id: string;
+  name: string;
+  required: boolean;
+}
+
+interface CreateImagesAnnotationShapeBase {
+  id: string;
+  x: number;
+  y: number;
+  stroke: CreateImagesAnnotationColor;
+  strokeWidth: number;
+}
+
+export type CreateImagesAnnotationShape =
+  | (CreateImagesAnnotationShapeBase & {
+      type: "rectangle";
+      width: number;
+      height: number;
+      fill?: CreateImagesAnnotationColor;
+    })
+  | (CreateImagesAnnotationShapeBase & {
+      type: "ellipse";
+      width: number;
+      height: number;
+      fill?: CreateImagesAnnotationColor;
+    })
+  | (CreateImagesAnnotationShapeBase & {
+      type: "arrow";
+      points: [number, number, number, number];
+    })
+  | (CreateImagesAnnotationShapeBase & {
+      type: "freehand";
+      points: number[];
+    })
+  | (CreateImagesAnnotationShapeBase & {
+      type: "text";
+      text: string;
+      fontSize: number;
+    });
 
 export interface CreateImagesPosition {
   x: number;
   y: number;
+}
+
+export interface CreateImagesNodeDimensions {
+  width: number;
+  height: number;
+}
+
+export interface CreateImagesNodeComment {
+  text: string;
+  unread?: boolean;
 }
 
 interface CreateImagesNodeBase<TType extends CreateImagesNodeType, TData> {
@@ -47,13 +119,23 @@ interface CreateImagesNodeBase<TType extends CreateImagesNodeType, TData> {
   type: TType;
   position: CreateImagesPosition;
   data: TData;
+  title?: string;
+  dimensions?: CreateImagesNodeDimensions;
+  comment?: CreateImagesNodeComment;
 }
 
 export type ImageInputNodeV1 = CreateImagesNodeBase<
   "image-input",
   { assetId?: string; label?: string }
 >;
-export type PromptNodeV1 = CreateImagesNodeBase<"prompt", { text: string }>;
+export type PromptNodeV1 = CreateImagesNodeBase<
+  "prompt",
+  { text: string; variables?: CreateImagesPromptVariable[] }
+>;
+export type PromptListNodeV5 = CreateImagesNodeBase<
+  "prompt-list",
+  { source: string; format: "lines" | "json" }
+>;
 export type GenerateImageNodeV1 = CreateImagesNodeBase<
   "generate-image",
   {
@@ -67,13 +149,30 @@ export type GenerateImageNodeV1 = CreateImagesNodeBase<
 >;
 export type OutputNodeV1 = CreateImagesNodeBase<"output", { label?: string }>;
 export type OutputGalleryNodeV1 = CreateImagesNodeBase<"output-gallery", { label?: string }>;
+export type ImageCompareNodeV2 = CreateImagesNodeBase<"image-compare", { divider: number }>;
+export type AnnotationNodeV3 = CreateImagesNodeBase<
+  "annotation",
+  { shapes: CreateImagesAnnotationShape[] }
+>;
+export type GroupNodeV4 = CreateImagesNodeBase<
+  "group",
+  {
+    memberNodeIds: string[];
+    color: "blue" | "green" | "orange" | "purple" | "gray";
+    locked: boolean;
+  }
+>;
 
 export type WorkflowNodeV1 =
   | ImageInputNodeV1
   | PromptNodeV1
+  | PromptListNodeV5
   | GenerateImageNodeV1
   | OutputNodeV1
-  | OutputGalleryNodeV1;
+  | OutputGalleryNodeV1
+  | ImageCompareNodeV2
+  | AnnotationNodeV3
+  | GroupNodeV4;
 
 export interface WorkflowEdgeV1 {
   id: string;
@@ -81,10 +180,16 @@ export interface WorkflowEdgeV1 {
   sourcePort: string;
   target: string;
   targetPort: string;
+  breakpoint?: boolean;
 }
 
 export interface WorkflowDocumentV1 {
-  schemaVersion: typeof CREATE_IMAGES_SCHEMA_VERSION;
+  schemaVersion:
+    | typeof CREATE_IMAGES_LEGACY_SCHEMA_VERSION
+    | typeof CREATE_IMAGES_PRESENTATION_SCHEMA_VERSION
+    | typeof CREATE_IMAGES_ANNOTATION_SCHEMA_VERSION
+    | typeof CREATE_IMAGES_POWER_SCHEMA_VERSION
+    | typeof CREATE_IMAGES_SCHEMA_VERSION;
   id: string;
   title: string;
   revision: number;
@@ -291,6 +396,51 @@ function positionAt(
   return x === undefined || y === undefined ? undefined : { x, y };
 }
 
+function nodePresentationAt(
+  record: Record<string, unknown>,
+  path: string,
+  issues: WorkflowParseIssue[],
+): Pick<WorkflowNodeV1, "title" | "dimensions" | "comment"> {
+  const title = stringAt(record.title, `${path}.title`, issues, {
+    maxLength: 120,
+    optional: true,
+  });
+  let dimensions: CreateImagesNodeDimensions | undefined;
+  if (record.dimensions !== undefined) {
+    const value = recordAt(record.dimensions, `${path}.dimensions`, issues);
+    if (value) {
+      rejectUnknownFields(value, ["width", "height"], `${path}.dimensions`, issues);
+      const width = finiteNumberAt(value.width, `${path}.dimensions.width`, issues, 180, 1_200);
+      const height = finiteNumberAt(value.height, `${path}.dimensions.height`, issues, 120, 1_600);
+      if (width !== undefined && height !== undefined) dimensions = { width, height };
+    }
+  }
+  let comment: CreateImagesNodeComment | undefined;
+  if (record.comment !== undefined) {
+    const value = recordAt(record.comment, `${path}.comment`, issues);
+    if (value) {
+      rejectUnknownFields(value, ["text", "unread"], `${path}.comment`, issues);
+      const text = stringAt(value.text, `${path}.comment.text`, issues, { maxLength: 2_000 });
+      const unread = value.unread;
+      if (unread !== undefined && typeof unread !== "boolean") {
+        issues.push({
+          path: `${path}.comment.unread`,
+          code: "invalid_type",
+          message: "Expected a boolean.",
+        });
+      }
+      if (text && (unread === undefined || typeof unread === "boolean")) {
+        comment = { text, ...(unread === true ? { unread: true } : {}) };
+      }
+    }
+  }
+  return {
+    ...(title ? { title } : {}),
+    ...(dimensions ? { dimensions } : {}),
+    ...(comment ? { comment } : {}),
+  };
+}
+
 const ASPECT_RATIOS: readonly CreateImagesAspectRatio[] = [
   "1:1",
   "2:3",
@@ -306,6 +456,130 @@ const ASPECT_RATIOS: readonly CreateImagesAspectRatio[] = [
 const IMAGE_SIZES: readonly CreateImagesImageSize[] = ["1K", "2K", "4K"];
 const OUTPUT_MIMES: readonly CreateImagesOutputMime[] = ["image/png", "image/jpeg"];
 
+function annotationShapeAt(
+  value: unknown,
+  path: string,
+  issues: WorkflowParseIssue[],
+): CreateImagesAnnotationShape | undefined {
+  const record = recordAt(value, path, issues);
+  if (!record) return undefined;
+  const type = enumAt(
+    record.type,
+    ["rectangle", "ellipse", "arrow", "freehand", "text"] as const,
+    `${path}.type`,
+    issues,
+  );
+  const common = ["id", "type", "x", "y", "stroke", "strokeWidth"];
+  const allowed =
+    type === "rectangle" || type === "ellipse"
+      ? [...common, "width", "height", "fill"]
+      : type === "arrow" || type === "freehand"
+        ? [...common, "points"]
+        : [...common, "text", "fontSize"];
+  rejectUnknownFields(record, allowed, path, issues);
+  const id = stringAt(record.id, `${path}.id`, issues, {
+    maxLength: 128,
+    pattern: OPAQUE_ID_PATTERN,
+  });
+  const x = finiteNumberAt(record.x, `${path}.x`, issues, -1, 1);
+  const y = finiteNumberAt(record.y, `${path}.y`, issues, -1, 1);
+  const stroke = enumAt(
+    record.stroke,
+    CREATE_IMAGES_ANNOTATION_COLORS,
+    `${path}.stroke`,
+    issues,
+  );
+  const strokeWidth = finiteNumberAt(record.strokeWidth, `${path}.strokeWidth`, issues, 0.5, 64);
+  if (!type || !id || x === undefined || y === undefined || !stroke || strokeWidth === undefined) {
+    return undefined;
+  }
+  if (type === "rectangle" || type === "ellipse") {
+    const width = finiteNumberAt(record.width, `${path}.width`, issues, 0.001, 2);
+    const height = finiteNumberAt(record.height, `${path}.height`, issues, 0.001, 2);
+    const fill = enumAt(
+      record.fill,
+      CREATE_IMAGES_ANNOTATION_COLORS,
+      `${path}.fill`,
+      issues,
+      true,
+    );
+    if (
+      width === undefined ||
+      height === undefined ||
+      (record.fill !== undefined && fill === undefined)
+    ) {
+      return undefined;
+    }
+    return {
+      id,
+      type,
+      x,
+      y,
+      width,
+      height,
+      stroke,
+      strokeWidth,
+      ...(fill ? { fill } : {}),
+    };
+  }
+  if (type === "arrow" || type === "freehand") {
+    const points = Array.isArray(record.points) ? record.points : undefined;
+    const maximum = type === "arrow" ? 4 : CREATE_IMAGES_MAX_ANNOTATION_POINTS * 2;
+    if (
+      !points ||
+      points.length < 4 ||
+      points.length > maximum ||
+      points.length % 2 !== 0 ||
+      (type === "arrow" && points.length !== 4)
+    ) {
+      issues.push({
+        path: `${path}.points`,
+        code: "invalid_value",
+        message: `Expected an even point list between 4 and ${maximum} values.`,
+      });
+      return undefined;
+    }
+    const parsed: number[] = [];
+    for (let index = 0; index < points.length; index += 1) {
+      const point = finiteNumberAt(points[index], `${path}.points[${index}]`, issues, -1, 2);
+      if (point === undefined) return undefined;
+      parsed.push(point);
+    }
+    return type === "arrow"
+      ? { id, type, x, y, points: parsed as [number, number, number, number], stroke, strokeWidth }
+      : { id, type, x, y, points: parsed, stroke, strokeWidth };
+  }
+  const text = stringAt(record.text, `${path}.text`, issues, { maxLength: 1_000 });
+  const fontSize = finiteNumberAt(record.fontSize, `${path}.fontSize`, issues, 8, 256);
+  return text && fontSize !== undefined
+    ? { id, type, x, y, text, fontSize, stroke, strokeWidth }
+    : undefined;
+}
+
+function promptVariableAt(
+  value: unknown,
+  path: string,
+  issues: WorkflowParseIssue[],
+): CreateImagesPromptVariable | undefined {
+  const record = recordAt(value, path, issues);
+  if (!record) return undefined;
+  rejectUnknownFields(record, ["id", "name", "required"], path, issues);
+  const id = stringAt(record.id, `${path}.id`, issues, {
+    maxLength: 128,
+    pattern: OPAQUE_ID_PATTERN,
+  });
+  const name = stringAt(record.name, `${path}.name`, issues, {
+    maxLength: 32,
+    pattern: CREATE_IMAGES_PROMPT_VARIABLE_NAME,
+  });
+  if (typeof record.required !== "boolean") {
+    issues.push({ path: `${path}.required`, code: "invalid_type", message: "Expected a boolean." });
+  }
+  return id && name && typeof record.required === "boolean"
+    ? { id, name, required: record.required }
+    : undefined;
+}
+
 function nodeAt(
   value: unknown,
   index: number,
@@ -314,7 +588,12 @@ function nodeAt(
   const path = `nodes[${index}]`;
   const record = recordAt(value, path, issues);
   if (!record) return undefined;
-  rejectUnknownFields(record, ["id", "type", "position", "data"], path, issues);
+  rejectUnknownFields(
+    record,
+    ["id", "type", "position", "data", "title", "dimensions", "comment"],
+    path,
+    issues,
+  );
   const id = stringAt(record.id, `${path}.id`, issues, {
     maxLength: 128,
     pattern: OPAQUE_ID_PATTERN,
@@ -323,6 +602,7 @@ function nodeAt(
   const position = positionAt(record.position, `${path}.position`, issues);
   const data = recordAt(record.data, `${path}.data`, issues);
   if (!id || !type || !position || !data) return undefined;
+  const presentation = nodePresentationAt(record, path, issues);
 
   if (type === "image-input") {
     rejectUnknownFields(data, ["assetId", "label"], `${path}.data`, issues);
@@ -337,12 +617,13 @@ function nodeAt(
       id,
       type,
       position,
+      ...presentation,
       data: { ...(assetId ? { assetId } : {}), ...(label !== undefined ? { label } : {}) },
     };
   }
 
   if (type === "prompt") {
-    rejectUnknownFields(data, ["text"], `${path}.data`, issues);
+    rejectUnknownFields(data, ["text", "variables"], `${path}.data`, issues);
     if (typeof data.text !== "string") {
       issues.push({
         path: `${path}.data.text`,
@@ -359,7 +640,70 @@ function nodeAt(
       });
       return undefined;
     }
-    return { id, type, position, data: { text: data.text } };
+    let variables: CreateImagesPromptVariable[] | undefined;
+    if (data.variables !== undefined) {
+      if (
+        !Array.isArray(data.variables) ||
+        data.variables.length > CREATE_IMAGES_MAX_PROMPT_VARIABLES
+      ) {
+        issues.push({
+          path: `${path}.data.variables`,
+          code: Array.isArray(data.variables) ? "too_large" : "invalid_type",
+          message: `Prompts are limited to ${CREATE_IMAGES_MAX_PROMPT_VARIABLES} variables.`,
+        });
+        return undefined;
+      }
+      variables = [];
+      for (let variableIndex = 0; variableIndex < data.variables.length; variableIndex += 1) {
+        const variable = promptVariableAt(
+          data.variables[variableIndex],
+          `${path}.data.variables[${variableIndex}]`,
+          issues,
+        );
+        if (variable) variables.push(variable);
+      }
+      for (const duplicate of duplicates(variables.map((variable) => variable.id))) {
+        issues.push({
+          path: `${path}.data.variables`,
+          code: "duplicate",
+          message: `Duplicate prompt variable ID "${duplicate}".`,
+        });
+      }
+      for (const duplicate of duplicates(variables.map((variable) => variable.name))) {
+        issues.push({
+          path: `${path}.data.variables`,
+          code: "duplicate",
+          message: `Duplicate prompt variable name "${duplicate}".`,
+        });
+      }
+    }
+    return {
+      id,
+      type,
+      position,
+      ...presentation,
+      data: { text: data.text, ...(variables ? { variables } : {}) },
+    };
+  }
+
+  if (type === "prompt-list") {
+    rejectUnknownFields(data, ["source", "format"], `${path}.data`, issues);
+    if (typeof data.source !== "string") {
+      issues.push({ path: `${path}.data.source`, code: "invalid_type", message: "Expected a string." });
+      return undefined;
+    }
+    if (data.source.length > CREATE_IMAGES_MAX_PROMPT_LENGTH) {
+      issues.push({
+        path: `${path}.data.source`,
+        code: "too_large",
+        message: `Prompt lists are limited to ${CREATE_IMAGES_MAX_PROMPT_LENGTH} characters.`,
+      });
+      return undefined;
+    }
+    const format = enumAt(data.format, ["lines", "json"] as const, `${path}.data.format`, issues);
+    return format
+      ? { id, type, position, ...presentation, data: { source: data.source, format } }
+      : undefined;
   }
 
   if (type === "generate-image") {
@@ -399,6 +743,7 @@ function nodeAt(
       id,
       type,
       position,
+      ...presentation,
       data: {
         ...(providerId ? { providerId } : {}),
         ...(modelId ? { modelId } : {}),
@@ -410,12 +755,99 @@ function nodeAt(
     };
   }
 
+  if (type === "image-compare") {
+    rejectUnknownFields(data, ["divider"], `${path}.data`, issues);
+    const divider = finiteNumberAt(data.divider, `${path}.data.divider`, issues, 0, 1);
+    return divider === undefined
+      ? undefined
+      : { id, type, position, ...presentation, data: { divider } };
+  }
+
+  if (type === "annotation") {
+    rejectUnknownFields(data, ["shapes"], `${path}.data`, issues);
+    if (!Array.isArray(data.shapes) || data.shapes.length > CREATE_IMAGES_MAX_ANNOTATION_SHAPES) {
+      issues.push({
+        path: `${path}.data.shapes`,
+        code: Array.isArray(data.shapes) ? "too_large" : "invalid_type",
+        message: `Annotations are limited to ${CREATE_IMAGES_MAX_ANNOTATION_SHAPES} shapes.`,
+      });
+      return undefined;
+    }
+    const shapes: CreateImagesAnnotationShape[] = [];
+    for (let shapeIndex = 0; shapeIndex < data.shapes.length; shapeIndex += 1) {
+      if (!hasOwn(data.shapes, shapeIndex)) {
+        issues.push({
+          path: `${path}.data.shapes[${shapeIndex}]`,
+          code: "invalid_type",
+          message: "Sparse shape arrays are not supported.",
+        });
+        continue;
+      }
+      const shape = annotationShapeAt(
+        data.shapes[shapeIndex],
+        `${path}.data.shapes[${shapeIndex}]`,
+        issues,
+      );
+      if (shape) shapes.push(shape);
+    }
+    for (const duplicate of duplicates(shapes.map((shape) => shape.id))) {
+      issues.push({
+        path: `${path}.data.shapes`,
+        code: "duplicate",
+        message: `Duplicate annotation shape ID "${duplicate}".`,
+      });
+    }
+    return { id, type, position, ...presentation, data: { shapes } };
+  }
+
+  if (type === "group") {
+    rejectUnknownFields(data, ["memberNodeIds", "color", "locked"], `${path}.data`, issues);
+    const memberValues = Array.isArray(data.memberNodeIds) ? data.memberNodeIds : undefined;
+    if (!memberValues || memberValues.length > CREATE_IMAGES_MAX_NODES) {
+      issues.push({
+        path: `${path}.data.memberNodeIds`,
+        code: memberValues ? "too_large" : "invalid_type",
+        message: "Group members must be a bounded node ID list.",
+      });
+      return undefined;
+    }
+    const memberNodeIds: string[] = [];
+    for (let memberIndex = 0; memberIndex < memberValues.length; memberIndex += 1) {
+      const memberId = stringAt(
+        memberValues[memberIndex],
+        `${path}.data.memberNodeIds[${memberIndex}]`,
+        issues,
+        { maxLength: 128, pattern: OPAQUE_ID_PATTERN },
+      );
+      if (memberId) memberNodeIds.push(memberId);
+    }
+    if (new Set(memberNodeIds).size !== memberNodeIds.length || memberNodeIds.includes(id)) {
+      issues.push({
+        path: `${path}.data.memberNodeIds`,
+        code: "duplicate",
+        message: "Group member IDs must be unique and cannot include the group itself.",
+      });
+    }
+    const color = enumAt(
+      data.color,
+      ["blue", "green", "orange", "purple", "gray"] as const,
+      `${path}.data.color`,
+      issues,
+    );
+    if (typeof data.locked !== "boolean") {
+      issues.push({ path: `${path}.data.locked`, code: "invalid_type", message: "Expected a boolean." });
+    }
+    return color && typeof data.locked === "boolean"
+      ? { id, type, position, ...presentation, data: { memberNodeIds, color, locked: data.locked } }
+      : undefined;
+  }
+
   rejectUnknownFields(data, ["label"], `${path}.data`, issues);
   const label = optionalLabelAt(data.label, `${path}.data.label`, issues);
   const outputData = label === undefined ? {} : { label };
   return type === "output"
-    ? { id, type, position, data: outputData }
-    : { id, type, position, data: outputData };
+    ? { id, type, position, ...presentation, data: outputData }
+    : { id, type, position, ...presentation, data: outputData };
 }
 
 function edgeAt(
@@ -426,7 +858,12 @@ function edgeAt(
   const path = `edges[${index}]`;
   const record = recordAt(value, path, issues);
   if (!record) return undefined;
-  rejectUnknownFields(record, ["id", "source", "sourcePort", "target", "targetPort"], path, issues);
+  rejectUnknownFields(
+    record,
+    ["id", "source", "sourcePort", "target", "targetPort", "breakpoint"],
+    path,
+    issues,
+  );
   const readId = (field: string): string | undefined =>
     stringAt(record[field], `${path}.${field}`, issues, {
       maxLength: 128,
@@ -437,8 +874,19 @@ function edgeAt(
   const sourcePort = readId("sourcePort");
   const target = readId("target");
   const targetPort = readId("targetPort");
+  const breakpoint = record.breakpoint;
+  if (breakpoint !== undefined && typeof breakpoint !== "boolean") {
+    issues.push({ path: `${path}.breakpoint`, code: "invalid_type", message: "Expected a boolean." });
+  }
   return id && source && sourcePort && target && targetPort
-    ? { id, source, sourcePort, target, targetPort }
+    ? {
+        id,
+        source,
+        sourcePort,
+        target,
+        targetPort,
+        ...(breakpoint === true ? { breakpoint: true } : {}),
+      }
     : undefined;
 }
 
@@ -454,8 +902,8 @@ function duplicates(values: readonly string[]): Set<string> {
 
 export function parseWorkflowDocument(value: unknown): WorkflowParseResult {
   const issues: WorkflowParseIssue[] = [];
-  const record = recordAt(value, "$", issues);
-  if (!record) return { success: false, issues };
+  const sourceRecord = recordAt(value, "$", issues);
+  if (!sourceRecord) return { success: false, issues };
   const serializedBytes = createImagesWorkflowSerializedBytes(value);
   if (serializedBytes === undefined || serializedBytes > CREATE_IMAGES_MAX_WORKFLOW_BYTES) {
     issues.push({
@@ -465,6 +913,13 @@ export function parseWorkflowDocument(value: unknown): WorkflowParseResult {
     });
     return { success: false, issues };
   }
+  const record =
+    sourceRecord.schemaVersion === CREATE_IMAGES_LEGACY_SCHEMA_VERSION ||
+    sourceRecord.schemaVersion === CREATE_IMAGES_PRESENTATION_SCHEMA_VERSION ||
+    sourceRecord.schemaVersion === CREATE_IMAGES_ANNOTATION_SCHEMA_VERSION ||
+    sourceRecord.schemaVersion === CREATE_IMAGES_POWER_SCHEMA_VERSION
+      ? { ...sourceRecord, schemaVersion: CREATE_IMAGES_SCHEMA_VERSION }
+      : sourceRecord;
   rejectUnknownFields(
     record,
     [
@@ -648,6 +1103,20 @@ export function parseWorkflowDocument(value: unknown): WorkflowParseResult {
       code: "duplicate",
       message: `Duplicate node ID "${duplicate}".`,
     });
+  }
+  const workflowNodeIds = new Set(nodes.map((node) => node.id));
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (node?.type !== "group") continue;
+    for (const memberId of node.data.memberNodeIds) {
+      if (!workflowNodeIds.has(memberId)) {
+        issues.push({
+          path: `$.nodes[${index}].data.memberNodeIds`,
+          code: "invalid_value",
+          message: `Group member "${memberId}" does not exist.`,
+        });
+      }
+    }
   }
   for (const duplicate of duplicates(edges.map((edge) => edge.id))) {
     issues.push({
