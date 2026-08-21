@@ -32,9 +32,12 @@ visitors and installed apps can download GitHub Release assets without a GitHub 
   Homebrew downloads; the ZIP and YAML are the updater payload.
 - Release-related pull requests run the separate release-consumer contract workflow. It verifies
   the versioned DMG name against `sambitcreate/homebrew-tap`, verifies the deployed website points
-  at the stable alias, and confirms that alias resolves to a non-empty public DMG. The release job
-  repeats this check before spending signing/notarization resources. If the artifact contract must
-  change, update and deploy the consumers first, then change Aiden's release configuration.
+  at the stable alias, confirms that alias resolves to a non-empty public DMG, and requires the
+  historical `download.chatwithaiden.com/Aiden-Agent-Beta.dmg` URL to return a non-cacheable HTTP
+  307 redirect to the same alias. The redirect Worker is owned by `sambitcreate/aiden-website`; its
+  underlying R2 object is rollback fallback only. The release job repeats this check before spending
+  signing/notarization resources. If the artifact contract must change, update and deploy the
+  consumers first, then change Aiden's release configuration.
 - Aiden checks shortly after launch and every six hours. It owns and observes one full-package
   download of a newer signed update rather than using differential updates because the release
   set does not publish separate blockmaps. Settings → About and the chat sidebar expose bounded progress, failure,

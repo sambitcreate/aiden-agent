@@ -6,6 +6,7 @@ import {
   checkReleaseConsumers,
   RELEASE_CONSUMER_URLS,
   verifyHomebrewReleaseContract,
+  verifyLegacyWebsiteDmgContract,
   verifyLocalReleaseContract,
   verifyWebsiteReleaseContract,
   WEBSITE_DMG_URL,
@@ -22,6 +23,14 @@ test("release consumer contract accepts the coordinated stable and versioned DMG
   assert.doesNotThrow(() => verifyLocalReleaseContract(packageJson));
   assert.doesNotThrow(() => verifyHomebrewReleaseContract({ cask, updater }));
   assert.doesNotThrow(() => verifyWebsiteReleaseContract(website));
+  assert.doesNotThrow(() =>
+    verifyLegacyWebsiteDmgContract(
+      new Response(null, {
+        status: 307,
+        headers: { "cache-control": "NO-STORE, max-age=0", location: WEBSITE_DMG_URL },
+      }),
+    ),
+  );
 });
 
 test("release consumer contract fails closed when any consumer drifts", () => {
@@ -38,6 +47,20 @@ test("release consumer contract fails closed when any consumer drifts", () => {
     /Homebrew updater/u,
   );
   assert.throws(() => verifyWebsiteReleaseContract("old website"), /production website/u);
+  assert.throws(
+    () =>
+      verifyLegacyWebsiteDmgContract(
+        new Response(null, { status: 307, headers: { location: "https://old.example/dmg" } }),
+      ),
+    /legacy website DMG URL/u,
+  );
+  assert.throws(
+    () =>
+      verifyLegacyWebsiteDmgContract(
+        new Response(null, { status: 307, headers: { location: WEBSITE_DMG_URL } }),
+      ),
+    /must not be cached/u,
+  );
 });
 
 test("live consumer check validates remote text and the stable DMG response", async () => {
@@ -52,6 +75,13 @@ test("live consumer check validates remote text and the stable DMG response", as
           "content-length": "42",
           "content-type": "application/x-apple-diskimage",
         },
+      }),
+    ],
+    [
+      RELEASE_CONSUMER_URLS.legacyWebsiteDmg,
+      new Response(null, {
+        status: 307,
+        headers: { "cache-control": "no-store", location: WEBSITE_DMG_URL },
       }),
     ],
   ]);
