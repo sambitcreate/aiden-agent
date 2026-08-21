@@ -384,10 +384,7 @@ test("replacement chat reads mark bounded wait timeouts for retained renderer re
     "await llmClient.waitForChatIdle(chatId)",
     inactiveCheck,
   );
-  const read = handler.indexOf(
-    "const chat = await chatStore.get(chatId)",
-    idleWait,
-  );
+  const read = handler.indexOf("chatStore.get(chatId)", idleWait);
   const response = handler.indexOf(
     "reconciliation: reconciliationRequired",
     read,

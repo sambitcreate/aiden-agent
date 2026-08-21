@@ -53,6 +53,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "app:navigate",
   "app:update-state",
   "chat:approval",
+  "chat:artifact",
   "chat:delta",
   "chat:done",
   "chat:error",

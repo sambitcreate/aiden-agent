@@ -294,6 +294,64 @@ test("live subagent notifications are subscribed only for enabled callbacks", ()
   }
 });
 
+test("GUI artifact notifications are validated and scoped to their owning stream", () => {
+  const { bridge, restore } = installFakeBridge();
+  const received: unknown[] = [];
+  try {
+    const disabled = startGeneration(
+      {
+        chatId: "chat-artifact-disabled",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      callbacks(),
+      "turn-artifact-disabled",
+    );
+    assert.equal(bridge.listeners.has("chat:artifact"), false);
+    disabled.cancel("lifecycle");
+
+    const enabled = startGeneration(
+      {
+        chatId: "chat-artifact-enabled",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onArtifactEvent: (event) => received.push(event) },
+      "turn-artifact-enabled",
+    );
+    const artifact = {
+      version: 1,
+      kind: "image",
+      attachment: {
+        id: "att-1",
+        name: "preview.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 1,
+        data: "AA==",
+      },
+    };
+    const present = { version: 1, operation: "present", artifact };
+    const reset = { version: 1, operation: "reset" };
+    for (const handler of bridge.listeners.get("chat:artifact") ?? []) {
+      handler({ streamId: "other-stream", event: present });
+      handler({
+        streamId: enabled.streamId,
+        event: { ...present, version: 2 },
+      });
+      handler({ streamId: enabled.streamId, event: present });
+      handler({ streamId: enabled.streamId, event: reset });
+    }
+    assert.deepEqual(received, [present, reset]);
+    enabled.cancel("lifecycle");
+    assert.equal(bridge.listeners.get("chat:artifact")?.size, 0);
+  } finally {
+    restore();
+  }
+});
+
 test("approval details are forwarded only to their owning stream", () => {
   const { bridge, restore } = installFakeBridge();
   const received: unknown[] = [];

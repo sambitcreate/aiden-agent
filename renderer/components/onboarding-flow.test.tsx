@@ -271,6 +271,7 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     assert.match(featurePresentation, new RegExp(title, "u"));
   }
   assert.match(featurePresentation, /reopen it with sanitized local history/u);
+  assert.match(featurePresentation, /workspace agent show raster images inline/u);
   assert.equal(featurePresentation.match(/imageUrl: FEATURE_ILLUSTRATIONS\./gu)?.length, 23);
   assert.doesNotMatch(featurePresentation, /Designer Mode|Image Generation|Proactive nudges/u);
 });

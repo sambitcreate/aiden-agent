@@ -6,13 +6,15 @@ import { AidenOrb } from "./aiden-orb";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
+import { MessageAttachmentPreviewProvider, MessageAttachments } from "./message-attachments";
 import { ReasoningBlock } from "./reasoning-block";
 import { SubagentChips } from "./subagent-chips";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
 } from "../lib/assistant-message-presentation";
-import type { ChatMessage } from "../lib/types";
+import type { Attachment, ChatMessage } from "../lib/types";
+import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -22,10 +24,9 @@ import {
 } from "../lib/subagent-panel-state";
 import { isToolStep, type GenerationTimeline } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
-import {
-  providerFailurePresentation,
-  type ProviderFailureV1,
-} from "../shared/provider-failure";
+import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
+
+const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -33,6 +34,8 @@ interface MessageListProps {
   streamingText: string | null;
   /** Reasoning explicitly emitted by the current supported provider. */
   streamingReasoning: string | null;
+  /** Versioned GUI artifacts emitted by Pi extensions during this response. */
+  streamingArtifacts?: readonly ChatArtifactV1[];
   streamComplete?: boolean;
   onStreamHandoffComplete?: () => void;
   timeline: GenerationTimeline | null;
@@ -48,6 +51,7 @@ interface AssistantResponseProps {
   content: string;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
+  attachments?: readonly Attachment[];
   subagentChips?: React.ReactNode;
   streaming?: boolean;
   streamComplete?: boolean;
@@ -58,6 +62,7 @@ function AssistantResponse({
   content,
   timeline,
   reasoning,
+  attachments,
   subagentChips,
   streaming = false,
   streamComplete,
@@ -84,6 +89,9 @@ function AssistantResponse({
             streamComplete={streamComplete}
             onStreamHandoffComplete={onStreamHandoffComplete}
           />
+        ) : null}
+        {attachments?.length ? (
+          <MessageAttachments attachments={attachments} role="assistant" />
         ) : null}
       </>
     );
@@ -135,23 +143,17 @@ function AssistantResponse({
           />
         );
       })}
+      {attachments?.length ? (
+        <MessageAttachments attachments={attachments} role="assistant" />
+      ) : null}
     </>
   );
 }
 
-export function ProviderFailureCallout({
-  failure,
-}: {
-  failure: ProviderFailureV1;
-}) {
+export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1 }) {
   const presentation = providerFailurePresentation(failure);
   return (
-    <Callout
-      color="red"
-      role="alert"
-      aria-atomic="true"
-      data-provider-failure={failure.category}
-    >
+    <Callout color="red" role="alert" aria-atomic="true" data-provider-failure={failure.category}>
       <Text variant="small-strong" color="red">
         {presentation.title}
       </Text>
@@ -166,6 +168,7 @@ export function MessageList({
   messages,
   streamingText,
   streamingReasoning,
+  streamingArtifacts = EMPTY_CHAT_ARTIFACTS,
   streamComplete,
   onStreamHandoffComplete,
   timeline,
@@ -177,6 +180,22 @@ export function MessageList({
 }: MessageListProps) {
   const transcriptRef = React.useRef<HTMLDivElement | null>(null);
   const chipFocusCaptureRef = React.useRef<SubagentChipFocusCapture | null>(null);
+  const persistedAttachmentIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of messages) {
+      for (const attachment of message.attachments ?? []) ids.add(attachment.id);
+    }
+    return ids;
+  }, [messages]);
+  const liveAttachments = React.useMemo(() => {
+    const attachments: Attachment[] = [];
+    for (const artifact of streamingArtifacts) {
+      if (!persistedAttachmentIds.has(artifact.attachment.id)) {
+        attachments.push(artifact.attachment);
+      }
+    }
+    return attachments;
+  }, [persistedAttachmentIds, streamingArtifacts]);
 
   React.useEffect(() => {
     const captureFocusedChip = (target: EventTarget | null) => {
@@ -232,73 +251,79 @@ export function MessageList({
   });
 
   return (
-    <div
-      ref={transcriptRef}
-      className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
-      data-subagent-chip-focus-scope="true"
-    >
-      {messages.map((m) => (
-        <div key={m.id} className="flex min-w-0 flex-col gap-3">
-          {m.role === "assistant" ? (
-            <>
-              <AssistantResponse
+    <MessageAttachmentPreviewProvider>
+      <div
+        ref={transcriptRef}
+        className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+        data-subagent-chip-focus-scope="true"
+      >
+        {messages.map((m) => (
+          <div key={m.id} className="flex min-w-0 flex-col gap-3">
+            {m.role === "assistant" ? (
+              <>
+                <AssistantResponse
+                  content={m.content}
+                  timeline={m.timeline}
+                  reasoning={m.reasoning}
+                  attachments={m.attachments}
+                  subagentChips={
+                    subagentsEnabled && m.subagents ? (
+                      <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
+                    ) : undefined
+                  }
+                />
+                {m.providerFailure ? <ProviderFailureCallout failure={m.providerFailure} /> : null}
+              </>
+            ) : (
+              <SafeMessageBubble
+                role={m.role}
                 content={m.content}
-                timeline={m.timeline}
-                reasoning={m.reasoning}
-                subagentChips={
-                  subagentsEnabled && m.subagents ? (
-                    <SubagentChips reference={m.subagents} onOpen={onOpenSubagent} />
-                  ) : undefined
-                }
+                attachments={m.attachments}
+                skill={m.skill}
               />
-              {m.providerFailure ? (
-                <ProviderFailureCallout failure={m.providerFailure} />
-              ) : null}
-            </>
-          ) : (
-            <SafeMessageBubble
-              role={m.role}
-              content={m.content}
-              attachments={m.attachments}
-              skill={m.skill}
+            )}
+          </div>
+        ))}
+
+        {timeline ||
+        liveSubagents.length > 0 ||
+        streamingReasoning ||
+        streamingText ||
+        liveAttachments.length > 0 ? (
+          <div className="flex min-w-0 flex-col gap-3">
+            <AssistantResponse
+              content={streamingText ?? ""}
+              timeline={timeline}
+              reasoning={streamingReasoning}
+              attachments={liveAttachments}
+              subagentChips={
+                subagentsEnabled && liveSubagents.length > 0 ? (
+                  <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
+                ) : undefined
+              }
+              streaming
+              streamComplete={streamComplete}
+              onStreamHandoffComplete={onStreamHandoffComplete}
             />
-          )}
-        </div>
-      ))}
-
-      {timeline || liveSubagents.length > 0 || streamingReasoning || streamingText ? (
-        <div className="flex min-w-0 flex-col gap-3">
-          <AssistantResponse
-            content={streamingText ?? ""}
-            timeline={timeline}
-            reasoning={streamingReasoning}
-            subagentChips={
-              subagentsEnabled && liveSubagents.length > 0 ? (
-                <SubagentChips runs={liveSubagents} onOpen={onOpenSubagent} />
-              ) : undefined
-            }
-            streaming
-            streamComplete={streamComplete}
-            onStreamHandoffComplete={onStreamHandoffComplete}
-          />
-        </div>
-      ) : null}
-
-      <AgentActivityTransition activity={agentActivity} />
-
-      <EventPresence present={Boolean(error)}>
-        {error ? (
-          <Callout color="red">
-            <Text variant="small-strong" color="red">
-              Generation failed
-            </Text>
-            <Text variant="small" color="secondary" className="mt-0.5 block">
-              {error}
-            </Text>
-          </Callout>
+          </div>
         ) : null}
-      </EventPresence>
-    </div>
+
+        <AgentActivityTransition activity={agentActivity} />
+
+        <EventPresence present={Boolean(error)}>
+          {error ? (
+            <Callout color="red">
+              <Text variant="small-strong" color="red">
+                Generation failed
+              </Text>
+              <Text variant="small" color="secondary" className="mt-0.5 block">
+                {error}
+              </Text>
+            </Callout>
+          ) : null}
+        </EventPresence>
+      </div>
+    </MessageAttachmentPreviewProvider>
   );
 }
 
