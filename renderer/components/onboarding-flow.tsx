@@ -260,7 +260,8 @@ const featureBentos: FeatureBento[] = [
     id: "vision",
     group: "extend",
     title: "Attachments & Vision",
-    description: "Attach text and images for vision-capable models to inspect in conversation.",
+    description:
+      "Attach files for models to inspect, and let the workspace agent show raster images inline.",
     icon: Eye,
     imageUrl: FEATURE_ILLUSTRATIONS.vision,
     size: "standard",
@@ -332,7 +333,8 @@ const featureBentos: FeatureBento[] = [
     id: "telegram",
     group: "control",
     title: "Aiden in Telegram",
-    description: "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
+    description:
+      "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
     size: "standard",
@@ -461,7 +463,10 @@ export function OnboardingFlow() {
     step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
 
   const selectProviderChoice = (nextChoice: OnboardingProviderChoice | null) => {
-    const nextFields = fieldsAfterProviderChoiceChange(choice, nextChoice, { apiKey, baseUrl });
+    const nextFields = fieldsAfterProviderChoiceChange(choice, nextChoice, {
+      apiKey,
+      baseUrl,
+    });
     setApiKey(nextFields.apiKey);
     setBaseUrl(nextFields.baseUrl);
     setChoice(nextChoice);
@@ -1036,7 +1041,9 @@ export function OnboardingFlow() {
             if (!nextOpen) setSettingUpProvider(null);
           }}
           onSaved={() => {
-            void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
+            void queryClient.invalidateQueries({
+              queryKey: queryKeys.providers,
+            });
             setIndex(2);
           }}
         />
