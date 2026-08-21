@@ -3,6 +3,7 @@ import type {
   AssetThumbnailGenerator,
 } from "./asset-store-core.js";
 import { runImageUtility } from "./electron-asset-image-utility.js";
+import type { CreateImagesAnnotationRasterizer } from "./run-service.js";
 
 export const electronAssetDeepValidator: AssetDeepValidator = {
   async validate({ filePath }) {
@@ -32,6 +33,24 @@ export const electronAssetThumbnailGenerator: AssetThumbnailGenerator = {
       width: result.width,
       height: result.height,
       mediaType: "image/png",
+    };
+  },
+};
+
+export const electronAnnotationRasterizer: CreateImagesAnnotationRasterizer = {
+  async rasterize({ sourcePath, shapes }) {
+    const result = await runImageUtility({
+      operation: "annotate",
+      filePath: sourcePath,
+      shapes,
+      maxPixels: 64_000_000,
+      maxOutputBytes: 64 * 1024 * 1024,
+    });
+    if (!result.bytes) throw new Error("The annotation rasterizer returned no PNG bytes.");
+    return {
+      bytes: result.bytes.slice(),
+      width: result.width,
+      height: result.height,
     };
   },
 };
