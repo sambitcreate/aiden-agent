@@ -12,6 +12,12 @@ import { GEMINI_INTERACTIONS_ENDPOINT } from "./gemini-interactions-core.js";
 const SECRET_KEY = "AIzaSy_TEST_GEMINI_KEY_NEVER_LEAK";
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const JPEG_BASE64 = Buffer.from(
+  Uint8Array.from([
+    0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63,
+    0, 1, 2, 3, 0xff, 0xd9,
+  ]),
+).toString("base64");
 
 function auth(overrides: Partial<AuthResult["auth"]> = {}): AuthResult {
   return {
@@ -117,10 +123,8 @@ test("uses only the fixed endpoint and main-owned API-key header, with bounded i
   assert.doesNotMatch(serialized, /(?:127\.0\.0\.1|Authorization|inherited-secret|api.?key)/iu);
   assert.deepEqual(JSON.parse(serialized).response_format, {
     type: "image",
-    mime_type: "image/png",
     aspect_ratio: "16:9",
     image_size: "2K",
-    delivery: "inline",
   });
   assert.equal(JSON.parse(serialized).store, false);
   assert.equal(JSON.parse(serialized).background, false);
@@ -255,6 +259,25 @@ test("normalizes auth, permission, rate limit, provider, and request status with
     assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET_KEY, "u"));
   }
 
+  const invalidKey = new GeminiImageProvider({
+    fetch: injectedFetch(async () =>
+      jsonResponse(
+        {
+          error: {
+            status: "INVALID_ARGUMENT",
+            message: `credential ${SECRET_KEY}`,
+            details: [{ reason: "API_KEY_INVALID", metadata: { key: SECRET_KEY } }],
+          },
+        },
+        { status: 400 },
+      ),
+    ),
+  });
+  const invalidKeyResult = await invalidKey.execute(auth(), request(), context());
+  assert.equal(invalidKeyResult.kind, "failure");
+  assert.equal(invalidKeyResult.providerErrorCode, "authentication-required");
+  assert.doesNotMatch(JSON.stringify(invalidKeyResult), new RegExp(SECRET_KEY, "u"));
+
   const limited = new GeminiImageProvider({
     now: () => 1_000,
     fetch: injectedFetch(async () =>
@@ -341,24 +364,61 @@ test("rejects malformed, truncated, non-canonical, and oversized base64", async 
   assert.equal(oversizedResult.providerErrorCode, "response-malformed");
 });
 
-test("rejects zero, multiple, remote, and wrong-MIME final images", async () => {
+test("uses the last generated image and accepts its validated PNG or JPEG media type", async () => {
+  const provider = new GeminiImageProvider({
+    fetch: injectedFetch(async () =>
+      jsonResponse(
+        interaction({
+          steps: [
+            {
+              type: "model_output",
+              content: [{ type: "image", mime_type: "image/png", data: PNG_BASE64 }],
+            },
+            {
+              type: "model_output",
+              content: [
+                { type: "text", text: "Final image follows." },
+                { type: "image", mime_type: "image/jpeg", data: JPEG_BASE64 },
+              ],
+            },
+          ],
+        }),
+      ),
+    ),
+  });
+  const result = await provider.execute(auth(), request({ outputMime: "image/png" }), context());
+  assert.equal(result.kind, "success");
+  if (result.kind !== "success") return;
+  assert.equal(result.output.images.length, 1);
+  assert.equal(result.output.images[0].metadata.mimeType, "image/jpeg");
+  assert.equal(Buffer.from(result.output.images[0].bytes).toString("base64"), JPEG_BASE64);
+});
+
+test("infers a missing final MIME from validated image bytes", async () => {
+  const provider = new GeminiImageProvider({
+    fetch: injectedFetch(async () =>
+      jsonResponse(
+        interaction({
+          steps: [
+            {
+              type: "model_output",
+              content: [{ type: "image", data: PNG_BASE64 }],
+            },
+          ],
+        }),
+      ),
+    ),
+  });
+  const result = await provider.execute(auth(), request(), context());
+  assert.equal(result.kind, "success");
+  if (result.kind !== "success") return;
+  assert.equal(result.output.images[0].metadata.mimeType, "image/png");
+});
+
+test("rejects missing, remote-final, unsupported, and declared-MIME-mismatched images", async () => {
   const cases: Array<[Record<string, unknown>, string]> = [
     [
       interaction({ steps: [{ type: "model_output", content: [{ type: "text", text: "none" }] }] }),
-      "response-malformed",
-    ],
-    [
-      interaction({
-        steps: [
-          {
-            type: "model_output",
-            content: [
-              { type: "image", mime_type: "image/png", data: PNG_BASE64 },
-              { type: "image", mime_type: "image/png", data: PNG_BASE64 },
-            ],
-          },
-        ],
-      }),
       "response-malformed",
     ],
     [
@@ -371,6 +431,17 @@ test("rejects zero, multiple, remote, and wrong-MIME final images", async () => 
         ],
       }),
       "response-malformed",
+    ],
+    [
+      interaction({
+        steps: [
+          {
+            type: "model_output",
+            content: [{ type: "image", mime_type: "image/webp", data: PNG_BASE64 }],
+          },
+        ],
+      }),
+      "response-mime-mismatch",
     ],
     [
       interaction({
