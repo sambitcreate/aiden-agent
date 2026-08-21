@@ -204,10 +204,15 @@ function CreateImagesTemplateExplorer({
     <section className="mt-8" aria-labelledby="create-images-template-explorer-title">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 id="create-images-template-explorer-title" className="text-strong font-medium text-primary">
+          <h2
+            id="create-images-template-explorer-title"
+            className="text-strong font-medium text-primary"
+          >
             Start from a template
           </h2>
-          <p className="mt-1 text-small text-secondary">Local previews and search work fully offline.</p>
+          <p className="mt-1 text-small text-secondary">
+            Local previews and search work fully offline.
+          </p>
         </div>
         <Button
           size="small"
@@ -246,37 +251,43 @@ function CreateImagesTemplateExplorer({
           ))}
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-3 max-[800px]:grid-cols-1" role="list">
+      <ul className="mt-3 grid grid-cols-3 gap-3 max-[800px]:grid-cols-1">
         {templates.map((template) => (
-          <button
-            key={template.id}
-            type="button"
-            role="listitem"
-            disabled={busy}
-            className="group rounded-card border border-field bg-popover/65 p-3 text-left shadow-control outline-none transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-field-strong hover:shadow-popover focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transform-none disabled:opacity-60"
-            onClick={() => onCreate(template.id)}
-          >
-            <span
-              className="create-images-template-preview relative block h-28 overflow-hidden rounded-control border border-separator bg-well"
-              data-preview={template.preview}
-              aria-hidden="true"
+          <li key={template.id}>
+            <button
+              type="button"
+              disabled={busy}
+              className="group h-full w-full rounded-card border border-field bg-popover/65 p-3 text-left shadow-control outline-none transition-[transform,border-color,box-shadow] hover:-translate-y-0.5 hover:border-field-strong hover:shadow-popover focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transform-none disabled:opacity-60"
+              onClick={() => onCreate(template.id)}
             >
-              <span className="absolute left-3 top-9 h-10 w-16 rounded-[7px] border border-field bg-popover shadow-control" />
-              <span className="absolute left-1/2 top-5 h-16 w-20 -translate-x-1/2 rounded-[7px] border border-accent/30 bg-popover shadow-control" />
-              <span className="absolute right-3 top-9 h-10 w-16 rounded-[7px] border border-field bg-popover shadow-control" />
-              <span className="absolute inset-x-12 top-1/2 h-px bg-accent/45" />
-            </span>
-            <span className="mt-3 block text-small-strong font-medium text-primary">{template.title}</span>
-            <span className="mt-1 block text-mini leading-relaxed text-secondary">{template.description}</span>
-            <span className="mt-2 block text-mini text-tertiary">{template.category} · {template.tags.join(" · ")}</span>
-          </button>
+              <span
+                className="create-images-template-preview relative block h-28 overflow-hidden rounded-control border border-separator bg-well"
+                data-preview={template.preview}
+                aria-hidden="true"
+              >
+                <span className="absolute left-3 top-9 h-10 w-16 rounded-[7px] border border-field bg-popover shadow-control" />
+                <span className="absolute left-1/2 top-5 h-16 w-20 -translate-x-1/2 rounded-[7px] border border-accent/30 bg-popover shadow-control" />
+                <span className="absolute right-3 top-9 h-10 w-16 rounded-[7px] border border-field bg-popover shadow-control" />
+                <span className="absolute inset-x-12 top-1/2 h-px bg-accent/45" />
+              </span>
+              <span className="mt-3 block text-small-strong font-medium text-primary">
+                {template.title}
+              </span>
+              <span className="mt-1 block text-mini leading-relaxed text-secondary">
+                {template.description}
+              </span>
+              <span className="mt-2 block text-mini text-tertiary">
+                {template.category} · {template.tags.join(" · ")}
+              </span>
+            </button>
+          </li>
         ))}
         {templates.length === 0 ? (
-          <p className="col-span-full rounded-card border border-dashed border-field px-4 py-8 text-center text-small text-secondary">
+          <li className="col-span-full rounded-card border border-dashed border-field px-4 py-8 text-center text-small text-secondary">
             No local template matches this search.
-          </p>
+          </li>
         ) : null}
-      </div>
+      </ul>
       <Dialog
         open={tutorialOpen}
         onOpenChange={setTutorialOpen}
@@ -291,12 +302,16 @@ function CreateImagesTemplateExplorer({
         <div className="rounded-card border border-field bg-well p-4">
           <div className="flex items-center justify-between gap-3 text-mini text-tertiary">
             <span>Local mock · $0.00</span>
-            <span>{tutorialStep + 1} / {CREATE_IMAGES_TUTORIAL_STEPS.length}</span>
+            <span>
+              {tutorialStep + 1} / {CREATE_IMAGES_TUTORIAL_STEPS.length}
+            </span>
           </div>
           <div className="mt-3 h-1 overflow-hidden rounded-pill bg-control">
             <div
               className="h-full rounded-pill bg-accent transition-[width] motion-reduce:transition-none"
-              style={{ width: `${((tutorialStep + 1) / CREATE_IMAGES_TUTORIAL_STEPS.length) * 100}%` }}
+              style={{
+                width: `${((tutorialStep + 1) / CREATE_IMAGES_TUTORIAL_STEPS.length) * 100}%`,
+              }}
             />
           </div>
           <h3 className="mt-5 text-heading2 font-semibold text-primary">{tutorial[0]}</h3>
@@ -314,7 +329,9 @@ function CreateImagesTemplateExplorer({
           </div>
           {tutorialStep === CREATE_IMAGES_TUTORIAL_STEPS.length - 1 ? (
             <div className="mt-4 flex items-center justify-between gap-3 rounded-control bg-popover px-3 py-2.5">
-              <p className="text-small text-secondary">Want a real local workflow after the tutorial?</p>
+              <p className="text-small text-secondary">
+                Want a real local workflow after the tutorial?
+              </p>
               <Button size="small" variant="filled" onClick={() => onCreate("starter")}>
                 Keep as workflow
               </Button>
@@ -700,7 +717,9 @@ function prepareLocalMockRun(workflow: WorkflowDocumentV1, scope: WorkflowRunSco
     const edge = plan.snapshot.edges.find(
       (candidate) => candidate.target === generationNodeId && candidate.targetPort === "prompt",
     );
-    const source = edge ? plan.snapshot.nodes.find((candidate) => candidate.id === edge.source) : undefined;
+    const source = edge
+      ? plan.snapshot.nodes.find((candidate) => candidate.id === edge.source)
+      : undefined;
     if (source?.type !== "prompt-list") return 1;
     const parsed = parseCreateImagesPromptList(source.data.source, source.data.format);
     return parsed.status === "ready" ? parsed.items.length : 1;
