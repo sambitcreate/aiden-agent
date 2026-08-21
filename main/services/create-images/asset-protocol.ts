@@ -3,12 +3,15 @@ import { isPackagedRuntime } from "../../runtime-mode.js";
 import { AssetDeliveryGrantRegistry } from "./asset-delivery-core.js";
 import {
   authorizeCreateImagesAssetRequest,
-  parseCreateImagesAssetProtocolToken,
+  parseCreateImagesAssetProtocolRequest,
 } from "./asset-protocol-core.js";
 import { shouldBlockAidenRendererEgress } from "./renderer-egress-core.js";
 
 export interface CreateImagesAssetProtocolSource {
-  response(assetId: string): Promise<Response | undefined>;
+  response(
+    assetId: string,
+    rendition: "preview" | "preview-128" | "preview-256" | "preview-512" | "original",
+  ): Promise<Response | undefined>;
 }
 
 let schemeRegistered = false;
@@ -119,11 +122,12 @@ export async function installCreateImagesAssetProtocol(
   );
 
   await targetSession.protocol.handle("aiden-asset", async (request) => {
-    const token = parseCreateImagesAssetProtocolToken(request.url);
-    const assetId = token ? grants.consumeProtocolRequest(token) : undefined;
+    const parsed = parseCreateImagesAssetProtocolRequest(request.url);
+    if (!parsed) return new Response("Not found", { status: 404 });
+    const assetId = grants.consumeProtocolRequest(parsed.token);
     if (!assetId) return new Response("Not found", { status: 404 });
     try {
-      const response = await source.response(assetId);
+      const response = await source.response(assetId, parsed.rendition);
       if (!response || !response.ok || !response.body) {
         return new Response("Not found", { status: 404 });
       }
