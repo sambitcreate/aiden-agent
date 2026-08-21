@@ -13,10 +13,19 @@ import {
 import { isChatCreateReconciliationRequiredError } from "../services/chat-store-core.js";
 import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
 import { botMutationGate } from "../services/bot-mutation-gate.js";
+import { generateBotAvatarSuggestion } from "../services/bot-avatar-generator.js";
+import { botAvatarOperations } from "../services/bot-avatar-operation-registry.js";
 import { telegramBotBindings } from "../services/telegram/telegram-bot-bindings.js";
 import { telegramService } from "../services/telegram/telegram-service.js";
 import { normalizeTelegramProfileName } from "../services/telegram/telegram-profile-config.js";
-import { parseBotChatCreate, parseBotCreate, parseBotId, parseBotUpdate } from "./bot-params.js";
+import {
+  parseBotAvatarSuggestionInput,
+  parseBotAvatarRequestId,
+  parseBotChatCreate,
+  parseBotCreate,
+  parseBotId,
+  parseBotUpdate,
+} from "./bot-params.js";
 
 export function registerBotHandlers(): void {
   ipcMain.handle("bots:list", async (_event, includeArchived: unknown) => {
@@ -28,6 +37,28 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:create", async (_event, input: unknown) =>
     botStore.create(parseBotCreate(input)),
   );
+  ipcMain.handle("bots:suggestAvatar", async (event, input: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Bot avatar design requires the active application document."),
+    );
+    const parsed = parseBotAvatarSuggestionInput(input);
+    const operation = botAvatarOperations.admit(owner.documentId, parsed.requestId);
+    const unsubscribe = owner.onInvalidated(operation.cancel);
+    try {
+      return await generateBotAvatarSuggestion(parsed, operation.signal);
+    } finally {
+      unsubscribe();
+      operation.finish();
+    }
+  });
+  ipcMain.handle("bots:cancelAvatarSuggestion", async (event, requestId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Bot avatar design requires the active application document."),
+    );
+    return botAvatarOperations.cancel(owner.documentId, parseBotAvatarRequestId(requestId));
+  });
   ipcMain.handle("bots:update", async (_event, input: unknown) => {
     const parsed = parseBotUpdate(input);
     return botMutationGate.run(parsed.id, () => botStore.update(parsed));
@@ -61,6 +92,7 @@ export function registerBotHandlers(): void {
     const options = [];
     for (const profile of profiles) {
       const paired = profile.settings.allowedUserId !== undefined;
+      const workspaceId = profile.settings.workspaceId;
       if (paired) {
         options.push({
           profile: profile.name,
@@ -69,10 +101,8 @@ export function registerBotHandlers(): void {
           hasToken: profile.hasToken,
           enabled: profile.settings.enabled === true,
           chatId: profile.settings.allowedUserId,
-          workspaceId: profile.settings.workspaceId,
-          workspaceName: profile.settings.workspaceId
-            ? workspaceNames.get(profile.settings.workspaceId)
-            : undefined,
+          workspaceId,
+          workspaceName: workspaceId ? workspaceNames.get(workspaceId) : undefined,
         });
       }
       for (const target of await telegramService.listTargets(profile.name)) {
