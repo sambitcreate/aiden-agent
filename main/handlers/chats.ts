@@ -12,6 +12,7 @@ import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.j
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
+import { displayImageArtifactStore } from "../services/display-image-artifact-store.js";
 import { skillRegistry } from "../services/skill-registry-main.js";
 import {
   commitSkillInvocationForAppend,
@@ -56,7 +57,9 @@ function asString(value: unknown, name: string): string {
 export function registerChatHistoryHandlers(): void {
   let chatCopyActive = false;
   let chatExportActive = false;
-  ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
+  ipcMain.handle("chats:activitySnapshot", () =>
+    chatActivityRegistry.snapshot(),
+  );
   ipcMain.handle("chats:list", async (_event, workspaceId?: unknown) =>
     chatStore.list(
       typeof workspaceId === "string" && workspaceId ? workspaceId : undefined,
@@ -69,13 +72,22 @@ export function registerChatHistoryHandlers(): void {
     if (llmClient.isChatOwnedByInactiveRenderer(chatId)) {
       reconciliationRequired = !(await llmClient.waitForChatIdle(chatId));
     }
-    const chat = await chatStore.get(chatId);
+    const [chat, hasStagedImageArtifact] = await Promise.all([
+      chatStore.get(chatId),
+      displayImageArtifactStore.hasPending(chatId),
+    ]);
+    const imageArtifactRecoveryPending =
+      hasStagedImageArtifact && !llmClient.isChatBusy(chatId)
+        ? (await displayImageArtifactStore.hasPending(chatId)) &&
+          !llmClient.isChatBusy(chatId)
+        : false;
     // The former renderer can be invalidated while this asynchronous read is
     // already in flight. Mark that result provisional as well; the renderer
     // retains a retry marker even if the one-shot settlement event was missed.
     reconciliationRequired ||= llmClient.isChatOwnedByInactiveRenderer(chatId);
     return {
       chat: chatForRenderer(chat),
+      imageArtifactRecoveryPending,
       reconciliation: reconciliationRequired
         ? {
             chatId,
@@ -232,6 +244,11 @@ export function registerChatHistoryHandlers(): void {
       }
       const source = await chatStore.get(parsed.chatId);
       if (!source) throw new Error("The chat is no longer available.");
+      if (await displayImageArtifactStore.hasPending(parsed.chatId)) {
+        throw new Error(
+          "Restart Aiden to recover the previous image response before copying this chat.",
+        );
+      }
       const workspaceId = persistedChatWorkspaceId(source.workspaceId);
       if (workspaceId === ASSISTANT_WORKSPACE_ID) {
         throw new Error(
@@ -312,6 +329,11 @@ export function registerChatHistoryHandlers(): void {
       }
       const chat = await chatStore.get(chatId);
       if (!chat) throw new Error("The chat is no longer available.");
+      if (await displayImageArtifactStore.hasPending(chatId)) {
+        throw new Error(
+          "Restart Aiden to recover the previous image response before exporting this chat.",
+        );
+      }
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -332,6 +354,11 @@ export function registerChatHistoryHandlers(): void {
       }
       const latestChat = await chatStore.get(chatId);
       if (!latestChat) throw new Error("The chat is no longer available.");
+      if (await displayImageArtifactStore.hasPending(chatId)) {
+        throw new Error(
+          "Restart Aiden to recover the previous image response before exporting this chat.",
+        );
+      }
       if (owner.isDestroyed()) {
         throw new Error("The renderer document is no longer active.");
       }
@@ -436,6 +463,14 @@ export function registerChatHistoryHandlers(): void {
         throw new Error("Aiden could not delete this chat's subagent history.");
       }
       try {
+        await displayImageArtifactStore.deleteChat(chatId);
+      } catch (error) {
+        logger.error("pi", "Could not delete staged image artifacts.", error);
+        throw new Error(
+          "Aiden could not delete this chat's staged image artifacts.",
+        );
+      }
+      try {
         await piRuntimeEffectStore.deleteChat(chatId);
       } catch (error) {
         logger.error(
@@ -534,6 +569,11 @@ export function registerChatHistoryHandlers(): void {
       return (async () => {
         let appended = false;
         try {
+          if (await displayImageArtifactStore.hasPending(chatId)) {
+            throw new Error(
+              "Restart Aiden to recover the previous image response before sending another message.",
+            );
+          }
           const authoritativeChat = skillReference
             ? await chatStore.get(chatId)
             : undefined;
