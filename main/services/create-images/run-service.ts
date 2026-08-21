@@ -5,6 +5,7 @@ import {
   hasUnresolvedCreateImagesRunAmbiguity,
   projectCreateImagesRun,
   type CreateImagesCancellationReason,
+  type CreateImagesBatchItemState,
   type CreateImagesRunEventV1,
   type CreateImagesRunJournalV1,
   type CreateImagesRunProviderAuthorizationV1,
@@ -21,17 +22,24 @@ import type {
   CreateImagesRunMutationResult,
   CreateImagesPrepareRunResult,
   CreateImagesProviderConsentPlanView,
+  CreateImagesRecentOutputView,
   CreateImagesRunRecoveryMutationResult,
   CreateImagesRunRecoveryRequiredView,
   CreateImagesRunRecoveryView,
   CreateImagesRunUnsafeRecoveryView,
   CreateImagesRunView,
   CreateImagesResolveRunAmbiguityRequest,
+  CreateImagesResumeRunRequest,
   CreateImagesTerminalRunView,
 } from "../../../renderer/shared/create-images/ipc.js";
 import type { WorkflowRunScope } from "../../../renderer/shared/create-images/execution.js";
 import { CREATE_IMAGES_LOCAL_MOCK_RETRY_POLICY } from "../../../renderer/shared/create-images/retry-policy.js";
-import type { WorkflowNodeV1 } from "../../../renderer/shared/create-images/schema.js";
+import { resolveCreateImagesPromptVariables } from "../../../renderer/shared/create-images/prompt-variables.js";
+import { parseCreateImagesPromptList } from "../../../renderer/shared/create-images/prompt-list.js";
+import type {
+  CreateImagesAnnotationShape,
+  WorkflowNodeV1,
+} from "../../../renderer/shared/create-images/schema.js";
 import type { ContentAddressedAssetStore } from "./asset-store-core.js";
 import {
   admitCreateImagesProviderExecution,
@@ -83,9 +91,42 @@ import type { WorkflowManifestStore } from "./workflow-manifest-store.js";
 import type { CreateImagesWorkspaceState } from "./workspace-store.js";
 
 interface DurableNodeOutput {
-  kind: "images" | "text";
+  kind: "images" | "text" | "text-list";
   assetIds: string[];
   text?: string;
+  items?: string[];
+}
+
+interface AnnotationImageOutput {
+  kind: "annotation-image";
+  sourceAssetId: string;
+  bytes: Uint8Array;
+  width: number;
+  height: number;
+}
+
+function isAnnotationImageOutput(value: unknown): value is AnnotationImageOutput {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<AnnotationImageOutput>;
+  return (
+    candidate.kind === "annotation-image" &&
+    typeof candidate.sourceAssetId === "string" &&
+    /^[a-f0-9]{64}$/u.test(candidate.sourceAssetId) &&
+    candidate.bytes instanceof Uint8Array &&
+    candidate.bytes.byteLength >= 33 &&
+    candidate.bytes.byteLength <= 64 * 1024 * 1024 &&
+    Number.isSafeInteger(candidate.width) &&
+    Number.isSafeInteger(candidate.height) &&
+    candidate.width! >= 1 &&
+    candidate.height! >= 1
+  );
+}
+
+export interface CreateImagesAnnotationRasterizer {
+  rasterize(input: {
+    sourcePath: string;
+    shapes: readonly CreateImagesAnnotationShape[];
+  }): Promise<{ bytes: Uint8Array; width: number; height: number }>;
 }
 
 type CreateImagesRunExecution = { mode: "local-mock" } | { mode: "gemini"; auth: AuthResult };
@@ -124,6 +165,7 @@ interface ActiveRun {
   reconciliationAttempt?: Promise<void>;
   ownershipReleaseAttempt?: Promise<boolean>;
   settled: Promise<void>;
+  pendingPause?: { checkpointId: string; beforeNodeId: string; edgeIds: string[] };
 }
 
 export type CreateImagesRunStopAllResult =
@@ -179,6 +221,7 @@ export interface CreateImagesRunServiceOptions {
   mockScript?: (nodeIds: readonly string[]) => MockImageProviderScript;
   resolveGeminiAuth?: () => Promise<AuthResult>;
   createGeminiProvider?: () => GeminiImageProvider;
+  annotationRasterizer?: CreateImagesAnnotationRasterizer;
   /** Fast root/config check before a run can start provider work. */
   workspaceStatus?: () => Promise<{ configured: boolean; state: CreateImagesWorkspaceState }>;
   workspaceRequired?: boolean;
@@ -283,6 +326,9 @@ function isDurableNodeOutput(value: unknown): value is DurableNodeOutput {
 type ProviderImageOutputBatch = MockImageOutputBatch | GeminiImageProviderOutput;
 
 function geminiCoordinatorErrorCode(code: GeminiImageProviderErrorCode): CoordinatorErrorCode {
+  if (code === "authentication-required") return "authentication-required";
+  if (code === "permission-denied") return "permission-denied";
+  if (code === "invalid-request" || code === "request-rejected") return "request-rejected";
   if (code === "refused") return "provider-refused";
   if (
     code === "response-too-large" ||
@@ -344,6 +390,16 @@ function runView(journal: CreateImagesRunJournalV1): CreateImagesRunView {
     createdAt: journal.createdAt,
     updatedAt: journal.updatedAt,
     executionMode: journal.providerAuthorization ? "gemini" : "local-mock",
+    ...(projection.status === "paused" && projection.pause
+      ? {
+          pause: {
+            checkpointId: projection.pause.checkpointId,
+            beforeNodeId: projection.pause.beforeNodeId,
+            edgeIds: [...projection.pause.edgeIds],
+            pausedAt: projection.pause.pausedAt,
+          },
+        }
+      : {}),
     ...(projection.ambiguityResolution
       ? { ambiguityResolution: { ...projection.ambiguityResolution } }
       : {}),
@@ -362,6 +418,28 @@ function runView(journal: CreateImagesRunJournalV1): CreateImagesRunView {
       };
     }),
   };
+}
+
+function terminalCostLabel(
+  projection: ReturnType<typeof projectCreateImagesRun>,
+  isGemini: boolean,
+): string {
+  if (!isGemini) return "$0.00 mock actual";
+  const costs = Object.values(projection.nodes).flatMap((node) =>
+    Object.values(node.batchItems ?? {}).flatMap((item) => (item.cost ? [item.cost] : [])),
+  );
+  if (costs.length === 0 || costs.some((cost) => cost.kind === "unknown")) {
+    return "Actual cost unknown";
+  }
+  const actual = costs.filter(
+    (cost): cost is Extract<(typeof costs)[number], { kind: "actual" }> => cost.kind === "actual",
+  );
+  const currencies = new Set(actual.map((cost) => cost.currency));
+  if (actual.length !== costs.length || currencies.size !== 1) return "Actual cost unknown";
+  const amount = actual.reduce((total, cost) => total + cost.amountMicros, 0) / 1_000_000;
+  const currency = actual[0]!.currency;
+  const digits = amount === 0 ? "0.00" : amount.toFixed(4).replace(/0+$/u, "").replace(/[.]$/u, "");
+  return `Actual ${currency === "USD" ? "$" : `${currency} `}${digits}`;
 }
 
 function terminalView(journal: CreateImagesRunJournalV1): CreateImagesTerminalRunView | undefined {
@@ -390,7 +468,7 @@ function terminalView(journal: CreateImagesRunJournalV1): CreateImagesTerminalRu
     executionMode: isGemini ? "gemini" : "local-mock",
     providerLabel: isGemini ? "Google Gemini" : "Aiden local mock",
     modelLabel: isGemini ? (geminiModelId ?? "Gemini image model") : "Deterministic Phase 3",
-    costLabel: isGemini ? "Provider cost not reported" : "$0.00 mock",
+    costLabel: terminalCostLabel(projection, isGemini),
     ...(projection.ambiguityResolution
       ? { ambiguityResolution: { ...projection.ambiguityResolution } }
       : {}),
@@ -566,6 +644,13 @@ export class CreateImagesRunService {
       for (const journal of await this.journals.reconciliationCandidates()) {
         const projection = projectCreateImagesRun(journal);
         if (projection.terminal) continue;
+        if (projection.status === "paused") {
+          const active = this.recoveryActive(journal);
+          active.publishedOutputs = new Map(await this.resumeOutputs(journal));
+          this.activeByRun.set(active.runId, active);
+          this.activeByWorkflow.set(active.workflowId, active);
+          continue;
+        }
         await this.reconcileAfterRestart(journal);
       }
       await this.options.references.reconcileRuns(this.journals);
@@ -991,6 +1076,17 @@ export class CreateImagesRunService {
           return;
         }
         if (event.kind === "run") {
+          if (event.status === "paused") {
+            const checkpoint = active.pendingPause;
+            if (!checkpoint) throw new Error("A durable pause requires a prepared checkpoint.");
+            await append((journal) => ({
+              ...createEventBase(journal, event.atMs),
+              type: "run-paused",
+              ...checkpoint,
+            }));
+            active.pendingPause = undefined;
+            return;
+          }
           if (event.status !== "running") this.terminalCache.delete(active.workflowId);
           await append(
             (journal) =>
@@ -1146,6 +1242,28 @@ export class CreateImagesRunService {
       active.reservations.set(nodeId, reservation);
       return { ...output, assetIds: [...output.assetIds] };
     }
+    if (isAnnotationImageOutput(output)) {
+      const expectedAssetId = createHash("sha256").update(output.bytes).digest("hex");
+      const reservation = await this.options.references.reserveRun(
+        active.runId,
+        this.cumulativeRunAssetIds(active, [expectedAssetId]),
+      );
+      active.reservations.set(nodeId, reservation);
+      const ingested = await this.options.assets.ingest(bytesOf(output.bytes), {
+        origin: { kind: "annotation", sourceAssetId: output.sourceAssetId },
+        declaredMimeType: "image/png",
+        displayName: "Annotated image.png",
+        generationMetadata: {
+          source: "aiden-annotation",
+          width: output.width,
+          height: output.height,
+        },
+      });
+      if (ingested.asset.assetId !== expectedAssetId) {
+        throw new Error("The durable annotation digest differs from its validated output.");
+      }
+      return { kind: "images", assetIds: [expectedAssetId] };
+    }
     if (!isProviderImageOutputBatch(output)) {
       throw new Error("The node executor returned an unsupported output.");
     }
@@ -1210,11 +1328,112 @@ export class CreateImagesRunService {
   }
 
   private async executeNode(
+    active: ActiveRun,
     provider: DeterministicMockImageProvider,
     providerEvents: MockProviderEventCoordinator,
     context: CoordinatorNodeExecutionContext,
   ) {
     if (context.node.type === "generate-image") {
+      const promptList = [...context.dependencyOutputs.values()].find(
+        (value): value is DurableNodeOutput & { items: string[] } =>
+          isDurableNodeOutput(value) &&
+          value.kind === "text-list" &&
+          Array.isArray(value.items),
+      );
+      if (promptList) {
+        if (promptList.items.length * context.node.data.count > 8) {
+          return {
+            kind: "failure" as const,
+            error: "A local batch is limited to eight planned outputs.",
+            retrySafety: "never" as const,
+          };
+        }
+        const itemIds = promptList.items.map((_, index) =>
+          `batch-${createHash("sha256")
+            .update(active.runId)
+            .update("\0")
+            .update(context.node.id)
+            .update("\0")
+            .update(String(index))
+            .digest("hex")
+            .slice(0, 40)}`,
+        );
+        for (const [index, itemId] of itemIds.entries()) {
+          await this.appendBatchItemState(active, context.node.id, itemId, index, "queued");
+        }
+        const outputAssetIds: string[] = [];
+        for (const [index, itemId] of itemIds.entries()) {
+          if (context.signal.aborted) {
+            for (let pending = index; pending < itemIds.length; pending += 1) {
+              await this.appendBatchItemState(
+                active,
+                context.node.id,
+                itemIds[pending]!,
+                pending,
+                "cancelled",
+              );
+            }
+            return { kind: "cancelled" as const };
+          }
+          await this.appendBatchItemState(
+            active,
+            context.node.id,
+            itemId,
+            index,
+            "submission_prepared",
+          );
+          const itemProvider = new DeterministicMockImageProvider({
+            clock: realClock(this.now),
+            script: {
+              nodes: {
+                [context.node.id]: [
+                  {
+                    outcome: "success",
+                    seed: index + 1,
+                    width: 96,
+                    height: 96,
+                  },
+                ],
+              },
+            },
+          });
+          const result = await itemProvider.execute(context);
+          if (result.kind !== "success") {
+            await this.appendBatchItemState(active, context.node.id, itemId, index, "failed", {
+              errorCode: "execution-failed",
+              cost: { kind: "actual", amountMicros: 0, currency: "USD" },
+            });
+            for (let pending = index + 1; pending < itemIds.length; pending += 1) {
+              await this.appendBatchItemState(
+                active,
+                context.node.id,
+                itemIds[pending]!,
+                pending,
+                "blocked",
+              );
+            }
+            return {
+              kind: "failure" as const,
+              error: "A deterministic batch item failed.",
+              retrySafety: "never" as const,
+            };
+          }
+          await this.appendBatchItemState(active, context.node.id, itemId, index, "submitted");
+          const reservationId = `${context.node.id}-batch-${index + 1}`;
+          const durable = await this.publishNodeOutput(active, reservationId, result.output);
+          active.publishedOutputs.set(reservationId, durable);
+          await this.commitBatchReservation(active, reservationId);
+          outputAssetIds.push(...durable.assetIds);
+          await this.appendBatchItemState(active, context.node.id, itemId, index, "succeeded", {
+            outputAssetIds: durable.assetIds,
+            cost: { kind: "actual", amountMicros: 0, currency: "USD" },
+          });
+        }
+        return {
+          kind: "success" as const,
+          output: { kind: "images", assetIds: outputAssetIds } satisfies DurableNodeOutput,
+        };
+      }
       const result = await provider.execute(context);
       if (
         result.kind === "success" &&
@@ -1232,14 +1451,55 @@ export class CreateImagesRunService {
       return result;
     }
     if (context.node.type === "prompt") {
+      const variables = context.node.data.variables ?? [];
+      const valuesById: Record<string, string | undefined> = {};
+      for (const variable of variables) {
+        const edge = active.journal.workflowSnapshot.edges.find(
+          (candidate) =>
+            candidate.target === context.node.id &&
+            candidate.targetPort === `variable-${variable.id}`,
+        );
+        const output = edge ? context.dependencyOutputs.get(edge.source) : undefined;
+        valuesById[variable.id] =
+          isDurableNodeOutput(output) && output.kind === "text" ? output.text : undefined;
+      }
+      const resolved = resolveCreateImagesPromptVariables(
+        context.node.data.text,
+        variables,
+        valuesById,
+      );
+      if (resolved.status === "invalid") {
+        return {
+          kind: "failure" as const,
+          error: resolved.message,
+          retrySafety: "never" as const,
+        };
+      }
       return {
         kind: "success" as const,
         output: {
           kind: "text",
-          text: context.node.data.text,
+          text: resolved.text,
           assetIds: [],
         } satisfies DurableNodeOutput,
       };
+    }
+    if (context.node.type === "prompt-list") {
+      const parsed = parseCreateImagesPromptList(context.node.data.source, context.node.data.format);
+      return parsed.status === "ready"
+        ? {
+            kind: "success" as const,
+            output: {
+              kind: "text-list",
+              items: parsed.items,
+              assetIds: [],
+            } satisfies DurableNodeOutput,
+          }
+        : {
+            kind: "failure" as const,
+            error: parsed.message,
+            retrySafety: "never" as const,
+          };
     }
     if (context.node.type === "image-input") {
       const assetId = context.node.data.assetId;
@@ -1257,6 +1517,50 @@ export class CreateImagesRunService {
           assetIds: [assetId],
         } satisfies DurableNodeOutput,
       };
+    }
+    if (context.node.type === "annotation") {
+      const assetIds = new Set<string>();
+      for (const value of context.dependencyOutputs.values()) {
+        for (const assetId of assetIdsFrom(value)) assetIds.add(assetId);
+      }
+      const sourceAssetId = [...assetIds][0];
+      if (assetIds.size !== 1 || !sourceAssetId) {
+        return {
+          kind: "failure" as const,
+          error: "Annotation requires exactly one available source image.",
+          retrySafety: "never" as const,
+        };
+      }
+      if (!this.options.annotationRasterizer) {
+        return {
+          kind: "failure" as const,
+          error: "The packaged annotation rasterizer is unavailable.",
+          retrySafety: "never" as const,
+        };
+      }
+      const shapes = context.node.data.shapes;
+      try {
+        const rasterized = await this.options.assets.withAssetFile(sourceAssetId, ({ filePath }) =>
+          this.options.annotationRasterizer!.rasterize({
+            sourcePath: filePath,
+            shapes,
+          }),
+        );
+        return {
+          kind: "success" as const,
+          output: {
+            kind: "annotation-image",
+            sourceAssetId,
+            ...rasterized,
+          } satisfies AnnotationImageOutput,
+        };
+      } catch {
+        return {
+          kind: "failure" as const,
+          error: "Aiden could not rasterize the bounded annotation.",
+          retrySafety: "local-safe" as const,
+        };
+      }
     }
     const assetIds = new Set<string>();
     for (const value of context.dependencyOutputs.values()) {
@@ -1278,6 +1582,7 @@ export class CreateImagesRunService {
   ) {
     if (context.node.type !== "generate-image") {
       return this.executeNode(
+        active,
         new DeterministicMockImageProvider({ clock: realClock(this.now), script: { nodes: {} } }),
         new MockProviderEventCoordinator(),
         context,
@@ -1325,10 +1630,28 @@ export class CreateImagesRunService {
         typeof value.text === "string" &&
         value.text.trim().length > 0,
     );
-    if (promptOutputs.length !== 1) {
+    const promptListOutputs = [...context.dependencyOutputs.values()].filter(
+      (value): value is DurableNodeOutput & { items: string[] } =>
+        isDurableNodeOutput(value) &&
+        value.kind === "text-list" &&
+        Array.isArray(value.items) &&
+        value.items.length > 0,
+    );
+    if (promptOutputs.length + promptListOutputs.length !== 1) {
       return {
         kind: "failure" as const,
-        error: "Gemini generation requires exactly one durable prompt input.",
+        error: "Gemini generation requires exactly one durable prompt or prompt-list input.",
+        retrySafety: "confirmed-not-submitted" as const,
+      };
+    }
+    const promptItems = promptListOutputs[0]?.items ?? [promptOutputs[0]!.text];
+    if (
+      promptItems.length * context.node.data.count > 8 ||
+      promptItems.length > active.journal.providerAuthorization.initialRequestCount
+    ) {
+      return {
+        kind: "failure" as const,
+        error: "The durable batch no longer matches its confirmed request count.",
         retrySafety: "confirmed-not-submitted" as const,
       };
     }
@@ -1365,10 +1688,175 @@ export class CreateImagesRunService {
           mimeType: preview.asset.mediaType as "image/png" | "image/jpeg" | "image/webp",
         });
       }
+      if (promptListOutputs.length === 1) {
+        const itemIds = promptItems.map((_, index) =>
+          `batch-${createHash("sha256")
+            .update(active.runId)
+            .update("\0")
+            .update(context.node.id)
+            .update("\0")
+            .update(String(index))
+            .digest("hex")
+            .slice(0, 40)}`,
+        );
+        for (const [index, itemId] of itemIds.entries()) {
+          await this.appendBatchItemState(active, context.node.id, itemId, index, "queued");
+        }
+        const outputAssetIds: string[] = [];
+        const interactionIds: string[] = [];
+        for (const [index, prompt] of promptItems.entries()) {
+          const itemId = itemIds[index]!;
+          if (context.signal.aborted) {
+            for (let pendingIndex = index; pendingIndex < itemIds.length; pendingIndex += 1) {
+              await this.appendBatchItemState(
+                active,
+                context.node.id,
+                itemIds[pendingIndex]!,
+                pendingIndex,
+                "cancelled",
+              );
+            }
+            return { kind: "cancelled" as const };
+          }
+          await this.appendBatchItemState(
+            active,
+            context.node.id,
+            itemId,
+            index,
+            "submission_prepared",
+          );
+          const request: ValidatedImageGenerationRequest = {
+            providerId: "gemini",
+            modelId: context.node.data.modelId ?? "",
+            prompt,
+            aspectRatio: context.node.data.aspectRatio,
+            imageSize: context.node.data.imageSize,
+            outputMime: context.node.data.outputMime,
+            count: context.node.data.count,
+            references,
+          };
+          const gate = this.providerAdmissionGate.tryAcquire("gemini", this.now());
+          if (gate.status === "deferred") {
+            await this.appendBatchItemState(active, context.node.id, itemId, index, "failed", {
+              errorCode: "rate-limited",
+              cost: { kind: "unknown" },
+            });
+            for (let pendingIndex = index + 1; pendingIndex < itemIds.length; pendingIndex += 1) {
+              await this.appendBatchItemState(
+                active,
+                context.node.id,
+                itemIds[pendingIndex]!,
+                pendingIndex,
+                "blocked",
+              );
+            }
+            return {
+              kind: "failure" as const,
+              error: "Gemini request admission is temporarily busy.",
+              retrySafety: "never" as const,
+              errorCode: "rate-limited" as const,
+            };
+          }
+          try {
+            const result = await provider.execute(currentAuth, request, {
+              runId: active.runId,
+              nodeId: `${context.node.id}-${index + 1}`,
+              signal: context.signal,
+            });
+            if (result.kind === "cancelled") {
+              await this.appendBatchItemState(active, context.node.id, itemId, index, "cancelled");
+              for (let pendingIndex = index + 1; pendingIndex < itemIds.length; pendingIndex += 1) {
+                await this.appendBatchItemState(
+                  active,
+                  context.node.id,
+                  itemIds[pendingIndex]!,
+                  pendingIndex,
+                  "cancelled",
+                );
+              }
+              return result;
+            }
+            if (result.kind !== "success") {
+              const errorCode = geminiCoordinatorErrorCode(result.providerErrorCode);
+              await this.appendBatchItemState(active, context.node.id, itemId, index, "submitted");
+              await this.appendBatchItemState(active, context.node.id, itemId, index, "failed", {
+                errorCode,
+                cost: { kind: "unknown" },
+              });
+              for (let pendingIndex = index + 1; pendingIndex < itemIds.length; pendingIndex += 1) {
+                await this.appendBatchItemState(
+                  active,
+                  context.node.id,
+                  itemIds[pendingIndex]!,
+                  pendingIndex,
+                  "blocked",
+                );
+              }
+              return {
+                ...result,
+                kind: "failure" as const,
+                retrySafety: "never" as const,
+                errorCode,
+              };
+            }
+            await this.appendBatchItemState(active, context.node.id, itemId, index, "submitted");
+            const durable = await this.publishNodeOutput(
+              active,
+              `${context.node.id}-batch-${index + 1}`,
+              result.output,
+            );
+            active.publishedOutputs.set(`${context.node.id}-batch-${index + 1}`, durable);
+            await this.commitBatchReservation(active, `${context.node.id}-batch-${index + 1}`);
+            outputAssetIds.push(...durable.assetIds);
+            if (result.output.metadata.interactionId) {
+              interactionIds.push(result.output.metadata.interactionId);
+            }
+            const usage = result.output.metadata.usage;
+            await this.appendBatchItemState(active, context.node.id, itemId, index, "succeeded", {
+              outputAssetIds: durable.assetIds,
+              ...(usage
+                ? {
+                    usage: {
+                      ...(usage.totalInputTokens === undefined
+                        ? {}
+                        : { inputTokens: usage.totalInputTokens }),
+                      ...(usage.totalOutputTokens === undefined
+                        ? {}
+                        : { outputTokens: usage.totalOutputTokens }),
+                      ...(usage.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+                    },
+                  }
+                : {}),
+              cost: { kind: "unknown" },
+            });
+          } finally {
+            this.providerAdmissionGate.release(gate.lease);
+          }
+        }
+        const acceptanceId = `gemini-batch-${createHash("sha256")
+          .update(interactionIds.join("\0") || "no-interaction-ids")
+          .update("\0")
+          .update(active.runId)
+          .update("\0")
+          .update(context.node.id)
+          .digest("hex")}`;
+        try {
+          await context.recordRemoteJobId(acceptanceId);
+        } catch {
+          return {
+            kind: "ambiguous-submit" as const,
+            error: "Gemini batch completed, but Aiden could not durably bind the responses.",
+          };
+        }
+        return {
+          kind: "success" as const,
+          output: { kind: "images", assetIds: outputAssetIds } satisfies DurableNodeOutput,
+        };
+      }
       const request: ValidatedImageGenerationRequest = {
         providerId: "gemini",
         modelId: context.node.data.modelId ?? "",
-        prompt: promptOutputs[0]!.text,
+        prompt: promptItems[0]!,
         aspectRatio: context.node.data.aspectRatio,
         imageSize: context.node.data.imageSize,
         outputMime: context.node.data.outputMime,
@@ -1431,7 +1919,97 @@ export class CreateImagesRunService {
     }
   }
 
-  private launch(active: ActiveRun, nodes: readonly WorkflowNodeV1[]): void {
+  private appendBatchItemState(
+    active: ActiveRun,
+    nodeId: string,
+    itemId: string,
+    itemIndex: number,
+    state: CreateImagesBatchItemState,
+    details: {
+      outputAssetIds?: string[];
+      errorCode?: string;
+      usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+      cost?: { kind: "unknown" } | { kind: "actual"; amountMicros: number; currency: string };
+    } = {},
+  ): Promise<void> {
+    return this.mutateJournal(active, (journal) =>
+      this.journals.append(journal.runId, journal.journalRevision, {
+        ...createEventBase(journal, this.now()),
+        type: "batch-item-state",
+        nodeId,
+        itemId,
+        itemIndex,
+        state,
+        ...details,
+      }),
+    );
+  }
+
+  private async commitBatchReservation(active: ActiveRun, reservationId: string): Promise<void> {
+    const reservation = active.reservations.get(reservationId);
+    if (!reservation) return;
+    try {
+      await this.options.references.commitRun(reservation);
+    } catch (error) {
+      if (!(await this.options.references.reconcileRuns(this.journals))) throw error;
+    }
+    active.reservations.delete(reservationId);
+    await this.options.assets
+      .replaceReferences(
+        { kind: "run", id: active.runId },
+        this.cumulativeRunAssetIds(active, []).sort(),
+      )
+      .catch(() => undefined);
+  }
+
+  private async resumeOutputs(
+    journal: CreateImagesRunJournalV1,
+  ): Promise<ReadonlyMap<string, DurableNodeOutput>> {
+    const projection = projectCreateImagesRun(journal);
+    const nodes = new Map(journal.workflowSnapshot.nodes.map((node) => [node.id, node]));
+    const outputs = new Map<string, DurableNodeOutput>();
+    for (const nodeId of journal.plan.orderedNodeIds) {
+      const nodeRun = projection.nodes[nodeId];
+      if (nodeRun?.status !== "succeeded") continue;
+      const node = nodes.get(nodeId);
+      if (!node) throw new Error("A paused run references a missing immutable node.");
+      if (node.type === "prompt") {
+        const valuesById: Record<string, string | undefined> = {};
+        for (const variable of node.data.variables ?? []) {
+          const edge = journal.workflowSnapshot.edges.find(
+            (candidate) =>
+              candidate.target === node.id &&
+              candidate.targetPort === `variable-${variable.id}`,
+          );
+          const dependency = edge ? outputs.get(edge.source) : undefined;
+          valuesById[variable.id] = dependency?.kind === "text" ? dependency.text : undefined;
+        }
+        const resolved = resolveCreateImagesPromptVariables(
+          node.data.text,
+          node.data.variables ?? [],
+          valuesById,
+        );
+        if (resolved.status === "invalid") throw new Error(resolved.message);
+        outputs.set(nodeId, { kind: "text", text: resolved.text, assetIds: [] });
+        continue;
+      }
+      if (node.type === "prompt-list") {
+        const parsed = parseCreateImagesPromptList(node.data.source, node.data.format);
+        if (parsed.status === "invalid") throw new Error(parsed.message);
+        outputs.set(nodeId, { kind: "text-list", items: parsed.items, assetIds: [] });
+        continue;
+      }
+      const assetIds = nodeRun.durableOutputAssetIds ?? nodeRun.outputAssetIds;
+      outputs.set(nodeId, { kind: "images", assetIds: [...assetIds] });
+    }
+    return outputs;
+  }
+
+  private launch(
+    active: ActiveRun,
+    nodes: readonly WorkflowNodeV1[],
+    resume?: { initialOutputs: ReadonlyMap<string, DurableNodeOutput>; skipBeforeNodeId: string },
+  ): void {
     active.settled = Promise.resolve()
       .then(async () => {
         const remoteNodeIds = nodes
@@ -1469,10 +2047,29 @@ export class CreateImagesRunService {
               : CREATE_IMAGES_LOCAL_MOCK_RETRY_POLICY,
           durability: this.durability(active),
           signal: active.controller.signal,
+          ...(resume
+            ? { initialSucceededOutputs: resume.initialOutputs, resuming: true }
+            : {}),
+          pauseBeforeNode: async ({ nodeId, dependencyNodeIds }) => {
+            if (resume?.skipBeforeNodeId === nodeId) return false;
+            const edges = active.journal.workflowSnapshot.edges.filter(
+              (edge) =>
+                edge.breakpoint === true &&
+                edge.target === nodeId &&
+                dependencyNodeIds.includes(edge.source),
+            );
+            if (edges.length === 0) return false;
+            active.pendingPause = {
+              checkpointId: randomUUID(),
+              beforeNodeId: nodeId,
+              edgeIds: edges.map((edge) => edge.id).sort(),
+            };
+            return true;
+          },
           executeNode: (context) =>
             geminiProvider
               ? this.executeGeminiNode(active, geminiProvider, context)
-              : this.executeNode(provider, providerEvents, context),
+              : this.executeNode(active, provider, providerEvents, context),
         });
       })
       .catch(async () => {
@@ -1559,10 +2156,56 @@ export class CreateImagesRunService {
         (candidate): candidate is Extract<WorkflowNodeV1, { type: "prompt" }> =>
           candidate.type === "prompt",
       );
-      if (prompts.length !== 1 || !prompts[0]!.data.text.trim()) {
+      const promptLists = dependencies.filter(
+        (candidate): candidate is Extract<WorkflowNodeV1, { type: "prompt-list" }> =>
+          candidate.type === "prompt-list",
+      );
+      if (prompts.length + promptLists.length !== 1) {
         throw new CreateImagesProviderAdmissionError(
           "invalid-input",
-          "Each Gemini request requires exactly one non-empty prompt input.",
+          "Each Gemini generation requires exactly one prompt or prompt-list input.",
+        );
+      }
+      let promptTexts: string[];
+      const promptNode = prompts[0];
+      if (promptNode) {
+        const promptValues: Record<string, string | undefined> = {};
+        for (const variable of promptNode.data.variables ?? []) {
+          const edge = plan.snapshot.edges.find(
+            (candidate) =>
+              candidate.target === promptNode.id &&
+              candidate.targetPort === `variable-${variable.id}`,
+          );
+          const source = edge ? nodes.get(edge.source) : undefined;
+          if (source?.type === "prompt" && (source.data.variables?.length ?? 0) === 0) {
+            promptValues[variable.id] = source.data.text;
+          }
+        }
+        const resolvedPrompt = resolveCreateImagesPromptVariables(
+          promptNode.data.text,
+          promptNode.data.variables ?? [],
+          promptValues,
+        );
+        if (resolvedPrompt.status === "invalid" || !resolvedPrompt.text.trim()) {
+          throw new CreateImagesProviderAdmissionError(
+            "invalid-input",
+            resolvedPrompt.status === "invalid"
+              ? resolvedPrompt.message
+              : "Each Gemini request requires a non-empty resolved prompt.",
+          );
+        }
+        promptTexts = [resolvedPrompt.text];
+      } else {
+        const parsed = parseCreateImagesPromptList(promptLists[0]!.data.source, promptLists[0]!.data.format);
+        if (parsed.status === "invalid") {
+          throw new CreateImagesProviderAdmissionError("invalid-input", parsed.message);
+        }
+        promptTexts = parsed.items;
+      }
+      if (promptTexts.length * node.data.count > 8) {
+        throw new CreateImagesProviderAdmissionError(
+          "invalid-input",
+          "A confirmed batch is limited to eight provider invocations including output count.",
         );
       }
       if (dependencies.some((candidate) => candidate.type === "generate-image")) {
@@ -1586,18 +2229,20 @@ export class CreateImagesRunService {
           "A reviewed Gemini reference image is unavailable.",
         );
       }
-      invocations.push({
-        nodeId: node.id,
-        promptBytes: Buffer.byteLength(prompts[0]!.data.text, "utf8"),
-        referenceImageCount: referenceAssets.length,
-        referenceImageBytes: referenceAssets.reduce(
-          (total, asset) => total + (asset?.byteLength ?? 0),
-          0,
-        ),
-        requestedOutputs: node.data.count,
-        aspectRatio: node.data.aspectRatio,
-        imageSize: node.data.imageSize,
-        outputMime: node.data.outputMime,
+      promptTexts.forEach((promptText, index) => {
+        invocations.push({
+          nodeId: promptTexts.length === 1 ? node.id : `${node.id}-batch-${index + 1}`,
+          promptBytes: Buffer.byteLength(promptText, "utf8"),
+          referenceImageCount: referenceAssets.length,
+          referenceImageBytes: referenceAssets.reduce(
+            (total, asset) => total + (asset?.byteLength ?? 0),
+            0,
+          ),
+          requestedOutputs: node.data.count,
+          aspectRatio: node.data.aspectRatio,
+          imageSize: node.data.imageSize,
+          outputMime: node.data.outputMime,
+        });
       });
     }
     return { capability, invocations };
@@ -1865,8 +2510,22 @@ export class CreateImagesRunService {
             "generate-image",
         );
         if (
-          JSON.stringify(authorization.invocations.map((invocation) => invocation.nodeId)) !==
-          JSON.stringify(generationNodeIds)
+          authorization.invocations.some(
+            (invocation) =>
+              !generationNodeIds.some(
+                (nodeId) =>
+                  invocation.nodeId === nodeId ||
+                  invocation.nodeId.startsWith(`${nodeId}-batch-`),
+              ),
+          ) ||
+          generationNodeIds.some(
+            (nodeId) =>
+              !authorization.invocations.some(
+                (invocation) =>
+                  invocation.nodeId === nodeId ||
+                  invocation.nodeId.startsWith(`${nodeId}-batch-`),
+              ),
+          )
         ) {
           throw new CreateImagesProviderAdmissionError(
             "forged-consent",
@@ -1983,6 +2642,101 @@ export class CreateImagesRunService {
     return operation;
   }
 
+  async resume(input: CreateImagesResumeRunRequest): Promise<CreateImagesRunMutationResult> {
+    await this.initialize();
+    const active = this.activeByRun.get(input.runId);
+    if (!active || active.workflowId !== input.workflowId) {
+      return { status: "not-found", message: "The paused workflow run no longer exists." };
+    }
+    let projection = projectCreateImagesRun(active.journal);
+    if (active.journal.journalRevision !== input.expectedJournalRevision) {
+      return {
+        status: "unavailable",
+        message: "The paused run changed. Review its current state before resuming.",
+      };
+    }
+    if (projection.status !== "paused" || !projection.pause || projection.pause.resumedAt) {
+      return { status: "unavailable", message: "This workflow run is not paused." };
+    }
+    if (projection.cancellation) {
+      return { status: "unavailable", message: "A cancelled workflow run cannot resume." };
+    }
+    const outputs = new Map(await this.resumeOutputs(active.journal));
+    const assetIds = [...new Set([...outputs.values()].flatMap((output) => output.assetIds))];
+    const availability = await Promise.all(
+      assetIds.map((assetId) => this.options.assets.getAvailable(assetId)),
+    );
+    if (availability.some((asset) => asset === undefined)) {
+      return {
+        status: "unavailable",
+        message: "A durable upstream image is no longer available. The run remains paused.",
+      };
+    }
+    if (active.journal.providerAuthorization) {
+      if (
+        !this.options.resolveGeminiAuth ||
+        Date.parse(active.journal.providerAuthorization.expiresAt) < this.now()
+      ) {
+        return {
+          status: "unavailable",
+          message: "Gemini consent expired while paused. Review a new run before any paid request.",
+        };
+      }
+      try {
+        const auth = await this.options.resolveGeminiAuth();
+        const binding = this.geminiCredentialBinding(auth);
+        if (
+          binding.recordId !== active.journal.providerAuthorization.credentialRecordId ||
+          binding.revision !== active.journal.providerAuthorization.credentialRevision
+        ) {
+          throw new Error("credential-drift");
+        }
+        const modelIds = [
+          ...new Set(
+            active.journal.workflowSnapshot.nodes.flatMap((node) =>
+              node.type === "generate-image" && node.data.modelId ? [node.data.modelId] : [],
+            ),
+          ),
+        ];
+        if (
+          modelIds.length !== 1 ||
+          this.currentGeminiCapability(modelIds[0]!).fingerprint !==
+            active.journal.providerAuthorization.capabilityFingerprint
+        ) {
+          throw new Error("capability-drift");
+        }
+        active.execution = { mode: "gemini", auth };
+      } catch {
+        return {
+          status: "unavailable",
+          message:
+            "Gemini credentials or capabilities changed while paused. No provider request was sent.",
+        };
+      }
+    } else {
+      active.execution = { mode: "local-mock" };
+    }
+    const checkpoint = projection.pause;
+    await this.mutateJournal(active, (journal) =>
+      this.journals.append(journal.runId, journal.journalRevision, {
+        ...createEventBase(journal, this.now()),
+        type: "run-resumed",
+        checkpointId: checkpoint.checkpointId,
+      }),
+    );
+    projection = projectCreateImagesRun(active.journal);
+    if (projection.status !== "running") {
+      return { status: "unavailable", message: "The durable resume transition was rejected." };
+    }
+    active.controller = new AbortController();
+    active.publishedOutputs = outputs;
+    this.launch(active, active.journal.workflowSnapshot.nodes, {
+      initialOutputs: outputs,
+      skipBeforeNodeId: checkpoint.beforeNodeId,
+    });
+    return { status: "resumed", run: runView(active.journal) };
+  }
+
   async deleteWorkflowIfRunLifecycleEmpty<Result>(
     workflowId: string,
     deleteWorkflow: () => Promise<Result>,
@@ -2062,6 +2816,29 @@ export class CreateImagesRunService {
     }
     if (!active.controller.signal.aborted) {
       active.controller.abort(new CoordinatorCancellationRequest(reason));
+    }
+    if (projectCreateImagesRun(active.journal).status === "paused") {
+      this.beginActiveCancellation(active, reason);
+      await active.mutationTail;
+      for (const nodeId of active.journal.plan.orderedNodeIds) {
+        if (projectCreateImagesRun(active.journal).nodes[nodeId]?.status !== "queued") continue;
+        await this.mutateJournal(active, (journal) =>
+          this.journals.append(journal.runId, journal.journalRevision, {
+            ...createEventBase(journal, this.now()),
+            type: "node-cancelled",
+            nodeId,
+          }),
+        );
+      }
+      await this.mutateJournal(active, (journal) =>
+        this.journals.append(journal.runId, journal.journalRevision, {
+          ...createEventBase(journal, this.now()),
+          type: "run-terminal",
+          status: "cancelled",
+        }),
+      );
+      await this.releaseActiveOwnershipIfTerminalOrDegraded(active);
+      return { status: "stopping", run: runView(active.journal) };
     }
     this.beginActiveCancellation(active, reason);
     const outcome = await this.waitForActiveStop(active, Date.now() + this.shutdownTimeoutMs);
@@ -2230,6 +3007,56 @@ export class CreateImagesRunService {
       (left, right) =>
         left.createdAt.localeCompare(right.createdAt) || left.runId.localeCompare(right.runId),
     );
+  }
+
+  async listRecentOutputs(limit: number): Promise<CreateImagesRecentOutputView[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+      throw new Error("Invalid Create Images recent output limit.");
+    }
+    await this.initialize();
+    const items: CreateImagesRecentOutputView[] = [];
+    for (const summary of await this.journals.terminalHistory()) {
+      if (items.length >= limit) break;
+      const journal = await this.journals.get(summary.runId);
+      if (!journal) continue;
+      const projection = projectCreateImagesRun(journal);
+      const nodes = new Map(journal.workflowSnapshot.nodes.map((node) => [node.id, node]));
+      const incoming = new Map<string, string[]>();
+      for (const edge of journal.workflowSnapshot.edges) {
+        const sources = incoming.get(edge.target) ?? [];
+        sources.push(edge.source);
+        incoming.set(edge.target, sources);
+      }
+      for (const nodeId of journal.plan.orderedNodeIds) {
+        if (items.length >= limit) break;
+        const node = nodes.get(nodeId);
+        if (node?.type !== "generate-image") continue;
+        const promptNode = (incoming.get(node.id) ?? [])
+          .map((sourceId) => nodes.get(sourceId))
+          .find((candidate) => candidate?.type === "prompt");
+        const prompt =
+          promptNode?.type === "prompt" ? promptNode.data.text.trim().slice(0, 280) : "";
+        for (const assetId of projection.nodes[nodeId]?.outputAssetIds ?? []) {
+          if (items.length >= limit) break;
+          if (!this.options.references.isRunAssetReferenced(journal.runId, assetId)) continue;
+          const asset = await this.options.assets.getAvailable(assetId);
+          if (!asset) continue;
+          items.push({
+            assetId,
+            runId: journal.runId,
+            workflowId: journal.workflowId,
+            nodeId,
+            prompt,
+            modelLabel: node.data.modelId ?? "Gemini image model",
+            createdAt: journal.updatedAt,
+            width: asset.width,
+            height: asset.height,
+            mediaType: asset.mediaType,
+          });
+        }
+      }
+    }
+    return items;
   }
 
   async list(workflowId: string): Promise<CreateImagesRunListResult> {
