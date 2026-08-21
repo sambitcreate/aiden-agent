@@ -59,7 +59,14 @@ import type {
   WorkspacePermission,
 } from "./types";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
-import type { BotCreateInput, BotDefinition, BotUpdateInput } from "../shared/bots";
+import type {
+  BotAvatarSuggestion,
+  BotAvatarSuggestionInput,
+  BotCreateInput,
+  BotDefinition,
+  BotUpdateInput,
+} from "../shared/bots";
+import { botAvatarSuggestionErrorMessage } from "../shared/bots";
 import type { AnthropicThinkingLevel } from "../shared/anthropic-thinking";
 import type { GoogleThinkingLevel } from "../shared/google-thinking";
 import type { CodexThinkingLevel } from "../shared/codex-thinking";
@@ -664,6 +671,15 @@ export const botsApi = {
     invoke<BotDefinition[]>("bots:list", includeArchived),
   get: (id: string) => invoke<BotDefinition | null>("bots:get", id),
   create: (input: BotCreateInput) => invoke<BotDefinition>("bots:create", input),
+  suggestAvatar: async (input: BotAvatarSuggestionInput) => {
+    try {
+      return await invoke<BotAvatarSuggestion>("bots:suggestAvatar", input);
+    } catch (error) {
+      throw new Error(botAvatarSuggestionErrorMessage(error));
+    }
+  },
+  cancelAvatarSuggestion: (requestId: string) =>
+    invoke<boolean>("bots:cancelAvatarSuggestion", requestId),
   update: (input: BotUpdateInput) => invoke<BotDefinition>("bots:update", input),
   archive: (id: string) => invoke<BotDefinition>("bots:archive", id),
   restore: (id: string) => invoke<BotDefinition>("bots:restore", id),
