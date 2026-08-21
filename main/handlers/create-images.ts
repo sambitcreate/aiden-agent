@@ -28,6 +28,7 @@ import {
 } from "../services/create-images/electron-asset-import.js";
 import { CreateImagesNativeArchiveError } from "../services/create-images/native-archive-service.js";
 import { CreateImagesNodeBananaServiceError } from "../services/create-images/node-banana-import-service.js";
+import { writeCreateImagesOutputZip } from "../services/create-images/native-output-zip.js";
 import type { CreateImagesWorkspaceStatus as CreateImagesWorkspaceStoreStatus } from "../services/create-images/workspace-store.js";
 import {
   createImagesAssetGrantUrl,
@@ -36,7 +37,9 @@ import {
   parseCreateImagesDeleteWorkflowRequest,
   parseCreateImagesDiscardDegradedRunRequest,
   parseCreateImagesDiscardAutosaveRequest,
+  parseCreateImagesDownloadWorkflowAssetRequest,
   parseCreateImagesDownloadRunAssetRequest,
+  parseCreateImagesDownloadRunAssetsZipRequest,
   parseCreateImagesDroppedAssetImportRequest,
   parseCreateImagesDuplicateWorkflowRequest,
   parseCreateImagesExportArchiveRequest,
@@ -47,10 +50,14 @@ import {
   parseCreateImagesGrantRunAssetRequest,
   parseCreateImagesGetRunRequest,
   parseCreateImagesListRunsRequest,
+  parseCreateImagesListRecentOutputsRequest,
+  parseCreateImagesGetPresentationRequest,
+  parseCreateImagesSetAssetHiddenRequest,
   parseCreateImagesPlanRunHistoryPruneRequest,
   parseCreateImagesPlanAssetCleanupRequest,
   parseCreateImagesPasteImageRequest,
   parseCreateImagesPrepareRunRequest,
+  parseCreateImagesProposeWorkflowRequest,
   parseCreateImagesPickAssetRequest,
   parseCreateImagesPlanDegradedRunDiscardRequest,
   parseCreateImagesPruneRunHistoryRequest,
@@ -63,6 +70,7 @@ import {
   parseCreateImagesSaveWorkflowRequest,
   parseCreateImagesStartRunRequest,
   parseCreateImagesStopRunRequest,
+  parseCreateImagesResumeRunRequest,
   parseCreateImagesSubscribeRunsRequest,
   parseCreateImagesUnsubscribeRunsRequest,
   parseCreateImagesWorkspaceRequest,
@@ -76,9 +84,12 @@ import {
   type CreateImagesExportArchiveResult,
   type CreateImagesImportArchiveResult,
   type CreateImagesImportNodeBananaResult,
+  type CreateImagesRecentOutputListResult,
+  type CreateImagesPresentationResult,
   type CreateImagesRunChangedNotification,
   type CreateImagesRunMutationResult,
   type CreateImagesPrepareRunResult,
+  type CreateImagesProposeWorkflowResult,
   type CreateImagesPasteImageResult,
   type CreateImagesWorkflowMutationResult,
   type CreateImagesWorkflowRecoveryView,
@@ -1366,6 +1377,76 @@ export function registerCreateImagesHandlers(): void {
     }
   });
 
+  ipcMain.handle("imageWorkflows:resumeRun", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted run request."));
+    const input = parseCreateImagesResumeRunRequest(value);
+    if (!mutationAllowed(owner, 2)) return runRateFailure();
+    try {
+      const bounded = await runBounded(owner.id, () => createImagesService().runs.resume(input));
+      return bounded.status === "completed" ? bounded.value : runRateFailure();
+    } catch {
+      return {
+        status: "unavailable" as const,
+        message: "The paused run could not be resumed safely.",
+      };
+    }
+  });
+
+  ipcMain.handle("imageWorkflows:proposeWorkflow", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted workflow proposal request."));
+    const input = parseCreateImagesProposeWorkflowRequest(value);
+    if (!mutationAllowed(owner, 8)) {
+      return {
+        status: "unavailable",
+        message: "Too many workflow proposals were requested. Wait a moment and try again.",
+      } satisfies CreateImagesProposeWorkflowResult;
+    }
+    const controller = new AbortController();
+    const releaseInvalidation = owner.onInvalidated(() => controller.abort());
+    try {
+      const bounded = await runBounded(owner.id, async (): Promise<CreateImagesProposeWorkflowResult> => {
+        const service = createImagesService();
+        await service.initialize();
+        const current = await service.workflows.get(input.workflowId);
+        if (!current) {
+          return { status: "unavailable", message: "The workflow no longer exists." };
+        }
+        if (current.revision !== input.expectedRevision) {
+          return { status: "conflict", currentRevision: current.revision };
+        }
+        const result = await service.proposals.propose({
+          request: input.request,
+          current: input.workflow,
+          providerId: input.providerId,
+          model: input.model,
+          signal: controller.signal,
+        });
+        if (owner.isDestroyed()) {
+          return { status: "unavailable", message: "The workflow was closed." };
+        }
+        const latest = await service.workflows.get(input.workflowId);
+        if (!latest) return { status: "unavailable", message: "The workflow no longer exists." };
+        if (latest.revision !== input.expectedRevision) {
+          return { status: "conflict", currentRevision: latest.revision };
+        }
+        return result;
+      });
+      return bounded.status === "completed"
+        ? bounded.value
+        : ({
+            status: "unavailable",
+            message: "Another workflow operation is still active. Try again shortly.",
+          } satisfies CreateImagesProposeWorkflowResult);
+    } catch {
+      return {
+        status: "unavailable",
+        message: "Aiden could not prepare a workflow proposal safely.",
+      } satisfies CreateImagesProposeWorkflowResult;
+    } finally {
+      releaseInvalidation();
+    }
+  });
+
   ipcMain.handle("imageWorkflows:resolveRunAmbiguity", async (event, value: unknown) => {
     const owner = rendererDocumentOwner(event, () => new Error("Untrusted run request."));
     const input = parseCreateImagesResolveRunAmbiguityRequest(value);
@@ -1482,12 +1563,22 @@ export function registerCreateImagesHandlers(): void {
       // change in the gap is delivered with a higher stream sequence and the
       // renderer applies it after this baseline snapshot.
       try {
-        const bounded = await runBounded(owner.id, () => service.runs.list(workflowId));
-        if (bounded.status === "busy") {
+        let snapshot: Awaited<ReturnType<typeof service.runs.list>> | undefined;
+        for (let attempt = 0; attempt < 4 && !snapshot; attempt += 1) {
+          const bounded = await runBounded(owner.id, () => service.runs.list(workflowId));
+          if (bounded.status === "completed") {
+            snapshot = bounded.value;
+            break;
+          }
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(resolve, 25 * 2 ** attempt);
+            timeout.unref?.();
+          });
+        }
+        if (!snapshot) {
           runSubscriptions.get(subscriptionId)?.release();
           return runReadRateFailure(owner);
         }
-        const snapshot = bounded.value;
         return {
           status: "ready" as const,
           subscriptionId,
@@ -1714,6 +1805,216 @@ export function registerCreateImagesHandlers(): void {
       };
     } finally {
       archiveDialogActive = false;
+    }
+  });
+
+  ipcMain.handle("imageWorkflows:downloadRunAssetsZip", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted run ZIP request."));
+    const input = parseCreateImagesDownloadRunAssetsZipRequest(value);
+    if (!readAllowed(owner, 4)) {
+      return {
+        status: "unavailable" as const,
+        message: "Too many image export requests were made. Wait a moment and try again.",
+      } satisfies CreateImagesDownloadRunAssetResult;
+    }
+    if (archiveDialogActive) {
+      return {
+        status: "unavailable" as const,
+        message: "Another image or workflow save dialog is open.",
+      } satisfies CreateImagesDownloadRunAssetResult;
+    }
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) {
+      return {
+        status: "unavailable" as const,
+        message: "The image ZIP save dialog is unavailable.",
+      } satisfies CreateImagesDownloadRunAssetResult;
+    }
+    archiveDialogActive = true;
+    const service = createImagesService();
+    const authorized = async () => {
+      const retained = await Promise.all(
+        input.assetIds.map((assetId) =>
+          service.runs.isRunAssetReferenced(input.workflowId, input.runId, assetId),
+        ),
+      );
+      return retained.every(Boolean) &&
+        input.assetIds.every((assetId) =>
+          service.references.isRunAssetReferenced(input.runId, assetId),
+        );
+    };
+    try {
+      await service.initialize();
+      if (!(await authorized())) return { status: "forbidden" as const };
+      const picked = await dialog.showSaveDialog(parent, {
+        defaultPath: `Aiden images ${input.runId.slice(0, 8)}.zip`,
+        filters: [{ name: "ZIP Archive", extensions: ["zip"] }],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      });
+      if (picked.canceled || !picked.filePath) return { status: "canceled" as const };
+      if (owner.isDestroyed()) {
+        return { status: "unavailable" as const, message: "The workflow was closed." };
+      }
+      if (!(await authorized())) return { status: "forbidden" as const };
+      await writeCreateImagesOutputZip(service.assets, input.assetIds, picked.filePath);
+      shell.showItemInFolder(picked.filePath);
+      return { status: "saved" as const, fileName: path.basename(picked.filePath) };
+    } catch {
+      return {
+        status: "unavailable" as const,
+        message: "Aiden could not save the selected images as a ZIP archive.",
+      };
+    } finally {
+      archiveDialogActive = false;
+    }
+  });
+
+  ipcMain.handle("imageWorkflows:downloadWorkflowAsset", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted workflow asset request."));
+    const input = parseCreateImagesDownloadWorkflowAssetRequest(value);
+    if (!readAllowed(owner, 8)) {
+      return {
+        status: "unavailable" as const,
+        message: "Too many image export requests were made. Wait a moment and try again.",
+      } satisfies CreateImagesDownloadRunAssetResult;
+    }
+    if (archiveDialogActive) {
+      return {
+        status: "unavailable" as const,
+        message: "Another image or workflow save dialog is open.",
+      } satisfies CreateImagesDownloadRunAssetResult;
+    }
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    if (!parent || parent.isDestroyed()) {
+      return {
+        status: "unavailable" as const,
+        message: "The image save dialog is unavailable.",
+      } satisfies CreateImagesDownloadRunAssetResult;
+    }
+    archiveDialogActive = true;
+    const service = createImagesService();
+    try {
+      await service.initialize();
+      if (!service.references.isWorkflowAssetReferenced(input.workflowId, input.assetId)) {
+        return { status: "forbidden" as const };
+      }
+      const asset = await service.assets.getAvailable(input.assetId);
+      if (!asset) return { status: "not-found" as const };
+      const extension = asset.mediaType === "image/png" ? "png" : "jpg";
+      const picked = await dialog.showSaveDialog(parent, {
+        defaultPath: `Aiden image ${input.assetId.slice(0, 8)}.${extension}`,
+        filters: [
+          {
+            name: asset.mediaType === "image/png" ? "PNG Image" : "JPEG Image",
+            extensions: [extension],
+          },
+        ],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+      });
+      if (picked.canceled || !picked.filePath) return { status: "canceled" as const };
+      if (owner.isDestroyed()) {
+        return { status: "unavailable" as const, message: "The workflow was closed." };
+      }
+      if (!service.references.isWorkflowAssetReferenced(input.workflowId, input.assetId)) {
+        return { status: "forbidden" as const };
+      }
+      await service.assets.exportAssetToFile(input.assetId, picked.filePath);
+      shell.showItemInFolder(picked.filePath);
+      return { status: "saved" as const, fileName: path.basename(picked.filePath) };
+    } catch (error) {
+      if (
+        error instanceof AssetStoreError &&
+        (error.code === "asset_not_found" || error.code === "asset_source_missing")
+      ) {
+        return { status: "not-found" as const };
+      }
+      return {
+        status: "unavailable" as const,
+        message: "Aiden could not save this workflow image.",
+      };
+    } finally {
+      archiveDialogActive = false;
+    }
+  });
+
+  ipcMain.handle("imageWorkflows:listRecentOutputs", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted recent image request."));
+    const input = parseCreateImagesListRecentOutputsRequest(value);
+    if (!readAllowed(owner, 2)) {
+      return {
+        status: "unavailable" as const,
+        message: "Recent images are busy. Wait a moment and try again.",
+      } satisfies CreateImagesRecentOutputListResult;
+    }
+    try {
+      const service = createImagesService();
+      await service.initialize();
+      return {
+        status: "ready" as const,
+        items: await service.runs.listRecentOutputs(input.limit),
+      } satisfies CreateImagesRecentOutputListResult;
+    } catch {
+      return {
+        status: "unavailable" as const,
+        message: "Aiden could not load recent generated images.",
+      } satisfies CreateImagesRecentOutputListResult;
+    }
+  });
+
+  ipcMain.handle("imageWorkflows:getPresentation", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted presentation request."));
+    const input = parseCreateImagesGetPresentationRequest(value);
+    if (!readAllowed(owner, 1)) {
+      return {
+        status: "unavailable" as const,
+        message: "Gallery presentation is busy. Wait a moment and try again.",
+      } satisfies CreateImagesPresentationResult;
+    }
+    try {
+      const service = createImagesService();
+      await service.initialize();
+      if (!(await service.workflows.get(input.workflowId))) return { status: "not-found" as const };
+      return {
+        status: "ready" as const,
+        hiddenAssetIds: await service.presentation.hiddenAssetIds(input.workflowId),
+      } satisfies CreateImagesPresentationResult;
+    } catch {
+      return {
+        status: "unavailable" as const,
+        message: "Gallery presentation could not be loaded.",
+      } satisfies CreateImagesPresentationResult;
+    }
+  });
+
+  ipcMain.handle("imageWorkflows:setAssetHidden", async (event, value: unknown) => {
+    const owner = rendererDocumentOwner(event, () => new Error("Untrusted presentation request."));
+    const input = parseCreateImagesSetAssetHiddenRequest(value);
+    if (!mutationAllowed(owner, 1)) {
+      return {
+        status: "unavailable" as const,
+        message: "Too many gallery changes were requested. Wait a moment and try again.",
+      } satisfies CreateImagesPresentationResult;
+    }
+    try {
+      const service = createImagesService();
+      await service.initialize();
+      if (!(await service.workflows.get(input.workflowId))) return { status: "not-found" as const };
+      if (!(await service.runs.isRunAssetReferenced(input.workflowId, input.runId, input.assetId))) {
+        return { status: "forbidden" as const };
+      }
+      return {
+        status: "ready" as const,
+        hiddenAssetIds: await service.presentation.setAssetHidden(
+          input.workflowId,
+          input.assetId,
+          input.hidden,
+        ),
+      } satisfies CreateImagesPresentationResult;
+    } catch {
+      return {
+        status: "unavailable" as const,
+        message: "Gallery presentation could not be updated.",
+      } satisfies CreateImagesPresentationResult;
     }
   });
 
