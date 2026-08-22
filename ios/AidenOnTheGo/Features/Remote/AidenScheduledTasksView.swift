@@ -43,15 +43,22 @@ actor AidenScheduledTaskCache {
         tasks: [AidenScheduledTask],
         settings: AidenScheduledSettings?
     ) throws {
-        let retainedRuns = load(instanceId: instanceId)?.runs ?? [:]
+        let retainedTaskIDs = Set(tasks.map(\.id))
+        let retainedRuns = (load(instanceId: instanceId)?.runs ?? [:]).filter {
+            retainedTaskIDs.contains($0.key)
+        }
         try persist(Snapshot(instanceId: instanceId, tasks: tasks, settings: settings, runs: retainedRuns))
     }
 
     func store(runs: [AidenScheduledRun], taskId: String, instanceId: String) throws {
-        var snapshot = load(instanceId: instanceId)
-            ?? Snapshot(instanceId: instanceId, tasks: [], settings: nil, runs: [:])
+        guard var snapshot = load(instanceId: instanceId),
+              snapshot.tasks.contains(where: { $0.id == taskId }) else { return }
         snapshot.runs[taskId] = Array(runs.prefix(50))
         try persist(snapshot)
+    }
+
+    func purge(instanceId: String) {
+        try? fileManager.removeItem(at: file(instanceId: instanceId))
     }
 
     private func persist(_ snapshot: Snapshot) throws {
@@ -78,6 +85,7 @@ actor AidenScheduledTaskCache {
 final class AidenScheduledTasksModel {
     private let coordinator: AidenRemoteCoordinator
     private let cache: AidenScheduledTaskCache
+    private let activationContext: AidenRemoteRequestContext?
     private var pendingRunKeys: [String: UUID] = [:]
     private(set) var tasks: [AidenScheduledTask] = []
     private(set) var settings: AidenScheduledSettings?
@@ -95,28 +103,45 @@ final class AidenScheduledTasksModel {
     ) {
         self.coordinator = coordinator
         self.cache = cache
+        activationContext = try? coordinator.requestContext()
     }
 
-    var isConnected: Bool { coordinator.connectionState == .connected }
-    var workspaces: [AidenWorkspace] { coordinator.workspaces.filter { $0.permission != .none } }
+    var isConnected: Bool {
+        coordinator.connectionState == .connected
+            && activationContext.map(coordinator.isCurrent) == true
+    }
+    var workspaces: [AidenWorkspace] {
+        guard activationContext.map(coordinator.isCurrent) == true else { return [] }
+        return coordinator.workspaces.filter { $0.permission != .none }
+    }
+
+    private func requestContext() throws -> AidenRemoteRequestContext {
+        guard let activationContext, coordinator.isCurrent(activationContext) else {
+            throw AidenRemoteClientError.installationChanged
+        }
+        return activationContext
+    }
 
     func load() async {
         guard !isLoading else { return }
         isLoading = true
         defer { isLoading = false }
-        guard let instanceId = coordinator.activeInstanceId else { return }
+        guard let context = try? requestContext() else { return }
+        let instanceId = context.instanceId
         if tasks.isEmpty, let cached = await cache.load(instanceId: instanceId) {
+            guard coordinator.isCurrent(context) else { return }
             tasks = cached.tasks.sorted(by: Self.sort)
             settings = cached.settings
         }
         guard isConnected else { return }
         do {
-            let client = try coordinator.remoteClient()
+            let client = try coordinator.remoteClient(for: context)
             async let loadedTasks = client.scheduledTasks()
             async let loadedSettings = client.scheduledSettings()
             async let loadedCatalog = client.modelCatalog()
             async let loadedMcpServers = client.scheduledMcpServers()
             let values = try await (loadedTasks, loadedSettings, loadedCatalog, loadedMcpServers)
+            guard coordinator.isCurrent(context) else { return }
             tasks = values.0.sorted(by: Self.sort)
             settings = values.1
             catalog = values.2
@@ -124,41 +149,54 @@ final class AidenScheduledTasksModel {
             try? await cache.store(instanceId: instanceId, tasks: tasks, settings: settings)
             presentedError = nil
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
         }
     }
 
     func loadScripts(workspaceId: String?) async {
+        guard let context = try? requestContext() else { return }
         do {
-            scripts = try await coordinator.remoteClient().scheduledScripts(workspaceId: workspaceId)
+            let loaded = try await coordinator.remoteClient(for: context).scheduledScripts(workspaceId: workspaceId)
+            guard coordinator.isCurrent(context) else { return }
+            scripts = loaded
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             scripts = []
             presentedError = error.localizedDescription
         }
     }
 
     func preview(_ draft: AidenScheduledTaskDraft) async throws -> [Date] {
-        try await coordinator.remoteClient().previewSchedule(
+        let context = try requestContext()
+        let result = try await coordinator.remoteClient(for: context).previewSchedule(
             cron: draft.schedule.trimmingCharacters(in: .whitespacesAndNewlines),
             timezone: draft.timezone.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+        guard coordinator.isCurrent(context) else {
+            throw AidenRemoteClientError.installationChanged
+        }
+        return result
     }
 
     func save(_ draft: AidenScheduledTaskDraft, replacing task: AidenScheduledTask?) async -> Bool {
         guard draft.validationMessage == nil, !isMutating, isConnected else { return false }
         isMutating = true
         defer { isMutating = false }
+        guard let context = try? requestContext() else { return false }
         do {
-            let client = try coordinator.remoteClient()
+            let client = try coordinator.remoteClient(for: context)
             let saved = if let task {
                 try await client.updateScheduledTask(id: task.id, revision: task.revision, mutation: draft.mutation)
             } else {
                 try await client.createScheduledTask(draft.mutation)
             }
+            guard coordinator.isCurrent(context) else { return false }
             upsert(saved)
             outcomeMessage = task == nil ? String(localized: "Scheduled task created.") : String(localized: "Scheduled task updated.")
             return true
         } catch {
+            guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
             await load()
             return false
@@ -177,11 +215,15 @@ final class AidenScheduledTasksModel {
         guard !isMutating, isConnected else { return false }
         isMutating = true
         defer { isMutating = false }
+        guard let context = try? requestContext() else { return false }
         do {
-            try await coordinator.remoteClient().removeScheduledTask(id: task.id, revision: task.revision)
+            try await coordinator.remoteClient(for: context).removeScheduledTask(id: task.id, revision: task.revision)
+            guard coordinator.isCurrent(context) else { return false }
             tasks.removeAll { $0.id == task.id }
+            try? await cache.store(instanceId: context.instanceId, tasks: tasks, settings: settings)
             return true
         } catch {
+            guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
             await load()
             return false
@@ -194,28 +236,39 @@ final class AidenScheduledTasksModel {
         defer { isMutating = false }
         let key = pendingRunKeys[task.id] ?? UUID()
         pendingRunKeys[task.id] = key
+        guard let context = try? requestContext() else { return }
         do {
-            let accepted = try await coordinator.remoteClient().runScheduledTask(id: task.id, idempotencyKey: key)
+            let accepted = try await coordinator.remoteClient(for: context).runScheduledTask(id: task.id, idempotencyKey: key)
+            guard coordinator.isCurrent(context) else { return }
             pendingRunKeys[task.id] = nil
             outcomeMessage = String(localized: "Run accepted (\(accepted.runId.prefix(12))…). It continues on your Mac if this phone disconnects.")
             await load()
         } catch {
+            guard coordinator.isCurrent(context) else { return }
             if !Self.isAmbiguous(error) { pendingRunKeys[task.id] = nil }
             presentedError = error.localizedDescription
         }
     }
 
     func runs(_ task: AidenScheduledTask) async throws -> [AidenScheduledRun] {
-        guard let instanceId = coordinator.activeInstanceId else {
-            throw AidenRemoteClientError.missingCredential
-        }
+        let context = try requestContext()
+        let instanceId = context.instanceId
         do {
-            let values = try await coordinator.remoteClient().scheduledRuns(taskId: task.id)
+            let values = try await coordinator.remoteClient(for: context).scheduledRuns(taskId: task.id)
+            guard coordinator.isCurrent(context) else {
+                throw AidenRemoteClientError.installationChanged
+            }
             try? await cache.store(runs: values, taskId: task.id, instanceId: instanceId)
             return values
         } catch {
             if let retained = await cache.load(instanceId: instanceId)?.runs[task.id] {
+                guard coordinator.isCurrent(context) else {
+                    throw AidenRemoteClientError.installationChanged
+                }
                 return retained
+            }
+            guard coordinator.isCurrent(context) else {
+                throw AidenRemoteClientError.installationChanged
             }
             throw error
         }
@@ -225,13 +278,18 @@ final class AidenScheduledTasksModel {
         guard let settings, !isMutating, isConnected else { return false }
         isMutating = true
         defer { isMutating = false }
+        guard let context = try? requestContext() else { return false }
         do {
-            self.settings = try await coordinator.remoteClient().updateScheduledSettings(
+            let updated = try await coordinator.remoteClient(for: context).updateScheduledSettings(
                 revision: settings.revision,
                 mutation: mutation
             )
+            guard coordinator.isCurrent(context) else { return false }
+            self.settings = updated
+            try? await cache.store(instanceId: context.instanceId, tasks: tasks, settings: updated)
             return true
         } catch {
+            guard coordinator.isCurrent(context) else { return false }
             presentedError = error.localizedDescription
             await load()
             return false
@@ -239,11 +297,16 @@ final class AidenScheduledTasksModel {
     }
 
     private func mutate(_ operation: (AidenRemoteClient) async throws -> AidenScheduledTask) async {
-        guard !isMutating, isConnected else { return }
+        guard !isMutating, isConnected, let context = try? requestContext() else { return }
         isMutating = true
         defer { isMutating = false }
-        do { upsert(try await operation(coordinator.remoteClient())) }
+        do {
+            let updated = try await operation(coordinator.remoteClient(for: context))
+            guard coordinator.isCurrent(context) else { return }
+            upsert(updated)
+        }
         catch {
+            guard coordinator.isCurrent(context) else { return }
             presentedError = error.localizedDescription
             await load()
         }
@@ -253,8 +316,17 @@ final class AidenScheduledTasksModel {
         tasks.removeAll { $0.id == task.id }
         tasks.append(task)
         tasks.sort(by: Self.sort)
-        if let instanceId = coordinator.activeInstanceId {
-            Task { try? await cache.store(instanceId: instanceId, tasks: tasks, settings: settings) }
+        if let instanceId = activationContext?.instanceId,
+           activationContext.map(coordinator.isCurrent) == true {
+            let taskSnapshot = tasks
+            let settingsSnapshot = settings
+            Task {
+                try? await cache.store(
+                    instanceId: instanceId,
+                    tasks: taskSnapshot,
+                    settings: settingsSnapshot
+                )
+            }
         }
     }
 
@@ -270,7 +342,7 @@ final class AidenScheduledTasksModel {
         switch error {
         case .invalidResponse, .unexpectedStatus: return true
         case .server(_, let body): return body.code.rawValue == "idempotency_in_flight" || body.code.rawValue == "internal_error"
-        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration: return false
+        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged: return false
         }
     }
 }
