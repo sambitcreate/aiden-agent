@@ -156,6 +156,7 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `POST /chats/{chatId}/turns`: atomic append/admit/start, idempotent by client key.
 - `POST /chats/{chatId}/attachments`: validate and stage one bounded image or UTF-8 text attachment.
 - `DELETE /chats/{chatId}/attachments/{attachmentId}`: discard an unused staged attachment.
+- `GET /chats/{chatId}/attachments/{attachmentId}/content`: return one authenticated, chat-scoped canonical PNG or JPEG for preview.
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`
@@ -169,7 +170,9 @@ First-turn title generation remains off the interactive response path. While it 
 
 Uploads produce random, short-lived, single-use references bound to the authenticated device and exact chat. References expire after 10 minutes, are removed on device revocation, and are consumed atomically by a turn. A turn accepts at most 10 distinct references. The server retains at most 20 staged references per device/chat, 40 per device, 256 globally, and 64 MiB of staged representation data; capacity exhaustion fails closed.
 
-Image uploads accept only PNG or JPEG, at most 8 MiB decoded, at most 16,384 pixels on either axis, and at most 40 million decoded pixels. Text uploads accept only the documented plain-text/source MIME allowlist, at most 100,000 Unicode scalars and 400,000 UTF-8 bytes. Display names are bounded to 255 Unicode scalars and reject separators and control characters. Upload envelopes never accept a local or server path. Chat and message responses project attachment ID, display name, MIME type, kind, and size only; inline bytes and text are never returned.
+Image uploads accept only PNG or JPEG, at most 8 MiB decoded, at most 16,384 pixels on either axis, and at most 40 million decoded pixels. Text uploads accept only the documented plain-text/source MIME allowlist, at most 100,000 Unicode scalars and 400,000 UTF-8 bytes. Display names are bounded to 255 Unicode scalars and reject separators and control characters. Upload envelopes never accept a local or server path. Chat and message responses project attachment ID, display name, MIME type, kind, and size only; inline bytes and text are never returned. A client may fetch a projected raster by its opaque attachment ID through the authenticated content route. The server re-resolves it inside the requested chat, fails closed on duplicate IDs or mismatched size/MIME/signature, and returns only bounded canonical image bytes with `no-store` and `nosniff` headers. Text and filesystem content are never exposed through that route.
+
+Assistant message history also carries a closed exceptional outcome when a stored generation failed or was cancelled. Failure metadata is restricted to Aiden's fixed provider category, bounded attempt count, and retry-exhausted flag; provider-authored errors and diagnostics remain forbidden. Completed messages omit this field. This makes terminal state durable across SSE disconnects and app restarts without exposing the private generation journal.
 
 ### Files and Git
 
