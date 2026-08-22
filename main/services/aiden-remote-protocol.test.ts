@@ -152,6 +152,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/turns",
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
+    "/chats/{chatId}/attachments/{attachmentId}/content",
     "/streams/{streamId}",
     "/streams/{streamId}/events",
     "/streams/{streamId}/cancel",
