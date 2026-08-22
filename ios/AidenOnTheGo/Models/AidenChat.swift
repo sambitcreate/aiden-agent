@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 enum AidenChatRole: String, Codable, Sendable {
     case user
@@ -10,6 +11,7 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
     let role: AidenChatRole
     let text: String
     let attachments: [AidenMessageAttachment]?
+    let outcome: AidenMessageOutcome?
     let createdAt: Date
 
     init(
@@ -17,14 +19,28 @@ struct AidenChatMessage: Codable, Identifiable, Equatable, Sendable {
         role: AidenChatRole,
         text: String,
         attachments: [AidenMessageAttachment]? = nil,
+        outcome: AidenMessageOutcome? = nil,
         createdAt: Date
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.attachments = attachments
+        self.outcome = outcome
         self.createdAt = createdAt
     }
+}
+
+enum AidenMessageOutcomeStatus: String, Codable, Sendable {
+    case failed
+    case cancelled
+}
+
+struct AidenMessageOutcome: Codable, Equatable, Sendable {
+    let status: AidenMessageOutcomeStatus
+    let category: String?
+    let attempts: Int?
+    let retryExhausted: Bool?
 }
 
 enum AidenAttachmentKind: String, Codable, Sendable {
@@ -38,6 +54,66 @@ struct AidenMessageAttachment: Codable, Identifiable, Equatable, Sendable {
     let mimeType: String
     let kind: AidenAttachmentKind
     let size: Int
+}
+
+struct AidenAttachmentContent: Equatable, Sendable {
+    let data: Data
+    let mimeType: String
+}
+
+enum AidenAttachmentImageValidation {
+    static let maximumBytes = 8 * 1_048_576
+    static let maximumDimension = 16_384
+    static let maximumPixels = 40_000_000
+
+    static func validatedData(
+        _ data: Data,
+        mimeType: String,
+        declaredSize: Int? = nil
+    ) -> Data? {
+        guard !data.isEmpty,
+              data.count <= maximumBytes,
+              declaredSize.map({ $0 == data.count }) ?? true,
+              hasMatchingSignature(data, mimeType: mimeType),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) == 1,
+              CGImageSourceGetStatus(source) == .statusComplete,
+              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0,
+              height > 0,
+              width <= maximumDimension,
+              height <= maximumDimension,
+              width <= maximumPixels / height,
+              CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 2,
+                  kCGImageSourceShouldCacheImmediately: true,
+              ] as CFDictionary) != nil
+        else { return nil }
+        return data
+    }
+
+    private static func hasMatchingSignature(_ data: Data, mimeType: String) -> Bool {
+        let header = [UInt8](data.prefix(8))
+        switch mimeType.lowercased() {
+        case "image/png":
+            return header == [137, 80, 78, 71, 13, 10, 26, 10]
+                && [UInt8](data.suffix(12)) == [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]
+        case "image/jpeg":
+            let trailer = [UInt8](data.suffix(2))
+            return header.count >= 3
+                && header[0] == 0xff
+                && header[1] == 0xd8
+                && header[2] == 0xff
+                && trailer == [0xff, 0xd9]
+        default:
+            return false
+        }
+    }
 }
 
 struct AidenAttachmentReference: Codable, Identifiable, Equatable, Sendable {
