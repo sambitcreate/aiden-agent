@@ -181,11 +181,11 @@ test("onboarding keeps navigation fixed while its content scrolls", () => {
   assert.match(source, /ref=\{scrollContainerRef\}[\s\S]*?data-onboarding-scroll/u);
   assert.match(
     source,
-    /scrollContainerRef\.current\?\.scrollTo\(\{ top: 0, behavior: "auto" \}\);[\s\S]*?\}, \[index\]\);/u,
+    /scrollContainerRef\.current\?\.scrollTo\(\{ top: 0, behavior: "auto" \}\);[\s\S]*?\}, \[index, open\]\);/u,
   );
 });
 
-test("provider setup progressively reveals the complete live Pi catalog", () => {
+test("provider setup progressively reveals Pi and uses the dedicated Codex surface", () => {
   assert.match(source, />\s*Choose from more\s*</u);
   assert.match(source, /aria-controls="onboarding-more-providers"/u);
   assert.match(source, /aria-expanded=\{showMoreProviders\}/u);
@@ -195,21 +195,53 @@ test("provider setup progressively reveals the complete live Pi catalog", () => 
   assert.match(source, /providers\.isError/u);
   assert.match(source, /providers\.refetch\(\)/u);
   assert.match(source, /disabled=\{!canChoose \|\| saving\}/u);
+  assert.match(source, /generic API-key login proves only that a credential was entered/u);
+  assert.match(source, /function canChooseBuiltinProvider\(_provider: Provider\): boolean \{[\s\S]*?return false;/u);
   assert.match(source, /<BuiltinProviderEditor[\s\S]*?layer="onboarding"/u);
-  assert.match(source, /provider\.id === "openai-codex"[\s\S]*?provider\.isBuiltin === true/u);
-  assert.match(source, /setSettingUpProvider\(chatGptProvider\)/u);
+  assert.match(source, /<CodexProviderSettings/u);
+  assert.match(source, /<CodexProviderSettings layer="onboarding"/u);
+  assert.match(source, /useCodexProviderStatus\(\)/u);
+  assert.match(source, /persistModelSelection\("openai-codex", model\)/u);
+  assert.doesNotMatch(source, /chatGptProvider/u);
   assert.doesNotMatch(source, /providersApi\.authStart/u);
 });
 
-test("onboarding traps focus and locks navigation during durable writes", () => {
+test("onboarding is an application modal and required setup cannot be skipped", () => {
   assert.match(source, /<DialogPrimitive\.Root open>/u);
-  assert.match(source, /<DialogPrimitive\.Content/u);
+  assert.match(source, /const \[open, setOpen\] = React\.useState\(true\)/u);
+  assert.match(source, /data-onboarding-active="true"/u);
+  assert.match(source, /<DialogPrimitive\.Content[\s\S]*?data-slot="dialog-content"/u);
   assert.match(source, /onEscapeKeyDown=\{\(event\) => event\.preventDefault\(\)\}/u);
   assert.match(source, /<DialogPrimitive\.Title className="sr-only">Set up Aiden/u);
   assert.match(source, /if \(!canContinue \|\| savingRef\.current\) return/u);
   assert.match(source, /aria-busy=\{saving \|\| undefined\}/u);
-  assert.match(source, /variant="transparent"[\s\S]*?disabled=\{saving\}[\s\S]*?>\s*Skip/u);
-  assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 6);
+  assert.match(source, /Profile and provider setup required/u);
+  assert.match(source, /aria-current=\{itemIndex === index \? "step" : undefined\}/u);
+  assert.doesNotMatch(source, />\s*Skip\s*</u);
+  assert.doesNotMatch(source, />\s*Set up later\s*</u);
+  assert.doesNotMatch(source, /setOnboardingOutcome\("deferred"/u);
+  assert.match(source, /setOpen\(snapshot\.outcome !== "completed"\)/u);
+  assert.ok((source.match(/disabled=\{saving\}/gu) ?? []).length >= 5);
+});
+
+test("hosted keys validate before selection and endpoint routes require discovered models", () => {
+  const providerStep = source.slice(
+    source.indexOf('if (step === "provider")'),
+    source.indexOf("  return (", source.indexOf('if (step === "provider")')),
+  );
+  const validate = providerStep.indexOf("providersApi.validateOnboardingApiKey");
+  const publish = providerStep.indexOf("queryClient.setQueryData<Provider[]>", validate);
+  const select = providerStep.indexOf("persistModelSelection(saved.id", validate);
+  assert.ok(validate >= 0 && validate < publish && publish < select);
+  assert.match(
+    providerStep,
+    /needsEndpointDiscovery = isLocalRuntime \|\| choice === "tailscale"/u,
+  );
+  assert.match(providerStep, /if \(!defaultModel\)[\s\S]*?no chat models were found/u);
+  assert.match(
+    source,
+    /choice === "openai-key" \|\| choice === "anthropic"[\s\S]*?Validating key…/u,
+  );
 });
 
 test("onboarding presentation stays compact and free of decorative gradients", () => {
@@ -221,7 +253,7 @@ test("onboarding presentation stays compact and free of decorative gradients", (
   );
 });
 
-test("the final step is a complete grouped bento gallery with hover and keyboard descriptions", () => {
+test("the final step is a complete grouped bento gallery with hover descriptions", () => {
   assert.match(source, /data-onboarding-bento/u);
   assert.match(source, /data-onboarding-feature-count=\{featureBentos\.length\}/u);
   assert.match(source, /auto-rows-\[118px\][\s\S]*?grid-cols-6/u);
@@ -236,8 +268,8 @@ test("the final step is a complete grouped bento gallery with hover and keyboard
     source,
     /Create reusable instructions, then type \$ to attach one to your next message\./u,
   );
-  assert.match(source, /tabIndex=\{0\}/u);
-  assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings → Remote Access/u);
+  assert.doesNotMatch(source, /<article[\s\S]*?tabIndex=\{0\}/u);
+  assert.match(source, /Phone and iPad access starts off[\s\S]*?Settings →\s*Remote\s+Access/u);
   for (const group of [
     "Build in your workspace",
     "Choose and extend",
