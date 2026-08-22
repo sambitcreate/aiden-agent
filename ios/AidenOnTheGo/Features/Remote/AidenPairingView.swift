@@ -254,6 +254,7 @@ struct AidenPairingView: View {
     @State private var isShowingAppearance = false
     @State private var isShowingPayloadFallback = false
     @State private var pairingTask: Task<Void, Never>?
+    @State private var hapticScope = UUID()
     @State private var step: Int
 
     private let onIntroductionComplete: (() -> Void)?
@@ -345,6 +346,7 @@ struct AidenPairingView: View {
                 }
             }
             .onDisappear {
+                coordinator.haptics.deactivate(scope: hapticScope)
                 pairingTask?.cancel()
                 pairingTask = nil
                 discovery.stop()
@@ -353,6 +355,7 @@ struct AidenPairingView: View {
                 manualEndpoint = ""
                 selectedAgentID = nil
             }
+            .onAppear { coordinator.haptics.activate(scope: hapticScope) }
             .sheet(isPresented: $isShowingScanner) {
                 NavigationStack {
                     AidenQRCodeScanner { payload in
@@ -875,6 +878,7 @@ struct AidenPairingView: View {
         operation: @escaping @MainActor () async -> AidenPairingAttemptResult
     ) {
         guard pairingTask == nil else { return }
+        let attemptID = UUID()
         pairingTask = Task { @MainActor in
             let result = await operation()
             guard !Task.isCancelled else {
@@ -882,11 +886,22 @@ struct AidenPairingView: View {
                 return
             }
             if result == .succeeded {
+                coordinator.haptics.play(
+                    .success,
+                    scope: hapticScope,
+                    dedupeKey: "pair:\(attemptID.uuidString)"
+                )
                 pairingPayload = ""
                 manualCode = ""
                 manualEndpoint = ""
                 selectedAgentID = nil
                 onPaired?()
+            } else if result == .failed {
+                coordinator.haptics.play(
+                    .error,
+                    scope: hapticScope,
+                    dedupeKey: "pair:\(attemptID.uuidString)"
+                )
             }
             pairingTask = nil
         }
