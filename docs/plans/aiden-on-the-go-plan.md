@@ -1,6 +1,6 @@
 # Aiden On The Go Plan
 
-Status: Active — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 11 is `VALID` and `IN_BETA_TESTING` for Internal Testers; physical-iPad and external/public-release acceptance remain open
+Status: Active — Phases 0–4, 7, 9, 10, and 11 are complete; Phases 5/6/8 are implemented, LAN and real Tailscale are proven on a physical iPhone, and version 0.1.0 build 15 is `VALID` and `IN_BETA_TESTING` for Internal Testers with Mac-aligned typed activity timelines; physical-iPad and external/public-release acceptance remain open
 Date: 2026-08-18
 Owners: Aiden Electron main process and the SwiftUI app under `ios/`
 
