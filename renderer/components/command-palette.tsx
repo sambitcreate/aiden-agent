@@ -239,9 +239,15 @@ export function AppCommandPalette({
     if (busy) return;
     setBusy(true);
     try {
-      const next = await providersApi.refresh();
-      queryClient.setQueryData(queryKeys.providers, next);
-      toast.success("Provider model catalogs refreshed");
+      const result = await providersApi.refresh();
+      queryClient.setQueryData(queryKeys.providers, result.providers);
+      if (result.errors.length > 0) {
+        toast.warning(
+          `${result.providers.length > 0 ? "Available catalogs refreshed; " : ""}${result.errors.length} provider catalog${result.errors.length === 1 ? "" : "s"} kept cached models.`,
+        );
+      } else {
+        toast.success("Provider model catalogs refreshed");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Providers could not be refreshed.");
     } finally {
