@@ -18,6 +18,7 @@ import {
 import { providerAuthFlow } from "../services/provider-auth-flow.js";
 import { providerAuthOwner } from "../services/provider-auth-owner.js";
 import { providerRegistry } from "../services/provider-registry.js";
+import { projectPiCatalogRefreshErrors } from "../services/pi-catalog-refresh.js";
 import { isCustomProviderId } from "../services/custom-provider-id.js";
 import {
   canonicalGoogleProvider,
@@ -54,6 +55,7 @@ import {
 } from "../../renderer/shared/appearance.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { normalizeProviderArtworkInput } from "../services/provider-artwork.js";
+import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 
 const appearancePreview = new AppearancePreviewState();
 
@@ -209,6 +211,14 @@ async function listProviders() {
   return listConfiguredProviders();
 }
 
+async function refreshProviderCatalogs(providerIds?: readonly string[], force = true) {
+  const errors = await providerRegistry.refreshBuiltinCatalogs(providerIds, force);
+  return {
+    providers: await listProviders(),
+    errors: projectPiCatalogRefreshErrors(errors),
+  };
+}
+
 export function registerProviderHandlers(): void {
   forwardCodexProviderStatusChanges(providerRegistry.codex, (channel, event) =>
     ipcMain.broadcast(channel, event),
@@ -329,16 +339,22 @@ export function registerProviderHandlers(): void {
     },
   );
 
-  ipcMain.handle("providers:refresh", async (event) => {
+  ipcMain.handle("providers:refresh", async (event, providerValue?: unknown) => {
     // A catalog refresh can renew OAuth credentials inside Pi, so treat it as
     // a credential-affecting operation rather than accepting stale documents.
     providerAuthOwner(event);
-    const errors = await providerRegistry.refreshBuiltinCatalogs();
-    if (errors.size > 0) {
-      const [providerId, error] = errors.entries().next().value as [string, Error];
-      throw new Error(`${providerId} model refresh failed: ${error.message}`);
+    const providerId = providerValue === undefined ? undefined : asProviderId(providerValue);
+    if (providerId !== undefined && !providerRegistry.isBuiltinProvider(providerId)) {
+      throw new Error("Only Pi built-in provider catalogs can be refreshed.");
     }
-    return listProviders();
+    return refreshProviderCatalogs(
+      providerId === undefined ? undefined : [providerId],
+    );
+  });
+
+  ipcMain.handle("providers:refreshIfStale", async (event) => {
+    providerAuthOwner(event);
+    return refreshProviderCatalogs(undefined, false);
   });
 
   ipcMain.handle("settings:get", async () => configStore.getSettings());
@@ -374,6 +390,26 @@ export function registerProviderHandlers(): void {
     async (_event, modelIdValue: unknown, levelValue: unknown) => {
       const selection = parseAnthropicThinkingSelection(modelIdValue, levelValue);
       return configStore.setAnthropicThinkingLevel(selection.modelId, selection.level);
+    },
+  );
+  ipcMain.handle(
+    "settings:setProviderThinking",
+    async (
+      _event,
+      providerIdValue: unknown,
+      modelIdValue: unknown,
+      levelValue: unknown,
+    ) => {
+      const providerId = asProviderId(providerIdValue);
+      const modelId = asString(modelIdValue, "modelId");
+      if (modelId.length > MAX_CONFIG_ID_LENGTH || !isGenerationThinkingLevel(levelValue)) {
+        throw new Error("Invalid provider thinking selection.");
+      }
+      const metadata = providerRegistry.builtinProvider(providerId)?.modelMetadata?.[modelId];
+      if (!metadata?.thinkingLevels?.includes(levelValue)) {
+        throw new Error("This thinking level is not supported by the selected model.");
+      }
+      return configStore.setProviderThinkingLevel(providerId, modelId, levelValue);
     },
   );
   ipcMain.handle(
