@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import {
   createRemoteChatGenerationOwner,
   type RemoteChatGenerationOwnerController,
@@ -574,18 +575,44 @@ export class AidenRemoteStreamService {
       return;
     }
     if (channel === "chat:error") {
+      const finalTimeline = parseGenerationTimeline(payload.timeline);
+      if (
+        stream.cancelRequested ||
+        payload.cancelled === true ||
+        finalTimeline?.status === "cancelled"
+      ) {
+        this.append(
+          stream,
+          "cancelled",
+          { source: stream.cancelRequested ? stream.cancellationSource : "server" },
+          true,
+          "cancelled",
+        );
+        return;
+      }
       this.append(
         stream,
         "error",
-        { code: "internal_error", message: boundedText(payload.message, 2_000, "Generation failed.") },
+        { code: "internal_error", message: "The model provider could not complete this response." },
         true,
         "error",
       );
       return;
     }
     if (channel === "chat:done") {
-      if (stream.cancelRequested) {
-        this.append(stream, "cancelled", { source: stream.cancellationSource }, true, "cancelled");
+      const finalTimeline = parseGenerationTimeline(payload.timeline);
+      if (
+        stream.cancelRequested ||
+        payload.cancelled === true ||
+        finalTimeline?.status === "cancelled"
+      ) {
+        this.append(
+          stream,
+          "cancelled",
+          { source: stream.cancelRequested ? stream.cancellationSource : "server" },
+          true,
+          "cancelled",
+        );
         return;
       }
       const chat = ownRecord(payload.chat);
@@ -603,12 +630,23 @@ export class AidenRemoteStreamService {
 
   markStartError(deviceId: string, streamId: string, error: unknown): void {
     const stream = this.requireStream(deviceId, streamId);
+    if (stream.cancelRequested) {
+      this.append(
+        stream,
+        "cancelled",
+        { source: stream.cancellationSource },
+        true,
+        "cancelled",
+      );
+      return;
+    }
+    void error;
     this.append(
       stream,
       "error",
       {
         code: "internal_error",
-        message: error instanceof Error ? error.message.slice(0, 2_000) : "Generation could not start.",
+        message: "Aiden could not start this response.",
       },
       true,
       "error",
