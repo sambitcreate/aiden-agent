@@ -38,7 +38,10 @@ test("Remote Access is opt-in and remains available after the main window closes
   await expect(remoteHealth()).rejects.toThrow();
   await enabled.click();
   await expect(enabled).toHaveAttribute("data-state", "checked");
-  await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("group").filter({ has: enabled })
+      .getByText("Ready for a device", { exact: true }),
+  ).toBeVisible();
   assertHealth(await remoteHealth());
 
   await page.close();
