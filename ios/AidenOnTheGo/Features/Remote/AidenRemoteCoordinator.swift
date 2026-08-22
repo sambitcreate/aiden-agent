@@ -2,11 +2,49 @@ import Foundation
 import Observation
 import UIKit
 
+actor AidenInstallationDataGate {
+    private var held = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !held {
+            held = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            held = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 enum AidenRemoteConnectionState: Equatable {
     case needsPairing
     case connecting
     case connected
     case offline(message: String)
+}
+
+enum AidenPairingAttemptResult: Equatable {
+    case succeeded
+    case cancelled
+    case failed
+}
+
+/// An opaque activation lease for one selected Aiden installation. The
+/// generation prevents an A -> B -> A switch from making work started during
+/// the first A activation current again.
+struct AidenRemoteRequestContext: Equatable, Hashable, Sendable {
+    let instanceId: String
+    let deviceId: String
+    fileprivate let generation: Int
 }
 
 @MainActor
@@ -23,13 +61,21 @@ final class AidenRemoteCoordinator {
     private(set) var isMutating = false
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
+    private let chatCache: AidenChatCache
+    private let scheduledTaskCache: AidenScheduledTaskCache
+    private let workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache
+    private let installationDataGate = AidenInstallationDataGate()
     private var pendingManagedWorktreeDeletionKeys: [String: UUID] = [:]
     private var connectionGeneration = 0
+    private var activationGeneration = 0
 
     init() {
         let installationStore = AidenInstallationStore()
         self.installationStore = installationStore
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
+        chatCache = .shared
+        scheduledTaskCache = .shared
+        workspaceEnvironmentCache = .shared
         clientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
         connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
     }
@@ -37,10 +83,16 @@ final class AidenRemoteCoordinator {
     init(
         installationStore: AidenInstallationStore,
         workspaceArchiveStore: AidenWorkspaceArchiveStore? = nil,
+        chatCache: AidenChatCache = .shared,
+        scheduledTaskCache: AidenScheduledTaskCache = .shared,
+        workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache = .shared,
         clientFactory: @escaping ClientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
     ) {
         self.installationStore = installationStore
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
+        self.chatCache = chatCache
+        self.scheduledTaskCache = scheduledTaskCache
+        self.workspaceEnvironmentCache = workspaceEnvironmentCache
         self.clientFactory = clientFactory
         connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
     }
@@ -55,12 +107,14 @@ final class AidenRemoteCoordinator {
         await connectActiveInstallation()
     }
 
-    func pair(qrPayload: String) async {
-        guard !isMutating else { return }
+    func pair(qrPayload: String) async -> AidenPairingAttemptResult {
+        guard !isMutating else { return .failed }
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
 
+        let previousConnectionState = connectionState
+        var credentialIssued = false
         do {
             guard let data = qrPayload.data(using: .utf8) else {
                 throw AidenRemoteClientError.invalidResponse
@@ -72,23 +126,103 @@ final class AidenRemoteCoordinator {
                 deviceType: Self.deviceType,
                 clientVersion: Self.clientVersion
             )
-            let temporaryName = payload.bootstrap.endpoint.host ?? String(localized: "Aiden Agent")
-            let installation = try installationStore.savePairing(
-                exchange,
-                trust: payload.trust,
-                name: temporaryName
-            )
-            connectionGeneration &+= 1
-            try await load(
-                installation: installation,
-                credential: exchange.credential,
-                generation: connectionGeneration
-            )
+            credentialIssued = true
+            try await activatePairing(payload: payload, exchange: exchange)
+            return .succeeded
+        } catch is CancellationError {
+            connectionState = installationStore.activeInstallation == nil ? .needsPairing : previousConnectionState
+            if credentialIssued {
+                presentedError = Self.pendingCredentialRecoveryMessage
+            }
+            return .cancelled
         } catch {
-            connectionState = installationStore.activeInstallation == nil ? .needsPairing : .offline(message: error.localizedDescription)
-            presentedError = error.localizedDescription
+            connectionState = installationStore.activeInstallation == nil ? .needsPairing : previousConnectionState
+            presentedError = credentialIssued
+                ? Self.pendingCredentialRecoveryMessage
+                : error.localizedDescription
+            return .failed
         }
     }
+
+    func pair(manualCode: String, endpoint: URL) async -> AidenPairingAttemptResult {
+        guard !isMutating else { return .failed }
+        isMutating = true
+        presentedError = nil
+        defer { isMutating = false }
+
+        let previousConnectionState = connectionState
+        var credentialIssued = false
+        do {
+            let result = try await AidenRemoteClient.pair(
+                manualCode: manualCode,
+                endpoint: endpoint,
+                deviceName: Self.deviceName,
+                deviceType: Self.deviceType,
+                clientVersion: Self.clientVersion
+            )
+            credentialIssued = true
+            try await activatePairing(payload: result.payload, exchange: result.exchange)
+            return .succeeded
+        } catch is CancellationError {
+            connectionState = installationStore.activeInstallation == nil ? .needsPairing : previousConnectionState
+            if credentialIssued {
+                presentedError = Self.pendingCredentialRecoveryMessage
+            }
+            return .cancelled
+        } catch {
+            connectionState = installationStore.activeInstallation == nil ? .needsPairing : previousConnectionState
+            presentedError = credentialIssued
+                ? Self.pendingCredentialRecoveryMessage
+                : error.localizedDescription
+            return .failed
+        }
+    }
+
+    func activatePairing(
+        payload: AidenRemoteContractFixture.PairingPayload,
+        exchange: AidenRemoteContractFixture.PairingExchange
+    ) async throws {
+        let temporaryName = exchange.displayName
+            ?? payload.bootstrap.endpoint.host
+            ?? String(localized: "Aiden Agent")
+        let stagedInstallation = AidenInstallation(
+            exchange: exchange,
+            pairingTrust: payload.trust,
+            name: temporaryName
+        )
+        let stagedClient = try clientFactory(stagedInstallation, exchange.credential)
+        async let serverRequest = stagedClient.server()
+        async let workspaceRequest = stagedClient.workspaces()
+        let (validatedServer, validatedWorkspaces) = try await (serverRequest, workspaceRequest)
+        guard validatedServer.instanceId == exchange.instanceId else {
+            throw AidenRemoteContractError.invalidPairingExchange
+        }
+        try Task.checkCancellation()
+        let previousDeviceId = installationStore.installations.first {
+            $0.id == exchange.instanceId
+        }?.deviceId
+        let knownWorkspaceIds = activeInstanceId == exchange.instanceId
+            ? Set(workspaces.map(\.id))
+            : []
+        let installation = try installationStore.savePairing(
+            exchange,
+            trust: payload.trust,
+            name: validatedServer.name,
+            connectedAt: Date()
+        )
+        activationGeneration &+= 1
+        connectionGeneration &+= 1
+        if let previousDeviceId, previousDeviceId != installation.deviceId {
+            await purgeInstallationData(installation.id, knownWorkspaceIds: knownWorkspaceIds)
+        }
+        self.server = validatedServer
+        applyWorkspaceSnapshot(validatedWorkspaces, instanceId: installation.id)
+        connectionState = .connected
+    }
+
+    private static let pendingCredentialRecoveryMessage = String(localized:
+        "Aiden created a pending device credential, but this iPhone could not finish saving it. Revoke the pending device in Aiden Agent, then create a new pairing code."
+    )
 
     func connectActiveInstallation() async {
         connectionGeneration &+= 1
@@ -117,7 +251,11 @@ final class AidenRemoteCoordinator {
     func switchInstallation(to installationId: String) async {
         guard !isMutating else { return }
         do {
+            let previousInstallationId = activeInstanceId
             try installationStore.setActive(installationId)
+            if previousInstallationId != activeInstanceId {
+                activationGeneration &+= 1
+            }
             server = nil
             workspaces = []
             updateIntentCatalog(for: nil)
@@ -130,10 +268,18 @@ final class AidenRemoteCoordinator {
     func removeInstallation(_ installationId: String) async {
         guard !isMutating else { return }
         do {
-            await AidenRemoteLiveActivityManager.shared.endAll(forInstanceID: installationId)
+            let previousInstallationId = activeInstanceId
+            let knownWorkspaceIds = previousInstallationId == installationId
+                ? Set(workspaces.map(\.id))
+                : []
             try installationStore.remove(installationId)
+            if previousInstallationId != activeInstanceId {
+                activationGeneration &+= 1
+            }
+            connectionGeneration &+= 1
             server = nil
             workspaces = []
+            await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
             updateIntentCatalog(for: installationId)
             await start()
         } catch {
@@ -309,35 +455,44 @@ final class AidenRemoteCoordinator {
         }
     }
 
-    func browserRoots() async throws -> [AidenBrowserRoot] {
-        try await activeClient().browserRoots()
+    func browserRoots(context: AidenRemoteRequestContext) async throws -> [AidenBrowserRoot] {
+        try await remoteClient(for: context).browserRoots()
     }
 
-    func browserChildren(location: String, cursor: String? = nil) async throws -> AidenBrowserPage {
-        try await activeClient().browserChildren(location: location, cursor: cursor)
+    func browserChildren(
+        context: AidenRemoteRequestContext,
+        location: String,
+        cursor: String? = nil
+    ) async throws -> AidenBrowserPage {
+        try await remoteClient(for: context).browserChildren(location: location, cursor: cursor)
     }
 
-    func createSelectedFolderWorkspace(location: String, name: String?) async -> AidenWorkspace? {
+    func createSelectedFolderWorkspace(
+        context: AidenRemoteRequestContext,
+        location: String,
+        name: String?
+    ) async -> AidenWorkspace? {
         guard !isMutating else { return nil }
         isMutating = true
         presentedError = nil
         defer { isMutating = false }
-        guard let installationId = activeInstanceId else { return nil }
-        let generation = connectionGeneration
+        guard isCurrent(context) else { return nil }
+        let installationId = context.instanceId
         do {
-            let client = try activeClient()
+            let client = try remoteClient(for: context)
             let selection = try await client.createWorkspaceSelection(location: location)
+            guard isCurrent(context) else { return nil }
             guard selection.expiresAt > Date() else {
                 throw AidenRemoteClientError.invalidResponse
             }
             let workspace = try await client.createWorkspace(
                 .selectedFolder(selection: selection.selection, name: name)
             )
-            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
+            guard isCurrent(context) else { return nil }
             upsert(workspace)
             return workspace
         } catch {
-            guard isCurrentContext(installationId: installationId, generation: generation) else { return nil }
+            guard isCurrent(context) else { return nil }
             await handleConnectionError(error, installationId: installationId)
             return nil
         }
@@ -355,6 +510,56 @@ final class AidenRemoteCoordinator {
 
     func remoteClient() throws -> AidenRemoteClient {
         try activeClient()
+    }
+
+    func requestContext(for instanceId: String? = nil) throws -> AidenRemoteRequestContext {
+        guard let activeInstallation = installationStore.activeInstallation,
+              let activeInstanceId,
+              instanceId == nil || instanceId == activeInstanceId else {
+            throw AidenRemoteClientError.installationChanged
+        }
+        return AidenRemoteRequestContext(
+            instanceId: activeInstanceId,
+            deviceId: activeInstallation.deviceId,
+            generation: activationGeneration
+        )
+    }
+
+    func remoteClient(for context: AidenRemoteRequestContext) throws -> AidenRemoteClient {
+        guard isCurrent(context) else {
+            throw AidenRemoteClientError.installationChanged
+        }
+        return try activeClient()
+    }
+
+    func isCurrent(_ context: AidenRemoteRequestContext) -> Bool {
+        activeInstanceId == context.instanceId
+            && activationGeneration == context.generation
+            && isRetained(context)
+    }
+
+    func isRetained(_ context: AidenRemoteRequestContext) -> Bool {
+        installationStore.installations.contains {
+            $0.id == context.instanceId && $0.deviceId == context.deviceId
+        }
+    }
+
+    func withRetainedInstallationData(
+        for context: AidenRemoteRequestContext,
+        operation: @MainActor () async -> Void
+    ) async -> Bool {
+        await installationDataGate.acquire()
+        guard isRetained(context) else {
+            await installationDataGate.release()
+            return false
+        }
+        await operation()
+        let retained = isRetained(context)
+        if !retained {
+            await purgeInstallationDataUnlocked(context.instanceId)
+        }
+        await installationDataGate.release()
+        return retained
     }
 
     private func load(
@@ -437,10 +642,18 @@ final class AidenRemoteCoordinator {
            clientError.isCredentialRevoked,
            let installationId {
             let revocationMessage = String(localized: "This device was revoked. Pair it with Aiden Agent again.")
-            await AidenRemoteLiveActivityManager.shared.endAll(forInstanceID: installationId)
+            let previousInstallationId = activeInstanceId
+            let knownWorkspaceIds = previousInstallationId == installationId
+                ? Set(workspaces.map(\.id))
+                : []
             try? installationStore.remove(installationId)
+            if previousInstallationId != activeInstanceId {
+                activationGeneration &+= 1
+            }
+            connectionGeneration &+= 1
             server = nil
             workspaces = []
+            await purgeInstallationData(installationId, knownWorkspaceIds: knownWorkspaceIds)
             updateIntentCatalog(for: installationId)
             connectionState = installationStore.activeInstallation == nil ? .needsPairing : .connecting
             if installationStore.activeInstallation != nil {
@@ -456,6 +669,32 @@ final class AidenRemoteCoordinator {
             connectionState = .offline(message: error.localizedDescription)
         }
         presentedError = error.localizedDescription
+    }
+
+    private func purgeInstallationData(
+        _ installationId: String,
+        knownWorkspaceIds: Set<String> = []
+    ) async {
+        await installationDataGate.acquire()
+        await purgeInstallationDataUnlocked(
+            installationId,
+            knownWorkspaceIds: knownWorkspaceIds
+        )
+        await installationDataGate.release()
+    }
+
+    private func purgeInstallationDataUnlocked(
+        _ installationId: String,
+        knownWorkspaceIds: Set<String> = []
+    ) async {
+        workspaceArchiveStore.purge(instanceID: installationId)
+        await chatCache.purge(instanceId: installationId)
+        await scheduledTaskCache.purge(instanceId: installationId)
+        await workspaceEnvironmentCache.purge(
+            instanceId: installationId,
+            knownWorkspaceIds: knownWorkspaceIds
+        )
+        await AidenRemoteLiveActivityManager.shared.endAll(forInstanceID: installationId)
     }
 
     private func updateIntentCatalog(for instanceId: String?) {
@@ -501,7 +740,7 @@ final class AidenRemoteCoordinator {
             return true
         case .server(_, let body):
             return body.code.rawValue == "idempotency_in_flight" || body.code.rawValue == "internal_error"
-        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration:
+        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
             return false
         }
     }
