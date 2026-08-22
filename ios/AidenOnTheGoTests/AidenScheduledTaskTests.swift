@@ -59,6 +59,27 @@ final class AidenScheduledTaskTests: XCTestCase {
         XCTAssertEqual(restored.runs[task.id]?.count, 50)
         let other = await cache.load(instanceId: "instance-2")
         XCTAssertNil(other)
+
+        let updatedSettings = AidenScheduledSettings(
+            revision: "rev_settings_2", enabled: false, defaultMode: .llm,
+            defaultPermission: .full, defaultMcpEnabled: true,
+            defaultNotify: false, defaultTimezone: "America/New_York"
+        )
+        try await cache.store(instanceId: "instance-1", tasks: [], settings: updatedSettings)
+        try await cache.store(runs: runs, taskId: task.id, instanceId: "instance-1")
+        let reloadedAfterDeletion = await cache.load(instanceId: "instance-1")
+        let afterDeletion = try XCTUnwrap(reloadedAfterDeletion)
+        XCTAssertEqual(afterDeletion.tasks, [])
+        XCTAssertEqual(afterDeletion.settings, updatedSettings)
+        XCTAssertNil(afterDeletion.runs[task.id])
+
+        try await cache.store(instanceId: "instance-2", tasks: [task], settings: settings)
+        await cache.purge(instanceId: "instance-1")
+        let purged = await cache.load(instanceId: "instance-1")
+        let retained = await cache.load(instanceId: "instance-2")
+        XCTAssertNil(purged)
+        XCTAssertEqual(retained?.tasks, [task])
+        XCTAssertEqual(retained?.settings, settings)
     }
 
     func testScheduledClientUsesCanonicalRoutesRevisionsConfirmationAndStableRunKey() async throws {
