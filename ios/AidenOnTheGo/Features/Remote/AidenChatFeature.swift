@@ -1973,11 +1973,11 @@ private struct AidenAttachmentThumbnailView: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: imageAlignment)
                     .clipShape(RoundedRectangle(
                         cornerRadius: imageCornerRadius,
                         style: .continuous
                     ))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: imageAlignment)
             case .failed:
                 VStack(spacing: 6) {
                     Image(systemName: "photo.badge.exclamationmark")
