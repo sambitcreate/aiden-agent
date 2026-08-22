@@ -252,6 +252,10 @@ function RootContent() {
   React.useEffect(() => {
     return onNotification<{ path: string }>("app:navigate", (payload) => {
       if (!payload?.path) return;
+      if (document.querySelector("[data-onboarding-active='true']")) {
+        toast.info("Finish onboarding before opening another part of Aiden.");
+        return;
+      }
       if (navigationBlockedReason) {
         toast.info(navigationBlockedReason);
         return;
