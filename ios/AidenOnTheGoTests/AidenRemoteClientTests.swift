@@ -29,6 +29,7 @@ final class AidenRemoteClientTests: XCTestCase {
             XCTAssertEqual(object["deviceName"] as? String, "Sambit's iPhone")
             XCTAssertEqual(object["deviceType"] as? String, "iphone")
             XCTAssertEqual(object["clientVersion"] as? String, "1.0")
+            XCTAssertEqual(object["acceptsDisplayName"] as? Bool, true)
             return Self.response(
                 for: request,
                 status: 200,
@@ -58,6 +59,218 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(exchange.instanceId, "instance-1")
         XCTAssertEqual(exchange.deviceId, "device-1")
         XCTAssertEqual(exchange.capabilities, [.serverRead, .workspaceRead, .workspaceManage])
+    }
+
+    func testManualPairingDecryptsSharedNodeVectorAndBindsSelectedEndpoint() async throws {
+        let vectorURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "manual-pairing-vector", withExtension: "json")
+        )
+        let vectorData = try Data(contentsOf: vectorURL)
+        let vector = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: vectorData) as? [String: Any]
+        )
+        let code = try XCTUnwrap(vector["code"] as? String)
+        _ = try XCTUnwrap(vector["payload"] as? String)
+        let bootstrap = try XCTUnwrap(vector["bootstrap"] as? [String: Any])
+        let bootstrapData = try JSONSerialization.data(withJSONObject: bootstrap, options: [.sortedKeys])
+        let endpoint = try XCTUnwrap(URL(string: "https://aiden-fixture.example.test/api/aiden/v1"))
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "https://aiden-fixture.example.test/api/aiden/v1/pairing/manual-bootstrap"
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            XCTAssertEqual(try Self.bodyData(request), Data("{}".utf8))
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Aiden-Protocol-Version": "1",
+                ]
+            ))
+            return (response, bootstrapData)
+        }
+
+        let payload = try await AidenRemoteClient.manualPairingPayload(
+            code: code.lowercased(),
+            endpoint: endpoint,
+            session: session,
+            now: Date(timeIntervalSince1970: 1_787_331_600)
+        )
+        XCTAssertEqual(payload.kind, AidenRemoteContractFixture.PairingPayload.kindValue)
+        XCTAssertEqual(payload.bootstrap.instanceId, "instance_fixture_01")
+        XCTAssertEqual(payload.bootstrap.endpoint, endpoint)
+        XCTAssertEqual(payload.bootstrap.secret, "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE")
+        XCTAssertEqual(payload.trust.mode, .system)
+
+        do {
+            _ = try await AidenRemoteClient.manualPairingPayload(
+                code: "1123-4567-89AB-CDEF-GHJK",
+                endpoint: endpoint,
+                session: session,
+                now: Date(timeIntervalSince1970: 1_787_331_600)
+            )
+            XCTFail("Wrong setup code unexpectedly decrypted the pairing payload.")
+        } catch {
+            XCTAssertEqual(error as? AidenManualPairingError, .decryptionFailed)
+        }
+
+        let otherEndpoint = try XCTUnwrap(URL(string: "https://other-aiden.example.test/api/aiden/v1"))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "https://other-aiden.example.test/api/aiden/v1/pairing/manual-bootstrap"
+            )
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Aiden-Protocol-Version": "1",
+                ]
+            ))
+            return (response, bootstrapData)
+        }
+        do {
+            _ = try await AidenRemoteClient.manualPairingPayload(
+                code: code,
+                endpoint: otherEndpoint,
+                session: session,
+                now: Date(timeIntervalSince1970: 1_787_331_600)
+            )
+            XCTFail("A setup envelope for another Mac endpoint was accepted.")
+        } catch {
+            XCTAssertEqual(error as? AidenManualPairingError, .endpointMismatch)
+        }
+    }
+
+    func testManualPairingCodeRejectsAmbiguousUnicodeAndInvalidLength() throws {
+        XCTAssertEqual(
+            try AidenRemoteClient.normalizeManualPairingCode("0123-4567-89ab-cdef-ghjk"),
+            "0123456789ABCDEFGHJK"
+        )
+        for invalid in [
+            "0123-4567-89AB-CDEF-GHJI",
+            "0123-4567-89AB-CDEF-GHJＫ",
+            "ß123-4567-89AB-CDEF-GHJK",
+            "ﬀ23-4567-89AB-CDEF-GHJK",
+            "ſ123-4567-89AB-CDEF-GHJK",
+            "0123-4567-89AB-CDEF",
+            "0123-4567-89AB-CDEF-GHJK-X",
+        ] {
+            XCTAssertThrowsError(try AidenRemoteClient.normalizeManualPairingCode(invalid)) {
+                XCTAssertEqual($0 as? AidenManualPairingError, .invalidCode)
+            }
+        }
+    }
+
+    func testManualPairingBootstrapRequiresCanonicalUnpaddedBase64URL() throws {
+        let vectorURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "manual-pairing-vector", withExtension: "json")
+        )
+        let vector = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: vectorURL)) as? [String: Any]
+        )
+        let original = try XCTUnwrap(vector["bootstrap"] as? [String: Any])
+        XCTAssertNoThrow(try AidenRemoteJSONDecoder.decodeManualPairingBootstrap(
+            from: JSONSerialization.data(withJSONObject: original)
+        ))
+
+        var padded = original
+        padded["salt"] = try XCTUnwrap(original["salt"] as? String) + "=="
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeManualPairingBootstrap(
+            from: JSONSerialization.data(withJSONObject: padded)
+        ))
+
+        var standardAlphabet = original
+        standardAlphabet["ciphertext"] = try XCTUnwrap(original["ciphertext"] as? String)
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decodeManualPairingBootstrap(
+            from: JSONSerialization.data(withJSONObject: standardAlphabet)
+        ))
+    }
+
+    func testManualPairingBootstrapStopsAtTheTransportByteLimit() async throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://bounded-aiden.example.test/api/aiden/v1"))
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Content-Length": "20000",
+                    "Aiden-Protocol-Version": "1",
+                ]
+            ))
+            return (response, Data(repeating: 0x41, count: 20_000))
+        }
+        do {
+            _ = try await AidenRemoteClient.manualPairingPayload(
+                code: "0123-4567-89AB-CDEF-GHJK",
+                endpoint: endpoint,
+                session: session
+            )
+            XCTFail("An oversized unauthenticated bootstrap response was buffered.")
+        } catch {
+            XCTAssertEqual(error as? AidenRemoteContractError, .payloadTooLarge)
+        }
+    }
+
+    func testPairingRetriesFrozenFourFieldShapeForStrictEarlyV1Server() async throws {
+        let now = Date(timeIntervalSince1970: 1_787_100_000)
+        let bootstrap = makeBootstrap(now: now)
+        let payload = makePairingPayload(bootstrap: bootstrap)
+        let session = makeSession()
+        var attempts = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            attempts += 1
+            let object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Self.bodyData(request)) as? [String: Any]
+            )
+            if attempts == 1 {
+                XCTAssertEqual(object["acceptsDisplayName"] as? Bool, true)
+                return Self.response(
+                    for: request,
+                    status: 400,
+                    json: #"{"error":{"code":"invalid_request","message":"Pairing details are invalid.","requestId":"request-legacy","retryable":false}}"#
+                )
+            }
+            XCTAssertEqual(Set(object.keys), ["secret", "deviceName", "deviceType", "clientVersion"])
+            return Self.response(
+                for: request,
+                status: 200,
+                json: """
+                {
+                  "protocolVersion": 1,
+                  "instanceId": "instance-1",
+                  "deviceId": "device-1",
+                  "credential": "\(String(repeating: "C", count: 43))",
+                  "capabilities": ["server:read"],
+                  "endpoint": "https://aiden.test/api/aiden/v1",
+                  "serverSpkiSha256": "\(bootstrap.serverSpkiSha256)"
+                }
+                """
+            )
+        }
+
+        let exchange = try await AidenRemoteClient.pair(
+            payload: payload,
+            deviceName: "Legacy Test Phone",
+            deviceType: .iphone,
+            clientVersion: "1.0",
+            session: session,
+            now: now
+        )
+        XCTAssertEqual(attempts, 2)
+        XCTAssertNil(exchange.displayName)
     }
 
     func testWorkspaceListUsesBearerAndStrictAidenProtocolHeader() async throws {
@@ -811,10 +1024,69 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(second.deviceId, "device-after")
         XCTAssertEqual(try store.credential(for: second), repaired.credential)
         XCTAssertEqual(
-            keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: "instance-repair")],
+            keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: second.credentialScope)],
             repaired.credential
         )
         XCTAssertFalse(keychain.scoped.values.contains(initial.credential))
+    }
+
+    @MainActor
+    func testRePairingSnapshotFailureKeepsPreviousVersionedCredentialCoherentAfterRestart() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let initial = makeExchange(
+            instanceId: "instance-atomic",
+            deviceId: "device-before",
+            credential: String(repeating: "A", count: 43)
+        )
+        let repaired = makeExchange(
+            instanceId: "instance-atomic",
+            deviceId: "device-after",
+            credential: String(repeating: "B", count: 43)
+        )
+        let previous = try store.savePairing(initial, trust: makeSystemTrust(), name: "Aiden Mac")
+        keychain.failingSaveKeys.insert(.remoteInstallations)
+        keychain.failingScopedDeleteScopes.insert("instance-atomic:device-after")
+
+        XCTAssertThrowsError(
+            try store.savePairing(repaired, trust: makeSystemTrust(), name: "Aiden Mac")
+        )
+        keychain.failingSaveKeys.remove(.remoteInstallations)
+        let restarted = AidenInstallationStore(keychain: keychain)
+        let active = try XCTUnwrap(restarted.activeInstallation)
+        XCTAssertEqual(active.deviceId, previous.deviceId)
+        XCTAssertEqual(active.credentialScope, previous.credentialScope)
+        XCTAssertEqual(try restarted.credential(for: active), initial.credential)
+        XCTAssertNotEqual(try restarted.credential(for: active), repaired.credential)
+    }
+
+    @MainActor
+    func testSameInstallationDeviceReplacementInvalidatesRetainedRequestContext() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let initial = makeExchange(
+            instanceId: "instance-repair-context",
+            deviceId: "device-before",
+            credential: String(repeating: "A", count: 43)
+        )
+        let repaired = makeExchange(
+            instanceId: "instance-repair-context",
+            deviceId: "device-after",
+            credential: String(repeating: "B", count: 43)
+        )
+        _ = try store.savePairing(initial, trust: makeSystemTrust(), name: "Aiden Mac")
+        let coordinator = AidenRemoteCoordinator(installationStore: store)
+        let admittedContext = try coordinator.requestContext()
+
+        _ = try store.savePairing(repaired, trust: makeSystemTrust(), name: "Aiden Mac")
+
+        XCTAssertFalse(coordinator.isRetained(admittedContext))
+        XCTAssertFalse(coordinator.isCurrent(admittedContext))
+        XCTAssertThrowsError(try coordinator.remoteClient(for: admittedContext)) { error in
+            guard case AidenRemoteClientError.installationChanged = error else {
+                return XCTFail("Expected the replaced device context to fail closed.")
+            }
+        }
     }
 
     @MainActor
@@ -836,8 +1108,170 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(try store.credential(for: store.activeInstallation!), first.credential)
 
         try store.remove("instance-1")
-        XCTAssertNil(keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: "instance-1")])
-        XCTAssertEqual(keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: "instance-2")], second.credential)
+        XCTAssertNil(keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: firstInstallation.credentialScope)])
+        XCTAssertEqual(
+            keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: secondInstallation.credentialScope)],
+            second.credential
+        )
+    }
+
+    @MainActor
+    func testRepeatedLANAndTailscaleMacSwitchingKeepsEndpointAndCredentialIdentityScoped() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let lan = makeExchange(
+            instanceId: "instance-lan",
+            deviceId: "device-lan",
+            credential: String(repeating: "L", count: 43),
+            endpoint: URL(string: "https://home.local:49220/api/aiden/v1")!
+        )
+        let tailscale = makeExchange(
+            instanceId: "instance-tailscale",
+            deviceId: "device-tailscale",
+            credential: String(repeating: "T", count: 43),
+            endpoint: URL(string: "https://studio.tailnet.ts.net/api/aiden/v1")!
+        )
+        _ = try store.savePairing(lan, trust: makeSystemTrust(), name: "Mac")
+        let tailscaleInstallation = try store.savePairing(tailscale, trust: makeSystemTrust(), name: "Mac")
+
+        for installationID in ["instance-lan", "instance-tailscale", "instance-lan", "instance-tailscale"] {
+            try store.setActive(installationID)
+            let active = try XCTUnwrap(store.activeInstallation)
+            XCTAssertEqual(active.id, installationID)
+            if installationID == "instance-lan" {
+                XCTAssertEqual(active.endpoint, lan.endpoint)
+                XCTAssertEqual(try store.credential(for: active), lan.credential)
+                XCTAssertEqual(AidenInstallationPresentation.endpointType(active.endpoint), "Local Network")
+            } else {
+                XCTAssertEqual(active.endpoint, tailscale.endpoint)
+                XCTAssertEqual(try store.credential(for: active), tailscale.credential)
+                XCTAssertEqual(AidenInstallationPresentation.endpointType(active.endpoint), "Tailscale")
+            }
+        }
+
+        try store.remove("instance-tailscale")
+        let remaining = try XCTUnwrap(store.activeInstallation)
+        XCTAssertEqual(remaining.id, "instance-lan")
+        XCTAssertEqual(remaining.endpoint, lan.endpoint)
+        XCTAssertEqual(try store.credential(for: remaining), lan.credential)
+        XCTAssertNil(keychain.scoped[
+            KeychainStore.scopedKey(.remoteCredential, scope: tailscaleInstallation.credentialScope)
+        ])
+    }
+
+    @MainActor
+    func testSameNamedInstallationsRemainDistinctAndServerRenamePreservesIdentity() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let first = makeExchange(
+            instanceId: "instance-a",
+            deviceId: "device-a",
+            credential: String(repeating: "A", count: 43)
+        )
+        let second = makeExchange(
+            instanceId: "instance-b",
+            deviceId: "device-b",
+            credential: String(repeating: "B", count: 43)
+        )
+        let firstInstallation = try store.savePairing(first, trust: makeSystemTrust(), name: "Studio Mac")
+        let secondInstallation = try store.savePairing(second, trust: makeSystemTrust(), name: "Studio Mac")
+
+        XCTAssertNil(firstInstallation.lastConnectedAt, "Credential exchange is not an authenticated server read.")
+        XCTAssertNil(secondInstallation.lastConnectedAt, "Credential exchange is not an authenticated server read.")
+        XCTAssertEqual(store.installations.map(\.id), ["instance-a", "instance-b"])
+        XCTAssertEqual(Set(store.installations.map(\.name)), ["Studio Mac"])
+        XCTAssertEqual(try store.credential(for: firstInstallation), first.credential)
+        XCTAssertEqual(try store.credential(for: secondInstallation), second.credential)
+
+        try store.updateServer(AidenServer(
+            protocolVersion: 1,
+            instanceId: "instance-a",
+            name: "Home Mac",
+            appVersion: "1.0",
+            capabilities: [.serverRead],
+            connectionMode: .lan,
+            minimumClientVersion: nil,
+            serverTime: Date()
+        ))
+        XCTAssertEqual(store.installations.first(where: { $0.id == "instance-a" })?.name, "Home Mac")
+        XCTAssertNotNil(store.installations.first(where: { $0.id == "instance-a" })?.lastConnectedAt)
+        XCTAssertEqual(try store.credential(for: firstInstallation), first.credential)
+        XCTAssertEqual(try store.credential(for: secondInstallation), second.credential)
+    }
+
+    @MainActor
+    func testServerRenamePersistenceFailureRestoresEntireSortedRegistry() throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-a", deviceId: "device-a", credential: "credential-a"),
+            trust: makeSystemTrust(),
+            name: "Alpha"
+        )
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-z", deviceId: "device-z", credential: "credential-z"),
+            trust: makeSystemTrust(),
+            name: "Zulu"
+        )
+        let before = store.installations
+        keychain.failingSaveKeys = [.remoteInstallations]
+
+        XCTAssertThrowsError(try store.updateServer(AidenServer(
+            protocolVersion: 1,
+            instanceId: "instance-a",
+            name: "ZZ Top",
+            appVersion: "1.0",
+            capabilities: [.serverRead],
+            connectionMode: .lan,
+            minimumClientVersion: nil,
+            serverTime: Date()
+        )))
+        XCTAssertEqual(store.installations, before)
+    }
+
+    func testDiscoveryAndInstallationPresentationUsePublicIdentityWithoutEndpointConfusion() throws {
+        let txt = NetService.data(fromTXTRecord: [
+            "v": Data("1".utf8),
+            "instance": Data("instance_studio_1".utf8),
+        ])
+        XCTAssertEqual(
+            AidenDiscoveryIdentity.instanceID(fromTXTRecord: txt),
+            "instance_studio_1"
+        )
+        XCTAssertNil(AidenDiscoveryIdentity.instanceID(fromTXTRecord: NetService.data(
+            fromTXTRecord: ["instance": Data("bad instance".utf8)]
+        )))
+        XCTAssertEqual(
+            AidenInstallationPresentation.endpointType(
+                URL(string: "https://studio.tailnet.ts.net/api/aiden/v1")!
+            ),
+            "Tailscale"
+        )
+        XCTAssertEqual(
+            AidenInstallationPresentation.endpointType(
+                URL(string: "https://studio.local:49220/api/aiden/v1")!
+            ),
+            "Local Network"
+        )
+        XCTAssertEqual(
+            AidenInstallationPresentation.reachability(
+                installationID: "instance-a",
+                activeInstallationID: "instance-b",
+                connectionState: .connected
+            ),
+            "Not checked"
+        )
+        XCTAssertEqual(AidenInstallationPresentation.identitySuffix("instance_studio_abcdef"), "abcdef")
+        XCTAssertEqual(
+            AidenInstallationPresentation.accessibilityValue(
+                installationID: "instance-a",
+                activeInstallationID: "instance-a",
+                connectionState: .connected,
+                endpoint: URL(string: "https://studio.local:49220/api/aiden/v1")!,
+                lastConnectedAt: nil
+            ),
+            "Selected, Connected, Local Network, Never connected"
+        )
     }
 
     @MainActor
@@ -957,6 +1391,69 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertTrue(removed)
         XCTAssertFalse(coordinator.workspaces.contains(where: { $0.id == updated.id }))
         XCTAssertEqual(workspaceListRequests, 2, "Confirmed removal should reload the canonical registry in case the Mac seeded a default workspace")
+    }
+
+    @MainActor
+    func testFailedStagedPairingCannotReplaceTheWorkingInstallation() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let previousExchange = makeExchange(
+            instanceId: "instance-1",
+            deviceId: "device-working",
+            credential: "credential-working"
+        )
+        let previousInstallation = try store.savePairing(
+            previousExchange,
+            trust: makeSystemTrust(),
+            name: "Working Mac"
+        )
+        let stagedExchange = makeExchange(
+            instanceId: "instance-1",
+            deviceId: "device-staged",
+            credential: "credential-staged"
+        )
+        let payload = makePairingPayload(
+            bootstrap: makeBootstrap(now: Date(timeIntervalSince1970: 1_787_100_000))
+        )
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/aiden/v1/server":
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"protocolVersion":1,"instanceId":"instance-impostor","name":"Wrong Mac",
+                    "appVersion":"1.0.0","capabilities":["server:read","workspace:read"],
+                    "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                    """
+                )
+            case "/api/aiden/v1/workspaces":
+                return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            default:
+                XCTFail("Unexpected staged-pairing request: \(request.url?.path ?? "nil")")
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+
+        do {
+            try await coordinator.activatePairing(payload: payload, exchange: stagedExchange)
+            XCTFail("A staged Mac with a mismatched authenticated identity was promoted.")
+        } catch {
+            XCTAssertEqual(error as? AidenRemoteContractError, .invalidPairingExchange)
+        }
+
+        let active = try XCTUnwrap(store.activeInstallation)
+        XCTAssertEqual(active.deviceId, previousInstallation.deviceId)
+        XCTAssertEqual(active.credentialScope, previousInstallation.credentialScope)
+        XCTAssertEqual(try store.credential(for: active), previousExchange.credential)
+        XCTAssertFalse(keychain.scoped.values.contains(stagedExchange.credential))
     }
 
     @MainActor
@@ -1128,9 +1625,9 @@ final class AidenRemoteClientTests: XCTestCase {
                 AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
             }
         )
-
         let slowLoad = Task { await coordinator.connectActiveInstallation() }
         try await Task.sleep(for: .milliseconds(25))
+        let firstActivation = try coordinator.requestContext()
         await coordinator.switchInstallation(to: "instance-2")
         await slowLoad.value
 
@@ -1138,12 +1635,114 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(coordinator.server?.instanceId, "instance-2")
         XCTAssertEqual(coordinator.workspaces.map(\.id), ["workspace-instance-2"])
         XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertThrowsError(try coordinator.requestContext(for: "instance-1")) { error in
+            guard case AidenRemoteClientError.installationChanged = error else {
+                return XCTFail("A stale feature must not borrow the newly active Mac client.")
+            }
+        }
+
+        await coordinator.switchInstallation(to: "instance-1")
+        XCTAssertFalse(coordinator.isCurrent(firstActivation), "A -> B -> A must invalidate the first A activation lease.")
+        XCTAssertThrowsError(try coordinator.remoteClient(for: firstActivation)) { error in
+            guard case AidenRemoteClientError.installationChanged = error else {
+                return XCTFail("An ABA-stale feature must not regain access to the current Mac client.")
+            }
+        }
+    }
+
+    @MainActor
+    func testStaleFolderBrowserLeaseNeverSendsOpaqueLocationToAnotherMacOrABAActivation() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-1", deviceId: "device-1", credential: "credential-one"),
+            trust: makeSystemTrust(),
+            name: "First Mac"
+        )
+        _ = try store.savePairing(
+            makeExchange(instanceId: "instance-2", deviceId: "device-2", credential: "credential-two"),
+            trust: makeSystemTrust(),
+            name: "Second Mac"
+        )
+        try store.setActive("instance-1")
+        let session = makeSession()
+        var browserRequests = 0
+        var scheduledRequests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            let instanceID = request.value(forHTTPHeaderField: "Authorization") == "Bearer credential-one"
+                ? "instance-1" : "instance-2"
+            if request.url?.path.contains("/browser/") == true {
+                browserRequests += 1
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+            if request.url?.path.contains("/scheduled-tasks") == true {
+                scheduledRequests += 1
+                return Self.response(for: request, status: 500, json: "{}")
+            }
+            if request.url?.path == "/api/aiden/v1/server" {
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"\(instanceID)","name":"Mac",
+                "appVersion":"1.0","capabilities":["server:read","workspace:read","workspace:browse","workspace:manage"],
+                "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                """)
+            }
+            return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+        }
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: store,
+            clientFactory: { installation, credential in
+                AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+            }
+        )
+        await coordinator.start()
+        let firstLease = try coordinator.requestContext()
+        let retainedScheduledModel = AidenScheduledTasksModel(coordinator: coordinator)
+        var staleDraft = AidenScheduledTaskDraft()
+        staleDraft.name = "Must stay on First Mac"
+        staleDraft.schedule = "0 9 * * *"
+        staleDraft.prompt = "Run the stale draft"
+        await coordinator.switchInstallation(to: "instance-2")
+        XCTAssertFalse(retainedScheduledModel.isConnected)
+        await retainedScheduledModel.loadScripts(workspaceId: nil)
+        let savedOnSecondMac = await retainedScheduledModel.save(staleDraft, replacing: nil)
+        XCTAssertFalse(savedOnSecondMac)
+        let afterSwitch = await coordinator.createSelectedFolderWorkspace(
+            context: firstLease,
+            location: "loc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            name: nil
+        )
+        XCTAssertNil(afterSwitch)
+        await coordinator.switchInstallation(to: "instance-1")
+        XCTAssertFalse(retainedScheduledModel.isConnected)
+        await retainedScheduledModel.loadScripts(workspaceId: nil)
+        let savedAfterABA = await retainedScheduledModel.save(staleDraft, replacing: nil)
+        XCTAssertFalse(savedAfterABA)
+        let afterABA = await coordinator.createSelectedFolderWorkspace(
+            context: firstLease,
+            location: "loc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            name: nil
+        )
+        XCTAssertNil(afterABA)
+        XCTAssertEqual(browserRequests, 0)
+        XCTAssertEqual(scheduledRequests, 0)
     }
 
     @MainActor
     func testCoordinatorRevocationRemovesOnlyAffectedInstallationAndConnectsNextMac() async throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)
+        let cacheRoot = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-revocation-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let chatCache = AidenChatCache(root: cacheRoot.appending(path: "chats"))
+        let scheduledCache = AidenScheduledTaskCache(root: cacheRoot.appending(path: "schedules"))
+        let environmentCache = AidenWorkspaceEnvironmentCache(
+            directory: cacheRoot.appending(path: "environment")
+        )
+        let suiteName = "AidenRevocationArchiveTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let archiveStore = AidenWorkspaceArchiveStore(defaults: defaults)
         let first = makeExchange(
             instanceId: "instance-1",
             deviceId: "device-1",
@@ -1154,9 +1753,23 @@ final class AidenRemoteClientTests: XCTestCase {
             deviceId: "device-2",
             credential: "credential-two"
         )
-        _ = try store.savePairing(first, trust: makeSystemTrust(), name: "Revoked Mac")
-        _ = try store.savePairing(second, trust: makeSystemTrust(), name: "Backup Mac")
+        let firstInstallation = try store.savePairing(first, trust: makeSystemTrust(), name: "Revoked Mac")
+        let secondInstallation = try store.savePairing(second, trust: makeSystemTrust(), name: "Backup Mac")
         try store.setActive("instance-1")
+        try await chatCache.saveActiveStream(
+            .init(deviceId: "device-1", streamId: "stream-1", turnId: "turn-1", lastSequence: 2),
+            instanceId: "instance-1",
+            chatId: "chat-1"
+        )
+        try await chatCache.saveActiveStream(
+            .init(deviceId: "device-2", streamId: "stream-2", turnId: "turn-2", lastSequence: 4),
+            instanceId: "instance-2",
+            chatId: "chat-2"
+        )
+        try await scheduledCache.store(instanceId: "instance-1", tasks: [], settings: nil)
+        try await scheduledCache.store(instanceId: "instance-2", tasks: [], settings: nil)
+        archiveStore.archive(workspaceID: "workspace-1", instanceID: "instance-1")
+        archiveStore.archive(workspaceID: "workspace-2", instanceID: "instance-2")
 
         let session = makeSession()
         AidenRemoteMockURLProtocol.handler = { request in
@@ -1182,11 +1795,24 @@ final class AidenRemoteClientTests: XCTestCase {
                     """
                 )
             }
-            return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+            return Self.response(
+                for: request,
+                status: 200,
+                json: """
+                {"workspaces":[{"id":"workspace-2","name":"Backup Workspace",
+                "permission":"ask","hasFolder":false,"isManagedWorktree":false,
+                "createdAt":"2026-08-19T07:00:00.000Z","updatedAt":"2026-08-19T07:00:00.000Z",
+                "revision":"rev-workspace-2"}]}
+                """
+            )
         }
 
         let coordinator = AidenRemoteCoordinator(
             installationStore: store,
+            workspaceArchiveStore: archiveStore,
+            chatCache: chatCache,
+            scheduledTaskCache: scheduledCache,
+            workspaceEnvironmentCache: environmentCache,
             clientFactory: { installation, credential in
                 AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
             }
@@ -1195,12 +1821,75 @@ final class AidenRemoteClientTests: XCTestCase {
 
         XCTAssertEqual(coordinator.connectionState, .connected)
         XCTAssertEqual(store.activeInstallationId, "instance-2")
-        XCTAssertNil(keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: "instance-1")])
+        XCTAssertNil(keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: firstInstallation.credentialScope)])
         XCTAssertEqual(
-            keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: "instance-2")],
+            keychain.scoped[KeychainStore.scopedKey(.remoteCredential, scope: secondInstallation.credentialScope)],
             "credential-two"
         )
         XCTAssertTrue(coordinator.presentedError?.contains("revoked") == true)
+        let removedStream = await chatCache.loadActiveStream(instanceId: "instance-1", chatId: "chat-1")
+        let retainedStream = await chatCache.loadActiveStream(instanceId: "instance-2", chatId: "chat-2")
+        let removedSchedule = await scheduledCache.load(instanceId: "instance-1")
+        let retainedSchedule = await scheduledCache.load(instanceId: "instance-2")
+        XCTAssertNil(removedStream)
+        XCTAssertNotNil(retainedStream)
+        XCTAssertNil(removedSchedule)
+        XCTAssertNotNil(retainedSchedule)
+        XCTAssertEqual(archiveStore.archivedWorkspaceIDs(for: "instance-1"), [])
+        XCTAssertEqual(archiveStore.archivedWorkspaceIDs(for: "instance-2"), ["workspace-2"])
+    }
+
+    @MainActor
+    func testRemovalSerializesAgainstAcceptedTurnWritesAndPurgesTheLateCommit() async throws {
+        let keychain = AidenRemoteMemoryKeychain()
+        let store = AidenInstallationStore(keychain: keychain)
+        let exchange = makeExchange(
+            instanceId: "instance-race",
+            deviceId: "device-race",
+            credential: String(repeating: "R", count: 43)
+        )
+        _ = try store.savePairing(exchange, trust: makeSystemTrust(), name: "Race Mac")
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "aiden-removal-race-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = AidenChatCache(root: root)
+        let coordinator = AidenRemoteCoordinator(installationStore: store, chatCache: cache)
+        let context = try coordinator.requestContext()
+        let probe = AidenInstallationDataRaceProbe()
+
+        let acceptedCommit = Task { @MainActor in
+            await coordinator.withRetainedInstallationData(for: context) {
+                await probe.markEntered()
+                await probe.waitForRelease()
+                try? await cache.saveActiveStream(
+                    .init(
+                        deviceId: "device-race",
+                        streamId: "stream-race",
+                        turnId: "turn-race",
+                        lastSequence: 0
+                    ),
+                    instanceId: "instance-race",
+                    chatId: "chat-race"
+                )
+            }
+        }
+        await probe.waitUntilEntered()
+        let removal = Task { @MainActor in
+            await coordinator.removeInstallation("instance-race")
+        }
+        for _ in 0..<20 where !store.installations.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertTrue(store.installations.isEmpty)
+        await probe.release()
+        _ = await acceptedCommit.value
+        await removal.value
+
+        let restored = await cache.loadActiveStream(
+            instanceId: "instance-race",
+            chatId: "chat-race"
+        )
+        XCTAssertNil(restored)
     }
 
     private func makeClient() -> AidenRemoteClient {
@@ -1244,7 +1933,8 @@ final class AidenRemoteClientTests: XCTestCase {
     private func makeExchange(
         instanceId: String,
         deviceId: String,
-        credential: String
+        credential: String,
+        endpoint: URL = URL(string: "https://aiden.test/api/aiden/v1")!
     ) -> AidenRemoteContractFixture.PairingExchange {
         AidenRemoteContractFixture.PairingExchange(
             protocolVersion: 1,
@@ -1252,7 +1942,7 @@ final class AidenRemoteClientTests: XCTestCase {
             deviceId: deviceId,
             credential: credential,
             capabilities: [.serverRead, .workspaceRead],
-            endpoint: URL(string: "https://aiden.test/api/aiden/v1")!,
+            endpoint: endpoint,
             serverSpkiSha256: "sha256/\(Data(repeating: 7, count: 32).base64EncodedString())"
         )
     }
@@ -1341,6 +2031,37 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 }
 
+private actor AidenInstallationDataRaceProbe {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markEntered() {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func waitForRelease() async {
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+}
+
 private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable {
     static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
@@ -1368,12 +2089,19 @@ private final class AidenRemoteMockURLProtocol: URLProtocol, @unchecked Sendable
 private final class AidenRemoteMemoryKeychain: KeychainStoring {
     var values: [KeychainStore.Key: String] = [:]
     var scoped: [String: String] = [:]
+    var failingSaveKeys: Set<KeychainStore.Key> = []
+    var failingScopedSaveScopes: Set<String> = []
+    var failingScopedDeleteScopes: Set<String> = []
 
-    func save(_ value: String, forKey key: KeychainStore.Key) throws { values[key] = value }
+    func save(_ value: String, forKey key: KeychainStore.Key) throws {
+        if failingSaveKeys.contains(key) { throw CocoaError(.fileWriteUnknown) }
+        values[key] = value
+    }
     func load(_ key: KeychainStore.Key) throws -> String? { values[key] }
     func delete(_ key: KeychainStore.Key) throws { values[key] = nil }
 
     func save(_ value: String, forKey key: KeychainStore.Key, scope: String) throws {
+        if failingScopedSaveScopes.contains(scope) { throw CocoaError(.fileWriteUnknown) }
         scoped[KeychainStore.scopedKey(key, scope: scope)] = value
     }
 
@@ -1382,6 +2110,7 @@ private final class AidenRemoteMemoryKeychain: KeychainStoring {
     }
 
     func delete(_ key: KeychainStore.Key, scope: String) throws {
+        if failingScopedDeleteScopes.contains(scope) { throw CocoaError(.fileWriteUnknown) }
         scoped[KeychainStore.scopedKey(key, scope: scope)] = nil
     }
 }
