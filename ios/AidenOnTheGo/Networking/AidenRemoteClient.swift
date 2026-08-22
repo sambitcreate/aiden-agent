@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum AidenDeviceType: String, Codable, Sendable {
@@ -123,6 +124,7 @@ enum AidenRemoteClientError: Error, LocalizedError {
     case server(statusCode: Int, body: AidenRemoteErrorEnvelope.Body)
     case missingCredential
     case missingTrustConfiguration
+    case installationChanged
 
     var isCredentialRevoked: Bool {
         guard case .server(_, let body) = self else { return false }
@@ -143,16 +145,26 @@ enum AidenRemoteClientError: Error, LocalizedError {
             return "This Aiden installation needs to be paired again."
         case .missingTrustConfiguration:
             return "This Aiden installation must be paired again to establish secure server trust."
+        case .installationChanged:
+            return "The active Aiden Agent changed. Try again on the selected Mac."
         }
     }
 }
 
+struct AidenManualPairingResult {
+    let payload: AidenRemoteContractFixture.PairingPayload
+    let exchange: AidenRemoteContractFixture.PairingExchange
+}
+
 final class AidenRemoteClient: @unchecked Sendable {
+    private struct EmptyRequest: Encodable {}
+
     private struct PairingExchangeRequest: Encodable {
         let secret: String
         let deviceName: String
         let deviceType: AidenDeviceType
         let clientVersion: String
+        let acceptsDisplayName: Bool?
     }
 
     private struct WorkspaceList: Decodable {
@@ -255,16 +267,149 @@ final class AidenRemoteClient: @unchecked Sendable {
             secret: bootstrap.secret,
             deviceName: deviceName,
             deviceType: deviceType,
-            clientVersion: clientVersion
+            clientVersion: clientVersion,
+            acceptsDisplayName: true
         )
-        let exchange: AidenRemoteContractFixture.PairingExchange = try await client.send(
-            method: "POST",
-            path: ["pairing", "exchange"],
-            body: request,
-            authenticated: false,
-            acceptedStatus: [200]
-        )
+        let exchange: AidenRemoteContractFixture.PairingExchange
+        do {
+            exchange = try await client.send(
+                method: "POST",
+                path: ["pairing", "exchange"],
+                body: request,
+                authenticated: false,
+                acceptedStatus: [200]
+            )
+        } catch let AidenRemoteClientError.server(statusCode, body)
+            where statusCode == 400 && body.code.rawValue == "invalid_request" {
+            // Strict early-v1 Macs reject additive request keys before consuming
+            // the one-time secret. Retry once with the frozen four-field shape.
+            exchange = try await client.send(
+                method: "POST",
+                path: ["pairing", "exchange"],
+                body: PairingExchangeRequest(
+                    secret: bootstrap.secret,
+                    deviceName: deviceName,
+                    deviceType: deviceType,
+                    clientVersion: clientVersion,
+                    acceptsDisplayName: nil
+                ),
+                authenticated: false,
+                acceptedStatus: [200]
+            )
+        }
         return try exchange.validated(against: bootstrap)
+    }
+
+    static func pair(
+        manualCode: String,
+        endpoint: URL,
+        deviceName: String,
+        deviceType: AidenDeviceType,
+        clientVersion: String,
+        bootstrapSession injectedBootstrapSession: URLSession? = nil,
+        pairingSession injectedPairingSession: URLSession? = nil,
+        now: Date = Date()
+    ) async throws -> AidenManualPairingResult {
+        let payload = try await manualPairingPayload(
+            code: manualCode,
+            endpoint: endpoint,
+            session: injectedBootstrapSession,
+            now: now
+        )
+        let exchange = try await pair(
+            payload: payload,
+            deviceName: deviceName,
+            deviceType: deviceType,
+            clientVersion: clientVersion,
+            session: injectedPairingSession,
+            now: now
+        )
+        return AidenManualPairingResult(payload: payload, exchange: exchange)
+    }
+
+    static func manualPairingPayload(
+        code: String,
+        endpoint: URL,
+        session injectedSession: URLSession? = nil,
+        now: Date = Date()
+    ) async throws -> AidenRemoteContractFixture.PairingPayload {
+        let normalizedCode = try normalizeManualPairingCode(code)
+        guard isCanonicalAidenEndpoint(endpoint) else {
+            throw AidenRemoteClientError.invalidEndpoint
+        }
+        let session = injectedSession ?? makeSealedBootstrapSession(endpoint: endpoint)
+        let client = AidenRemoteClient(endpoint: endpoint, credential: nil, session: session)
+        let sealed: AidenRemoteContractFixture.ManualPairingBootstrap = try await client.send(
+            method: "POST",
+            path: ["pairing", "manual-bootstrap"],
+            body: EmptyRequest(),
+            authenticated: false,
+            acceptedStatus: [200],
+            maximumResponseBytes: AidenRemoteProtocol.maxPairingPayloadBytes * 2
+        )
+        _ = try sealed.validated(at: now)
+
+        let inputKey = SymmetricKey(data: Data(normalizedCode.utf8))
+        let key = HKDF<SHA256>.deriveKey(
+            inputKeyMaterial: inputKey,
+            salt: sealed.salt,
+            info: sealed.keyDerivationInfo,
+            outputByteCount: 32
+        )
+        let nonce: AES.GCM.Nonce
+        let sealedBox: AES.GCM.SealedBox
+        do {
+            nonce = try AES.GCM.Nonce(data: sealed.nonce)
+            sealedBox = try AES.GCM.SealedBox(
+                nonce: nonce,
+                ciphertext: sealed.ciphertext,
+                tag: sealed.tag
+            )
+        } catch {
+            throw AidenManualPairingError.invalidBootstrap
+        }
+        let plaintext: Data
+        do {
+            plaintext = try AES.GCM.open(
+                sealedBox,
+                using: key,
+                authenticating: sealed.additionalAuthenticatedData
+            )
+        } catch {
+            throw AidenManualPairingError.decryptionFailed
+        }
+        guard plaintext.count <= AidenRemoteProtocol.maxPairingPayloadBytes else {
+            throw AidenRemoteContractError.payloadTooLarge
+        }
+        let payload = try AidenRemoteJSONDecoder.decodePairingPayload(from: plaintext)
+        _ = try payload.validated(at: now)
+        guard payload.bootstrap.endpoint.absoluteString == endpoint.absoluteString,
+              payload.bootstrap.expiresAt == sealed.expiresAt else {
+            throw AidenManualPairingError.endpointMismatch
+        }
+        return payload
+    }
+
+    static func normalizeManualPairingCode(_ value: String) throws -> String {
+        guard value.unicodeScalars.allSatisfy({ scalar in
+            scalar.isASCII && (scalar.value == 32 || scalar.value == 45
+                || (48...57).contains(scalar.value)
+                || (65...90).contains(scalar.value)
+                || (97...122).contains(scalar.value))
+        }) else {
+            throw AidenManualPairingError.invalidCode
+        }
+        let normalized = value
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .uppercased()
+        let alphabet = Set("0123456789ABCDEFGHJKMNPQRSTVWXYZ".utf8)
+        guard normalized.utf8.count == 20,
+              normalized.unicodeScalars.allSatisfy({ $0.isASCII }),
+              normalized.utf8.allSatisfy(alphabet.contains) else {
+            throw AidenManualPairingError.invalidCode
+        }
+        return normalized
     }
 
     func server() async throws -> AidenServer {
@@ -890,6 +1035,20 @@ final class AidenRemoteClient: @unchecked Sendable {
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
     }
 
+    private static func makeSealedBootstrapSession(endpoint: URL) -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 30
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
+        return URLSession(
+            configuration: configuration,
+            delegate: AidenSealedBootstrapSessionDelegate(endpoint: endpoint),
+            delegateQueue: nil
+        )
+    }
+
     private func send<Response: Decodable>(
         method: String,
         path: [String],
@@ -907,7 +1066,10 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: authenticated
         )
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: maximumResponseBytes
+        )
         try validate(response: response, data: data, acceptedStatus: acceptedStatus)
         do {
             return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
@@ -935,7 +1097,10 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: authenticated
         )
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: maximumResponseBytes
+        )
         try validate(response: response, data: data, acceptedStatus: acceptedStatus)
         do {
             return try AidenRemoteJSONDecoder.decode(Response.self, from: data, maximumBytes: maximumResponseBytes)
@@ -958,7 +1123,10 @@ final class AidenRemoteClient: @unchecked Sendable {
             headers: headers,
             authenticated: true
         )
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenRemoteProtocol.maxJSONBodyBytes
+        )
         try validate(response: response, data: data, acceptedStatus: acceptedStatus)
     }
 
@@ -1001,6 +1169,27 @@ final class AidenRemoteClient: @unchecked Sendable {
             request.setValue(value, forHTTPHeaderField: name)
         }
         return request
+    }
+
+    private func boundedData(
+        for request: URLRequest,
+        maximumBytes: Int
+    ) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        if response.expectedContentLength > Int64(maximumBytes) {
+            throw AidenRemoteContractError.payloadTooLarge
+        }
+        var data = Data()
+        if response.expectedContentLength > 0 {
+            data.reserveCapacity(min(Int(response.expectedContentLength), maximumBytes))
+        }
+        for try await byte in bytes {
+            guard data.count < maximumBytes else {
+                throw AidenRemoteContractError.payloadTooLarge
+            }
+            data.append(byte)
+        }
+        return (data, response)
     }
 
     private func idempotencyHeaders(_ key: UUID) -> [String: String] {
