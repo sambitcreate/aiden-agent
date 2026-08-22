@@ -10,6 +10,13 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+enum AidenStreamFeedbackPolicy: Equatable, Sendable {
+    case localTurn
+    case restoredStream
+
+    var allowsFeedback: Bool { self == .localTurn }
+}
+
 enum AidenImageSendRecovery: Equatable {
     case proceed
     case configureBotVision
@@ -644,12 +651,30 @@ enum AidenMissingStreamResolution: Equatable {
     }
 }
 
+enum AidenStreamFeedbackDecision {
+    static func announcesApproval(_ policy: AidenStreamFeedbackPolicy) -> Bool {
+        policy.allowsFeedback
+    }
+
+    static func terminalEvent(
+        for resolution: AidenMissingStreamResolution,
+        policy: AidenStreamFeedbackPolicy
+    ) -> AidenHapticEvent? {
+        guard policy.allowsFeedback else { return nil }
+        switch resolution {
+        case .failed, .interrupted: return .error
+        case .complete, .cancelled: return nil
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AidenWorkspaceChatsModel {
     private let coordinator: AidenRemoteCoordinator
     private let workspaceId: String
     private let cache: AidenChatCache
+    private let hapticScope: UUID
     private(set) var chats: [AidenChat] = []
     private(set) var isLoading = false
     private(set) var isMutating = false
@@ -658,14 +683,24 @@ final class AidenWorkspaceChatsModel {
     init(
         coordinator: AidenRemoteCoordinator,
         workspaceId: String,
+        hapticScope: UUID = UUID(),
         cache: AidenChatCache = .shared
     ) {
         self.coordinator = coordinator
         self.workspaceId = workspaceId
+        self.hapticScope = hapticScope
         self.cache = cache
     }
 
     var isConnected: Bool { coordinator.connectionState == .connected }
+
+    func setHapticsActive(_ active: Bool) {
+        if active {
+            coordinator.haptics.activate(scope: hapticScope)
+        } else {
+            coordinator.haptics.deactivate(scope: hapticScope)
+        }
+    }
 
     func accept(_ chat: AidenChat) {
         guard chat.workspaceId == workspaceId, !chat.isBotChat else { return }
@@ -707,11 +742,15 @@ final class AidenWorkspaceChatsModel {
                 return nil
             }
             upsert(chat)
-            try await persist(chat: chat, instanceId: instanceId)
+            try? await persist(chat: chat, instanceId: instanceId)
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-create:\(chat.id):\(chat.revision)")
             return chat
+        } catch let error where aidenIsCancellation(error) {
+            return nil
         } catch {
             guard coordinator.isCurrent(context) else { return nil }
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             return nil
         }
     }
@@ -733,12 +772,17 @@ final class AidenWorkspaceChatsModel {
             )
             guard coordinator.isCurrent(context) else { return }
             upsert(updated)
-            try await persist(chat: updated, instanceId: instanceId)
+            try? await persist(chat: updated, instanceId: instanceId)
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-rename:\(updated.id):\(updated.revision)")
+        } catch let error where aidenIsCancellation(error) {
+            guard coordinator.isCurrent(context) else { return }
+            upsert(chat)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
             upsert(chat)
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await load()
         }
     }
@@ -754,11 +798,16 @@ final class AidenWorkspaceChatsModel {
             guard coordinator.isCurrent(context) else { return }
             await cache.removeChat(instanceId: instanceId, chatId: chat.id)
             await AidenChatDraftStore.shared.remove(instanceId: instanceId, chatId: chat.id)
-            try await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            try? await cache.saveChats(chats, instanceId: instanceId, workspaceId: workspaceId)
+            coordinator.haptics.play(.success, scope: hapticScope, dedupeKey: "chat-remove:\(chat.id):\(chat.revision)")
+        } catch let error where aidenIsCancellation(error) {
+            guard coordinator.isCurrent(context) else { return }
+            upsert(chat)
         } catch {
             guard coordinator.isCurrent(context) else { return }
             upsert(chat)
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
             await load()
         }
     }
@@ -818,6 +867,7 @@ final class AidenChatViewModel {
     private var allowsMutations: Bool
     private let onChatUpdated: @MainActor (AidenChat) -> Void
     private let draftStore: AidenChatDraftStore
+    private let hapticScope: UUID
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
@@ -902,6 +952,7 @@ final class AidenChatViewModel {
     init(
         coordinator: AidenRemoteCoordinator,
         chat: AidenChat,
+        hapticScope: UUID = UUID(),
         cache: AidenChatCache = .shared,
         draftStore: AidenChatDraftStore = .shared,
         liveActivities: AidenRemoteLiveActivityManager? = nil,
@@ -917,6 +968,7 @@ final class AidenChatViewModel {
         self.chat = chat
         self.allowsMutations = allowsMutations
         self.draftStore = draftStore
+        self.hapticScope = hapticScope
         self.onChatUpdated = onChatUpdated
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
@@ -928,6 +980,7 @@ final class AidenChatViewModel {
         self.chat = chat
         allowsMutations = false
         draftStore = .shared
+        hapticScope = UUID()
         onChatUpdated = { _ in }
         selectedProviderId = chat.providerId
         selectedModelId = chat.modelId
@@ -1009,6 +1062,14 @@ final class AidenChatViewModel {
             || (turnModelSelection.providerId != nil && turnModelSelection.modelId != nil)
     }
 
+    func setHapticsActive(_ active: Bool) {
+        if active {
+            coordinator.haptics.activate(scope: hapticScope)
+        } else {
+            coordinator.haptics.deactivate(scope: hapticScope)
+        }
+    }
+
     func load() async {
         guard !isReadOnlyFixture else { return }
         guard !instanceId.isEmpty, !isLoading else { return }
@@ -1060,6 +1121,7 @@ final class AidenChatViewModel {
 
     func selectProvider(_ providerId: String) {
         guard !chat.isBotChat else { return }
+        guard selectedProviderId != providerId else { return }
         selectedProviderId = providerId
         selectedModelId = visibleProviders.first { $0.id == providerId }?.models.first?.id
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
@@ -1067,6 +1129,7 @@ final class AidenChatViewModel {
 
     func selectModel(_ modelId: String) {
         guard !chat.isBotChat else { return }
+        guard selectedModelId != modelId else { return }
         selectedModelId = modelId
         selectedThinkingLevel = selectedModel?.effectiveThinkingLevel
     }
@@ -1084,6 +1147,15 @@ final class AidenChatViewModel {
     func requestBotVisionSetup() {
         guard chat.isBotChat, !acceptsImageAttachments else { return }
         needsBotVisionSetup = true
+    }
+
+    func selectModel(providerId: String, modelId: String, thinkingLevel: String?) {
+        let next = [providerId, modelId, thinkingLevel ?? ""]
+        let current = [selectedProviderId ?? "", selectedModelId ?? "", selectedThinkingLevel ?? ""]
+        guard next != current else { return }
+        selectedProviderId = providerId
+        selectedModelId = modelId
+        selectedThinkingLevel = thinkingLevel
     }
 
     func send() async {
@@ -1191,7 +1263,15 @@ final class AidenChatViewModel {
             activityTimeline = nil
             pendingApproval = nil
             streamState = .queued
-            startStreaming(stream, context: context)
+            coordinator.haptics.play(.actionStarted, scope: hapticScope, dedupeKey: "turn-start:\(response.streamId)")
+            startStreaming(stream, context: context, feedbackPolicy: .localTurn)
+        } catch let error where aidenIsCancellation(error) {
+            guard coordinator.isCurrent(context) else { return }
+            chat.messages.removeAll { $0.id == optimisticID }
+            chat.updatedAt = previousUpdatedAt
+            if draft.isEmpty { draft = text }
+            if pendingAttachments.isEmpty { pendingAttachments = submittedAttachments }
+            streamState = nil
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
@@ -1207,6 +1287,7 @@ final class AidenChatViewModel {
             )
             streamState = nil
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
@@ -1258,7 +1339,7 @@ final class AidenChatViewModel {
                         attachment: attachment
                     )
                 }
-            } catch is CancellationError {
+            } catch let error where aidenIsCancellation(error) {
                 await cleanupCancelledUpload(acceptedReferences, context: context)
                 return uploads.count
             } catch {
@@ -1273,6 +1354,7 @@ final class AidenChatViewModel {
             presentedError = failedCount == 1
                 ? String(localized: "One attachment could not be uploaded. Other attachments are still ready to send.")
                 : String(localized: "\(failedCount) attachments could not be uploaded. Other attachments are still ready to send.")
+            coordinator.haptics.play(acceptedReferences.isEmpty ? .error : .warning, scope: hapticScope)
         }
         return failedCount
     }
@@ -1377,13 +1459,26 @@ final class AidenChatViewModel {
         streamState = .cancelled
         do {
             let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
+            guard coordinator.isCurrent(context) else { return }
+            guard status.streamId == stream.streamId, status.chatId == chat.id else { return }
+            if activeStreamID == stream.streamId {
+                await apply(
+                    status,
+                    streamID: stream.streamId,
+                    context: context,
+                    feedbackPolicy: .restoredStream
+                )
+            }
+            coordinator.haptics.play(.actionStopped, scope: hapticScope, dedupeKey: "turn-stop:\(stream.streamId)")
+        } catch let error where aidenIsCancellation(error) {
             guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-            await apply(status, streamID: stream.streamId, context: context)
+            streamState = previousState
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
             streamState = previousState
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
@@ -1399,14 +1494,21 @@ final class AidenChatViewModel {
         pendingApproval = nil
         streamState = .running
         do {
-            _ = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
+            let response = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
             guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard response.approvalId == approval.id, response.decision == decision else { return }
+            coordinator.haptics.play(.selection, scope: hapticScope, dedupeKey: "approval-response:\(approval.id):\(decision.rawValue)")
+        } catch let error where aidenIsCancellation(error) {
+            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            pendingApproval = approval
+            streamState = previousState
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = approval
             streamState = previousState
             presentedError = error.localizedDescription
+            coordinator.haptics.play(.error, scope: hapticScope)
         }
     }
 
@@ -1444,11 +1546,16 @@ final class AidenChatViewModel {
                 )
             }
             guard activeStreamID == stream.streamId else { return }
-            await apply(status, streamID: stream.streamId, context: context)
+            await apply(
+                status,
+                streamID: stream.streamId,
+                context: context,
+                feedbackPolicy: .restoredStream
+            )
             // A terminal status can become visible before its final SSE event is
             // consumed. Keep the durable cursor and replay first so cancellation
             // and provider-failure details are never skipped on reopen.
-            startStreaming(stream, context: context)
+            startStreaming(stream, context: context, feedbackPolicy: .restoredStream)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
             guard coordinator.isCurrent(context) else { return }
@@ -1456,21 +1563,29 @@ final class AidenChatViewModel {
             await liveActivities.markStale(instanceID: instanceId, streamID: stream.streamId)
             // Retain and resume the durable cursor even if the first status
             // probe happens while the phone is offline.
-            startStreaming(stream, context: context)
+            startStreaming(stream, context: context, feedbackPolicy: .restoredStream)
         }
     }
 
-    private func startStreaming(_ stream: AidenChatCache.ActiveStream, context: AidenRemoteRequestContext) {
+    private func startStreaming(
+        _ stream: AidenChatCache.ActiveStream,
+        context: AidenRemoteRequestContext,
+        feedbackPolicy: AidenStreamFeedbackPolicy
+    ) {
         terminalReconciliationTask?.cancel()
         terminalReconciliationTask = nil
         streamTask?.cancel()
         activeStreamID = stream.streamId
         streamTask = Task { [weak self] in
-            await self?.consume(stream, context: context)
+            await self?.consume(stream, context: context, feedbackPolicy: feedbackPolicy)
         }
     }
 
-    private func consume(_ original: AidenChatCache.ActiveStream, context: AidenRemoteRequestContext) async {
+    private func consume(
+        _ original: AidenChatCache.ActiveStream,
+        context: AidenRemoteRequestContext,
+        feedbackPolicy: AidenStreamFeedbackPolicy
+    ) async {
         var stream = original
         var terminalReplayGate = AidenTerminalReplayGate()
         var retryAttempt = 0
@@ -1488,7 +1603,7 @@ final class AidenChatViewModel {
                     if event.sequence != stream.lastSequence + 1 {
                         await reconcileChat(context: context)
                     }
-                    await apply(event, context: context)
+                    await apply(event, context: context, feedbackPolicy: feedbackPolicy)
                     guard activeStreamID == stream.streamId else { return }
                     stream.lastSequence = event.sequence
                     if event.terminal { return }
@@ -1498,34 +1613,48 @@ final class AidenChatViewModel {
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                 guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 retryAttempt = 0
-                await apply(status, streamID: stream.streamId, context: context)
+                await apply(
+                    status,
+                    streamID: stream.streamId,
+                    context: context,
+                    feedbackPolicy: feedbackPolicy
+                )
                 if status.state.isTerminal {
                     if terminalReplayGate.shouldReplay(status.state) { continue }
                     await finishStream(expectedStreamID: stream.streamId, context: context)
                     return
                 }
                 try await Task.sleep(for: .milliseconds(500))
-            } catch is CancellationError {
+            } catch let error where aidenIsCancellation(error) {
                 return
             } catch {
                 guard !Task.isCancelled else { return }
                 do {
                     let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
                     guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
-                    await apply(status, streamID: stream.streamId, context: context)
+                    await apply(
+                        status,
+                        streamID: stream.streamId,
+                        context: context,
+                        feedbackPolicy: feedbackPolicy
+                    )
                     if status.state.isTerminal {
                         if terminalReplayGate.shouldReplay(status.state) { continue }
                         await finishStream(expectedStreamID: stream.streamId, context: context)
                         return
                     }
                     try await Task.sleep(for: .seconds(1))
-                } catch is CancellationError {
+                } catch let error where aidenIsCancellation(error) {
                     return
                 } catch {
                     if await coordinator.handleCredentialRevocation(error, context: context) { return }
                     guard coordinator.isCurrent(context) else { return }
                     if AidenTerminalReconciliation.isDefinitiveMissingStream(error),
-                       await reconcileMissingStream(stream, context: context) {
+                       await reconcileMissingStream(
+                           stream,
+                           context: context,
+                           feedbackPolicy: feedbackPolicy
+                       ) {
                         return
                     }
                     presentedError = error.localizedDescription
@@ -1543,7 +1672,11 @@ final class AidenChatViewModel {
         }
     }
 
-    private func apply(_ event: AidenRemoteStreamEvent, context: AidenRemoteRequestContext) async {
+    private func apply(
+        _ event: AidenRemoteStreamEvent,
+        context: AidenRemoteRequestContext,
+        feedbackPolicy: AidenStreamFeedbackPolicy
+    ) async {
         guard coordinator.isCurrent(context),
               activeStreamID == event.streamId,
               event.shouldApply,
@@ -1562,7 +1695,11 @@ final class AidenChatViewModel {
         case .status:
             if let value = payload.state, let state = AidenStreamState(rawValue: value) {
                 if state == .waitingForApproval {
-                    await restorePendingApproval(streamID: event.streamId, context: context)
+                    await restorePendingApproval(
+                        streamID: event.streamId,
+                        context: context,
+                        announce: feedbackPolicy.allowsFeedback
+                    )
                     break
                 }
                 streamState = state
@@ -1589,7 +1726,11 @@ final class AidenChatViewModel {
         case .timeline:
             if let timeline = payload.timeline { activityTimeline = timeline }
         case .approvalRequired:
-            await restorePendingApproval(streamID: event.streamId, context: context)
+            await restorePendingApproval(
+                streamID: event.streamId,
+                context: context,
+                announce: feedbackPolicy.allowsFeedback
+            )
         case .error:
             pendingApproval = nil
             // The terminal chat reconciliation renders the durable, fixed-copy
@@ -1597,6 +1738,13 @@ final class AidenChatViewModel {
             // second generic modal alert.
             presentedError = nil
             streamState = .error
+            if feedbackPolicy.allowsFeedback {
+                coordinator.haptics.play(
+                    .error,
+                    scope: hapticScope,
+                    dedupeKey: "turn-terminal:\(event.streamId):error"
+                )
+            }
             await liveActivities.finish(
                 instanceID: instanceId,
                 streamID: event.streamId,
@@ -1635,7 +1783,8 @@ final class AidenChatViewModel {
     private func apply(
         _ status: AidenStreamStatus,
         streamID: String,
-        context: AidenRemoteRequestContext
+        context: AidenRemoteRequestContext,
+        feedbackPolicy: AidenStreamFeedbackPolicy
     ) async {
         guard activeStreamID == streamID,
               status.streamId == streamID,
@@ -1643,17 +1792,30 @@ final class AidenChatViewModel {
               coordinator.isCurrent(context)
         else { return }
         if status.state == .waitingForApproval {
-            await restorePendingApproval(streamID: streamID, context: context)
+            await restorePendingApproval(
+                streamID: streamID,
+                context: context,
+                announce: AidenStreamFeedbackDecision.announcesApproval(feedbackPolicy)
+            )
             return
         }
         pendingApproval = nil
         streamState = status.state
+        if feedbackPolicy.allowsFeedback,
+           status.state == .error || status.state == .interrupted {
+            coordinator.haptics.play(
+                .error,
+                scope: hapticScope,
+                dedupeKey: "turn-terminal:\(streamID):error"
+            )
+        }
         await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
     }
 
     private func restorePendingApproval(
         streamID: String,
-        context: AidenRemoteRequestContext
+        context: AidenRemoteRequestContext,
+        announce: Bool = false
     ) async {
         do {
             let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
@@ -1674,6 +1836,13 @@ final class AidenChatViewModel {
             }
             pendingApproval = approval
             streamState = .waitingForApproval
+            if announce {
+                coordinator.haptics.play(
+                    .warning,
+                    scope: hapticScope,
+                    dedupeKey: "approval-required:\(approval.id)"
+                )
+            }
             await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
         } catch {
             if await coordinator.handleCredentialRevocation(error, context: context) { return }
@@ -1726,7 +1895,7 @@ final class AidenChatViewModel {
                     guard coordinator.isCurrent(context) else { return }
                     await acceptRemoteChat(remote, context: context, scheduleTitleRefresh: false)
                     if !remote.isTitlePending { return }
-                } catch is CancellationError {
+                } catch let error where aidenIsCancellation(error) {
                     return
                 } catch {
                     if await coordinator.handleCredentialRevocation(error, context: context) { return }
@@ -1750,12 +1919,24 @@ final class AidenChatViewModel {
 
     private func reconcileMissingStream(
         _ stream: AidenChatCache.ActiveStream,
-        context: AidenRemoteRequestContext
+        context: AidenRemoteRequestContext,
+        feedbackPolicy: AidenStreamFeedbackPolicy
     ) async -> Bool {
         guard activeStreamID == stream.streamId else { return false }
         guard await reconcileChat(context: context) else { return false }
         guard activeStreamID == stream.streamId else { return false }
-        switch AidenMissingStreamResolution.resolve(messages: chat.messages) {
+        let resolution = AidenMissingStreamResolution.resolve(messages: chat.messages)
+        if let event = AidenStreamFeedbackDecision.terminalEvent(
+            for: resolution,
+            policy: feedbackPolicy
+        ) {
+            coordinator.haptics.play(
+                event,
+                scope: hapticScope,
+                dedupeKey: "turn-terminal:\(stream.streamId):error"
+            )
+        }
+        switch resolution {
         case .cancelled:
             streamState = .cancelled
             await liveActivities.finish(
@@ -1812,7 +1993,7 @@ final class AidenChatViewModel {
                         await clearFinishedStream(expectedStreamID: expectedStreamID)
                         return
                     }
-                } catch is CancellationError {
+                } catch let error where aidenIsCancellation(error) {
                     return
                 } catch {
                     // Keep the durable stream cursor and continue retrying while
@@ -1853,7 +2034,10 @@ struct AidenWorkspaceChatsView: View {
     init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace) {
         self.coordinator = coordinator
         self.workspace = workspace
-        _model = State(initialValue: AidenWorkspaceChatsModel(coordinator: coordinator, workspaceId: workspace.id))
+        _model = State(initialValue: AidenWorkspaceChatsModel(
+            coordinator: coordinator,
+            workspaceId: workspace.id
+        ))
     }
 
     var body: some View {
@@ -1970,6 +2154,8 @@ struct AidenWorkspaceChatsView: View {
         } message: {
             Text(model.presentedError ?? "The operation could not be completed.")
         }
+        .onAppear { model.setHapticsActive(true) }
+        .onDisappear { model.setHapticsActive(false) }
     }
 
     private func beginRename(_ chat: AidenChat) {
@@ -2092,6 +2278,8 @@ struct AidenChatDetailView: View {
         } message: {
             Text("This Bot’s primary model reads text only. Choose a vision model for photos and screenshots; attached images and a focused question will go to that model, while replies keep using the current primary model.")
         }
+        .onAppear { model.setHapticsActive(true) }
+        .onDisappear { model.setHapticsActive(false) }
     }
 
     private var chatStack: some View {
@@ -2847,6 +3035,7 @@ private struct AidenAttachmentGallerySelection: Identifiable {
 }
 
 private struct AidenMessageImageAttachmentsView: View {
+    @Environment(AidenHapticCenter.self) private var haptics
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let attachments: [AidenMessageAttachment]
     let edge: AidenMessageMediaEdge
@@ -3018,6 +3207,10 @@ private struct AidenMessageImageAttachmentsView: View {
     }
 
     private func setDeckSelection(_ selection: Int) {
+        guard selection != deckSelection else {
+            deckDragTranslation = 0
+            return
+        }
         let update = {
             deckSelection = selection
             deckDragTranslation = 0
@@ -3027,6 +3220,7 @@ private struct AidenMessageImageAttachmentsView: View {
         } else {
             withAnimation(.spring(duration: 0.22, bounce: 0.08), update)
         }
+        haptics.play(.selection)
     }
 
     private func openGallery(at index: Int) {
@@ -3102,12 +3296,14 @@ private struct AidenAttachmentThumbnailView: View {
 private struct AidenAttachmentGalleryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(AidenHapticCenter.self) private var haptics
     let attachments: [AidenMessageAttachment]
     let loadData: (AidenMessageAttachment) async -> Data?
     @State private var selectedID: String
     @State private var isSaving = false
     @State private var toastMessage: String?
     @State private var showsPhotoSettingsRecovery = false
+    @State private var hapticScope = UUID()
 
     init(
         attachments: [AidenMessageAttachment],
@@ -3190,6 +3386,8 @@ private struct AidenAttachmentGalleryView: View {
         } message: {
             Text("Allow Aiden On The Go to add images in Settings, then try again.")
         }
+        .onAppear { haptics.activate(scope: hapticScope) }
+        .onDisappear { haptics.deactivate(scope: hapticScope) }
     }
 
     private var selectedAttachments: [AidenMessageAttachment] {
@@ -3216,6 +3414,7 @@ private struct AidenAttachmentGalleryView: View {
 
     private func save(_ requested: [AidenMessageAttachment]) {
         guard !requested.isEmpty, !isSaving else { return }
+        let operationID = UUID()
         isSaving = true
         toastMessage = nil
         Task {
@@ -3228,11 +3427,28 @@ private struct AidenAttachmentGalleryView: View {
                 announce(savedCount == 1
                     ? String(localized: "Saved to Photos")
                     : String(localized: "Saved \(savedCount) images to Photos"))
+                haptics.play(
+                    .success,
+                    scope: hapticScope,
+                    dedupeKey: "photo-save:\(operationID.uuidString)"
+                )
             } catch AidenPhotoLibrarySavingError.denied {
                 announce(AidenPhotoLibrarySavingError.denied.localizedDescription)
                 showsPhotoSettingsRecovery = true
+                haptics.play(
+                    .warning,
+                    scope: hapticScope,
+                    dedupeKey: "photo-save:\(operationID.uuidString)"
+                )
+            } catch let error where aidenIsCancellation(error) {
+                return
             } catch {
                 announce(error.localizedDescription)
+                haptics.play(
+                    .error,
+                    scope: hapticScope,
+                    dedupeKey: "photo-save:\(operationID.uuidString)"
+                )
             }
             try? await Task.sleep(for: .seconds(2.5))
             if !Task.isCancelled { toastMessage = nil }
@@ -4269,7 +4485,7 @@ private struct AidenComposerView: View {
                             forceImage: true
                         )
                         uploads.append(upload)
-                    } catch is CancellationError {
+                    } catch let error where aidenIsCancellation(error) {
                         return
                     } catch {
                         preparationFailures += 1
@@ -4305,7 +4521,7 @@ private struct AidenComposerView: View {
                         do {
                             let upload = try await AidenAttachmentPreparation.fileUploadAsync(url: url)
                             uploads.append(upload)
-                        } catch is CancellationError {
+                        } catch let error where aidenIsCancellation(error) {
                             return
                         } catch {
                             preparationFailures += 1
@@ -4395,9 +4611,11 @@ private struct AidenComposerView: View {
     }
 
     private func select(_ candidate: AidenModel, providerId: String, thinkingLevel: String?) {
-        model.selectProvider(providerId)
-        model.selectModel(candidate.id)
-        model.selectedThinkingLevel = thinkingLevel
+        model.selectModel(
+            providerId: providerId,
+            modelId: candidate.id,
+            thinkingLevel: thinkingLevel
+        )
     }
 
     private func isSelected(
