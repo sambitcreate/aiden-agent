@@ -31,8 +31,13 @@ struct ContentView: View {
                 guard coordinator.connectionState != .needsPairing else { return }
                 Task {
                     await coordinator.connectActiveInstallation()
-                    if let client = try? coordinator.remoteClient() {
-                        await AidenRemoteLiveActivityManager.shared.reconcile(client: client)
+                    if let context = try? coordinator.requestContext(),
+                       let client = try? coordinator.remoteClient(for: context) {
+                        await AidenRemoteLiveActivityManager.shared.reconcile(
+                            instanceID: context.instanceId,
+                            client: client,
+                            isCurrent: { coordinator.isCurrent(context) }
+                        )
                     }
                 }
             case .background:
