@@ -594,6 +594,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var titleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var terminalReconciliationTask: Task<Void, Never>?
+    @ObservationIgnored private var activeStreamID: String?
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
 
     private(set) var chat: AidenChat
@@ -927,12 +928,14 @@ final class AidenChatViewModel {
         guard let stream = await cache.loadActiveStream(instanceId: instanceId, chatId: chat.id) else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let previousState = streamState
+        pendingApproval = nil
         streamState = .cancelled
         do {
-            streamState = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId).state
-            guard coordinator.isCurrent(context) else { return }
+            let status = try await coordinator.remoteClient(for: context).cancelStream(id: stream.streamId)
+            guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+            await apply(status, streamID: stream.streamId, context: context)
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
             streamState = previousState
             presentedError = error.localizedDescription
         }
@@ -944,14 +947,15 @@ final class AidenChatViewModel {
             return
         }
         let previousState = streamState
+        guard let streamID = activeStreamID else { return }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         pendingApproval = nil
         streamState = .running
         do {
             _ = try await coordinator.remoteClient(for: context).respondToApproval(id: approval.id, decision: decision)
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
         } catch {
-            guard coordinator.isCurrent(context) else { return }
+            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
             pendingApproval = approval
             streamState = previousState
             presentedError = error.localizedDescription
@@ -980,7 +984,7 @@ final class AidenChatViewModel {
         do {
             let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
             guard coordinator.isCurrent(context) else { return }
-            streamState = status.state
+            activeStreamID = stream.streamId
             if !status.state.isTerminal {
                 await liveActivities.start(
                     instanceID: instanceId,
@@ -989,7 +993,8 @@ final class AidenChatViewModel {
                     streamID: stream.streamId
                 )
             }
-            await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
+            guard activeStreamID == stream.streamId else { return }
+            await apply(status, streamID: stream.streamId, context: context)
             // A terminal status can become visible before its final SSE event is
             // consumed. Keep the durable cursor and replay first so cancellation
             // and provider-failure details are never skipped on reopen.
@@ -1008,6 +1013,7 @@ final class AidenChatViewModel {
         terminalReconciliationTask?.cancel()
         terminalReconciliationTask = nil
         streamTask?.cancel()
+        activeStreamID = stream.streamId
         streamTask = Task { [weak self] in
             await self?.consume(stream, context: context)
         }
@@ -1017,7 +1023,7 @@ final class AidenChatViewModel {
         var stream = original
         var terminalReplayGate = AidenTerminalReplayGate()
         var retryAttempt = 0
-        while !Task.isCancelled && coordinator.isCurrent(context) {
+        while !Task.isCancelled && coordinator.isCurrent(context) && activeStreamID == stream.streamId {
             do {
                 let events = try coordinator.remoteClient(for: context).streamEvents(
                     id: stream.streamId,
@@ -1025,26 +1031,26 @@ final class AidenChatViewModel {
                 )
                 for try await event in events {
                     try Task.checkCancellation()
-                    guard coordinator.isCurrent(context) else { return }
+                    guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                     guard event.streamId == stream.streamId else { continue }
                     if event.sequence <= stream.lastSequence { continue }
                     if event.sequence != stream.lastSequence + 1 {
                         await reconcileChat(context: context)
                     }
-                    stream.lastSequence = event.sequence
-                    try await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
                     await apply(event, context: context)
+                    guard activeStreamID == stream.streamId else { return }
+                    stream.lastSequence = event.sequence
                     if event.terminal { return }
+                    try await cache.saveActiveStream(stream, instanceId: instanceId, chatId: chat.id)
                 }
 
                 let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
-                guard coordinator.isCurrent(context) else { return }
+                guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
                 retryAttempt = 0
-                streamState = status.state
-                await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
+                await apply(status, streamID: stream.streamId, context: context)
                 if status.state.isTerminal {
                     if terminalReplayGate.shouldReplay(status.state) { continue }
-                    await finishStream(context: context)
+                    await finishStream(expectedStreamID: stream.streamId, context: context)
                     return
                 }
                 try await Task.sleep(for: .milliseconds(500))
@@ -1054,12 +1060,11 @@ final class AidenChatViewModel {
                 guard !Task.isCancelled else { return }
                 do {
                     let status = try await coordinator.remoteClient(for: context).streamStatus(id: stream.streamId)
-                    guard coordinator.isCurrent(context) else { return }
-                    streamState = status.state
-                    await liveActivities.updateStatus(instanceID: instanceId, streamID: stream.streamId, state: status.state)
+                    guard coordinator.isCurrent(context), activeStreamID == stream.streamId else { return }
+                    await apply(status, streamID: stream.streamId, context: context)
                     if status.state.isTerminal {
                         if terminalReplayGate.shouldReplay(status.state) { continue }
-                        await finishStream(context: context)
+                        await finishStream(expectedStreamID: stream.streamId, context: context)
                         return
                     }
                     try await Task.sleep(for: .seconds(1))
@@ -1088,6 +1093,7 @@ final class AidenChatViewModel {
 
     private func apply(_ event: AidenRemoteStreamEvent, context: AidenRemoteRequestContext) async {
         guard coordinator.isCurrent(context),
+              activeStreamID == event.streamId,
               event.shouldApply,
               let payload = event.payload else { return }
         switch event.type {
@@ -1096,7 +1102,12 @@ final class AidenChatViewModel {
             await reconcileChat(context: context)
         case .status:
             if let value = payload.state, let state = AidenStreamState(rawValue: value) {
+                if state == .waitingForApproval {
+                    await restorePendingApproval(streamID: event.streamId, context: context)
+                    break
+                }
                 streamState = state
+                if state != .waitingForApproval { pendingApproval = nil }
                 await liveActivities.updateStatus(instanceID: instanceId, streamID: event.streamId, state: state)
             }
         case .textDelta:
@@ -1119,12 +1130,9 @@ final class AidenChatViewModel {
         case .timeline:
             if let label = payload.label, timeline.last != label { timeline.append(label) }
         case .approvalRequired:
-            if let id = payload.approvalId, let summary = payload.summary, let expiresAt = payload.expiresAt {
-                pendingApproval = AidenPendingApproval(id: id, summary: summary, expiresAt: expiresAt)
-                streamState = .waitingForApproval
-                await liveActivities.approvalRequired(instanceID: instanceId, streamID: event.streamId)
-            }
+            await restorePendingApproval(streamID: event.streamId, context: context)
         case .error:
+            pendingApproval = nil
             presentedError = payload.message ?? "Aiden could not finish this response."
             streamState = .error
             await liveActivities.finish(
@@ -1134,8 +1142,9 @@ final class AidenChatViewModel {
                 message: String(localized: "Response failed"),
                 errorSummary: payload.message
             )
-            await finishStream(context: context)
+            await finishStream(expectedStreamID: event.streamId, context: context)
         case .cancelled:
+            pendingApproval = nil
             streamState = .cancelled
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -1143,8 +1152,9 @@ final class AidenChatViewModel {
                 status: .cancelled,
                 message: String(localized: "Response cancelled")
             )
-            await finishStream(context: context)
+            await finishStream(expectedStreamID: event.streamId, context: context)
         case .done:
+            pendingApproval = nil
             streamState = .done
             await liveActivities.finish(
                 instanceID: instanceId,
@@ -1152,11 +1162,62 @@ final class AidenChatViewModel {
                 status: .complete,
                 message: String(localized: "Response complete")
             )
-            await finishStream(context: context)
+            await finishStream(expectedStreamID: event.streamId, context: context)
         case .heartbeat:
             break
         default:
             break
+        }
+    }
+
+    private func apply(
+        _ status: AidenStreamStatus,
+        streamID: String,
+        context: AidenRemoteRequestContext
+    ) async {
+        guard activeStreamID == streamID,
+              status.streamId == streamID,
+              status.chatId == chat.id,
+              coordinator.isCurrent(context)
+        else { return }
+        if status.state == .waitingForApproval {
+            await restorePendingApproval(streamID: streamID, context: context)
+            return
+        }
+        pendingApproval = nil
+        streamState = status.state
+        await liveActivities.updateStatus(instanceID: instanceId, streamID: streamID, state: status.state)
+    }
+
+    private func restorePendingApproval(
+        streamID: String,
+        context: AidenRemoteRequestContext
+    ) async {
+        do {
+            let snapshot = try await coordinator.remoteClient(for: context).streamApproval(id: streamID)
+            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            guard let approval = AidenPendingApprovalResolution.resolve(
+                snapshot.approval,
+                streamId: streamID,
+                chatId: chat.id
+            ) else {
+                pendingApproval = nil
+                streamState = .reconciling
+                await liveActivities.updateStatus(
+                    instanceID: instanceId,
+                    streamID: streamID,
+                    state: .reconciling
+                )
+                return
+            }
+            pendingApproval = approval
+            streamState = .waitingForApproval
+            await liveActivities.approvalRequired(instanceID: instanceId, streamID: streamID)
+        } catch {
+            guard coordinator.isCurrent(context), activeStreamID == streamID else { return }
+            pendingApproval = nil
+            streamState = .reconciling
+            await liveActivities.markStale(instanceID: instanceId, streamID: streamID)
         }
     }
 
@@ -1211,20 +1272,23 @@ final class AidenChatViewModel {
         }
     }
 
-    private func finishStream(context: AidenRemoteRequestContext) async {
-        guard coordinator.isCurrent(context) else { return }
+    private func finishStream(expectedStreamID: String, context: AidenRemoteRequestContext) async {
+        guard coordinator.isCurrent(context), activeStreamID == expectedStreamID else { return }
         guard await reconcileChat(context: context) else {
-            scheduleTerminalReconciliation(context: context)
+            scheduleTerminalReconciliation(expectedStreamID: expectedStreamID, context: context)
             return
         }
-        await clearFinishedStream()
+        guard activeStreamID == expectedStreamID else { return }
+        await clearFinishedStream(expectedStreamID: expectedStreamID)
     }
 
     private func reconcileMissingStream(
         _ stream: AidenChatCache.ActiveStream,
         context: AidenRemoteRequestContext
     ) async -> Bool {
+        guard activeStreamID == stream.streamId else { return false }
         guard await reconcileChat(context: context) else { return false }
+        guard activeStreamID == stream.streamId else { return false }
         switch AidenMissingStreamResolution.resolve(messages: chat.messages) {
         case .cancelled:
             streamState = .cancelled
@@ -1259,23 +1323,27 @@ final class AidenChatViewModel {
                 message: String(localized: "Response interrupted")
             )
         }
-        await clearFinishedStream()
+        await clearFinishedStream(expectedStreamID: stream.streamId)
         return true
     }
 
-    private func scheduleTerminalReconciliation(context: AidenRemoteRequestContext) {
+    private func scheduleTerminalReconciliation(
+        expectedStreamID: String,
+        context: AidenRemoteRequestContext
+    ) {
         guard terminalReconciliationTask == nil else { return }
         terminalReconciliationTask = Task { [weak self] in
             guard let self else { return }
             defer { terminalReconciliationTask = nil }
             var attempt = 0
-            while !Task.isCancelled && coordinator.isCurrent(context) {
+            while !Task.isCancelled && coordinator.isCurrent(context) && activeStreamID == expectedStreamID {
                 do {
                     let delay = AidenTerminalReconciliation.retryDelayMilliseconds(attempt: attempt)
                     try await Task.sleep(for: .milliseconds(delay))
-                    guard coordinator.isCurrent(context) else { return }
+                    guard coordinator.isCurrent(context), activeStreamID == expectedStreamID else { return }
                     if await reconcileChat(context: context) {
-                        await clearFinishedStream()
+                        guard activeStreamID == expectedStreamID else { return }
+                        await clearFinishedStream(expectedStreamID: expectedStreamID)
                         return
                     }
                 } catch is CancellationError {
@@ -1290,13 +1358,19 @@ final class AidenChatViewModel {
         }
     }
 
-    private func clearFinishedStream() async {
+    private func clearFinishedStream(expectedStreamID: String) async {
+        guard activeStreamID == expectedStreamID else { return }
+        guard await cache.removeActiveStream(
+            instanceId: instanceId,
+            chatId: chat.id,
+            ifStreamId: expectedStreamID
+        ) else { return }
         liveText = ""
         reasoning = ""
         tools = []
         timeline = []
         pendingApproval = nil
-        await cache.removeActiveStream(instanceId: instanceId, chatId: chat.id)
+        activeStreamID = nil
     }
 }
 
@@ -2537,6 +2611,7 @@ private struct AidenLiveResponseView: View {
             if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
+                    canAllow: approval.canAllow,
                     onDeny: { Task { await model.respondToApproval(.deny) } },
                     onAllow: { Task { await model.respondToApproval(.allow) } }
                 )
@@ -2566,6 +2641,7 @@ private struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
 
     let summary: String
+    let canAllow: Bool
     let onDeny: () -> Void
     let onAllow: () -> Void
 
@@ -2616,16 +2692,18 @@ private struct AidenApprovalCard: View {
                 .buttonStyle(.plain)
                 .padding(.vertical, 5)
 
-                Button(action: onAllow) {
-                    Text("Allow once")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(palette.canvas)
-                        .padding(.horizontal, 13)
-                        .frame(height: 34)
-                        .aidenApprovalActionGlass(tint: palette.accent)
+                if canAllow {
+                    Button(action: onAllow) {
+                        Text("Allow once")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.canvas)
+                            .padding(.horizontal, 13)
+                            .frame(height: 34)
+                            .aidenApprovalActionGlass(tint: palette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 5)
                 }
-                .buttonStyle(.plain)
-                .padding(.vertical, 5)
             }
         }
         .padding(12)
