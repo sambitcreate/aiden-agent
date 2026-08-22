@@ -616,7 +616,8 @@ export function OnboardingFlow() {
         if (choice === "openai-key" || choice === "anthropic") {
           setDiscovering(true);
           const providerId = choice === "openai-key" ? "openai" : "anthropic";
-          const saved = await providersApi.validateOnboardingApiKey(providerId, apiKey.trim());
+          const validation = await providersApi.validateOnboardingApiKey(providerId, apiKey.trim());
+          const saved = validation.provider;
           queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) => {
             const without = (current ?? []).filter((item) => item.id !== saved.id);
             return [...without, saved];
@@ -626,7 +627,8 @@ export function OnboardingFlow() {
             throw new Error("Credentials were accepted, but no chat models are available.");
           persistModelSelection(saved.id, model);
           await completeProviderStep(saved.id);
-          toast.success(`${saved.label} credentials accepted.`);
+          if (validation.catalogWarning) toast.warning(validation.catalogWarning);
+          else toast.success(`${saved.label} credentials accepted.`);
           return;
         }
         const isLocalRuntime = choice === "lmstudio" || choice === "ollama";
