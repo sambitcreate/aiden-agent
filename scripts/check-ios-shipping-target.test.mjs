@@ -319,6 +319,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(chat, /Section \{[\s\S]*?header: \{[\s\S]*?AidenProviderIcon/u);
   assert.match(chat, /contextMenu[\s\S]*?Label\("Copy", systemImage: "doc\.on\.doc"\)/u);
+  assert.match(
+    chat,
+    /Image\(uiImage: image\)[\s\S]{0,240}?\.aspectRatio\(contentMode: contentMode\)[\s\S]{0,240}?\.clipShape\(RoundedRectangle\([\s\S]{0,240}?\.frame\(maxWidth: \.infinity, maxHeight: \.infinity, alignment: imageAlignment\)/u,
+  );
   assert.match(chat, /if !model\.liveText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = model\.liveText/u);
   assert.match(
     scheduledTasks,
