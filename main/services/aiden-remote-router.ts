@@ -62,7 +62,7 @@ export interface AidenRemoteRouterDependencies {
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
-    "status" | "cancel" | "respondApproval" | "openEvents"
+    "status" | "pendingApproval" | "cancel" | "respondApproval" | "openEvents"
   >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -96,6 +96,7 @@ export interface AidenRemoteRouterDependencies {
       | "turns"
       | "models"
       | "stream"
+      | "streamApproval"
       | "streamEvents"
       | "streamCancel"
       | "approvalRespond"
@@ -1135,6 +1136,16 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.streams) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         dependencies.streams.openEvents(device.id, eventsMatch[1]!, streamAfter(request, query), response);
+        return;
+      }
+      const streamApprovalMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/approval$/u.exec(path);
+      if (streamApprovalMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "streamApproval";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.streams) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, { approval: dependencies.streams.pendingApproval(device.id, streamApprovalMatch[1]!) });
         return;
       }
       const cancelMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/cancel$/u.exec(path);
