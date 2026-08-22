@@ -234,6 +234,20 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(shell, /archivedWorkspaceIDs\.contains\(chat\.workspaceId\)[\s\S]*?Unarchive it from Workspaces/u);
   assert.match(pairing, /Aiden, wherever you are\./u);
   assert.match(pairing, /task\(id: step\)[\s\S]*?if step == 2[\s\S]*?discovery\.start\(\)/u);
+  assert.match(
+    pairing,
+    /static let primary: \[AidenPairingMethod\] = \[[\s\S]*?\.scanQRCode[\s\S]*?\.nearbyMac[\s\S]*?\.privateAddress/u,
+  );
+  assert.match(pairing, /static let advanced: \[AidenPairingMethod\] = \[\.pastePayload\]/u);
+  assert.match(pairing, /case \.scanQRCode: return String\(localized: "Scan QR Code"\)/u);
+  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Nearby Mac \+ Setup Code"\)/u);
+  assert.match(pairing, /case \.privateAddress: return String\(localized: "Private Address \+ Setup Code"\)/u);
+  assert.match(pairing, /case \.nearbyMac: return String\(localized: "Local Network"\)/u);
+  assert.match(pairing, /case \.privateAddress: return String\(localized: "Tailscale"\)/u);
+  assert.match(pairing, /The QR already contains the selected Local Network or Tailscale address/u);
+  assert.match(pairing, /https:\/\/mac-name\.local:49220\/api\/aiden\/v1/u);
+  assert.match(pairing, /https:\/\/mac-name\.tailnet\.ts\.net\/api\/aiden\/v1/u);
+  assert.doesNotMatch(pairing, /Picker\("Pairing method"/u);
   assert.match(chat, /AidenUIKitMenuButton[\s\S]*?\.photosPicker\(\s*isPresented: \$isPhotoPickerPresented/u);
   assert.doesNotMatch(chat, /PhotosPicker\(selection:/u);
   assert.match(chat, /\.fileImporter\(/u);
