@@ -17,6 +17,7 @@ import {
   GitBranch,
   Globe2,
   Lock,
+  LoaderCircle,
   MessageSquare,
   Mic2,
   MousePointer2,
@@ -37,9 +38,14 @@ import * as React from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ProviderIcon } from "./provider-icon";
 import { BuiltinProviderEditor } from "./settings/builtin-provider-editor";
+import { CodexProviderSettings } from "./settings/codex-provider-settings";
 import { Button, Input, Text, toast } from "./ui";
-import { providersApi, profileApi } from "../lib/ipc";
-import { markOnboardingComplete, shouldShowOnboarding } from "../lib/onboarding-state";
+import { appApi, providersApi, profileApi } from "../lib/ipc";
+import {
+  clearLegacyOnboardingCompletion,
+  markOnboardingComplete,
+  shouldShowOnboarding,
+} from "../lib/onboarding-state";
 import {
   discoveredDefaultModel,
   fieldsAfterProviderChoiceChange,
@@ -47,9 +53,10 @@ import {
   type OnboardingProviderChoice,
 } from "../lib/onboarding-provider";
 import { getOnboardingMoreProviders } from "../lib/pi-provider-display";
-import { queryKeys, useProviders } from "../lib/queries";
+import { queryKeys, useCodexProviderStatus, useProviders } from "../lib/queries";
 import { persistModelSelection } from "../lib/use-model-selection";
 import type { Provider } from "../lib/types";
+import { onboardingStepIndex, type OnboardingSnapshot } from "../shared/onboarding";
 
 type Step = "profile" | "provider" | "tour";
 const steps: Step[] = ["profile", "provider", "tour"];
@@ -88,8 +95,7 @@ const FEATURE_ILLUSTRATIONS = {
   themes: new URL("../assets/onboarding/features/themes-accessibility.png", import.meta.url).href,
   telegram: new URL("../assets/onboarding/features/telegram-remote-control.png", import.meta.url)
     .href,
-  aidenOnTheGo: new URL("../assets/onboarding/features/aiden-on-the-go.png", import.meta.url)
-    .href,
+  aidenOnTheGo: new URL("../assets/onboarding/features/aiden-on-the-go.png", import.meta.url).href,
 } as const;
 
 const providerChoices: Array<{
@@ -335,7 +341,8 @@ const featureBentos: FeatureBento[] = [
     id: "telegram",
     group: "control",
     title: "Aiden in Telegram",
-    description: "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
+    description:
+      "Use models, skills, files, voice, queues, and trusted workspace automation from your paired account.",
     icon: Send,
     imageUrl: FEATURE_ILLUSTRATIONS.telegram,
     size: "standard",
@@ -410,6 +417,8 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-60 bg-background" />
         <DialogPrimitive.Content
+          data-slot="dialog-content"
+          data-onboarding-active="true"
           onEscapeKeyDown={(event) => event.preventDefault()}
           onPointerDownOutside={(event) => event.preventDefault()}
           className="fixed inset-0 z-60 grid place-items-center bg-background p-4 outline-none max-[760px]:p-0"
@@ -426,22 +435,27 @@ function OnboardingDialogShell({ children }: React.PropsWithChildren) {
 }
 
 function builtinProviderSetupLabel(provider: Provider): string {
-  if (provider.hasKey) return "Ready on this Mac";
-  const methods = (provider.authMethods ?? [])
-    .filter((method) => method.canLogin)
-    .map((method) => method.label);
-  if (methods.length > 0) return methods.slice(0, 2).join(" or ");
-  return "Requires system credentials";
+  return provider.hasKey
+    ? "Configured; verify in Settings after onboarding"
+    : "Available in Settings after onboarding";
 }
 
-function canChooseBuiltinProvider(provider: Provider): boolean {
-  return provider.hasKey || (provider.authMethods ?? []).some((method) => method.canLogin);
+function canChooseBuiltinProvider(_provider: Provider): boolean {
+  // Pi's generic API-key login proves only that a credential was entered; it
+  // does not contact the provider. Until a provider-specific non-generation
+  // validator exists, it cannot satisfy required first-run setup.
+  return false;
 }
 
 export function OnboardingFlow() {
   const queryClient = useQueryClient();
   const providers = useProviders();
-  const [open, setOpen] = React.useState(() => shouldShowOnboarding());
+  const codexStatus = useCodexProviderStatus();
+  // Main-owned state is authoritative. Block the workbench until it has been
+  // checked so a stale legacy renderer marker cannot expose a bypass window.
+  const [open, setOpen] = React.useState(true);
+  const [stateReady, setStateReady] = React.useState(false);
+  const [onboardingLoadError, setOnboardingLoadError] = React.useState<string | null>(null);
   const [index, setIndex] = React.useState(0);
   const [name, setName] = React.useState("");
   const [choice, setChoice] = React.useState<OnboardingProviderChoice | null>("openai-signin");
@@ -453,24 +467,79 @@ export function OnboardingFlow() {
   const [saving, setSaving] = React.useState(false);
   const [discovering, setDiscovering] = React.useState(false);
   const [providerError, setProviderError] = React.useState<string | null>(null);
+  const onboardingSnapshotRef = React.useRef<OnboardingSnapshot | null>(null);
+  const readyProviderIdRef = React.useRef<string | null>(null);
   const savingRef = React.useRef(false);
   const scrollContainerRef = React.useRef<HTMLElement>(null);
+  const profileInitializedRef = React.useRef(false);
+  const loadGenerationRef = React.useRef(0);
+
+  const loadOnboarding = React.useCallback(async (reopen = false) => {
+    const generation = loadGenerationRef.current + 1;
+    loadGenerationRef.current = generation;
+    setStateReady(false);
+    setOnboardingLoadError(null);
+    try {
+      const snapshot = reopen
+        ? await appApi.setOnboardingOutcome("incomplete")
+        : await appApi.getOnboardingState(!shouldShowOnboarding());
+      if (loadGenerationRef.current !== generation) return;
+      onboardingSnapshotRef.current = snapshot;
+      readyProviderIdRef.current = snapshot.selectedProviderId ?? null;
+      setIndex(onboardingStepIndex(snapshot));
+      setOpen(snapshot.outcome !== "completed");
+      if (snapshot.profileReady && !profileInitializedRef.current) {
+        const current = await profileApi.get();
+        profileInitializedRef.current = true;
+        setName(current.name);
+        queryClient.setQueryData(queryKeys.profile, current);
+      }
+      setStateReady(true);
+      if (reopen) clearLegacyOnboardingCompletion();
+    } catch (error) {
+      if (loadGenerationRef.current !== generation) return;
+      setOnboardingLoadError(
+        error instanceof Error ? error.message : "Aiden couldn't load onboarding progress.",
+      );
+      setOpen(true);
+    }
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    void loadOnboarding();
+    const reopen = () => void loadOnboarding(true);
+    window.addEventListener("aiden:show-onboarding", reopen);
+    return () => window.removeEventListener("aiden:show-onboarding", reopen);
+  }, [loadOnboarding]);
 
   React.useEffect(() => {
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: "auto" });
-  }, [index]);
+    const frame = requestAnimationFrame(() => {
+      scrollContainerRef.current?.querySelector<HTMLElement>("h2")?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [index, open]);
 
   if (!open) return null;
   const step = steps[index];
   const selected = providerChoices.find((item) => item.id === choice);
   const moreProviders = getOnboardingMoreProviders(providers.data ?? []);
-  const chatGptProvider = (providers.data ?? []).find(
-    (provider) => provider.id === "openai-codex" && provider.isBuiltin === true,
-  );
   const selectedBuiltinProvider = moreProviders.find((provider) => provider.id === builtinChoiceId);
   const hasProviderChoice = Boolean(selected || selectedBuiltinProvider);
+  const codexReady =
+    codexStatus.data?.configured === true &&
+    codexStatus.data.needsAttention === false &&
+    codexStatus.data.models.length > 0;
   const canContinue =
-    step === "profile" ? name.trim().length > 0 : step === "provider" ? hasProviderChoice : true;
+    !stateReady
+      ? false
+      : step === "profile"
+      ? name.trim().length > 0
+      : step === "provider"
+        ? choice === "openai-signin"
+          ? codexReady
+          : hasProviderChoice
+        : true;
 
   const selectProviderChoice = (nextChoice: OnboardingProviderChoice | null) => {
     const nextFields = fieldsAfterProviderChoiceChange(choice, nextChoice, { apiKey, baseUrl });
@@ -480,6 +549,13 @@ export function OnboardingFlow() {
     setProviderError(null);
   };
 
+  const completeProviderStep = async (providerId: string) => {
+    const snapshot = await appApi.setOnboardingProgress("provider", providerId);
+    onboardingSnapshotRef.current = snapshot;
+    readyProviderIdRef.current = providerId;
+    setIndex(2);
+  };
+
   const next = async () => {
     if (!canContinue || savingRef.current) return;
     if (step === "profile") {
@@ -487,7 +563,10 @@ export function OnboardingFlow() {
       setSaving(true);
       try {
         const saved = await profileApi.setName(name);
+        profileInitializedRef.current = true;
         queryClient.setQueryData(queryKeys.profile, saved);
+        const snapshot = await appApi.setOnboardingProgress("profile");
+        onboardingSnapshotRef.current = snapshot;
         setIndex(1);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Couldn't save your profile name.");
@@ -499,8 +578,10 @@ export function OnboardingFlow() {
     }
     if (step === "provider") {
       if (selectedBuiltinProvider) {
-        if (selectedBuiltinProvider.hasKey) {
-          setIndex(2);
+        if (selectedBuiltinProvider.hasKey && selectedBuiltinProvider.models.length > 0) {
+          const model = selectedBuiltinProvider.defaultModel ?? selectedBuiltinProvider.models[0];
+          persistModelSelection(selectedBuiltinProvider.id, model);
+          await completeProviderStep(selectedBuiltinProvider.id);
         } else {
           setSettingUpProvider(selectedBuiltinProvider);
         }
@@ -511,18 +592,13 @@ export function OnboardingFlow() {
         return;
       }
       if (choice === "openai-signin") {
-        if (providers.isLoading) {
-          toast.info("Aiden is still loading the ChatGPT sign-in option. Try again in a moment.");
+        const model = codexStatus.data?.models[0]?.id;
+        if (!codexReady || !model) {
+          setProviderError("Complete ChatGPT sign-in before continuing.");
           return;
         }
-        if (!chatGptProvider) {
-          toast.error(
-            "ChatGPT sign-in is unavailable. Refresh the provider catalog or choose another option.",
-          );
-          return;
-        }
-        if (chatGptProvider.hasKey) setIndex(2);
-        else setSettingUpProvider(chatGptProvider);
+        persistModelSelection("openai-codex", model);
+        await completeProviderStep("openai-codex");
         return;
       }
       if (choice === "tailscale" && !baseUrl.trim()) {
@@ -537,7 +613,24 @@ export function OnboardingFlow() {
       setSaving(true);
       setProviderError(null);
       try {
+        if (choice === "openai-key" || choice === "anthropic") {
+          setDiscovering(true);
+          const providerId = choice === "openai-key" ? "openai" : "anthropic";
+          const saved = await providersApi.validateOnboardingApiKey(providerId, apiKey.trim());
+          queryClient.setQueryData<Provider[]>(queryKeys.providers, (current) => {
+            const without = (current ?? []).filter((item) => item.id !== saved.id);
+            return [...without, saved];
+          });
+          const model = saved.defaultModel ?? saved.models[0];
+          if (!model)
+            throw new Error("Credentials were accepted, but no chat models are available.");
+          persistModelSelection(saved.id, model);
+          await completeProviderStep(saved.id);
+          toast.success(`${saved.label} credentials accepted.`);
+          return;
+        }
         const isLocalRuntime = choice === "lmstudio" || choice === "ollama";
+        const needsEndpointDiscovery = isLocalRuntime || choice === "tailscale";
         // Resolve reserved local identities from a fresh main-process snapshot.
         // The query cache may still be loading or stale when the user clicks Next.
         const currentProviders = isLocalRuntime
@@ -547,7 +640,7 @@ export function OnboardingFlow() {
           queryClient.setQueryData(queryKeys.providers, currentProviders);
         }
         let providerToSave = makeOnboardingProvider(choice, baseUrl.trim(), currentProviders);
-        if (providerToSave && isLocalRuntime) {
+        if (providerToSave && needsEndpointDiscovery) {
           let discovery: Awaited<ReturnType<typeof providersApi.test>>;
           try {
             setDiscovering(true);
@@ -584,24 +677,37 @@ export function OnboardingFlow() {
             const without = (current ?? []).filter((item) => item.id !== saved.id);
             return [...without, saved];
           });
-          if (isLocalRuntime) {
-            persistModelSelection(saved.id, saved.defaultModel ?? providerToSave.defaultModel!);
-          }
+          persistModelSelection(saved.id, saved.defaultModel ?? providerToSave.defaultModel!);
+          await completeProviderStep(saved.id);
           toast.success(`${saved.label} added.`);
         }
-        setIndex(2);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Couldn't add that provider.";
         setProviderError(message);
         toast.error(message);
       } finally {
+        setDiscovering(false);
         savingRef.current = false;
         setSaving(false);
       }
       return;
     }
-    markOnboardingComplete();
-    setOpen(false);
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      const snapshot = await appApi.setOnboardingOutcome(
+        "completed",
+        readyProviderIdRef.current ?? onboardingSnapshotRef.current?.selectedProviderId,
+      );
+      onboardingSnapshotRef.current = snapshot;
+      markOnboardingComplete();
+      setOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden couldn't finish onboarding.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   return (
@@ -633,6 +739,7 @@ export function OnboardingFlow() {
               {steps.map((item, itemIndex) => (
                 <li
                   key={item}
+                  aria-current={itemIndex === index ? "step" : undefined}
                   className={`flex items-center gap-2 ${itemIndex <= index ? "text-primary" : "text-tertiary"}`}
                 >
                   <span
@@ -662,18 +769,9 @@ export function OnboardingFlow() {
                 Step {index + 1} of {steps.length}
               </Text>
             </div>
-            <Button
-              className="no-drag"
-              variant="transparent"
-              size="small"
-              disabled={saving}
-              onClick={() => {
-                markOnboardingComplete();
-                setOpen(false);
-              }}
-            >
-              Skip
-            </Button>
+            <Text variant="small" color="tertiary">
+              Profile and provider setup required
+            </Text>
           </header>
 
           <main
@@ -681,12 +779,42 @@ export function OnboardingFlow() {
             data-onboarding-scroll
             className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 max-[520px]:px-4"
           >
-            {step === "profile" ? (
+            {onboardingLoadError ? (
+              <div role="alert" className="mb-4 rounded-card border border-red/30 bg-red/5 p-3">
+                <Text variant="small" color="red">
+                  {onboardingLoadError}
+                </Text>
+                <Button
+                  className="mt-2"
+                  size="small"
+                  variant="filled"
+                  onClick={() => void loadOnboarding()}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : null}
+            {!stateReady && !onboardingLoadError ? (
+              <div className="grid min-h-48 place-items-center" role="status" aria-live="polite">
+                <div className="flex items-center gap-2 text-secondary">
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                  <Text variant="small" color="secondary">
+                    Checking setup…
+                  </Text>
+                </div>
+              </div>
+            ) : null}
+            {stateReady && step === "profile" ? (
               <div className="max-w-md">
                 <div className="flex items-start gap-3">
                   <UserRound className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
-                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                    <Text
+                      as="h2"
+                      tabIndex={-1}
+                      variant="heading1"
+                      className="block text-[20px] leading-6 outline-none"
+                    >
                       What should Aiden call you?
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
@@ -718,12 +846,17 @@ export function OnboardingFlow() {
               </div>
             ) : null}
 
-            {step === "provider" ? (
+            {stateReady && step === "provider" ? (
               <div>
                 <div className="flex items-start gap-3">
                   <Network className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
-                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                    <Text
+                      as="h2"
+                      tabIndex={-1}
+                      variant="heading1"
+                      className="block text-[20px] leading-6 outline-none"
+                    >
                       Add a model provider
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
@@ -770,6 +903,11 @@ export function OnboardingFlow() {
                     </button>
                   ))}
                 </div>
+                {choice === "openai-signin" ? (
+                  <div className="mt-3">
+                    <CodexProviderSettings layer="onboarding" />
+                  </div>
+                ) : null}
                 <button
                   data-onboarding-more-provider-trigger
                   type="button"
@@ -893,20 +1031,14 @@ export function OnboardingFlow() {
                       />
                     </label>
                   ) : null}
-                  {choice === "tailscale" || choice === "openai-key" || choice === "anthropic" ? (
+                  {choice === "tailscale" ? (
                     <label>
-                      <Text variant="small-strong">
-                        {choice === "tailscale" ? "Model URL" : "Base URL (optional)"}
-                      </Text>
+                      <Text variant="small-strong">Model URL</Text>
                       <Input
                         className="mt-2"
                         disabled={saving}
                         value={baseUrl}
-                        placeholder={
-                          choice === "tailscale"
-                            ? "https://model.tailnet.ts.net/v1"
-                            : "Use provider default"
-                        }
+                        placeholder={"https://model.tailnet.ts.net/v1"}
                         onChange={(event) => setBaseUrl(event.currentTarget.value)}
                       />
                     </label>
@@ -920,12 +1052,17 @@ export function OnboardingFlow() {
               </div>
             ) : null}
 
-            {step === "tour" ? (
+            {stateReady && step === "tour" ? (
               <div>
                 <div className="flex items-start gap-3">
                   <Check className="mt-0.5 size-5 shrink-0 text-accent" />
                   <div>
-                    <Text as="h2" variant="heading1" className="block text-[20px] leading-6">
+                    <Text
+                      as="h2"
+                      tabIndex={-1}
+                      variant="heading1"
+                      className="block text-[20px] leading-6 outline-none"
+                    >
                       Everything Aiden brings together
                     </Text>
                     <Text as="p" variant="small" color="secondary" className="mt-1.5 block">
@@ -933,7 +1070,8 @@ export function OnboardingFlow() {
                       focus a tile to learn more.
                     </Text>
                     <Text as="p" variant="small" color="tertiary" className="mt-1 block">
-                      Phone and iPad access starts off. After setup, opt in from Settings → Remote Access; Aiden must stay running, and Tailscale is optional.
+                      Phone and iPad access starts off. After setup, opt in from Settings → Remote
+                      Access; Aiden must stay running, and Tailscale is optional.
                     </Text>
                   </div>
                 </div>
@@ -961,7 +1099,6 @@ export function OnboardingFlow() {
                             return (
                               <article
                                 key={feature.id}
-                                tabIndex={0}
                                 aria-label={`${feature.title}. ${feature.description}`}
                                 className={`group relative overflow-hidden rounded-card border border-field bg-well shadow-control outline-none transition-[background-color,border-color,box-shadow] duration-150 hover:border-separator hover:bg-control-hover hover:shadow-control-hover focus-visible:border-focus-ring focus-visible:bg-control-hover focus-visible:shadow-control-hover ${FEATURE_LAYOUTS[feature.size]}`}
                               >
@@ -1024,14 +1161,20 @@ export function OnboardingFlow() {
           >
             <Button
               variant="transparent"
-              disabled={index === 0 || saving}
+              disabled={!stateReady || index === 0 || saving}
               onClick={() => setIndex((value) => Math.max(0, value - 1))}
             >
               <ChevronLeft /> Back
             </Button>
-            <Button variant="accent" disabled={!canContinue || saving} onClick={() => void next()}>
+            <Button
+              variant="accent"
+              disabled={!stateReady || !canContinue || saving}
+              onClick={() => void next()}
+            >
               {discovering
-                ? "Discovering models…"
+                ? choice === "openai-key" || choice === "anthropic"
+                  ? "Validating key…"
+                  : "Discovering models…"
                 : saving && step === "provider"
                   ? "Adding provider…"
                   : step === "tour"
@@ -1051,8 +1194,30 @@ export function OnboardingFlow() {
             if (!nextOpen) setSettingUpProvider(null);
           }}
           onSaved={() => {
-            void queryClient.invalidateQueries({ queryKey: queryKeys.providers });
-            setIndex(2);
+            void (async () => {
+              const refreshed = await providersApi.list();
+              queryClient.setQueryData(queryKeys.providers, refreshed);
+              const ready = refreshed.find(
+                (provider) =>
+                  provider.id === settingUpProvider.id &&
+                  provider.hasKey === true &&
+                  provider.models.length > 0,
+              );
+              if (!ready) {
+                setProviderError(
+                  `${settingUpProvider.label} is configured but does not have an available chat model yet.`,
+                );
+                return;
+              }
+              const model = ready.defaultModel ?? ready.models[0];
+              persistModelSelection(ready.id, model);
+              await completeProviderStep(ready.id);
+              setSettingUpProvider(null);
+            })().catch((error: unknown) => {
+              setProviderError(
+                error instanceof Error ? error.message : "Couldn't verify that provider.",
+              );
+            });
           }}
         />
       ) : null}
