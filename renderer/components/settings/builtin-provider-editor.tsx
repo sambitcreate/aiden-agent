@@ -142,12 +142,10 @@ export function BuiltinProviderEditor({
             // editor closed while the session reported `finishing`.
             onSaved();
             if (mountedRef.current && openRef.current) {
-              toast.success(`${provider.label} is configured.`);
+              if (event.warning) toast.warning(event.warning);
+              else toast.success(`${provider.label} is configured.`);
               onOpenChange(false);
             }
-            // Refresh dynamic catalogs independently; an unrelated provider
-            // failure must not turn this selected provider's success into failure.
-            void providersApi.refresh().catch(() => undefined);
           } catch (error) {
             if (mountedRef.current && openRef.current) {
               setMessage(
