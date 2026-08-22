@@ -3,10 +3,11 @@ import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js"
 import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote.js";
 import {
   parseAidenRemoteConnectionMode,
+  parseAidenRemoteTakeoverToken,
   parseAidenRemoteTransport,
 } from "./aiden-remote-parse.js";
 
-function parseIdentifier(value: unknown, prefix: "device_" | "root_"): string {
+function parseIdentifier(value: unknown, prefix: "device_" | "root_" | "pairing_"): string {
   if (
     typeof value !== "string" ||
     !value.startsWith(prefix) ||
@@ -21,9 +22,13 @@ function parseIdentifier(value: unknown, prefix: "device_" | "root_"): string {
 async function settingsSnapshot(): Promise<AidenRemoteSettingsSnapshot> {
   const runtime = await getAidenRemoteRuntime();
   const state = await runtime.state.snapshot();
+  const pairing = runtime.service.pairingStatus();
   return {
+    instanceId: state.instanceId,
+    displayName: state.displayName,
     status: await runtime.service.status(),
     devices: await runtime.state.listDevices(),
+    ...(pairing ? { pairing } : {}),
     approvedRoots: state.approvedRoots.map((root) => ({
       id: root.id,
       label: root.label,
@@ -49,6 +54,14 @@ export function registerAidenRemoteHandlers(): void {
     return settingsSnapshot();
   });
 
+  ipcMain.handle("remote:setDisplayName", async (_event, displayName: unknown) => {
+    if (typeof displayName !== "string") {
+      throw new Error("Invalid Aiden Remote display name.");
+    }
+    await (await getAidenRemoteRuntime()).service.setDisplayName(displayName);
+    return settingsSnapshot();
+  });
+
   ipcMain.handle("remote:tailscaleConnect", async () => {
     await (await getAidenRemoteRuntime()).service.connectTailscale();
     return settingsSnapshot();
@@ -59,19 +72,40 @@ export function registerAidenRemoteHandlers(): void {
     return settingsSnapshot();
   });
 
+  ipcMain.handle("remote:tailscaleReconcile", async () => {
+    await (await getAidenRemoteRuntime()).service.reconcileTailscale();
+    return settingsSnapshot();
+  });
+
+  ipcMain.handle("remote:tailscaleReviewTakeover", async () => {
+    return (await getAidenRemoteRuntime()).service.reviewTailscaleTakeover();
+  });
+
+  ipcMain.handle("remote:tailscaleTakeOver", async (_event, token: unknown) => {
+    await (await getAidenRemoteRuntime()).service.takeOverTailscale(
+      parseAidenRemoteTakeoverToken(token),
+    );
+    return settingsSnapshot();
+  });
+
   ipcMain.handle("remote:beginPairing", async (_event, transport: unknown) => {
     const selectedTransport = parseAidenRemoteTransport(transport);
     const service = (await getAidenRemoteRuntime()).service;
-    const bootstrap = await service.beginPairing(selectedTransport);
+    const pairing = await service.beginPairing(selectedTransport);
     return {
-      ...bootstrap,
-      qrPayload: service.pairingQrPayload(bootstrap, selectedTransport),
+      ...pairing.bootstrap,
+      pairingSessionId: pairing.sessionId,
+      qrPayload: pairing.qrPayload
+        ?? service.pairingQrPayload(pairing.bootstrap, selectedTransport),
+      manualCode: pairing.manualCode,
     };
   });
 
-  ipcMain.handle("remote:closePairing", async () => {
-    await (await getAidenRemoteRuntime()).service.closePairing();
-    return { closed: true };
+  ipcMain.handle("remote:closePairing", async (_event, sessionId: unknown) => {
+    const closed = await (await getAidenRemoteRuntime()).service.closePairing(
+      parseIdentifier(sessionId, "pairing_"),
+    );
+    return { closed };
   });
 
   ipcMain.handle("remote:revokeDevice", async (_event, deviceId: unknown) => {
