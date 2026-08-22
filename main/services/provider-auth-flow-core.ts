@@ -86,6 +86,7 @@ export interface ProviderAuthDoneDto {
   flowId: string;
   providerId: string;
   cancelled: boolean;
+  warning?: string;
 }
 
 export type ProviderAuthErrorCode =
@@ -125,7 +126,7 @@ export interface ProviderAuthOwner {
 export interface ProviderAuthBackend {
   snapshot(): Promise<unknown>;
   authenticate(interaction: AuthInteraction): Promise<unknown>;
-  commitCredential(credential: unknown): Promise<void>;
+  commitCredential(credential: unknown): Promise<void | { warning?: string }>;
   logout(): Promise<void>;
 }
 
@@ -696,8 +697,8 @@ export class ProviderAuthFlowCoordinator {
         clearTimeout(session.timeout);
         session.timeout = undefined;
       }
-      await session.backend.commitCredential(outcome.credential);
-      this.sendDone(session, false);
+      const committed = await session.backend.commitCredential(outcome.credential);
+      this.sendDone(session, false, committed?.warning);
     } catch (error) {
       if (session.abortController.signal.aborted && !session.timedOut) {
         this.sendDone(session, true);
@@ -946,11 +947,12 @@ export class ProviderAuthFlowCoordinator {
     if (session.pendingPrompt === pending) session.pendingPrompt = undefined;
   }
 
-  private sendDone(session: AuthSession, cancelled: boolean): void {
+  private sendDone(session: AuthSession, cancelled: boolean, warning?: string): void {
     this.safeSend(session, "providers:auth:done", {
       flowId: session.flowId,
       providerId: session.providerId,
       cancelled,
+      ...(warning ? { warning: boundedCopy(warning, "Provider catalog refresh failed.", 512) } : {}),
     } satisfies ProviderAuthDoneDto);
   }
 
