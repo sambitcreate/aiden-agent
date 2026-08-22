@@ -37,6 +37,7 @@ import {
   MAX_AIDEN_REMOTE_STREAM_SNAPSHOT_BYTES,
   normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
+  type AidenRemotePendingApproval,
   type AidenRemoteStreamSnapshot,
 } from "./aiden-remote-streams.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
@@ -113,6 +114,12 @@ export interface AidenRemoteRuntime {
   state: AidenRemoteStateRegistry;
   approvedRoots: AidenRemoteApprovedRootService;
   revokeDevice(deviceId: string): Promise<boolean>;
+  pendingApprovalForChat(chatId: string): AidenRemotePendingApproval | null;
+  respondApprovalFromHost(
+    chatId: string,
+    approvalId: string,
+    decision: "allow" | "deny",
+  ): boolean;
 }
 
 let runtimePromise: Promise<AidenRemoteRuntime> | null = null;
@@ -264,6 +271,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             approve: (approvalId, decision, ownerDocumentId) =>
               llmClient.approve(approvalId, decision, ownerDocumentId),
             notifyChatChanged: () => ipcMain.broadcast("chats:changed", {}),
+            notifyApprovalChanged: (chatId) =>
+              ipcMain.broadcast("remote:approval-changed", { chatId }),
             snapshot: streamSnapshot,
             persist: (snapshot) => streamStore.save(snapshot),
             idempotency,
@@ -367,6 +376,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
       chats: activeChats,
       workspaceOwners,
     }, deviceId),
+    pendingApprovalForChat: (chatId) => activeStreams?.pendingApprovalForChat(chatId) ?? null,
+    respondApprovalFromHost: (chatId, approvalId, decision) =>
+      activeStreams?.respondApprovalFromHost(chatId, approvalId, decision) ?? false,
   };
 }
 

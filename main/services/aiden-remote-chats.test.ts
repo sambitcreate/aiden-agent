@@ -11,6 +11,7 @@ import {
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+const ONE_PIXEL_GIF = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
 
 function chat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -179,6 +180,105 @@ test("chat projection is path-free and excludes private Pi protocol and reasonin
   assert.match(projection.revision, /^rev_[A-Za-z0-9_-]{43}$/u);
 });
 
+test("chat projection preserves only renderer-safe exceptional outcomes", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      {
+        id: "assistant-failed",
+        role: "assistant",
+        content: "Partial answer",
+        createdAt: 2_000,
+        providerFailure: {
+          version: 1,
+          category: "service_unavailable",
+          attempts: 2,
+          retryExhausted: true,
+        },
+      },
+      {
+        id: "assistant-cancelled",
+        role: "assistant",
+        content: "Stopped answer",
+        createdAt: 3_000,
+        timeline: {
+          version: 3,
+          generationId: "stream-safe",
+          status: "cancelled",
+          startedAt: 1_000,
+          finishedAt: 2_000,
+          cancellationOrigin: "user_stop",
+          steps: [],
+        },
+      },
+      {
+        id: "assistant-complete",
+        role: "assistant",
+        content: "Complete answer",
+        createdAt: 4_000,
+        timeline: {
+          version: 3,
+          generationId: "stream-complete",
+          status: "completed",
+          startedAt: 1_000,
+          finishedAt: 2_000,
+          steps: [],
+        },
+      },
+    ],
+  }));
+
+  assert.deepEqual(projection.messages.map((message) => message.outcome), [
+    {
+      status: "failed",
+      category: "service_unavailable",
+      attempts: 2,
+      retryExhausted: true,
+    },
+    { status: "cancelled" },
+    undefined,
+  ]);
+  assert.notEqual(projection.revision, projectAidenRemoteChat(chat()).revision);
+});
+
+test("chat projection retains only the sanitized activity timeline", () => {
+  const safeTimeline = {
+    version: 3 as const,
+    generationId: "stream-safe",
+    status: "completed" as const,
+    startedAt: 1_000,
+    finishedAt: 2_000,
+    steps: [{
+      id: "tool-1",
+      order: 0,
+      kind: "tool" as const,
+      toolCallId: "call-1",
+      toolName: "read_file",
+      label: "Read file",
+      status: "completed" as const,
+      startedAt: 1_000,
+      updatedAt: 2_000,
+      finishedAt: 2_000,
+      contentOffset: 0,
+      target: "README.md",
+    }],
+  };
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      { id: "assistant-safe", role: "assistant", content: "Done", createdAt: 2_000, timeline: safeTimeline },
+      {
+        id: "assistant-unsafe",
+        role: "assistant",
+        content: "No leak",
+        createdAt: 3_000,
+        timeline: { ...safeTimeline, steps: [{ ...safeTimeline.steps[0], target: "/Users/private/secret" }] },
+      },
+    ],
+  }));
+  assert.deepEqual(projection.messages[0]?.timeline, safeTimeline);
+  assert.equal(projection.messages[1]?.timeline, undefined);
+  assert.doesNotMatch(JSON.stringify(projection), /Users\/private/u);
+});
+
 test("chat reads expose an in-flight background title without changing the revision", async () => {
   let pending = true;
   const app = fixture(chat(), { isTitlePending: () => pending });
@@ -281,12 +381,177 @@ test("remote attachments are one-use, bounded, and projected without inline cont
     { name: "diagram.png", kind: "image" },
     { name: "notes.md", kind: "text" },
   ]);
+  const imageContent = await app.service.attachmentContent("chat-1", image.id);
+  assert.equal(imageContent.mimeType, "image/png");
+  assert.equal(imageContent.bytes.toString("base64"), ONE_PIXEL_PNG);
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", text.id),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+  await assert.rejects(
+    app.service.attachmentContent("chat-2", image.id),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", "missing-attachment"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
   await assert.rejects(
     app.service.startTurn("device-1", "chat-1", "turn-attachments-0002", {
       text: "Do not reuse",
       attachmentIds: [image.id],
     }),
     (error: unknown) => (error as { code?: string }).code === "handle_invalid",
+  );
+});
+
+test("attachment content fails closed when projected identifiers are ambiguous", async () => {
+  const duplicate = "attachment-duplicate";
+  const attachment = {
+    id: duplicate,
+    name: "duplicate.png",
+    mimeType: "image/png",
+    kind: "image" as const,
+    size: 70,
+    data: ONE_PIXEL_PNG,
+  };
+  const app = fixture(chat({
+    messages: [{
+      id: "message-1",
+      role: "user",
+      content: "Two copies",
+      createdAt: 1_500,
+      attachments: [attachment, { ...attachment }],
+    }],
+  }));
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", duplicate),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+});
+
+test("attachment content never exposes images from hidden message roles", async () => {
+  const app = fixture(chat({
+    messages: [{
+      id: "system-image-message",
+      role: "system",
+      content: "private",
+      createdAt: 1_500,
+      attachments: [{
+        id: "hidden-system-image",
+        name: "hidden.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: Buffer.from(ONE_PIXEL_PNG, "base64").byteLength,
+        data: ONE_PIXEL_PNG,
+      }],
+    }],
+  }));
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", "hidden-system-image"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+});
+
+test("assistant image attachments project to paired clients and retain authenticated content", async () => {
+  const imageBytes = Buffer.from(ONE_PIXEL_PNG, "base64");
+  const app = fixture(chat({
+    messages: [{
+      id: "assistant-image-message",
+      role: "assistant",
+      content: "Here it is.",
+      createdAt: 1_500,
+      attachments: [{
+        id: "assistant-shared-image",
+        name: "Result.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: imageBytes.length,
+        data: ONE_PIXEL_PNG,
+      }],
+    }],
+  }));
+  const projected = await app.service.get("chat-1");
+  assert.deepEqual(projected.messages[0]?.attachments, [{
+    id: "assistant-shared-image",
+    name: "Result.png",
+    mimeType: "image/png",
+    kind: "image",
+    size: imageBytes.length,
+  }]);
+  const content = await app.service.attachmentContent("chat-1", "assistant-shared-image");
+  assert.equal(content.mimeType, "image/png");
+  assert.deepEqual(content.bytes, imageBytes);
+});
+
+test("attachment content rejects stored raster bytes that do not match their MIME type", async () => {
+  const app = fixture(chat({
+    messages: [{
+      id: "message-1",
+      role: "assistant",
+      content: "Generated image",
+      createdAt: 1_500,
+      attachments: [{
+        id: "mismatched-image",
+        name: "mismatched.jpg",
+        mimeType: "image/jpeg",
+        kind: "image",
+        size: 70,
+        data: ONE_PIXEL_PNG,
+      }],
+    }],
+  }));
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", "mismatched-image"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+});
+
+test("attachment content rejects canonical raster formats outside the public PNG and JPEG contract", async () => {
+  const app = fixture(chat({
+    messages: [{
+      id: "message-1",
+      role: "assistant",
+      content: "Generated animation",
+      createdAt: 1_500,
+      attachments: [{
+        id: "unsupported-gif",
+        name: "animation.gif",
+        mimeType: "image/gif",
+        kind: "image",
+        size: Buffer.from(ONE_PIXEL_GIF, "base64").byteLength,
+        data: ONE_PIXEL_GIF,
+      }],
+    }],
+  }));
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", "unsupported-gif"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
+  );
+});
+
+test("attachment content rejects a truncated image even when its header and metadata remain readable", async () => {
+  const complete = Buffer.from(ONE_PIXEL_PNG, "base64");
+  const truncated = complete.subarray(0, complete.length - 12);
+  const app = fixture(chat({
+    messages: [{
+      id: "message-1",
+      role: "assistant",
+      content: "Incomplete image",
+      createdAt: 1_500,
+      attachments: [{
+        id: "truncated-image",
+        name: "truncated.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: truncated.byteLength,
+        data: truncated.toString("base64"),
+      }],
+    }],
+  }));
+  await assert.rejects(
+    app.service.attachmentContent("chat-1", "truncated-image"),
+    (error: unknown) => (error as { code?: string }).code === "not_found",
   );
 });
 

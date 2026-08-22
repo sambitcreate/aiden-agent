@@ -17,7 +17,11 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools } from "./tools.js";
-import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
+import {
+  APPROVAL_TOOL_NAMES,
+  DISCLOSURE_APPROVAL_TOOL_NAMES,
+  summarizeToolCall,
+} from "./coding-tools.js";
 import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
@@ -47,7 +51,13 @@ import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
-import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
+import type {
+  ApprovalDecision,
+  Attachment,
+  Chat,
+  ChatStartParams,
+  WorkspacePermission,
+} from "./types.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
@@ -84,6 +94,7 @@ import { piRuntimeEffectStore } from "./pi-runtime-effect-store.js";
 import { createComputerUseController } from "./computer-use/runtime.js";
 import { computerUseStatus } from "./computer-use/status.js";
 import { GenerationTimelineProjector } from "./generation-timeline.js";
+import { persistGenerationInitializationTerminal } from "./generation-initialization-terminal.js";
 import type { GenerationCancellationOrigin } from "../../renderer/shared/generation-timeline.js";
 import {
   assertGenerationContextCapacity,
@@ -91,6 +102,10 @@ import {
 } from "./generation-context.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
+import {
+  MAX_ATTACHMENT_INLINE_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
@@ -419,6 +434,7 @@ async function prepareGeneration(
   ownerDocumentId: string,
   options: GenerationExecutionOptions,
 ) {
+  const sharedImages: Attachment[] = [];
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const attendedAssistant = params.mode === "assistant";
   const assistantPersonaMode =
@@ -679,6 +695,19 @@ async function prepareGeneration(
               subagentDelegationEnabled,
             )
         : undefined,
+      shareImage: folderPath
+        ? (attachment) => {
+            if (sharedImages.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+              throw new Error("This response already contains the maximum number of images.");
+            }
+            if (sharedImages.some((item) => item.data === attachment.data)) return;
+            const nextBytes = sharedImages.reduce((sum, item) => sum + item.size, 0) + attachment.size;
+            if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
+              throw new Error("The images shared in this response exceed the 16 MB limit.");
+            }
+            sharedImages.push(attachment);
+          }
+        : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   let googleWorkspaceSnapshot: string | undefined;
@@ -716,6 +745,7 @@ async function prepareGeneration(
     workspaceId: workspace?.id,
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
+    sharedImages,
     // The Aiden system prompt reads its approval posture from settings, which
     // are already loaded here; re-reading them at the prompt site would be a
     // second disk round trip inside the generation's hot path.
@@ -807,9 +837,35 @@ export const llmClient = {
     });
     if (initialization.controller.signal.aborted) initialization.removeOwnerInvalidation();
     let setup: Awaited<ReturnType<typeof prepareGeneration>>;
-    let authoritativeChat!: Chat;
+    let authoritativeChat: Chat | undefined;
     let authoritativeBot: BotDefinition | undefined;
     let authoritativeMode: ChatStartParams["mode"];
+    const initializationTerminalState = { attempted: false };
+    const persistInitializationTerminal = async (
+      status: "failed" | "cancelled",
+      cancellationOrigin?: GenerationCancellationOrigin,
+    ): Promise<void> => {
+      await persistGenerationInitializationTerminal({
+        state: initializationTerminalState,
+        hasAuthoritativeChat: authoritativeChat !== undefined,
+        workspaceId: initialization.workspaceId,
+        streamId,
+        providerId: params.providerId,
+        model: params.model,
+        status,
+        cancellationOrigin,
+        isCurrent: () =>
+          initializing.get(streamId) === initialization ||
+          (active.get(streamId)?.chatId === params.chatId &&
+            active.get(streamId)?.owner === owner),
+        append: (message, meta) => chatStore.appendMessage(params.chatId, message, meta),
+        onUnknownOutcome: (terminalError) => logger.error(
+          "pi",
+          `Could not persist the initialization outcome for stream ${streamId}`,
+          terminalError,
+        ),
+      });
+    };
     try {
       const chat = await chatStore.get(params.chatId);
       if (!chat) {
@@ -867,7 +923,16 @@ export const llmClient = {
       );
     } catch (error) {
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        await persistInitializationTerminal(
+          "cancelled",
+          initialization.cancellationOrigin,
+        );
+        sendGeneration(streamId, "chat:done", {
+          streamId,
+          content: "",
+          cancelled: true,
+          cancellationOrigin: initialization.cancellationOrigin,
+        });
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
@@ -875,12 +940,17 @@ export const llmClient = {
         broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
+      await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
       approvals.releaseStream(streamId);
       broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
       throw error;
+    }
+    const generationChat = authoritativeChat;
+    if (!generationChat) {
+      throw new Error("This chat is no longer available.");
     }
     const {
       runtime,
@@ -897,6 +967,7 @@ export const llmClient = {
       assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
+      sharedImages,
     } = setup;
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
@@ -960,7 +1031,8 @@ export const llmClient = {
         finalTimeline.steps.length === 0 &&
         finalTimeline.status !== "cancelled" &&
         !subagents &&
-        !providerFailure
+        !providerFailure &&
+        sharedImages.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -982,6 +1054,7 @@ export const llmClient = {
                 ? finalTimeline
                 : undefined,
             subagents,
+            attachments: sharedImages.length > 0 ? sharedImages : undefined,
           },
           {
             providerId: params.providerId,
@@ -1136,12 +1209,12 @@ export const llmClient = {
       };
       const promptJournal = piSession;
 
-      const currentUser = [...authoritativeChat.messages]
+      const currentUser = [...generationChat.messages]
         .reverse()
         .find((message) => message.role === "user");
       const priorVisibleMessages = currentUser
-        ? authoritativeChat.messages.filter((message) => message.id !== currentUser.id)
-        : authoritativeChat.messages;
+        ? generationChat.messages.filter((message) => message.id !== currentUser.id)
+        : generationChat.messages;
       const contentOverrides = new Map<string, string>();
       if (currentUser) {
         if (
@@ -1329,8 +1402,9 @@ export const llmClient = {
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
               permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
-            if (!scheduleApproval && !workspaceApproval) {
+            if (!scheduleApproval && !workspaceApproval && !disclosureApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
@@ -1590,7 +1664,16 @@ export const llmClient = {
       endLoadMonitor(initialization, streamId, false);
       await computerUse?.close().catch(() => {});
       if (initialization.cancelRequested || initialization.controller.signal.aborted) {
-        sendGeneration(streamId, "chat:done", { streamId, content: "" });
+        await persistInitializationTerminal(
+          "cancelled",
+          initialization.cancellationOrigin,
+        );
+        sendGeneration(streamId, "chat:done", {
+          streamId,
+          content: "",
+          cancelled: true,
+          cancellationOrigin: initialization.cancellationOrigin,
+        });
         releaseGenerationSkillReservation(initialization);
         initializing.delete(streamId);
         initialization.removeOwnerInvalidation();
@@ -1598,6 +1681,7 @@ export const llmClient = {
         broadcastChatSettled(streamId, params.chatId, initialization.workspaceId, params.workspaceId);
         return false;
       }
+      await persistInitializationTerminal("failed");
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
       initialization.removeOwnerInvalidation();
@@ -1607,6 +1691,7 @@ export const llmClient = {
     }
     const agent = candidate;
     if (!agent || !piSession) {
+      await persistInitializationTerminal("failed");
       endLoadMonitor(initialization, streamId, false);
       releaseGenerationSkillReservation(initialization);
       initializing.delete(streamId);
@@ -1782,6 +1867,10 @@ export const llmClient = {
     active.set(streamId, activeGeneration);
     initializing.delete(streamId);
     if (initialization.cancelRequested || activeGeneration.cancelRequested) {
+      await persistInitializationTerminal(
+        "cancelled",
+        activeGeneration.cancellationOrigin,
+      );
       await piTurnLease?.rollback().catch((error) => {
         logger.error(
           "pi",
@@ -1792,7 +1881,12 @@ export const llmClient = {
       resetGenerationAgent(agent, streamId);
       endLoadMonitor(activeGeneration, streamId, false);
       await computerUse?.close().catch(() => {});
-      sendGeneration(streamId, "chat:done", { streamId, content: "" });
+      sendGeneration(streamId, "chat:done", {
+        streamId,
+        content: "",
+        cancelled: true,
+        cancellationOrigin: activeGeneration.cancellationOrigin,
+      });
       releaseGenerationSkillReservation(activeGeneration);
       active.delete(streamId);
       activeGeneration.removeOwnerInvalidation();

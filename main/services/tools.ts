@@ -33,6 +33,8 @@ import { selectedMcpServers } from "./mcp-selection.js";
 import { assertScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { buildTelegramAgentTools } from "./telegram/telegram-agent-tools.js";
+import { createShareImageTool } from "./share-image-tool.js";
+import type { Attachment } from "./types.js";
 
 const EXA_ENDPOINT = "https://api.exa.ai/search";
 
@@ -131,6 +133,8 @@ export interface ToolContext {
   interactionSurface?: "telegram";
   /** Explicitly expose cross-target Telegram delivery to attended local agents. */
   allowTelegramDirect?: boolean;
+  /** Generation-scoped sink for assistant images that become durable with the final response. */
+  shareImage?: (attachment: Attachment) => void;
 }
 
 export function buildSchedulingTools(
@@ -234,6 +238,9 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
   // Withheld entirely when permission is "none" or no folder is bound.
   if (ctx.workspaceRoot && ctx.permission !== "none") {
     tools.push(...buildCodingTools(ctx.workspaceRoot));
+    if (ctx.shareImage) {
+      tools.push(createShareImageTool({ workspaceRoot: ctx.workspaceRoot, share: ctx.shareImage }));
+    }
   }
 
   const settings = await configStore.getSettings();
@@ -261,4 +268,3 @@ export async function buildAgentTools(ctx: ToolContext): Promise<AgentTool[]> {
 
   return tools;
 }
-

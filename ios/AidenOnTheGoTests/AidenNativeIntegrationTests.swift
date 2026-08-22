@@ -497,6 +497,20 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("MCP"))
         XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
     }
+
+    func testMobileOnboardingUsesAvailableWindowSizeAndReadableMaximums() {
+        XCTAssertEqual(AidenMobileOnboardingLayout.contentWidth(for: 390), 390)
+        XCTAssertEqual(AidenMobileOnboardingLayout.contentWidth(for: 834), 620)
+        XCTAssertEqual(AidenMobileOnboardingLayout.contentWidth(for: 320), 320)
+        XCTAssertEqual(AidenMobileOnboardingLayout.contentHeight(for: 700), 700)
+        XCTAssertEqual(AidenMobileOnboardingLayout.contentHeight(for: 1_194), 760)
+        XCTAssertLessThan(
+            AidenMobileOnboardingLayout.maximumActionWidth,
+            AidenMobileOnboardingLayout.maximumContentWidth
+        )
+        XCTAssertEqual(AidenMobileOnboardingLayout.actionHorizontalPadding, 24)
+        XCTAssertEqual(AidenMobileOnboardingLayout.actionBottomPadding, 12)
+    }
 }
 
 private final class AidenNativeActivityURLProtocol: URLProtocol, @unchecked Sendable {

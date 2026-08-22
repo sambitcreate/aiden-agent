@@ -457,8 +457,14 @@ export const aidenRemoteApi = {
     invoke<AidenRemoteSettingsSnapshot>("remote:addApprovedRoot"),
   removeApprovedRoot: (rootId: string) =>
     invoke<AidenRemoteSettingsSnapshot>("remote:removeApprovedRoot", rootId),
+  pendingApproval: (chatId: string) =>
+    invoke<RemoteApprovalPrompt | null>("remote:getPendingApproval", chatId),
+  respondApproval: (chatId: string, approvalId: string, decision: "allow" | "deny") =>
+    invoke<{ resolved: true }>("remote:respondApprovalFromHost", chatId, approvalId, decision),
   onChanged: (handler: () => void) =>
     onNotification("remote:changed", handler),
+  onApprovalChanged: (handler: (payload: { chatId: string }) => void) =>
+    onNotification("remote:approval-changed", handler),
 };
 
 // ── Voice + shortcut ──────────────────────────────────────────────────
@@ -854,6 +860,20 @@ export interface ApprovalPrompt {
   toolCallId: string;
   toolName: string;
   summary: string;
+  details?: ToolApprovalDetails;
+  canAllow?: boolean;
+  source?: "remote";
+}
+
+export interface RemoteApprovalPrompt {
+  approvalId: string;
+  streamId: string;
+  chatId: string;
+  summary: string;
+  toolCallId: string;
+  toolName: string;
+  expiresAt: string;
+  canAllow: boolean;
   details?: ToolApprovalDetails;
 }
 interface ChatApproval extends ApprovalPrompt {

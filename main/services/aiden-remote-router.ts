@@ -58,11 +58,11 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "uploadAttachment" | "removeAttachment">>;
+  > & Partial<Pick<AidenRemoteChatService, "uploadAttachment" | "removeAttachment" | "attachmentContent">>;
   models?: Pick<AidenRemoteModelService, "list">;
   streams?: Pick<
     AidenRemoteStreamService,
-    "status" | "cancel" | "respondApproval" | "openEvents"
+    "status" | "pendingApproval" | "cancel" | "respondApproval" | "openEvents"
   >;
   files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
   git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
@@ -96,6 +96,7 @@ export interface AidenRemoteRouterDependencies {
       | "turns"
       | "models"
       | "stream"
+      | "streamApproval"
       | "streamEvents"
       | "streamCancel"
       | "approvalRespond"
@@ -137,6 +138,18 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
     "content-length": String(Buffer.byteLength(body, "utf8")),
   });
   response.end(body);
+}
+
+function writeAttachmentContent(
+  response: ServerResponse,
+  content: { bytes: Buffer; mimeType: string },
+): void {
+  response.writeHead(200, {
+    ...responseHeaders(content.mimeType),
+    "content-length": String(content.bytes.length),
+    "content-security-policy": "default-src 'none'; sandbox",
+  });
+  response.end(content.bytes);
 }
 
 function writeError(
@@ -1088,6 +1101,24 @@ export function createAidenRemoteRequestHandler(
         response.end();
         return;
       }
+      const attachmentContentMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/attachments\/([A-Za-z0-9._:-]{1,256})\/content$/u.exec(path);
+      if (attachmentContentMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "chatAttachment";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.chats?.attachmentContent) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        writeAttachmentContent(
+          response,
+          await dependencies.chats.attachmentContent(
+            attachmentContentMatch[1]!,
+            attachmentContentMatch[2]!,
+          ),
+        );
+        return;
+      }
       const streamMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
       if (streamMatch && request.method === "GET") {
         requireNoQuery(query);
@@ -1105,6 +1136,16 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.streams) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         dependencies.streams.openEvents(device.id, eventsMatch[1]!, streamAfter(request, query), response);
+        return;
+      }
+      const streamApprovalMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/approval$/u.exec(path);
+      if (streamApprovalMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "streamApproval";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.streams) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        writeJson(response, 200, { approval: dependencies.streams.pendingApproval(device.id, streamApprovalMatch[1]!) });
         return;
       }
       const cancelMatch = /^\/streams\/([A-Za-z0-9._:-]{1,128})\/cancel$/u.exec(path);

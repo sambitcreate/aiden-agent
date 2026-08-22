@@ -14,3 +14,13 @@ export function parseAidenRemoteTakeoverToken(value: unknown): string {
   if (typeof value === "string" && /^[A-Za-z0-9_-]{32}$/u.test(value)) return value;
   throw new Error("Invalid Tailscale takeover review token.");
 }
+
+export function parseAidenRemoteScopedIdentifier(value: unknown): string {
+  if (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= 128 &&
+    /^[A-Za-z0-9._:-]+$/u.test(value)
+  ) return value;
+  throw new Error("Invalid Aiden Remote approval identifier.");
+}

@@ -1,8 +1,10 @@
 import { BrowserWindow, dialog, ipcMain } from "../platform.js";
 import { getAidenRemoteRuntime } from "../services/aiden-remote-service-main.js";
 import type { AidenRemoteSettingsSnapshot } from "../../renderer/shared/aiden-remote.js";
+import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
 import {
   parseAidenRemoteConnectionMode,
+  parseAidenRemoteScopedIdentifier,
   parseAidenRemoteTakeoverToken,
   parseAidenRemoteTransport,
 } from "./aiden-remote-parse.js";
@@ -40,6 +42,40 @@ async function settingsSnapshot(): Promise<AidenRemoteSettingsSnapshot> {
 
 export function registerAidenRemoteHandlers(): void {
   ipcMain.handle("remote:get", settingsSnapshot);
+
+  ipcMain.handle("remote:getPendingApproval", async (event, chatId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Remote approvals require the active application document."),
+    );
+    const approval = (await getAidenRemoteRuntime()).pendingApprovalForChat(
+      parseAidenRemoteScopedIdentifier(chatId),
+    );
+    if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+    return approval;
+  });
+
+  ipcMain.handle(
+    "remote:respondApprovalFromHost",
+    async (event, chatId: unknown, approvalId: unknown, decision: unknown) => {
+      const owner = rendererDocumentOwner(
+        event,
+        () => new Error("Remote approvals require the active application document."),
+      );
+      if (decision !== "allow" && decision !== "deny") {
+        throw new Error("Invalid Aiden Remote approval decision.");
+      }
+      const runtime = await getAidenRemoteRuntime();
+      if (owner.isDestroyed()) throw new Error("The renderer document is no longer active.");
+      const resolved = runtime.respondApprovalFromHost(
+        parseAidenRemoteScopedIdentifier(chatId),
+        parseAidenRemoteScopedIdentifier(approvalId),
+        decision,
+      );
+      if (!resolved) throw new Error("This approval is no longer available.");
+      return { resolved: true };
+    },
+  );
 
   ipcMain.handle("remote:setEnabled", async (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") throw new Error("Invalid Aiden Remote enabled state.");

@@ -24,6 +24,56 @@ test("legacy messages render unchanged without provenance", () => {
   assert.doesNotMatch(markup, /skill/u);
 });
 
+test("assistant image attachments render as an accessible full-screen gallery trigger", () => {
+  const markup = renderToStaticMarkup(
+    <MessageBubble
+      role="assistant"
+      content="Here it is."
+      attachments={[{
+        id: "shared-image",
+        name: "Result.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: 12,
+        data: "iVBORw0KGgo=",
+      }]}
+    />,
+  );
+  assert.match(markup, /data-message-image-gallery/u);
+  assert.match(markup, /Open Result\.png full screen/u);
+  assert.match(markup, /data:image\/png;base64,iVBORw0KGgo=/u);
+});
+
+test("message list forwards persisted assistant image attachments to the gallery", () => {
+  const markup = renderToStaticMarkup(
+    <MessageList
+      messages={[{
+        id: "assistant-image",
+        role: "assistant",
+        content: "Shared from the Mac.",
+        createdAt: 1,
+        attachments: [{
+          id: "image-1",
+          name: "Desktop.png",
+          mimeType: "image/png",
+          kind: "image",
+          size: 12,
+          data: "iVBORw0KGgo=",
+        }],
+      }]}
+      streamingText={null}
+      streamingReasoning={null}
+      timeline={null}
+      liveSubagents={[]}
+      subagentsEnabled={false}
+      onOpenSubagent={() => undefined}
+      agentActivity={null}
+      error={null}
+    />,
+  );
+  assert.match(markup, /Open Desktop\.png full screen/u);
+});
+
 test("assistant prose and activity render in chronological order with one copy action", () => {
   const content = "Before.\n\nBetween.\n\nAfter.";
   const tool = (

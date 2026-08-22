@@ -565,7 +565,10 @@ test("workspace-write approvals render exact bounded safety facts and stay wired
   assert.match(chatPaneSource, /isSubagentWorkspaceWriteApprovalDetails\(pending\.details\)/u);
   assert.match(chatPaneSource, /pendingWorkspaceWriteClaim/u);
   assert.match(chatPaneSource, /Invalid privileged approval blocked/u);
-  assert.match(chatPaneSource, /invalidPendingPrivilegedApproval \? null/u);
+  assert.match(chatPaneSource, /pending\?\.canAllow !== false && !invalidPendingPrivilegedApproval/u);
+  assert.match(chatPaneSource, /Aiden cannot safely authorize this action from this view/u);
+  assert.match(approvalCard, /\{pendingCanAllow \? \(/u);
+  assert.match(approvalCard, /\) : null\}/u);
   assert.match(chatPaneSource, /decidingApprovalRef\.current/u);
   assert.match(chatPaneSource, /if \(decidingApprovalRef\.current\) return/u);
   assert.match(approvalCard, /SubagentWorkspaceWriteApproval/u);

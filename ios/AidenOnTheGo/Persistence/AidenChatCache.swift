@@ -31,6 +31,7 @@ actor AidenChatCache {
     private let root: URL
     private let fileManager: FileManager
     private let maxCacheFileBytes = 10 * 1_024 * 1_024
+    private let maxAttachmentImageCacheBytes = 96 * 1_024 * 1_024
 
     init(root: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
@@ -102,19 +103,94 @@ actor AidenChatCache {
         try? fileManager.removeItem(at: fileURL(kind: "streams", instanceId, chatId))
     }
 
+    @discardableResult
+    func removeActiveStream(instanceId: String, chatId: String, ifStreamId streamId: String) -> Bool {
+        guard loadActiveStream(instanceId: instanceId, chatId: chatId)?.streamId == streamId else {
+            return false
+        }
+        removeActiveStream(instanceId: instanceId, chatId: chatId)
+        return true
+    }
+
     func removeChat(instanceId: String, chatId: String) {
         try? fileManager.removeItem(at: fileURL(kind: "chats", instanceId, chatId))
         removeActiveStream(instanceId: instanceId, chatId: chatId)
+        try? fileManager.removeItem(at: attachmentChatDirectory(instanceId: instanceId, chatId: chatId))
     }
 
     func purge(instanceId: String) {
         purgeFiles(kind: "lists", instanceId: instanceId, as: ChatListEnvelope.self) { $0.instanceId }
         purgeFiles(kind: "chats", instanceId: instanceId, as: ChatEnvelope.self) { $0.instanceId }
         purgeFiles(kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) { $0.instanceId }
+        try? fileManager.removeItem(at: attachmentInstanceDirectory(instanceId: instanceId))
     }
 
     func removeActiveStreams(instanceId: String) {
         purgeFiles(kind: "streams", instanceId: instanceId, as: StreamEnvelope.self) { $0.instanceId }
+    }
+
+    func attachmentImage(
+        instanceId: String,
+        deviceId: String,
+        chatId: String,
+        attachment: AidenMessageAttachment
+    ) -> Data? {
+        guard attachment.kind == .image else { return nil }
+        let url = attachmentImageURL(
+            instanceId: instanceId,
+            deviceId: deviceId,
+            chatId: chatId,
+            attachmentId: attachment.id
+        )
+        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
+        guard let validated = AidenAttachmentImageValidation.validatedData(
+            data,
+            mimeType: attachment.mimeType,
+            declaredSize: attachment.size
+        ) else {
+            try? fileManager.removeItem(at: url)
+            return nil
+        }
+        try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: url.path)
+        return validated
+    }
+
+    func saveAttachmentImage(
+        _ data: Data,
+        instanceId: String,
+        deviceId: String,
+        chatId: String,
+        attachment: AidenMessageAttachment
+    ) throws {
+        guard attachment.kind == .image,
+              AidenAttachmentImageValidation.validatedData(
+                  data,
+                  mimeType: attachment.mimeType,
+                  declaredSize: attachment.size
+              ) != nil
+        else { throw CocoaError(.fileReadCorruptFile) }
+        let url = attachmentImageURL(
+            instanceId: instanceId,
+            deviceId: deviceId,
+            chatId: chatId,
+            attachmentId: attachment.id
+        )
+        try fileManager.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        )
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        pruneAttachmentImages(instanceId: instanceId, preserving: url)
+    }
+
+    func removeAttachmentImage(instanceId: String, deviceId: String, chatId: String, attachmentId: String) {
+        try? fileManager.removeItem(at: attachmentImageURL(
+            instanceId: instanceId,
+            deviceId: deviceId,
+            chatId: chatId,
+            attachmentId: attachmentId
+        ))
     }
 
     private func fileURL(kind: String, _ parts: String...) -> URL {
@@ -123,6 +199,64 @@ actor AidenChatCache {
         return root
             .appending(path: kind, directoryHint: .isDirectory)
             .appending(path: "\(name).json")
+    }
+
+    private func digestName(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func attachmentInstanceDirectory(instanceId: String) -> URL {
+        root
+            .appending(path: "attachment-images", directoryHint: .isDirectory)
+            .appending(path: digestName(instanceId), directoryHint: .isDirectory)
+    }
+
+    private func attachmentChatDirectory(instanceId: String, chatId: String) -> URL {
+        attachmentInstanceDirectory(instanceId: instanceId)
+            .appending(path: digestName(chatId), directoryHint: .isDirectory)
+    }
+
+    private func attachmentImageURL(
+        instanceId: String,
+        deviceId: String,
+        chatId: String,
+        attachmentId: String
+    ) -> URL {
+        attachmentChatDirectory(instanceId: instanceId, chatId: chatId)
+            .appending(path: digestName(deviceId), directoryHint: .isDirectory)
+            .appending(path: "\(digestName(attachmentId)).image")
+    }
+
+    private func pruneAttachmentImages(instanceId: String, preserving preservedURL: URL) {
+        let directory = attachmentInstanceDirectory(instanceId: instanceId)
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let files = enumerator.compactMap { value -> (url: URL, bytes: Int, modified: Date)? in
+            guard let url = value as? URL,
+                  let values = try? url.resourceValues(forKeys: [
+                      .isRegularFileKey,
+                      .fileSizeKey,
+                      .contentModificationDateKey,
+                  ]),
+                  values.isRegularFile == true
+            else { return nil }
+            return (url, max(0, values.fileSize ?? 0), values.contentModificationDate ?? .distantPast)
+        }.sorted { lhs, rhs in
+            if lhs.url == preservedURL { return true }
+            if rhs.url == preservedURL { return false }
+            return lhs.modified > rhs.modified
+        }
+        var retainedBytes = 0
+        for file in files {
+            if retainedBytes + file.bytes <= maxAttachmentImageCacheBytes {
+                retainedBytes += file.bytes
+            } else {
+                try? fileManager.removeItem(at: file.url)
+            }
+        }
     }
 
     private func load<Value: Decodable>(_ type: Value.Type, from url: URL) -> Value? {

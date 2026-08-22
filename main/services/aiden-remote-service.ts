@@ -130,7 +130,7 @@ export interface AidenRemoteServiceOptions {
         >;
         chats?: Pick<AidenRemoteChatService, "list" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "status" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "status" | "pendingApproval" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;
@@ -145,7 +145,7 @@ export interface AidenRemoteServiceOptions {
         >;
         chats?: Pick<AidenRemoteChatService, "list" | "get" | "create" | "rename" | "move" | "remove" | "startTurn">;
         models?: Pick<AidenRemoteModelService, "list">;
-        streams?: Pick<AidenRemoteStreamService, "status" | "cancel" | "respondApproval" | "openEvents">;
+        streams?: Pick<AidenRemoteStreamService, "status" | "pendingApproval" | "cancel" | "respondApproval" | "openEvents">;
         files?: Pick<AidenRemoteFileService, "list" | "read" | "write">;
         git?: Pick<AidenRemoteGitService, "review" | "diff" | "branches" | "checkout" | "createBranch" | "commit" | "pushCapability" | "push" | "compare" | "comparisonDiff" | "worktrees" | "createWorktree" | "deleteManagedWorktree">;
         schedules?: Pick<AidenRemoteScheduleService, "list" | "get" | "create" | "update" | "remove" | "pause" | "resume" | "run" | "runs" | "preview" | "scripts" | "mcpServers" | "settings" | "updateSettings">;

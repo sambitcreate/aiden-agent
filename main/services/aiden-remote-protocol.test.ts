@@ -152,8 +152,10 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/turns",
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
+    "/chats/{chatId}/attachments/{attachmentId}/content",
     "/streams/{streamId}",
     "/streams/{streamId}/events",
+    "/streams/{streamId}/approval",
     "/streams/{streamId}/cancel",
     "/approvals/{approvalId}/respond",
     "/models",
@@ -580,6 +582,13 @@ test("OpenAPI and runtime stream sequence bounds stay at the JSON safe-integer m
   const schemas = record(record(document.components, "components").schemas, "schemas");
   const streamStatusProperties = record(record(schemas.StreamStatus, "StreamStatus").properties, "StreamStatus properties");
   assert.equal(record(streamStatusProperties.lastSequence, "lastSequence").maximum, Number.MAX_SAFE_INTEGER);
+  assert.equal(Object.prototype.hasOwnProperty.call(streamStatusProperties, "approval"), false);
+  const pendingApproval = record(schemas.PendingApproval, "PendingApproval");
+  assert.deepEqual(pendingApproval.required, [
+    "approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow",
+  ]);
+  const approvalSnapshot = record(schemas.StreamApprovalSnapshot, "StreamApprovalSnapshot");
+  assert.deepEqual(approvalSnapshot.required, ["approval"]);
   const streamEvent = record(schemas.StreamEvent, "StreamEvent");
   const streamEventVariants = streamEvent.allOf as Array<Record<string, unknown>>;
   const streamEventBaseProperties = record(

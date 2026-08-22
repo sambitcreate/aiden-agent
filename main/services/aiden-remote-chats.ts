@@ -2,6 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
+  parseGenerationTimeline,
+  type GenerationTimeline,
+} from "../../renderer/shared/generation-timeline.js";
+import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
+import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
 } from "./chat-append-commit.js";
@@ -26,11 +31,23 @@ import {
   attachmentRepresentationBytes,
   safeStoredAttachments,
 } from "./attachment-contract.js";
+import {
+  imageBytesMatchMime,
+  MAX_IMAGE_BYTES,
+} from "./attachments.js";
 import type { Chat, ChatMessage, ChatStartParams } from "./types.js";
 
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/u;
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{16,128}$/u;
 type ChatApplicationService = ReturnType<typeof createChatApplicationService>;
+
+function remoteImageHasCompleteTrailer(bytes: Uint8Array, mimeType: "image/png" | "image/jpeg"): boolean {
+  if (mimeType === "image/jpeg") {
+    return bytes.length >= 2 && bytes[bytes.length - 2] === 0xff && bytes[bytes.length - 1] === 0xd9;
+  }
+  const iend = [0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130];
+  return bytes.length >= iend.length && iend.every((value, index) => bytes[bytes.length - iend.length + index] === value);
+}
 
 export interface AidenRemoteMessageProjection {
   id: string;
@@ -38,6 +55,8 @@ export interface AidenRemoteMessageProjection {
   text: string;
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
+  outcome?: AidenRemoteMessageOutcomeProjection;
+  timeline?: GenerationTimeline;
 }
 
 export interface AidenRemoteMessageAttachmentProjection {
@@ -46,6 +65,18 @@ export interface AidenRemoteMessageAttachmentProjection {
   mimeType: string;
   kind: "image" | "text";
   size: number;
+}
+
+export interface AidenRemoteMessageOutcomeProjection {
+  status: "failed" | "cancelled";
+  category?: string;
+  attempts?: number;
+  retryExhausted?: boolean;
+}
+
+export interface AidenRemoteAttachmentContent {
+  bytes: Buffer;
+  mimeType: string;
 }
 
 export interface AidenRemoteChatProjection {
@@ -98,11 +129,15 @@ function safeAttachmentDisplayName(value: string): string {
   return cleaned || "Attachment";
 }
 
+function projectedAttachmentId(value: string): string {
+  return /^[A-Za-z0-9._:-]{1,256}$/u.test(value)
+    ? value
+    : `legacy_${createHash("sha256").update(value).digest("base64url")}`;
+}
+
 function projectMessageAttachments(value: unknown): AidenRemoteMessageAttachmentProjection[] {
   return (safeStoredAttachments(value) ?? []).map((attachment) => ({
-    id: /^[A-Za-z0-9._:-]{1,256}$/u.test(attachment.id)
-      ? attachment.id
-      : `legacy_${createHash("sha256").update(attachment.id).digest("base64url")}`,
+    id: projectedAttachmentId(attachment.id),
     name: safeAttachmentDisplayName(attachment.name),
     mimeType: /^[\x21-\x7e]{1,120}$/u.test(attachment.mimeType)
       ? attachment.mimeType
@@ -110,6 +145,28 @@ function projectMessageAttachments(value: unknown): AidenRemoteMessageAttachment
     kind: attachment.kind,
     size: attachment.size,
   }));
+}
+
+function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeProjection | undefined {
+  const failure = parseProviderFailureV1(message.providerFailure);
+  if (failure) {
+    return {
+      status: "failed",
+      category: failure.category,
+      attempts: failure.attempts,
+      retryExhausted: failure.retryExhausted,
+    };
+  }
+  const timeline = parseGenerationTimeline(message.timeline, message.content.length);
+  if (timeline?.status === "failed" || timeline?.status === "cancelled") {
+    return { status: timeline.status };
+  }
+  return undefined;
+}
+
+function projectMessageTimeline(message: ChatMessage): GenerationTimeline | undefined {
+  if (message.role !== "assistant") return undefined;
+  return parseGenerationTimeline(message.timeline, message.content.length);
 }
 
 function chatRevision(chat: Chat): string {
@@ -129,6 +186,8 @@ function chatRevision(chat: Chat): string {
         content: message.content,
         createdAt: message.createdAt,
         attachments: projectMessageAttachments(message.attachments),
+        outcome: projectMessageOutcome(message) ?? null,
+        timeline: projectMessageTimeline(message) ?? null,
       })),
   };
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
@@ -147,12 +206,16 @@ export function projectAidenRemoteChat(
     messages: chat.messages.flatMap((message) => {
       if (message.role !== "user" && message.role !== "assistant") return [];
       const attachments = projectMessageAttachments(message.attachments);
+      const outcome = projectMessageOutcome(message);
+      const timeline = projectMessageTimeline(message);
       return [{
         id: message.id,
         role: message.role,
         text: message.content.slice(0, 200_000),
         createdAt: new Date(message.createdAt).toISOString(),
         ...(attachments.length > 0 ? { attachments } : {}),
+        ...(outcome ? { outcome } : {}),
+        ...(timeline ? { timeline } : {}),
       }];
     }),
     createdAt: new Date(chat.createdAt).toISOString(),
@@ -381,7 +444,7 @@ export class AidenRemoteChatService {
 
   private async chat(chatId: string): Promise<Chat> {
     const result = await this.options.application.get(safeId(chatId, "chat"));
-    if (!result.chat) {
+    if (!result.chat || result.chat.id !== chatId) {
       throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
     }
     if (result.reconciliation) {
@@ -419,6 +482,48 @@ export class AidenRemoteChatService {
   async removeAttachment(deviceId: string, chatId: string, attachmentId: string): Promise<void> {
     await this.chat(chatId);
     this.attachments.remove(deviceId, safeId(chatId, "chat"), attachmentId);
+  }
+
+  async attachmentContent(
+    chatId: string,
+    attachmentId: string,
+  ): Promise<AidenRemoteAttachmentContent> {
+    safeId(chatId, "chat");
+    if (!/^[A-Za-z0-9._:-]{1,256}$/u.test(attachmentId)) {
+      throw new AidenRemoteServiceError("invalid_request", "The attachment identifier is invalid.", 400);
+    }
+    const authoritative = await this.chat(chatId);
+    const matches = authoritative.messages.flatMap((message) =>
+      message.role === "user" || message.role === "assistant"
+        ? (safeStoredAttachments(message.attachments) ?? []).filter(
+            (attachment) => projectedAttachmentId(attachment.id) === attachmentId,
+          )
+        : [],
+    );
+    if (matches.length !== 1) {
+      throw new AidenRemoteServiceError("not_found", "This attachment is unavailable.", 404);
+    }
+    const attachment = matches[0]!;
+    if (attachment.kind === "image") {
+      if (
+        (attachment.mimeType !== "image/png" && attachment.mimeType !== "image/jpeg") ||
+        typeof attachment.data !== "string"
+      ) {
+        throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
+      }
+      const bytes = Buffer.from(attachment.data, "base64");
+      if (
+        bytes.length === 0 ||
+        bytes.length > MAX_IMAGE_BYTES ||
+        bytes.length !== attachment.size ||
+        !imageBytesMatchMime(bytes, attachment.mimeType) ||
+        !remoteImageHasCompleteTrailer(bytes, attachment.mimeType)
+      ) {
+        throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
+      }
+      return { bytes, mimeType: attachment.mimeType };
+    }
+    throw new AidenRemoteServiceError("not_found", "This image is unavailable.", 404);
   }
 
   revokeDevice(deviceId: string): void {

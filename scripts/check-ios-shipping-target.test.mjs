@@ -274,9 +274,29 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(pairing, /AidenMobileOnboardingPhase\.allCases[\s\S]*?Image\(phase\.imageName\)/u);
   assert.match(pairing, /Image\("AidenAppIcon"\)[\s\S]*?Text\("Aiden On The Go"\)/u);
   assert.doesNotMatch(pairing, /AidenSidebarLogo/u);
+  assert.match(pairing, /GeometryReader \{ proxy in[\s\S]*?AidenMobileOnboardingLayout\.contentWidth\(for: proxy\.size\.width\)[\s\S]*?AidenMobileOnboardingLayout\.contentHeight\(for: proxy\.size\.height\)/u);
+  assert.match(pairing, /ViewThatFits\(in: \.vertical\)[\s\S]*?onboardingPhaseContent/u);
+  assert.doesNotMatch(pairing, /UIDevice\.current\.userInterfaceIdiom/u);
   assert.match(
     pairing,
-    /prominentGlassButton\(action:[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+    /onboardingActionButton\(action:[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+  );
+  assert.match(
+    pairing,
+    /private var qrPairingPage:[\s\S]*?\.safeAreaInset\(edge: \.bottom, spacing: 0\) \{[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+  );
+  assert.match(
+    pairing,
+    /private func onboardingActionButton<[\s\S]*?maximumActionWidth[\s\S]*?actionHorizontalPadding/u,
+  );
+  assert.match(
+    pairing,
+    /Text\(isOnboardingLastPage \? "Set Up Connection" : "Continue"\)[\s\S]*?Text\("Choose How to Connect"\)[\s\S]*?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
+  );
+  assert.doesNotMatch(pairing, /Text\("Choose How to Connect"\)[\s\S]{0,180}?\.background\(\.bar\)/u);
+  assert.doesNotMatch(
+    pairing,
+    /Section \{[\s\S]{0,240}?Label\("Open Camera", systemImage: "qrcode\.viewfinder"\)/u,
   );
   assert.match(pairing, /button\.buttonStyle\(\.glassProminent\)/u);
   assert.match(content, /@AppStorage\("aiden\.mobileOnboarding\.v1\.complete"\)/u);
@@ -299,6 +319,10 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   );
   assert.match(chat, /Section \{[\s\S]*?header: \{[\s\S]*?AidenProviderIcon/u);
   assert.match(chat, /contextMenu[\s\S]*?Label\("Copy", systemImage: "doc\.on\.doc"\)/u);
+  assert.match(
+    chat,
+    /Image\(uiImage: image\)[\s\S]{0,240}?\.aspectRatio\(contentMode: contentMode\)[\s\S]{0,240}?\.clipShape\(RoundedRectangle\([\s\S]{0,240}?\.frame\(maxWidth: \.infinity, maxHeight: \.infinity, alignment: imageAlignment\)/u,
+  );
   assert.match(chat, /if !model\.liveText\.isEmpty[\s\S]*?contextMenu[\s\S]*?UIPasteboard\.general\.string = model\.liveText/u);
   assert.match(
     scheduledTasks,
@@ -327,7 +351,15 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /composerFocus: \$composerIsFocused[\s\S]*?\.focused\(composerFocus\)/u);
   assert.match(chat, /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u);
   assert.match(chat, /ForEach\(model\.visibleProviders\)[\s\S]*?ForEach\(provider\.models\)/u);
-  assert.match(chat, /AidenReasoningCard[\s\S]*?AidenSidebarLogo/u);
+  assert.match(
+    chat,
+    /AidenReasoningCard[\s\S]*?Text\(active \? "Thinking…" : "Thinking"\)[\s\S]*?aidenActivityShimmer\(active\)/u,
+  );
+  const reasoningCard = chat.match(
+    /private struct AidenReasoningCard[\s\S]*?private struct AidenToolActivityCard/u,
+  )?.[0];
+  assert.ok(reasoningCard, "Expected the bounded reasoning-card source section");
+  assert.doesNotMatch(reasoningCard, /AidenSidebarLogo/u);
   assert.doesNotMatch(
     chat,
     /Menu \{[\s\S]{0,500}?ForEach\(levels[\s\S]{0,500}?label: \{[\s\S]{0,120}?AidenSidebarLogo/u,

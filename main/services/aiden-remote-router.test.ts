@@ -168,6 +168,16 @@ async function fixture(options: {
         lastSequence: 2,
         updatedAt: new Date(4_000).toISOString(),
       }),
+      pendingApproval: (_deviceId, streamId) => ({
+        approvalId: "approval-1",
+        streamId,
+        chatId: "chat-1",
+        summary: "Run a reviewed command",
+        toolCallId: "tool-1",
+        toolName: "bash",
+        expiresAt: new Date(60_000).toISOString(),
+        canAllow: false,
+      }),
       cancel: async (deviceId, streamId, _key) => {
         calls.push(`cancel:${deviceId}:${streamId}`);
         return {
@@ -487,6 +497,21 @@ test("authenticated chat, model, turn, stream, cancel, and approval routes prese
     const status = await fetch(`${app.base}/streams/stream-1`, { headers });
     assert.equal(status.status, 200);
     assert.equal((await status.json()).state, "running");
+
+    const approvalSnapshot = await fetch(`${app.base}/streams/stream-1/approval`, { headers });
+    assert.equal(approvalSnapshot.status, 200);
+    assert.deepEqual(await approvalSnapshot.json(), {
+      approval: {
+        approvalId: "approval-1",
+        streamId: "stream-1",
+        chatId: "chat-1",
+        summary: "Run a reviewed command",
+        toolCallId: "tool-1",
+        toolName: "bash",
+        expiresAt: new Date(60_000).toISOString(),
+        canAllow: false,
+      },
+    });
 
     const events = await fetch(`${app.base}/streams/stream-1/events?after=1`, { headers });
     assert.equal(events.status, 200);

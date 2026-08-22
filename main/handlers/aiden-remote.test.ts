@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 import {
   parseAidenRemoteConnectionMode,
+  parseAidenRemoteScopedIdentifier,
   parseAidenRemoteTakeoverToken,
   parseAidenRemoteTransport,
 } from "./aiden-remote-parse.js";
@@ -17,10 +19,30 @@ test("Remote Access IPC parsers accept only exact transport values", () => {
   }
 });
 
+test("Remote approval IPC identifiers are bounded and path-safe", () => {
+  for (const value of ["chat-1", "approval_1", "stream:one", "chat.fixture"]) {
+    assert.equal(parseAidenRemoteScopedIdentifier(value), value);
+  }
+  for (const invalid of ["", "../chat", "chat/one", "chat one", "A".repeat(129), null]) {
+    assert.throws(() => parseAidenRemoteScopedIdentifier(invalid), /invalid/iu);
+  }
+});
+
 test("Tailscale takeover IPC accepts only one exact opaque review token", () => {
   const token = "A".repeat(32);
   assert.equal(parseAidenRemoteTakeoverToken(token), token);
   for (const invalid of [undefined, null, "A".repeat(31), "A".repeat(33), `${"A".repeat(31)}+`, { token }]) {
     assert.throws(() => parseAidenRemoteTakeoverToken(invalid), /invalid/iu);
   }
+});
+
+test("Remote approval IPC is bound to the current main-frame document across awaits", async () => {
+  const source = await readFile(new URL("./aiden-remote.ts", import.meta.url), "utf8");
+  const approvalHandlers = source.slice(
+    source.indexOf('ipcMain.handle("remote:getPendingApproval"'),
+    source.indexOf('ipcMain.handle("remote:setEnabled"'),
+  );
+  assert.match(approvalHandlers, /rendererDocumentOwner\(/u);
+  assert.match(approvalHandlers, /owner\.isDestroyed\(\)/u);
+  assert.doesNotMatch(approvalHandlers, /async \(_event/u);
 });
