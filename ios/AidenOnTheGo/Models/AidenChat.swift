@@ -123,9 +123,27 @@ struct AidenModel: Codable, Identifiable, Equatable, Sendable {
     let id: String
     let label: String
     let thinkingLevels: [String]?
+    let defaultThinkingLevel: String?
+    let thinkingCanDisable: Bool?
     let hidden: Bool?
 
     var isHidden: Bool { hidden == true }
+
+    var effectiveThinkingLevel: String? {
+        guard let thinkingLevels, !thinkingLevels.isEmpty else { return nil }
+        if let defaultThinkingLevel, thinkingLevels.contains(defaultThinkingLevel) {
+            return defaultThinkingLevel
+        }
+        if thinkingLevels.contains("medium") { return "medium" }
+        if thinkingLevels.contains("high") { return "high" }
+        if thinkingLevels.contains("low") { return "low" }
+        if thinkingLevels.contains("off") { return "off" }
+        return thinkingLevels.first
+    }
+
+    func thinkingLabel(for level: String) -> String {
+        level == "off" && thinkingCanDisable == false ? "Hide" : level.capitalized
+    }
 }
 
 struct AidenProvider: Codable, Identifiable, Equatable, Sendable {
