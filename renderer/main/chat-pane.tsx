@@ -27,6 +27,7 @@ import {
 import { SubagentShellApproval } from "../components/subagent-shell-approval";
 import {
   chatsApi,
+  aidenRemoteApi,
   createChatTurnId,
   settingsApi,
   startGeneration,
@@ -62,6 +63,7 @@ import {
 import { computerUseReadinessReady } from "../lib/computer-use-control";
 import { resolveAgentActivity, type ToolActivity } from "../lib/agent-activity";
 import { STREAMING_REVEAL_FALLBACK_MS } from "../lib/streaming-reveal";
+import { isLatestRemoteApprovalRefresh, mergeRemoteApproval } from "../lib/remote-approval";
 import { latestActiveAgentStep, type GenerationTimeline } from "../shared/generation-timeline";
 import { GOOGLE_PROVIDER_ID } from "../shared/google-provider";
 import {
@@ -328,6 +330,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminalShortcutBinding = useShortcutBinding("terminal.toggle");
   const approvalDenyRef = React.useRef<HTMLButtonElement | null>(null);
   const approvalCardRef = React.useRef<HTMLElement | null>(null);
+  const remoteApprovalRefreshRef = React.useRef(0);
   const pendingDeltaRef = React.useRef("");
   const pendingReasoningDeltaRef = React.useRef("");
   const streamedTextRef = React.useRef("");
@@ -337,6 +340,33 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const generationTimelineRef = React.useRef<GenerationTimeline | null>(null);
 
   chatIdRef.current = chatId;
+
+  React.useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      const requestId = ++remoteApprovalRefreshRef.current;
+      try {
+        const remote = await aidenRemoteApi.pendingApproval(chatId);
+        if (
+          !active
+          || chatIdRef.current !== chatId
+          || !isLatestRemoteApprovalRefresh(requestId, remoteApprovalRefreshRef.current)
+        ) return;
+        setApprovals((current) => mergeRemoteApproval(current, remote));
+      } catch {
+        // Remote chat infrastructure is lazy; absence before first pairing is expected.
+      }
+    };
+    void refresh();
+    const unsubscribe = aidenRemoteApi.onApprovalChanged(({ chatId: changedChatId }) => {
+      if (changedChatId === chatId) void refresh();
+    });
+    return () => {
+      active = false;
+      remoteApprovalRefreshRef.current += 1;
+      unsubscribe();
+    };
+  }, [chatId]);
 
   // Detach only the generation owned by the departing chat. The main process
   // keeps that operation alive and reconciles its durable terminal state.
@@ -910,13 +940,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
       decidingApprovalRef.current = prompt.approvalId;
       setDecidingApprovalId(prompt.approvalId);
       try {
-        await chatsApi.approve(prompt.approvalId, decision);
+        if (prompt.source === "remote") {
+          await aidenRemoteApi.respondApproval(chatId, prompt.approvalId, decision);
+        } else {
+          await chatsApi.approve(prompt.approvalId, decision);
+        }
         if (chatIdRef.current !== decisionChatId) return;
         setApprovals((prev) =>
           prev.filter((approval) => approval.approvalId !== prompt.approvalId),
         );
       } catch (approvalError) {
         if (chatIdRef.current !== decisionChatId) return;
+        if (prompt.source === "remote") {
+          setApprovals((prev) =>
+            prev.filter((approval) => approval.approvalId !== prompt.approvalId),
+          );
+        }
         toast.error(
           approvalError instanceof Error
             ? approvalError.message
@@ -1319,6 +1358,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const invalidPendingShell = pendingShellClaim && pendingShell === undefined;
   const invalidPendingPrivilegedApproval =
     invalidPendingWorkspaceWrite || invalidPendingMcpMutation || invalidPendingShell;
+  const pendingCanAllow = pending?.canAllow !== false && !invalidPendingPrivilegedApproval;
   const activeStep = latestActiveAgentStep(generationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -1451,15 +1491,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
                       </Text>
                     </div>
                   </div>
-                  {invalidPendingPrivilegedApproval ? (
+                  {!pendingCanAllow ? (
                     <Text
                       variant="small"
                       as="p"
                       id={`approval-summary-${pending.approvalId}`}
                       className="mt-2.5 rounded-control bg-well px-3 py-2"
                     >
-                      Aiden could not verify the exact target, arguments, or safety profile for this
-                      request.
+                      Aiden cannot safely authorize this action from this view. Deny it here or
+                      review the exact action on the Mac that owns this chat.
                     </Text>
                   ) : pendingWorkspaceWrite ? (
                     <SubagentWorkspaceWriteApproval
@@ -1496,7 +1536,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     >
                       Deny
                     </Button>
-                    {invalidPendingPrivilegedApproval ? null : (
+                    {pendingCanAllow ? (
                       <Button
                         variant="accent"
                         size="small"
@@ -1509,7 +1549,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                             ? subagentMcpMutationAllowLabel(pendingMcpMutation)
                             : "Allow once"}
                       </Button>
-                    )}
+                    ) : null}
                   </div>
                 </section>
               </div>
