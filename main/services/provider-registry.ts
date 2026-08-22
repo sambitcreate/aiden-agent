@@ -28,6 +28,7 @@ import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thin
 import type { ProviderAuthBackend, ProviderLogoutBackend } from "./provider-auth-flow-core.js";
 import { CONCENTRATE_PROVIDER_ID, registerAidenBuiltinProviders } from "./concentrate-provider.js";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { validateOnboardingProviderCredential } from "./onboarding-provider-validation.js";
 
 /** IDs used by Aiden before Pi became the provider authority. */
 const LEGACY_API_KEY_PROVIDER_IDS: Readonly<Record<string, string>> = {
@@ -229,6 +230,53 @@ export class ProviderRegistry {
         (await this.listBuiltinProviders()).find((item) => item.id === providerId),
       logout: () => this.credentials.delete(providerId),
       committedFallback: () => ({ id: providerId, hasKey: null, canLogout: false }),
+    };
+  }
+
+  /**
+   * Validate first-run OpenAI/Anthropic API keys with their authenticated,
+   * non-generation model catalogs before replacing any stored credential.
+   * Other Pi providers keep their provider-owned setup flows until they have an
+   * explicitly documented non-billable validation strategy.
+   */
+  async validateAndStoreOnboardingApiKey(
+    providerId: "openai" | "anthropic",
+    key: string,
+    isCurrent: () => boolean,
+  ): Promise<Provider> {
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new Error("This provider is unavailable in the installed catalog.");
+    const draft = {
+      ...builtinProviderRecord(provider),
+      kind: providerId === "anthropic" ? ("anthropic" as const) : ("openai" as const),
+    };
+    if (!draft.baseUrl) throw new Error("This provider does not expose a validation endpoint.");
+    const installedModels = provider.getModels();
+    const usableModelIds = await validateOnboardingProviderCredential({
+      provider: draft,
+      apiKey: key,
+      installedModelIds: installedModels.map((model) => model.id),
+      isCurrent,
+      commit: async (apiKey) => {
+        await this.credentials.modify(providerId, async () => {
+          if (!isCurrent()) throw new Error("The onboarding window is no longer active.");
+          return { type: "api_key", key: apiKey };
+        });
+      },
+    });
+    const usable = new Set(usableModelIds);
+    const usableModels = installedModels.filter((model) => usable.has(model.id));
+    return {
+      ...builtinProviderRecord(provider, usableModels),
+      hasKey: true,
+      canLogout: true,
+      authMethods: [
+        {
+          type: "api_key",
+          label: provider.auth.apiKey?.name ?? "API key",
+          canLogin: Boolean(provider.auth.apiKey?.login),
+        },
+      ],
     };
   }
 
