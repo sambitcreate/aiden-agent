@@ -351,7 +351,15 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /composerFocus: \$composerIsFocused[\s\S]*?\.focused\(composerFocus\)/u);
   assert.match(chat, /candidate\.thinkingLevels[\s\S]*?Menu \{[\s\S]*?ForEach\(levels[\s\S]*?thinkingLevel: level/u);
   assert.match(chat, /ForEach\(model\.visibleProviders\)[\s\S]*?ForEach\(provider\.models\)/u);
-  assert.match(chat, /AidenReasoningCard[\s\S]*?AidenSidebarLogo/u);
+  assert.match(
+    chat,
+    /AidenReasoningCard[\s\S]*?Text\(active \? "Thinking…" : "Thinking"\)[\s\S]*?aidenActivityShimmer\(active\)/u,
+  );
+  const reasoningCard = chat.match(
+    /private struct AidenReasoningCard[\s\S]*?private struct AidenToolActivityCard/u,
+  )?.[0];
+  assert.ok(reasoningCard, "Expected the bounded reasoning-card source section");
+  assert.doesNotMatch(reasoningCard, /AidenSidebarLogo/u);
   assert.doesNotMatch(
     chat,
     /Menu \{[\s\S]{0,500}?ForEach\(levels[\s\S]{0,500}?label: \{[\s\S]{0,120}?AidenSidebarLogo/u,

@@ -38,6 +38,87 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenMessageMediaEdge.forRole(chat.messages.first?.role ?? .user), .leading)
     }
 
+    func testRemoteChatDecodesDurableMacActivityAndUsesMacPresentationLanguage() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Activity","messages":[{"id":"message-1","role":"assistant","text":"Done.","createdAt":"2026-08-20T12:00:00Z","timeline":{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":3000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolName":"read_file","label":"Read file","status":"completed","startedAt":1000,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"target":"README.md"},{"id":"think-1","order":1,"kind":"thinking","startedAt":1500,"updatedAt":2500,"finishedAt":2500,"contentOffset":0,"durationMs":1000},{"id":"tool-2","order":2,"kind":"tool","toolName":"run_command","label":"Run command","status":"completed","startedAt":2500,"updatedAt":3000,"finishedAt":3000,"contentOffset":0,"detail":"Run tests"}]}}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        let timeline = try XCTUnwrap(chat.messages.first?.timeline)
+        XCTAssertTrue(timeline.isRendererSafe)
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[0]), "Read README.md")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Thought briefly")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[2]), "Ran Run tests")
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, ran 1 command")
+    }
+
+    func testActivityTimelineRejectsAbsoluteTargetsBeforePresentation() throws {
+        let timeline = try JSONDecoder().decode(
+            AidenGenerationTimeline.self,
+            from: Data(
+                #"{"version":3,"generationId":"stream-1","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolName":"read_file","label":"Read file","status":"running","startedAt":1000,"updatedAt":1000,"contentOffset":0,"target":"/Users/private/secret"}]}"#.utf8
+            )
+        )
+        XCTAssertFalse(timeline.isRendererSafe)
+    }
+
+    func testActivityTimelineRejectsWindowsAbsoluteAndTraversalTargets() throws {
+        for target in [#"C:\Users\private\secret"#, #"folder\..\secret"#, #"\\server\share\secret"#] {
+            let timeline = AidenGenerationTimeline(
+                version: 3,
+                generationId: "stream-1",
+                status: .running,
+                startedAt: 1_000,
+                finishedAt: nil,
+                steps: [
+                    AidenAgentStep(
+                        id: "tool-1",
+                        order: 0,
+                        kind: .tool,
+                        toolName: "read_file",
+                        label: "Read file",
+                        status: .running,
+                        startedAt: 1_000,
+                        updatedAt: 1_000,
+                        finishedAt: nil,
+                        contentOffset: 0,
+                        durationMs: nil,
+                        target: target,
+                        detail: nil,
+                        lineChanges: nil
+                    )
+                ]
+            )
+            XCTAssertFalse(timeline.isRendererSafe, "Expected to reject unsafe target: \(target)")
+        }
+    }
+
+    func testActivitySummaryMatchesMacCategories() throws {
+        let timeline = AidenGenerationTimeline(
+            version: 3,
+            generationId: "stream-1",
+            status: .completed,
+            startedAt: 1_000,
+            finishedAt: 2_000,
+            steps: ["web_search", "computer_use", "compact_context", "custom_tool"].enumerated().map { index, name in
+                AidenAgentStep(
+                    id: "tool-\(index)", order: index, kind: .tool, toolName: name,
+                    label: "Tool", status: .completed, startedAt: 1_000, updatedAt: 2_000,
+                    finishedAt: 2_000, contentOffset: 0, durationMs: 1_000,
+                    target: nil, detail: nil, lineChanges: nil
+                )
+            }
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline),
+            "1 web search, 1 Mac action, compacted context, 1 tool call"
+        )
+    }
+
     func testModelCatalogHidesPresentationOnlyModelsWithoutDroppingTheirIdentity() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
