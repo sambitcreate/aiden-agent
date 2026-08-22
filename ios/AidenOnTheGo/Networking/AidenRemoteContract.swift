@@ -48,6 +48,26 @@ enum AidenPairingPayloadError: Error, Equatable {
     case invalidCACertificateData
 }
 
+enum AidenManualPairingError: Error, Equatable, LocalizedError {
+    case invalidCode
+    case invalidBootstrap
+    case decryptionFailed
+    case endpointMismatch
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCode:
+            return String(localized: "Enter the 20-character setup code shown on your Mac.")
+        case .invalidBootstrap:
+            return String(localized: "Aiden Agent returned an invalid manual pairing response.")
+        case .decryptionFailed:
+            return String(localized: "The setup code is incorrect or belongs to a different pairing window.")
+        case .endpointMismatch:
+            return String(localized: "The setup code belongs to a different Aiden Agent address.")
+        }
+    }
+}
+
 enum AidenRemoteContractError: Error, Equatable {
     case duplicateJSONKey(String)
     case invalidJSON
@@ -534,7 +554,7 @@ private func isCanonicalAidenAuthority(_ value: String) -> Bool {
     return rawPort.map(isCanonicalAidenPort) ?? true
 }
 
-private func isCanonicalAidenEndpoint(_ rawEndpoint: String) -> Bool {
+func isCanonicalAidenEndpoint(_ rawEndpoint: String) -> Bool {
     guard rawEndpoint.utf8.count <= AidenRemoteProtocol.maxEndpointLength,
           rawEndpoint.hasPrefix("https://"),
           rawEndpoint.hasSuffix(AidenRemoteProtocol.basePath) else {
@@ -546,7 +566,7 @@ private func isCanonicalAidenEndpoint(_ rawEndpoint: String) -> Bool {
     return isCanonicalAidenAuthority(String(rawEndpoint[authorityStart..<pathStart]))
 }
 
-private func isCanonicalAidenEndpoint(_ endpoint: URL) -> Bool {
+func isCanonicalAidenEndpoint(_ endpoint: URL) -> Bool {
     isCanonicalAidenEndpoint(endpoint.absoluteString)
 }
 
@@ -1074,6 +1094,84 @@ struct AidenRemoteContractFixture: Decodable {
         }
     }
 
+    struct ManualPairingBootstrap: Decodable, Equatable {
+        static let kindValue = "aiden-manual-pairing-v1"
+
+        let kind: String
+        let protocolVersion: Int
+        let sessionId: String
+        let expiresAt: Date
+        let rawExpiresAt: String
+        let salt: Data
+        let nonce: Data
+        let ciphertext: Data
+        let tag: Data
+
+        init(from decoder: Decoder) throws {
+            let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+            try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try values.decode(String.self, forKey: .kind)
+            protocolVersion = try values.decode(Int.self, forKey: .protocolVersion)
+            sessionId = try values.decode(String.self, forKey: .sessionId)
+            rawExpiresAt = try values.decode(String.self, forKey: .expiresAt)
+            guard let parsedExpiry = AidenStrictRFC3339Date.date(from: rawExpiresAt) else {
+                throw AidenManualPairingError.invalidBootstrap
+            }
+            expiresAt = parsedExpiry
+            let rawSalt = try values.decode(String.self, forKey: .salt)
+            let rawNonce = try values.decode(String.self, forKey: .nonce)
+            let rawCiphertext = try values.decode(String.self, forKey: .ciphertext)
+            let rawTag = try values.decode(String.self, forKey: .tag)
+            guard rawSalt.count == 22,
+                  rawNonce.count == 16,
+                  (2...5_462).contains(rawCiphertext.count),
+                  rawTag.count == 22,
+                  let decodedSalt = rawSalt.canonicalBase64URLDecoded,
+                  let decodedNonce = rawNonce.canonicalBase64URLDecoded,
+                  let decodedCiphertext = rawCiphertext.canonicalBase64URLDecoded,
+                  let decodedTag = rawTag.canonicalBase64URLDecoded else {
+                throw AidenManualPairingError.invalidBootstrap
+            }
+            salt = decodedSalt
+            nonce = decodedNonce
+            ciphertext = decodedCiphertext
+            tag = decodedTag
+        }
+
+        @discardableResult
+        func validated(at now: Date = Date()) throws -> Self {
+            guard kind == Self.kindValue,
+                  protocolVersion == AidenRemoteProtocol.version,
+                  sessionId.range(
+                    of: "^pairing_[A-Za-z0-9_-]{32}$",
+                    options: .regularExpression
+                  ) != nil,
+                  expiresAt > now,
+                  expiresAt.timeIntervalSince(now) <= 5 * 60,
+                  salt.count == 16,
+                  nonce.count == 12,
+                  !ciphertext.isEmpty,
+                  ciphertext.count <= AidenRemoteProtocol.maxPairingPayloadBytes,
+                  tag.count == 16 else {
+                throw AidenManualPairingError.invalidBootstrap
+            }
+            return self
+        }
+
+        var keyDerivationInfo: Data {
+            Data("\(Self.kindValue)\n\(sessionId)".utf8)
+        }
+
+        var additionalAuthenticatedData: Data {
+            Data("\(Self.kindValue)\n\(sessionId)\n\(rawExpiresAt)".utf8)
+        }
+
+        private enum CodingKeys: String, CodingKey, CaseIterable {
+            case kind, protocolVersion, sessionId, expiresAt, salt, nonce, ciphertext, tag
+        }
+    }
+
     struct PairingBootstrap: Codable, Equatable {
         let protocolVersion: Int
         let instanceId: String
@@ -1264,6 +1362,7 @@ struct AidenRemoteContractFixture: Decodable {
         let endpoint: URL
         fileprivate let rawEndpoint: String
         let serverSpkiSha256: String
+        let displayName: String?
 
         init(
             protocolVersion: Int,
@@ -1272,7 +1371,8 @@ struct AidenRemoteContractFixture: Decodable {
             credential: String,
             capabilities: [AidenRemoteCapability],
             endpoint: URL,
-            serverSpkiSha256: String
+            serverSpkiSha256: String,
+            displayName: String? = nil
         ) {
             self.protocolVersion = protocolVersion
             self.instanceId = instanceId
@@ -1282,6 +1382,7 @@ struct AidenRemoteContractFixture: Decodable {
             self.endpoint = endpoint
             self.rawEndpoint = endpoint.absoluteString
             self.serverSpkiSha256 = serverSpkiSha256
+            self.displayName = displayName
         }
 
         init(from decoder: Decoder) throws {
@@ -1312,6 +1413,13 @@ struct AidenRemoteContractFixture: Decodable {
             self.endpoint = endpoint
             self.rawEndpoint = rawEndpoint
             serverSpkiSha256 = try values.decode(String.self, forKey: .serverSpkiSha256)
+            displayName = try boundedString(
+                values,
+                forKey: .displayName,
+                maxLength: 80,
+                field: "displayName",
+                required: false
+            )
         }
 
         func validated(against bootstrap: PairingBootstrap) throws -> Self {
@@ -1336,7 +1444,7 @@ struct AidenRemoteContractFixture: Decodable {
         }
 
         private enum CodingKeys: String, CodingKey, CaseIterable {
-            case protocolVersion, instanceId, deviceId, credential, capabilities, endpoint, serverSpkiSha256
+            case protocolVersion, instanceId, deviceId, credential, capabilities, endpoint, serverSpkiSha256, displayName
         }
     }
 
@@ -1350,12 +1458,25 @@ struct AidenRemoteContractFixture: Decodable {
     let error: AidenRemoteErrorEnvelope
 }
 
-private extension String {
+extension String {
     var base64URLDecoded: Data? {
         var value = replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         value += String(repeating: "=", count: (4 - value.count % 4) % 4)
         return Data(base64Encoded: value)
+    }
+
+    var canonicalBase64URLDecoded: Data? {
+        guard !isEmpty,
+              unicodeScalars.allSatisfy({ $0.isASCII }),
+              range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
+              count % 4 != 1,
+              let decoded = base64URLDecoded else { return nil }
+        let canonical = decoded.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return canonical == self ? decoded : nil
     }
 }
 
@@ -1385,6 +1506,16 @@ enum AidenRemoteJSONDecoder {
             throw AidenRemoteContractError.payloadTooLarge
         }
         return try decode(AidenRemoteContractFixture.PairingPayload.self, from: data)
+    }
+
+    static func decodeManualPairingBootstrap(
+        from data: Data
+    ) throws -> AidenRemoteContractFixture.ManualPairingBootstrap {
+        try decode(
+            AidenRemoteContractFixture.ManualPairingBootstrap.self,
+            from: data,
+            maximumBytes: AidenRemoteProtocol.maxPairingPayloadBytes * 2
+        )
     }
 }
 
