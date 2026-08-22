@@ -605,7 +605,7 @@ final class AidenChatViewModel {
     private(set) var liveText = ""
     private(set) var reasoning = ""
     private(set) var tools: [AidenLiveTool] = []
-    private(set) var timeline: [String] = []
+    private(set) var activityTimeline: AidenGenerationTimeline?
     private(set) var pendingApproval: AidenPendingApproval?
     private(set) var pendingAttachments: [AidenAttachmentReference] = []
     private(set) var isUploadingAttachment = false
@@ -763,7 +763,7 @@ final class AidenChatViewModel {
             liveText = ""
             reasoning = ""
             tools = []
-            timeline = []
+            activityTimeline = nil
             pendingApproval = nil
             streamState = .queued
             startStreaming(stream, context: context)
@@ -1128,7 +1128,7 @@ final class AidenChatViewModel {
             }
             await liveActivities.toolFinished(instanceID: instanceId, streamID: event.streamId)
         case .timeline:
-            if let label = payload.label, timeline.last != label { timeline.append(label) }
+            if let timeline = payload.timeline { activityTimeline = timeline }
         case .approvalRequired:
             await restorePendingApproval(streamID: event.streamId, context: context)
         case .error:
@@ -1368,7 +1368,7 @@ final class AidenChatViewModel {
         liveText = ""
         reasoning = ""
         tools = []
-        timeline = []
+        activityTimeline = nil
         pendingApproval = nil
         activeStreamID = nil
     }
@@ -1685,6 +1685,9 @@ private struct AidenMessageView: View {
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
+            if message.role == .assistant, let timeline = message.timeline, !timeline.steps.isEmpty {
+                AidenActivityFeed(timeline: timeline, active: false)
+            }
             if !message.text.isEmpty {
                 AidenMessageTextView(role: message.role, content: message.text)
                     .padding(AidenMessageContentSurface.usesRaisedBubble(
@@ -1758,6 +1761,147 @@ private struct AidenMessageView: View {
                 .foregroundStyle(palette.secondary)
             }
         }
+    }
+}
+
+private struct AidenActivityFeed: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let timeline: AidenGenerationTimeline
+    let active: Bool
+    @State private var isExpanded = false
+
+    private var rows: [AidenAgentStep] { Array(timeline.steps.suffix(3)) }
+    private var isRunning: Bool { active && timeline.status == .running }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: isExpanded ? 4 : 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(alignment: isRunning && !isExpanded ? .bottom : .center, spacing: 8) {
+                    Group {
+                        if isRunning && !isExpanded {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(rows) { step in
+                                    AidenActivityStepLine(step: step, shimmer: step.id == rows.last?.id && step.isActive)
+                                        .frame(height: 24)
+                                        .id(step.id)
+                                        .transition(.opacity)
+                                }
+                            }
+                            .frame(height: CGFloat(rows.count) * 24, alignment: .bottom)
+                            .clipped()
+                        } else {
+                            Text(AidenAgentActivityPresentation.summary(timeline))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(palette.secondary)
+                                .lineLimit(1)
+                                .aidenActivityShimmer(isRunning)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if timeline.issueCount > 0 {
+                        Text(timeline.issueCount == 1 ? "1 issue" : "\(timeline.issueCount) issues")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(palette.warning)
+                    }
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(AidenAgentActivityPresentation.summary(timeline))
+            .accessibilityHint(isExpanded ? "Collapses activity" : "Expands activity")
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(timeline.steps) { step in
+                        AidenActivityStepLine(step: step, shimmer: isRunning && step.isActive)
+                    }
+                }
+                .padding(.top, 2)
+                .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: timeline.steps.last?.id)
+        .onAppear {
+            if timeline.issueCount > 0 { isExpanded = true }
+        }
+    }
+}
+
+private struct AidenActivityStepLine: View {
+    @Environment(\.aidenPalette) private var palette
+    let step: AidenAgentStep
+    let shimmer: Bool
+
+    private var tone: Color {
+        switch step.status {
+        case .failed: palette.danger
+        case .blocked, .cancelled, .awaitingApproval: palette.warning
+        default: palette.secondary
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(AidenAgentActivityPresentation.line(for: step))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let changes = step.lineChanges, changes.additions > 0 || changes.deletions > 0 {
+                Text("+\(changes.additions) −\(changes.deletions)")
+                    .font(.caption2.monospaced().weight(.medium))
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(tone)
+        .aidenActivityShimmer(shimmer)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct AidenActivityShimmerModifier: ViewModifier {
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    let active: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if active && !reduceMotion {
+            content.overlay {
+                GeometryReader { proxy in
+                    TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                        let cycle = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: 1.8) / 1.8
+                        LinearGradient(
+                            colors: [.clear, .white.opacity(0.42), .clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: max(proxy.size.width * 0.55, 36))
+                        .offset(x: (proxy.size.width * 1.55 * cycle) - proxy.size.width * 0.55)
+                    }
+                }
+                .mask(content)
+                .allowsHitTesting(false)
+            }
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    func aidenActivityShimmer(_ active: Bool) -> some View {
+        modifier(AidenActivityShimmerModifier(active: active))
     }
 }
 
@@ -2572,6 +2716,7 @@ private extension MarkdownUI.Theme {
 
 private struct AidenLiveResponseView: View {
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
     @Bindable var model: AidenChatViewModel
 
     private var activity: (label: String, orb: OrbState) {
@@ -2595,21 +2740,26 @@ private struct AidenLiveResponseView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if model.isStreaming {
+            if model.isStreaming && model.reasoning.isEmpty && model.activityTimeline?.steps.isEmpty != false {
                 HStack(spacing: 8) {
                     ThinkingOrb(state: activity.orb, size: .px20)
-                    Text(model.timeline.last ?? activity.label)
+                    Text(activity.label)
                         .foregroundStyle(palette.secondary)
                 }
                 .font(.callout)
                 .accessibilityElement(children: .combine)
+                .transition(.opacity)
             }
 
             if !model.reasoning.isEmpty {
-                AidenReasoningCard(text: model.reasoning)
+                AidenReasoningCard(text: model.reasoning, active: model.isStreaming)
+                    .transition(.opacity)
             }
 
-            if !model.tools.isEmpty {
+            if let timeline = model.activityTimeline, !timeline.steps.isEmpty {
+                AidenActivityFeed(timeline: timeline, active: model.isStreaming)
+                    .transition(.opacity)
+            } else if !model.tools.isEmpty {
                 AidenToolActivityCard(tools: model.tools)
             }
 
@@ -2640,6 +2790,7 @@ private struct AidenLiveResponseView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.activityTimeline?.steps.last?.id)
     }
 }
 
@@ -2791,45 +2942,60 @@ private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let text: String
-    @State private var isExpanded = false
-
-    private var summary: String {
-        let oneLine = text.replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return oneLine.count > 80 ? "\(oneLine.prefix(80))…" : oneLine
-    }
+    let active: Bool
+    @State private var isExpanded = true
+    @State private var userControlled = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isExpanded ? 8 : 0) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                userControlled = true
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
             } label: {
                 HStack(spacing: 8) {
-                    AidenSidebarLogo(size: 18, color: palette.secondary)
-                    Text("Thinking").font(.caption.weight(.semibold))
-                    Text(summary).font(.caption).foregroundStyle(palette.secondary).lineLimit(1)
+                    Text(active ? "Thinking…" : "Thinking")
+                        .font(.caption.weight(.semibold))
+                        .aidenActivityShimmer(active)
                     Spacer(minLength: 6)
-                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(palette.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
+                .frame(height: 36)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if isExpanded {
-                Text(text)
-                    .font(.caption)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView {
+                    Text(text)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 4)
+                }
+                .frame(maxHeight: 144, alignment: .top)
+                .padding(.bottom, 10)
+                .transition(.opacity)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 12)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .contain)
+        .task {
+            guard active else {
+                isExpanded = false
+                return
+            }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, !userControlled else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                isExpanded = false
+            }
+        }
     }
 }
 
@@ -2839,7 +3005,18 @@ private struct AidenToolActivityCard: View {
     let tools: [AidenLiveTool]
     @State private var isExpanded = false
 
-    private var isComplete: Bool { tools.allSatisfy { $0.status != nil } }
+    private var isComplete: Bool {
+        !tools.isEmpty && tools.allSatisfy { tool in
+            guard let status = tool.status?.lowercased() else { return false }
+            return ["completed", "complete", "succeeded", "success"].contains(status)
+        }
+    }
+    private var hasIssue: Bool {
+        tools.contains { tool in
+            guard let status = tool.status?.lowercased() else { return false }
+            return ["failed", "blocked", "cancelled", "canceled", "denied"].contains(status)
+        }
+    }
     private var summary: String {
         let names = Array(Set(tools.map(\.name))).sorted()
         let visible = names.prefix(3).joined(separator: ", ")
@@ -2854,11 +3031,11 @@ private struct AidenToolActivityCard: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: isComplete ? "checkmark.circle.fill" : "wrench.and.screwdriver.fill")
+                    Image(systemName: hasIssue ? "exclamationmark.circle.fill" : (isComplete ? "checkmark.circle.fill" : "wrench.and.screwdriver.fill"))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(palette.secondary)
                         .frame(width: 18, height: 18)
-                    Text(isComplete ? "Tools used" : "Using tools")
+                    Text(hasIssue ? "Tool issue" : (isComplete ? "Tools used" : "Using tools"))
                         .font(.caption.weight(.semibold))
                     Text(summary).font(.caption).foregroundStyle(palette.secondary).lineLimit(1)
                     Spacer(minLength: 6)
@@ -2874,7 +3051,7 @@ private struct AidenToolActivityCard: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(tools) { tool in
                         HStack(spacing: 8) {
-                            Image(systemName: tool.status == nil ? "circle.dotted" : "checkmark.circle")
+                            Image(systemName: legacySymbol(for: tool.status))
                             Text(tool.name).lineLimit(1)
                             Spacer()
                             Text(tool.status ?? "Running").foregroundStyle(palette.secondary)
@@ -2887,6 +3064,15 @@ private struct AidenToolActivityCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func legacySymbol(for status: String?) -> String {
+        guard let status = status?.lowercased() else { return "circle.dotted" }
+        if ["completed", "complete", "succeeded", "success"].contains(status) { return "checkmark.circle" }
+        if ["failed", "blocked", "cancelled", "canceled", "denied"].contains(status) {
+            return "exclamationmark.circle"
+        }
+        return "circle.dotted"
     }
 }
 

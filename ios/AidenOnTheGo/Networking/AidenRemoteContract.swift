@@ -823,6 +823,7 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
     let name: String?
     let status: String?
     let label: String?
+    let timeline: AidenGenerationTimeline?
     let approvalId: String?
     let summary: String?
     let expiresAt: Date?
@@ -883,6 +884,10 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
             maxLength: AidenRemoteProtocol.maxTimelineLabelLength,
             field: "label"
         )
+        timeline = try decodeOptionalNonNull(values, AidenGenerationTimeline.self, forKey: .timeline)
+        if let timeline, !timeline.isRendererSafe {
+            throw AidenRemoteContractError.unsafePayloadField("timeline")
+        }
         approvalId = try boundedString(
             values,
             forKey: .approvalId,
@@ -913,7 +918,7 @@ struct AidenRemoteEventPayload: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case chatId, turnId, nextSequence, state, text, toolId, name, status, label
+        case chatId, turnId, nextSequence, state, text, toolId, name, status, label, timeline
         case approvalId, summary, expiresAt, messageId, code, message, source
     }
 }
@@ -1034,7 +1039,7 @@ struct AidenRemoteStreamEvent: Decodable, Equatable, Sendable {
         case .textDelta, .reasoningDelta: allowedKeys = ["text"]
         case .toolStarted: allowedKeys = ["toolId", "name"]
         case .toolFinished: allowedKeys = ["toolId", "status"]
-        case .timeline: allowedKeys = ["label"]
+        case .timeline: allowedKeys = ["timeline"]
         case .approvalRequired: allowedKeys = ["approvalId", "summary", "expiresAt"]
         case .done: allowedKeys = ["messageId"]
         case .error: allowedKeys = ["code", "message"]
