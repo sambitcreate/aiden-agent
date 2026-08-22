@@ -414,6 +414,37 @@ test("attachment content never exposes images from hidden message roles", async 
   );
 });
 
+test("assistant image attachments project to paired clients and retain authenticated content", async () => {
+  const imageBytes = Buffer.from(ONE_PIXEL_PNG, "base64");
+  const app = fixture(chat({
+    messages: [{
+      id: "assistant-image-message",
+      role: "assistant",
+      content: "Here it is.",
+      createdAt: 1_500,
+      attachments: [{
+        id: "assistant-shared-image",
+        name: "Result.png",
+        mimeType: "image/png",
+        kind: "image",
+        size: imageBytes.length,
+        data: ONE_PIXEL_PNG,
+      }],
+    }],
+  }));
+  const projected = await app.service.get("chat-1");
+  assert.deepEqual(projected.messages[0]?.attachments, [{
+    id: "assistant-shared-image",
+    name: "Result.png",
+    mimeType: "image/png",
+    kind: "image",
+    size: imageBytes.length,
+  }]);
+  const content = await app.service.attachmentContent("chat-1", "assistant-shared-image");
+  assert.equal(content.mimeType, "image/png");
+  assert.deepEqual(content.bytes, imageBytes);
+});
+
 test("attachment content rejects stored raster bytes that do not match their MIME type", async () => {
   const app = fixture(chat({
     messages: [{

@@ -17,7 +17,11 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { access } from "node:fs/promises";
 import { ipcMain, logger } from "../platform.js";
 import { buildAgentTools } from "./tools.js";
-import { APPROVAL_TOOL_NAMES, summarizeToolCall } from "./coding-tools.js";
+import {
+  APPROVAL_TOOL_NAMES,
+  DISCLOSURE_APPROVAL_TOOL_NAMES,
+  summarizeToolCall,
+} from "./coding-tools.js";
 import { gitInfo } from "./git.js";
 import { configStore } from "./config-store.js";
 import { secrets } from "./secrets.js";
@@ -45,7 +49,13 @@ import { usageStore } from "./usage-store.js";
 import { storedPiAssistantMessage } from "./pi-message-storage.js";
 import { chatForRenderer } from "./visible-chat-projection.js";
 import { cancelWorkspaceGenerationsAndSettle } from "./workspace-mutation-gate.js";
-import type { ApprovalDecision, Chat, ChatStartParams, WorkspacePermission } from "./types.js";
+import type {
+  ApprovalDecision,
+  Attachment,
+  Chat,
+  ChatStartParams,
+  WorkspacePermission,
+} from "./types.js";
 import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
@@ -89,6 +99,10 @@ import {
 } from "./generation-context.js";
 import { buildGeminiWorkspaceSnapshot, GeminiContextCache } from "./gemini-context-cache.js";
 import { attachClaimCheck } from "../../renderer/shared/claim-check.js";
+import {
+  MAX_ATTACHMENT_INLINE_BYTES,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
@@ -416,6 +430,7 @@ async function prepareGeneration(
   ownerDocumentId: string,
   options: GenerationExecutionOptions,
 ) {
+  const sharedImages: Attachment[] = [];
   const runtime = await resolveModelRuntime(params.providerId, params.model, signal);
   const attendedAssistant = params.mode === "assistant";
   const assistantPersonaMode =
@@ -675,6 +690,19 @@ async function prepareGeneration(
               subagentDelegationEnabled,
             )
         : undefined,
+      shareImage: folderPath
+        ? (attachment) => {
+            if (sharedImages.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+              throw new Error("This response already contains the maximum number of images.");
+            }
+            if (sharedImages.some((item) => item.data === attachment.data)) return;
+            const nextBytes = sharedImages.reduce((sum, item) => sum + item.size, 0) + attachment.size;
+            if (nextBytes > MAX_ATTACHMENT_INLINE_BYTES) {
+              throw new Error("The images shared in this response exceed the 16 MB limit.");
+            }
+            sharedImages.push(attachment);
+          }
+        : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
   let googleWorkspaceSnapshot: string | undefined;
@@ -712,6 +740,7 @@ async function prepareGeneration(
     workspaceId: workspace?.id,
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
+    sharedImages,
     // The Aiden system prompt reads its approval posture from settings, which
     // are already loaded here; re-reading them at the prompt site would be a
     // second disk round trip inside the generation's hot path.
@@ -926,6 +955,7 @@ export const llmClient = {
       assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
+      sharedImages,
     } = setup;
     const attendedAssistant = authoritativeMode === "assistant";
     initialization.computerUse = computerUse;
@@ -989,7 +1019,8 @@ export const llmClient = {
         finalTimeline.steps.length === 0 &&
         finalTimeline.status !== "cancelled" &&
         !subagents &&
-        !providerFailure
+        !providerFailure &&
+        sharedImages.length === 0
       ) {
         return { chat: undefined, error: undefined, messageId: undefined };
       }
@@ -1011,6 +1042,7 @@ export const llmClient = {
                 ? finalTimeline
                 : undefined,
             subagents,
+            attachments: sharedImages.length > 0 ? sharedImages : undefined,
           },
           {
             providerId: params.providerId,
@@ -1355,8 +1387,9 @@ export const llmClient = {
             const scheduleApproval = createScheduleApproval || editScheduleApproval;
             const workspaceApproval =
               permission === "ask" && APPROVAL_TOOL_NAMES.has(context.toolCall.name);
+            const disclosureApproval = DISCLOSURE_APPROVAL_TOOL_NAMES.has(context.toolCall.name);
             attendedScheduleApproval = scheduleApproval && attendedAssistant;
-            if (!scheduleApproval && !workspaceApproval) {
+            if (!scheduleApproval && !workspaceApproval && !disclosureApproval) {
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }

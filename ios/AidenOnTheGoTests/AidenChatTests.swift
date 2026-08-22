@@ -23,6 +23,21 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
+    func testRemoteChatDecodesAssistantImageAttachmentsForTheSharedGallery() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let chat = try decoder.decode(
+            AidenChat.self,
+            from: Data(
+                #"{"id":"chat-1","workspaceId":"workspace-1","title":"Image","messages":[{"id":"message-1","role":"assistant","text":"Here it is.","createdAt":"2026-08-20T12:00:00Z","attachments":[{"id":"attachment-1","name":"Result.png","mimeType":"image/png","kind":"image","size":70}]}],"createdAt":"2026-08-20T12:00:00Z","updatedAt":"2026-08-20T12:00:01Z","revision":"rev_1"}"#.utf8
+            )
+        )
+
+        XCTAssertEqual(chat.messages.first?.role, .assistant)
+        XCTAssertEqual(chat.messages.first?.attachments?.first?.name, "Result.png")
+        XCTAssertEqual(AidenMessageMediaEdge.forRole(chat.messages.first?.role ?? .user), .leading)
+    }
+
     func testModelCatalogHidesPresentationOnlyModelsWithoutDroppingTheirIdentity() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
@@ -425,6 +440,14 @@ final class AidenChatTests: XCTestCase {
                 now: now
             )
         )
+    }
+
+    func testApprovalSummaryCollapsesWhitespaceForCompactDisclosure() {
+        XCTAssertEqual(
+            AidenApprovalPresentation.oneLineSummary("Run command:\n  find ~/Downloads   -type f"),
+            "Run command: find ~/Downloads -type f"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.oneLineSummary(" \n\t "), "Review requested action")
     }
 
     func testAttachmentImageValidationAndProtectedCacheFailClosed() async throws {

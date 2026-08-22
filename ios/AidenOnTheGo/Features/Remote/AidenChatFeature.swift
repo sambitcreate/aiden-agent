@@ -1574,6 +1574,11 @@ struct AidenChatDetailView: View {
                 )
                 .onChange(of: model.chat.messages.count) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: model.liveText) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: model.pendingApproval?.id) { _, approvalID in
+                    guard approvalID != nil else { return }
+                    composerIsFocused = false
+                    scrollToBottom(proxy)
+                }
             }
 
             AidenComposerView(
@@ -2615,6 +2620,7 @@ private struct AidenLiveResponseView: View {
                     onDeny: { Task { await model.respondToApproval(.deny) } },
                     onAllow: { Task { await model.respondToApproval(.allow) } }
                 )
+                .id(approval.id)
             }
 
             if !model.liveText.isEmpty {
@@ -2639,6 +2645,8 @@ private struct AidenLiveResponseView: View {
 
 private struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @State private var isExpanded = false
 
     let summary: String
     let canAllow: Bool
@@ -2669,14 +2677,45 @@ private struct AidenApprovalCard: View {
                 }
             }
 
-            Text(summary)
-                .font(.caption.monospaced())
-                .foregroundStyle(palette.foreground)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(AidenApprovalPresentation.oneLineSummary(summary))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(palette.foreground)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(height: 36)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityLabel("Requested action")
+            .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
+            .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
+
+            if isExpanded {
+                Text(summary)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(palette.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             HStack(spacing: 8) {
                 Spacer(minLength: 0)

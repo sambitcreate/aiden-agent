@@ -441,6 +441,15 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let canAllow: Bool
 }
 
+enum AidenApprovalPresentation {
+    static func oneLineSummary(_ summary: String) -> String {
+        let collapsed = summary
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return collapsed.isEmpty ? String(localized: "Review requested action") : collapsed
+    }
+}
+
 enum AidenPendingApprovalResolution {
     static func resolve(
         _ approval: AidenStreamPendingApproval?,

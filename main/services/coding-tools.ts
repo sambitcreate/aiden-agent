@@ -40,6 +40,8 @@ let re2Constructor: typeof import("re2-wasm").RE2 | undefined;
 
 /** Tools whose effects mutate the folder or system — gated behind approval in "ask" mode. */
 export const APPROVAL_TOOL_NAMES = new Set(["write_file", "edit_file", "run_command"]);
+/** Sharing a local file is an outbound disclosure and always needs attended approval. */
+export const DISCLOSURE_APPROVAL_TOOL_NAMES = new Set(["share_image"]);
 
 function textResult(text: string): AgentToolResult<null> {
   return { content: [{ type: "text", text }], details: null };
@@ -836,6 +838,8 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "share_image":
+      return `Share image in chat: ${String(a.path ?? "?")}`;
     default:
       return toolName;
   }
