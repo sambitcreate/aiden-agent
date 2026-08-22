@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import XCTest
 @testable import AidenOnTheGo
 
@@ -632,6 +633,51 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(turn.message.attachments?.first?.size, 7)
         try await client.removeAttachment(chatId: "chat-1", attachmentId: attachmentID)
         XCTAssertEqual(step, 3)
+    }
+
+    func testAttachmentContentUsesAuthenticatedBoundedRawImageRoute() async throws {
+        let client = makeClient()
+        let attachmentID = "att_\(String(repeating: "I", count: 43))"
+        let imageData = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).pngData { context in
+            UIColor.systemPurple.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                request.url?.path,
+                "/api/aiden/v1/chats/chat-1/attachments/\(attachmentID)/content"
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "image/jpeg, image/png")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "image/png", "Content-Length": "\(imageData.count)"]
+                )!,
+                imageData
+            )
+        }
+
+        let content = try await client.attachmentContent(chatId: "chat-1", attachmentId: attachmentID)
+        XCTAssertEqual(content.mimeType, "image/png")
+        XCTAssertEqual(content.data, imageData)
+    }
+
+    func testAttachmentContentRejectsNonImageResponses() async {
+        let client = makeClient()
+        AidenRemoteMockURLProtocol.handler = { request in
+            Self.response(for: request, status: 200, json: "{}")
+        }
+
+        do {
+            _ = try await client.attachmentContent(chatId: "chat-1", attachmentId: "attachment-1")
+            XCTFail("Expected a non-image content type to fail closed.")
+        } catch {
+            XCTAssertTrue(error is AidenRemoteClientError)
+        }
     }
 
     func testPhysicalDevicePairingAndWorkspaceCRUDWhenConfigured() async throws {
