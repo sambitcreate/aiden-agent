@@ -769,4 +769,6 @@ If a retained stream is definitively gone after a Mac restart or journal expiry,
 
 The inline deck now preserves the sender-side spatial anchor during interaction: user media stays trailing, assistant media stays leading, and only the selected front card consumes live drag progress. Rear cards remain fixed until selection commits, eliminating whole-stack drift and reducing per-frame transforms while preserving edge resistance, flick selection, reduced-motion behavior, rounded media, and the full-screen viewer.
 
+The fitted-image mask is applied before the sender-aligned layout frame expands. Portrait and landscape images therefore keep all four continuous corners instead of allowing the frame boundary to square off the edge opposite the sender.
+
 The complete repository suite, type-check, lint, production build, generic iPhoneOS build, iOS release policy, Remote Access and attachment suites, and the full Apple Development-signed XCTest target pass. The final native run used the connected physical iPhone 13 Pro; no simulator or iPhone 16 Pro Max was used.
