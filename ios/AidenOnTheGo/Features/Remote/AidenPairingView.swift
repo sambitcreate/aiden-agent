@@ -219,6 +219,23 @@ enum AidenMobileOnboardingPhase: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+enum AidenMobileOnboardingLayout {
+    static let maximumContentWidth: CGFloat = 620
+    static let maximumContentHeight: CGFloat = 760
+    static let maximumActionWidth: CGFloat = 360
+    static let actionHorizontalPadding: CGFloat = 24
+    static let actionBottomPadding: CGFloat = 12
+    static let artworkSide: CGFloat = 232
+
+    static func contentWidth(for availableWidth: CGFloat) -> CGFloat {
+        max(0, min(availableWidth, maximumContentWidth))
+    }
+
+    static func contentHeight(for availableHeight: CGFloat) -> CGFloat {
+        max(0, min(availableHeight, maximumContentHeight))
+    }
+}
+
 struct AidenPairingView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(AidenAppearanceStore.self) private var appearance
@@ -381,111 +398,150 @@ struct AidenPairingView: View {
     }
 
     private var welcomePage: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image("AidenAppIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 42, height: 42)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Aiden On The Go")
-                        .font(.headline)
-                    Text("Aiden, wherever you are.")
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image("AidenAppIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 42, height: 42)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Aiden On The Go")
+                            .font(.headline)
+                        Text("Aiden, wherever you are.")
+                            .font(.caption)
+                            .foregroundStyle(palette.secondary)
+                    }
+                    Spacer()
                 }
-                Spacer()
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
 
-            TabView(selection: $selectedOnboardingPhase) {
-                ForEach(AidenMobileOnboardingPhase.allCases) { phase in
-                    onboardingPhasePage(phase)
-                        .tag(phase)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .accessibilityLabel("Aiden capabilities")
-
-            VStack(spacing: 12) {
-                HStack(spacing: 4) {
+                TabView(selection: $selectedOnboardingPhase) {
                     ForEach(AidenMobileOnboardingPhase.allCases) { phase in
-                        Button {
-                            selectedOnboardingPhase = phase
-                        } label: {
-                            Capsule()
-                                .fill(phase == selectedOnboardingPhase ? palette.accent : palette.secondary.opacity(0.24))
-                                .frame(width: phase == selectedOnboardingPhase ? 22 : 7, height: 7)
-                                .frame(width: 34, height: 28)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(phase.title)
-                        .accessibilityValue(phase == selectedOnboardingPhase ? "Current page" : "")
+                        onboardingPhasePage(phase)
+                            .tag(phase)
                     }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .accessibilityLabel("Aiden capabilities")
 
-                onboardingContinueButton
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 14)
+            .frame(
+                width: AidenMobileOnboardingLayout.contentWidth(for: proxy.size.width),
+                height: AidenMobileOnboardingLayout.contentHeight(for: proxy.size.height)
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 12) {
+                onboardingPageIndicator
+                onboardingActionButton(action: advanceOnboarding) {
+                    Text(isOnboardingLastPage ? "Set Up Connection" : "Continue")
+                }
+            }
+            .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
         }
         .navigationBarHidden(true)
     }
 
     private func onboardingPhasePage(_ phase: AidenMobileOnboardingPhase) -> some View {
-        ScrollView {
-            VStack(spacing: 22) {
-                ZStack {
-                    Circle()
-                        .fill(palette.accent.opacity(0.07))
-                        .frame(width: 252, height: 252)
-                    Circle()
-                        .stroke(palette.accent.opacity(0.14), lineWidth: 1)
-                        .frame(width: 210, height: 210)
-                    Image(phase.imageName)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 250, maxHeight: 250)
-                        .accessibilityHidden(true)
-                }
-                .frame(maxWidth: .infinity)
-
-                VStack(spacing: 10) {
-                    Text(phase.eyebrow)
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.8)
-                        .foregroundStyle(palette.accent)
-                    Text(phase.title)
-                        .font(.title.bold())
-                        .multilineTextAlignment(.center)
-                    Text(phase.detail)
-                        .font(.subheadline)
-                        .foregroundStyle(palette.secondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.horizontal, 26)
+        ViewThatFits(in: .vertical) {
+            VStack(spacing: 0) {
+                Spacer(minLength: 16)
+                onboardingPhaseContent(phase)
+                Spacer(minLength: 16)
             }
-            .padding(.top, 24)
-            .padding(.bottom, 12)
+
+            ScrollView {
+                onboardingPhaseContent(phase)
+                    .padding(.vertical, 16)
+            }
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
     }
 
-    @ViewBuilder
-    private var onboardingContinueButton: some View {
-        let isLast = selectedOnboardingPhase == AidenMobileOnboardingPhase.allCases.last
-        prominentGlassButton(action: {
-            if isLast {
-                step = 1
-            } else if let index = AidenMobileOnboardingPhase.allCases.firstIndex(of: selectedOnboardingPhase) {
-                selectedOnboardingPhase = AidenMobileOnboardingPhase.allCases[index + 1]
+    private func onboardingPhaseContent(_ phase: AidenMobileOnboardingPhase) -> some View {
+        VStack(spacing: 22) {
+            ZStack {
+                Circle()
+                    .fill(palette.accent.opacity(0.07))
+                    .frame(
+                        width: AidenMobileOnboardingLayout.artworkSide,
+                        height: AidenMobileOnboardingLayout.artworkSide
+                    )
+                Circle()
+                    .stroke(palette.accent.opacity(0.14), lineWidth: 1)
+                    .frame(width: 196, height: 196)
+                Image(phase.imageName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(
+                        maxWidth: AidenMobileOnboardingLayout.artworkSide,
+                        maxHeight: AidenMobileOnboardingLayout.artworkSide
+                    )
+                    .accessibilityHidden(true)
             }
-        }) {
-            Text(isLast ? "Set Up Connection" : "Continue")
+            .frame(maxWidth: .infinity)
+
+            VStack(spacing: 10) {
+                Text(phase.eyebrow)
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.8)
+                    .foregroundStyle(palette.accent)
+                Text(phase.title)
+                    .font(.title.bold())
+                    .multilineTextAlignment(.center)
+                Text(phase.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 480)
+            .padding(.horizontal, 26)
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var isOnboardingLastPage: Bool {
+        selectedOnboardingPhase == AidenMobileOnboardingPhase.allCases.last
+    }
+
+    private var onboardingPageIndicator: some View {
+        HStack(spacing: 4) {
+            ForEach(AidenMobileOnboardingPhase.allCases) { phase in
+                Button {
+                    selectedOnboardingPhase = phase
+                } label: {
+                    Capsule()
+                        .fill(phase == selectedOnboardingPhase ? palette.accent : palette.secondary.opacity(0.24))
+                        .frame(width: phase == selectedOnboardingPhase ? 22 : 7, height: 7)
+                        .frame(width: 34, height: 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(phase.title)
+                .accessibilityValue(phase == selectedOnboardingPhase ? "Current page" : "")
+            }
+        }
+    }
+
+    private func advanceOnboarding() {
+        if isOnboardingLastPage {
+            step = 1
+        } else if let index = AidenMobileOnboardingPhase.allCases.firstIndex(of: selectedOnboardingPhase) {
+            selectedOnboardingPhase = AidenMobileOnboardingPhase.allCases[index + 1]
+        }
+    }
+
+    private func onboardingActionButton<Label: View>(
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        prominentGlassButton(action: action, label: label)
+            .frame(maxWidth: AidenMobileOnboardingLayout.maximumActionWidth)
+            .padding(.horizontal, AidenMobileOnboardingLayout.actionHorizontalPadding)
     }
 
     @ViewBuilder
@@ -529,17 +585,18 @@ struct AidenPairingView: View {
                 .font(.subheadline)
                 .foregroundStyle(palette.secondary)
             }
+            .frame(maxWidth: AidenMobileOnboardingLayout.maximumContentWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
             .padding(24)
         }
-        .safeAreaInset(edge: .bottom) {
-            prominentGlassButton(action: {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            onboardingActionButton(action: {
                 onIntroductionComplete?()
                 step = 2
             }) {
                 Text("Choose How to Connect")
             }
-                .padding(20)
-                .background(.bar)
+            .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
         }
         .navigationTitle("Connect")
         .navigationBarTitleDisplayMode(.inline)
@@ -609,15 +666,18 @@ struct AidenPairingView: View {
                 Text("On your Mac")
             }
 
-            Section {
-                prominentGlassButton(action: { isShowingScanner = true }) {
-                    Label("Open Camera", systemImage: "qrcode.viewfinder")
-                }
-            } footer: {
+            Section("Private pairing") {
                 Text("The QR expires after five minutes and can be used once. Aiden pins the Mac’s HTTPS identity during pairing.")
+                    .foregroundStyle(palette.secondary)
             }
         }
         .scrollContentBackground(.hidden)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            onboardingActionButton(action: { isShowingScanner = true }) {
+                Label("Open Camera", systemImage: "qrcode.viewfinder")
+            }
+            .padding(.bottom, AidenMobileOnboardingLayout.actionBottomPadding)
+        }
     }
 
     private var nearbyMacPairingPage: some View {
