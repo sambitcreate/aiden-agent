@@ -16,7 +16,7 @@ All timestamps are RFC 3339 UTC strings. IDs are opaque strings and must not enc
 
 ## 2. Authentication and capabilities
 
-`GET /health` is the only unauthenticated read. `POST /pairing/exchange` is available only while a local desktop pairing window is open and requires its single-use secret. Every other request, including SSE, requires:
+`GET /health` is the only unauthenticated read. `POST /pairing/manual-bootstrap` returns only a bounded AES-GCM sealed trust envelope while a local desktop pairing window is open; the locally displayed setup code is never sent in its request. `POST /pairing/exchange` is available only during that same window and requires its single-use 256-bit secret. Every other request, including SSE, requires:
 
 ```http
 Authorization: Bearer <device credential>
@@ -82,6 +82,8 @@ Required stable codes include:
 
 Allowed: instance ID/display name, app/protocol version, supported capabilities, selected connection mode, minimum client version, server time.
 
+The display name is a bounded, user-editable label persisted by the Mac and returned by `GET /server`; it is never an identity key. Clients scope credentials, caches, streams, App Intents, and navigation to `instanceId`, including when multiple installations use the same label or a label changes.
+
 Forbidden: local usernames, config/user-data paths, environment values, provider credentials, logs, process arguments.
 
 ### Workspace
@@ -120,9 +122,10 @@ The OpenAPI document owns exact request/response shapes. This section owns behav
 
 ### Bootstrap/device
 
-- The locally displayed QR encodes the OpenAPI `PairingBootstrap` object as canonical JSON: protocol version, instance ID, HTTPS API endpoint, P-256 SPKI SHA-256 fingerprint, high-entropy single-use secret, and expiry. The phone must decode and validate this object, configure hostname plus SPKI verification, and only then make its first network request. A fingerprint learned from `/pairing/exchange` is confirmation, never the trust bootstrap.
+- The locally displayed QR encodes the OpenAPI `PairingPayload` envelope as canonical JSON. Its `PairingBootstrap` contains protocol version, instance ID, HTTPS API endpoint, P-256 SPKI SHA-256 fingerprint, high-entropy single-use secret, and expiry; its trust member selects the bundled private LAN CA or system trust for Tailscale. The phone must decode and validate the complete envelope, configure hostname plus SPKI verification, and only then exchange the secret. A fingerprint learned from `/pairing/exchange` is confirmation, never the trust bootstrap.
+- `POST /pairing/manual-bootstrap`: returns that exact canonical `PairingPayload` encrypted with AES-256-GCM. A uniformly random 100-bit Crockford Base32 setup code is shown only through local Electron IPC and derives the encryption key with HKDF-SHA256. The client sends `{}` to the selected exact endpoint, validates the bounded response, derives and authenticates the envelope locally, requires the decrypted endpoint and expiry to match, and then uses the normal pinned `/pairing/exchange`. The setup code never appears in a URL, request, log, persistent state, Bonjour record, or public status projection. LAN users select a discovered Mac; Tailscale users provide its canonical private endpoint. QR and manual entry share one window and one synchronously consumed exchange secret.
 - `GET /health`: minimal readiness and protocol version.
-- `POST /pairing/exchange`: exchange a high-entropy single-use secret for device/instance IDs, bearer credential, capability list, endpoint, and P-256 SPKI SHA-256 fingerprint.
+- `POST /pairing/exchange`: exchange a high-entropy single-use secret for device/instance IDs, bearer credential, capability list, endpoint, and P-256 SPKI SHA-256 fingerprint. A client may set `acceptsDisplayName: true` to receive the optional bounded server display name; the server omits that additive key for strict legacy v1 decoders. The display name is presentation metadata only and newer clients still verify `instanceId` as identity.
 - `GET /server`: authenticated server projection.
 
 Device enumeration/revocation remains desktop-local in v1 unless a later explicit capability is added.
@@ -238,9 +241,20 @@ Logs may include request ID, route template, status, latency, instance/device ID
 
 LAN transport uses an installation-local P-256 CA and a server-only leaf with a stable P-256 key. The server presents the leaf plus CA chain; the QR payload carries the HTTPS endpoint and `sha256/<base64-leaf-SPKI-digest>`. Certificate renewal keeps the leaf key and pin. Key rotation is explicit, invalidates the old pin, and requires recovery/re-pairing. The iOS trust path anchors only the presented local CA, validates hostname, validity, certificate signature, server-auth usage, and the expected leaf SPKI digest; a matching pin alone must not accept an expired or wrong-host certificate.
 
-When LAN access is enabled, discovery advertises `_aiden-agent._tcp` over Bonjour. Its TXT record may expose only `v=1` and the public Aiden instance identifier; the service port comes from Bonjour. Pairing secrets, device credentials, pins, paths, capability grants, and user content are never discovery metadata. The iOS app declares `_aiden-agent._tcp` in `NSBonjourServices` and provides `NSLocalNetworkUsageDescription`; disabling LAN access withdraws the advertisement.
+When LAN access is enabled, discovery advertises `_aiden-agent._tcp` over Bonjour. The service label uses the bounded Mac display name plus a stable short suffix derived from the public instance identifier so same-named installations remain distinguishable. Its TXT record may expose only `v=1` and the full public Aiden instance identifier; the service port comes from Bonjour. Pairing secrets, device credentials, pins, paths, capability grants, and user content are never discovery metadata. The iOS app declares `_aiden-agent._tcp` in `NSBonjourServices` and provides `NSLocalNetworkUsageDescription`; disabling LAN access withdraws the advertisement.
 
 Tailscale mode uses the server-owned loopback Aiden HTTP listener behind Tailscale Serve HTTPS plus the same Aiden device credential. Because `--set-path=/api/aiden/v1` strips that public mount prefix before reverse proxying, the target must restore the exact canonical base: `http://localhost:<port>/api/aiden/v1`, IPv4 loopback, or IPv6 loopback, with no credentials, additional path, query, or fragment. Before connect, inspect current config. An explicitly incompatible or Funnel-enabled HTTPS listener is a connect conflict. When Serve status is empty, first-connect eligibility comes from an exact normalized match between the node's stable DNS name and its Tailscale certificate domains; Aiden never completes Tailscale's HTTPS authorization flow for the user. Add one exact Aiden-owned non-Funnel route. Disconnect uses its matching route-specific `off`; never use Serve reset or replace unrelated configuration. A pre-acceptance origin-only target may be recognized solely for exact persisted-ownership cleanup before replacement with the canonical target; it is never accepted for a new connection.
+
+### Operating multiple devices and Aiden installations
+
+- One Aiden installation accepts multiple paired phones and iPads. Each device receives a distinct credential and has independent activity, streams, approvals, attachment references, scheduled-task operations, and revocation. Revoking one device must not interrupt or re-authorize another.
+- Aiden On The Go stores each Mac as a separate installation keyed by its public `instanceId`. The display name is only a label, so same-named Macs remain distinct. Credentials, caches, navigation work, App Intents, and Live Activities stay scoped to that identifier during repeated switching and removal.
+- Multiple fresh Aiden profiles on one physical Mac may use distinct persisted LAN/loopback port pairs. A profile with paired devices never moves its endpoint automatically; a collision is reported as `remote_port_in_use` with recovery guidance.
+- Only one profile on a physical Mac may own the canonical Tailscale Serve path. A live incumbent cannot be taken over. A stale exact Aiden handler may be replaced only after an explicit review and immediate verification; unrelated Serve handlers and Funnel state remain unchanged.
+- If the Tailscale CLI returns an ambiguous result or route visibility is delayed, Aiden records an unknown outcome before mutation and blocks ordinary route actions and pairing. Use **Verify update** in Remote Access after Tailscale settles. Verification either commits the exact route owner or proves the old state is unchanged; it never guesses or resets Serve.
+- The desktop connection summary may show active, inactive, pending, and revoked device labels plus bounded activity times. It never includes bearer credentials, pairing secrets, certificate material, opaque handles, approved folder paths, prompts, or attachment contents.
+
+When moving a phone between Macs, select the intended saved Mac before starting work. If a Mac is offline, the saved entry and its credential remain isolated and another installation can be selected. Removing a saved Mac from the phone deletes only that installation's local credential and caches; pairing again creates a new device credential. Removing or revoking a device from the Mac invalidates only that device. Removing an Aiden workspace does not delete its folder from disk.
 
 ## 10. Contract change process
 
