@@ -30,6 +30,7 @@
 		A0DA00000000000000000002 /* AidenScheduledTasksView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000012 /* AidenScheduledTasksView.swift */; };
 		A0DA00000000000000000003 /* AidenScheduledTaskTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DA00000000000000000013 /* AidenScheduledTaskTests.swift */; };
 		A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000014 /* AidenRemoteContractV1.json */; };
+		A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */ = {isa = PBXBuildFile; fileRef = A0D000000000000000000015 /* AidenManualPairingVectorV1.json */; };
 		1A2B3C4D5E6F700000000001 /* AidenOnTheGoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000011 /* AidenOnTheGoApp.swift */; };
 		1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000012 /* ContentView.swift */; };
 		1A2B3C4D5E6F700000000338 /* AidenAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000337 /* AidenAppIntents.swift */; };
@@ -103,6 +104,7 @@
 		A0D000000000000000000012 /* AidenServerTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenServerTrust.swift; sourceTree = "<group>"; };
 		A0D000000000000000000013 /* AidenRemotePhase0Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemotePhase0Tests.swift; sourceTree = "<group>"; };
 		A0D000000000000000000014 /* AidenRemoteContractV1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = AidenRemoteContractV1.json; path = ../protocol/aiden-remote/v1/fixtures/contract.json; sourceTree = SOURCE_ROOT; };
+		A0D000000000000000000015 /* AidenManualPairingVectorV1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = AidenManualPairingVectorV1.json; path = ../protocol/aiden-remote/v1/fixtures/manual-pairing-vector.json; sourceTree = SOURCE_ROOT; };
 		A0D600000000000000000011 /* AidenRemoteClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteClient.swift; sourceTree = "<group>"; };
 		A0D600000000000000000012 /* AidenInstallation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenInstallation.swift; sourceTree = "<group>"; };
 		A0D600000000000000000013 /* AidenRemoteClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AidenRemoteClientTests.swift; sourceTree = "<group>"; };
@@ -252,6 +254,7 @@
 				A0D700000000000000000015 /* AidenChatTests.swift */,
 				A0D800000000000000000012 /* AidenAppearanceV1.json */,
 				A0D000000000000000000014 /* AidenRemoteContractV1.json */,
+				A0D000000000000000000015 /* AidenManualPairingVectorV1.json */,
 			);
 			path = AidenOnTheGoTests;
 			sourceTree = "<group>";
@@ -568,6 +571,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0D000000000000000000004 /* AidenRemoteContractV1.json in Resources */,
+				A0D000000000000000000005 /* AidenManualPairingVectorV1.json in Resources */,
 				A0D800000000000000000002 /* AidenAppearanceV1.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -809,7 +813,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = AidenOnTheGo/Resources/AidenOnTheGo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AidenOnTheGo/Resources/Info.plist;
@@ -838,7 +842,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = AidenOnTheGo/Resources/AidenOnTheGo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				DEVELOPMENT_ASSET_PATHS = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AidenOnTheGo/Resources/Info.plist;
@@ -864,7 +868,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -888,7 +892,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -912,7 +916,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AidenLiveActivityWidget/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -939,7 +943,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AidenLiveActivityWidget/Resources/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
