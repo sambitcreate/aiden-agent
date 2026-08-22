@@ -2,6 +2,20 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import type { AppSettings, Provider } from "./types.js";
 import { isModelHidden } from "../../renderer/shared/model-visibility.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
+import {
+  isGoogleThinkingLevel,
+  normalizeGoogleThinkingLevel,
+} from "../../renderer/shared/google-thinking.js";
+import {
+  isCodexThinkingLevel,
+  normalizeCodexThinkingLevel,
+} from "../../renderer/shared/codex-thinking.js";
+import {
+  isAnthropicThinkingLevel,
+  normalizeAnthropicThinkingLevel,
+} from "../../renderer/shared/anthropic-thinking.js";
+import { normalizeProviderThinkingLevel } from "../../renderer/shared/provider-thinking.js";
+import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 
 const MAX_REMOTE_MODEL_ID_LENGTH = 256;
 const MAX_REMOTE_MODEL_CATALOG_BYTES = 900 * 1024;
@@ -11,6 +25,8 @@ export interface AidenRemoteModelProjection {
   id: string;
   label: string;
   thinkingLevels?: string[];
+  defaultThinkingLevel?: string;
+  thinkingCanDisable?: boolean;
   hidden?: boolean;
 }
 
@@ -84,13 +100,37 @@ export class AidenRemoteModelService {
         const thinkingLevels = metadata?.thinkingLevels
           ?.slice(0, 8)
           .map((level) => bounded(level, 32));
+        const safeThinkingLevels = thinkingLevels?.filter(isGenerationThinkingLevel) ?? [];
+        const googleThinkingLevels = safeThinkingLevels.filter(isGoogleThinkingLevel);
+        const codexThinkingLevels = safeThinkingLevels.filter(isCodexThinkingLevel);
+        const anthropicThinkingLevels = safeThinkingLevels.filter(isAnthropicThinkingLevel);
+        const savedThinkingLevel = provider.id === "google"
+          ? settings.googleThinkingByModel?.[id]
+          : provider.id === "openai-codex"
+            ? settings.codexThinkingByModel?.[id]
+            : provider.id === "anthropic"
+              ? settings.anthropicThinkingByModel?.[id]
+              : settings.providerThinkingByModel?.[provider.id]?.[id];
+        const defaultThinkingLevel = safeThinkingLevels.length === 0
+          ? undefined
+          : provider.id === "google"
+            ? normalizeGoogleThinkingLevel(googleThinkingLevels, savedThinkingLevel)
+            : provider.id === "openai-codex"
+              ? normalizeCodexThinkingLevel(codexThinkingLevels, savedThinkingLevel)
+              : provider.id === "anthropic"
+                ? normalizeAnthropicThinkingLevel(anthropicThinkingLevels, savedThinkingLevel)
+                : normalizeProviderThinkingLevel(safeThinkingLevels, savedThinkingLevel);
         const model: AidenRemoteModelProjection = {
           id,
           label: bounded(metadata?.name ?? id, 256),
           ...(isModelHidden(settings.hiddenModelsByProvider, provider.id, id)
             ? { hidden: true }
             : {}),
-          ...(thinkingLevels?.length ? { thinkingLevels } : {}),
+          ...(safeThinkingLevels.length ? {
+            thinkingLevels: safeThinkingLevels,
+            defaultThinkingLevel,
+            thinkingCanDisable: metadata?.thinkingCanDisable !== false,
+          } : {}),
         };
         const modelBytes = Buffer.byteLength(JSON.stringify(model), "utf8") + 1;
         if (serializedBytes + modelBytes > MAX_REMOTE_MODEL_CATALOG_BYTES) break;
