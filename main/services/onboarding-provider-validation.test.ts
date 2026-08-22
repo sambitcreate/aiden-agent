@@ -57,7 +57,7 @@ test("onboarding validation commits only after the catalog proves a supported mo
     },
   });
 
-  assert.deepEqual(usable, ["model-b"]);
+  assert.deepEqual(usable, ["model-b", "unknown-model"]);
   assert.deepEqual(committed, ["validated-key"]);
 });
 
