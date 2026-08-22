@@ -16,7 +16,7 @@ The app is not a Hermes WebUI client, a hosted service, a web view, or an agent 
 
 The complete planned product includes:
 
-- Multiple paired Aiden installations with QR pairing, Keychain credentials, discovery, manual URL entry, switching, and revocation handling.
+- Multiple paired Aiden installations with QR or 100-bit setup-code pairing, Keychain credentials, discovery, manual URL entry, switching, and revocation handling.
 - Chat list/open/create/rename/delete, bounded attachments, provider/model/thinking selection, atomic turn start, resumable streaming, cancel, reasoning/tool/timeline status, and allow/deny approvals.
 - Workspace registry list/create/update/unregister, including folderless, managed scratch, and folders selected through a server-approved Mac directory browser.
 - Workspace Settings from the conversation toolbar ellipsis. Workspace permission is never a composer control.
@@ -33,7 +33,7 @@ Remove Kanban, Hermes projects/profiles/personalities, Skills/Memory/Insights pa
 - Remote Access is off by default and has no listener until enabled on the Mac.
 - Tailscale supplies reachability, never app authorization. Aiden manages only the exact non-Funnel Serve route it owns and never invokes `tailscale serve reset`.
 - Local-network production transport is HTTPS. QR pairing pins the Aiden installation's stable P-256 SPKI SHA-256 fingerprint. Plain HTTP is development-build-only.
-- Pairing secrets are high entropy, short lived, single use, rate limited, and never logged. Human-sized codes require a reviewed PAKE/SAS or explicit fingerprint confirmation.
+- Pairing secrets are high entropy, short lived, single use, rate limited, and never logged. The reviewed manual path uses a uniformly random 100-bit Crockford code only as a local HKDF input for authenticated decryption of the existing certificate-pinned trust envelope; lower-entropy human-sized codes still require a reviewed PAKE/SAS or explicit fingerprint confirmation.
 - Device credentials are random, stored as digests on Mac and in Keychain on iOS, capability scoped, revocable, and never placed in URLs, App Group data, App Intents, logs, or Live Activities.
 - DTOs are allowlists. Absolute paths, provider/MCP credentials, raw diagnostics, Git admin paths/tokens, schedule runtime internals, and private agent history never cross the API.
 - Directory and file handles are opaque server-side capabilities bound to instance, device, workspace/root identity, policy revision, expiry, and snapshot. The client never submits a free-form Mac path.
