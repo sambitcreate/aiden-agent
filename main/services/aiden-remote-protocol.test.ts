@@ -191,6 +191,18 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     name: "Aiden-Protocol-Version",
     description: "Must be exactly 1.",
   });
+  const schemas = record(record(document.components, "components").schemas, "schemas");
+  const providerSchema = record(schemas.Provider, "Provider schema");
+  const providerModels = record(record(providerSchema.properties, "Provider properties").models, "Provider models");
+  const modelProperties = record(record(record(providerModels.items, "Provider model").properties, "Provider model properties"), "Provider model properties");
+  assert.deepEqual(Object.keys(modelProperties), [
+    "id",
+    "label",
+    "thinkingLevels",
+    "defaultThinkingLevel",
+    "thinkingCanDisable",
+    "hidden",
+  ]);
   const healthGet = record(record(paths["/health"], "health").get, "health get");
   assert.deepEqual(healthGet.security, []);
   const pairingPost = record(record(paths["/pairing/exchange"], "pairing").post, "pairing post");
