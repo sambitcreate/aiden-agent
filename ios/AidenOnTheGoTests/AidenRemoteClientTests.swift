@@ -526,12 +526,32 @@ final class AidenRemoteClientTests: XCTestCase {
                 )
             case 6:
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/streams/stream-1")
-                return Self.streamStatusResponse(for: request, state: "running")
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"streamId":"stream-1","chatId":"chat-1","turnId":"turn-1",
+                    "state":"waiting_for_approval","lastSequence":3,
+                    "updatedAt":"2026-08-19T07:00:01.000Z"}
+                    """
+                )
             case 7:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/streams/stream-1/approval")
+                return Self.response(
+                    for: request,
+                    status: 200,
+                    json: """
+                    {"approval":{
+                    "approvalId":"approval-1","streamId":"stream-1","chatId":"chat-1",
+                    "summary":"Allow this command?","toolCallId":"tool-1","toolName":"run_command",
+                    "expiresAt":"2026-08-19T07:05:01.000Z","canAllow":true}}
+                    """
+                )
+            case 8:
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/streams/stream-1/cancel")
                 XCTAssertNotNil(request.value(forHTTPHeaderField: "Idempotency-Key"))
                 return Self.streamStatusResponse(for: request, state: "cancelled")
-            case 8:
+            case 9:
                 XCTAssertEqual(request.url?.path, "/api/aiden/v1/approvals/approval-1/respond")
                 XCTAssertEqual(try Self.jsonBody(request)["decision"] as? String, "allow")
                 return Self.response(
@@ -539,7 +559,7 @@ final class AidenRemoteClientTests: XCTestCase {
                     status: 200,
                     json: "{\"approvalId\":\"approval-1\",\"decision\":\"allow\",\"resolvedAt\":\"2026-08-19T07:00:00.000Z\"}"
                 )
-            case 9:
+            case 10:
                 XCTAssertEqual(request.httpMethod, "DELETE")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "revision-2")
                 return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
@@ -562,13 +582,17 @@ final class AidenRemoteClientTests: XCTestCase {
             request: .init(text: "Work on this", providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
         )
         let runningStatus = try await client.streamStatus(id: turn.streamId)
+        let pendingApproval = try await client.streamApproval(id: turn.streamId)
         let cancelledStatus = try await client.cancelStream(id: turn.streamId)
         let approval = try await client.respondToApproval(id: "approval-1", decision: .allow)
-        XCTAssertEqual(runningStatus.state, .running)
+        XCTAssertEqual(runningStatus.state, .waitingForApproval)
+        XCTAssertEqual(pendingApproval.approval?.approvalId, "approval-1")
+        XCTAssertEqual(pendingApproval.approval?.toolName, "run_command")
+        XCTAssertEqual(pendingApproval.approval?.canAllow, true)
         XCTAssertEqual(cancelledStatus.state, .cancelled)
         XCTAssertEqual(approval.decision, .allow)
         try await client.removeChat(id: updated.id, revision: updated.revision)
-        XCTAssertEqual(step, 9)
+        XCTAssertEqual(step, 10)
     }
 
     func testAttachmentUploadTurnProjectionAndRemovalUseBoundedCanonicalRoutes() async throws {
