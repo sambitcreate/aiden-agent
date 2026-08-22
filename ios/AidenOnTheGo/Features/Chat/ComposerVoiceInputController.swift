@@ -620,7 +620,7 @@ private extension Logger {
 }
 
 @MainActor
-private final class AidenComposerAudioCaptureState {
+final class AidenComposerAudioCaptureState {
     static let shared = AidenComposerAudioCaptureState()
     private(set) var isCapturing = false
 
