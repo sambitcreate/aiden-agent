@@ -36,6 +36,20 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(catalog.visibleProviders.first?.models.map(\.id), ["gemini-flash"])
     }
 
+    func testModelCatalogPreservesThinkingDefaultAndRequiredThinkingPresentation() throws {
+        let catalog = try JSONDecoder().decode(
+            AidenModelCatalog.self,
+            from: Data(
+                #"{"providers":[{"id":"opencode-go","label":"OpenCode Go","models":[{"id":"ox-alpha-free","label":"Ox Alpha","thinkingLevels":["low","high","max"],"defaultThinkingLevel":"high","thinkingCanDisable":false},{"id":"legacy","label":"Legacy","thinkingLevels":["low","high"]}]}],"defaults":{}}"#.utf8
+            )
+        )
+
+        let models = try XCTUnwrap(catalog.providers.first?.models)
+        XCTAssertEqual(models[0].effectiveThinkingLevel, "high")
+        XCTAssertEqual(models[0].thinkingLabel(for: "off"), "Hide")
+        XCTAssertEqual(models[1].effectiveThinkingLevel, "high")
+    }
+
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
