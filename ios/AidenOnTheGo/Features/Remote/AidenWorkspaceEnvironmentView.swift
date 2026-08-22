@@ -22,10 +22,20 @@ actor AidenWorkspaceEnvironmentCache {
     }
 
     func load(instanceId: String, workspaceId: String) -> Snapshot? {
-        try? JSONDecoder().decode(
+        if let current = try? JSONDecoder().decode(
             Snapshot.self,
             from: Data(contentsOf: file(instanceId: instanceId, workspaceId: workspaceId))
-        )
+        ) {
+            return current
+        }
+        let legacyURL = legacyFile(instanceId: instanceId, workspaceId: workspaceId)
+        guard let legacy = try? JSONDecoder().decode(
+            Snapshot.self,
+            from: Data(contentsOf: legacyURL)
+        ) else { return nil }
+        try? persist(legacy, instanceId: instanceId, workspaceId: workspaceId)
+        try? FileManager.default.removeItem(at: legacyURL)
+        return legacy
     }
 
     func store(
@@ -46,6 +56,22 @@ actor AidenWorkspaceEnvironmentCache {
         )
     }
 
+    func purge(instanceId: String, knownWorkspaceIds: Set<String> = []) {
+        let instanceDirectory = directory.appending(
+            path: instanceDigest(instanceId),
+            directoryHint: .isDirectory
+        )
+        try? FileManager.default.removeItem(at: instanceDirectory)
+        // The legacy flat format encoded instance + workspace identity in its
+        // filename but not its payload. Delete only names attributable from a
+        // known workspace snapshot; never erase another Mac's unknown cache.
+        for workspaceId in knownWorkspaceIds {
+            try? FileManager.default.removeItem(
+                at: legacyFile(instanceId: instanceId, workspaceId: workspaceId)
+            )
+        }
+    }
+
     func store(
         document: AidenWorkspaceFileDocument,
         instanceId: String,
@@ -58,7 +84,11 @@ actor AidenWorkspaceEnvironmentCache {
     }
 
     private func persist(_ snapshot: Snapshot, instanceId: String, workspaceId: String) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = file(instanceId: instanceId, workspaceId: workspaceId)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         var value = snapshot
         var data = try JSONEncoder().encode(value)
         if data.count > maximumBytes {
@@ -66,10 +96,25 @@ actor AidenWorkspaceEnvironmentCache {
             data = try JSONEncoder().encode(value)
         }
         guard data.count <= maximumBytes else { return }
-        try data.write(to: file(instanceId: instanceId, workspaceId: workspaceId), options: .atomic)
+        try data.write(to: destination, options: .atomic)
     }
 
     private func file(instanceId: String, workspaceId: String) -> URL {
+        let digest = SHA256.hash(data: Data(workspaceId.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return directory
+            .appending(path: instanceDigest(instanceId), directoryHint: .isDirectory)
+            .appending(path: "\(digest).json")
+    }
+
+    private func instanceDigest(_ instanceId: String) -> String {
+        SHA256.hash(data: Data(instanceId.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private func legacyFile(instanceId: String, workspaceId: String) -> URL {
         let digest = SHA256.hash(data: Data("\(instanceId)\u{0}\(workspaceId)".utf8))
             .map { String(format: "%02x", $0) }
             .joined()
@@ -97,49 +142,57 @@ final class AidenWorkspaceFilesModel {
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
-        guard !isLoading, let instanceId = coordinator.activeInstanceId else { return }
+        guard !isLoading, let context = try? coordinator.requestContext() else { return }
+        let instanceId = context.instanceId
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         if coordinator.connectionState == .connected {
             do {
-                let value = try await coordinator.remoteClient().workspaceFiles(workspaceId: workspace.id)
+                let value = try await coordinator.remoteClient(for: context).workspaceFiles(workspaceId: workspace.id)
+                guard coordinator.isCurrent(context) else { return }
                 index = value
                 isOfflineSnapshot = false
                 try? await cache.store(index: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
+                guard coordinator.isCurrent(context) else { return }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id) {
+            guard coordinator.isCurrent(context) else { return }
             index = cached.index
             isOfflineSnapshot = true
-        } else if errorMessage == nil {
+        } else if coordinator.isCurrent(context), errorMessage == nil {
             errorMessage = "Connect to Aiden Agent to load workspace files."
         }
     }
 
     func open(_ entry: AidenWorkspaceFileEntry, coordinator: AidenRemoteCoordinator) async {
-        guard entry.kind == .file, let instanceId = coordinator.activeInstanceId else { return }
+        guard entry.kind == .file, let context = try? coordinator.requestContext() else { return }
+        let instanceId = context.instanceId
         errorMessage = nil
         if coordinator.connectionState == .connected {
             do {
-                let value = try await coordinator.remoteClient().workspaceFile(
+                let value = try await coordinator.remoteClient(for: context).workspaceFile(
                     workspaceId: workspace.id,
                     fileId: entry.id
                 )
+                guard coordinator.isCurrent(context) else { return }
                 document = value
                 draft = value.content
                 isOfflineSnapshot = false
                 try? await cache.store(document: value, instanceId: instanceId, workspaceId: workspace.id)
                 return
             } catch {
+                guard coordinator.isCurrent(context) else { return }
                 errorMessage = error.localizedDescription
             }
         }
         if let cached = await cache.load(instanceId: instanceId, workspaceId: workspace.id),
            let value = cached.documents[entry.id] {
+            guard coordinator.isCurrent(context) else { return }
             document = value
             draft = value.content
             isOfflineSnapshot = true
@@ -150,22 +203,25 @@ final class AidenWorkspaceFilesModel {
         guard coordinator.connectionState == .connected,
               !isSaving,
               let document,
-              let instanceId = coordinator.activeInstanceId else { return false }
+              let context = try? coordinator.requestContext() else { return false }
+        let instanceId = context.instanceId
         isSaving = true
         errorMessage = nil
         defer { isSaving = false }
         do {
-            let saved = try await coordinator.remoteClient().writeWorkspaceFile(
+            let saved = try await coordinator.remoteClient(for: context).writeWorkspaceFile(
                 workspaceId: workspace.id,
                 fileId: document.id,
                 content: draft,
                 expectedVersion: document.version
             )
+            guard coordinator.isCurrent(context) else { return false }
             self.document = saved
             draft = saved.content
             try? await cache.store(document: saved, instanceId: instanceId, workspaceId: workspace.id)
             return true
         } catch {
+            guard coordinator.isCurrent(context) else { return false }
             if case AidenRemoteClientError.server(_, let body) = error,
                body.code.rawValue == "revision_conflict" {
                 errorMessage = "This file changed on the Mac. Reload it before saving again."
@@ -346,28 +402,44 @@ final class AidenWorkspaceGitModel {
 
     var canRetryPendingMutation: Bool { pendingMutation != nil }
 
-    func refresh(client: AidenRemoteClient, workspaceId: String) async {
+    func refresh(
+        client: AidenRemoteClient,
+        workspaceId: String,
+        isCurrent: @MainActor () -> Bool
+    ) async {
         guard !isLoading else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         do {
             let reviewResult = try await client.gitReview(workspaceId: workspaceId)
+            guard isCurrent() else { return }
             if case .review(let value) = reviewResult.result {
                 review = value
                 reviewSnapshotId = reviewResult.snapshotId
             }
             let branchResult = try await client.gitBranches(workspaceId: workspaceId)
+            guard isCurrent() else { return }
             if case .branches(let value) = branchResult.result {
                 branches = value
                 branchesSnapshotId = branchResult.snapshotId
             }
             let worktreeResult = try await client.gitWorktrees(workspaceId: workspaceId)
+            guard isCurrent() else { return }
             if case .worktrees(let value) = worktreeResult.result { worktrees = value.worktrees }
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            guard isCurrent() else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
-    func diff(client: AidenRemoteClient, workspaceId: String, file: AidenGitFile, comparisonMode: Bool = false) async {
+    func diff(
+        client: AidenRemoteClient,
+        workspaceId: String,
+        file: AidenGitFile,
+        comparisonMode: Bool = false,
+        isCurrent: @MainActor () -> Bool
+    ) async {
         do {
             let result = comparisonMode
                 ? try await client.gitComparisonDiff(
@@ -380,47 +452,52 @@ final class AidenWorkspaceGitModel {
                     snapshotId: reviewSnapshotId ?? "",
                     fileId: file.id
                 )
+            guard isCurrent() else { return }
             if case .diff(let value) = result.result { selectedDiff = value }
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            guard isCurrent() else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
-    func commit(client: AidenRemoteClient, workspaceId: String, message: String, stagedOnly: Bool) async {
+    func commit(client: AidenRemoteClient, workspaceId: String, message: String, stagedOnly: Bool, isCurrent: @escaping @MainActor () -> Bool) async {
         let operation = AidenPendingGitMutation.commit(
             UUID(),
             snapshot: reviewSnapshotId ?? "",
             message: message,
             stagedOnly: stagedOnly
         )
-        if await execute(operation, client: client, workspaceId: workspaceId) {
-            await refresh(client: client, workspaceId: workspaceId)
+        if await execute(operation, client: client, workspaceId: workspaceId, isCurrent: isCurrent) {
+            await refresh(client: client, workspaceId: workspaceId, isCurrent: isCurrent)
         }
     }
 
-    func checkout(client: AidenRemoteClient, workspaceId: String, branch: String) async {
+    func checkout(client: AidenRemoteClient, workspaceId: String, branch: String, isCurrent: @escaping @MainActor () -> Bool) async {
         let operation = AidenPendingGitMutation.checkout(
             UUID(),
             snapshot: branchesSnapshotId ?? "",
             branch: branch
         )
-        if await execute(operation, client: client, workspaceId: workspaceId) {
-            await refresh(client: client, workspaceId: workspaceId)
+        if await execute(operation, client: client, workspaceId: workspaceId, isCurrent: isCurrent) {
+            await refresh(client: client, workspaceId: workspaceId, isCurrent: isCurrent)
         }
     }
 
-    func createBranch(client: AidenRemoteClient, workspaceId: String, name: String) async {
+    func createBranch(client: AidenRemoteClient, workspaceId: String, name: String, isCurrent: @escaping @MainActor () -> Bool) async {
         let operation = AidenPendingGitMutation.createBranch(
             UUID(),
             name: name,
             startPoint: branches?.current ?? "HEAD"
         )
-        if await execute(operation, client: client, workspaceId: workspaceId) {
-            await refresh(client: client, workspaceId: workspaceId)
+        if await execute(operation, client: client, workspaceId: workspaceId, isCurrent: isCurrent) {
+            await refresh(client: client, workspaceId: workspaceId, isCurrent: isCurrent)
         }
     }
 
-    func preparePush(client: AidenRemoteClient, workspaceId: String) async {
+    func preparePush(client: AidenRemoteClient, workspaceId: String, isCurrent: @MainActor () -> Bool) async {
         do {
             let result = try await client.gitPushCapability(workspaceId: workspaceId)
+            guard isCurrent() else { return }
             if case .pushCapability(let value) = result.result {
                 pushCapability = value
                 pushSnapshotId = result.snapshotId
@@ -428,46 +505,56 @@ final class AidenWorkspaceGitModel {
                     errorMessage = value.reason ?? "Push is unavailable for this workspace state."
                 }
             }
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            guard isCurrent() else { return }
+            errorMessage = error.localizedDescription
+        }
     }
 
-    func push(client: AidenRemoteClient, workspaceId: String) async {
+    func push(client: AidenRemoteClient, workspaceId: String, isCurrent: @escaping @MainActor () -> Bool) async {
         guard let pushCapability, let remote = pushCapability.remote, let branch = pushCapability.branch else { return }
         _ = await execute(
             .push(UUID(), snapshot: pushSnapshotId ?? "", remote: remote, branch: branch),
             client: client,
-            workspaceId: workspaceId
+            workspaceId: workspaceId,
+            isCurrent: isCurrent
         )
     }
 
-    func compare(client: AidenRemoteClient, workspaceId: String, baseRef: String) async {
+    func compare(client: AidenRemoteClient, workspaceId: String, baseRef: String, isCurrent: @MainActor () -> Bool) async {
         do {
             let result = try await client.compareGit(workspaceId: workspaceId, baseRef: baseRef)
+            guard isCurrent() else { return }
             if case .comparison(let value) = result.result { comparison = value }
-        } catch { errorMessage = error.localizedDescription }
-    }
-
-    func createWorktree(client: AidenRemoteClient, workspaceId: String, branch: String, name: String) async {
-        if await execute(
-            .createWorktree(UUID(), branch: branch, name: name),
-            client: client,
-            workspaceId: workspaceId
-        ) {
-            await refresh(client: client, workspaceId: workspaceId)
+        } catch {
+            guard isCurrent() else { return }
+            errorMessage = error.localizedDescription
         }
     }
 
-    func retryPendingMutation(client: AidenRemoteClient, workspaceId: String) async {
+    func createWorktree(client: AidenRemoteClient, workspaceId: String, branch: String, name: String, isCurrent: @escaping @MainActor () -> Bool) async {
+        if await execute(
+            .createWorktree(UUID(), branch: branch, name: name),
+            client: client,
+            workspaceId: workspaceId,
+            isCurrent: isCurrent
+        ) {
+            await refresh(client: client, workspaceId: workspaceId, isCurrent: isCurrent)
+        }
+    }
+
+    func retryPendingMutation(client: AidenRemoteClient, workspaceId: String, isCurrent: @escaping @MainActor () -> Bool) async {
         guard let pendingMutation else { return }
-        if await execute(pendingMutation, client: client, workspaceId: workspaceId) {
-            await refresh(client: client, workspaceId: workspaceId)
+        if await execute(pendingMutation, client: client, workspaceId: workspaceId, isCurrent: isCurrent) {
+            await refresh(client: client, workspaceId: workspaceId, isCurrent: isCurrent)
         }
     }
 
     private func execute(
         _ operation: AidenPendingGitMutation,
         client: AidenRemoteClient,
-        workspaceId: String
+        workspaceId: String,
+        isCurrent: @MainActor () -> Bool
     ) async -> Bool {
         isLoading = true
         errorMessage = nil
@@ -514,12 +601,14 @@ final class AidenWorkspaceGitModel {
                     idempotencyKey: key
                 )
             }
+            guard isCurrent() else { return false }
             if case .mutation(let mutation) = value.result {
                 lastMessage = mutation.warning.map { "\(mutation.message) \($0)" } ?? mutation.message
             }
             pendingMutation = nil
             return true
         } catch {
+            guard isCurrent() else { return false }
             let retain = shouldRetainForReconciliation(error)
             if !retain { pendingMutation = nil }
             errorMessage = retain
@@ -537,7 +626,7 @@ final class AidenWorkspaceGitModel {
             return true
         case .server(_, let body):
             return body.code.rawValue == "idempotency_in_flight" || body.code.rawValue == "internal_error"
-        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration:
+        case .invalidEndpoint, .missingCredential, .missingTrustConfiguration, .installationChanged:
             return false
         }
     }
@@ -560,8 +649,6 @@ struct AidenWorkspaceGitView: View {
     @State private var worktreeBranch = ""
     @State private var worktreeName = ""
     @State private var isShowingNewWorktree = false
-
-    private var client: AidenRemoteClient? { try? coordinator.remoteClient() }
 
     var body: some View {
         gitConfirmations
@@ -601,9 +688,15 @@ struct AidenWorkspaceGitView: View {
                     .disabled(model.review?.files.isEmpty != false)
                 Button("Push reviewed commit", systemImage: "arrow.up.circle") {
                     Task {
-                        guard let client else { return }
-                        await model.preparePush(client: client, workspaceId: workspace.id)
-                        isConfirmingPush = model.pushCapability?.allowed == true
+                        await withRemoteContext { client, context in
+                            await model.preparePush(
+                                client: client,
+                                workspaceId: workspace.id,
+                                isCurrent: { coordinator.isCurrent(context) }
+                            )
+                            guard coordinator.isCurrent(context) else { return }
+                            isConfirmingPush = model.pushCapability?.allowed == true
+                        }
                     }
                 }
                 Button("Compare branch", systemImage: "arrow.left.arrow.right") { isShowingCompare = true }
@@ -644,8 +737,12 @@ struct AidenWorkspaceGitView: View {
                 Section {
                     Button("Retry Last Git Operation", systemImage: "arrow.clockwise") {
                         Task {
-                            if let client {
-                                await model.retryPendingMutation(client: client, workspaceId: workspace.id)
+                            await withRemoteContext { client, context in
+                                await model.retryPendingMutation(
+                                    client: client,
+                                    workspaceId: workspace.id,
+                                    isCurrent: { coordinator.isCurrent(context) }
+                                )
                             }
                         }
                     }
@@ -682,7 +779,16 @@ struct AidenWorkspaceGitView: View {
             TextField("Base branch", text: $compareBase)
             Button("Compare") {
                 let base = compareBase.trimmingCharacters(in: .whitespacesAndNewlines)
-                Task { if let client { await model.compare(client: client, workspaceId: workspace.id, baseRef: base) } }
+                Task {
+                    await withRemoteContext { client, context in
+                        await model.compare(
+                            client: client,
+                            workspaceId: workspace.id,
+                            baseRef: base,
+                            isCurrent: { coordinator.isCurrent(context) }
+                        )
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {}
         }
@@ -690,7 +796,16 @@ struct AidenWorkspaceGitView: View {
             TextField("Branch name", text: $newBranch)
             Button("Create and Check Out") {
                 let value = newBranch.trimmingCharacters(in: .whitespacesAndNewlines)
-                Task { if let client { await model.createBranch(client: client, workspaceId: workspace.id, name: value) } }
+                Task {
+                    await withRemoteContext { client, context in
+                        await model.createBranch(
+                            client: client,
+                            workspaceId: workspace.id,
+                            name: value,
+                            isCurrent: { coordinator.isCurrent(context) }
+                        )
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {}
         }
@@ -701,8 +816,15 @@ struct AidenWorkspaceGitView: View {
                 let branch = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
                 let name = worktreeName.trimmingCharacters(in: .whitespacesAndNewlines)
                 Task {
-                    if let client {
-                        await model.createWorktree(client: client, workspaceId: workspace.id, branch: branch, name: name)
+                    await withRemoteContext { client, context in
+                        await model.createWorktree(
+                            client: client,
+                            workspaceId: workspace.id,
+                            branch: branch,
+                            name: name,
+                            isCurrent: { coordinator.isCurrent(context) }
+                        )
+                        guard coordinator.isCurrent(context) else { return }
                         await coordinator.refreshWorkspaces()
                     }
                 }
@@ -720,13 +842,31 @@ struct AidenWorkspaceGitView: View {
             Button("Check Out Branch") {
                 let branch = checkoutBranch
                 checkoutBranch = nil
-                Task { if let branch, let client { await model.checkout(client: client, workspaceId: workspace.id, branch: branch) } }
+                Task {
+                    guard let branch else { return }
+                    await withRemoteContext { client, context in
+                        await model.checkout(
+                            client: client,
+                            workspaceId: workspace.id,
+                            branch: branch,
+                            isCurrent: { coordinator.isCurrent(context) }
+                        )
+                    }
+                }
             }
             Button("Cancel", role: .cancel) { checkoutBranch = nil }
         } message: { Text("Aiden Agent will switch the workspace to this branch.") }
         .confirmationDialog("Push the reviewed commit?", isPresented: $isConfirmingPush) {
             Button("Push to \(model.pushCapability?.remote ?? "remote")") {
-                Task { if let client { await model.push(client: client, workspaceId: workspace.id) } }
+                Task {
+                    await withRemoteContext { client, context in
+                        await model.push(
+                            client: client,
+                            workspaceId: workspace.id,
+                            isCurrent: { coordinator.isCurrent(context) }
+                        )
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -757,13 +897,15 @@ struct AidenWorkspaceGitView: View {
                     let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
                     isShowingCommit = false
                     Task {
-                        guard let client else { return }
-                        await model.commit(
-                            client: client,
-                            workspaceId: workspace.id,
-                            message: message,
-                            stagedOnly: stagedOnly
-                        )
+                        await withRemoteContext { client, context in
+                            await model.commit(
+                                client: client,
+                                workspaceId: workspace.id,
+                                message: message,
+                                stagedOnly: stagedOnly,
+                                isCurrent: { coordinator.isCurrent(context) }
+                            )
+                        }
                     }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -799,8 +941,15 @@ struct AidenWorkspaceGitView: View {
     private func gitFileButton(_ file: AidenGitFile, comparisonMode: Bool) -> some View {
         Button {
             Task {
-                guard let client else { return }
-                await model.diff(client: client, workspaceId: workspace.id, file: file, comparisonMode: comparisonMode)
+                await withRemoteContext { client, context in
+                    await model.diff(
+                        client: client,
+                        workspaceId: workspace.id,
+                        file: file,
+                        comparisonMode: comparisonMode,
+                        isCurrent: { coordinator.isCurrent(context) }
+                    )
+                }
             }
         } label: {
             HStack {
@@ -816,11 +965,25 @@ struct AidenWorkspaceGitView: View {
     }
 
     private func refresh() async {
-        guard coordinator.connectionState == .connected, let client else {
+        guard coordinator.connectionState == .connected else {
             model.errorMessage = "Connect to Aiden Agent to use Git."
             return
         }
-        await model.refresh(client: client, workspaceId: workspace.id)
+        await withRemoteContext { client, context in
+            await model.refresh(
+                client: client,
+                workspaceId: workspace.id,
+                isCurrent: { coordinator.isCurrent(context) }
+            )
+        }
+    }
+
+    private func withRemoteContext(
+        _ operation: @MainActor (AidenRemoteClient, AidenRemoteRequestContext) async -> Void
+    ) async {
+        guard let context = try? coordinator.requestContext(),
+              let client = try? coordinator.remoteClient(for: context) else { return }
+        await operation(client, context)
     }
 }
 
