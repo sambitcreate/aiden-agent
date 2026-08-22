@@ -736,3 +736,9 @@ Completed and streaming assistant replies expose a Hermex-style long-press Copy 
 7. **Tailscale ownership:** Aiden provides explicit Connect/Disconnect, previews the exact non-Funnel Serve change, records ownership, and removes only the route it created without altering unrelated routes.
 
 Implementation may begin with Phase 0. Later phases remain gated by the acceptance criteria above rather than unresolved product decisions.
+
+## First-class pairing choices follow-up — 2026-08-22
+
+The iOS pairing surface now exposes the same connection choices as Aiden Agent's Add Device flow. The primary list presents Scan QR Code, Nearby Mac + Setup Code for local Wi-Fi/Bonjour, and Private Address + Setup Code for Tailscale; Paste Pairing Payload remains an advanced camera-unavailable fallback. Each route reuses the reviewed five-minute, one-use trust protocol rather than defining a second authentication mechanism. The QR path explicitly states that it already carries the Mac-selected Local Network or Tailscale endpoint, while manual paths request the exact address and setup code shown on the Mac.
+
+Focused contract tests lock the complete method inventory and Mac/iOS labels, while the shipping-source gate requires both canonical endpoint forms and rejects the former segmented picker. The full Remote Access, release, repository, type, lint, build, generic iPhoneOS, and signed physical-iPhone gates pass. Remaining physical-iPad and hands-on cross-network acceptance stay open under the existing Phase 12 gates.
