@@ -135,10 +135,19 @@ final class AidenWorkspaceFilesModel {
 
     private let workspace: AidenWorkspace
     private let cache: AidenWorkspaceEnvironmentCache
+    private let hapticScope = UUID()
 
     init(workspace: AidenWorkspace, cache: AidenWorkspaceEnvironmentCache = .shared) {
         self.workspace = workspace
         self.cache = cache
+    }
+
+    func setHapticsActive(_ active: Bool, coordinator: AidenRemoteCoordinator) {
+        if active {
+            coordinator.haptics.activate(scope: hapticScope)
+        } else {
+            coordinator.haptics.deactivate(scope: hapticScope)
+        }
     }
 
     func load(coordinator: AidenRemoteCoordinator) async {
@@ -219,14 +228,23 @@ final class AidenWorkspaceFilesModel {
             self.document = saved
             draft = saved.content
             try? await cache.store(document: saved, instanceId: instanceId, workspaceId: workspace.id)
+            coordinator.haptics.play(
+                .success,
+                scope: hapticScope,
+                dedupeKey: "file-save:\(workspace.id):\(saved.id):\(saved.version)"
+            )
             return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
         } catch {
             guard coordinator.isCurrent(context) else { return false }
             if case AidenRemoteClientError.server(_, let body) = error,
                body.code.rawValue == "revision_conflict" {
                 errorMessage = "This file changed on the Mac. Reload it before saving again."
+                coordinator.haptics.play(.warning, scope: hapticScope)
             } else {
                 errorMessage = error.localizedDescription
+                coordinator.haptics.play(.error, scope: hapticScope)
             }
             return false
         }
@@ -304,6 +322,8 @@ struct AidenWorkspaceFilesView: View {
         .searchable(text: $search, prompt: "Find a file")
         .refreshable { await model.load(coordinator: coordinator) }
         .task { await model.load(coordinator: coordinator) }
+        .onAppear { model.setHapticsActive(true, coordinator: coordinator) }
+        .onDisappear { model.setHapticsActive(false, coordinator: coordinator) }
         .sheet(isPresented: $isShowingDocument) {
             AidenWorkspaceFileEditorView(coordinator: coordinator, model: model)
         }
@@ -381,6 +401,14 @@ private enum AidenPendingGitMutation {
     case createBranch(UUID, name: String, startPoint: String)
     case push(UUID, snapshot: String, remote: String, branch: String)
     case createWorktree(UUID, branch: String, name: String)
+
+    var idempotencyKey: UUID {
+        switch self {
+        case .commit(let key, _, _, _), .checkout(let key, _, _),
+             .createBranch(let key, _, _), .push(let key, _, _, _),
+             .createWorktree(let key, _, _): key
+        }
+    }
 }
 
 @MainActor
@@ -399,6 +427,20 @@ final class AidenWorkspaceGitModel {
     var errorMessage: String?
     var lastMessage: String?
     private var pendingMutation: AidenPendingGitMutation?
+    private let haptics: any AidenHapticEmitting
+    private let hapticScope = UUID()
+
+    init(haptics: (any AidenHapticEmitting)? = nil) {
+        self.haptics = haptics ?? AidenHapticCenter()
+    }
+
+    func setHapticsActive(_ active: Bool) {
+        if active {
+            haptics.activate(scope: hapticScope)
+        } else {
+            haptics.deactivate(scope: hapticScope)
+        }
+    }
 
     var canRetryPendingMutation: Bool { pendingMutation != nil }
 
@@ -503,11 +545,19 @@ final class AidenWorkspaceGitModel {
                 pushSnapshotId = result.snapshotId
                 if !value.allowed {
                     errorMessage = value.reason ?? "Push is unavailable for this workspace state."
+                    haptics.play(
+                        .warning,
+                        scope: hapticScope,
+                        dedupeKey: "git-push-capability:\(result.snapshotId ?? workspaceId)"
+                    )
                 }
             }
+        } catch let error where aidenIsCancellation(error) {
+            return
         } catch {
             guard isCurrent() else { return }
             errorMessage = error.localizedDescription
+            haptics.play(.error, scope: hapticScope)
         }
     }
 
@@ -602,11 +652,20 @@ final class AidenWorkspaceGitModel {
                 )
             }
             guard isCurrent() else { return false }
+            var event: AidenHapticEvent = .success
             if case .mutation(let mutation) = value.result {
                 lastMessage = mutation.warning.map { "\(mutation.message) \($0)" } ?? mutation.message
+                if mutation.warning != nil { event = .warning }
             }
             pendingMutation = nil
+            haptics.play(
+                event,
+                scope: hapticScope,
+                dedupeKey: "git:\(workspaceId):\(operation.idempotencyKey.uuidString)"
+            )
             return true
+        } catch let error where aidenIsCancellation(error) {
+            return false
         } catch {
             guard isCurrent() else { return false }
             let retain = shouldRetainForReconciliation(error)
@@ -614,6 +673,7 @@ final class AidenWorkspaceGitModel {
             errorMessage = retain
                 ? "\(error.localizedDescription) Reconnect, then use Retry Last Git Operation to reconcile safely."
                 : error.localizedDescription
+            haptics.play(retain ? .warning : .error, scope: hapticScope)
             return false
         }
     }
@@ -635,7 +695,7 @@ final class AidenWorkspaceGitModel {
 struct AidenWorkspaceGitView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     let workspace: AidenWorkspace
-    @State private var model = AidenWorkspaceGitModel()
+    @State private var model: AidenWorkspaceGitModel
     @State private var commitMessage = ""
     @State private var stagedOnly = false
     @State private var isShowingCommit = false
@@ -649,6 +709,12 @@ struct AidenWorkspaceGitView: View {
     @State private var worktreeBranch = ""
     @State private var worktreeName = ""
     @State private var isShowingNewWorktree = false
+
+    init(coordinator: AidenRemoteCoordinator, workspace: AidenWorkspace) {
+        self.coordinator = coordinator
+        self.workspace = workspace
+        _model = State(initialValue: AidenWorkspaceGitModel(haptics: coordinator.haptics))
+    }
 
     var body: some View {
         gitConfirmations
@@ -756,6 +822,8 @@ struct AidenWorkspaceGitView: View {
         .overlay { if model.isLoading && model.review == nil { ProgressView("Loading Git…") } }
         .refreshable { await refresh() }
         .task { await refresh() }
+        .onAppear { model.setHapticsActive(true) }
+        .onDisappear { model.setHapticsActive(false) }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }
