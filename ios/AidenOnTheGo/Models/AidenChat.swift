@@ -408,6 +408,21 @@ struct AidenStreamStatus: Codable, Equatable, Sendable {
     let updatedAt: Date
 }
 
+struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
+    let approvalId: String
+    let streamId: String
+    let chatId: String
+    let summary: String
+    let toolCallId: String
+    let toolName: String
+    let expiresAt: Date
+    let canAllow: Bool
+}
+
+struct AidenStreamApprovalSnapshot: Codable, Equatable, Sendable {
+    let approval: AidenStreamPendingApproval?
+}
+
 enum AidenApprovalDecision: String, Codable, Sendable {
     case allow
     case deny
@@ -423,6 +438,27 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let id: String
     let summary: String
     let expiresAt: Date
+    let canAllow: Bool
+}
+
+enum AidenPendingApprovalResolution {
+    static func resolve(
+        _ approval: AidenStreamPendingApproval?,
+        streamId: String,
+        chatId: String,
+        now: Date = Date()
+    ) -> AidenPendingApproval? {
+        guard let approval,
+              approval.streamId == streamId,
+              approval.chatId == chatId,
+              approval.expiresAt > now else { return nil }
+        return AidenPendingApproval(
+            id: approval.approvalId,
+            summary: approval.summary,
+            expiresAt: approval.expiresAt,
+            canAllow: approval.canAllow
+        )
+    }
 }
 
 struct AidenLiveTool: Identifiable, Equatable, Sendable {
