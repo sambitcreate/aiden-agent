@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
-import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+import {
+  parseGenerationTimeline,
+  type GenerationTimeline,
+} from "../../renderer/shared/generation-timeline.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import {
   appendChatMessageWithReconciliation,
@@ -53,6 +56,7 @@ export interface AidenRemoteMessageProjection {
   createdAt: string;
   attachments?: AidenRemoteMessageAttachmentProjection[];
   outcome?: AidenRemoteMessageOutcomeProjection;
+  timeline?: GenerationTimeline;
 }
 
 export interface AidenRemoteMessageAttachmentProjection {
@@ -160,6 +164,11 @@ function projectMessageOutcome(message: ChatMessage): AidenRemoteMessageOutcomeP
   return undefined;
 }
 
+function projectMessageTimeline(message: ChatMessage): GenerationTimeline | undefined {
+  if (message.role !== "assistant") return undefined;
+  return parseGenerationTimeline(message.timeline, message.content.length);
+}
+
 function chatRevision(chat: Chat): string {
   const visible = {
     id: chat.id,
@@ -178,6 +187,7 @@ function chatRevision(chat: Chat): string {
         createdAt: message.createdAt,
         attachments: projectMessageAttachments(message.attachments),
         outcome: projectMessageOutcome(message) ?? null,
+        timeline: projectMessageTimeline(message) ?? null,
       })),
   };
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
@@ -197,6 +207,7 @@ export function projectAidenRemoteChat(
       if (message.role !== "user" && message.role !== "assistant") return [];
       const attachments = projectMessageAttachments(message.attachments);
       const outcome = projectMessageOutcome(message);
+      const timeline = projectMessageTimeline(message);
       return [{
         id: message.id,
         role: message.role,
@@ -204,6 +215,7 @@ export function projectAidenRemoteChat(
         createdAt: new Date(message.createdAt).toISOString(),
         ...(attachments.length > 0 ? { attachments } : {}),
         ...(outcome ? { outcome } : {}),
+        ...(timeline ? { timeline } : {}),
       }];
     }),
     createdAt: new Date(chat.createdAt).toISOString(),

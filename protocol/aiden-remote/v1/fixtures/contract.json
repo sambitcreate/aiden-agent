@@ -1,5 +1,5 @@
 {
-  "contractRevision": 5,
+  "contractRevision": 6,
   "protocolVersion": 1,
   "generated": false,
   "notice": "Synthetic fixtures only. Values are not credentials and contain no machine-local paths.",
@@ -132,7 +132,7 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:03.000Z", "type": "reasoning_delta", "terminal": false, "payload": { "text": "Checking invariants." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:04.000Z", "type": "text_delta", "terminal": false, "payload": { "text": "The protocol " } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:05.000Z", "type": "tool_started", "terminal": false, "payload": { "toolId": "tool_fixture_01", "name": "read" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "label": "Reading project context" } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }] } } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "heartbeat", "terminal": false, "payload": {} },

@@ -1,6 +1,5 @@
 import type { ServerResponse } from "node:http";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
-import type { GenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
 import {
@@ -677,10 +676,8 @@ export class AidenRemoteStreamService {
       return;
     }
     if (channel === "chat:timeline") {
-      const timeline = ownRecord(payload.timeline) as GenerationTimeline | null;
-      const last = timeline?.steps?.[timeline.steps.length - 1];
-      const label = last?.kind === "tool" ? last.label : "Thinking";
-      this.append(stream, "timeline", { label: boundedText(label, 500) || "Activity" }, false, "running");
+      const timeline = parseGenerationTimeline(payload.timeline);
+      if (timeline) this.append(stream, "timeline", { timeline }, false, "running");
       return;
     }
     if (channel === "chat:approval") {

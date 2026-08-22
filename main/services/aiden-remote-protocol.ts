@@ -1,3 +1,5 @@
+import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
+
 export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -326,7 +328,7 @@ const EVENT_PAYLOAD_KEYS: Record<AidenRemoteEventType, readonly string[]> = {
   reasoning_delta: ["text"],
   tool_started: ["toolId", "name"],
   tool_finished: ["toolId", "status"],
-  timeline: ["label"],
+  timeline: ["timeline"],
   approval_required: ["approvalId", "summary", "expiresAt"],
   done: ["messageId"],
   error: ["code", "message"],
@@ -404,7 +406,9 @@ function validateEventPayload(type: AidenRemoteEventType, payload: Record<string
     assertBoundedString(payload, "toolId", 128);
     if (!["succeeded", "failed", "cancelled"].includes(requiredString(payload, "status"))) throw new Error("tool status is invalid.");
   } else if (type === "timeline") {
-    assertBoundedString(payload, "label", 500);
+    if (!parseGenerationTimeline(payload.timeline)) {
+      throw new Error("timeline payload must contain a renderer-safe generation timeline.");
+    }
   } else if (type === "approval_required") {
     assertBoundedString(payload, "approvalId", 128);
     assertBoundedString(payload, "summary", 2_000);
